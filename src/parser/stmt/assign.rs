@@ -7,6 +7,13 @@ use crate::span::Span;
 use super::params::parse_type_expr;
 use super::{expect_semicolon, expect_token};
 
+#[derive(Debug, Clone, PartialEq)]
+enum AssignmentOperator {
+    Assign,
+    Compound(crate::parser::ast::BinOp),
+    NullCoalesce,
+}
+
 /// Handle statements starting with $variable: assignment, array ops, or post-increment.
 pub(super) fn parse_variable_stmt(
     tokens: &[(Token, Span)],
@@ -48,11 +55,19 @@ pub(super) fn parse_variable_stmt(
         )
     {
         let expr = parse_expr(tokens, pos)?;
-        if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+        if let Some(op) = tokens.get(*pos).and_then(|(token, _)| assignment_operator(token)) {
             *pos += 1;
-            let value = parse_assignment_value_expr(tokens, pos)?;
+            let rhs = parse_assignment_value_expr(tokens, pos)?;
             expect_semicolon(tokens, pos)?;
             if let ExprKind::PropertyAccess { object, property } = expr.kind {
+                let target = Expr::new(
+                    ExprKind::PropertyAccess {
+                        object: object.clone(),
+                        property: property.clone(),
+                    },
+                    span,
+                );
+                let value = assignment_value(target, op, rhs, span);
                 return Ok(Stmt::new(
                     StmtKind::PropertyAssign {
                         object,
@@ -94,53 +109,15 @@ pub(super) fn parse_assign(
         return Err(CompileError::new(span, "Expected '=' after variable name"));
     }
 
-    use crate::parser::ast::BinOp;
-    let compound_op = match &tokens[*pos].0 {
-        Token::PlusAssign => Some(BinOp::Add),
-        Token::MinusAssign => Some(BinOp::Sub),
-        Token::StarAssign => Some(BinOp::Mul),
-        Token::StarStarAssign => Some(BinOp::Pow),
-        Token::SlashAssign => Some(BinOp::Div),
-        Token::PercentAssign => Some(BinOp::Mod),
-        Token::DotAssign => Some(BinOp::Concat),
-        Token::AmpAssign => Some(BinOp::BitAnd),
-        Token::PipeAssign => Some(BinOp::BitOr),
-        Token::CaretAssign => Some(BinOp::BitXor),
-        Token::LessLessAssign => Some(BinOp::ShiftLeft),
-        Token::GreaterGreaterAssign => Some(BinOp::ShiftRight),
-        Token::Assign => None,
-        Token::QuestionQuestionAssign => {
-            *pos += 1;
-            let rhs = parse_assignment_value_expr(tokens, pos)?;
-            expect_semicolon(tokens, pos)?;
-            let value = Expr::new(
-                ExprKind::NullCoalesce {
-                    value: Box::new(Expr::new(ExprKind::Variable(name.clone()), span)),
-                    default: Box::new(rhs),
-                },
-                span,
-            );
-            return Ok(Stmt::new(StmtKind::Assign { name, value }, span));
-        }
-        _ => return Err(CompileError::new(span, "Expected '=' after variable name")),
-    };
+    let op = assignment_operator(&tokens[*pos].0)
+        .ok_or_else(|| CompileError::new(span, "Expected '=' after variable name"))?;
     *pos += 1;
 
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
 
-    let value = if let Some(op) = compound_op {
-        Expr::new(
-            ExprKind::BinaryOp {
-                left: Box::new(Expr::new(ExprKind::Variable(name.clone()), span)),
-                op,
-                right: Box::new(rhs),
-            },
-            span,
-        )
-    } else {
-        rhs
-    };
+    let target = Expr::new(ExprKind::Variable(name.clone()), span);
+    let value = assignment_value(target, op, rhs, span);
 
     Ok(Stmt::new(StmtKind::Assign { name, value }, span))
 }
@@ -151,7 +128,7 @@ pub(super) fn try_parse_postfix_assignment(
     span: Span,
 ) -> Result<Option<Stmt>, CompileError> {
     let start = *pos;
-    let Some(assign_pos) = find_top_level_assign(tokens, start) else {
+    let Some((assign_pos, op)) = find_top_level_assignment(tokens, start) else {
         return Ok(None);
     };
     if assign_pos < start + 3 {
@@ -161,6 +138,9 @@ pub(super) fn try_parse_postfix_assignment(
     let lhs = &tokens[start..assign_pos];
     let is_append =
         lhs.len() >= 3 && lhs[lhs.len() - 2].0 == Token::LBracket && lhs[lhs.len() - 1].0 == Token::RBracket;
+    if is_append && op != AssignmentOperator::Assign {
+        return Err(CompileError::new(span, "Invalid assignment target"));
+    }
     let contains_postfix = lhs
         .iter()
         .skip(1)
@@ -175,10 +155,13 @@ pub(super) fn try_parse_postfix_assignment(
     if lhs_pos != lhs_expr_tokens.len() {
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
-
     *pos = assign_pos + 1;
-    let value = parse_assignment_value_expr(tokens, pos)?;
+    let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
+    if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
+        return lower_effectful_postfix_assignment(lhs_expr, op, rhs, span).map(Some);
+    }
+    let value = assignment_value(lhs_expr.clone(), op, rhs, span);
 
     let stmt = match lhs_expr.kind {
         ExprKind::Variable(array) if is_append => StmtKind::ArrayPush { array, value },
@@ -220,7 +203,7 @@ pub(super) fn try_parse_scoped_property_assignment(
     span: Span,
 ) -> Result<Option<Stmt>, CompileError> {
     let start = *pos;
-    let Some(assign_pos) = find_top_level_assign(tokens, start) else {
+    let Some((assign_pos, op)) = find_top_level_assignment(tokens, start) else {
         return Ok(None);
     };
     if assign_pos < start + 3 {
@@ -230,16 +213,22 @@ pub(super) fn try_parse_scoped_property_assignment(
     let lhs = &tokens[start..assign_pos];
     let is_append =
         lhs.len() >= 3 && lhs[lhs.len() - 2].0 == Token::LBracket && lhs[lhs.len() - 1].0 == Token::RBracket;
+    if is_append && op != AssignmentOperator::Assign {
+        return Err(CompileError::new(span, "Invalid assignment target"));
+    }
     let mut lhs_pos = 0;
     let lhs_expr_tokens = if is_append { &lhs[..lhs.len() - 2] } else { lhs };
     let lhs_expr = parse_expr(lhs_expr_tokens, &mut lhs_pos)?;
     if lhs_pos != lhs_expr_tokens.len() {
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
-
     *pos = assign_pos + 1;
-    let value = parse_assignment_value_expr(tokens, pos)?;
+    let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
+    if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
+        return lower_effectful_static_assignment(lhs_expr, op, rhs, span).map(Some);
+    }
+    let value = assignment_value(lhs_expr.clone(), op, rhs, span);
 
     let stmt = match lhs_expr.kind {
         ExprKind::StaticPropertyAccess { receiver, property } if is_append => {
@@ -271,7 +260,10 @@ pub(super) fn try_parse_scoped_property_assignment(
     Ok(Some(Stmt::new(stmt, span)))
 }
 
-fn find_top_level_assign(tokens: &[(Token, Span)], start: usize) -> Option<usize> {
+fn find_top_level_assignment(
+    tokens: &[(Token, Span)],
+    start: usize,
+) -> Option<(usize, AssignmentOperator)> {
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     let mut brace_depth = 0usize;
@@ -285,11 +277,13 @@ fn find_top_level_assign(tokens: &[(Token, Span)], start: usize) -> Option<usize
             Token::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
             Token::LBrace => brace_depth += 1,
             Token::RBrace => brace_depth = brace_depth.saturating_sub(1),
-            Token::Assign if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                return Some(pos);
-            }
             Token::Semicolon if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return None;
+            }
+            _ if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                if let Some(op) = assignment_operator(&tokens[pos].0) {
+                    return Some((pos, op));
+                }
             }
             _ => {}
         }
@@ -297,6 +291,255 @@ fn find_top_level_assign(tokens: &[(Token, Span)], start: usize) -> Option<usize
     }
 
     None
+}
+
+fn assignment_operator(token: &Token) -> Option<AssignmentOperator> {
+    use crate::parser::ast::BinOp;
+
+    match token {
+        Token::Assign => Some(AssignmentOperator::Assign),
+        Token::PlusAssign => Some(AssignmentOperator::Compound(BinOp::Add)),
+        Token::MinusAssign => Some(AssignmentOperator::Compound(BinOp::Sub)),
+        Token::StarAssign => Some(AssignmentOperator::Compound(BinOp::Mul)),
+        Token::StarStarAssign => Some(AssignmentOperator::Compound(BinOp::Pow)),
+        Token::SlashAssign => Some(AssignmentOperator::Compound(BinOp::Div)),
+        Token::PercentAssign => Some(AssignmentOperator::Compound(BinOp::Mod)),
+        Token::DotAssign => Some(AssignmentOperator::Compound(BinOp::Concat)),
+        Token::AmpAssign => Some(AssignmentOperator::Compound(BinOp::BitAnd)),
+        Token::PipeAssign => Some(AssignmentOperator::Compound(BinOp::BitOr)),
+        Token::CaretAssign => Some(AssignmentOperator::Compound(BinOp::BitXor)),
+        Token::LessLessAssign => Some(AssignmentOperator::Compound(BinOp::ShiftLeft)),
+        Token::GreaterGreaterAssign => Some(AssignmentOperator::Compound(BinOp::ShiftRight)),
+        Token::QuestionQuestionAssign => Some(AssignmentOperator::NullCoalesce),
+        _ => None,
+    }
+}
+
+fn assignment_value(target: Expr, op: AssignmentOperator, rhs: Expr, span: Span) -> Expr {
+    match op {
+        AssignmentOperator::Assign => rhs,
+        AssignmentOperator::Compound(op) => Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(target),
+                op,
+                right: Box::new(rhs),
+            },
+            span,
+        ),
+        AssignmentOperator::NullCoalesce => Expr::new(
+            ExprKind::NullCoalesce {
+                value: Box::new(target),
+                default: Box::new(rhs),
+            },
+            span,
+        ),
+    }
+}
+
+fn can_replay_assignment_target(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::ArrayAccess { array, index } => {
+            can_replay_assignment_target(array) && can_replay_assignment_target(index)
+        }
+        ExprKind::PropertyAccess { object, .. } => can_replay_assignment_target(object),
+        ExprKind::BinaryOp { left, right, .. } => {
+            can_replay_assignment_target(left) && can_replay_assignment_target(right)
+        }
+        ExprKind::InstanceOf { value, .. }
+        | ExprKind::Negate(value)
+        | ExprKind::Not(value)
+        | ExprKind::BitNot(value)
+        | ExprKind::Cast { expr: value, .. }
+        | ExprKind::PtrCast { expr: value, .. }
+        | ExprKind::NamedArg { value, .. }
+        | ExprKind::Spread(value) => can_replay_assignment_target(value),
+        ExprKind::NullCoalesce { value, default }
+        | ExprKind::ShortTernary { value, default } => {
+            can_replay_assignment_target(value) && can_replay_assignment_target(default)
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            can_replay_assignment_target(condition)
+                && can_replay_assignment_target(then_expr)
+                && can_replay_assignment_target(else_expr)
+        }
+        ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::ConstRef(_)
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::EnumCase { .. }
+        | ExprKind::MagicConstant(_) => true,
+        _ => false,
+    }
+}
+
+fn lower_effectful_postfix_assignment(
+    lhs_expr: Expr,
+    op: AssignmentOperator,
+    rhs: Expr,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let mut lowerer = EffectfulTargetLowerer::new(span);
+    let lowered = match lhs_expr.kind {
+        ExprKind::ArrayAccess { array, index } => match array.kind {
+            ExprKind::Variable(array) => {
+                let index = lowerer.stabilize(*index);
+                let target = Expr::new(
+                    ExprKind::ArrayAccess {
+                        array: Box::new(Expr::new(ExprKind::Variable(array.clone()), span)),
+                        index: Box::new(index.clone()),
+                    },
+                    span,
+                );
+                let value = assignment_value(target, op, rhs, span);
+                StmtKind::ArrayAssign { array, index, value }
+            }
+            ExprKind::PropertyAccess { object, property } => {
+                let object = Box::new(lowerer.stabilize(*object));
+                let index = lowerer.stabilize(*index);
+                let target = Expr::new(
+                    ExprKind::ArrayAccess {
+                        array: Box::new(Expr::new(
+                            ExprKind::PropertyAccess {
+                                object: object.clone(),
+                                property: property.clone(),
+                            },
+                            span,
+                        )),
+                        index: Box::new(index.clone()),
+                    },
+                    span,
+                );
+                let value = assignment_value(target, op, rhs, span);
+                StmtKind::PropertyArrayAssign {
+                    object,
+                    property,
+                    index,
+                    value,
+                }
+            }
+            _ => return Err(CompileError::new(span, "Invalid assignment target")),
+        },
+        ExprKind::PropertyAccess { object, property } => {
+            let object = Box::new(lowerer.stabilize(*object));
+            let target = Expr::new(
+                ExprKind::PropertyAccess {
+                    object: object.clone(),
+                    property: property.clone(),
+                },
+                span,
+            );
+            let value = assignment_value(target, op, rhs, span);
+            StmtKind::PropertyAssign {
+                object,
+                property,
+                value,
+            }
+        }
+        _ => return Err(CompileError::new(span, "Invalid assignment target")),
+    };
+    Ok(lowerer.finish(lowered))
+}
+
+fn lower_effectful_static_assignment(
+    lhs_expr: Expr,
+    op: AssignmentOperator,
+    rhs: Expr,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let mut lowerer = EffectfulTargetLowerer::new(span);
+    let lowered = match lhs_expr.kind {
+        ExprKind::ArrayAccess { array, index } => match array.kind {
+            ExprKind::StaticPropertyAccess { receiver, property } => {
+                let index = lowerer.stabilize(*index);
+                let target = Expr::new(
+                    ExprKind::ArrayAccess {
+                        array: Box::new(Expr::new(
+                            ExprKind::StaticPropertyAccess {
+                                receiver: receiver.clone(),
+                                property: property.clone(),
+                            },
+                            span,
+                        )),
+                        index: Box::new(index.clone()),
+                    },
+                    span,
+                );
+                let value = assignment_value(target, op, rhs, span);
+                StmtKind::StaticPropertyArrayAssign {
+                    receiver,
+                    property,
+                    index,
+                    value,
+                }
+            }
+            _ => return Err(CompileError::new(span, "Invalid assignment target")),
+        },
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            let target = Expr::new(
+                ExprKind::StaticPropertyAccess {
+                    receiver: receiver.clone(),
+                    property: property.clone(),
+                },
+                span,
+            );
+            let value = assignment_value(target, op, rhs, span);
+            StmtKind::StaticPropertyAssign {
+                receiver,
+                property,
+                value,
+            }
+        }
+        _ => return Err(CompileError::new(span, "Invalid assignment target")),
+    };
+    Ok(lowerer.finish(lowered))
+}
+
+struct EffectfulTargetLowerer {
+    span: Span,
+    next_temp: usize,
+    stmts: Vec<Stmt>,
+}
+
+impl EffectfulTargetLowerer {
+    fn new(span: Span) -> Self {
+        Self {
+            span,
+            next_temp: 0,
+            stmts: Vec::new(),
+        }
+    }
+
+    fn stabilize(&mut self, expr: Expr) -> Expr {
+        if can_replay_assignment_target(&expr) {
+            return expr;
+        }
+        let name = format!(
+            "__elephc_compound_{}_{}_{}",
+            self.span.line, self.span.col, self.next_temp
+        );
+        self.next_temp += 1;
+        self.stmts.push(Stmt::new(
+            StmtKind::Assign {
+                name: name.clone(),
+                value: expr,
+            },
+            self.span,
+        ));
+        Expr::new(ExprKind::Variable(name), self.span)
+    }
+
+    fn finish(mut self, final_stmt: StmtKind) -> Stmt {
+        self.stmts.push(Stmt::new(final_stmt, self.span));
+        Stmt::new(StmtKind::Synthetic(self.stmts), self.span)
+    }
 }
 
 /// Handle ++$var; or --$var; as standalone statements.

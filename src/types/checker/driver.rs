@@ -460,6 +460,7 @@ impl Checker {
 
     fn stmt_contains_method_call(stmt: &crate::parser::ast::Stmt) -> bool {
         match &stmt.kind {
+            StmtKind::Synthetic(stmts) => stmts.iter().any(Self::stmt_contains_method_call),
             StmtKind::ExprStmt(expr)
             | StmtKind::Echo(expr)
             | StmtKind::Return(Some(expr)) => Self::expr_contains_method_call(expr),

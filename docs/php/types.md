@@ -120,7 +120,7 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
 - Integer overflow wraps instead of promoting to float.
 - Loose comparison (`==`) between different types coerces both sides to integer.
-- `??=` is checked against static local-slot storage; for concrete local variable types, the fallback must keep the same type or be a literal `null`.
+- `??=` is checked against typed assignment storage for variables, object properties, static properties, and non-append array elements. For concrete local variable types, the fallback must keep the same type or be a literal `null`.
 - elephc does not model PHP's uninitialized typed-property state; property slots without explicit defaults start from the compiler's existing zero/null-like object-slot initialization until assigned.
 
 ### Compiler diagnostics

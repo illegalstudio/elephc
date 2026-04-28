@@ -92,6 +92,9 @@ pub(super) fn collect_scope_reads(
 ) {
     for stmt in stmts {
         match &stmt.kind {
+            StmtKind::Synthetic(stmts) => {
+                collect_scope_reads(stmts, scope, warnings);
+            }
             StmtKind::Assign { name, value } => {
                 collect_expr_reads(value, scope, warnings);
                 scope.declare(name, stmt.span);

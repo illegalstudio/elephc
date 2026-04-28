@@ -70,6 +70,7 @@ pub(crate) fn block_local_writes(body: &[Stmt]) -> Option<HashSet<String>> {
 
 pub(crate) fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
     match &stmt.kind {
+        StmtKind::Synthetic(stmts) => block_local_writes(stmts),
         StmtKind::Echo(expr)
         | StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }

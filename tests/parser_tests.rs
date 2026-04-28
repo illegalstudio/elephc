@@ -1295,6 +1295,49 @@ fn test_null_coalesce_parse() {
 }
 
 #[test]
+fn test_parse_array_compound_assignment() {
+    let stmts = parse_source("<?php $items[0] += 3;");
+    match &stmts[0].kind {
+        StmtKind::ArrayAssign {
+            array,
+            index,
+            value,
+        } => {
+            assert_eq!(array, "items");
+            assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
+            match &value.kind {
+                ExprKind::BinaryOp { left, op, right } => {
+                    assert_eq!(op, &BinOp::Add);
+                    assert!(matches!(right.kind, ExprKind::IntLiteral(3)));
+                    match &left.kind {
+                        ExprKind::ArrayAccess { array, index } => {
+                            assert!(matches!(array.kind, ExprKind::Variable(ref name) if name == "items"));
+                            assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
+                        }
+                        other => panic!("Expected ArrayAccess lhs, got {:?}", other),
+                    }
+                }
+                other => panic!("Expected BinaryOp value, got {:?}", other),
+            }
+        }
+        other => panic!("Expected ArrayAssign, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_effectful_array_compound_assignment_uses_synthetic_temporary() {
+    let stmts = parse_source("<?php $items[idx()] += 3;");
+    match &stmts[0].kind {
+        StmtKind::Synthetic(stmts) => {
+            assert_eq!(stmts.len(), 2);
+            assert!(matches!(stmts[0].kind, StmtKind::Assign { .. }));
+            assert!(matches!(stmts[1].kind, StmtKind::ArrayAssign { .. }));
+        }
+        other => panic!("Expected Synthetic lowering, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_null_coalesce_assignment_parse() {
     let stmts = parse_source("<?php $x ??= 10;");
     assert_eq!(stmts.len(), 1);
@@ -1980,6 +2023,36 @@ fn test_parse_static_property_assignment() {
 }
 
 #[test]
+fn test_parse_static_property_compound_assignment() {
+    let stmts = parse_source("<?php Counter::$count += 2;");
+    match &stmts[0].kind {
+        StmtKind::StaticPropertyAssign {
+            receiver,
+            property,
+            value,
+        } => {
+            assert_eq!(receiver, &StaticReceiver::Named("Counter".into()));
+            assert_eq!(property, "count");
+            match &value.kind {
+                ExprKind::BinaryOp { left, op, right } => {
+                    assert_eq!(op, &BinOp::Add);
+                    assert!(matches!(right.kind, ExprKind::IntLiteral(2)));
+                    match &left.kind {
+                        ExprKind::StaticPropertyAccess { receiver, property } => {
+                            assert_eq!(receiver, &StaticReceiver::Named("Counter".into()));
+                            assert_eq!(property, "count");
+                        }
+                        other => panic!("Expected StaticPropertyAccess lhs, got {:?}", other),
+                    }
+                }
+                other => panic!("Expected BinaryOp value, got {:?}", other),
+            }
+        }
+        other => panic!("Expected StaticPropertyAssign, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_static_property_array_push() {
     let stmts = parse_source("<?php Counter::$items[] = 2;");
     match &stmts[0].kind {
@@ -2010,6 +2083,37 @@ fn test_parse_static_property_array_assign() {
             assert_eq!(property, "items");
             assert!(matches!(index.kind, ExprKind::IntLiteral(1)));
             assert!(matches!(value.kind, ExprKind::IntLiteral(3)));
+        }
+        other => panic!("Expected StaticPropertyArrayAssign, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_static_property_array_compound_assignment() {
+    let stmts = parse_source("<?php Counter::$items[1] ??= 3;");
+    match &stmts[0].kind {
+        StmtKind::StaticPropertyArrayAssign {
+            receiver,
+            property,
+            index,
+            value,
+        } => {
+            assert_eq!(receiver, &StaticReceiver::Named("Counter".into()));
+            assert_eq!(property, "items");
+            assert!(matches!(index.kind, ExprKind::IntLiteral(1)));
+            match &value.kind {
+                ExprKind::NullCoalesce { value, default } => {
+                    assert!(matches!(default.kind, ExprKind::IntLiteral(3)));
+                    match &value.kind {
+                        ExprKind::ArrayAccess { array, index } => {
+                            assert!(matches!(index.kind, ExprKind::IntLiteral(1)));
+                            assert!(matches!(array.kind, ExprKind::StaticPropertyAccess { .. }));
+                        }
+                        other => panic!("Expected ArrayAccess lhs, got {:?}", other),
+                    }
+                }
+                other => panic!("Expected NullCoalesce value, got {:?}", other),
+            }
         }
         other => panic!("Expected StaticPropertyArrayAssign, got {:?}", other),
     }
@@ -2181,6 +2285,30 @@ fn test_parse_property_assign() {
 }
 
 #[test]
+fn test_parse_property_compound_assignment() {
+    let stmts = parse_source("<?php $obj->prop += 42;");
+    match &stmts[0].kind {
+        StmtKind::PropertyAssign {
+            object,
+            property,
+            value,
+        } => {
+            assert_eq!(property, "prop");
+            assert!(matches!(object.kind, ExprKind::Variable(_)));
+            match &value.kind {
+                ExprKind::BinaryOp { left, op, right } => {
+                    assert_eq!(op, &BinOp::Add);
+                    assert!(matches!(right.kind, ExprKind::IntLiteral(42)));
+                    assert!(matches!(left.kind, ExprKind::PropertyAccess { .. }));
+                }
+                other => panic!("Expected BinaryOp value, got {:?}", other),
+            }
+        }
+        other => panic!("Expected PropertyAssign, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_property_array_push() {
     let stmts = parse_source("<?php $obj->entries[] = $item;");
     match &stmts[0].kind {
@@ -2211,6 +2339,32 @@ fn test_parse_property_array_assign() {
             assert!(matches!(object.kind, ExprKind::Variable(_)));
             assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
             assert!(matches!(value.kind, ExprKind::IntLiteral(42)));
+        }
+        other => panic!("Expected PropertyArrayAssign, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_property_array_compound_assignment() {
+    let stmts = parse_source("<?php $obj->items[0] *= 2;");
+    match &stmts[0].kind {
+        StmtKind::PropertyArrayAssign {
+            object,
+            property,
+            index,
+            value,
+        } => {
+            assert_eq!(property, "items");
+            assert!(matches!(object.kind, ExprKind::Variable(_)));
+            assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
+            match &value.kind {
+                ExprKind::BinaryOp { left, op, right } => {
+                    assert_eq!(op, &BinOp::Mul);
+                    assert!(matches!(right.kind, ExprKind::IntLiteral(2)));
+                    assert!(matches!(left.kind, ExprKind::ArrayAccess { .. }));
+                }
+                other => panic!("Expected BinaryOp value, got {:?}", other),
+            }
         }
         other => panic!("Expected PropertyArrayAssign, got {:?}", other),
     }

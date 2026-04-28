@@ -9,12 +9,12 @@ class Counter {
     }
 
     public function inc() {
-        $this->count = $this->count + 1;
+        $this->count += 1;
     }
 
     public function dec() {
         if ($this->count > 0) {
-            $this->count = $this->count - 1;
+            $this->count -= 1;
         }
     }
 

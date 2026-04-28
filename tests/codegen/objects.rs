@@ -945,6 +945,87 @@ echo $bucket->first();
 }
 
 #[test]
+fn test_class_property_compound_assign() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter {
+    public $value = 10;
+}
+
+$counter = new Counter();
+$counter->value += 5;
+$counter->value *= 3;
+echo $counter->value;
+"#,
+    );
+    assert_eq!(out, "45");
+}
+
+#[test]
+fn test_class_property_compound_assign_evaluates_receiver_once() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter {
+    public $value = 10;
+}
+
+function passthrough($counter) {
+    echo "r";
+    return $counter;
+}
+
+$counter = new Counter();
+passthrough($counter)->value += 5;
+echo ":" . $counter->value;
+"#,
+    );
+    assert_eq!(out, "r:15");
+}
+
+#[test]
+fn test_class_property_array_compound_assign() {
+    let out = compile_and_run(
+        r#"<?php
+class Bucket {
+    public $items = [2, 4, 8];
+}
+
+$bucket = new Bucket();
+$bucket->items[1] += 6;
+$bucket->items[2] >>= 1;
+echo $bucket->items[1] . "|" . $bucket->items[2];
+"#,
+    );
+    assert_eq!(out, "10|4");
+}
+
+#[test]
+fn test_class_property_array_compound_assign_evaluates_receiver_and_index_once() {
+    let out = compile_and_run(
+        r#"<?php
+class Bucket {
+    public $items = [2, 4, 8];
+}
+
+function passthrough($bucket) {
+    echo "r";
+    return $bucket;
+}
+
+function idx() {
+    echo "i";
+    return 2;
+}
+
+$bucket = new Bucket();
+passthrough($bucket)->items[idx()] -= 3;
+echo ":" . $bucket->items[2];
+"#,
+    );
+    assert_eq!(out, "ri:5");
+}
+
+#[test]
 fn test_deep_mixed_property_and_array_chain() {
     let out = compile_and_run(
         r#"<?php
@@ -1258,6 +1339,31 @@ echo $u->name();
 "#,
     );
     assert_eq!(out, "7:Ada");
+}
+
+#[test]
+fn test_readonly_property_null_coalesce_assignment_keeps_initialized_value() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public readonly int $value;
+
+    public function __construct() {
+        $this->value = 7;
+    }
+}
+
+function fallback() {
+    echo "fallback";
+    return 9;
+}
+
+$box = new Box();
+$box->value ??= fallback();
+echo $box->value;
+"#,
+    );
+    assert_eq!(out, "7");
 }
 
 #[test]
@@ -1644,6 +1750,56 @@ echo Registry::$items[0] . ":" . Registry::$items[1];
 "#,
     );
     assert_eq!(out, "4:8");
+}
+
+#[test]
+fn test_static_property_compound_assign() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter {
+    public static int $count = 4;
+}
+Counter::$count += 6;
+Counter::$count *= 2;
+echo Counter::$count;
+"#,
+    );
+    assert_eq!(out, "20");
+}
+
+#[test]
+fn test_static_property_array_compound_assign() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    public static $items = [3, 5, 7];
+}
+Registry::$items[0] += 9;
+Registry::$items[2] -= 4;
+echo Registry::$items[0] . ":" . Registry::$items[2];
+"#,
+    );
+    assert_eq!(out, "12:3");
+}
+
+#[test]
+fn test_static_property_array_compound_assign_evaluates_index_once() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    public static $items = [3, 5, 7];
+}
+
+function idx() {
+    echo "i";
+    return 1;
+}
+
+Registry::$items[idx()] += 6;
+echo ":" . Registry::$items[1];
+"#,
+    );
+    assert_eq!(out, "i:11");
 }
 
 #[test]

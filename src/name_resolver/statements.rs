@@ -41,6 +41,17 @@ pub(super) fn resolve_stmt_list(
                     continue;
                 }
                 match &stmt.kind {
+                    StmtKind::Synthetic(stmts) => {
+                        resolved.push(Stmt::new(
+                            StmtKind::Synthetic(resolve_stmt_list(
+                                stmts,
+                                namespace.as_deref(),
+                                &imports,
+                                symbols,
+                            )?),
+                            stmt.span,
+                        ));
+                    }
                     StmtKind::If {
                         condition,
                         then_body,

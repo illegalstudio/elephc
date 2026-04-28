@@ -5,7 +5,7 @@ use super::super::super::emit::Emitter;
 use super::super::super::expr::{coerce_result_to_type, emit_expr};
 use crate::codegen::platform::Arch;
 use crate::names::static_property_symbol;
-use crate::parser::ast::{Expr, StaticReceiver, Visibility};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Visibility};
 use crate::types::PhpType;
 
 const STATIC_PROP_PRIVATE_ACCESS_LABEL: &str = "_static_prop_private_access_msg";
@@ -29,6 +29,24 @@ pub(crate) fn emit_static_property_assign_stmt(
 ) {
     emitter.blank();
     emitter.comment(&format!("::${} = ...", property));
+    if let Some((current, default)) =
+        super::super::null_coalesce_static_property_target(receiver, property, value)
+    {
+        if matches!(default.kind, ExprKind::Null) {
+            emitter.comment("literal null fallback leaves the static property unchanged");
+            return;
+        }
+        let current_ty = emit_expr(current, emitter, ctx, data);
+        if current_ty != PhpType::Void {
+            let keep_label = ctx.next_label("nca_keep");
+            super::super::emit_branch_if_result_non_null(&current_ty, &keep_label, emitter);
+            emit_static_property_assign_stmt(receiver, property, default, emitter, ctx, data);
+            emitter.label(&keep_label);
+        } else {
+            emit_static_property_assign_stmt(receiver, property, default, emitter, ctx, data);
+        }
+        return;
+    }
 
     let Some((class_name, declaring_class, prop_ty, declared)) =
         resolve_static_property(receiver, property, ctx, emitter)
@@ -155,6 +173,28 @@ pub(crate) fn emit_static_property_array_assign_stmt(
 ) {
     emitter.blank();
     emitter.comment(&format!("::${}[...] = ...", property));
+    if let Some((current, default)) =
+        super::super::null_coalesce_static_property_array_target(receiver, property, index, value)
+    {
+        if matches!(default.kind, ExprKind::Null) {
+            emitter.comment("literal null fallback leaves the static property array slot unchanged");
+            return;
+        }
+        let current_ty = emit_expr(current, emitter, ctx, data);
+        if current_ty != PhpType::Void {
+            let keep_label = ctx.next_label("nca_keep");
+            super::super::emit_branch_if_result_non_null(&current_ty, &keep_label, emitter);
+            emit_static_property_array_assign_stmt(
+                receiver, property, index, default, emitter, ctx, data,
+            );
+            emitter.label(&keep_label);
+        } else {
+            emit_static_property_array_assign_stmt(
+                receiver, property, index, default, emitter, ctx, data,
+            );
+        }
+        return;
+    }
 
     let Some((_, declaring_class, prop_ty, _)) =
         resolve_static_property(receiver, property, ctx, emitter)

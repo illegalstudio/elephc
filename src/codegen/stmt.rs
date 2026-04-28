@@ -3,6 +3,7 @@ mod arrays;
 mod control_flow;
 mod helpers;
 mod io;
+mod null_coalesce_assign;
 mod storage;
 
 use super::abi;
@@ -12,6 +13,15 @@ use super::emit::Emitter;
 use super::expr::emit_expr;
 use crate::parser::ast::{Stmt, StmtKind};
 use crate::types::PhpType;
+
+pub(crate) use null_coalesce_assign::{
+    emit_branch_if_result_non_null,
+    null_coalesce_array_target,
+    null_coalesce_property_array_target,
+    null_coalesce_property_target,
+    null_coalesce_static_property_array_target,
+    null_coalesce_static_property_target,
+};
 
 fn current_function_name(ctx: &Context) -> String {
     ctx.return_label
@@ -44,6 +54,11 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
     crate::codegen::abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
 
     match &stmt.kind {
+        StmtKind::Synthetic(stmts) => {
+            for stmt in stmts {
+                emit_stmt(stmt, emitter, ctx, data);
+            }
+        }
         StmtKind::IfDef { .. } => {
             emitter.comment("WARNING: unresolved ifdef reached codegen");
         }

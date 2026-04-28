@@ -150,6 +150,11 @@ pub(super) fn collect_expr_reads(
 
 pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<CompileWarning>) {
     match &stmt.kind {
+        StmtKind::Synthetic(stmts) => {
+            for stmt in stmts {
+                collect_closure_warnings_in_stmt(stmt, warnings);
+            }
+        }
         StmtKind::Echo(expr)
         | StmtKind::Throw(expr)
         | StmtKind::ExprStmt(expr)

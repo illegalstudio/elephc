@@ -17,6 +17,10 @@ pub(crate) fn propagate_block(body: Vec<Stmt>, mut env: ConstantEnv) -> (Vec<Stm
 pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
     let span = stmt.span;
     match stmt.kind {
+        StmtKind::Synthetic(stmts) => {
+            let (stmts, next_env) = propagate_block(stmts, env);
+            (Stmt::new(StmtKind::Synthetic(stmts), span), next_env)
+        }
         StmtKind::Echo(expr) => {
             let expr = propagate_expr(expr, &env);
             (Stmt::new(StmtKind::Echo(expr), span), env)

@@ -45,7 +45,11 @@ pub(super) fn prepare_indexed_array_assign(
     emit_expr(index, emitter, ctx, data);
     emitter.instruction("str x0, [sp, #-16]!");                                 // push computed index onto stack
     let val_ty = emit_expr(value, emitter, ctx, data);
-    helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
+    if matches!(val_ty, PhpType::Str) {
+        abi::emit_call_label(emitter, "__rt_str_persist");                      // persist transient string results before storing them in indexed-array slots
+    } else {
+        helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
+    }
     match &val_ty {
         PhpType::Str => {
             emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve string pointer/length across growth helpers
@@ -146,7 +150,11 @@ fn prepare_indexed_array_assign_linux_x86_64(
     emit_expr(index, emitter, ctx, data);
     abi::emit_push_reg(emitter, "rax");                                           // preserve the computed target index while evaluating the assigned value
     let val_ty = emit_expr(value, emitter, ctx, data);
-    helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
+    if matches!(val_ty, PhpType::Str) {
+        abi::emit_call_label(emitter, "__rt_str_persist");                      // persist transient string results before storing them in indexed-array slots
+    } else {
+        helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
+    }
     match &val_ty {
         PhpType::Str => {
             abi::emit_push_reg_pair(emitter, "rax", "rdx");                       // preserve the string payload across indexed-array growth helpers

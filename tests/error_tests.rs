@@ -227,6 +227,11 @@ fn test_error_compound_assignment_missing_rhs() {
 }
 
 #[test]
+fn test_error_compound_assignment_rejects_append_target() {
+    expect_error("<?php $items = [1]; $items[] += 2;", "Invalid assignment target");
+}
+
+#[test]
 fn test_error_instanceof_missing_class_name() {
     expect_error(
         "<?php class A {} $a = new A(); echo $a instanceof 1;",

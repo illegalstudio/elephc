@@ -99,7 +99,18 @@ The operand is evaluated normally and its value is preserved. Only suppressible 
 | `>>=` | `$x >>= 2` | `$x = $x >> 2` |
 | `??=` | `$x ??= "default"` | Assign RHS only when `$x` is `null` |
 
-Compound assignments are supported for local variable assignments and `for` init/update clauses.
+Compound assignments are supported for local variable assignments, `for` init/update clauses, object properties, static properties, indexed array elements, property-backed indexed array elements, and static-property-backed indexed array elements:
+
+```php
+$items[0] += 3;
+$box->count *= 2;
+$box->items[1] >>= 1;
+Counter::$count **= 2;
+Registry::$items[0] ??= 10;
+```
+
+Append targets such as `$items[] += 1` are invalid; append syntax is only supported with plain assignment (`$items[] = 1`).
+Receiver and index expressions are evaluated once for non-local compound targets, matching PHP read-modify-write behavior for forms such as `$items[f()] += 1` and `getBox()->count += 1`.
 
 ## List Unpacking
 
@@ -122,7 +133,7 @@ $x ??= "fallback";       // assigns because $x is null
 $x ??= "ignored";        // keeps "fallback"; RHS is not evaluated
 ```
 
-`??=` is supported for already-declared local/global/static variables as a standalone assignment statement.
+`??=` is supported for already-declared local/global/static variables and non-append property/array/static-property assignment targets as a standalone assignment statement.
 For concrete local variable types, the fallback must keep the same static type, or be a literal `null`.
 Use a nullable, union, or `mixed` typed local when the fallback may change the stored runtime representation.
 

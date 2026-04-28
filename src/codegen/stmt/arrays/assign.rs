@@ -5,7 +5,7 @@ mod indexed;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 pub(super) fn emit_array_assign_stmt(
@@ -18,6 +18,24 @@ pub(super) fn emit_array_assign_stmt(
 ) {
     emitter.blank();
     emitter.comment(&format!("${}[...] = ...", array));
+    if let Some((current, default)) = super::super::null_coalesce_array_target(array, index, value)
+    {
+        if matches!(default.kind, ExprKind::Null) {
+            emitter.comment("literal null fallback leaves the array slot unchanged");
+            return;
+        }
+        let current_ty = crate::codegen::expr::emit_expr(current, emitter, ctx, data);
+        if current_ty != PhpType::Void {
+            let keep_label = ctx.next_label("nca_keep");
+            super::super::emit_branch_if_result_non_null(&current_ty, &keep_label, emitter);
+            emit_array_assign_stmt(array, index, default, emitter, ctx, data);
+            emitter.label(&keep_label);
+        } else {
+            emit_array_assign_stmt(array, index, default, emitter, ctx, data);
+        }
+        return;
+    }
+
     let var = match ctx.variables.get(array) {
         Some(v) => v,
         None => {

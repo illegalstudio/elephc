@@ -10,6 +10,12 @@ use super::Checker;
 impl Checker {
     pub fn check_stmt(&mut self, stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileError> {
         match &stmt.kind {
+            StmtKind::Synthetic(stmts) => {
+                for stmt in stmts {
+                    self.check_stmt(stmt, env)?;
+                }
+                Ok(())
+            }
             StmtKind::IfDef { .. } => {
                 Err(CompileError::new(stmt.span, "Unresolved ifdef statement"))
             }

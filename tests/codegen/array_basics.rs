@@ -82,6 +82,58 @@ fn test_array_assign() {
 }
 
 #[test]
+fn test_array_compound_assign() {
+    let out = compile_and_run("<?php $a = [1, 2, 3]; $a[1] += 40; $a[2] *= 10; echo $a[1] . \"|\" . $a[2];");
+    assert_eq!(out, "42|30");
+}
+
+#[test]
+fn test_array_compound_assign_evaluates_index_once() {
+    let out = compile_and_run(
+        r#"<?php
+function idx() {
+    echo "i";
+    return 1;
+}
+
+$a = [10, 20, 30];
+$a[idx()] += 5;
+echo ":" . $a[1];
+"#,
+    );
+    assert_eq!(out, "i:25");
+}
+
+#[test]
+fn test_array_compound_assign_effectful_index_all_operator_families() {
+    let out = compile_and_run(
+        r#"<?php
+function idx() {
+    echo ".";
+    return 0;
+}
+
+$num = [2];
+$num[idx()] **= 3;
+echo ":" . $num[0];
+
+$bits = [8];
+$bits[idx()] >>= 1;
+echo ":" . $bits[0];
+
+$text = ["a"];
+$text[idx()] .= "b";
+echo ":" . $text[0];
+
+$fallback = [null];
+$fallback[idx()] ??= 7;
+echo ":" . $fallback[0];
+"#,
+    );
+    assert_eq!(out, ".:8.:4.:ab.:7");
+}
+
+#[test]
 fn test_array_assign_into_empty_array_updates_length() {
     let out = compile_and_run(r#"<?php $a = []; $a[0] = 7; echo count($a) . "|" . $a[0];"#);
     assert_eq!(out, "1|7");

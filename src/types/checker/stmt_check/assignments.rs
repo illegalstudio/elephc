@@ -63,6 +63,56 @@ impl Checker {
         ))
     }
 
+    fn type_can_be_null(ty: &PhpType) -> bool {
+        *ty == PhpType::Void || Self::union_contains_void(ty) || matches!(ty, PhpType::Mixed)
+    }
+
+    fn null_coalesce_property_keeps_non_null(
+        object: &Expr,
+        property: &str,
+        value: &Expr,
+        property_ty: &PhpType,
+    ) -> bool {
+        if Self::type_can_be_null(property_ty) {
+            return false;
+        }
+        let ExprKind::NullCoalesce {
+            value: current,
+            default: _,
+        } = &value.kind
+        else {
+            return false;
+        };
+        let ExprKind::PropertyAccess {
+            object: current_object,
+            property: current_property,
+        } = &current.kind
+        else {
+            return false;
+        };
+        current_property == property
+            && Self::assignment_expr_equivalent(current_object, object)
+    }
+
+    fn assignment_expr_equivalent(left: &Expr, right: &Expr) -> bool {
+        match (&left.kind, &right.kind) {
+            (ExprKind::Variable(a), ExprKind::Variable(b)) => a == b,
+            (ExprKind::This, ExprKind::This) => true,
+            (
+                ExprKind::PropertyAccess {
+                    object: a_object,
+                    property: a_property,
+                },
+                ExprKind::PropertyAccess {
+                    object: b_object,
+                    property: b_property,
+                },
+            ) => a_property == b_property
+                && Self::assignment_expr_equivalent(a_object, b_object),
+            _ => false,
+        }
+    }
+
     fn resolve_static_property_assignment_target(
         &self,
         receiver: &StaticReceiver,
@@ -614,6 +664,19 @@ impl Checker {
                                 ));
                             }
                         }
+                        let expected_ty = class_info
+                            .properties
+                            .iter()
+                            .find(|(n, _)| n == property)
+                            .map(|(_, ty)| ty.clone())
+                            .unwrap_or(PhpType::Int);
+                        let readonly_non_null_coalesce_keep =
+                            Self::null_coalesce_property_keeps_non_null(
+                                object,
+                                property,
+                                value,
+                                &expected_ty,
+                            );
                         if class_info.readonly_properties.contains(property)
                             && !(self.current_class.as_deref()
                                 == class_info
@@ -621,6 +684,7 @@ impl Checker {
                                     .get(property)
                                     .map(String::as_str)
                                 && self.current_method.as_deref() == Some("__construct"))
+                            && !readonly_non_null_coalesce_keep
                         {
                             return Err(CompileError::new(
                                 stmt.span,
@@ -631,12 +695,6 @@ impl Checker {
                             ));
                         }
                         if class_info.declared_properties.contains(property) {
-                            let expected_ty = class_info
-                                .properties
-                                .iter()
-                                .find(|(n, _)| n == property)
-                                .map(|(_, ty)| ty.clone())
-                                .unwrap_or(PhpType::Int);
                             self.require_compatible_arg_type(
                                 &expected_ty,
                                 &val_ty,

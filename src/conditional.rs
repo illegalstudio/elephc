@@ -32,6 +32,7 @@ fn apply_stmts(stmts: Vec<Stmt>, defines: &HashSet<String>) -> Vec<Stmt> {
 
 fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
     match kind {
+        StmtKind::Synthetic(stmts) => StmtKind::Synthetic(apply_stmts(stmts, defines)),
         StmtKind::Echo(expr) => StmtKind::Echo(rewrite_expr(expr, defines)),
         StmtKind::Assign { name, value } => StmtKind::Assign {
             name,

@@ -11,6 +11,9 @@ pub fn collect_local_vars(
 ) {
     for stmt in stmts {
         match &stmt.kind {
+            StmtKind::Synthetic(stmts) => {
+                collect_local_vars(stmts, ctx, sig);
+            }
             StmtKind::Assign { name, value } => {
                 if !ctx.variables.contains_key(name) {
                     let static_ty = infer_local_type(value, sig, Some(ctx));
