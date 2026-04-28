@@ -431,7 +431,11 @@ impl Checker {
                 name,
                 value,
             } => {
-                let declared_ty = self.resolve_type_expr(type_expr, stmt.span)?;
+                let declared_ty = self.resolve_declared_local_type_hint(
+                    type_expr,
+                    stmt.span,
+                    &format!("Typed local ${}", name),
+                )?;
                 let value_ty = self.infer_type(value, env)?;
                 if !self.type_accepts(&declared_ty, &value_ty) {
                     return Err(CompileError::new(

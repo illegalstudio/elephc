@@ -557,3 +557,124 @@ fn test_example_functions_compiles_and_runs() {
         "my_abs(-42) = 42\nmy_max(3, 7) = 7\nclamp(15, 0, 10) = 10\ngcd(48, 18) = 6\n2^10 = 1024\ndescribe(42) = integer:42\ndescribe(null) = NULL:null\nadd_ten() = 20\nprofile(age: 30, name: \"Ada\") = Ada:30\n",
     );
 }
+
+#[test]
+fn test_never_return_type_throws_and_is_caught() {
+    let out = compile_and_run(
+        "<?php
+        function fail(): never {
+            throw new \\Exception(\"boom\");
+        }
+        try {
+            fail();
+            echo \"unreachable\";
+        } catch (\\Exception $e) {
+            echo $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(out, "boom");
+}
+
+#[test]
+fn test_never_instance_method_throws_and_is_caught() {
+    let out = compile_and_run(
+        "<?php
+        class Failer {
+            public function fail(): never {
+                throw new \\Exception(\"method-boom\");
+            }
+        }
+        $f = new Failer();
+        try {
+            $f->fail();
+            echo \"unreachable\";
+        } catch (\\Exception $e) {
+            echo $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(out, "method-boom");
+}
+
+#[test]
+fn test_never_static_method_throws_and_is_caught() {
+    let out = compile_and_run(
+        "<?php
+        class Failer {
+            public static function fail(): never {
+                throw new \\Exception(\"static-boom\");
+            }
+        }
+        try {
+            Failer::fail();
+            echo \"unreachable\";
+        } catch (\\Exception $e) {
+            echo $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(out, "static-boom");
+}
+
+#[test]
+fn test_never_function_calls_exit() {
+    let out = compile_and_run_expect_failure(
+        "<?php
+        function bail(): never {
+            exit(1);
+        }
+        bail();
+        echo \"unreachable\";
+        ",
+    );
+    assert!(
+        out.is_empty() || !out.contains("unreachable"),
+        "unexpected output before exit: {:?}",
+        out,
+    );
+}
+
+#[test]
+fn test_never_function_call_followed_by_unreachable_code_compiles() {
+    let out = compile_and_run(
+        "<?php
+        function panic(string $msg): never {
+            throw new \\Exception($msg);
+        }
+        try {
+            panic(\"oops\");
+            $x = 42;
+            echo $x;
+        } catch (\\Exception $e) {
+            echo $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(out, "oops");
+}
+
+#[test]
+fn test_never_overrides_void_parent() {
+    let out = compile_and_run(
+        "<?php
+        class Base {
+            public function run(): void {
+                echo \"base\";
+            }
+        }
+        class Derived extends Base {
+            public function run(): never {
+                throw new \\Exception(\"derived\");
+            }
+        }
+        $d = new Derived();
+        try {
+            $d->run();
+        } catch (\\Exception $e) {
+            echo $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(out, "derived");
+}

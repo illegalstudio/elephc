@@ -143,9 +143,8 @@ impl Checker {
         method_env: &TypeEnv,
         pass_errors: &mut Vec<CompileError>,
     ) {
-        let inferred_return = self
-            .find_return_type_in_body(&method.body, method_env)
-            .unwrap_or(PhpType::Void);
+        let raw_inferred = self.find_return_type_in_body(&method.body, method_env);
+        let inferred_return = raw_inferred.clone().unwrap_or(PhpType::Void);
         let effective_return = if let Some(type_ann) = method.return_type.as_ref() {
             match self.resolve_declared_return_type_hint(
                 type_ann,
@@ -153,17 +152,22 @@ impl Checker {
                 &format!("Method '{}::{}'", class.name, method.name),
             ) {
                 Ok(declared) => {
-                    if let Err(error) = self.require_compatible_arg_type(
-                        &declared,
-                        &inferred_return,
-                        method.span,
-                        &format!("Method '{}::{}' return type", class.name, method.name),
-                    ) {
-                        pass_errors.extend(error.flatten());
-                        self.current_class = None;
-                        self.current_method = None;
-                        self.current_method_is_static = false;
-                        return;
+                    // :never methods are allowed to have no return statements (they always throw/exit/loop).
+                    let skip_compat_check =
+                        matches!(declared, PhpType::Never) && raw_inferred.is_none();
+                    if !skip_compat_check {
+                        if let Err(error) = self.require_compatible_arg_type(
+                            &declared,
+                            &inferred_return,
+                            method.span,
+                            &format!("Method '{}::{}' return type", class.name, method.name),
+                        ) {
+                            pass_errors.extend(error.flatten());
+                            self.current_class = None;
+                            self.current_method = None;
+                            self.current_method_is_static = false;
+                            return;
+                        }
                     }
                     if Self::is_generic_array_hint(&declared)
                         && matches!(inferred_return, PhpType::Array(_) | PhpType::AssocArray { .. })

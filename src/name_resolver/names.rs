@@ -15,6 +15,7 @@ pub(super) fn resolve_type_expr(
         TypeExpr::Bool => TypeExpr::Bool,
         TypeExpr::Str => TypeExpr::Str,
         TypeExpr::Void => TypeExpr::Void,
+        TypeExpr::Never => TypeExpr::Never,
         TypeExpr::Buffer(inner) => {
             TypeExpr::Buffer(Box::new(resolve_type_expr(inner, current_namespace, imports)))
         }

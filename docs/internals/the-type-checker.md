@@ -32,6 +32,7 @@ pub enum PhpType {
     Str,
     Bool,
     Void,                          // null
+    Never,                         // marks a function/method that never returns (always throws / exits / loops)
     Mixed,                         // runtime-boxed heterogeneous assoc-array value
     Array(Box<PhpType>),           // e.g., Array(Int) = int[]
     AssocArray {                    // e.g., AssocArray { key: Str, value: Int }
@@ -48,6 +49,8 @@ pub enum PhpType {
 ```
 
 This is still much smaller than full PHP's runtime type system, but it now includes user-written union and nullable annotations where the language subset supports them. `Union(...)` values are lowered to the same boxed runtime representation used by `Mixed`. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`).
+
+`Never` is a return-position-only marker: a function annotated `: never` must always diverge (throw, call `exit()`/`die()`, or loop forever). The type checker rejects any reachable `return value;` from such a function, and the runtime size is zero because the value is never materialized. `: never` is rejected as a parameter or local-variable type — same restriction as `: void`.
 
 `Callable` is used for anonymous functions (closures), arrow functions, and first-class callables. A callable value is stored as a function pointer (8 bytes) on the stack, and is invoked via an indirect branch (`blr`).
 

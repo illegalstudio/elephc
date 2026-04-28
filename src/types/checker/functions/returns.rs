@@ -116,7 +116,8 @@ impl Checker {
             (PhpType::Str, _) | (_, PhpType::Str) => PhpType::Str,
             (PhpType::Float, _) | (_, PhpType::Float) => PhpType::Float,
             (PhpType::Void, other) | (other, PhpType::Void) => other.clone(),
-            _ => a.clone(),
+            (PhpType::Never, other) | (other, PhpType::Never) => other.clone(),
+            _ => PhpType::Mixed,
         }
     }
 }

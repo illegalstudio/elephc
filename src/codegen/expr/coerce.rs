@@ -46,7 +46,7 @@ pub(super) fn coerce_to_string(
                 }
             }
         }
-        PhpType::Void => {
+        PhpType::Void | PhpType::Never => {
             // -- null coerces to empty string in PHP --
             match emitter.target.arch {
                 Arch::AArch64 => {

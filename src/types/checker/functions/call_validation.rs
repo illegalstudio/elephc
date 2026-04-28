@@ -116,6 +116,7 @@ impl Checker {
 
         match (expected, actual) {
             (PhpType::Mixed, _) => true,
+            (_, PhpType::Never) => true, // never is the bottom type — compatible with any expected type
             (PhpType::Union(members), _) => {
                 members.iter().any(|m| Self::types_compatible(m, actual))
             }

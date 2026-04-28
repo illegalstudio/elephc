@@ -41,6 +41,10 @@ impl Checker {
                 span,
                 &format!("{} cannot use type void", context),
             )),
+            PhpType::Never => Err(CompileError::new(
+                span,
+                &format!("{} cannot use type never", context),
+            )),
             _ => Ok(ty),
         }
     }
@@ -54,6 +58,22 @@ impl Checker {
         self.resolve_type_expr(type_expr, span)
     }
 
+    pub(crate) fn resolve_declared_local_type_hint(
+        &self,
+        type_expr: &TypeExpr,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<PhpType, CompileError> {
+        let ty = self.resolve_type_expr(type_expr, span)?;
+        if matches!(ty, PhpType::Never) {
+            return Err(CompileError::new(
+                span,
+                &format!("{} cannot use type never", context),
+            ));
+        }
+        Ok(ty)
+    }
+
     pub(crate) fn resolve_declared_property_type_hint(
         &self,
         type_expr: &TypeExpr,
@@ -65,6 +85,12 @@ impl Checker {
             return Err(CompileError::new(
                 span,
                 &format!("{} cannot use type void", context),
+            ));
+        }
+        if matches!(ty, PhpType::Never) {
+            return Err(CompileError::new(
+                span,
+                &format!("{} cannot use type never", context),
             ));
         }
         if Self::type_contains_callable(&ty) {

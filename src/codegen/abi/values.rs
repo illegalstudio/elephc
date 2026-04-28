@@ -20,7 +20,7 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
             store_at_offset(emitter, ptr_reg, offset);                                  // store string pointer
             store_at_offset(emitter, len_reg, offset - 8);                              // store string length
         }
-        PhpType::Void => {
+        PhpType::Void | PhpType::Never => {
             store_at_offset(emitter, int_result_reg(emitter), offset);                  // store null sentinel
         }
         PhpType::Mixed
@@ -85,7 +85,7 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
             load_at_offset(emitter, ptr_reg, offset);                                   // load string pointer
             load_at_offset(emitter, len_reg, offset - 8);                               // load string length
         }
-        PhpType::Void => {
+        PhpType::Void | PhpType::Never => {
             load_at_offset(emitter, int_result_reg(emitter), offset);                   // load null sentinel
         }
         PhpType::Mixed
@@ -223,6 +223,7 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
             emit_call_label(emitter, "__rt_mixed_write_stdout");
         }
         PhpType::Void
+        | PhpType::Never
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Callable

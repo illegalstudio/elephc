@@ -358,6 +358,7 @@ Proper type system for PHP compatibility.
 - [x] Static closures: `static function() { }` and `static fn() => ...` (no `$this` capture)
 - [x] PHP array union operator `+` for indexed+indexed and associative+associative arrays, preserving left-side duplicate keys and associative insertion order
 - [x] PHP-compatible associative array key normalization for integer keys and numeric-string keys across literals, reads/writes, `foreach`, `array_keys()`, `array_search()`, `array_key_exists()`, `array_flip()`, `json_encode()`, and associative array union
+- [x] Support for `never` return type
 
 ## v0.20.x — Shared and static libraries (C ABI)
 

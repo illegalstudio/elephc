@@ -22,6 +22,7 @@ pub(super) fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &P
             abi::emit_store_reg_to_extern_symbol(emitter, abi::int_result_reg(emitter), &sym, 0); // store the returned char* into the extern global slot
         }
         PhpType::Void
+        | PhpType::Never
         | PhpType::Mixed
         | PhpType::Union(_)
         | PhpType::Array(_)
@@ -55,6 +56,7 @@ pub(super) fn emit_extern_global_load(emitter: &mut Emitter, name: &str, ty: &Ph
             abi::emit_call_label(emitter, "__rt_cstr_to_str");                 // convert the borrowed C string into the elephc string result convention
         }
         PhpType::Void
+        | PhpType::Never
         | PhpType::Mixed
         | PhpType::Union(_)
         | PhpType::Array(_)

@@ -23,11 +23,45 @@ sidebar:
 | `int|string`     | Yes              | Union type — variable accepts any of the listed types. Lowered to Mixed at runtime.                                    |
 | `?int`           | Yes              | Nullable shorthand — sugar for `int|null`.                                                                             |
 | `void`           | Return only      | Valid as a function, method, closure, or extern return type. Internally, `null` is represented as `Void`.              |
+| `never`          | Return only      | Marks a function/method/closure that **never returns** — it must always `throw`, call `exit()`/`die()`, or loop forever. Returning a value is rejected at type-check time. Like `void`, not valid as a parameter or local type. |
 | `ptr` / `ptr<T>` | elephc extension | Raw 64-bit pointer, optionally carrying a checked compile-time pointee tag. See [Pointers](../beyond-php/pointers.md). |
 | `buffer<T>`      | elephc extension | Fixed-size contiguous storage for POD scalars, pointers, or packed records. See [Buffers](../beyond-php/buffers.md).   |
 | `packed class`   | elephc extension | Flat POD record type with compile-time field offsets. See [Packed Classes](../beyond-php/packed-classes.md).           |
 | `resource`       | No               | File handles are modeled as integer file descriptors (`int`).                                                          |
 
+
+### Never
+
+`never` marks a function, method, or interface method that **must not return normally**. The function body is expected to either `throw`, call `exit()`/`die()`, or loop forever.
+
+```php
+<?php
+function panic(string $msg): never {
+    throw new RuntimeException($msg);
+}
+
+class Failer {
+    public function fail(): never {
+        throw new \Exception("boom");
+    }
+
+    public static function bail(int $code): never {
+        exit($code);
+    }
+}
+
+interface Aborts {
+    public function abort(): never;
+}
+```
+
+Rules:
+
+- valid as a return type for functions, instance methods, static methods, and interface methods
+- not valid as a parameter, property, or typed local
+- declaring `: never` and then writing `return $value;` (or even bare `return;`) is rejected at type-check time
+- `: never` is the **bottom type** in the type system: it is a subtype of every other type, so a child method may override a parent that returns `void`/`int`/etc. with `: never`. The reverse — narrowing a parent `: never` to a wider type in a child — is rejected.
+- when the body falls through without throwing, exiting, or looping, behavior is undefined. elephc does not currently insert a runtime trap for this case (matching PHP's permissive parse-time checking).
 
 ### Typed local declarations
 

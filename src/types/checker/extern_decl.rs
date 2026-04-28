@@ -42,6 +42,7 @@ impl Checker {
                     int_regs += 1;
                 }
                 PhpType::Void
+                | PhpType::Never
                 | PhpType::Mixed
                 | PhpType::Union(_)
                 | PhpType::Array(_)

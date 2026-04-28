@@ -128,11 +128,11 @@ fn pop_saved_result_value(emitter: &mut Emitter, ty: &PhpType) {
         PhpType::Float => {
             abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter));
         }
+        PhpType::Void | PhpType::Never => {}
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
         }
-        PhpType::Void => {}
     }
 }
 

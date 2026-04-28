@@ -17,6 +17,7 @@ pub enum PhpType {
     Str,
     Bool,
     Void,
+    Never,
     Mixed,
     Array(Box<PhpType>),
     AssocArray {
@@ -40,6 +41,7 @@ impl PhpType {
             PhpType::Float => 8,
             PhpType::Str => 16,
             PhpType::Void => 8,              // null sentinel stored as 8 bytes
+            PhpType::Never => 0,             // never materialized — functions with :never do not return
             PhpType::Mixed => 8,             // pointer to heap-tagged mixed cell
             PhpType::Array(_) => 8,          // pointer to heap
             PhpType::AssocArray { .. } => 8, // pointer to heap
@@ -60,6 +62,7 @@ impl PhpType {
             PhpType::Float => 1,
             PhpType::Str => 2,
             PhpType::Void => 0,
+            PhpType::Never => 0,
             PhpType::Mixed => 1,
             PhpType::Array(_) => 1,
             PhpType::AssocArray { .. } => 1,
@@ -93,6 +96,7 @@ impl PhpType {
     pub fn codegen_repr(&self) -> PhpType {
         match self {
             PhpType::Union(_) => PhpType::Mixed,
+            PhpType::Never => PhpType::Void, // never should not be materialized; fallback to void sentinel
             _ => self.clone(),
         }
     }
@@ -173,6 +177,7 @@ impl fmt::Display for PhpType {
             PhpType::Str => write!(f, "string"),
             PhpType::Bool => write!(f, "bool"),
             PhpType::Void => write!(f, "null"),
+            PhpType::Never => write!(f, "never"),
             PhpType::Mixed => write!(f, "mixed"),
             PhpType::Array(inner) => write!(f, "array<{}>", inner),
             PhpType::AssocArray { key, value } => write!(f, "array<{}, {}>", key, value),

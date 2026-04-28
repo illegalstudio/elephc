@@ -199,5 +199,17 @@ pub(crate) fn validate_override_signature(
         parent_sig,
         kind,
         "overriding",
-    )
+    )?;
+    if method.return_type.is_some()
+        && !Checker::types_compatible(&parent_sig.return_type, &child_sig.return_type)
+    {
+        return Err(CompileError::new(
+            method.span,
+            &format!(
+                "Cannot override {} {}::{} with incompatible return type {} (parent returns {})",
+                kind, class_name, method.name, child_sig.return_type, parent_sig.return_type
+            ),
+        ));
+    }
+    Ok(())
 }

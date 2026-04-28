@@ -195,6 +195,7 @@ pub fn emit(
         PhpType::Pointer(_) => b"pointer".as_slice(),
         PhpType::Buffer(_) => b"buffer".as_slice(),
         PhpType::Packed(_) => b"packed".as_slice(),
+        PhpType::Never => b"never".as_slice(),
         PhpType::Mixed | PhpType::Union(_) => unreachable!("mixed handled above"),
     };
     emit_type_name_result(emitter, data, type_str)

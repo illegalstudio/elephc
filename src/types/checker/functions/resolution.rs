@@ -439,12 +439,15 @@ impl Checker {
                 &format!("Function '{}'", name),
             )?;
             if all_return_types.is_empty() {
-                self.require_compatible_arg_type(
-                    &declared_ret,
-                    &PhpType::Void,
-                    decl.span,
-                    &format!("Function '{}' return type", name),
-                )?;
+                // :never functions are allowed to have no return statements (they always throw/exit).
+                if !matches!(declared_ret, PhpType::Never) {
+                    self.require_compatible_arg_type(
+                        &declared_ret,
+                        &PhpType::Void,
+                        decl.span,
+                        &format!("Function '{}' return type", name),
+                    )?;
+                }
             } else {
                 for rt in &all_return_types {
                     self.require_compatible_arg_type(

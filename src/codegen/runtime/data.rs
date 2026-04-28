@@ -355,6 +355,7 @@ pub(crate) fn emit_runtime_data_user(
                         | PhpType::Pointer(_)
                         | PhpType::Buffer(_)
                         | PhpType::Packed(_)
+                        | PhpType::Never
                         | PhpType::Void => 0,
                     }
                 };
