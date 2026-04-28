@@ -117,6 +117,7 @@ fn walk_program<P: Pass>(stmts: Vec<Stmt>, pass: &mut P) -> Vec<Stmt> {
 fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
     let span = stmt.span;
     let kind = match stmt.kind {
+        StmtKind::Synthetic(stmts) => StmtKind::Synthetic(walk_program(stmts, pass)),
         StmtKind::Echo(e) => StmtKind::Echo(walk_expr(e, pass)),
         StmtKind::Throw(e) => StmtKind::Throw(walk_expr(e, pass)),
         StmtKind::ExprStmt(e) => StmtKind::ExprStmt(walk_expr(e, pass)),

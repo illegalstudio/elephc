@@ -368,6 +368,7 @@ pub enum StmtKind {
         required: bool,
     },
     Throw(Expr),
+    Synthetic(Vec<Stmt>),
     Try {
         try_body: Vec<Stmt>,
         catches: Vec<CatchClause>,

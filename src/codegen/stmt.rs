@@ -44,6 +44,11 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
     crate::codegen::abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
 
     match &stmt.kind {
+        StmtKind::Synthetic(stmts) => {
+            for stmt in stmts {
+                emit_stmt(stmt, emitter, ctx, data);
+            }
+        }
         StmtKind::IfDef { .. } => {
             emitter.comment("WARNING: unresolved ifdef reached codegen");
         }

@@ -343,6 +343,7 @@ pub(super) fn program_uses_variable(program: &Program, needle: &str) -> bool {
 
 fn stmt_uses_variable(stmt: &Stmt, needle: &str) -> bool {
     match &stmt.kind {
+        StmtKind::Synthetic(stmts) => stmts.iter().any(|stmt| stmt_uses_variable(stmt, needle)),
         StmtKind::Assign { value, .. }
         | StmtKind::TypedAssign { value, .. }
         | StmtKind::Echo(value)

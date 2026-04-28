@@ -21,6 +21,7 @@ pub(crate) fn block_terminal_effect(stmts: &[Stmt]) -> TerminalEffect {
 
 pub(crate) fn stmt_terminal_effect(stmt: &Stmt) -> TerminalEffect {
     match &stmt.kind {
+        StmtKind::Synthetic(stmts) => block_terminal_effect(stmts),
         StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Continue => {
             TerminalEffect::ExitsCurrentBlock
         }

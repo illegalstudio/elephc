@@ -66,9 +66,14 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
             if assign::looks_like_typed_assign(tokens, *pos) {
                 return assign::parse_typed_assign(tokens, pos, span);
             }
-            if let Some(stmt) =
-                assign::try_parse_scoped_property_assignment(tokens, pos, span)?
-            {
+            if statement_lhs_contains_double_colon(tokens, *pos) {
+                if let Some(stmt) =
+                    assign::try_parse_scoped_property_assignment(tokens, pos, span)?
+                {
+                    return Ok(stmt);
+                }
+            }
+            if let Some(stmt) = assign::try_parse_postfix_assignment(tokens, pos, span)? {
                 return Ok(stmt);
             }
             let expr = parse_expr(tokens, pos)?;
@@ -99,6 +104,41 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
             &format!("Unexpected token at statement position: {:?}", other),
         )),
     }
+}
+
+fn statement_lhs_contains_double_colon(tokens: &[(Token, Span)], start: usize) -> bool {
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    for (token, _) in tokens.iter().skip(start) {
+        match token {
+            Token::LParen => paren_depth += 1,
+            Token::RParen => paren_depth = paren_depth.saturating_sub(1),
+            Token::LBracket => bracket_depth += 1,
+            Token::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
+            Token::DoubleColon if paren_depth == 0 && bracket_depth == 0 => return true,
+            Token::Assign
+            | Token::PlusAssign
+            | Token::MinusAssign
+            | Token::StarAssign
+            | Token::StarStarAssign
+            | Token::SlashAssign
+            | Token::DotAssign
+            | Token::PercentAssign
+            | Token::AmpAssign
+            | Token::PipeAssign
+            | Token::CaretAssign
+            | Token::LessLessAssign
+            | Token::GreaterGreaterAssign
+            | Token::QuestionQuestionAssign
+            | Token::Semicolon
+                if paren_depth == 0 && bracket_depth == 0 =>
+            {
+                return false;
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 pub(crate) fn recover_to_statement_boundary(tokens: &[(Token, Span)], pos: &mut usize) {

@@ -155,16 +155,12 @@ pub(super) fn try_parse_postfix_assignment(
     if lhs_pos != lhs_expr_tokens.len() {
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
-    if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
-        return Err(CompileError::new(
-            span,
-            "Compound assignment target must be side-effect-free",
-        ));
-    }
-
     *pos = assign_pos + 1;
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
+    if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
+        return lower_effectful_postfix_assignment(lhs_expr, op, rhs, span).map(Some);
+    }
     let value = assignment_value(lhs_expr.clone(), op, rhs, span);
 
     let stmt = match lhs_expr.kind {
@@ -226,16 +222,12 @@ pub(super) fn try_parse_scoped_property_assignment(
     if lhs_pos != lhs_expr_tokens.len() {
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
-    if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
-        return Err(CompileError::new(
-            span,
-            "Compound assignment target must be side-effect-free",
-        ));
-    }
-
     *pos = assign_pos + 1;
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
+    if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
+        return lower_effectful_static_assignment(lhs_expr, op, rhs, span).map(Some);
+    }
     let value = assignment_value(lhs_expr.clone(), op, rhs, span);
 
     let stmt = match lhs_expr.kind {
@@ -385,6 +377,168 @@ fn can_replay_assignment_target(expr: &Expr) -> bool {
         | ExprKind::EnumCase { .. }
         | ExprKind::MagicConstant(_) => true,
         _ => false,
+    }
+}
+
+fn lower_effectful_postfix_assignment(
+    lhs_expr: Expr,
+    op: AssignmentOperator,
+    rhs: Expr,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let mut lowerer = EffectfulTargetLowerer::new(span);
+    let lowered = match lhs_expr.kind {
+        ExprKind::ArrayAccess { array, index } => match array.kind {
+            ExprKind::Variable(array) => {
+                let index = lowerer.stabilize(*index);
+                let target = Expr::new(
+                    ExprKind::ArrayAccess {
+                        array: Box::new(Expr::new(ExprKind::Variable(array.clone()), span)),
+                        index: Box::new(index.clone()),
+                    },
+                    span,
+                );
+                let value = assignment_value(target, op, rhs, span);
+                StmtKind::ArrayAssign { array, index, value }
+            }
+            ExprKind::PropertyAccess { object, property } => {
+                let object = Box::new(lowerer.stabilize(*object));
+                let index = lowerer.stabilize(*index);
+                let target = Expr::new(
+                    ExprKind::ArrayAccess {
+                        array: Box::new(Expr::new(
+                            ExprKind::PropertyAccess {
+                                object: object.clone(),
+                                property: property.clone(),
+                            },
+                            span,
+                        )),
+                        index: Box::new(index.clone()),
+                    },
+                    span,
+                );
+                let value = assignment_value(target, op, rhs, span);
+                StmtKind::PropertyArrayAssign {
+                    object,
+                    property,
+                    index,
+                    value,
+                }
+            }
+            _ => return Err(CompileError::new(span, "Invalid assignment target")),
+        },
+        ExprKind::PropertyAccess { object, property } => {
+            let object = Box::new(lowerer.stabilize(*object));
+            let target = Expr::new(
+                ExprKind::PropertyAccess {
+                    object: object.clone(),
+                    property: property.clone(),
+                },
+                span,
+            );
+            let value = assignment_value(target, op, rhs, span);
+            StmtKind::PropertyAssign {
+                object,
+                property,
+                value,
+            }
+        }
+        _ => return Err(CompileError::new(span, "Invalid assignment target")),
+    };
+    Ok(lowerer.finish(lowered))
+}
+
+fn lower_effectful_static_assignment(
+    lhs_expr: Expr,
+    op: AssignmentOperator,
+    rhs: Expr,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let mut lowerer = EffectfulTargetLowerer::new(span);
+    let lowered = match lhs_expr.kind {
+        ExprKind::ArrayAccess { array, index } => match array.kind {
+            ExprKind::StaticPropertyAccess { receiver, property } => {
+                let index = lowerer.stabilize(*index);
+                let target = Expr::new(
+                    ExprKind::ArrayAccess {
+                        array: Box::new(Expr::new(
+                            ExprKind::StaticPropertyAccess {
+                                receiver: receiver.clone(),
+                                property: property.clone(),
+                            },
+                            span,
+                        )),
+                        index: Box::new(index.clone()),
+                    },
+                    span,
+                );
+                let value = assignment_value(target, op, rhs, span);
+                StmtKind::StaticPropertyArrayAssign {
+                    receiver,
+                    property,
+                    index,
+                    value,
+                }
+            }
+            _ => return Err(CompileError::new(span, "Invalid assignment target")),
+        },
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            let target = Expr::new(
+                ExprKind::StaticPropertyAccess {
+                    receiver: receiver.clone(),
+                    property: property.clone(),
+                },
+                span,
+            );
+            let value = assignment_value(target, op, rhs, span);
+            StmtKind::StaticPropertyAssign {
+                receiver,
+                property,
+                value,
+            }
+        }
+        _ => return Err(CompileError::new(span, "Invalid assignment target")),
+    };
+    Ok(lowerer.finish(lowered))
+}
+
+struct EffectfulTargetLowerer {
+    span: Span,
+    next_temp: usize,
+    stmts: Vec<Stmt>,
+}
+
+impl EffectfulTargetLowerer {
+    fn new(span: Span) -> Self {
+        Self {
+            span,
+            next_temp: 0,
+            stmts: Vec::new(),
+        }
+    }
+
+    fn stabilize(&mut self, expr: Expr) -> Expr {
+        if can_replay_assignment_target(&expr) {
+            return expr;
+        }
+        let name = format!(
+            "__elephc_compound_{}_{}_{}",
+            self.span.line, self.span.col, self.next_temp
+        );
+        self.next_temp += 1;
+        self.stmts.push(Stmt::new(
+            StmtKind::Assign {
+                name: name.clone(),
+                value: expr,
+            },
+            self.span,
+        ));
+        Expr::new(ExprKind::Variable(name), self.span)
+    }
+
+    fn finish(mut self, final_stmt: StmtKind) -> Stmt {
+        self.stmts.push(Stmt::new(final_stmt, self.span));
+        Stmt::new(StmtKind::Synthetic(self.stmts), self.span)
     }
 }
 
