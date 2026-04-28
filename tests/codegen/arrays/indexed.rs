@@ -108,6 +108,43 @@ echo $c[0] . $c[1] . $c[2] . $c[3];
 }
 
 #[test]
+fn test_indexed_array_union_keeps_left_duplicate_numeric_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$left = [10, 20];
+$right = [99, 88, 77];
+$result = $left + $right;
+echo count($result) . ":" . $result[0] . "," . $result[1] . "," . $result[2];
+"#,
+    );
+    assert_eq!(out, "3:10,20,77");
+}
+
+#[test]
+fn test_indexed_array_union_string_values_append_missing_suffix() {
+    let out = compile_and_run(
+        r#"<?php
+$left = ["left"];
+$right = ["ignored", "added"];
+$result = $left + $right;
+echo count($result) . ":" . $result[0] . "," . $result[1];
+"#,
+    );
+    assert_eq!(out, "2:left,added");
+}
+
+#[test]
+fn test_indexed_array_union_empty_left_copies_right_layout() {
+    let out = compile_and_run(
+        r#"<?php
+$result = [] + ["first", "second"];
+echo count($result) . ":" . $result[0] . "," . $result[1];
+"#,
+    );
+    assert_eq!(out, "2:first,second");
+}
+
+#[test]
 fn test_array_slice() {
     let out = compile_and_run(
         r#"<?php

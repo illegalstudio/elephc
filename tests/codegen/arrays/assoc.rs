@@ -49,6 +49,35 @@ echo $m["key"];
 }
 
 #[test]
+fn test_assoc_array_union_keeps_left_duplicate_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$left = ["a" => "left", "b" => "keep"];
+$right = ["a" => "right", "c" => "new"];
+$result = $left + $right;
+echo count($result) . ":";
+foreach ($result as $k => $v) {
+    echo $k . "=" . $v . " ";
+}
+"#,
+    );
+    assert_eq!(out, "3:a=left b=keep c=new ");
+}
+
+#[test]
+fn test_assoc_array_union_int_values() {
+    let out = compile_and_run(
+        r#"<?php
+$left = ["a" => 1, "b" => 2];
+$right = ["b" => 99, "c" => 3];
+$result = $left + $right;
+echo $result["a"] + $result["b"] + $result["c"];
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+#[test]
 fn test_assoc_foreach_key_value() {
     let out = compile_and_run(
         r#"<?php
@@ -226,4 +255,3 @@ echo match($x) {
     );
     assert_eq!(out, "unknown");
 }
-

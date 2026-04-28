@@ -1832,6 +1832,22 @@ fn test_assoc_array_mixed_type_checks() {
     );
 }
 
+#[test]
+fn test_error_array_union_requires_same_container_kind() {
+    expect_error(
+        r#"<?php $result = [1, 2] + ["a" => 3];"#,
+        "Array union requires both operands to be arrays of the same kind",
+    );
+}
+
+#[test]
+fn test_error_indexed_array_union_requires_compatible_element_types() {
+    expect_error(
+        r#"<?php $result = [1] + ["right", "side"];"#,
+        "Array union requires compatible indexed array element types",
+    );
+}
+
 // --- v0.6: array function argument errors ---
 
 #[test]
