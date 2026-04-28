@@ -44,6 +44,7 @@ pub fn emit_array_fill_keys_refcounted(emitter: &mut Emitter) {
     emitter.instruction("add x5, x5, #24");                                     // skip array header
     emitter.instruction("ldr x1, [x5]");                                        // load key pointer
     emitter.instruction("ldr x2, [x5, #8]");                                    // load key length
+    emitter.instruction("bl __rt_hash_normalize_key");                          // normalize numeric-string keys to PHP integer array keys
     emitter.instruction("str x1, [sp, #40]");                                   // preserve key pointer across incref
     emitter.instruction("str x2, [sp, #48]");                                   // preserve key length across incref
     emitter.instruction("ldr x3, [sp, #8]");                                    // reload borrowed fill payload
@@ -100,10 +101,11 @@ fn emit_array_fill_keys_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shl r11, 4");                                          // scale the indexed-array key loop index by the 16-byte string slot size
     emitter.instruction("add r10, r11");                                        // advance from the indexed-array base pointer to the selected string key slot
     emitter.instruction("add r10, 24");                                         // skip the indexed-array header to reach the selected string key slot payload
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the current key pointer from the selected indexed-array string slot
-    emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // preserve the current key pointer across the incref helper call
-    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load the current key length from the selected indexed-array string slot
-    emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // preserve the current key length across the incref helper call
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the current key pointer from the selected indexed-array string slot
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // load the current key length from the selected indexed-array string slot
+    emitter.instruction("call __rt_hash_normalize_key");                        // normalize numeric-string keys to PHP integer array keys
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the normalized key low word across the incref helper call
+    emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // preserve the normalized key high word across the incref helper call
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // move the borrowed heap payload into the x86_64 incref input register
     emitter.instruction("call __rt_incref");                                    // retain the borrowed heap payload before the associative-array insert helper becomes an owner
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the destination associative-array pointer before inserting the current key/value pair

@@ -346,6 +346,30 @@ echo count($f);
 }
 
 #[test]
+fn test_array_flip_integer_values_are_integer_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10, 20];
+$f = array_flip($a);
+echo $f[10] . "|" . $f["20"];
+"#,
+    );
+    assert_eq!(out, "0|1");
+}
+
+#[test]
+fn test_array_flip_string_values_normalize_numeric_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["1", "02", "2"];
+$f = array_flip($a);
+echo count($f) . "|" . $f[1] . "|" . $f["02"] . "|" . $f["2"];
+"#,
+    );
+    assert_eq!(out, "3|0|1|2");
+}
+
+#[test]
 fn test_array_chunk() {
     let out = compile_and_run(
         r#"<?php

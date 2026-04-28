@@ -253,6 +253,12 @@ fn test_json_encode_assoc() {
 }
 
 #[test]
+fn test_json_encode_assoc_integer_keys() {
+    let out = compile_and_run(r#"<?php echo json_encode([1 => "one", "02" => "two"]);"#);
+    assert_eq!(out, r#"{"1":"one","02":"two"}"#);
+}
+
+#[test]
 fn test_json_encode_assoc_mixed_values() {
     let out = compile_and_run(
         r#"<?php echo json_encode(["id" => 7, "name" => "Alice", "ok" => true, "note" => null]);"#,
@@ -457,4 +463,3 @@ fn test_preg_replace_case_insensitive() {
     let out = compile_and_run(r#"<?php echo preg_replace("/WORLD/i", "PHP", "hello World");"#);
     assert_eq!(out, "hello PHP");
 }
-

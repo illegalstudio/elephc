@@ -126,10 +126,19 @@ pub fn emit(
                 emitter.instruction(&format!("b {}", loop_label));              // continue scanning the remaining associative-array insertion-order entries
 
                 emitter.label(&found_label);
-                abi::emit_pop_reg_pair(emitter, "x1", "x2");                        // return the matching associative-array key as the searched string result
-                abi::emit_call_label(emitter, "__rt_str_persist");                  // materialize an owned string result so array_search() does not leak a borrowed hash-key alias
-                emitter.instruction("mov x0, #1");                              // runtime tag 1 = string for a successful associative array_search() result
-                abi::emit_call_label(emitter, "__rt_mixed_from_value");          // box the matching string key so false remains distinguishable from an empty key
+                abi::emit_pop_reg_pair(emitter, "x1", "x2");                        // restore the matching normalized associative-array key
+                let found_string_key = ctx.next_label("asearch_assoc_found_string_key");
+                let found_key_boxed = ctx.next_label("asearch_assoc_found_key_boxed");
+                emitter.instruction("cmn x2, #1");                              // check whether the matching key is an integer key
+                emitter.instruction(&format!("b.ne {}", found_string_key));     // string keys need string-tagged mixed boxing
+                emitter.instruction("mov x0, #0");                              // runtime tag 0 = integer key
+                emitter.instruction("mov x2, xzr");                             // integer mixed payloads do not use the high word
+                abi::emit_call_label(emitter, "__rt_mixed_from_value");          // box the matching integer key so false remains distinguishable from 0
+                emitter.instruction(&format!("b {}", found_key_boxed));         // skip the string-key boxing path
+                emitter.label(&found_string_key);
+                emitter.instruction("mov x0, #1");                              // runtime tag 1 = string key
+                abi::emit_call_label(emitter, "__rt_mixed_from_value");          // persist and box the matching string key
+                emitter.label(&found_key_boxed);
                 emitter.instruction(&format!("b {}", skip_label));              // jump to the common associative-array cleanup once a match is found
 
                 emitter.label(&end_label);
@@ -193,12 +202,20 @@ pub fn emit(
                 emitter.instruction(&format!("jmp {}", loop_label));            // continue scanning the remaining associative-array insertion-order entries
 
                 emitter.label(&found_label);
-                abi::emit_pop_reg_pair(emitter, "rax", "rdx");                      // return the matching associative-array key through the standard x86_64 string result registers
-                abi::emit_call_label(emitter, "__rt_str_persist");                  // materialize an owned string result so array_search() does not leak a borrowed hash-key alias
-                emitter.instruction("mov rdi, rax");                            // move the persisted key pointer into the mixed helper payload register
-                emitter.instruction("mov rsi, rdx");                            // move the persisted key length into the mixed helper high-word register
-                emitter.instruction("mov eax, 1");                              // runtime tag 1 = string for a successful associative array_search() result
-                abi::emit_call_label(emitter, "__rt_mixed_from_value");          // box the matching string key so false remains distinguishable from an empty key
+                abi::emit_pop_reg_pair(emitter, "rdi", "rdx");                      // restore the matching normalized associative-array key
+                let found_string_key = ctx.next_label("asearch_assoc_found_string_key");
+                let found_key_boxed = ctx.next_label("asearch_assoc_found_key_boxed");
+                emitter.instruction("cmp rdx, -1");                             // check whether the matching key is an integer key
+                emitter.instruction(&format!("jne {}", found_string_key));      // string keys need string-tagged mixed boxing
+                emitter.instruction("xor esi, esi");                            // integer mixed payloads do not use the high word
+                emitter.instruction("mov eax, 0");                              // runtime tag 0 = integer key
+                abi::emit_call_label(emitter, "__rt_mixed_from_value");          // box the matching integer key so false remains distinguishable from 0
+                emitter.instruction(&format!("jmp {}", found_key_boxed));       // skip the string-key boxing path
+                emitter.label(&found_string_key);
+                emitter.instruction("mov rsi, rdx");                            // move the string key length into the mixed helper high-word register
+                emitter.instruction("mov eax, 1");                              // runtime tag 1 = string key
+                abi::emit_call_label(emitter, "__rt_mixed_from_value");          // persist and box the matching string key
+                emitter.label(&found_key_boxed);
                 emitter.instruction(&format!("jmp {}", skip_label));            // jump to the common associative-array cleanup once a match is found
 
                 emitter.label(&end_label);

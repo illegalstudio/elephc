@@ -248,7 +248,7 @@ pub(crate) fn emit_array_access(
     if let PhpType::AssocArray { value, .. } = &arr_ty {
         let val_ty = *value.clone();
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the hash-table pointer while evaluating the string key expression
-        let _key_ty = emit_expr(index, emitter, ctx, data);
+        crate::codegen::emit_normalized_hash_key(index, emitter, ctx, data);
         let (key_ptr_reg, key_len_reg) = abi::string_result_regs(emitter);
         abi::emit_push_reg_pair(emitter, key_ptr_reg, key_len_reg);                 // preserve the computed key pointer and length while restoring the hash-table pointer
         match emitter.target.arch {

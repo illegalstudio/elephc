@@ -1,6 +1,6 @@
 use crate::errors::CompileError;
 use crate::parser::ast::Expr;
-use crate::types::{PhpType, TypeEnv};
+use crate::types::{array_key_type_from_value_type, PhpType, TypeEnv};
 
 use super::super::Checker;
 
@@ -145,11 +145,11 @@ pub(super) fn check_builtin(
             let ty = checker.infer_type(&args[0], env)?;
             match ty {
                 PhpType::Array(elem_ty) => Ok(Some(PhpType::AssocArray {
-                    key: elem_ty,
+                    key: Box::new(array_key_type_from_value_type(*elem_ty)),
                     value: Box::new(PhpType::Int),
                 })),
                 PhpType::AssocArray { key, value } => Ok(Some(PhpType::AssocArray {
-                    key: value,
+                    key: Box::new(array_key_type_from_value_type(*value)),
                     value: key,
                 })),
                 _ => Err(CompileError::new(span, "array_flip() argument must be array")),
@@ -300,7 +300,7 @@ pub(super) fn check_builtin(
                 }
             };
             Ok(Some(PhpType::AssocArray {
-                key: Box::new(key_elem),
+                key: Box::new(array_key_type_from_value_type(key_elem)),
                 value: Box::new(val_elem),
             }))
         }
@@ -323,7 +323,7 @@ pub(super) fn check_builtin(
                 }
             };
             Ok(Some(PhpType::AssocArray {
-                key: Box::new(key_elem),
+                key: Box::new(array_key_type_from_value_type(key_elem)),
                 value: Box::new(val_ty),
             }))
         }

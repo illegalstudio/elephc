@@ -57,6 +57,7 @@ pub fn emit_array_combine(emitter: &mut Emitter) {
     emitter.instruction("add x5, x5, #24");                                     // x5 = skip header to data region
     emitter.instruction("ldr x1, [x5]");                                        // x1 = key_ptr = keys[i].ptr
     emitter.instruction("ldr x2, [x5, #8]");                                    // x2 = key_len = keys[i].len
+    emitter.instruction("bl __rt_hash_normalize_key");                          // normalize numeric-string keys to PHP integer array keys
 
     // -- load value from values[i] (8 bytes per int element) --
     emitter.instruction("ldr x5, [sp, #8]");                                    // reload values array pointer
@@ -117,6 +118,11 @@ fn emit_array_combine_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the destination hash pointer before inserting the selected key/value pair
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // load the selected key pointer from the string-key indexed array
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // load the selected key length from the string-key indexed array
+    emitter.instruction("mov rax, rsi");                                        // move the key pointer into the x86_64 normalization helper input register
+    emitter.instruction("call __rt_hash_normalize_key");                        // normalize numeric-string keys to PHP integer array keys
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the destination hash pointer after key normalization
+    emitter.instruction("mov rsi, rax");                                        // move the normalized key low word back into the hash-set key register
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the array-combine loop index after key normalization clobbered caller-saved registers
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the scalar-value indexed array before reading the selected scalar payload
     emitter.instruction("lea r10, [r10 + 24]");                                 // compute the payload base address for the scalar-value indexed array
     emitter.instruction("mov rcx, QWORD PTR [r10 + rcx * 8]");                  // load the selected scalar payload into the low-word hash insertion register

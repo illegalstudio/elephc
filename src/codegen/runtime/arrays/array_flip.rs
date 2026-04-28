@@ -2,7 +2,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
 /// array_flip: swap keys and values for an indexed int array.
-/// Creates a hash table where str(value) becomes the key and the index becomes the value.
+/// Creates a hash table where the integer value becomes the key and the index becomes the value.
 /// Input:  x0=array_ptr (indexed int array)
 /// Output: x0=new hash table
 pub fn emit_array_flip(emitter: &mut Emitter) {
@@ -47,15 +47,14 @@ pub fn emit_array_flip(emitter: &mut Emitter) {
     emitter.instruction("cmp x4, x3");                                          // compare i with length
     emitter.instruction("b.ge __rt_array_flip_done");                           // if i >= length, done
 
-    // -- load array[i] and convert to string key --
+    // -- load array[i] as the integer key --
     emitter.instruction("add x5, x0, #24");                                     // x5 = data base
-    emitter.instruction("ldr x0, [x5, x4, lsl #3]");                            // x0 = array[i] (the integer value)
-    emitter.instruction("bl __rt_itoa");                                        // convert int to string, x1=ptr, x2=len
+    emitter.instruction("ldr x1, [x5, x4, lsl #3]");                            // x1 = integer key payload from array[i]
+    emitter.instruction("mov x2, #-1");                                         // key_hi sentinel marks the flipped key as integer
 
-    // -- call hash_set: key=str(value), value=index --
+    // -- call hash_set: key=value, value=index --
     emitter.instruction("ldr x0, [sp, #8]");                                    // x0 = hash table pointer
-    // x1 = key_ptr (from itoa)
-    // x2 = key_len (from itoa)
+    // x1/x2 = normalized integer key
     emitter.instruction("ldr x3, [sp, #16]");                                   // x3 = value_lo = index i
     emitter.instruction("mov x4, #0");                                          // x4 = value_hi = 0
     emitter.instruction("mov x5, #0");                                          // x5 = value_tag = integer
@@ -102,9 +101,9 @@ fn emit_array_flip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_array_flip_done_x86");                        // finish once every source payload has been converted into a destination hash key
     emitter.instruction("lea r11, [r10 + 24]");                                 // compute the payload base address for the source indexed array
     emitter.instruction("mov rax, QWORD PTR [r11 + rcx * 8]");                  // load the current integer payload into the x86_64 integer-to-string helper input register
-    emitter.instruction("call __rt_itoa");                                      // convert the current integer payload into a string key for the destination hash table
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the destination hash pointer before inserting the flipped key/value pair
-    emitter.instruction("mov rsi, rax");                                        // place the converted key pointer in the second x86_64 hash insertion argument register
+    emitter.instruction("mov rsi, rax");                                        // place the integer key payload in the hash insertion key low-word register
+    emitter.instruction("mov rdx, -1");                                         // key_hi sentinel marks the flipped key as integer
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the current source index after __rt_itoa clobbered caller-saved registers
     emitter.instruction("mov rcx, r10");                                        // move the current source index into the low-word hash insertion register because array_flip stores indices as values
     emitter.instruction("xor r8d, r8d");                                        // clear the high-word hash insertion register because array_flip stores integer indices as values

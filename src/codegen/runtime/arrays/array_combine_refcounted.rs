@@ -44,6 +44,7 @@ pub fn emit_array_combine_refcounted(emitter: &mut Emitter) {
     emitter.instruction("add x5, x5, #24");                                     // skip array header
     emitter.instruction("ldr x1, [x5]");                                        // load key pointer
     emitter.instruction("ldr x2, [x5, #8]");                                    // load key length
+    emitter.instruction("bl __rt_hash_normalize_key");                          // normalize numeric-string keys to PHP integer array keys
     emitter.instruction("str x1, [sp, #40]");                                   // preserve key pointer across incref
     emitter.instruction("str x2, [sp, #48]");                                   // preserve key length across incref
     emitter.instruction("ldr x5, [sp, #8]");                                    // reload values array pointer
@@ -103,10 +104,12 @@ fn emit_array_combine_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shl r11, 4");                                          // scale the loop index by the 16-byte string slot size used by the key array
     emitter.instruction("add r10, r11");                                        // advance from the key-array base pointer to the selected string key slot
     emitter.instruction("add r10, 24");                                         // skip the indexed-array header to reach the selected string key payload
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the selected key pointer from the string-key indexed array
-    emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // preserve the selected key pointer across incref and hash insertion helper calls
-    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load the selected key length from the string-key indexed array
-    emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // preserve the selected key length across incref and hash insertion helper calls
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the selected key pointer from the string-key indexed array
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // load the selected key length from the string-key indexed array
+    emitter.instruction("call __rt_hash_normalize_key");                        // normalize numeric-string keys to PHP integer array keys
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the normalized key low word across incref and hash insertion helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // preserve the normalized key high word across incref and hash insertion helper calls
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the array-combine loop index after key normalization clobbered caller-saved registers
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the refcounted-values indexed array before reading the selected value payload
     emitter.instruction("lea r10, [r10 + 24]");                                 // compute the payload base address for the refcounted-values indexed array
     emitter.instruction("mov r11, QWORD PTR [r10 + rcx * 8]");                  // load the selected borrowed refcounted value payload from the values indexed array

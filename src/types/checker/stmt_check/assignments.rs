@@ -1,6 +1,6 @@
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
-use crate::types::{PhpType, TypeEnv};
+use crate::types::{merge_array_key_types, normalized_array_key_type, PhpType, TypeEnv};
 
 use super::super::Checker;
 
@@ -315,6 +315,10 @@ impl Checker {
                     value: existing_value,
                 } = &arr_ty
                 {
+                    let merged_key = merge_array_key_types(
+                        *key.clone(),
+                        normalized_array_key_type(index, self.infer_type(index, env)?),
+                    );
                     let merged_value = if **existing_value == val_ty {
                         *existing_value.clone()
                     } else {
@@ -323,7 +327,7 @@ impl Checker {
                     env.insert(
                         array.clone(),
                         PhpType::AssocArray {
-                            key: key.clone(),
+                            key: Box::new(merged_key),
                             value: Box::new(merged_value),
                         },
                     );

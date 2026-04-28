@@ -1,5 +1,5 @@
 use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
-use crate::types::PhpType;
+use crate::types::{merge_array_key_types, normalized_array_key_type, PhpType};
 
 /// Infer a function's return type by scanning its body for Return statements.
 /// This is a syntactic/heuristic check — no full type inference.
@@ -256,14 +256,17 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         ExprKind::ArrayLiteralAssoc(entries) => {
             let mut key_ty = entries
                 .first()
-                .map(|(key, _)| infer_expr_type_syntactic(key))
+                .map(|(key, _)| normalized_array_key_type(key, infer_expr_type_syntactic(key)))
                 .unwrap_or(PhpType::Mixed);
             let mut value_ty = entries
                 .first()
                 .map(|(_, value)| infer_expr_type_syntactic(value))
                 .unwrap_or(PhpType::Mixed);
             for (key, value) in entries.iter().skip(1) {
-                key_ty = wider_type_syntactic(&key_ty, &infer_expr_type_syntactic(key));
+                key_ty = merge_array_key_types(
+                    key_ty,
+                    normalized_array_key_type(key, infer_expr_type_syntactic(key)),
+                );
                 value_ty = wider_type_syntactic(&value_ty, &infer_expr_type_syntactic(value));
             }
             PhpType::AssocArray {

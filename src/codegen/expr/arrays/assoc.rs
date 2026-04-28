@@ -2,7 +2,7 @@ use super::super::super::context::Context;
 use super::super::super::data_section::DataSection;
 use super::super::super::emit::Emitter;
 use super::super::super::{abi, platform::Arch};
-use super::super::{emit_expr, retain_borrowed_heap_arg, Expr, ExprKind, PhpType};
+use super::super::{emit_expr, retain_borrowed_heap_arg, Expr, PhpType};
 
 pub(crate) fn emit_assoc_array_literal(
     pairs: &[(Expr, Expr)],
@@ -48,7 +48,7 @@ pub(crate) fn emit_assoc_array_literal(
 
     let mut val_ty = PhpType::Int;
     for (i, pair) in pairs.iter().enumerate() {
-        emit_expr(&pair.0, emitter, ctx, data);
+        super::super::super::emit_normalized_hash_key(&pair.0, emitter, ctx, data);
         abi::emit_push_reg_pair(emitter, string_ptr_reg, string_len_reg);        // save the assoc-array key payload while the value expression is emitted
         let ty = emit_expr(&pair.1, emitter, ctx, data);
         retain_borrowed_heap_arg(emitter, &pair.1, &ty);
@@ -91,13 +91,22 @@ pub(crate) fn emit_assoc_array_literal(
 
     abi::emit_pop_reg(emitter, result_reg);                                     // restore the completed hash table pointer as the expression result
 
-    let key_ty = match &pairs[0].0.kind {
-        ExprKind::IntLiteral(_) => PhpType::Int,
-        _ => PhpType::Str,
-    };
+    let mut key_ty = normalized_assoc_key_type(&pairs[0].0, ctx);
+    for (key, _) in pairs.iter().skip(1) {
+        let next_ty = normalized_assoc_key_type(key, ctx);
+        if next_ty != key_ty {
+            key_ty = PhpType::Mixed;
+            break;
+        }
+    }
 
     PhpType::AssocArray {
         key: Box::new(key_ty),
         value: Box::new(val_ty),
     }
+}
+
+fn normalized_assoc_key_type(key: &Expr, ctx: &Context) -> PhpType {
+    let raw_ty = super::super::super::functions::infer_contextual_type(key, ctx);
+    crate::types::normalized_array_key_type(key, raw_ty)
 }

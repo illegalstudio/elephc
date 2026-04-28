@@ -1,7 +1,7 @@
 use crate::errors::CompileError;
 use crate::names::Name;
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, TypeExpr};
-use crate::types::{PhpType, TypeEnv};
+use crate::types::{merge_array_key_types, PhpType, TypeEnv};
 
 use super::super::Checker;
 use super::syntactic::infer_return_type_syntactic;
@@ -193,12 +193,7 @@ impl Checker {
             ) => {
                 let key = self
                     .merge_array_element_type(left_key, right_key)
-                    .ok_or_else(|| {
-                        CompileError::new(
-                            expr.span,
-                            "Array union requires compatible associative array key types",
-                        )
-                    })?;
+                    .unwrap_or_else(|| merge_array_key_types(*left_key.clone(), *right_key.clone()));
                 let value = self
                     .merge_array_element_type(left_value, right_value)
                     .unwrap_or(PhpType::Mixed);

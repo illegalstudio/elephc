@@ -27,7 +27,7 @@ pub(super) fn emit_foreach_stmt(
     let arr_ty = emit_expr(array, emitter, ctx, data);
 
     match &arr_ty {
-        PhpType::AssocArray { value, .. } => {
+        PhpType::AssocArray { key, value } => {
             assoc::emit_assoc_foreach(
                 key_var,
                 value_var,
@@ -35,6 +35,7 @@ pub(super) fn emit_foreach_stmt(
                 &loop_start,
                 &loop_end,
                 &loop_cont,
+                &*key.clone(),
                 &*value.clone(),
                 emitter,
                 ctx,

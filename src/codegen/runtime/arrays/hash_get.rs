@@ -1,8 +1,8 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// hash_get: look up a value by string key in the hash table.
-/// Input:  x0=hash_table_ptr, x1=key_ptr, x2=key_len
+/// hash_get: look up a value by normalized int/string key in the hash table.
+/// Input:  x0=hash_table_ptr, x1=key_lo, x2=key_hi (-1 means integer key)
 /// Output: x0=found (1 or 0), x1=value_lo, x2=value_hi, x3=value_tag
 pub fn emit_hash_get(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -31,7 +31,7 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #16]");                                   // save key_len
 
     // -- hash the key --
-    emitter.instruction("bl __rt_hash_fnv1a");                                  // compute hash, result in x0
+    emitter.instruction("bl __rt_hash_key_hash");                               // compute the typed key hash, result in x0
 
     // -- compute slot index: hash % capacity --
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash_table_ptr
@@ -67,7 +67,7 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = our key_len
     emitter.instruction("ldr x3, [x12, #8]");                                   // x3 = entry's key_ptr
     emitter.instruction("ldr x4, [x12, #16]");                                  // x4 = entry's key_len
-    emitter.instruction("bl __rt_str_eq");                                      // compare keys, x0=1 if equal
+    emitter.instruction("bl __rt_hash_key_eq");                                 // compare normalized typed keys, x0=1 if equal
     emitter.instruction("cbnz x0, __rt_hash_get_found");                        // if keys match, we found it
 
     // -- advance to next slot --
@@ -125,9 +125,9 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash-table pointer across helper calls and probe iterations
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the key pointer across helper calls and probe iterations
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the key length across helper calls and probe iterations
-    emitter.instruction("mov rdi, rsi");                                        // pass the lookup key pointer to the x86_64 FNV-1a helper in the first SysV argument register
-    emitter.instruction("mov rsi, rdx");                                        // pass the lookup key length to the x86_64 FNV-1a helper in the second SysV argument register
-    emitter.instruction("call __rt_hash_fnv1a");                                // compute the 64-bit FNV-1a hash for the lookup key
+    emitter.instruction("mov rdi, rsi");                                        // pass the lookup key low word to the typed hash helper
+    emitter.instruction("mov rsi, rdx");                                        // pass the lookup key high word to the typed hash helper
+    emitter.instruction("call __rt_hash_key_hash");                             // compute the 64-bit hash for the normalized lookup key
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the hash helper returns
     emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load the table capacity for the modulo operation and linear-probe loop
     emitter.instruction("xor edx, edx");                                        // clear the high dividend half before dividing the 64-bit hash by the capacity
@@ -150,7 +150,7 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the lookup key length to the x86_64 string-equality helper
     emitter.instruction("mov rdx, QWORD PTR [r8 + 8]");                         // pass the stored entry key pointer to the x86_64 string-equality helper
     emitter.instruction("mov rcx, QWORD PTR [r8 + 16]");                        // pass the stored entry key length to the x86_64 string-equality helper
-    emitter.instruction("call __rt_str_eq");                                    // compare the requested key against the current live hash entry key
+    emitter.instruction("call __rt_hash_key_eq");                               // compare the requested normalized key against the current live hash entry key
     emitter.instruction("test rax, rax");                                       // check whether the string-equality helper reported a key match
     emitter.instruction("jne __rt_hash_get_found");                             // stop probing as soon as the requested key matches the current entry
 

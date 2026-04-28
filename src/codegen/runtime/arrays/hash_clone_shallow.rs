@@ -63,8 +63,12 @@ pub fn emit_hash_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("str x5, [sp, #40]");                                   // save source value_tag before helper calls
 
     // -- share the key string with the cloned hash via refcount bump --
+    emitter.instruction("ldr x2, [sp, #16]");                                   // load source key_hi to distinguish string keys from integer keys
+    emitter.instruction("cmn x2, #1");                                          // check whether this entry stores an inline integer key
+    emitter.instruction("b.eq __rt_hash_clone_shallow_key_ready");              // integer keys can be copied without retaining heap storage
     emitter.instruction("ldr x0, [sp, #8]");                                    // x0 = source key pointer for incref
     emitter.instruction("bl __rt_incref");                                      // retain shared key for the cloned hash
+    emitter.label("__rt_hash_clone_shallow_key_ready");
 
     // -- duplicate or retain the entry value according to this entry's runtime tag --
     emitter.instruction("ldr x5, [sp, #40]");                                   // x5 = source entry value_tag
@@ -160,8 +164,11 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // preserve the current source value_lo across nested value-ownership helper calls
     emitter.instruction("mov QWORD PTR [rbp - 56], r8");                        // preserve the current source value_hi across nested value-ownership helper calls
     emitter.instruction("mov QWORD PTR [rbp - 64], r9");                        // preserve the current source runtime value_tag across nested value-ownership helper calls
+    emitter.instruction("cmp QWORD PTR [rbp - 40], -1");                        // check whether this entry stores an inline integer key
+    emitter.instruction("je __rt_hash_clone_shallow_key_ready");                // integer keys can be copied without retaining heap storage
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // load the shared source key pointer so the cloned associative array can retain it for owned insertion
     emitter.instruction("call __rt_incref");                                    // retain the shared source key payload for the cloned associative-array owner instead of allocating a new key copy
+    emitter.label("__rt_hash_clone_shallow_key_ready");
     emitter.instruction("mov r10, QWORD PTR [rbp - 64]");                       // load the current source runtime value_tag before deciding how the cloned owner should retain it
     emitter.instruction("cmp r10, 1");                                          // is the current source entry value a string payload that needs a fresh owned copy?
     emitter.instruction("je __rt_hash_clone_shallow_value_str");                // duplicate string payloads so the cloned associative array owns independent string storage

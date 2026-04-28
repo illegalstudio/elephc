@@ -1,3 +1,4 @@
+use crate::parser::ast::Expr;
 use crate::types::{ClassInfo, EnumInfo, PhpType};
 
 use super::abi;
@@ -363,6 +364,49 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
             }
         }
     }
+}
+
+pub(crate) fn emit_normalized_hash_key(
+    expr: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let key_ty = emit_expr(expr, emitter, ctx, data).codegen_repr();
+    match &key_ty {
+        PhpType::Int | PhpType::Bool => match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("mov x1, x0");                              // move the integer array key payload into the normalized key low word
+                emitter.instruction("mov x2, #-1");                             // key_hi sentinel marks the associative-array key as integer
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rdx, -1");                             // key_hi sentinel marks the associative-array key as integer while rax keeps key_lo
+            }
+        },
+        PhpType::Float => match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("fcvtzs x1, d0");                           // PHP casts float array keys to integer keys
+                emitter.instruction("mov x2, #-1");                             // key_hi sentinel marks the associative-array key as integer
+            }
+            Arch::X86_64 => {
+                emitter.instruction("cvttsd2si rax, xmm0");                     // PHP casts float array keys to integer keys
+                emitter.instruction("mov rdx, -1");                             // key_hi sentinel marks the associative-array key as integer
+            }
+        },
+        PhpType::Str => {
+            abi::emit_call_label(emitter, "__rt_hash_normalize_key");           // normalize numeric-string array keys to their integer PHP form
+        }
+        _ => match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("mov x1, x0");                              // treat unsupported key payloads as integer-like low words for the hash ABI
+                emitter.instruction("mov x2, #-1");                             // key_hi sentinel marks the associative-array key as integer
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rdx, -1");                             // treat unsupported key payloads as integer-like low words for the hash ABI
+            }
+        },
+    }
+    key_ty
 }
 
 pub(super) fn align16(n: usize) -> usize {

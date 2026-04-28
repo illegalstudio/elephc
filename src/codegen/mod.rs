@@ -31,7 +31,8 @@ use driver_support::{
 };
 use emit::Emitter;
 pub(crate) use driver_support::{
-    emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed, runtime_value_tag,
+    emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed, emit_normalized_hash_key,
+    runtime_value_tag,
 };
 pub use driver_support::generate_runtime;
 use platform::Target;

@@ -127,6 +127,7 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_array_combine(emitter);
     arrays::emit_array_combine_refcounted(emitter);
     arrays::emit_array_flip(emitter);
+    arrays::emit_array_flip_string(emitter);
     arrays::emit_array_unshift(emitter);
     arrays::emit_array_unique(emitter);
     arrays::emit_array_unique_refcounted(emitter);
@@ -138,6 +139,9 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_array_walk(emitter);
     arrays::emit_usort(emitter);
     arrays::emit_hash_fnv1a(emitter);
+    arrays::emit_hash_key_hash(emitter);
+    arrays::emit_hash_key_eq(emitter);
+    arrays::emit_hash_normalize_key(emitter);
     arrays::emit_hash_new(emitter);
     arrays::emit_hash_insert_owned(emitter);
     arrays::emit_hash_clone_shallow(emitter);

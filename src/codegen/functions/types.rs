@@ -1,6 +1,9 @@
 use crate::codegen::context::Context;
 use crate::parser::ast::{Expr, ExprKind, TypeExpr};
-use crate::types::{FunctionSig, PhpType};
+use crate::types::{
+    array_key_type_from_value_type, merge_array_key_types, normalized_array_key_type, FunctionSig,
+    PhpType,
+};
 
 pub fn infer_local_type_pub(expr: &Expr, sig: &FunctionSig) -> PhpType {
     infer_local_type(expr, sig, None)
@@ -232,19 +235,22 @@ pub(super) fn infer_local_type(
             PhpType::Array(Box::new(elem_ty))
         }
         ExprKind::ArrayLiteralAssoc(pairs) => {
-            let key_ty = match pairs.first().map(|(key, _)| &key.kind) {
-                Some(ExprKind::IntLiteral(_)) => PhpType::Int,
-                _ => PhpType::Str,
-            };
+            let mut key_ty = pairs
+                .first()
+                .map(|(key, _)| normalized_array_key_type(key, infer_local_type(key, sig, ctx)))
+                .unwrap_or(PhpType::Mixed);
             let mut value_ty = pairs
                 .first()
                 .map(|(_, value)| infer_local_type(value, sig, ctx))
                 .unwrap_or(PhpType::Mixed);
-            for (_, value) in pairs.iter().skip(1) {
+            for (key, value) in pairs.iter().skip(1) {
+                key_ty = merge_array_key_types(
+                    key_ty,
+                    normalized_array_key_type(key, infer_local_type(key, sig, ctx)),
+                );
                 let next_ty = infer_local_type(value, sig, ctx);
                 if next_ty != value_ty {
                     value_ty = PhpType::Mixed;
-                    break;
                 }
             }
             PhpType::AssocArray {
@@ -380,6 +386,7 @@ pub(super) fn infer_local_type(
                         .first()
                         .map(|arg| infer_local_type(arg, sig, ctx))
                         .map(|ty| indexed_array_value_type(&ty, PhpType::Str))
+                        .map(array_key_type_from_value_type)
                         .unwrap_or(PhpType::Str);
                     let value_ty = args
                         .get(1)
@@ -396,6 +403,7 @@ pub(super) fn infer_local_type(
                         .first()
                         .map(|arg| infer_local_type(arg, sig, ctx))
                         .map(|ty| indexed_array_value_type(&ty, PhpType::Str))
+                        .map(array_key_type_from_value_type)
                         .unwrap_or(PhpType::Str);
                     let value_ty = args
                         .get(1)
@@ -413,11 +421,11 @@ pub(super) fn infer_local_type(
                         .unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Int)));
                     match arr_ty {
                         PhpType::Array(value) => PhpType::AssocArray {
-                            key: value,
+                            key: Box::new(array_key_type_from_value_type(*value)),
                             value: Box::new(PhpType::Int),
                         },
                         PhpType::AssocArray { key, value } => PhpType::AssocArray {
-                            key: value,
+                            key: Box::new(array_key_type_from_value_type(*value)),
                             value: key,
                         },
                         _ => PhpType::AssocArray {

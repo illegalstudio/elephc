@@ -129,6 +129,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_sort_int(emitter, false);
     arrays::emit_sort_int(emitter, true);
     arrays::emit_hash_fnv1a(emitter);
+    arrays::emit_hash_key_hash(emitter);
+    arrays::emit_hash_key_eq(emitter);
+    arrays::emit_hash_normalize_key(emitter);
     arrays::emit_hash_clone_shallow(emitter);
     arrays::emit_hash_ensure_unique(emitter);
     arrays::emit_hash_new(emitter);
@@ -167,6 +170,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_array_intersect(emitter);
     arrays::emit_array_intersect_refcounted(emitter);
     arrays::emit_array_flip(emitter);
+    arrays::emit_array_flip_string(emitter);
     arrays::emit_array_combine(emitter);
     arrays::emit_array_combine_refcounted(emitter);
     arrays::emit_array_fill_keys(emitter);

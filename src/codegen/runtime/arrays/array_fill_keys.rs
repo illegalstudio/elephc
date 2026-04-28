@@ -55,6 +55,7 @@ pub fn emit_array_fill_keys(emitter: &mut Emitter) {
     emitter.instruction("add x5, x5, #24");                                     // x5 = skip header to data region
     emitter.instruction("ldr x1, [x5]");                                        // x1 = key_ptr = keys[i].ptr
     emitter.instruction("ldr x2, [x5, #8]");                                    // x2 = key_len = keys[i].len
+    emitter.instruction("bl __rt_hash_normalize_key");                          // normalize numeric-string keys to PHP integer array keys
 
     // -- call hash_set with fill value --
     emitter.instruction("ldr x0, [sp, #16]");                                   // x0 = hash table pointer
@@ -111,6 +112,10 @@ fn emit_array_fill_keys_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the destination associative-array pointer before inserting the current key/value pair
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // load the current key pointer from the selected indexed-array string slot
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // load the current key length from the selected indexed-array string slot
+    emitter.instruction("mov rax, rsi");                                        // move the key pointer into the x86_64 normalization helper input register
+    emitter.instruction("call __rt_hash_normalize_key");                        // normalize numeric-string keys to PHP integer array keys
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the destination associative-array pointer after key normalization
+    emitter.instruction("mov rsi, rax");                                        // move the normalized key low word back into the hash-set key register
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the scalar fill payload into the x86_64 hash insertion low-word register
     emitter.instruction("xor r8d, r8d");                                        // clear the x86_64 hash insertion high-word register because scalar fills use only the low payload word
     emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the requested associative-array value_type tag into the x86_64 hash insertion tag register

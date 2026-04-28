@@ -13,6 +13,7 @@ pub(crate) fn emit_assoc_foreach(
     loop_start: &str,
     loop_end: &str,
     loop_cont: &str,
+    key_ty: &PhpType,
     val_ty: &PhpType,
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -26,6 +27,7 @@ pub(crate) fn emit_assoc_foreach(
             loop_start,
             loop_end,
             loop_cont,
+            key_ty,
             val_ty,
             emitter,
             ctx,
@@ -48,12 +50,15 @@ pub(crate) fn emit_assoc_foreach(
     if let Some(kv) = key_var {
         if let Some(kvar) = ctx.variables.get(kv) {
             let k_offset = kvar.stack_offset;
-            crate::codegen::abi::store_at_offset_scratch(emitter, "x1", k_offset, "x10"); // store key ptr
-            crate::codegen::abi::store_at_offset_scratch(emitter, "x2", k_offset - 8, "x10"); // store key len
+            store_assoc_key_var_aarch64(kv, k_offset, key_ty, emitter, ctx);
             ctx.update_var_type_and_ownership(
                 kv,
-                PhpType::Str,
-                HeapOwnership::borrowed_alias_for_type(&PhpType::Str),
+                key_ty.clone(),
+                if matches!(key_ty, PhpType::Mixed) {
+                    HeapOwnership::local_owner_for_type(key_ty)
+                } else {
+                    HeapOwnership::borrowed_alias_for_type(key_ty)
+                },
             );
         } else {
             emitter.comment(&format!("WARNING: undefined foreach key variable ${}", kv));
@@ -132,6 +137,7 @@ fn emit_assoc_foreach_linux_x86_64(
     loop_start: &str,
     loop_end: &str,
     loop_cont: &str,
+    key_ty: &PhpType,
     val_ty: &PhpType,
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -152,12 +158,15 @@ fn emit_assoc_foreach_linux_x86_64(
     if let Some(kv) = key_var {
         if let Some(kvar) = ctx.variables.get(kv) {
             let k_offset = kvar.stack_offset;
-            crate::codegen::abi::store_at_offset_scratch(emitter, "rdi", k_offset, "r10"); // store the associative-array foreach key pointer into the loop key variable slot
-            crate::codegen::abi::store_at_offset_scratch(emitter, "rdx", k_offset - 8, "r10"); // store the associative-array foreach key length into the paired loop key variable slot
+            store_assoc_key_var_x86_64(kv, k_offset, key_ty, emitter, ctx);
             ctx.update_var_type_and_ownership(
                 kv,
-                PhpType::Str,
-                HeapOwnership::borrowed_alias_for_type(&PhpType::Str),
+                key_ty.clone(),
+                if matches!(key_ty, PhpType::Mixed) {
+                    HeapOwnership::local_owner_for_type(key_ty)
+                } else {
+                    HeapOwnership::borrowed_alias_for_type(key_ty)
+                },
             );
         } else {
             emitter.comment(&format!("WARNING: undefined foreach key variable ${}", kv));
@@ -227,4 +236,95 @@ fn emit_assoc_foreach_linux_x86_64(
     emitter.instruction(&format!("jmp {}", loop_start));                        // continue the associative-array foreach loop from the next insertion-order entry
     emitter.label(loop_end);
     emitter.instruction("add rsp, 32");                                         // drop the associative-array iterator cursor and preserved hash-table pointer stack slots
+}
+
+fn store_assoc_key_var_aarch64(
+    name: &str,
+    offset: usize,
+    key_ty: &PhpType,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    match key_ty {
+        PhpType::Int | PhpType::Bool => {
+            crate::codegen::abi::store_at_offset_scratch(emitter, "x1", offset, "x10");
+        }
+        PhpType::Str => {
+            crate::codegen::abi::store_at_offset_scratch(emitter, "x1", offset, "x10");
+            crate::codegen::abi::store_at_offset_scratch(emitter, "x2", offset - 8, "x10");
+        }
+        PhpType::Mixed => {
+            let key_string = ctx.next_label("foreach_assoc_key_string");
+            let key_done = ctx.next_label("foreach_assoc_key_done");
+            emitter.instruction("stp x3, x4, [sp, #-16]!");                     // preserve the iterated value payload while boxing the mixed key
+            emitter.instruction("str x5, [sp, #-16]!");                         // preserve the iterated value tag while boxing the mixed key
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the iterated key while releasing any previous mixed key variable
+            crate::codegen::abi::load_at_offset_scratch(emitter, "x0", offset, "x10"); // load the previous boxed mixed key before overwrite
+            emitter.instruction("bl __rt_decref_mixed");                        // release the previous owned mixed key if one exists
+            emitter.instruction("ldp x1, x2, [sp], #16");                       // restore the iterated key payload after decref
+            emitter.instruction("cmn x2, #1");                                  // check whether this associative-array key is stored as an integer
+            emitter.instruction(&format!("b.ne {}", key_string));               // string keys need string-tagged mixed boxing
+            emitter.instruction("mov x0, #0");                                  // runtime tag 0 = int key
+            emitter.instruction("mov x2, xzr");                                 // integer mixed payloads do not use the high word
+            emitter.instruction("bl __rt_mixed_from_value");                    // box the integer key into an owned mixed cell
+            emitter.instruction(&format!("b {}", key_done));                    // skip the string-key boxing path
+            emitter.label(&key_string);
+            emitter.instruction("mov x0, #1");                                  // runtime tag 1 = string key
+            emitter.instruction("bl __rt_mixed_from_value");                    // persist and box the string key into an owned mixed cell
+            emitter.label(&key_done);
+            crate::codegen::abi::store_at_offset_scratch(emitter, "x0", offset, "x10");
+            emitter.instruction("ldr x5, [sp], #16");                           // restore the iterated value tag after mixed key storage
+            emitter.instruction("ldp x3, x4, [sp], #16");                       // restore the iterated value payload after mixed key storage
+        }
+        _ => {
+            emitter.comment(&format!("WARNING: unsupported foreach key type {:?} for ${}", key_ty, name));
+            crate::codegen::abi::store_at_offset_scratch(emitter, "x1", offset, "x10");
+        }
+    }
+}
+
+fn store_assoc_key_var_x86_64(
+    name: &str,
+    offset: usize,
+    key_ty: &PhpType,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    match key_ty {
+        PhpType::Int | PhpType::Bool => {
+            crate::codegen::abi::store_at_offset_scratch(emitter, "rdi", offset, "r10");
+        }
+        PhpType::Str => {
+            crate::codegen::abi::store_at_offset_scratch(emitter, "rdi", offset, "r10");
+            crate::codegen::abi::store_at_offset_scratch(emitter, "rdx", offset - 8, "r10");
+        }
+        PhpType::Mixed => {
+            let key_string = ctx.next_label("foreach_assoc_key_string");
+            let key_done = ctx.next_label("foreach_assoc_key_done");
+            crate::codegen::abi::emit_push_reg(emitter, "rcx");                // preserve the iterated value low word while boxing the mixed key
+            crate::codegen::abi::emit_push_reg_pair(emitter, "r8", "r9");      // preserve the iterated value high word and tag while boxing the mixed key
+            crate::codegen::abi::emit_push_reg_pair(emitter, "rdi", "rdx");    // preserve the iterated key while releasing any previous mixed key variable
+            crate::codegen::abi::load_at_offset_scratch(emitter, "rax", offset, "r10"); // load the previous boxed mixed key before overwrite
+            emitter.instruction("call __rt_decref_mixed");                      // release the previous owned mixed key if one exists
+            crate::codegen::abi::emit_pop_reg_pair(emitter, "rdi", "rdx");     // restore the iterated key payload after decref
+            emitter.instruction("cmp rdx, -1");                                 // check whether this associative-array key is stored as an integer
+            emitter.instruction(&format!("jne {}", key_string));                // string keys need string-tagged mixed boxing
+            emitter.instruction("xor esi, esi");                                // integer mixed payloads do not use the high word
+            emitter.instruction("mov eax, 0");                                  // runtime tag 0 = int key
+            emitter.instruction("call __rt_mixed_from_value");                  // box the integer key into an owned mixed cell
+            emitter.instruction(&format!("jmp {}", key_done));                  // skip the string-key boxing path
+            emitter.label(&key_string);
+            emitter.instruction("mov rsi, rdx");                                // move the string key length into the mixed helper high-word register
+            emitter.instruction("mov eax, 1");                                  // runtime tag 1 = string key
+            emitter.instruction("call __rt_mixed_from_value");                  // persist and box the string key into an owned mixed cell
+            emitter.label(&key_done);
+            crate::codegen::abi::store_at_offset_scratch(emitter, "rax", offset, "r10");
+            crate::codegen::abi::emit_pop_reg_pair(emitter, "r8", "r9");       // restore the iterated value high word and tag after mixed key storage
+            crate::codegen::abi::emit_pop_reg(emitter, "rcx");                 // restore the iterated value low word after mixed key storage
+        }
+        _ => {
+            emitter.comment(&format!("WARNING: unsupported foreach key type {:?} for ${}", key_ty, name));
+            crate::codegen::abi::store_at_offset_scratch(emitter, "rdi", offset, "r10");
+        }
+    }
 }

@@ -5,7 +5,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
 use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
-use crate::types::PhpType;
+use crate::types::{array_key_type_from_value_type, PhpType};
 use super::hash_value_type_tag::hash_value_type_tag;
 
 pub fn emit(
@@ -40,7 +40,7 @@ pub fn emit(
         }
 
         return Some(PhpType::AssocArray {
-            key: Box::new(key_elem_ty),
+            key: Box::new(array_key_type_from_value_type(key_elem_ty)),
             value: Box::new(value_elem_ty),
         });
     }
@@ -66,7 +66,7 @@ pub fn emit(
     emitter.instruction(runtime_call);                                          // call runtime: combine → x0=new assoc array
 
     Some(PhpType::AssocArray {
-        key: Box::new(key_elem_ty),
+        key: Box::new(array_key_type_from_value_type(key_elem_ty)),
         value: Box::new(value_elem_ty),
     })
 }

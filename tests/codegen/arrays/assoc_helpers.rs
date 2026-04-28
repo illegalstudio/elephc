@@ -51,6 +51,19 @@ echo $key;
 }
 
 #[test]
+fn test_assoc_array_search_returns_integer_and_string_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$m = [10 => "Alice", "02" => "Bob"];
+echo array_search("Alice", $m);
+echo "|";
+echo array_search("Bob", $m);
+"#,
+    );
+    assert_eq!(out, "10|02");
+}
+
+#[test]
 fn test_assoc_array_search_not_found_is_strict_false() {
     let out = compile_and_run(
         r#"<?php
@@ -74,6 +87,18 @@ for ($i = 0; $i < $n; $i++) {
 "#,
     );
     assert_eq!(out, "x y ");
+}
+
+#[test]
+fn test_assoc_array_keys_preserves_integer_and_string_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$m = [1 => "one", "02" => "two"];
+$keys = array_keys($m);
+echo $keys[0] . "|" . $keys[1];
+"#,
+    );
+    assert_eq!(out, "1|02");
 }
 
 #[test]

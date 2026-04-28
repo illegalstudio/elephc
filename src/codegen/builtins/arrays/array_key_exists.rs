@@ -22,7 +22,7 @@ pub fn emit(
     if matches!(arr_ty, PhpType::AssocArray { .. }) {
         // -- associative array: use hash_get to check if key exists --
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));              // preserve the hash table pointer while evaluating the associative-array key expression
-        emit_expr(&args[0], emitter, ctx, data);
+        crate::codegen::emit_normalized_hash_key(&args[0], emitter, ctx, data);
         let (key_ptr_reg, key_len_reg) = abi::string_result_regs(emitter);
         abi::emit_push_reg_pair(emitter, key_ptr_reg, key_len_reg);             // preserve the computed associative-array key while restoring the hash-table pointer
         match emitter.target.arch {

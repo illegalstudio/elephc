@@ -1,10 +1,10 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// hash_set: insert or update a key-value pair in the hash table.
+/// hash_set: insert or update a normalized int/string key-value pair in the hash table.
 /// Grows the table automatically if load factor exceeds 75%, persists newly
-/// inserted keys, and releases overwritten heap-backed values on update.
-/// Input:  x0=hash_table_ptr, x1=key_ptr, x2=key_len, x3=value_lo, x4=value_hi, x5=value_tag
+/// inserted string keys, and releases overwritten heap-backed values on update.
+/// Input:  x0=hash_table_ptr, x1=key_lo, x2=key_hi (-1 means integer key), x3=value_lo, x4=value_hi, x5=value_tag
 /// Output: x0=hash_table_ptr (may differ if table was reallocated)
 pub fn emit_hash_set(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -56,7 +56,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     // -- hash the key --
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload incoming key_ptr
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload key_len
-    emitter.instruction("bl __rt_hash_fnv1a");                                  // compute hash, result in x0
+    emitter.instruction("bl __rt_hash_key_hash");                               // compute the typed key hash, result in x0
 
     // -- compute slot index: hash % capacity --
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash_table_ptr
@@ -89,7 +89,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = our key_len
     emitter.instruction("ldr x3, [x12, #8]");                                   // x3 = existing key_ptr in entry
     emitter.instruction("ldr x4, [x12, #16]");                                  // x4 = existing key_len in entry
-    emitter.instruction("bl __rt_str_eq");                                      // compare keys, x0=1 if equal
+    emitter.instruction("bl __rt_hash_key_eq");                                 // compare normalized typed keys, x0=1 if equal
 
     // -- restore probe state after str_eq --
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash_table_ptr
@@ -118,8 +118,12 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_insert");
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload inserted key_ptr
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload inserted key_len
-    emitter.instruction("bl __rt_str_persist");                                 // persist inserted key into heap storage
+    emitter.instruction("cmn x2, #1");                                          // check whether the inserted key is an integer key
+    emitter.instruction("b.eq __rt_hash_set_key_ready");                        // integer keys are stored inline and do not need persistence
+    emitter.instruction("bl __rt_str_persist");                                 // persist inserted string key into heap storage
     emitter.instruction("str x1, [sp, #8]");                                    // save persistent key pointer for slot write
+    emitter.instruction("str x2, [sp, #16]");                                   // save persistent key length for slot write
+    emitter.label("__rt_hash_set_key_ready");
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash table pointer after helper call
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload probe index after helper call
     emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
@@ -223,9 +227,9 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the candidate hash-table pointer so the copy-on-write helper sees the current mutation target
     emitter.instruction("call __rt_hash_ensure_unique");                        // split shared associative arrays before insert/update mutates shared storage
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the unique hash-table pointer that subsequent probe logic must mutate
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the incoming key pointer after the copy-on-write helper clobbered caller-saved argument registers
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the incoming key length after the copy-on-write helper clobbered caller-saved argument registers
-    emitter.instruction("call __rt_hash_fnv1a");                                // compute the 64-bit FNV-1a hash for the inserted key
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the incoming key low word after the copy-on-write helper clobbered caller-saved argument registers
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the incoming key high word after the copy-on-write helper clobbered caller-saved argument registers
+    emitter.instruction("call __rt_hash_key_hash");                             // compute the 64-bit hash for the normalized inserted key
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the hash helper returns
     emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load the table capacity for the modulo operation and linear-probe loop
     emitter.instruction("xor edx, edx");                                        // clear the high dividend half before dividing the 64-bit hash by the capacity
@@ -246,7 +250,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the incoming key length to the x86_64 string-equality helper
     emitter.instruction("mov rdx, QWORD PTR [r12 + 8]");                        // pass the stored entry key pointer to the equality helper
     emitter.instruction("mov rcx, QWORD PTR [r12 + 16]");                       // pass the stored entry key length to the equality helper
-    emitter.instruction("call __rt_str_eq");                                    // compare the existing key with the inserted key before deciding between update and probe
+    emitter.instruction("call __rt_hash_key_eq");                               // compare the existing normalized key with the inserted key before deciding between update and probe
     emitter.instruction("test rax, rax");                                       // check whether the probed slot already stores the same logical key
     emitter.instruction("jne __rt_hash_set_update");                            // overwrite the existing payload instead of probing further when the keys match
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the equality helper clobbered caller-saved registers
@@ -264,12 +268,19 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_insert");
     emitter.instruction("mov QWORD PTR [r12], 1");                              // mark the selected entry slot as occupied before filling its payload fields
     emitter.instruction("mov QWORD PTR [rbp - 64], r12");                       // preserve the selected entry pointer across the string-persist helper call for computed keys
+    emitter.instruction("cmp QWORD PTR [rbp - 24], -1");                        // check whether the inserted key is an integer key
+    emitter.instruction("je __rt_hash_set_key_ready");                          // integer keys are stored inline and do not need persistence
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // move the inserted key pointer into the x86_64 string helper input register
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // move the inserted key length into the paired x86_64 string helper register
     emitter.instruction("call __rt_str_persist");                               // duplicate the inserted key so hash-table storage does not alias transient concat-buffer bytes
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the owned key pointer for the selected hash entry
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the owned key length for the selected hash entry
+    emitter.label("__rt_hash_set_key_ready");
     emitter.instruction("mov r12, QWORD PTR [rbp - 64]");                       // restore the selected entry pointer after persisting the inserted key
-    emitter.instruction("mov QWORD PTR [r12 + 8], rax");                        // store the owned key pointer into the selected hash entry
-    emitter.instruction("mov QWORD PTR [r12 + 16], rdx");                       // store the owned key length into the selected hash entry
+    emitter.instruction("mov r13, QWORD PTR [rbp - 16]");                       // reload the normalized key low word for storage in the selected hash entry
+    emitter.instruction("mov QWORD PTR [r12 + 8], r13");                        // store the owned string pointer or integer payload into the selected hash entry
+    emitter.instruction("mov r13, QWORD PTR [rbp - 24]");                       // reload the normalized key high word for storage in the selected hash entry
+    emitter.instruction("mov QWORD PTR [r12 + 16], r13");                       // store the string length or integer sentinel into the selected hash entry
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the string-persist helper clobbered caller-saved registers
     emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // reload the low payload word that belongs to the inserted hash value
     emitter.instruction("mov QWORD PTR [r12 + 24], r13");                       // store the low payload word into the hash entry payload area

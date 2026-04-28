@@ -62,7 +62,10 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.instruction("cmp x14, #1");                                         // is this slot occupied?
     emitter.instruction("b.ne __rt_hash_free_deep_next");                       // skip empty or tombstone slots
 
-    // -- decref the key string for this entry (keys may be shared after COW clone) --
+    // -- decref the key string for this entry (integer keys are inline payloads) --
+    emitter.instruction("ldr x15, [x13, #16]");                                 // load key_hi to distinguish string keys from integer keys
+    emitter.instruction("cmn x15, #1");                                         // check whether this entry stores an inline integer key
+    emitter.instruction("b.eq __rt_hash_free_deep_after_key");                  // integer keys have no heap ownership to release
     emitter.instruction("ldr x0, [x13, #8]");                                   // load key pointer
     emitter.instruction("str x11, [sp, #24]");                                  // preserve loop index across helper call
     emitter.instruction("ldr w15, [x0, #-12]");                                 // load key refcount from heap header
@@ -74,6 +77,7 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #24]");                                  // restore loop index after key handling
 
     // -- free the entry value based on the runtime value tag --
+    emitter.label("__rt_hash_free_deep_after_key");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload hash table pointer after helper call
     emitter.instruction("mov x12, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
     emitter.instruction("mul x13, x11, x12");                                   // recompute byte offset for this slot
@@ -149,6 +153,8 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rcx]");                             // load the occupied marker for the current hash-entry slot
     emitter.instruction("cmp r8, 1");                                           // only fully occupied hash-entry slots own key/value payloads that need cleanup
     emitter.instruction("jne __rt_hash_free_deep_next");                        // skip empty or tombstone slots during the deep-free scan
+    emitter.instruction("cmp QWORD PTR [rcx + 16], -1");                        // check whether this entry stores an inline integer key
+    emitter.instruction("je __rt_hash_free_deep_value");                        // integer keys have no heap ownership to release
     emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // load the persisted key pointer for the current hash-entry slot
     emitter.instruction("test rax, rax");                                       // skip missing keys defensively even though occupied entries should normally have one
     emitter.instruction("jz __rt_hash_free_deep_value");                        // move on to the entry value cleanup when the key pointer is unexpectedly null

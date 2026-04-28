@@ -85,6 +85,13 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     // -- copy key bytes --
     emitter.instruction("ldr x1, [sp, #48]");                                   // load key ptr
     emitter.instruction("ldr x2, [sp, #56]");                                   // load key len
+    emitter.instruction("cmn x2, #1");                                          // check whether the hash key is stored as an integer key
+    emitter.instruction("b.ne __rt_json_assoc_key_copy_ready");                 // string keys can be copied directly
+    emitter.instruction("str x11, [sp, #80]");                                  // preserve the JSON write pointer across integer key formatting
+    emitter.instruction("mov x0, x1");                                          // move the integer key payload into the decimal formatter input register
+    emitter.instruction("bl __rt_itoa");                                        // format the integer key so JSON object keys remain strings
+    emitter.instruction("ldr x11, [sp, #80]");                                  // restore the JSON write pointer after integer key formatting
+    emitter.label("__rt_json_assoc_key_copy_ready");
     emitter.instruction("mov x10, #0");                                         // copy index
     emitter.label("__rt_json_assoc_key_copy");
     emitter.instruction("cmp x10, x2");                                         // check if done
@@ -215,7 +222,7 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving JSON-assoc scratch space
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for hash iteration state and concat-buffer cursors
-    emitter.instruction("sub rsp, 80");                                         // reserve local slots for the hash pointer, output pointers, cursor, item count, and entry scratch payload
+    emitter.instruction("sub rsp, 96");                                         // reserve local slots for the hash pointer, output pointers, cursor, item count, entry scratch payload, and key-format scratch
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source associative-array pointer across nested JSON helper calls
     emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // load the current concat-buffer offset before appending the JSON object
     emitter.instruction("lea r11, [rip + _concat_buf]");                        // materialize the concat-buffer base pointer for the current JSON append
@@ -253,6 +260,15 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the opening key quote
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the associative-array key pointer for the JSON key copy loop
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the associative-array key length for the JSON key copy loop
+    emitter.instruction("cmp rcx, -1");                                         // check whether the hash key is stored as an integer key
+    emitter.instruction("jne __rt_json_assoc_key_copy_ready");                  // string keys can be copied directly
+    emitter.instruction("mov QWORD PTR [rbp - 88], r11");                       // preserve the JSON write pointer across integer key formatting
+    emitter.instruction("mov rax, r10");                                        // move the integer key payload into the decimal formatter input register
+    emitter.instruction("call __rt_itoa");                                      // format the integer key so JSON object keys remain strings
+    emitter.instruction("mov r10, rax");                                        // use the formatted integer string as the JSON key source pointer
+    emitter.instruction("mov rcx, rdx");                                        // use the formatted integer string length as the JSON key length
+    emitter.instruction("mov r11, QWORD PTR [rbp - 88]");                       // restore the JSON write pointer after integer key formatting
+    emitter.label("__rt_json_assoc_key_copy_ready");
     emitter.instruction("xor rdx, rdx");                                        // initialize the JSON key copy index to the beginning of the associative-array key slice
 
     emitter.label("__rt_json_assoc_key_copy");
@@ -361,7 +377,7 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the final concat-buffer write pointer before converting it into an absolute offset
     emitter.instruction("sub rcx, r10");                                        // compute the new absolute concat-buffer offset after the encoded JSON object
     emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // publish the updated concat-buffer offset so later writers append after this JSON object
-    emitter.instruction("add rsp, 80");                                         // release the local JSON-assoc scratch frame before returning to generated code
+    emitter.instruction("add rsp, 96");                                         // release the local JSON-assoc scratch frame before returning to generated code
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
     emitter.instruction("ret");                                                 // return the encoded JSON object slice in the x86_64 string result registers
 }

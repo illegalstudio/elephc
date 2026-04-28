@@ -28,7 +28,7 @@ pub(super) fn emit_assoc_array_assign(
         abi::load_at_offset(emitter, table_reg, target.offset);                       // load the current hash-table pointer from the local slot
     }
     abi::emit_push_reg(emitter, table_reg);                                           // preserve the hash-table pointer while evaluating the string key
-    emit_expr(index, emitter, ctx, data);
+    crate::codegen::emit_normalized_hash_key(index, emitter, ctx, data);
     abi::emit_push_reg_pair(emitter, key_ptr_reg, key_len_reg);                       // preserve the computed key pointer and length while evaluating the value expression
 
     let mut val_ty = emit_expr(value, emitter, ctx, data);

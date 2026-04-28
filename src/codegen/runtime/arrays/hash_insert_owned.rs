@@ -1,9 +1,9 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// hash_insert_owned: insert a key-value pair whose key/value ownership already
+/// hash_insert_owned: insert a normalized key-value pair whose key/value ownership already
 /// belongs to the destination table. Used by hash_grow when moving entries.
-/// Input:  x0=hash_table_ptr, x1=key_ptr, x2=key_len, x3=value_lo, x4=value_hi, x5=value_tag
+/// Input:  x0=hash_table_ptr, x1=key_lo, x2=key_hi (-1 means integer key), x3=value_lo, x4=value_hi, x5=value_tag
 /// Output: x0=hash_table_ptr
 pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -37,7 +37,7 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     emitter.instruction("str x5, [sp, #40]");                                   // save value_tag
 
     // -- hash the existing owned key --
-    emitter.instruction("bl __rt_hash_fnv1a");                                  // compute hash of the moved key
+    emitter.instruction("bl __rt_hash_key_hash");                               // compute the typed hash of the moved key
 
     // -- compute slot index: hash % capacity --
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload destination table pointer
@@ -66,7 +66,7 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload incoming key length
     emitter.instruction("ldr x3, [x12, #8]");                                   // load stored key pointer
     emitter.instruction("ldr x4, [x12, #16]");                                  // load stored key length
-    emitter.instruction("bl __rt_str_eq");                                      // compare moved key against existing key
+    emitter.instruction("bl __rt_hash_key_eq");                                 // compare moved normalized key against existing key
 
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload destination table after call clobbers regs
     emitter.instruction("ldr x6, [x5, #8]");                                    // reload capacity after call clobbers regs
@@ -158,7 +158,7 @@ fn emit_hash_insert_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the runtime value tag across the probe and optional overwrite paths
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the owned key pointer into the x86_64 hash helper input register
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the owned key length into the paired x86_64 hash helper input register
-    emitter.instruction("call __rt_hash_fnv1a");                                // compute the 64-bit FNV-1a hash for the owned key payload
+    emitter.instruction("call __rt_hash_key_hash");                             // compute the 64-bit hash for the owned normalized key payload
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the destination hash-table pointer after the hash helper returns
     emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load the destination table capacity for the modulo operation and linear-probe loop
     emitter.instruction("xor edx, edx");                                        // clear the high dividend half before dividing the 64-bit hash by the capacity
@@ -179,7 +179,7 @@ fn emit_hash_insert_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the incoming owned key length to the x86_64 string-equality helper
     emitter.instruction("mov rdx, QWORD PTR [r12 + 8]");                        // pass the stored entry key pointer to the equality helper
     emitter.instruction("mov rcx, QWORD PTR [r12 + 16]");                       // pass the stored entry key length to the equality helper
-    emitter.instruction("call __rt_str_eq");                                    // compare the existing key with the incoming owned key before deciding between overwrite and probe
+    emitter.instruction("call __rt_hash_key_eq");                               // compare the existing normalized key with the incoming owned key before deciding between overwrite and probe
     emitter.instruction("test rax, rax");                                       // check whether the probed slot already stores the same logical key
     emitter.instruction("jne __rt_hash_insert_owned_overwrite");                // overwrite the existing payload instead of probing further when the keys match
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the destination hash-table pointer after the equality helper clobbered caller-saved registers

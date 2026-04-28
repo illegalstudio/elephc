@@ -1,6 +1,8 @@
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
-use crate::types::{packed_type_size, PhpType, TypeEnv};
+use crate::types::{
+    merge_array_key_types, normalized_array_key_type, packed_type_size, PhpType, TypeEnv,
+};
 
 use super::super::Checker;
 use super::syntactic::{infer_expr_type_syntactic, wider_type_syntactic};
@@ -53,19 +55,16 @@ impl Checker {
                         "Cannot infer type of empty associative array literal",
                     ));
                 }
-                let key_ty = self.infer_type(&pairs[0].0, env)?;
+                let mut key_ty = normalized_array_key_type(
+                    &pairs[0].0,
+                    self.infer_type(&pairs[0].0, env)?,
+                );
                 let mut val_ty = self.infer_type(&pairs[0].1, env)?;
                 for (k, v) in &pairs[1..] {
-                    let kt = self.infer_type(k, env)?;
+                    let kt = normalized_array_key_type(k, self.infer_type(k, env)?);
                     let vt = self.infer_type(v, env)?;
                     if kt != key_ty {
-                        return Err(CompileError::new(
-                            k.span,
-                            &format!(
-                                "Assoc array key type mismatch: expected {:?}, got {:?}",
-                                key_ty, kt
-                            ),
-                        ));
+                        key_ty = merge_array_key_types(key_ty, kt);
                     }
                     if vt != val_ty {
                         val_ty = PhpType::Mixed;
