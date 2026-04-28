@@ -10,11 +10,11 @@ sidebar:
 
 | Type             | Supported        | Notes                                                                                                                  |
 | ---------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `int`            | Yes              | 64-bit signed integer                                                                                                  |
+| `int`            | Yes              | 64-bit signed integer. Literals: decimal `42` / `1_000_000`, hexadecimal `0xFF` / `0xFF_FF`, explicit octal `0o755` / `0O755` (PHP 8.1+), binary `0b1010` / `0B1010` (PHP 5.4+). Numeric separators `_` allowed between digits in any base (PHP 7.4+). |
 | `string`         | Yes              | Pointer + length pair, double and single quoted                                                                        |
 | `null`           | Yes              | Sentinel value, coerces to `0`/`""` in operations                                                                      |
 | `bool`           | Yes              | `true`/`false` as distinct type. `echo false` prints nothing, `echo true` prints `1`. Coerces to 0/1 in arithmetic.    |
-| `float`          | Yes              | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`. Constants: `INF`, `NAN`.                           |
+| `float`          | Yes              | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`, `1_000.5`, `1e1_0`. Constants: `INF`, `NAN`.       |
 | `array`          | Yes              | Indexed (`[1, 2, 3]`) and associative (`["key" => "value"]`). Arrays use copy-on-write semantics.                      |
 | `mixed`          | Yes              | Supported in type hints and typed locals. Runtime values are boxed with a per-value tag.                               |
 | `callable`       | Yes              | Closures, arrow functions, first-class callables, and FFI callback parameters.                                         |

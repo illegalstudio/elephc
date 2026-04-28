@@ -145,51 +145,114 @@ pub fn scan_variable(cursor: &mut Cursor) -> Result<Token, CompileError> {
     Ok(Token::Variable(name))
 }
 
-pub fn scan_number(cursor: &mut Cursor) -> Result<Token, CompileError> {
-    // Check for hex prefix (0x or 0X)
-    if cursor.peek() == Some('0') {
-        let remaining = cursor.remaining();
-        if remaining.len() > 1 && (remaining.as_bytes()[1] == b'x' || remaining.as_bytes()[1] == b'X')
-        {
-            cursor.advance(); // consume '0'
-            cursor.advance(); // consume 'x' or 'X'
-            let mut hex_str = String::new();
-            while let Some(ch) = cursor.peek() {
-                if ch.is_ascii_hexdigit() {
-                    hex_str.push(ch);
-                    cursor.advance();
-                } else {
-                    break;
-                }
-            }
-            if hex_str.is_empty() {
-                return Err(CompileError::new(
-                    cursor.span(),
-                    "Expected hex digits after '0x'",
-                ));
-            }
-            let value = i64::from_str_radix(&hex_str, 16)
-                .map_err(|_| CompileError::new(cursor.span(), "Invalid hex literal"))?;
-            return Ok(Token::IntLiteral(value));
-        }
-    }
-
-    let mut num_str = String::new();
-
+/// Collect digits according to `is_digit`, allowing a single `_` between digits
+/// (PHP 7.4+ numeric separator). The helper never consumes a leading or trailing
+/// `_` — those remain on the cursor so [`validate_no_trailing_alnum`] can flag
+/// them. Returns the digit string with separators stripped.
+fn scan_radix_digits<F: Fn(char) -> bool>(cursor: &mut Cursor, is_digit: F) -> String {
+    let mut s = String::new();
     while let Some(ch) = cursor.peek() {
-        if ch.is_ascii_digit() {
-            num_str.push(ch);
+        if is_digit(ch) {
+            s.push(ch);
             cursor.advance();
+        } else if ch == '_' && !s.is_empty() {
+            let remaining = cursor.remaining();
+            let next_is_digit =
+                remaining.len() > 1 && is_digit(remaining.as_bytes()[1] as char);
+            if next_is_digit {
+                cursor.advance();
+            } else {
+                break;
+            }
         } else {
             break;
         }
     }
+    s
+}
+
+/// After scanning a numeric literal, ensure no alphanumeric character or `_`
+/// follows. Catches malformed forms like `0o78`, `0xfg`, `0b12`, `1_`, and `1__0`,
+/// which PHP rejects at parse time but the lexer would otherwise silently split
+/// into two adjacent tokens.
+fn validate_no_trailing_alnum(cursor: &Cursor, base_label: &str) -> Result<(), CompileError> {
+    if let Some(ch) = cursor.peek() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            return Err(CompileError::new(
+                cursor.span(),
+                &format!("Unexpected character '{ch}' after {base_label} literal"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn scan_number(cursor: &mut Cursor) -> Result<Token, CompileError> {
+    // Prefixed integer literals: 0x / 0o / 0b (and uppercase variants)
+    if cursor.peek() == Some('0') {
+        let remaining = cursor.remaining();
+        if remaining.len() > 1 {
+            let prefix = remaining.as_bytes()[1];
+
+            // Hexadecimal (0x or 0X)
+            if prefix == b'x' || prefix == b'X' {
+                cursor.advance(); // consume '0'
+                cursor.advance(); // consume 'x' or 'X'
+                let hex_str = scan_radix_digits(cursor, |c| c.is_ascii_hexdigit());
+                if hex_str.is_empty() {
+                    return Err(CompileError::new(
+                        cursor.span(),
+                        "Expected hex digits after '0x'",
+                    ));
+                }
+                validate_no_trailing_alnum(cursor, "hex")?;
+                let value = i64::from_str_radix(&hex_str, 16)
+                    .map_err(|_| CompileError::new(cursor.span(), "Invalid hex literal"))?;
+                return Ok(Token::IntLiteral(value));
+            }
+
+            // Explicit octal (0o or 0O) — PHP 8.1+
+            if prefix == b'o' || prefix == b'O' {
+                cursor.advance();
+                cursor.advance();
+                let octal_str = scan_radix_digits(cursor, |c| c.is_ascii_digit() && c < '8');
+                if octal_str.is_empty() {
+                    return Err(CompileError::new(
+                        cursor.span(),
+                        "Expected octal digits after '0o'",
+                    ));
+                }
+                validate_no_trailing_alnum(cursor, "octal")?;
+                let value = i64::from_str_radix(&octal_str, 8)
+                    .map_err(|_| CompileError::new(cursor.span(), "Invalid octal literal"))?;
+                return Ok(Token::IntLiteral(value));
+            }
+
+            // Binary (0b or 0B) — PHP 5.4+
+            if prefix == b'b' || prefix == b'B' {
+                cursor.advance();
+                cursor.advance();
+                let bin_str = scan_radix_digits(cursor, |c| c == '0' || c == '1');
+                if bin_str.is_empty() {
+                    return Err(CompileError::new(
+                        cursor.span(),
+                        "Expected binary digits after '0b'",
+                    ));
+                }
+                validate_no_trailing_alnum(cursor, "binary")?;
+                let value = i64::from_str_radix(&bin_str, 2)
+                    .map_err(|_| CompileError::new(cursor.span(), "Invalid binary literal"))?;
+                return Ok(Token::IntLiteral(value));
+            }
+        }
+    }
+
+    let mut num_str = scan_radix_digits(cursor, |c| c.is_ascii_digit());
 
     // Check for decimal point followed by digit (float literal)
     let is_float = if cursor.peek() == Some('.') {
-        // Look ahead: need a digit after the dot to be a float
         let remaining = cursor.remaining();
-        remaining.len() > 1 && remaining.as_bytes()[1].is_ascii_digit()
+        remaining.len() > 1 && (remaining.as_bytes()[1] as char).is_ascii_digit()
     } else {
         false
     };
@@ -201,14 +264,7 @@ pub fn scan_number(cursor: &mut Cursor) -> Result<Token, CompileError> {
         if is_float {
             num_str.push('.');
             cursor.advance(); // consume '.'
-            while let Some(ch) = cursor.peek() {
-                if ch.is_ascii_digit() {
-                    num_str.push(ch);
-                    cursor.advance();
-                } else {
-                    break;
-                }
-            }
+            num_str.push_str(&scan_radix_digits(cursor, |c| c.is_ascii_digit()));
         }
         // Scientific notation
         if matches!(cursor.peek(), Some('e') | Some('E')) {
@@ -218,21 +274,16 @@ pub fn scan_number(cursor: &mut Cursor) -> Result<Token, CompileError> {
                 num_str.push(sign);
                 cursor.advance();
             }
-            while let Some(ch) = cursor.peek() {
-                if ch.is_ascii_digit() {
-                    num_str.push(ch);
-                    cursor.advance();
-                } else {
-                    break;
-                }
-            }
+            num_str.push_str(&scan_radix_digits(cursor, |c| c.is_ascii_digit()));
         }
+        validate_no_trailing_alnum(cursor, "float")?;
         let value: f64 = num_str
             .parse()
             .map_err(|_| CompileError::new(cursor.span(), "Invalid float literal"))?;
         return Ok(Token::FloatLiteral(value));
     }
 
+    validate_no_trailing_alnum(cursor, "decimal")?;
     let value: i64 = num_str
         .parse()
         .map_err(|_| CompileError::new(cursor.span(), "Invalid integer literal"))?;
@@ -245,14 +296,7 @@ pub fn scan_dot_float(cursor: &mut Cursor) -> Result<Token, CompileError> {
     let mut num_str = String::from("0.");
     cursor.advance(); // consume '.'
 
-    while let Some(ch) = cursor.peek() {
-        if ch.is_ascii_digit() {
-            num_str.push(ch);
-            cursor.advance();
-        } else {
-            break;
-        }
-    }
+    num_str.push_str(&scan_radix_digits(cursor, |c| c.is_ascii_digit()));
 
     // Scientific notation
     if matches!(cursor.peek(), Some('e') | Some('E')) {
@@ -262,15 +306,10 @@ pub fn scan_dot_float(cursor: &mut Cursor) -> Result<Token, CompileError> {
             num_str.push(sign);
             cursor.advance();
         }
-        while let Some(ch) = cursor.peek() {
-            if ch.is_ascii_digit() {
-                num_str.push(ch);
-                cursor.advance();
-            } else {
-                break;
-            }
-        }
+        num_str.push_str(&scan_radix_digits(cursor, |c| c.is_ascii_digit()));
     }
+
+    validate_no_trailing_alnum(cursor, "float")?;
 
     let value: f64 = num_str
         .parse()

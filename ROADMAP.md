@@ -358,6 +358,10 @@ Proper type system for PHP compatibility.
 - [x] Static closures: `static function() { }` and `static fn() => ...` (no `$this` capture)
 - [x] PHP array union operator `+` for indexed+indexed and associative+associative arrays, preserving left-side duplicate keys and associative insertion order
 - [x] PHP-compatible associative array key normalization for integer keys and numeric-string keys across literals, reads/writes, `foreach`, `array_keys()`, `array_search()`, `array_key_exists()`, `array_flip()`, `json_encode()`, and associative array union
+- [x] PHP 8.1 explicit octal integer literals (`0o755` / `0O755`) alongside the existing decimal and hexadecimal forms
+- [x] PHP 5.4 binary integer literals (`0b1010` / `0B1010`)
+- [x] PHP 7.4 numeric separators (`1_000_000`, `0xFF_FF`, `0b1010_1010`, `0o7_7_7`, `1_000.5`, `1e1_0`) across decimal, hex, octal, binary, and float literals
+- [x] Trailing-character validation on numeric literals (rejects `0o78`, `0xfg`, `0b12`, `1_`, `1__0` at lex time instead of silently splitting tokens)
 
 ## v0.20.x — Shared and static libraries (C ABI)
 

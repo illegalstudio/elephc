@@ -1149,6 +1149,114 @@ fn test_hex_literal_zero() {
     assert_eq!(t[1], Token::IntLiteral(0));
 }
 
+// --- Octal integer literals (0o prefix) ---
+
+#[test]
+fn test_octal_literal_lowercase() {
+    let t = tokens("<?php 0o777;");
+    assert_eq!(t[1], Token::IntLiteral(511));
+}
+
+#[test]
+fn test_octal_literal_uppercase_o() {
+    let t = tokens("<?php 0O777;");
+    assert_eq!(t[1], Token::IntLiteral(511));
+}
+
+#[test]
+fn test_octal_literal_zero() {
+    let t = tokens("<?php 0o0;");
+    assert_eq!(t[1], Token::IntLiteral(0));
+}
+
+#[test]
+fn test_octal_literal_single_digit() {
+    let t = tokens("<?php 0o7;");
+    assert_eq!(t[1], Token::IntLiteral(7));
+}
+
+// --- Binary integer literals (0b prefix) ---
+
+#[test]
+fn test_binary_literal_lowercase() {
+    let t = tokens("<?php 0b1010;");
+    assert_eq!(t[1], Token::IntLiteral(10));
+}
+
+#[test]
+fn test_binary_literal_uppercase_b() {
+    let t = tokens("<?php 0B1010;");
+    assert_eq!(t[1], Token::IntLiteral(10));
+}
+
+#[test]
+fn test_binary_literal_zero() {
+    let t = tokens("<?php 0b0;");
+    assert_eq!(t[1], Token::IntLiteral(0));
+}
+
+#[test]
+fn test_binary_literal_one() {
+    let t = tokens("<?php 0b1;");
+    assert_eq!(t[1], Token::IntLiteral(1));
+}
+
+#[test]
+fn test_binary_literal_eight_bits() {
+    let t = tokens("<?php 0b11111111;");
+    assert_eq!(t[1], Token::IntLiteral(255));
+}
+
+// --- Numeric separators (PHP 7.4+) ---
+
+#[test]
+fn test_decimal_separator() {
+    let t = tokens("<?php 1_000_000;");
+    assert_eq!(t[1], Token::IntLiteral(1_000_000));
+}
+
+#[test]
+fn test_hex_separator() {
+    let t = tokens("<?php 0xFF_FF;");
+    assert_eq!(t[1], Token::IntLiteral(0xFFFF));
+}
+
+#[test]
+fn test_octal_separator() {
+    let t = tokens("<?php 0o7_7_7;");
+    assert_eq!(t[1], Token::IntLiteral(0o777));
+}
+
+#[test]
+fn test_binary_separator() {
+    let t = tokens("<?php 0b1010_1010;");
+    assert_eq!(t[1], Token::IntLiteral(0b10101010));
+}
+
+#[test]
+fn test_float_separator_int_part() {
+    let t = tokens("<?php 1_000.5;");
+    assert_eq!(t[1], Token::FloatLiteral(1000.5));
+}
+
+#[test]
+fn test_float_separator_frac_part() {
+    let t = tokens("<?php 1.5_5;");
+    assert_eq!(t[1], Token::FloatLiteral(1.55));
+}
+
+#[test]
+fn test_float_separator_exponent() {
+    let t = tokens("<?php 1e1_0;");
+    assert_eq!(t[1], Token::FloatLiteral(1e10));
+}
+
+#[test]
+fn test_float_separator_signed_exp() {
+    let t = tokens("<?php 1e+1_0;");
+    assert_eq!(t[1], Token::FloatLiteral(1e10));
+}
+
 // --- EOF / empty input handling ---
 
 #[test]

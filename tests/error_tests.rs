@@ -151,6 +151,63 @@ fn test_error_unexpected_character() {
     expect_error("<?php `", "Unexpected character");
 }
 
+// --- Numeric literal errors ---
+
+#[test]
+fn test_error_octal_invalid_digit() {
+    expect_error("<?php $x = 0o78;", "after octal literal");
+}
+
+#[test]
+fn test_error_octal_empty() {
+    expect_error("<?php $x = 0o;", "Expected octal digits");
+}
+
+#[test]
+fn test_error_octal_separator_after_prefix() {
+    expect_error("<?php $x = 0o_77;", "Expected octal digits");
+}
+
+#[test]
+fn test_error_hex_empty() {
+    expect_error("<?php $x = 0x;", "Expected hex digits");
+}
+
+#[test]
+fn test_error_hex_invalid_trailing() {
+    expect_error("<?php $x = 0xfg;", "after hex literal");
+}
+
+#[test]
+fn test_error_hex_separator_after_prefix() {
+    expect_error("<?php $x = 0x_FF;", "Expected hex digits");
+}
+
+#[test]
+fn test_error_binary_empty() {
+    expect_error("<?php $x = 0b;", "Expected binary digits");
+}
+
+#[test]
+fn test_error_binary_invalid_digit() {
+    expect_error("<?php $x = 0b12;", "after binary literal");
+}
+
+#[test]
+fn test_error_binary_separator_after_prefix() {
+    expect_error("<?php $x = 0b_10;", "Expected binary digits");
+}
+
+#[test]
+fn test_error_decimal_trailing_underscore() {
+    expect_error("<?php $x = 1_;", "after decimal literal");
+}
+
+#[test]
+fn test_error_decimal_double_underscore() {
+    expect_error("<?php $x = 1__0;", "after decimal literal");
+}
+
 #[test]
 fn test_error_control_requires_operand() {
     expect_error(

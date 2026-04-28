@@ -250,3 +250,82 @@ fn test_float_in_condition() {
         compile_and_run("<?php $x = 3.14; if ($x > 3.0) { echo \"yes\"; } else { echo \"no\"; }");
     assert_eq!(out, "yes");
 }
+
+// --- Octal integer literals ---
+
+#[test]
+fn test_octal_literal_echo() {
+    let out = compile_and_run("<?php echo 0o777;");
+    assert_eq!(out, "511");
+}
+
+#[test]
+fn test_octal_literal_default_param() {
+    let out = compile_and_run(
+        "<?php
+        function chmod(int $mode = 0o777): int {
+            return $mode;
+        }
+        echo chmod();
+        ",
+    );
+    assert_eq!(out, "511");
+}
+
+// --- Binary integer literals ---
+
+#[test]
+fn test_binary_literal_echo() {
+    let out = compile_and_run("<?php echo 0b1010;");
+    assert_eq!(out, "10");
+}
+
+#[test]
+fn test_binary_literal_arith() {
+    let out = compile_and_run("<?php echo 0b1100 & 0b1010;");
+    assert_eq!(out, "8");
+}
+
+#[test]
+fn test_binary_literal_uppercase() {
+    let out = compile_and_run("<?php echo 0B11111111;");
+    assert_eq!(out, "255");
+}
+
+// --- Numeric separators (PHP 7.4+) ---
+
+#[test]
+fn test_decimal_separator_echo() {
+    let out = compile_and_run("<?php echo 1_000_000;");
+    assert_eq!(out, "1000000");
+}
+
+#[test]
+fn test_hex_separator_echo() {
+    let out = compile_and_run("<?php echo 0xFF_FF;");
+    assert_eq!(out, "65535");
+}
+
+#[test]
+fn test_octal_separator_echo() {
+    let out = compile_and_run("<?php echo 0o7_7_7;");
+    assert_eq!(out, "511");
+}
+
+#[test]
+fn test_binary_separator_echo() {
+    let out = compile_and_run("<?php echo 0b1010_1010;");
+    assert_eq!(out, "170");
+}
+
+#[test]
+fn test_float_separator_echo() {
+    let out = compile_and_run("<?php echo 1_000.5;");
+    assert_eq!(out, "1000.5");
+}
+
+#[test]
+fn test_float_separator_exponent_echo() {
+    let out = compile_and_run("<?php echo 1e1_0;");
+    assert_eq!(out, "10000000000");
+}
