@@ -2,6 +2,7 @@ mod date;
 mod define;
 mod exec_fn;
 mod exit;
+mod fileperms;
 mod getenv;
 mod json_decode;
 mod json_encode;
@@ -16,6 +17,7 @@ mod preg_match_all;
 mod preg_replace;
 mod preg_split;
 mod putenv;
+mod realpath;
 mod shell_exec;
 mod sleep;
 mod strtotime;
@@ -45,6 +47,8 @@ pub fn emit(
         "usleep" => usleep::emit(name, args, emitter, ctx, data),
         "getenv" => getenv::emit(name, args, emitter, ctx, data),
         "putenv" => putenv::emit(name, args, emitter, ctx, data),
+        "fileperms" => fileperms::emit(name, args, emitter, ctx, data),
+        "realpath" => realpath::emit(name, args, emitter, ctx, data),
         "php_uname" => php_uname::emit(name, args, emitter, ctx, data),
         "phpversion" => phpversion::emit(name, args, emitter, ctx, data),
         "exec" => exec_fn::emit(name, args, emitter, ctx, data),

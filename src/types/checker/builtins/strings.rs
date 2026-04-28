@@ -251,6 +251,19 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Str))
         }
+        "realpath" | "fileperms" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 1 argument", name),
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            match name {
+                "realpath" => Ok(Some(PhpType::Union(vec![PhpType::Str, PhpType::Bool]))),
+                _ => Ok(Some(PhpType::Union(vec![PhpType::Int, PhpType::Bool]))),
+            }
+        }
         "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
             if args.len() != 1 {
                 return Err(CompileError::new(

@@ -463,3 +463,35 @@ fn test_preg_replace_case_insensitive() {
     let out = compile_and_run(r#"<?php echo preg_replace("/WORLD/i", "PHP", "hello World");"#);
     assert_eq!(out, "hello PHP");
 }
+
+// --- Path functions ---
+
+#[test]
+fn test_realpath_root() {
+    let out = compile_and_run("<?php echo realpath(\"/\");");
+    assert_eq!(out.trim(), "/");
+}
+
+#[test]
+fn test_realpath_current_dir() {
+    let out = compile_and_run("<?php echo realpath(\".\");");
+    assert!(!out.is_empty());
+}
+
+#[test]
+fn test_realpath_nonexistent() {
+    let out = compile_and_run("<?php $r = realpath(\"/nonexistent/path/12345\"); if ($r == false) { echo \"false\"; }");
+    assert_eq!(out, "false");
+}
+
+#[test]
+fn test_fileperms_root() {
+    let out = compile_and_run("<?php $p = fileperms(\"/\"); echo $p > 0 ? \"ok\" : \"zero\";");
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_fileperms_nonexistent() {
+    let out = compile_and_run("<?php $p = fileperms(\"/nonexistent/path/12345\"); echo $p == false ? \"false\" : \"ok\";");
+    assert_eq!(out, "false");
+}

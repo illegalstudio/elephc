@@ -1147,6 +1147,16 @@ expect_builtin_arity_error!(
     "nl2br() takes exactly 1 argument"
 );
 expect_builtin_arity_error!(
+    test_error_realpath_wrong_args,
+    "<?php realpath();",
+    "realpath() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_fileperms_wrong_args,
+    "<?php fileperms();",
+    "fileperms() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
     test_error_wordwrap_wrong_args,
     "<?php wordwrap(\"a\", 1, \"-\", true, 5);",
     "wordwrap() takes 1 to 4 arguments"

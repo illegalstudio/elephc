@@ -80,6 +80,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     system::emit_php_uname(emitter);
     system::emit_getenv(emitter);
     system::emit_shell_exec(emitter);
+    system::emit_realpath(emitter);
+    system::emit_fileperms(emitter);
     system::emit_date(emitter);
     system::emit_mktime(emitter);
     system::emit_strtotime(emitter);
