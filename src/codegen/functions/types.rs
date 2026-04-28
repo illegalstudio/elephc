@@ -77,6 +77,29 @@ fn array_union_type(a: &PhpType, b: &PhpType) -> Option<PhpType> {
     }
 }
 
+fn array_like_key_type(ty: &PhpType) -> PhpType {
+    match ty {
+        PhpType::Array(_) => PhpType::Int,
+        PhpType::AssocArray { key, .. } => *key.clone(),
+        _ => PhpType::Int,
+    }
+}
+
+fn array_like_value_type(ty: &PhpType) -> PhpType {
+    match ty {
+        PhpType::Array(value) => *value.clone(),
+        PhpType::AssocArray { value, .. } => *value.clone(),
+        _ => PhpType::Int,
+    }
+}
+
+fn indexed_array_value_type(ty: &PhpType, fallback: PhpType) -> PhpType {
+    match ty {
+        PhpType::Array(value) => *value.clone(),
+        _ => fallback,
+    }
+}
+
 fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
     matches!(&expr.kind, ExprKind::ArrayLiteral(elems) if elems.is_empty())
 }
@@ -338,13 +361,80 @@ pub(super) fn infer_local_type(
                 | "base64_decode" | "bin2hex" | "hex2bin" | "md5" | "sha1" | "hash" | "gettype"
                 | "strstr" | "readline" | "date" | "json_encode" | "php_uname" | "phpversion"
                 | "tempnam" | "getcwd" | "shell_exec" => PhpType::Str,
+                "array_keys" => {
+                    let arr_ty = args
+                        .first()
+                        .map(|arg| infer_local_type(arg, sig, ctx))
+                        .unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Int)));
+                    PhpType::Array(Box::new(array_like_key_type(&arr_ty)))
+                }
+                "array_values" => {
+                    let arr_ty = args
+                        .first()
+                        .map(|arg| infer_local_type(arg, sig, ctx))
+                        .unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Int)));
+                    PhpType::Array(Box::new(array_like_value_type(&arr_ty)))
+                }
+                "array_combine" => {
+                    let key_ty = args
+                        .first()
+                        .map(|arg| infer_local_type(arg, sig, ctx))
+                        .map(|ty| indexed_array_value_type(&ty, PhpType::Str))
+                        .unwrap_or(PhpType::Str);
+                    let value_ty = args
+                        .get(1)
+                        .map(|arg| infer_local_type(arg, sig, ctx))
+                        .map(|ty| indexed_array_value_type(&ty, PhpType::Int))
+                        .unwrap_or(PhpType::Int);
+                    PhpType::AssocArray {
+                        key: Box::new(key_ty),
+                        value: Box::new(value_ty),
+                    }
+                }
+                "array_fill_keys" => {
+                    let key_ty = args
+                        .first()
+                        .map(|arg| infer_local_type(arg, sig, ctx))
+                        .map(|ty| indexed_array_value_type(&ty, PhpType::Str))
+                        .unwrap_or(PhpType::Str);
+                    let value_ty = args
+                        .get(1)
+                        .map(|arg| infer_local_type(arg, sig, ctx))
+                        .unwrap_or(PhpType::Int);
+                    PhpType::AssocArray {
+                        key: Box::new(key_ty),
+                        value: Box::new(value_ty),
+                    }
+                }
+                "array_flip" => {
+                    let arr_ty = args
+                        .first()
+                        .map(|arg| infer_local_type(arg, sig, ctx))
+                        .unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Int)));
+                    match arr_ty {
+                        PhpType::Array(value) => PhpType::AssocArray {
+                            key: value,
+                            value: Box::new(PhpType::Int),
+                        },
+                        PhpType::AssocArray { key, value } => PhpType::AssocArray {
+                            key: value,
+                            value: key,
+                        },
+                        _ => PhpType::AssocArray {
+                            key: Box::new(PhpType::Int),
+                            value: Box::new(PhpType::Int),
+                        },
+                    }
+                }
+                "array_diff_key" | "array_intersect_key" => args
+                    .first()
+                    .map(|arg| infer_local_type(arg, sig, ctx))
+                    .unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Int))),
                 "explode"
                 | "str_split"
                 | "file"
                 | "scandir"
                 | "glob"
-                | "array_keys"
-                | "array_values"
                 | "array_merge"
                 | "array_slice"
                 | "array_reverse"
@@ -352,13 +442,8 @@ pub(super) fn infer_local_type(
                 | "array_chunk"
                 | "array_pad"
                 | "array_fill"
-                | "array_fill_keys"
                 | "array_diff"
                 | "array_intersect"
-                | "array_diff_key"
-                | "array_intersect_key"
-                | "array_flip"
-                | "array_combine"
                 | "array_splice"
                 | "array_column"
                 | "array_map"

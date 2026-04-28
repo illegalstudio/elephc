@@ -22,14 +22,11 @@ pub(super) fn emit_array_union_binop(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
-    let left_static_ty = super::super::super::functions::infer_contextual_type(left, ctx);
-    let right_static_ty = super::super::super::functions::infer_contextual_type(right, ctx);
+    let left_static_ty = emit_expr(left, emitter, ctx, data);
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // save the left array pointer while evaluating the right operand
+    let right_static_ty = emit_expr(right, emitter, ctx, data);
     let result_ty = array_union_result_type(left, &left_static_ty, right, &right_static_ty);
     let use_hash_union = matches!(left_static_ty, PhpType::AssocArray { .. });
-
-    emit_expr(left, emitter, ctx, data);
-    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // save the left array pointer while evaluating the right operand
-    emit_expr(right, emitter, ctx, data);
 
     match emitter.target.arch {
         Arch::AArch64 => {

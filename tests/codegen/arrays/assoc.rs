@@ -78,6 +78,32 @@ echo $result["a"] + $result["b"] + $result["c"];
 }
 
 #[test]
+fn test_assoc_array_union_with_assoc_builtin_operands() {
+    let out = compile_and_run(
+        r#"<?php
+$left = array_fill_keys(["a", "b"], 1);
+$right = array_combine(["b", "c"], [99, 3]);
+$result = $left + $right;
+echo $result["a"] + $result["b"] + $result["c"];
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_assoc_array_union_with_key_filter_builtin_operand() {
+    let out = compile_and_run(
+        r#"<?php
+$left = array_diff_key(["a" => 1, "b" => 2], ["a" => 0]);
+$right = ["b" => 99, "c" => 3];
+$result = $left + $right;
+echo $result["b"] + $result["c"];
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+#[test]
 fn test_assoc_foreach_key_value() {
     let out = compile_and_run(
         r#"<?php
