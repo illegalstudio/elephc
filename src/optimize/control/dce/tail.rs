@@ -1,11 +1,98 @@
 use super::*;
-use super::state::TailSinkTarget;
+use super::ifs::dce_if_stmt;
+use super::state::{GuardState, TailSinkTarget};
+use super::switches::dce_switch_stmt_with_tail;
+use super::tries::dce_try_stmt_with_tail;
 
 pub(super) fn append_tail_to_fallthrough_path(mut body: Vec<Stmt>, tail: Vec<Stmt>) -> Vec<Stmt> {
     if block_reaches_following_stmt(&body) {
         body.extend(tail);
     }
     body
+}
+
+pub(super) fn dce_stmt_with_tail(stmt: Stmt, tail: Vec<Stmt>, guards: &GuardState) -> Vec<Stmt> {
+    let span = stmt.span;
+    match stmt.kind {
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            let reachability = analyze_if_tail_paths(&then_body, &elseif_clauses, &else_body);
+            let then_body = if reachability.then_sinks_tail {
+                append_tail_to_fallthrough_path(then_body, tail.clone())
+            } else {
+                then_body
+            };
+            let elseif_clauses: Vec<_> = elseif_clauses
+                .into_iter()
+                .zip(reachability.elseif_sinks_tail)
+                .map(|((condition, body), sinks_tail)| {
+                    let body = if sinks_tail {
+                        append_tail_to_fallthrough_path(body, tail.clone())
+                    } else {
+                        body
+                    };
+                    (condition, body)
+                })
+                .collect();
+            let else_body = match else_body {
+                Some(body) if reachability.else_sinks_tail => Some(append_tail_to_fallthrough_path(body, tail)),
+                Some(body) => Some(body),
+                None if reachability.implicit_else_sinks_tail => Some(tail),
+                None => None,
+            };
+            dce_if_stmt(condition, then_body, elseif_clauses, else_body, span, guards)
+        }
+        StmtKind::IfDef {
+            symbol,
+            then_body,
+            else_body,
+        } => {
+            let reachability = analyze_ifdef_tail_paths(&then_body, &else_body);
+            let then_body = if reachability.then_sinks_tail {
+                append_tail_to_fallthrough_path(then_body, tail.clone())
+            } else {
+                then_body
+            };
+            let else_body = match else_body {
+                Some(body) if reachability.else_sinks_tail => Some(append_tail_to_fallthrough_path(body, tail)),
+                Some(body) => Some(body),
+                None if reachability.implicit_else_sinks_tail => Some(tail),
+                None => None,
+            };
+            dce_stmt_with_guards(Stmt::new(
+                StmtKind::IfDef {
+                    symbol,
+                    then_body,
+                    else_body,
+                },
+                span,
+            ), guards)
+        }
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => dce_switch_stmt_with_tail(subject, cases, default, tail, span, guards),
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => dce_try_stmt_with_tail(try_body, catches, finally_body, tail, span, guards),
+        _ => {
+            let mut stmts = dce_stmt_with_guards(stmt, guards);
+            if stmts
+                .last()
+                .is_some_and(|stmt| matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough))
+            {
+                stmts.extend(dce_block_with_guards(tail, guards.clone()));
+            }
+            stmts
+        }
+    }
 }
 
 fn block_matches_tail_target(body: &[Stmt], target: TailSinkTarget) -> bool {
