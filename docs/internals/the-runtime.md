@@ -158,7 +158,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (104 files)
+**Source:** `src/codegen/runtime/arrays/` (110 files)
 
 ### Core allocation
 
