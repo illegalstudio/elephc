@@ -1,43 +1,10 @@
 use super::*;
 
-#[derive(Clone, Copy)]
-enum TailSinkTarget {
-    FallsThrough,
-    Breaks,
-}
+mod methods;
+mod state;
 
-#[derive(Clone, Default)]
-struct GuardState {
-    truthy_vars: Vec<String>,
-    falsy_vars: Vec<String>,
-    bool_true_vars: Vec<String>,
-    bool_false_vars: Vec<String>,
-    exact_guards: Vec<ExactGuard>,
-    excluded_guards: Vec<ExactGuard>,
-    condition_guards: Vec<ConditionGuard>,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-struct ExactGuard {
-    name: String,
-    value: GuardLiteral,
-}
-
-#[derive(Clone)]
-struct ConditionGuard {
-    condition: Expr,
-    value: bool,
-    names: Vec<String>,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-enum GuardLiteral {
-    Bool(bool),
-    Null,
-    Int(i64),
-    Float(u64),
-    String(String),
-}
+pub(crate) use methods::{dce_method, dce_method_without_context};
+use state::{ConditionGuard, ExactGuard, GuardLiteral, GuardState, TailSinkTarget};
 
 pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
     dce_block_with_guards(body, GuardState::default())
@@ -2540,23 +2507,5 @@ fn collect_expr_written_names(expr: &Expr, written: &mut Vec<String>) {
 fn push_written_name(written: &mut Vec<String>, name: &str) {
     if !written.iter().any(|known| known == name) {
         written.push(name.to_string());
-    }
-}
-
-pub(crate) fn dce_method(method: ClassMethod, class_name: &str, parent_name: Option<&str>) -> ClassMethod {
-    let context = ClassEffectContext {
-        class_name: class_name.to_string(),
-        parent_name: parent_name.map(str::to_string),
-    };
-    ClassMethod {
-        body: with_class_effect_context(Some(context), || dce_block(method.body)),
-        ..method
-    }
-}
-
-pub(crate) fn dce_method_without_context(method: ClassMethod) -> ClassMethod {
-    ClassMethod {
-        body: with_class_effect_context(None, || dce_block(method.body)),
-        ..method
     }
 }
