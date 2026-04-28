@@ -37,6 +37,10 @@ echo "Sum: " . sum($numbers) . "\n";
 echo "array_sum: " . array_sum($numbers) . "\n";
 echo "array_product([2,3,4]): " . array_product([2, 3, 4]) . "\n";
 
+$numbers[2] += 8;
+$numbers[3] >>= 1;
+echo "Adjusted slots: " . $numbers[2] . ", " . $numbers[3] . "\n";
+
 // Build array dynamically
 $squares = [1];
 for ($i = 2; $i <= 5; $i++) {
