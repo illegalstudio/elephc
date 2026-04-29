@@ -1,0 +1,122 @@
+use super::*;
+
+#[test]
+fn test_print_basic() {
+    let out = compile_and_run("<?php print \"hello\";");
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_print_int() {
+    let out = compile_and_run("<?php print 42;");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_var_dump_int() {
+    let out = compile_and_run("<?php var_dump(42);");
+    assert_eq!(out, "int(42)\n");
+}
+
+#[test]
+fn test_var_dump_string() {
+    let out = compile_and_run(r#"<?php var_dump("hello");"#);
+    assert_eq!(out, "string(5) \"hello\"\n");
+}
+
+#[test]
+fn test_var_dump_bool_true() {
+    let out = compile_and_run("<?php var_dump(true);");
+    assert_eq!(out, "bool(true)\n");
+}
+
+#[test]
+fn test_var_dump_bool_false() {
+    let out = compile_and_run("<?php var_dump(false);");
+    assert_eq!(out, "bool(false)\n");
+}
+
+#[test]
+fn test_var_dump_null() {
+    let out = compile_and_run("<?php var_dump(null);");
+    assert_eq!(out, "NULL\n");
+}
+
+#[test]
+fn test_var_dump_float() {
+    let out = compile_and_run("<?php var_dump(3.14);");
+    assert_eq!(out, "float(3.14)\n");
+}
+
+#[test]
+fn test_var_dump_mixed_prints_concrete_payload() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {}
+
+$map = [
+    "i" => 42,
+    "s" => "hello",
+    "b" => true,
+    "n" => null,
+    "a" => [1, 2],
+    "o" => new Box(),
+];
+
+var_dump($map["i"]);
+var_dump($map["s"]);
+var_dump($map["b"]);
+var_dump($map["n"]);
+var_dump($map["a"]);
+var_dump($map["o"]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\narray(2) {\n}\nobject(Box)\n"
+    );
+}
+
+#[test]
+fn test_print_r_int() {
+    let out = compile_and_run("<?php print_r(42);");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_print_r_string() {
+    let out = compile_and_run(r#"<?php print_r("hello");"#);
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_print_r_bool_true() {
+    let out = compile_and_run("<?php print_r(true);");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_print_r_bool_false() {
+    let out = compile_and_run("<?php print_r(false);");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_print_r_array() {
+    let out = compile_and_run("<?php print_r([1, 2, 3]);");
+    assert_eq!(out, "Array\n");
+}
+
+#[test]
+fn test_var_dump_multiple() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(1);
+var_dump("hi");
+var_dump(true);
+"#,
+    );
+    assert_eq!(out, "int(1)\nstring(2) \"hi\"\nbool(true)\n");
+}
+
+// --- File I/O: CSV, timestamps, directory listing, temp files, seek/rewind/eof ---

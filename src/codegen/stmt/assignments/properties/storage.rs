@@ -72,7 +72,7 @@ pub(super) fn store_property_value(emitter: &mut Emitter, object_reg: &str, val_
             abi::emit_store_to_address(emitter, ptr_reg, object_reg, offset);
             abi::emit_store_to_address(emitter, len_reg, object_reg, offset + 8);
         }
-        PhpType::Void => {
+        PhpType::Void | PhpType::Never => {
             abi::emit_store_zero_to_address(emitter, object_reg, offset);
             abi::emit_store_zero_to_address(emitter, object_reg, offset + 8);
         }
@@ -182,7 +182,7 @@ pub(super) fn store_referenced_value(
             abi::emit_store_to_address(emitter, ptr_reg, pointer_reg, 0);
             abi::emit_store_to_address(emitter, len_reg, pointer_reg, 8);
         }
-        PhpType::Void => {
+        PhpType::Void | PhpType::Never => {
             abi::emit_store_zero_to_address(emitter, pointer_reg, 0);
             abi::emit_store_zero_to_address(emitter, pointer_reg, 8);
         }

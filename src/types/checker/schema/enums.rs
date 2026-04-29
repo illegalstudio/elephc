@@ -198,6 +198,7 @@ pub(crate) fn build_enum_info(
             params: Vec::new(),
             defaults: Vec::new(),
             return_type: PhpType::Array(Box::new(PhpType::Object(name.to_string()))),
+            declared_return: true,
             ref_params: Vec::new(),
             declared_params: Vec::new(),
             variadic: None,
@@ -221,6 +222,7 @@ pub(crate) fn build_enum_info(
                             PhpType::Void,
                         ])
                     },
+                    declared_return: true,
                     ref_params: vec![false],
                     declared_params: vec![true],
                     variadic: None,

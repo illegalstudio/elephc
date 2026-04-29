@@ -254,6 +254,7 @@ impl Checker {
                         params: php_params.clone(),
                         defaults: params.iter().map(|_| None).collect(),
                         return_type: php_ret.clone(),
+                        declared_return: true,
                         ref_params: params.iter().map(|_| false).collect(),
                         declared_params: vec![true; php_params.len()],
                         variadic: None,

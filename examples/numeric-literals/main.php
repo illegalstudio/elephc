@@ -5,22 +5,27 @@
 // before parsing — they only exist to make long numbers readable.
 
 // --- Integer bases --------------------------------------------------------
-// All four forms below produce the same value (255).
+// All five forms below produce the same value (255).
 $decimal = 255;
 $hex = 0xFF;
-$octal = 0o377;       // PHP 8.1+ explicit octal
+$legacy_octal = 0377;  // PHP legacy octal
+$octal = 0o377;        // PHP 8.1+ explicit octal
 $binary = 0b1111_1111; // PHP 5.4+ binary, with separator
 
-echo "decimal = " . $decimal . "\n";
-echo "hex     = " . $hex . "\n";
-echo "octal   = " . $octal . "\n";
-echo "binary  = " . $binary . "\n";
+echo "decimal      = " . $decimal . "\n";
+echo "hex          = " . $hex . "\n";
+echo "legacy octal = " . $legacy_octal . "\n";
+echo "octal        = " . $octal . "\n";
+echo "binary       = " . $binary . "\n";
 
 // --- Numeric separators on real-world values ------------------------------
 // File permissions: octal is the natural fit; the separator is uncommon here
 // but legal — useful when you want to group user/group/other bits visually.
 $chmod_mode = 0o7_5_5;
 echo "chmod mode 0o7_5_5 = " . $chmod_mode . "\n"; // 493
+
+$legacy_chmod_mode = 0_7_5_5;
+echo "chmod mode 0_7_5_5 = " . $legacy_chmod_mode . "\n"; // 493
 
 // Big numbers stay readable when grouped in thousands.
 $population = 7_900_000_000;

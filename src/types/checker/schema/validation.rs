@@ -49,6 +49,7 @@ pub(crate) fn build_method_sig(
         params,
         defaults,
         return_type,
+        declared_return: method.return_type.is_some(),
         ref_params,
         declared_params: method
             .params
@@ -199,5 +200,26 @@ pub(crate) fn validate_override_signature(
         parent_sig,
         kind,
         "overriding",
-    )
+    )?;
+    if parent_sig.declared_return && !child_sig.declared_return {
+        return Err(CompileError::new(
+            method.span,
+            &format!(
+                "Cannot override {} {}::{} without declaring a compatible return type (parent returns {})",
+                kind, class_name, method.name, parent_sig.return_type
+            ),
+        ));
+    }
+    if parent_sig.declared_return
+        && !Checker::types_compatible(&parent_sig.return_type, &child_sig.return_type)
+    {
+        return Err(CompileError::new(
+            method.span,
+            &format!(
+                "Cannot override {} {}::{} with incompatible return type {} (parent returns {})",
+                kind, class_name, method.name, child_sig.return_type, parent_sig.return_type
+            ),
+        ));
+    }
+    Ok(())
 }

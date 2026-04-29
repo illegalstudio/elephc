@@ -438,6 +438,7 @@ fn resolve_buffer_element_type(type_expr: &TypeExpr, ctx: &Context) -> PhpType {
         TypeExpr::Int => PhpType::Int,
         TypeExpr::Float => PhpType::Float,
         TypeExpr::Bool => PhpType::Bool,
+        TypeExpr::Never => PhpType::Never,
         TypeExpr::Ptr(target) => {
             PhpType::Pointer(target.as_ref().map(|name| name.as_str().to_string()))
         }

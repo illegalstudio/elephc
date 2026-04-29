@@ -1,0 +1,105 @@
+use super::*;
+
+#[test]
+fn test_error_never_function_cannot_return_value() {
+    expect_error(
+        "<?php function fail(): never { return 42; }",
+        "Function 'fail' declared never must not return",
+    );
+}
+
+#[test]
+fn test_error_never_function_cannot_return_void() {
+    expect_error(
+        "<?php function fail(): never { return; }",
+        "Function 'fail' declared never must not return",
+    );
+}
+
+#[test]
+fn test_error_never_method_cannot_return() {
+    expect_error(
+        "<?php class Failer { public function fail(): never { return; } }",
+        "Method 'Failer::fail' declared never must not return",
+    );
+}
+
+#[test]
+fn test_error_never_rejected_in_union_return_type() {
+    expect_error(
+        "<?php function fail(): int|never { return 1; }",
+        "never can only be used as a standalone return type",
+    );
+}
+
+#[test]
+fn test_error_never_rejected_in_nullable_return_type() {
+    expect_error(
+        "<?php function fail(): ?never { throw new \\Exception(); }",
+        "never can only be used as a standalone return type",
+    );
+}
+
+#[test]
+fn test_error_never_rejected_as_parameter_type() {
+    expect_error(
+        "<?php function take(never $x) {} take(1);",
+        "cannot use type never",
+    );
+}
+
+#[test]
+fn test_error_never_rejected_in_union_parameter_type() {
+    expect_error(
+        "<?php function take(int|never $x) {} take(1);",
+        "cannot use type never",
+    );
+}
+
+#[test]
+fn test_error_never_rejected_as_property_type() {
+    expect_error(
+        "<?php class Box { public never $value; }",
+        "cannot use type never",
+    );
+}
+
+#[test]
+fn test_error_never_rejected_as_typed_local() {
+    expect_error(
+        "<?php never $x = 1;",
+        "cannot use type never",
+    );
+}
+
+#[test]
+fn test_error_never_override_widening_to_void_rejected() {
+    expect_error(
+        "<?php class Parent_ { public function f(): never { throw new \\Exception(); } } class Child_ extends Parent_ { public function f(): void {} }",
+        "incompatible return type",
+    );
+}
+
+#[test]
+fn test_error_never_override_requires_declared_return_type() {
+    expect_error(
+        "<?php class Parent_ { public function f(): never { throw new \\Exception(); } } class Child_ extends Parent_ { public function f() { throw new \\Exception(); } }",
+        "without declaring a compatible return type",
+    );
+}
+
+#[test]
+fn test_error_never_interface_implementation_widening_rejected() {
+    expect_error(
+        "<?php interface Failer { public function fail(): never; } class Bad implements Failer { public function fail(): int { return 1; } }",
+        "incompatible return type",
+    );
+}
+
+#[test]
+fn test_error_never_interface_requires_declared_return_type() {
+    expect_error(
+        "<?php interface Failer { public function fail(): never; } class Bad implements Failer { public function fail() { throw new \\Exception(); } }",
+        "without declaring a compatible return type",
+    );
+}

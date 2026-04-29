@@ -188,7 +188,7 @@ pub fn emit(
         PhpType::Float => b"double".as_slice(),
         PhpType::Str => b"string".as_slice(),
         PhpType::Bool => b"boolean".as_slice(),
-        PhpType::Void => b"NULL".as_slice(),
+        PhpType::Void | PhpType::Never => b"NULL".as_slice(),
         PhpType::Array(_) | PhpType::AssocArray { .. } => b"array".as_slice(),
         PhpType::Callable => b"callable".as_slice(),
         PhpType::Object(_) => b"object".as_slice(),

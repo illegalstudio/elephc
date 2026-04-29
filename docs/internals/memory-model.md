@@ -410,6 +410,7 @@ The runtime data layer is split into `emit_runtime_data_fixed()` (shared buffers
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
 - `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_enum_from_msg`, `_static_prop_private_access_msg` — fatal runtime error strings for buffers, `match`, enums, and late-bound private static-property access
 - `_rt_diag_suppression`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — runtime warning suppression depth and warning strings used by `@`
+- `_php_uname_mode_len_msg`, `_php_uname_mode_value_msg` — fatal `php_uname()` diagnostics for invalid mode arguments
 - `_pcre_space`, `_pcre_digit`, `_pcre_word`, `_pcre_nspace`, `_pcre_ndigit`, `_pcre_nword` — regex shorthand replacement strings used by the POSIX regex bridge
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings (4, 5, and 4 bytes) used by `json_encode` for boolean and null values
 - `_day_names` — 84-byte table (7 entries x 12 bytes each) with day names, lengths, and padding. Used by `date()` for day-of-week formatting
@@ -513,7 +514,7 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 
 The runtime now includes a targeted collector for heap-backed `array`, associative-array/hash, and `object` graphs:
 
-- the allocator header carries a uniform heap-kind tag (`string`, `array`, `hash`, `object`, raw)
+- the allocator header carries a uniform heap-kind tag (`raw`, `string`, `array`, `hash`, `object`, `boxed mixed`)
 - indexed arrays pack their runtime `value_type` into the same kind word so the collector knows whether their elements can contain nested heap pointers
 - objects record runtime property tags/metadata, with `_class_gc_desc_*` tables as a compile-time fallback for property traversal
 - mixed release paths use `__rt_decref_any`, so deep-free and GC walks can release nested strings/arrays/hashes/objects through one uniform dispatcher

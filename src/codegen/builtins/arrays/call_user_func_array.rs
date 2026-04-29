@@ -330,7 +330,7 @@ pub fn emit(
             | PhpType::Object(_)
             | PhpType::Packed(_)
             | PhpType::Pointer(_)
-            | PhpType::Union(_) => {
+            | PhpType::Union(_) | PhpType::Never => {
                 let dest_reg = len_store_reg;
                 emitter.instruction(&format!("mov {}, {}", dest_reg, peek_reg)); // point at the variadic array before skipping the header
                 match emitter.target.arch {

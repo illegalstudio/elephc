@@ -20,7 +20,7 @@ PHP source (.php)
      ▼
 ┌─────────┐
 │  Parser  │  src/parser/
-│          │  expr/, stmt.rs, control.rs, ast.rs
+│          │  expr/, stmt/, control.rs, ast.rs
 │          │  Tokens → Program (Vec<Stmt>)
 └────┬─────┘
      │
@@ -135,9 +135,11 @@ src/
 ├── magic_constants.rs         Per-file lowering for PHP magic constants
 ├── conditional.rs             Build-time `ifdef` pass
 ├── resolver.rs                Include/require file resolution
+├── optimize.rs                Public optimizer entry points and effect context
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination
 ├── runtime_cache.rs           Cached shared runtime object preparation
 ├── source_map.rs              Assembly comment markers → JSON sidecar map
+├── termination.rs             Structured terminal-effect analysis shared by checker and optimizer
 ├── names.rs                   Qualified/FQN name model + assembly symbol mangling
 ├── name_resolver/             Namespace/use resolution to canonical names
 │
@@ -160,10 +162,18 @@ src/
 │   ├── traits.rs              Trait flattening and conflict-resolution helpers
 │   ├── warnings/              Non-fatal diagnostics (unused vars, unreachable code)
 │   └── checker/
-│       ├── mod.rs             Type-checker orchestration
+│       ├── mod.rs             Type-checker orchestration boundary
+│       ├── driver.rs          Main checker driver and program passes
+│       ├── builtin_types.rs   Shared builtin/type helper predicates
 │       ├── builtins/          Built-in function type signatures
-│       ├── functions/         User function type inference
-│       └── inference/         Focused inference helpers
+│       ├── functions.rs       Function-checking module root / orchestration
+│       ├── functions/         Call validation, signature resolution, return collection
+│       ├── inference/         Focused expression and object inference helpers
+│       ├── schema/            Class, interface, enum, and declaration validation
+│       ├── stmt_check.rs      Statement-checking module root
+│       ├── stmt_check/        Assignment and control-flow statement checks
+│       ├── type_compat.rs     Type-compatibility module root
+│       └── type_compat/       Declaration, object, pointer, and union compatibility helpers
 │
 ├── codegen/
 │   ├── mod.rs                 generate() orchestration
@@ -174,27 +184,30 @@ src/
 │   ├── expr/                  Expression submodules
 │   │   ├── arrays.rs          Array-expression dispatch
 │   │   ├── arrays/            `access.rs`, `indexed.rs`, `assoc.rs`
-│   │   ├── binops/            `arithmetic.rs`, `comparison.rs`, `target.rs`, `mod.rs`
+│   │   ├── binops/            `arithmetic.rs`, `array_union.rs`, `comparison.rs`, `target.rs`, `mod.rs`
 │   │   ├── calls.rs           Call-expression dispatch
 │   │   ├── calls/             `function.rs`, `closure.rs`, `first_class.rs`, `indirect.rs`, `args.rs`
 │   │   ├── coerce.rs          Truthiness / string / null coercions
 │   │   ├── compare.rs         Comparison and widening helpers
+│   │   ├── diagnostics.rs     Error-control / runtime-diagnostic expression helpers
 │   │   ├── helpers.rs         Shared expression-codegen utilities
 │   │   ├── objects.rs         Object-expression dispatch
-│   │   ├── objects/           `allocation.rs`, `access.rs`, `instanceof.rs`, `dispatch.rs`, `dispatch/`
+│   │   ├── objects/           `allocation.rs`, `access.rs`, `instanceof.rs`, `nullsafe.rs`, `static_properties.rs`, `dispatch.rs`, `dispatch/`
 │   │   ├── ownership.rs       Result ownership classification
 │   │   ├── scalars.rs         Literal / negate / bit-not / logical-not lowering
+│   │   ├── ternary.rs         Full and short ternary lowering
 │   │   └── variables.rs       Variable load / increment / decrement helpers
 │   ├── stmt.rs                Statement codegen dispatcher
 │   ├── stmt/                  Statement submodules
 │   │   ├── arrays.rs          Array statement dispatch
 │   │   ├── arrays/            `assign/`, `push.rs`, `unpack.rs`
 │   │   ├── assignments.rs     Variable / property assignment dispatch
-│   │   ├── assignments/       `locals.rs`, `properties.rs`, `properties/`
+│   │   ├── assignments/       `locals.rs`, `properties.rs`, `properties/`, `static_properties.rs`, `static_properties/`
 │   │   ├── control_flow.rs    Control-flow dispatch
 │   │   ├── control_flow/      `branching/`, `foreach/`, `loops/`, `exceptions/`
 │   │   ├── helpers.rs         Shared statement-codegen helpers
 │   │   ├── io.rs              Echo / print helpers
+│   │   ├── null_coalesce_assign.rs `??=` read-modify-write helpers for non-local targets
 │   │   ├── storage.rs         Global / static / extern-global dispatch
 │   │   └── storage/           `locals.rs`, `extern_globals.rs`
 │   ├── functions/             User function emission
@@ -224,7 +237,7 @@ src/
 │   │
 │   ├── builtins/              Built-in function codegen (one file per language function)
 │   │   ├── mod.rs             Dispatcher — chains to category modules
-│   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (57 files)
+│   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (58 files)
 │   │   ├── arrays/            count, array_push, buffer_new/len/free, sort, array_map, usort, ... (58 files)
 │   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, sin, cos, ... (32 files)
 │   │   ├── types/             is_*, gettype, empty, unset, settype, ... (16 files)
@@ -235,6 +248,7 @@ src/
 │   └── runtime/               Runtime routines and target-specific emission helpers
 │       ├── mod.rs             Emits all runtime functions into assembly
 │       ├── data.rs            Emits runtime .data / .bss symbols and metadata tables
+│       ├── diagnostics.rs     Suppressible runtime-warning channel used by `@`
 │       ├── emitters.rs        Shared emit helpers used across runtime categories
 │       ├── x86_minimal.rs     Minimal x86_64 runtime slice for the Linux x86_64 target
 │       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (53 files)

@@ -167,9 +167,10 @@ impl Checker {
                         .cloned()
                         .map(|name| (name, PhpType::Array(Box::new(PhpType::Int)))),
                 )
-                .collect(),
+            .collect(),
             defaults: decl.defaults.clone(),
             return_type: PhpType::Int,
+            declared_return: decl.return_type.is_some(),
             ref_params: decl.ref_params.clone(),
             declared_params: decl.param_types.iter().map(|type_ann| type_ann.is_some()).collect(),
             variadic: decl.variadic.clone(),
@@ -396,6 +397,7 @@ impl Checker {
             params: param_types.clone(),
             defaults: decl.defaults.clone(),
             return_type: PhpType::Int,
+            declared_return: decl.return_type.is_some(),
             ref_params: decl.ref_params.clone(),
             declared_params: decl
                 .param_types
@@ -438,13 +440,22 @@ impl Checker {
                 decl.span,
                 &format!("Function '{}'", name),
             )?;
-            if all_return_types.is_empty() {
-                self.require_compatible_arg_type(
-                    &declared_ret,
-                    &PhpType::Void,
+            if matches!(declared_ret, PhpType::Never) && Self::body_contains_return(&decl.body) {
+                return Err(CompileError::new(
                     decl.span,
-                    &format!("Function '{}' return type", name),
-                )?;
+                    &format!("Function '{}' declared never must not return", name),
+                ));
+            }
+            if all_return_types.is_empty() {
+                // :never functions are allowed to have no return statements (they always throw/exit).
+                if !matches!(declared_ret, PhpType::Never) {
+                    self.require_compatible_arg_type(
+                        &declared_ret,
+                        &PhpType::Void,
+                        decl.span,
+                        &format!("Function '{}' return type", name),
+                    )?;
+                }
             } else {
                 for rt in &all_return_types {
                     self.require_compatible_arg_type(
@@ -473,6 +484,7 @@ impl Checker {
             params: param_types,
             defaults: decl.defaults.clone(),
             return_type: return_type.clone(),
+            declared_return: decl.return_type.is_some(),
             ref_params: decl.ref_params.clone(),
             declared_params: decl
                 .param_types

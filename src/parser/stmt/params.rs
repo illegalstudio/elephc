@@ -108,25 +108,29 @@ fn parse_atomic_type_expr(
     span: Span,
 ) -> Result<TypeExpr, CompileError> {
     match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Identifier(name)) if matches!(name.as_str(), "int" | "integer") => {
+        Some(Token::Identifier(name)) if ident_matches(name, &["int", "integer"]) => {
             *pos += 1;
             Ok(TypeExpr::Int)
         }
-        Some(Token::Identifier(name)) if matches!(name.as_str(), "float" | "double" | "real") => {
+        Some(Token::Identifier(name)) if ident_matches(name, &["float", "double", "real"]) => {
             *pos += 1;
             Ok(TypeExpr::Float)
         }
-        Some(Token::Identifier(name)) if matches!(name.as_str(), "bool" | "boolean") => {
+        Some(Token::Identifier(name)) if ident_matches(name, &["bool", "boolean"]) => {
             *pos += 1;
             Ok(TypeExpr::Bool)
         }
-        Some(Token::Identifier(name)) if name.as_str() == "string" => {
+        Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("string") => {
             *pos += 1;
             Ok(TypeExpr::Str)
         }
-        Some(Token::Identifier(name)) if name.as_str() == "void" => {
+        Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("void") => {
             *pos += 1;
             Ok(TypeExpr::Void)
+        }
+        Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("never") => {
+            *pos += 1;
+            Ok(TypeExpr::Never)
         }
         Some(Token::Identifier(name)) if matches!(name.as_str(), "ptr" | "pointer") => {
             *pos += 1;
@@ -169,6 +173,12 @@ fn parse_atomic_type_expr(
         )?)),
         _ => Err(CompileError::new(span, "Expected type expression")),
     }
+}
+
+fn ident_matches(name: &str, keywords: &[&str]) -> bool {
+    keywords
+        .iter()
+        .any(|keyword| name.eq_ignore_ascii_case(keyword))
 }
 
 pub(super) fn parse_params(

@@ -25,7 +25,7 @@ pub(super) fn emit_cast(
                     abi::emit_float_result_to_int_result(emitter);              // convert double to signed 64-bit int (toward zero)
                 }
                 PhpType::Bool => {}
-                PhpType::Void => {
+                PhpType::Void | PhpType::Never => {
                     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
                 }
                 PhpType::Str => {
@@ -51,7 +51,7 @@ pub(super) fn emit_cast(
                 PhpType::Int | PhpType::Bool => {
                     abi::emit_int_result_to_float_result(emitter);              // signed int to double conversion
                 }
-                PhpType::Void => {
+                PhpType::Void | PhpType::Never => {
                     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
                     abi::emit_int_result_to_float_result(emitter);              // convert to 0.0 double
                 }
@@ -305,7 +305,7 @@ pub(super) fn emit_strict_compare(
         }
 
         match &lt {
-            PhpType::Int | PhpType::Bool | PhpType::Void => {
+            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {
                 let left_reg = abi::symbol_scratch_reg(emitter);
                 abi::emit_pop_reg(emitter, left_reg);                           // pop the saved left scalar or pointer-like value from the temporary comparison stack
                 emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter))); // compare the left and right scalar values

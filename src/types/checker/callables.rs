@@ -33,6 +33,7 @@ impl Checker {
                         params: sig.params.clone(),
                         defaults: vec![None; sig.params.len()],
                         return_type: sig.return_type.clone(),
+                        declared_return: true,
                         ref_params: vec![false; sig.params.len()],
                         declared_params: vec![true; sig.params.len()],
                         variadic: None,
@@ -247,6 +248,7 @@ impl Checker {
                         .map(|(_, _, default, _)| default.clone())
                         .collect(),
                     return_type,
+                    declared_return: false,
                     ref_params: params.iter().map(|(_, _, _, is_ref)| *is_ref).collect(),
                     declared_params: params
                         .iter()

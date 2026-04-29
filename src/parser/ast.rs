@@ -525,6 +525,7 @@ pub enum TypeExpr {
     Bool,
     Str,
     Void,
+    Never,
     Ptr(Option<Name>),
     Buffer(Box<TypeExpr>),
     Named(Name),

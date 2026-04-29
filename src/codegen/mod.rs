@@ -160,12 +160,16 @@ pub fn generate_user_asm(
                     let return_type = class_static_sig
                         .map(|s| s.return_type.clone())
                         .unwrap_or(PhpType::Int);
+                    let declared_return = class_static_sig
+                        .map(|s| s.declared_return)
+                        .unwrap_or(method.return_type.is_some());
                     (
                         label,
                         FunctionSig {
                             params,
                             defaults,
                             return_type,
+                            declared_return,
                             ref_params,
                             declared_params,
                             variadic: method.variadic.clone(),
@@ -214,12 +218,16 @@ pub fn generate_user_asm(
                     let return_type = class_method_sig
                         .map(|s| s.return_type.clone())
                         .unwrap_or(PhpType::Int);
+                    let declared_return = class_method_sig
+                        .map(|s| s.declared_return)
+                        .unwrap_or(method.return_type.is_some());
                     (
                         label,
                         FunctionSig {
                             params,
                             defaults,
                             return_type,
+                            declared_return,
                             ref_params,
                             declared_params,
                             variadic: method.variadic.clone(),

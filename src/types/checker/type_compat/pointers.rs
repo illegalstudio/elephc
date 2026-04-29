@@ -41,6 +41,7 @@ impl Checker {
             crate::parser::ast::TypeExpr::Bool => Ok(PhpType::Bool),
             crate::parser::ast::TypeExpr::Str => Ok(PhpType::Str),
             crate::parser::ast::TypeExpr::Void => Ok(PhpType::Void),
+            crate::parser::ast::TypeExpr::Never => Ok(PhpType::Never),
             crate::parser::ast::TypeExpr::Nullable(inner) => {
                 let inner_ty = self.resolve_type_expr(inner, span)?;
                 Ok(self.normalize_union_type(vec![inner_ty, PhpType::Void]))
@@ -76,27 +77,30 @@ impl Checker {
                 }
                 Ok(PhpType::Buffer(Box::new(inner_ty)))
             }
-            crate::parser::ast::TypeExpr::Named(name) => match name.as_str() {
-                "string" => Ok(PhpType::Str),
-                "mixed" => Ok(PhpType::Mixed),
-                "callable" => Ok(PhpType::Callable),
-                "void" => Ok(PhpType::Void),
-                "array" => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
-                _ if self.classes.contains_key(name.as_str())
-                    || self.declared_classes.contains(name.as_str())
-                    || self.interfaces.contains_key(name.as_str())
-                    || self.declared_interfaces.contains(name.as_str())
-                    || self.extern_classes.contains_key(name.as_str()) =>
-                {
-                    Ok(PhpType::Object(name.as_str().to_string()))
+            crate::parser::ast::TypeExpr::Named(name) => {
+                let name_str = name.as_str();
+                match name_str.to_ascii_lowercase().as_str() {
+                    "string" => Ok(PhpType::Str),
+                    "mixed" => Ok(PhpType::Mixed),
+                    "callable" => Ok(PhpType::Callable),
+                    "void" => Ok(PhpType::Void),
+                    "array" => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
+                    _ if self.classes.contains_key(name_str)
+                        || self.declared_classes.contains(name_str)
+                        || self.interfaces.contains_key(name_str)
+                        || self.declared_interfaces.contains(name_str)
+                        || self.extern_classes.contains_key(name_str) =>
+                    {
+                        Ok(PhpType::Object(name_str.to_string()))
+                    }
+                    _ if self.packed_classes.contains_key(name_str) => {
+                        Ok(PhpType::Packed(name_str.to_string()))
+                    }
+                    _ => Err(CompileError::new(
+                        span,
+                        &format!("Unknown type: {}", name_str),
+                    )),
                 }
-                _ if self.packed_classes.contains_key(name.as_str()) => {
-                    Ok(PhpType::Packed(name.as_str().to_string()))
-                }
-                _ => Err(CompileError::new(
-                    span,
-                    &format!("Unknown type: {}", name.as_str()),
-                )),
             },
         }
     }

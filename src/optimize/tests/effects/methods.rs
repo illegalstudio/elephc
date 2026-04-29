@@ -1,0 +1,248 @@
+use super::*;
+
+#[test]
+fn test_program_static_method_effects_recognize_pure_static_methods() {
+    let program = vec![Stmt::new(
+        StmtKind::ClassDecl {
+            name: "Util".to_string(),
+            extends: None,
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            trait_uses: Vec::new(),
+            properties: Vec::new(),
+            methods: vec![ClassMethod {
+                name: "len3".to_string(),
+                visibility: Visibility::Public,
+                is_static: true,
+                is_abstract: false,
+                is_final: false,
+                has_body: true,
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![Stmt::new(
+                    StmtKind::Return(Some(Expr::new(
+                        ExprKind::FunctionCall {
+                            name: Name::from("strlen"),
+                            args: vec![Expr::string_lit("abc")],
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                )],
+                span: Span::dummy(),
+            }],
+        },
+        Span::dummy(),
+    )];
+
+    let (_, static_method_effects, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        static_method_effects.get("Util::len3"),
+        Some(&Effect::PURE)
+    );
+}
+
+#[test]
+fn test_program_static_method_effects_resolve_self_receiver() {
+    let program = vec![Stmt::new(
+        StmtKind::ClassDecl {
+            name: "Util".to_string(),
+            extends: None,
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            trait_uses: Vec::new(),
+            properties: Vec::new(),
+            methods: vec![
+                ClassMethod {
+                    name: "len3".to_string(),
+                    visibility: Visibility::Public,
+                    is_static: true,
+                    is_abstract: false,
+                    is_final: false,
+                    has_body: true,
+                    params: Vec::new(),
+                    variadic: None,
+                    return_type: None,
+                    body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::FunctionCall {
+                                name: Name::from("strlen"),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )],
+                    span: Span::dummy(),
+                },
+                ClassMethod {
+                    name: "relay".to_string(),
+                    visibility: Visibility::Public,
+                    is_static: true,
+                    is_abstract: false,
+                    is_final: false,
+                    has_body: true,
+                    params: Vec::new(),
+                    variadic: None,
+                    return_type: None,
+                    body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::StaticMethodCall {
+                                receiver: StaticReceiver::Self_,
+                                method: "len3".to_string(),
+                                args: Vec::new(),
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )],
+                    span: Span::dummy(),
+                },
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let (_, static_method_effects, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        static_method_effects.get("Util::relay"),
+        Some(&Effect::PURE)
+    );
+}
+
+#[test]
+fn test_program_static_method_effects_resolve_parent_receiver() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::ClassDecl {
+                name: "Base".to_string(),
+                extends: None,
+                implements: Vec::new(),
+                is_abstract: false,
+                is_final: false,
+                is_readonly_class: false,
+                trait_uses: Vec::new(),
+                properties: Vec::new(),
+                methods: vec![ClassMethod {
+                    name: "len3".to_string(),
+                    visibility: Visibility::Public,
+                    is_static: true,
+                    is_abstract: false,
+                    is_final: false,
+                    has_body: true,
+                    params: Vec::new(),
+                    variadic: None,
+                    return_type: None,
+                    body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::FunctionCall {
+                                name: Name::from("strlen"),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )],
+                    span: Span::dummy(),
+                }],
+            },
+            Span::dummy(),
+        ),
+        Stmt::new(
+            StmtKind::ClassDecl {
+                name: "Child".to_string(),
+                extends: Some(Name::from("Base")),
+                implements: Vec::new(),
+                is_abstract: false,
+                is_final: false,
+                is_readonly_class: false,
+                trait_uses: Vec::new(),
+                properties: Vec::new(),
+                methods: vec![ClassMethod {
+                    name: "relay".to_string(),
+                    visibility: Visibility::Public,
+                    is_static: true,
+                    is_abstract: false,
+                    is_final: false,
+                    has_body: true,
+                    params: Vec::new(),
+                    variadic: None,
+                    return_type: None,
+                    body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::StaticMethodCall {
+                                receiver: StaticReceiver::Parent,
+                                method: "len3".to_string(),
+                                args: Vec::new(),
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )],
+                    span: Span::dummy(),
+                }],
+            },
+            Span::dummy(),
+        ),
+    ];
+
+    let (_, static_method_effects, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        static_method_effects.get("Child::relay"),
+        Some(&Effect::PURE)
+    );
+}
+
+#[test]
+fn test_program_private_instance_method_effects_recognize_private_methods() {
+    let program = vec![Stmt::new(
+        StmtKind::ClassDecl {
+            name: "Util".to_string(),
+            extends: None,
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            trait_uses: Vec::new(),
+            properties: Vec::new(),
+            methods: vec![ClassMethod {
+                name: "len3".to_string(),
+                visibility: Visibility::Private,
+                is_static: false,
+                is_abstract: false,
+                is_final: false,
+                has_body: true,
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![Stmt::new(
+                    StmtKind::Return(Some(Expr::new(
+                        ExprKind::FunctionCall {
+                            name: Name::from("strlen"),
+                            args: vec![Expr::string_lit("abc")],
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                )],
+                span: Span::dummy(),
+            }],
+        },
+        Span::dummy(),
+    )];
+
+    let (_, _, private_instance_method_effects) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        private_instance_method_effects.get("Util::len3"),
+        Some(&Effect::PURE)
+    );
+}

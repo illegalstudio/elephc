@@ -79,6 +79,6 @@ fn stabilize_x86_64_echo_result(emitter: &mut Emitter, ty: &PhpType) {
             abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));  // spill floating-point x86_64 echo results through a temporary slot before helper calls consume them
             abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter));   // reload the stabilized x86_64 echo result back into the canonical floating-point result register
         }
-        PhpType::Str | PhpType::Void => {}
+        PhpType::Str | PhpType::Void | PhpType::Never => {}
     }
 }

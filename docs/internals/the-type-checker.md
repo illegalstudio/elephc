@@ -32,6 +32,7 @@ pub enum PhpType {
     Str,
     Bool,
     Void,                          // null
+    Never,                         // marks a function/method that never returns (always throws / exits / loops)
     Mixed,                         // runtime-boxed heterogeneous assoc-array value
     Array(Box<PhpType>),           // e.g., Array(Int) = int[]
     AssocArray {                    // e.g., AssocArray { key: Str, value: Int }
@@ -48,6 +49,8 @@ pub enum PhpType {
 ```
 
 This is still much smaller than full PHP's runtime type system, but it now includes user-written union and nullable annotations where the language subset supports them. `Union(...)` values are lowered to the same boxed runtime representation used by `Mixed`. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`).
+
+`Never` is a return-position-only marker: a function annotated `: never` must always diverge (throw, call `exit()`/`die()`, or loop forever). The type checker rejects any reachable `return value;` from such a function, and the runtime size is zero because the value is never materialized. `: never` is rejected as a parameter or local-variable type — same restriction as `: void`.
 
 `Callable` is used for anonymous functions (closures), arrow functions, and first-class callables. A callable value is stored as a function pointer (8 bytes) on the stack, and is invoked via an indirect branch (`blr`).
 
@@ -132,7 +135,7 @@ The type checker computes the type of every expression:
 
 ### Function calls
 
-Built-in functions have hardcoded type signatures (see below). User-defined functions, methods, constructors, closures, and arrow functions can also carry declared parameter and return type hints. Named arguments are normalized against the declared parameter list before the usual argument-count and type checks run.
+Built-in functions have hardcoded type signatures (see below). User-defined functions, methods, and constructors can carry declared parameter and return type hints. Closures and arrow functions currently carry declared parameter hints, while their return type is inferred from the body or expression because closure / arrow return annotations are not represented in the AST yet. Named arguments are normalized against the declared parameter list before the usual argument-count and type checks run.
 
 ## Built-in function signatures
 
@@ -188,6 +191,7 @@ pub struct FunctionSig {
     pub params: Vec<(String, PhpType)>,
     pub defaults: Vec<Option<Expr>>,
     pub return_type: PhpType,
+    pub declared_return: bool,        // whether return_type came from an explicit return hint
     pub ref_params: Vec<bool>,         // which parameters are pass-by-reference (&$param)
     pub declared_params: Vec<bool>,    // whether each parameter came from an explicit type hint
     pub variadic: Option<String>,      // variadic parameter name (...$args), if any
@@ -196,6 +200,7 @@ pub struct FunctionSig {
 
 - `ref_params` tracks which parameters use `&` (pass by reference). The codegen passes the stack address of the argument instead of its value.
 - `declared_params` lets later phases distinguish explicit PHP type hints from inferred/defaulted parameter types.
+- `declared_return` lets later phases distinguish explicit PHP return hints from inferred return types.
 - `variadic` holds the name of the variadic parameter (e.g., `$args` in `function foo(...$args)`). Extra arguments beyond the regular parameters are collected into an array.
 
 This information is then used when checking calls to that function.

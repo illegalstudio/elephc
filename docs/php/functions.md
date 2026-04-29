@@ -27,7 +27,9 @@ function repeat(string $label, int $count): string {
 - Supported types: `int`, `float`, `bool`, `string`, `array`, `callable`, `ptr`, class/interface/enum names
 - `mixed`, union, and nullable type hints supported
 - `void` is valid only as a return type
+- `never` is valid only as a return type and must not return normally
 - Typed parameters can use default values
+- Function, method, and constructor return type hints are checked; closure and arrow-function parameter type hints are supported, but closure / arrow return annotations are still future work
 - Named arguments supported for user-defined functions (reordered at compile time)
 - Named arguments not supported for built-in functions, extern functions, or calls mixed with spread arguments
 
@@ -132,7 +134,7 @@ $triple = triple(...);
 $double = MathBox::double(...);
 ```
 
-Supported: `functionName(...)`, `ClassName::method(...)`, `self::method(...)`, `parent::method(...)`.
+Supported: user-defined function names, extern function names, the registered builtin wrappers `strlen(...)`, `count(...)`, and `buffer_len(...)`, plus `ClassName::method(...)`, `self::method(...)`, and `parent::method(...)`.
 Not supported: `static::method(...)`, `$obj->method(...)`.
 
 ## Global variables

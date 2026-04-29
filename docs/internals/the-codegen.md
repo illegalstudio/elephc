@@ -5,7 +5,7 @@ sidebar:
   order: 7
 ---
 
-**Source:** `src/codegen/` — `mod.rs`, `expr.rs`, `expr/`, `stmt.rs`, `stmt/`, `functions/`, `ffi.rs`, `abi/`, `context.rs`, `data_section.rs`, `emit.rs`
+**Source:** `src/codegen/` — `mod.rs`, `driver_support.rs`, `prescan.rs`, `program_usage.rs`, `expr.rs`, `expr/`, `stmt.rs`, `stmt/`, `functions/`, `ffi.rs`, `abi/`, `platform/`, `context.rs`, `data_section.rs`, `emit.rs`
 
 The code generator (codegen) is the heart of the compiler. It takes the checked AST after the optimizer's local simplification passes and produces native assembly text for the selected target — the actual instructions the CPU will execute.
 
@@ -339,6 +339,10 @@ csinv x0, x0, xzr, ge           ; if left < right: x0 = ~0 = -1 (all ones)
 `csinv` (conditional select invert) inverts `xzr` (the zero register) to produce -1 when the condition is not met.
 
 For floats, `fcmp` replaces `cmp`, but the same `cset`/`csinv` pattern applies.
+
+### Array union
+
+When both operands of `+` are arrays, codegen routes the expression to PHP array-union lowering instead of numeric addition. Indexed arrays call `__rt_array_union`, which clones the left operand and appends only the right-side numeric suffix whose keys are missing from the left. Associative arrays call `__rt_hash_union`, which clones the left hash, walks the right hash in insertion order, and inserts only keys that are absent from the clone. Mixed indexed/associative operands are rejected by the checker until that compatibility case is modeled.
 
 ### Null coalescing operator
 

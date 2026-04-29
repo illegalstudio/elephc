@@ -172,9 +172,9 @@ fn scan_radix_digits<F: Fn(char) -> bool>(cursor: &mut Cursor, is_digit: F) -> S
 }
 
 /// After scanning a numeric literal, ensure no alphanumeric character or `_`
-/// follows. Catches malformed forms like `0o78`, `0xfg`, `0b12`, `1_`, and `1__0`,
-/// which PHP rejects at parse time but the lexer would otherwise silently split
-/// into two adjacent tokens.
+/// follows. Catches malformed forms like `0o78`, `078`, `0xfg`, `0b12`, `1_`,
+/// and `1__0`, which PHP rejects at parse time but the lexer would otherwise
+/// silently split into two adjacent tokens.
 fn validate_no_trailing_alnum(cursor: &Cursor, base_label: &str) -> Result<(), CompileError> {
     if let Some(ch) = cursor.peek() {
         if ch.is_ascii_alphanumeric() || ch == '_' {
@@ -283,7 +283,17 @@ pub fn scan_number(cursor: &mut Cursor) -> Result<Token, CompileError> {
         return Ok(Token::FloatLiteral(value));
     }
 
-    validate_no_trailing_alnum(cursor, "decimal")?;
+    let is_legacy_octal = num_str.len() > 1 && num_str.starts_with('0');
+    validate_no_trailing_alnum(
+        cursor,
+        if is_legacy_octal { "octal" } else { "decimal" },
+    )?;
+    if is_legacy_octal {
+        let value = i64::from_str_radix(&num_str, 8)
+            .map_err(|_| CompileError::new(cursor.span(), "Invalid octal literal"))?;
+        return Ok(Token::IntLiteral(value));
+    }
+
     let value: i64 = num_str
         .parse()
         .map_err(|_| CompileError::new(cursor.span(), "Invalid integer literal"))?;

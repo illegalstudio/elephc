@@ -60,7 +60,7 @@ pub fn emit(
                 }
             }
         }
-        PhpType::Void => {
+        PhpType::Void | PhpType::Never => {
             // -- null is always empty --
             match emitter.target.arch {
                 Arch::AArch64 => {

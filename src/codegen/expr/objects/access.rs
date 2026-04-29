@@ -95,7 +95,7 @@ pub(super) fn emit_property_access(
             PhpType::Float => {
                 abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), pointer_reg, 0);
             }
-            PhpType::Bool | PhpType::Int | PhpType::Void => {
+            PhpType::Bool | PhpType::Int | PhpType::Void | PhpType::Never => {
                 abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0);
             }
             PhpType::Mixed
@@ -124,7 +124,7 @@ pub(super) fn emit_property_access(
         PhpType::Float => {
             abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), object_reg, offset);
         }
-        PhpType::Bool | PhpType::Int | PhpType::Void => {
+        PhpType::Bool | PhpType::Int | PhpType::Void | PhpType::Never => {
             abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), object_reg, offset);
         }
         PhpType::Mixed
@@ -236,7 +236,7 @@ fn emit_loaded_object_property_value(
             PhpType::Float => {
                 abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), pointer_reg, 0);
             }
-            PhpType::Bool | PhpType::Int | PhpType::Void => {
+            PhpType::Bool | PhpType::Int | PhpType::Void | PhpType::Never => {
                 abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0);
             }
             PhpType::Mixed
@@ -265,7 +265,7 @@ fn emit_loaded_object_property_value(
         PhpType::Float => {
             abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), object_reg, offset);
         }
-        PhpType::Bool | PhpType::Int | PhpType::Void => {
+        PhpType::Bool | PhpType::Int | PhpType::Void | PhpType::Never => {
             abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), object_reg, offset);
         }
         PhpType::Mixed

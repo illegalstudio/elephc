@@ -130,7 +130,7 @@ pub fn emit_store_incoming_param(
                 cursor.int_stack_only = true;
             }
         }
-        PhpType::Void => {}
+        PhpType::Void | PhpType::Never => {}
         PhpType::Mixed
         | PhpType::Union(_)
         | PhpType::Array(_)
@@ -256,7 +256,7 @@ pub fn emit_push_result_value(emitter: &mut Emitter, ty: &PhpType) {
             let (ptr_reg, len_reg) = string_result_regs(emitter);
             emit_push_reg_pair(emitter, ptr_reg, len_reg);                              // push the current string result register pair onto the temporary arg stack
         }
-        PhpType::Void => {}
+        PhpType::Void | PhpType::Never => {}
     }
 }
 
@@ -483,7 +483,7 @@ pub fn materialize_outgoing_args(
                     src_offset + 8,
                 );
             }
-            PhpType::Void => {}
+            PhpType::Void | PhpType::Never => {}
         }
     }
 

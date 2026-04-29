@@ -80,7 +80,7 @@ For each token, the scanner looks at the current character and decides:
 
 2. **`'`** → Start of a single-quoted string. No interpolation, only `\\` and `\'` escapes.
 
-3. **Digit** → Start of a number. `0x` / `0X` introduces a hexadecimal integer literal; `0o` / `0O` an explicit octal (PHP 8.1+, digits `0`–`7`); `0b` / `0B` a binary (PHP 5.4+, digits `0`–`1`). Otherwise read decimal digits, with `.` followed by a digit promoting to a float, plus `e` / `E` for scientific notation. A single `_` between digits acts as a visual separator (PHP 7.4+) and is stripped before parsing — separators may not appear at the start, end, or doubled. After a literal, any trailing alphanumeric character or `_` is rejected (catches `0o78`, `0xfg`, `0b12`, `1_`, `1__0`).
+3. **Digit** → Start of a number. `0x` / `0X` introduces a hexadecimal integer literal; `0o` / `0O` an explicit octal (PHP 8.1+, digits `0`–`7`); `0b` / `0B` a binary (PHP 5.4+, digits `0`–`1`). Otherwise read decimal digits, with `.` followed by a digit promoting to a float, plus `e` / `E` for scientific notation. Integer literals that start with `0` and do not become floats are PHP legacy octal literals, so `0777` and `0_777` both produce decimal `511`, while `078` is rejected. A single `_` between digits acts as a visual separator (PHP 7.4+) and is stripped before parsing — separators may not appear at the start, end, or doubled. After a literal, any trailing alphanumeric character or `_` is rejected (catches `0o78`, `078`, `0xfg`, `0b12`, `1_`, `1__0`).
 
 4. **`$`** → Start of a variable. Read the name (letters, digits, underscores).
 
@@ -134,7 +134,7 @@ Arrow  QuestionArrow  DoubleColon  QuestionQuestion  QuestionQuestionAssign  Ell
 
 | Token | Example | Carries |
 |---|---|---|
-| `IntLiteral` | `42`, `0xFF`, `0o755`, `0b1010`, `1_000_000` | `i64` value (decimal, hex `0x`/`0X`, explicit octal `0o`/`0O`, binary `0b`/`0B`; `_` allowed between digits) |
+| `IntLiteral` | `42`, `0xFF`, `0755`, `0o755`, `0b1010`, `1_000_000` | `i64` value (decimal, hex `0x`/`0X`, legacy octal with leading `0`, explicit octal `0o`/`0O`, binary `0b`/`0B`; `_` allowed between digits) |
 | `FloatLiteral` | `3.14`, `.5`, `1e3`, `1_000.5`, `1e1_0` | `f64` value (`_` allowed between digits in mantissa or exponent) |
 | `StringLiteral` | `"hello"`, `'world'` | `String` content (escapes resolved) |
 

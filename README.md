@@ -40,7 +40,7 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 ## What you can expect
 
-You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, `instanceof`, nullsafe access (`?->`), abstract classes, final classes, methods and typed/static properties, PHP-style static property redeclarations, constructor property promotion, traits, constructors, instance/static methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, named arguments, first-class callables, typed parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order and integer/numeric-string key normalization, array union with `+`, closures, namespaces, and includes.
+You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, `instanceof`, nullsafe access (`?->`), abstract classes, final classes, methods and typed/static properties, PHP-style static property redeclarations, constructor property promotion, traits, constructors, instance/static methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, named arguments, first-class callables, typed function and method parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order and integer/numeric-string key normalization, array union with `+`, closures, namespaces, and includes.
 
 For performance-oriented code, elephc exposes compiler extensions beyond standard PHP — see the Why section above.
 
@@ -215,8 +215,8 @@ if ($x === 3) {
 
 | Type | Example |
 |---|---|
-| `int` | `42`, `-7`, `PHP_INT_MAX` |
-| `float` | `3.14`, `.5`, `1e-5`, `INF`, `NAN` |
+| `int` | `42`, `-7`, `0xFF`, `0755`, `0o755`, `0b1010`, `1_000_000`, `PHP_INT_MAX` |
+| `float` | `3.14`, `.5`, `1e-5`, `1_000.5`, `1e1_0`, `INF`, `NAN` |
 | `string` | `"hello\n"`, `'raw'` |
 | `bool` | `true`, `false` |
 | `null` | `null` |
@@ -235,10 +235,11 @@ if ($x === 3) {
 The full list of supported constructs, operators, and control structures is in the [docs](docs/). Highlights:
 
 - **OOP**: classes, abstract/final classes, typed/final/static properties and methods, PHP-style static property redeclarations, direct static array property writes, constructor property promotion, interfaces, `instanceof`, traits, enums, `readonly`, static/instance methods, `self::`/`parent::`/`static::`, `::class` reflection, `new self()` / `new static()` / `new parent()`, magic methods (`__toString`, `__get`, `__set`)
-- **Functions**: default parameters, variadic/spread, pass by reference, named arguments, first-class callables, closures, arrow functions, static closures (`static function () { }`, `static fn () => ...`)
+- **Functions**: default parameters, variadic/spread, pass by reference, named arguments, global variables, static locals, first-class callables, closures, arrow functions, static closures (`static function () { }`, `static fn () => ...`)
 - **Control flow**: if/elseif/else, while, do-while, for, foreach, switch, match, break, continue, try/catch/finally/throw
+- **Statements and literals**: `const` / `define()` constants, `global` declarations, `static` locals, list unpacking, PHP numeric literal forms, heredoc / nowdoc strings
 - **Operators**: arithmetic, comparison, `instanceof`, logical, bitwise, ternary, null coalescing (`??`), null coalescing assignment (`??=`), error control (`@`), and compound assignments
-- **Types**: union types (`int|string`), nullable (`?int`), type casting, typed properties, typed parameters and returns
+- **Types**: union types (`int|string`), nullable (`?int`), `never` return type, type casting, typed properties, typed function and method parameters and returns
 - **Modules**: namespaces, use imports, include/require/require_once, PHP magic constants
 - **FFI**: extern functions, extern blocks, extern globals, extern classes, pointer builtins
 - **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`
@@ -336,7 +337,12 @@ src/
 ├── lib.rs               # Public module exports
 ├── span.rs              # Source position tracking (line, col)
 ├── conditional.rs       # Build-time `ifdef` pass driven by --define
+├── magic_constants.rs   # Per-file PHP magic constant lowering
 ├── resolver.rs          # Include/require file resolution
+├── runtime_cache.rs     # Preassembled runtime object cache
+├── source_map.rs        # Assembly/source-map sidecar emission
+├── termination.rs       # Structured terminal-effect analysis
+├── optimize.rs          # Optimizer public entry points and effect context
 ├── optimize/            # AST optimizer: folding, propagation, pruning, normalization, dead-code elimination
 ├── names.rs             # Qualified/FQN name model + symbol mangling helpers
 ├── name_resolver/       # Namespace/use resolution to canonical names

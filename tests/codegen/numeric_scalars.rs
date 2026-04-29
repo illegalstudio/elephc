@@ -260,6 +260,24 @@ fn test_octal_literal_echo() {
 }
 
 #[test]
+fn test_legacy_octal_literal_echo() {
+    let out = compile_and_run("<?php echo 0777;");
+    assert_eq!(out, "511");
+}
+
+#[test]
+fn test_legacy_octal_separator_echo() {
+    let out = compile_and_run("<?php echo 0_777;");
+    assert_eq!(out, "511");
+}
+
+#[test]
+fn test_leading_zero_float_is_decimal() {
+    let out = compile_and_run("<?php echo 08.5;");
+    assert_eq!(out, "8.5");
+}
+
+#[test]
 fn test_octal_literal_default_param() {
     let out = compile_and_run(
         "<?php

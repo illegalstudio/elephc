@@ -145,7 +145,7 @@ pub(super) fn emit_new_object(
                     abi::emit_store_to_address(emitter, ptr_reg, object_reg, offset);
                     abi::emit_store_to_address(emitter, len_reg, object_reg, offset + 8);
                 }
-                PhpType::Void => {}
+                PhpType::Void | PhpType::Never => {}
             }
         }
     }

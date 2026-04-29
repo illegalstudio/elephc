@@ -18,6 +18,7 @@ pub fn infer_contextual_type(expr: &Expr, ctx: &Context) -> PhpType {
         params: Vec::new(),
         defaults: Vec::new(),
         return_type: PhpType::Void,
+        declared_return: false,
         ref_params: Vec::new(),
         declared_params: Vec::new(),
         variadic: None,
@@ -124,6 +125,7 @@ fn resolve_buffer_element_type(type_expr: &TypeExpr, ctx: &Context) -> PhpType {
         }
         TypeExpr::Str => PhpType::Str,
         TypeExpr::Void => PhpType::Void,
+        TypeExpr::Never => PhpType::Never,
         TypeExpr::Buffer(inner) => {
             PhpType::Buffer(Box::new(resolve_buffer_element_type(inner, ctx)))
         }
@@ -138,6 +140,7 @@ pub(crate) fn codegen_declared_type(type_expr: &TypeExpr, ctx: &Context) -> PhpT
         TypeExpr::Bool => PhpType::Bool,
         TypeExpr::Str => PhpType::Str,
         TypeExpr::Void => PhpType::Void,
+        TypeExpr::Never => PhpType::Never,
         TypeExpr::Ptr(target) => {
             PhpType::Pointer(target.as_ref().map(|name| name.as_str().to_string()))
         }
