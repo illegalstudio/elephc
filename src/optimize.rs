@@ -1,7 +1,7 @@
 use crate::names::Name;
 use crate::parser::ast::{
     BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
-    Program, Stmt, StmtKind,
+    Program, Stmt, StmtKind, TypeExpr,
 };
 use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
 use std::cell::RefCell;
@@ -112,9 +112,16 @@ struct ClassEffectContext {
 }
 
 #[derive(Clone, Debug)]
+struct FunctionEffectBody {
+    body: Vec<Stmt>,
+    declared_never: bool,
+}
+
+#[derive(Clone, Debug)]
 struct StaticMethodBody {
     context: ClassEffectContext,
     body: Vec<Stmt>,
+    declared_never: bool,
 }
 
 fn with_callable_effects<R>(
@@ -209,8 +216,8 @@ fn compute_program_callable_effects(
                     let previous_instance_methods =
                         instance_slot.replace(Some(private_instance_method_snapshot));
 
-                    for (name, body) in &function_bodies {
-                        let effect = block_effect(body);
+                    for (name, function) in &function_bodies {
+                        let effect = never_declared_effect(function.declared_never, block_effect(&function.body));
                         if function_effects.get(name).copied() != Some(effect) {
                             function_effects.insert(name.clone(), effect);
                             changed = true;
@@ -221,6 +228,7 @@ fn compute_program_callable_effects(
                         let effect = with_class_effect_context(Some(method.context.clone()), || {
                             block_effect(&method.body)
                         });
+                        let effect = never_declared_effect(method.declared_never, effect);
                         if static_method_effects.get(name).copied() != Some(effect) {
                             static_method_effects.insert(name.clone(), effect);
                             changed = true;
@@ -231,6 +239,7 @@ fn compute_program_callable_effects(
                         let effect = with_class_effect_context(Some(method.context.clone()), || {
                             block_effect(&method.body)
                         });
+                        let effect = never_declared_effect(method.declared_never, effect);
                         if private_instance_method_effects.get(name).copied() != Some(effect) {
                             private_instance_method_effects.insert(name.clone(), effect);
                             changed = true;
@@ -254,11 +263,22 @@ fn compute_program_callable_effects(
     }
 }
 
-fn collect_program_function_bodies(stmts: &[Stmt], out: &mut HashMap<String, Vec<Stmt>>) {
+fn collect_program_function_bodies(stmts: &[Stmt], out: &mut HashMap<String, FunctionEffectBody>) {
     for stmt in stmts {
         match &stmt.kind {
-            StmtKind::FunctionDecl { name, body, .. } => {
-                out.insert(name.clone(), body.clone());
+            StmtKind::FunctionDecl {
+                name,
+                body,
+                return_type,
+                ..
+            } => {
+                out.insert(
+                    name.clone(),
+                    FunctionEffectBody {
+                        body: body.clone(),
+                        declared_never: is_never_return_type(return_type),
+                    },
+                );
             }
             StmtKind::NamespaceBlock { body, .. } => collect_program_function_bodies(body, out),
             _ => {}
@@ -289,6 +309,7 @@ fn collect_program_static_method_bodies(
                             StaticMethodBody {
                                 context: context.clone(),
                                 body: method.body.clone(),
+                                declared_never: is_never_return_type(&method.return_type),
                             },
                         );
                     }
@@ -326,6 +347,7 @@ fn collect_program_private_instance_method_bodies(
                             StaticMethodBody {
                                 context: context.clone(),
                                 body: method.body.clone(),
+                                declared_never: is_never_return_type(&method.return_type),
                             },
                         );
                     }
@@ -341,4 +363,16 @@ fn collect_program_private_instance_method_bodies(
 
 fn method_effect_key(class_name: &str, method_name: &str) -> String {
     format!("{class_name}::{method_name}")
+}
+
+fn is_never_return_type(return_type: &Option<TypeExpr>) -> bool {
+    matches!(return_type, Some(TypeExpr::Never))
+}
+
+fn never_declared_effect(declared_never: bool, effect: Effect) -> Effect {
+    if declared_never {
+        effect.with_side_effects()
+    } else {
+        effect
+    }
 }

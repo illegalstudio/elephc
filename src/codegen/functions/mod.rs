@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 use crate::codegen::stmt;
 use crate::names::{function_epilogue_symbol, function_symbol};
 use crate::parser::ast::ExprKind;
@@ -304,6 +305,10 @@ fn emit_function_with_label_and_class(
     }
 
     emitter.label(epilogue_label);
+    if matches!(sig.return_type, PhpType::Never) {
+        emit_never_implicit_return_abort(emitter, data);
+    }
+
     let needs_return_preserve = epilogue_has_side_effects(&ctx);
     if needs_return_preserve {
         preserve_return_registers(emitter, &ctx, &sig.return_type);
@@ -361,3 +366,28 @@ fn emit_function_with_label_and_class(
 }
 
 pub(crate) use self::cleanup::emit_owned_local_epilogue_cleanup;
+
+fn emit_never_implicit_return_abort(emitter: &mut Emitter, data: &mut DataSection) {
+    let (message_label, message_len) =
+        data.add_string(b"Fatal error: A never-returning function must not implicitly return\n");
+
+    emitter.comment("never: abort implicit return");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, #2");                                  // write the fatal never diagnostic to stderr
+            emitter.adrp("x1", &message_label);
+            emitter.add_lo12("x1", "x1", &message_label);
+            emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the fatal never diagnostic byte length to write
+            emitter.syscall(4);
+            super::abi::emit_exit(emitter, 1);
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov edi, 2");                                  // write the fatal never diagnostic to the Linux stderr descriptor
+            super::abi::emit_symbol_address(emitter, "rsi", &message_label);
+            emitter.instruction(&format!("mov edx, {}", message_len));          // pass the fatal never diagnostic byte length to write
+            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
+            emitter.instruction("syscall");                                     // emit the fatal never diagnostic before terminating
+            super::abi::emit_exit(emitter, 1);
+        }
+    }
+}
