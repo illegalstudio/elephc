@@ -1,7 +1,12 @@
 mod chdir;
+mod chgrp;
+mod chmod;
+mod chown;
 mod copy;
 mod fclose;
+mod fdatasync;
 mod feof;
+mod fflush;
 mod fgetcsv;
 mod fgets;
 mod file;
@@ -14,7 +19,9 @@ mod fopen;
 mod fputcsv;
 mod fread;
 mod fseek;
+mod fsync;
 mod ftell;
+mod ftruncate;
 mod fwrite;
 mod getcwd;
 mod glob_fn;
@@ -31,6 +38,8 @@ mod rmdir;
 mod scandir;
 mod sys_get_temp_dir;
 mod tempnam;
+mod touch;
+mod umask;
 mod unlink;
 mod var_dump;
 
@@ -83,6 +92,15 @@ pub fn emit(
         "sys_get_temp_dir" => sys_get_temp_dir::emit(name, args, emitter, ctx, data),
         "fgetcsv" => fgetcsv::emit(name, args, emitter, ctx, data),
         "fputcsv" => fputcsv::emit(name, args, emitter, ctx, data),
+        "chmod" => chmod::emit(name, args, emitter, ctx, data),
+        "chown" => chown::emit(name, args, emitter, ctx, data),
+        "chgrp" => chgrp::emit(name, args, emitter, ctx, data),
+        "umask" => umask::emit(name, args, emitter, ctx, data),
+        "ftruncate" => ftruncate::emit(name, args, emitter, ctx, data),
+        "fsync" => fsync::emit(name, args, emitter, ctx, data),
+        "fflush" => fflush::emit(name, args, emitter, ctx, data),
+        "fdatasync" => fdatasync::emit(name, args, emitter, ctx, data),
+        "touch" => touch::emit(name, args, emitter, ctx, data),
         _ => None,
     }
 }

@@ -35,6 +35,23 @@ function repeat(string $label, int $count): string {
 - Named arguments supported for user-defined functions (reordered at compile time)
 - Named arguments not supported for built-in functions, extern functions, or calls mixed with spread arguments
 
+## User-defined functions can shadow built-ins
+
+In PHP, redeclaring a built-in function name (`function strlen() { ... }`) is a fatal error. elephc deliberately diverges from this rule: a user-defined function takes precedence over a built-in of the same name, and the call resolves to the user definition without diagnostic.
+
+```php
+<?php
+function touch($path) {
+    echo "user touch on " . $path . "\n";
+    return true;
+}
+touch("/tmp/x");          // calls the user function, not the filesystem builtin
+```
+
+This makes it safe to add new filesystem builtins (e.g. `touch`, `chmod`) to the compiler without breaking existing PHP test fixtures or stub helpers that happen to use those names. Built-ins remain reachable in any function scope where the name has not been user-declared.
+
+If you want PHP-strict behavior in your codebase, treat the built-in name list as reserved by convention.
+
 ## Recursion
 
 ```php

@@ -112,6 +112,24 @@ Uses POSIX extended regex with common PCRE shorthand translation (`\s`, `\d`, `\
 | `tempnam()` | `tempnam($dir, $prefix): string` | Create temp filename |
 | `sys_get_temp_dir()` | `sys_get_temp_dir(): string` | System temp directory |
 
+## File modification
+
+| Function | Signature | Description |
+|---|---|---|
+| `touch()` | `touch($filename [, $mtime [, $atime]]): bool` | Set access/modification times. Creates the file with permissions 0644 if missing. With no `$mtime` (or `$mtime = -1`), uses the current time; with no `$atime`, defaults to `$mtime`. |
+| `chmod()` | `chmod($filename, $mode): bool` | Change file mode. |
+| `chown()` | `chown($filename, $user): bool` | Change owner UID. The group is left unchanged. |
+| `chgrp()` | `chgrp($filename, $group): bool` | Change group GID. The owner is left unchanged. |
+| `umask()` | `umask([$mask]): int` | Set the process umask and return the previous value. With no argument, returns the current umask without changing it (implemented by setting `umask(0)` and immediately restoring the original). |
+| `ftruncate()` | `ftruncate($handle, $size): bool` | Truncate or extend an open file to `$size` bytes. |
+| `fflush()` | `fflush($handle): bool` | Flush buffered output. Implemented as `fsync()` since elephc has no userspace stdio buffer. |
+| `fsync()` | `fsync($handle): bool` | Flush data and metadata to durable storage. |
+| `fdatasync()` | `fdatasync($handle): bool` | Flush data only. On macOS (which lacks a `fdatasync` libc entry point) this falls back to `fsync()`. |
+
+> All file-modification functions return `true` on success and `false` on failure.
+
+> `touch()` accepts integer Unix timestamps for `$mtime` / `$atime`. Passing `-1` selects the current time for that field, matching PHP's null/default behaviour.
+
 ## Debugging
 
 | Function | Signature | Description |

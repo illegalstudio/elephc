@@ -368,6 +368,7 @@ Proper type system for PHP compatibility.
 - [x] Trailing-character validation on numeric literals (rejects `0o78`, `078`, `0xfg`, `0b12`, `1_`, `1__0` at lex time instead of silently splitting tokens)
 - [x] Support for `never` return type
 - [x] `iterable` pseudo-type runtime parity — `foreach` over indexed-array, hash-backed, `Iterator`, and `IteratorAggregate` iterables; `echo`, `gettype()`, `var_dump()`, `===`, scalar casts (`(int)`, `(float)`, `(string)`, `(bool)`), and the `is_iterable()` builtin all dispatch through heap-kind, value-type, or interface metadata where needed
+- [x] Filesystem modification: `touch()` (with optional `$mtime` / `$atime`, creates the file at 0644 if missing), `chmod()`, `chown()`, `chgrp()`, `umask()` (with the no-arg probe form), `ftruncate()`, `fflush()` (implemented as `fsync()`), `fsync()`, and `fdatasync()` (with a Darwin `fsync` fallback). All of them go through libc rather than direct syscalls, so the same code paths work on Darwin arm64 and Linux arm64/x86_64 without per-syscall mapping work.
 
 ## v0.20.x — Shared and static libraries (C ABI)
 

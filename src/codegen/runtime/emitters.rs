@@ -240,6 +240,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     io::emit_tempnam(emitter);
     io::emit_fgetcsv(emitter);
     io::emit_fputcsv(emitter);
+    io::emit_modify(emitter);
 
     // Pointer runtime functions
     pointers::emit_ptoa(emitter);

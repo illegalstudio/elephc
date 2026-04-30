@@ -103,6 +103,15 @@ impl Platform {
         }
     }
 
+    /// Value of `AT_FDCWD` on this platform. Differs between macOS (-2) and
+    /// Linux (-100); the libc *at() functions consume the platform-native value.
+    pub fn at_fdcwd(&self) -> i64 {
+        match self {
+            Platform::MacOS => -2,
+            Platform::Linux => -100,
+        }
+    }
+
     pub fn dirent_name_offset(&self) -> usize {
         match self {
             Platform::MacOS => 21,

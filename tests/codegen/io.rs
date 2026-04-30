@@ -10,3 +10,5 @@ mod streams;
 mod filesystem;
 #[path = "io/misc.rs"]
 mod misc;
+#[path = "io/modify.rs"]
+mod modify;
