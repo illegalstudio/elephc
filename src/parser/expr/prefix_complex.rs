@@ -131,11 +131,13 @@ pub(super) fn parse_closure(
         }
         *pos += 1;
     }
+    let return_type = parse_optional_closure_return_type(tokens, pos, span)?;
     let body = parse_block(tokens, pos)?;
     Ok(Expr::new(
         ExprKind::Closure {
             params,
             variadic,
+            return_type,
             body,
             is_arrow: false,
             is_static,
@@ -157,6 +159,7 @@ pub(super) fn parse_arrow_closure(
     }
     *pos += 1;
     let (params, variadic) = parse_closure_params(tokens, pos, span)?;
+    let return_type = parse_optional_closure_return_type(tokens, pos, span)?;
     if *pos >= tokens.len() || tokens[*pos].0 != Token::DoubleArrow {
         return Err(CompileError::new(
             span,
@@ -170,6 +173,7 @@ pub(super) fn parse_arrow_closure(
         ExprKind::Closure {
             params,
             variadic,
+            return_type,
             body,
             is_arrow: true,
             is_static,
@@ -177,6 +181,19 @@ pub(super) fn parse_arrow_closure(
         },
         span,
     ))
+}
+
+fn parse_optional_closure_return_type(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Option<crate::parser::ast::TypeExpr>, CompileError> {
+    if *pos < tokens.len() && tokens[*pos].0 == Token::Colon {
+        *pos += 1;
+        Ok(Some(parse_type_expr(tokens, pos, span)?))
+    } else {
+        Ok(None)
+    }
 }
 
 fn parse_closure_params(

@@ -256,45 +256,19 @@ impl Checker {
         &mut self,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         variadic: &Option<String>,
+        return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        // Verify captured variables exist in the enclosing scope
-        for cap in captures {
-            if !env.contains_key(cap) {
-                return Err(CompileError::new(
-                    expr.span,
-                    &format!("Undefined variable in use(): ${}", cap),
-                ));
-            }
-        }
-        // Type-check the closure body in its own environment
-        let mut closure_env: TypeEnv = env.clone();
-        for (p, type_ann, default, _is_ref) in params {
-            let ty = match type_ann {
-                Some(type_ann) => {
-                    let declared_ty = self.resolve_declared_param_type_hint(
-                        type_ann,
-                        expr.span,
-                        &format!("Closure parameter ${}", p),
-                    )?;
-                    self.validate_declared_default_type(
-                        &declared_ty,
-                        default.as_ref(),
-                        expr.span,
-                        &format!("Closure parameter ${}", p),
-                    )?;
-                    declared_ty
-                }
-                None => PhpType::Int,
-            };
-            closure_env.insert(p.clone(), ty);
-        }
-        if let Some(vp) = variadic {
-            closure_env.insert(vp.clone(), PhpType::Array(Box::new(PhpType::Int)));
-        }
+        let mut closure_sig = self.prepare_closure_signature_context(
+            params,
+            variadic,
+            captures,
+            expr.span,
+            env,
+        )?;
         let closure_ref_params: Vec<String> = params
             .iter()
             .filter(|(_, _, _, is_ref)| *is_ref)
@@ -302,10 +276,11 @@ impl Checker {
             .collect();
         self.with_local_storage_context(closure_ref_params, |checker| {
             for stmt in body {
-                checker.check_stmt(stmt, &mut closure_env)?;
+                checker.check_stmt(stmt, &mut closure_sig.env)?;
             }
             Ok(())
         })?;
+        self.resolve_closure_return_type(body, return_type, expr.span, &closure_sig.env)?;
         Ok(PhpType::Callable)
     }
 

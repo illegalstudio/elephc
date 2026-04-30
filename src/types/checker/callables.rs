@@ -1,10 +1,143 @@
 use crate::errors::CompileError;
-use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
+use crate::span::Span;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
+use super::inference::syntactic::wider_type_syntactic;
 use super::Checker;
 
+pub(crate) struct ClosureSignatureContext {
+    pub params: Vec<(String, PhpType)>,
+    pub env: TypeEnv,
+    pub defaults: Vec<Option<Expr>>,
+    pub ref_params: Vec<bool>,
+    pub declared_params: Vec<bool>,
+}
+
 impl Checker {
+    pub(crate) fn prepare_closure_signature_context(
+        &mut self,
+        params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+        variadic: &Option<String>,
+        captures: &[String],
+        span: Span,
+        env: &TypeEnv,
+    ) -> Result<ClosureSignatureContext, CompileError> {
+        for cap in captures {
+            if !env.contains_key(cap) {
+                return Err(CompileError::new(
+                    span,
+                    &format!("Undefined variable in use(): ${}", cap),
+                ));
+            }
+        }
+
+        let mut closure_env = env.clone();
+        let mut param_types = Vec::new();
+        let mut defaults = Vec::new();
+        let mut ref_params = Vec::new();
+        let mut declared_params = Vec::new();
+
+        for (name, type_ann, default, is_ref) in params {
+            let (env_ty, sig_ty) = match type_ann {
+                Some(type_ann) => {
+                    let declared_ty = self.resolve_declared_param_type_hint(
+                        type_ann,
+                        span,
+                        &format!("Closure parameter ${}", name),
+                    )?;
+                    self.validate_declared_default_type(
+                        &declared_ty,
+                        default.as_ref(),
+                        span,
+                        &format!("Closure parameter ${}", name),
+                    )?;
+                    (declared_ty.clone(), declared_ty)
+                }
+                None => (PhpType::Int, PhpType::Mixed),
+            };
+
+            closure_env.insert(name.clone(), env_ty);
+            param_types.push((name.clone(), sig_ty));
+            defaults.push(default.clone());
+            ref_params.push(*is_ref);
+            declared_params.push(type_ann.is_some());
+        }
+
+        if let Some(name) = variadic {
+            closure_env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Int)));
+            param_types.push((name.clone(), PhpType::Array(Box::new(PhpType::Mixed))));
+            defaults.push(None);
+            ref_params.push(false);
+            declared_params.push(false);
+        }
+
+        Ok(ClosureSignatureContext {
+            params: param_types,
+            env: closure_env,
+            defaults,
+            ref_params,
+            declared_params,
+        })
+    }
+
+    pub(crate) fn resolve_closure_return_type(
+        &mut self,
+        body: &[Stmt],
+        return_type: &Option<TypeExpr>,
+        span: Span,
+        env: &TypeEnv,
+    ) -> Result<(PhpType, bool), CompileError> {
+        let mut all_return_types = Vec::new();
+        for stmt in body {
+            self.collect_return_types(stmt, env, &mut all_return_types);
+        }
+
+        if let Some(type_ann) = return_type {
+            let declared_ret =
+                self.resolve_declared_return_type_hint(type_ann, span, "Closure")?;
+            if matches!(declared_ret, PhpType::Never) && Self::body_contains_return(body) {
+                return Err(CompileError::new(
+                    span,
+                    "Closure declared never must not return",
+                ));
+            }
+            if all_return_types.is_empty() {
+                if !matches!(declared_ret, PhpType::Never) {
+                    self.require_compatible_arg_type(
+                        &declared_ret,
+                        &PhpType::Void,
+                        span,
+                        "Closure return type",
+                    )?;
+                }
+                return Ok((declared_ret, true));
+            }
+
+            for rt in &all_return_types {
+                self.require_compatible_arg_type(&declared_ret, rt, span, "Closure return type")?;
+            }
+
+            let mut inferred_return = all_return_types[0].clone();
+            for rt in &all_return_types[1..] {
+                inferred_return = wider_type_syntactic(&inferred_return, rt);
+            }
+
+            Ok((
+                Self::specialize_generic_array_hint(&declared_ret, &inferred_return),
+                true,
+            ))
+        } else if all_return_types.is_empty() {
+            Ok((PhpType::Int, false))
+        } else {
+            let mut inferred_return = all_return_types[0].clone();
+            for rt in &all_return_types[1..] {
+                inferred_return = wider_type_syntactic(&inferred_return, rt);
+            }
+            Ok((inferred_return, false))
+        }
+    }
+
     pub(crate) fn resolve_first_class_callable_sig(
         &mut self,
         target: &CallableTarget,
@@ -218,43 +351,31 @@ impl Checker {
             ExprKind::Closure {
                 params,
                 variadic,
+                return_type,
                 body,
+                captures,
                 ..
             } => {
-                let return_type = self.infer_closure_return_type(body, env);
-                Ok(Some(FunctionSig {
-                    params: params
-                        .iter()
-                        .map(|(name, type_ann, _, _)| {
-                            let ty = match type_ann {
-                                Some(type_ann) => self.resolve_declared_param_type_hint(
-                                    type_ann,
-                                    expr.span,
-                                    &format!("Closure parameter ${}", name),
-                                )?,
-                                None => PhpType::Mixed,
-                            };
-                            Ok((name.clone(), ty))
-                        })
-                        .chain(
-                            variadic
-                                .iter()
-                                .cloned()
-                                .map(|name| Ok((name, PhpType::Array(Box::new(PhpType::Mixed))))),
-                        )
-                        .collect::<Result<Vec<_>, CompileError>>()?,
-                    defaults: params
-                        .iter()
-                        .map(|(_, _, default, _)| default.clone())
-                        .collect(),
+                let closure_sig = self.prepare_closure_signature_context(
+                    params,
+                    variadic,
+                    captures,
+                    expr.span,
+                    env,
+                )?;
+                let (return_type, declared_return) = self.resolve_closure_return_type(
+                    body,
                     return_type,
-                    declared_return: false,
-                    ref_params: params.iter().map(|(_, _, _, is_ref)| *is_ref).collect(),
-                    declared_params: params
-                        .iter()
-                        .map(|(_, type_ann, _, _)| type_ann.is_some())
-                        .chain(variadic.iter().map(|_| false))
-                        .collect(),
+                    expr.span,
+                    &closure_sig.env,
+                )?;
+                Ok(Some(FunctionSig {
+                    params: closure_sig.params,
+                    defaults: closure_sig.defaults,
+                    return_type,
+                    declared_return,
+                    ref_params: closure_sig.ref_params,
+                    declared_params: closure_sig.declared_params,
                     variadic: variadic.clone(),
                 }))
             }

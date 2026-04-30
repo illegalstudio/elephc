@@ -29,7 +29,7 @@ function repeat(string $label, int $count): string {
 - `void` is valid only as a return type
 - `never` is valid only as a return type and must not return normally
 - Typed parameters can use default values
-- Function, method, and constructor return type hints are checked; closure and arrow-function parameter type hints are supported, but closure / arrow return annotations are still future work
+- Function, method, constructor, closure, and arrow-function parameter and return type hints are checked
 - Named arguments supported for user-defined functions (reordered at compile time)
 - Named arguments not supported for built-in functions, extern functions, or calls mixed with spread arguments
 
@@ -65,7 +65,7 @@ Variables inside a function are separate from the caller.
 
 ```php
 <?php
-$double = function($x) {
+$double = function(int $x): int {
     return $x * 2;
 };
 echo $double(5); // 10
@@ -76,7 +76,7 @@ Closures can capture with `use`:
 ```php
 <?php
 $factor = 3;
-$multiply = function($x) use ($factor) {
+$multiply = function(int $x) use ($factor): int {
     return $x * $factor;
 };
 echo $multiply(5); // 15
@@ -119,11 +119,11 @@ class C {
 
 ```php
 <?php
-$double = fn($x) => $x * 2;
+$double = fn(int $x): int => $x * 2;
 echo $double(5); // 10
 
 $nums = [1, 2, 3, 4];
-$squared = array_map(fn($n) => $n * $n, $nums);
+$squared = array_map(fn(int $n): int => $n * $n, $nums);
 ```
 
 ## First-class callable syntax

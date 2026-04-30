@@ -38,3 +38,27 @@ fn test_error_call_user_func_string_literal_ref_param_requires_variable() {
         "parameter $n must be passed a variable",
     );
 }
+
+#[test]
+fn test_error_closure_return_type_rejects_mismatch() {
+    expect_error(
+        "<?php $f = function(): string { return 1; };",
+        "Closure return type expects Str, got Int",
+    );
+}
+
+#[test]
+fn test_error_arrow_return_type_rejects_mismatch() {
+    expect_error(
+        "<?php $f = fn(): int => \"nope\";",
+        "Closure return type expects Int, got Str",
+    );
+}
+
+#[test]
+fn test_error_closure_void_return_type_rejects_value() {
+    expect_error(
+        "<?php $f = function(): void { return 1; };",
+        "Closure return type expects Void, got Int",
+    );
+}

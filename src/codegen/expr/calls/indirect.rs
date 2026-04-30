@@ -111,7 +111,13 @@ pub(super) fn emit_expr_call(
         .as_ref()
         .map(|sig| sig.return_type.clone())
         .unwrap_or_else(|| match &callee.kind {
-            ExprKind::Closure { body, .. } => crate::types::checker::infer_return_type_syntactic(body),
+            ExprKind::Closure {
+                return_type: Some(type_ann),
+                ..
+            } => crate::codegen::functions::codegen_static_type(type_ann, ctx),
+            ExprKind::Closure { body, .. } => {
+                crate::types::checker::infer_return_type_syntactic(body)
+            }
             _ => PhpType::Int,
         });
 

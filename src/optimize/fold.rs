@@ -170,6 +170,7 @@ pub(super) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::Closure {
             params,
             variadic,
+            return_type,
             body,
             is_arrow,
             is_static,
@@ -177,6 +178,7 @@ pub(super) fn fold_expr(expr: Expr) -> Expr {
         } => ExprKind::Closure {
             params: fold_params(params),
             variadic,
+            return_type,
             body: fold_block(body),
             is_arrow,
             is_static,

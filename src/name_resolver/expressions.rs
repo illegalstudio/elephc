@@ -117,6 +117,7 @@ pub(super) fn resolve_expr(
         ExprKind::Closure {
             params,
             variadic,
+            return_type,
             body,
             is_arrow,
             is_static,
@@ -124,6 +125,9 @@ pub(super) fn resolve_expr(
         } => ExprKind::Closure {
             params: resolve_params(params, current_namespace, imports, symbols),
             variadic: variadic.clone(),
+            return_type: return_type
+                .as_ref()
+                .map(|ty| resolve_type_expr(ty, current_namespace, imports)),
             body: resolve_stmt_list(body, current_namespace, imports, symbols)
                 .expect("name resolver bug: closure body resolution failed"),
             is_arrow: *is_arrow,

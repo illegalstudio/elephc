@@ -8,6 +8,7 @@ fn test_effect_analysis_tracks_pure_iife_expr_calls() {
                 ExprKind::Closure {
                     params: Vec::new(),
                     variadic: None,
+                    return_type: None,
                     body: vec![Stmt::new(
                         StmtKind::Return(Some(Expr::new(
                             ExprKind::FunctionCall {

@@ -71,6 +71,7 @@ pub enum ExprKind {
     Closure {
         params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
         variadic: Option<String>,
+        return_type: Option<TypeExpr>,
         body: Vec<Stmt>,
         is_arrow: bool,
         is_static: bool,

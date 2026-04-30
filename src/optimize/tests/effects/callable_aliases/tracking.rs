@@ -16,6 +16,7 @@ fn test_program_function_effects_track_closure_alias_locals() {
                             ExprKind::Closure {
                                 params: Vec::new(),
                                 variadic: None,
+                                return_type: None,
                                 body: vec![Stmt::new(
                                     StmtKind::Return(Some(Expr::new(
                                         ExprKind::FunctionCall {

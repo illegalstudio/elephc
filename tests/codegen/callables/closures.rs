@@ -47,6 +47,54 @@ echo $calc(5);
 }
 
 #[test]
+fn test_closure_return_type_annotation() {
+    let out = compile_and_run(
+        r#"<?php
+$prefix = "id:";
+$format = function(int $value) use ($prefix): string {
+    return $prefix . $value;
+};
+echo $format(7);
+"#,
+    );
+    assert_eq!(out, "id:7");
+}
+
+#[test]
+fn test_closure_return_type_annotation_uses_typed_param() {
+    let out = compile_and_run(
+        r#"<?php
+$identity = function(string $value): string {
+    return $value;
+};
+echo $identity("ok");
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_arrow_return_type_annotation() {
+    let out = compile_and_run(
+        r#"<?php
+$double = fn(int $value): int => $value * 2;
+echo $double(9);
+"#,
+    );
+    assert_eq!(out, "18");
+}
+
+#[test]
+fn test_iife_arrow_return_type_annotation() {
+    let out = compile_and_run(
+        r#"<?php
+echo (fn(): string => "ready")();
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
+#[test]
 fn test_closure_array_map() {
     let out = compile_and_run(
         r#"<?php
@@ -63,7 +111,7 @@ echo $result[2];
 fn test_arrow_function_array_map() {
     let out = compile_and_run(
         r#"<?php
-$result = array_map(fn($x) => $x + 100, [1, 2, 3]);
+$result = array_map(fn(int $x): int => $x + 100, [1, 2, 3]);
 echo $result[0];
 echo $result[1];
 echo $result[2];
@@ -222,4 +270,3 @@ echo $fn(7);
     );
     assert_eq!(out, "21");
 }
-

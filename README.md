@@ -239,7 +239,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **Control flow**: if/elseif/else, while, do-while, for, foreach, switch, match, break/continue including multi-level depths, try/catch/finally/throw
 - **Statements and literals**: `const` / `define()` constants, `global` declarations, `static` locals, `print` expressions, list unpacking, PHP numeric literal forms, heredoc / nowdoc strings
 - **Operators**: arithmetic, comparison, `instanceof`, logical, bitwise, ternary, null coalescing (`??`), null coalescing assignment (`??=`), error control (`@`), and compound assignments
-- **Types**: union types (`int|string`), nullable (`?int`), `never` return type, type casting, typed properties, typed function and method parameters and returns
+- **Types**: union types (`int|string`), nullable (`?int`), `never` return type, type casting, typed properties, typed function, method, closure, and arrow parameters and returns
 - **Modules**: namespaces, use imports, include/require/require_once, PHP magic constants
 - **FFI**: extern functions, extern blocks, extern globals, extern classes, pointer builtins
 - **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`

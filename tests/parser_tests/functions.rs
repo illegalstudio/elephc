@@ -67,6 +67,34 @@ fn test_parse_typed_closure_param() {
 }
 
 #[test]
+fn test_parse_closure_return_type_after_use() {
+    let stmts =
+        parse_source("<?php $x = 1; $fn = function(int $n) use ($x): string { return \"ok\"; };");
+    assert_eq!(stmts.len(), 2);
+    if let StmtKind::Assign { value, .. } = &stmts[1].kind {
+        if let ExprKind::Closure {
+            params,
+            captures,
+            return_type,
+            is_arrow,
+            ..
+        } = &value.kind
+        {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].0, "n");
+            assert_eq!(params[0].1, Some(TypeExpr::Int));
+            assert_eq!(captures, &["x".to_string()]);
+            assert_eq!(return_type.as_ref(), Some(&TypeExpr::Str));
+            assert!(!is_arrow);
+        } else {
+            panic!("expected Closure");
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+#[test]
 fn test_parse_arrow_function() {
     let stmts = parse_source("<?php $fn = fn($x) => $x * 2;");
     assert_eq!(stmts.len(), 1);
@@ -77,6 +105,31 @@ fn test_parse_arrow_function() {
         {
             let param_names: Vec<&str> = params.iter().map(|(n, _, _, _)| n.as_str()).collect();
             assert_eq!(param_names, &["x"]);
+            assert!(is_arrow);
+        } else {
+            panic!("expected Closure (arrow)");
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+#[test]
+fn test_parse_arrow_function_return_type() {
+    let stmts = parse_source("<?php $fn = fn(int $x): int => $x + 1;");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        if let ExprKind::Closure {
+            params,
+            return_type,
+            is_arrow,
+            ..
+        } = &value.kind
+        {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].0, "x");
+            assert_eq!(params[0].1, Some(TypeExpr::Int));
+            assert_eq!(return_type.as_ref(), Some(&TypeExpr::Int));
             assert!(is_arrow);
         } else {
             panic!("expected Closure (arrow)");

@@ -97,6 +97,7 @@ fn infer_closure_return_type(body: &[Stmt], sig: &FunctionSig) -> PhpType {
 pub(super) fn emit_closure(
     params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
     variadic: &Option<String>,
+    return_type: &Option<TypeExpr>,
     body: &[Stmt],
     captures: &[String],
     emitter: &mut Emitter,
@@ -162,12 +163,15 @@ pub(super) fn emit_closure(
         declared_params: declared_params.clone(),
         variadic: variadic.clone(),
     };
-    let return_type = infer_closure_return_type(body, &preliminary_sig);
+    let resolved_return_type = return_type
+        .as_ref()
+        .map(|type_ann| functions::codegen_static_type(type_ann, ctx))
+        .unwrap_or_else(|| infer_closure_return_type(body, &preliminary_sig));
     let sig = FunctionSig {
         params: param_types,
         defaults,
-        return_type,
-        declared_return: false,
+        return_type: resolved_return_type,
+        declared_return: return_type.is_some(),
         ref_params,
         declared_params,
         variadic: variadic.clone(),

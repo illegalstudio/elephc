@@ -303,7 +303,7 @@ Proper type system for PHP compatibility.
 - [x] Final classes, methods, and properties (`final class Foo {}`, `final public function run() {}`, `final public $id`) — compile-time inheritance and override enforcement
 - [x] Union types (`int|string`) — tagged union with runtime type dispatch
 - [x] Nullable types (`?int`) — sugar for `int|null`
-- [x] Function / method parameter and return type hints (`function foo(int $x): string`) — compile-time validation for functions, methods, and constructors; closure / arrow parameter hints are supported, while closure / arrow return annotations remain future work
+- [x] Function / method parameter and return type hints (`function foo(int $x): string`) — compile-time validation for functions, methods, constructors, closures, and arrow functions
 - [x] Constructor property promotion (`public function __construct(public int $x)`) — promoted parameters lower to declared properties plus constructor assignments, including visibility, `readonly`, defaults, nullable/union type declarations, and by-reference promoted parameters
 
 ## v0.18.x — Multi-platform and optimizations
@@ -424,7 +424,7 @@ Features that are feasible but complex. Not currently planned for any specific v
 | Mixed indexed/associative array union | Medium | Model `array + array` cases where one operand is represented as an indexed array and the other as an associative hash, preserving PHP's shared int/string key space and left-key precedence. |
 | Named-argument parity for built-ins, extern calls, and spread | Medium | Extend call validation/lowering so named arguments work outside user-defined calls and interact correctly with spread arguments. |
 | Captured closures as callback values | Medium | Forward hidden `use (...)` capture environments through callback-style built-ins such as `array_map`, `array_filter`, and `call_user_func`. |
-| Closure and arrow return type annotations | Low | Parse and validate `function (...): T {}` and `fn(...): T => expr`, adding a closure return-type field to the AST and threading it through closure `FunctionSig` creation. |
+| Declared return fallthrough parity | Medium | Reject or runtime-fatal every path that can fall through a non-`void` declared return type without an explicit return value, matching PHP's runtime `TypeError` behavior more closely. |
 | Full first-class callable targets | Medium | Support `static::method(...)` and `$object->method(...)` first-class callable syntax in addition to function, `ClassName::`, `self::`, and `parent::` targets. |
 | OOP property parity v2 | High | Cover abstract properties, `readonly static` properties, instance property redeclaration rules, and the remaining by-reference constructor-promotion gaps (`readonly` and default values). |
 | Buffer ergonomics v2 | Medium | Consider dynamic resize/push/pop, `foreach`, array conversion, and automatic cleanup for `buffer<T>` while keeping the hot-path POD contract explicit. |

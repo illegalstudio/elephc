@@ -21,7 +21,7 @@ echo $add(3, 7);
 echo "\n";
 
 // Arrow function with expression body
-$square_plus_one = fn($x) => $x * $x + 1;
+$square_plus_one = fn(int $x): int => $x * $x + 1;
 echo "square_plus_one(5) = ";
 echo $square_plus_one(5);
 echo "\n";
@@ -56,7 +56,7 @@ echo "\n";
 
 // Closures capturing variables with use()
 $factor = 3;
-$multiply = function($x) use ($factor) {
+$multiply = function(int $x) use ($factor): int {
     return $x * $factor;
 };
 echo "multiply(5) with factor=3: ";

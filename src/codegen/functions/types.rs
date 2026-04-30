@@ -580,6 +580,15 @@ pub(super) fn infer_local_type(
                     _ => {}
                 }
             }
+            if let ExprKind::Closure {
+                return_type: Some(type_ann),
+                ..
+            } = &callee.kind
+            {
+                return ctx
+                    .map(|c| codegen_static_type(type_ann, c))
+                    .unwrap_or(PhpType::Mixed);
+            }
             if let ExprKind::Closure { body, .. } = &callee.kind {
                 return crate::types::checker::infer_return_type_syntactic(body);
             }

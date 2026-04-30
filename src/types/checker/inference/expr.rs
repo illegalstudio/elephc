@@ -5,7 +5,7 @@ use crate::types::{
 };
 
 use super::super::Checker;
-use super::syntactic::{infer_expr_type_syntactic, wider_type_syntactic};
+use super::syntactic::wider_type_syntactic;
 
 impl Checker {
     pub fn infer_type(&mut self, expr: &Expr, env: &TypeEnv) -> Result<PhpType, CompileError> {
@@ -305,6 +305,7 @@ impl Checker {
             ExprKind::Closure {
                 params,
                 variadic,
+                return_type,
                 body,
                 is_arrow: _,
                 is_static,
@@ -313,7 +314,7 @@ impl Checker {
                 if *is_static {
                     body_must_not_use_this(body, expr.span)?;
                 }
-                self.infer_closure_type(params, variadic, body, captures, expr, env)
+                self.infer_closure_type(params, variadic, return_type, body, captures, expr, env)
             }
             ExprKind::Spread(inner) => {
                 let ty = self.infer_type(inner, env)?;
@@ -425,106 +426,6 @@ impl Checker {
         }
     }
 
-    /// Infer the return type of a closure by scanning its body for Return statements.
-    pub(crate) fn infer_closure_return_type(&mut self, body: &[Stmt], env: &TypeEnv) -> PhpType {
-        let mut return_types = Vec::new();
-        for stmt in body {
-            self.collect_closure_return_types(stmt, env, &mut return_types);
-        }
-        if return_types.is_empty() {
-            return PhpType::Int;
-        }
-        let mut result = return_types[0].clone();
-        for ty in &return_types[1..] {
-            result = wider_type_syntactic(&result, ty);
-        }
-        result
-    }
-
-    fn collect_closure_return_types(
-        &mut self,
-        stmt: &Stmt,
-        env: &TypeEnv,
-        return_types: &mut Vec<PhpType>,
-    ) {
-        match &stmt.kind {
-            StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => {}
-            StmtKind::NamespaceBlock { body, .. } => {
-                for inner in body {
-                    self.collect_return_types(inner, env, return_types);
-                }
-            }
-            StmtKind::Return(Some(expr)) => {
-                let ty = self
-                    .infer_type(expr, env)
-                    .unwrap_or_else(|_| infer_expr_type_syntactic(expr));
-                return_types.push(ty);
-            }
-            StmtKind::Return(None) => {
-                return_types.push(PhpType::Void);
-            }
-            StmtKind::If {
-                then_body,
-                elseif_clauses,
-                else_body,
-                ..
-            } => {
-                for stmt in then_body {
-                    self.collect_closure_return_types(stmt, env, return_types);
-                }
-                for (_, body) in elseif_clauses {
-                    for stmt in body {
-                        self.collect_closure_return_types(stmt, env, return_types);
-                    }
-                }
-                if let Some(body) = else_body {
-                    for stmt in body {
-                        self.collect_closure_return_types(stmt, env, return_types);
-                    }
-                }
-            }
-            StmtKind::While { body, .. }
-            | StmtKind::DoWhile { body, .. }
-            | StmtKind::For { body, .. }
-            | StmtKind::Foreach { body, .. } => {
-                for stmt in body {
-                    self.collect_closure_return_types(stmt, env, return_types);
-                }
-            }
-            StmtKind::Try {
-                try_body,
-                catches,
-                finally_body,
-            } => {
-                for stmt in try_body {
-                    self.collect_closure_return_types(stmt, env, return_types);
-                }
-                for catch_clause in catches {
-                    for stmt in &catch_clause.body {
-                        self.collect_closure_return_types(stmt, env, return_types);
-                    }
-                }
-                if let Some(body) = finally_body {
-                    for stmt in body {
-                        self.collect_closure_return_types(stmt, env, return_types);
-                    }
-                }
-            }
-            StmtKind::Switch { cases, default, .. } => {
-                for (_, body) in cases {
-                    for stmt in body {
-                        self.collect_closure_return_types(stmt, env, return_types);
-                    }
-                }
-                if let Some(body) = default {
-                    for stmt in body {
-                        self.collect_closure_return_types(stmt, env, return_types);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 impl Checker {
