@@ -170,3 +170,20 @@ fn test_is_iterable_runtime_dispatch_for_mixed() {
     );
     assert_eq!(out, "yynnn");
 }
+
+#[test]
+fn test_iterable_boxes_to_mixed_with_concrete_array_tag() {
+    let out = compile_and_run(
+        "<?php
+        function box(iterable $items): mixed {
+            return $items;
+        }
+        echo is_iterable(box([1, 2])) ? 'y' : 'n';
+        echo '|';
+        echo gettype(box(['a' => 1]));
+        echo '|';
+        var_dump(box([10, 20]));
+        ",
+    );
+    assert_eq!(out, "y|array|array(2) {\n}\n");
+}
