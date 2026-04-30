@@ -187,3 +187,20 @@ fn test_iterable_boxes_to_mixed_with_concrete_array_tag() {
     );
     assert_eq!(out, "y|array|array(2) {\n}\n");
 }
+
+#[test]
+fn test_empty_iterable_uses_underlying_array_length() {
+    let out = compile_and_run(
+        "<?php
+        function describe(iterable $items): string {
+            return empty($items) ? 'empty' : 'not';
+        }
+        echo describe([]);
+        echo '|';
+        echo describe([1]);
+        echo '|';
+        echo describe(['a' => 1]);
+        ",
+    );
+    assert_eq!(out, "empty|not|not");
+}
