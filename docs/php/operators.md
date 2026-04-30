@@ -142,7 +142,7 @@ $count = 4;
 echo ($count += 3); // 7
 ```
 
-Assignment expression precedence matches PHP: assignment binds lower than `?:` and `??`, but higher than the word-form logical operators. The expression form supports local variables plus replayable non-local targets such as array elements, object properties, static properties, and indexed array slots stored in properties:
+Assignment expression precedence matches PHP: assignment binds lower than `?:` and `??`, but higher than the word-form logical operators. The expression form supports local variables plus stabilized non-local targets such as array elements, object properties, static properties, and indexed array slots stored in properties:
 
 ```php
 <?php
@@ -163,7 +163,9 @@ class Registry {
 echo (Registry::$value ??= 10);
 ```
 
-Non-local assignment expression targets must be replayable and must stay stable while the assigned value is evaluated. Receiver/index expressions with side effects, or RHS expressions that mutate a variable used by the target, are still limited to standalone assignment statements for now. This avoids evaluating those expressions twice while the compiler does not yet have expression-level target stabilization.
+Non-local assignment expression targets stabilize receiver and index subexpressions when needed, so side-effecting targets such as `$items[idx()] = 1` and `make_box()->count += 1` are evaluated once. For `=` and compound assignment, elephc also preserves PHP's ordering for RHS-mutated simple indexes such as `$items[$i] = ($i = 1)` while pre-evaluating computed indexes such as `$items[$i + 0] = ($i = 1)`.
+
+**Current limitation:** `??=` expression form still rejects non-local targets whose RHS mutates a variable used by the target, such as `$items[$i] ??= ($i = 1)`. This keeps the RHS short-circuit behavior correct until conditional non-local write stabilization is implemented.
 
 ## List Unpacking
 
