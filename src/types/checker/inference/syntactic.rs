@@ -209,6 +209,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             wider_type_syntactic(&left_ty, &right_ty)
         }
         ExprKind::ErrorSuppress(inner) => infer_expr_type_syntactic(inner),
+        ExprKind::Print(_) => PhpType::Int,
         ExprKind::Throw(_) => PhpType::Void,
         ExprKind::Ternary {
             then_expr,

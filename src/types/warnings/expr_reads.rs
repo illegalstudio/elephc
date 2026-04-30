@@ -22,6 +22,7 @@ pub(super) fn collect_expr_reads(
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
         | ExprKind::ErrorSuppress(inner)
+        | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
         | ExprKind::PtrCast { expr: inner, .. } => collect_expr_reads(inner, scope, warnings),
         ExprKind::NullCoalesce { value, default } => {

@@ -54,6 +54,7 @@ Things that have a value:
 | `Not(Expr)` | `!$x` | Logical NOT |
 | `BitNot(Expr)` | `~$x` | Bitwise NOT (complement) |
 | `Throw(Expr)` | `throw new Exception("boom")` | Throw expression node used both in statements and expression positions such as `??` or ternaries |
+| `Print(Expr)` | `print $x` | PHP print expression. It writes the operand and returns `1`; statement-form `print $x;` is represented as `ExprStmt(Print(...))`. |
 | `NullCoalesce { value, default }` | `$x ?? $y` | Returns `$x` if non-null, otherwise `$y` |
 | `PreIncrement(String)` | `++$i` | Returns new value |
 | `PostIncrement(String)` | `$i++` | Returns old value |
@@ -159,7 +160,8 @@ At statement level, parsing is split between `parser/mod.rs` and the `stmt/` sub
 | `Use` | Namespace import declaration |
 | `Return` | Return statement |
 | `Throw` | Throw statement |
-| `Echo` / `Print` | Echo/print statement |
+| `Echo` | Echo statement |
+| `Print` | Generic expression statement containing `Print(...)` |
 | `If` / `While` / `Do` / `For` / `Foreach` / `Switch` / `Try` | Control-flow statement |
 | `Const` / `Global` / `Static` | Declaration-like statement |
 | `Variable` / `This` / `Identifier` / `Backslash` / `Self_` / `Parent` / `Static::...` | Assignment, property write, call, or generic expression statement |
@@ -287,14 +289,14 @@ parse_expr_bp(0):
   prefix → IntLiteral(1)
 
   loop iteration 1:
-    next token: +  → (left_bp=21, right_bp=22)
-    21 >= 0? yes → consume +
-    parse_expr_bp(22):
+    next token: +  → (left_bp=29, right_bp=30)
+    29 >= 0? yes → consume +
+    parse_expr_bp(30):
       prefix → IntLiteral(2)
       loop iteration:
-        next token: *  → (left_bp=23, right_bp=24)
-        23 >= 22? yes → consume *
-        parse_expr_bp(24):
+        next token: *  → (left_bp=31, right_bp=32)
+        31 >= 30? yes → consume *
+        parse_expr_bp(32):
           prefix → IntLiteral(3)
           loop: no more operators
           return IntLiteral(3)
@@ -380,7 +382,8 @@ Statement parsing is simpler — after `parse()` has peeled off top-level `exter
 
 | Current token | Parse as |
 |---|---|
-| `Echo` / `Print` | `Echo` statement — parse expression, expect `;` |
+| `Echo` | `Echo` statement — parse expression, expect `;` |
+| `Print` | Expression statement — parse `Print(...)`, expect `;` |
 | `Throw` | `Throw` statement — parse one expression, expect `;` |
 | `IfDef` | Build-time conditional statement |
 | `Variable` | Assignment, compound assignment, array assign/push, or expression statement |

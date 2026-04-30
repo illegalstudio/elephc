@@ -22,6 +22,7 @@ pub(crate) use null_coalesce_assign::{
     null_coalesce_static_property_array_target,
     null_coalesce_static_property_target,
 };
+pub(crate) use io::emit_expr_to_stdout;
 
 fn current_function_name(ctx: &Context) -> String {
     ctx.return_label

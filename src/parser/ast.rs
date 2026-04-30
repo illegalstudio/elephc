@@ -31,6 +31,7 @@ pub enum ExprKind {
     BitNot(Box<Expr>),
     Throw(Box<Expr>),
     ErrorSuppress(Box<Expr>),
+    Print(Box<Expr>),
     NullCoalesce {
         value: Box<Expr>,
         default: Box<Expr>,
@@ -242,6 +243,10 @@ impl Expr {
 
     pub fn negate(inner: Expr) -> Self {
         Self::new(ExprKind::Negate(Box::new(inner)), Span::dummy())
+    }
+
+    pub fn print(inner: Expr) -> Self {
+        Self::new(ExprKind::Print(Box::new(inner)), Span::dummy())
     }
 }
 

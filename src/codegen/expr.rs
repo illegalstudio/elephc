@@ -75,6 +75,9 @@ pub fn emit_expr(
         ExprKind::ErrorSuppress(inner) => {
             diagnostics::emit_error_suppress(inner, emitter, ctx, data)
         }
+        ExprKind::Print(inner) => {
+            emit_print_expr(inner, emitter, ctx, data)
+        }
         ExprKind::NullCoalesce { value, default } => {
             emit_null_coalesce(value, default, emitter, ctx, data)
         }
@@ -193,6 +196,18 @@ pub fn emit_expr(
             unreachable!("MagicConstant must be lowered before codegen")
         }
     }
+}
+
+fn emit_print_expr(
+    inner: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment("print expression");
+    super::stmt::emit_expr_to_stdout(inner, emitter, ctx, data);
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 1);
+    PhpType::Int
 }
 
 fn emit_new_object(

@@ -20,7 +20,8 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
     let span = tokens[*pos].1;
 
     match &tokens[*pos].0 {
-        Token::Echo | Token::Print => simple::parse_echo(tokens, pos, span),
+        Token::Echo => simple::parse_echo(tokens, pos, span),
+        Token::Print => simple::parse_expr_stmt(tokens, pos, span),
         Token::Variable(_) => assign::parse_variable_stmt(tokens, pos, span),
         Token::This => simple::parse_this_stmt(tokens, pos, span),
         Token::PlusPlus | Token::MinusMinus => assign::parse_incdec_stmt(tokens, pos, span),

@@ -72,6 +72,22 @@ echo "still running";
 
 The operand is evaluated normally and its value is preserved. Only suppressible runtime warnings are hidden; compile-time errors and fatal runtime errors still report normally. Nested `@` scopes are tracked with a runtime suppression depth, and exception unwinds restore the previous suppression state before entering a `catch`.
 
+## Print Expression
+
+`print` is supported as a PHP-compatible expression: it writes its operand to
+stdout and returns `1`.
+
+```php
+<?php
+$status = print "ready\n";
+echo $status;          // 1
+echo print "nested";   // nested1
+```
+
+Its precedence matches PHP: the operand can include `?:` and `??`, while the
+word-form logical operators `and`, `xor`, and `or` bind looser than the whole
+`print` expression.
+
 ## String
 
 | Operator | Example | Notes |

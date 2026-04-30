@@ -362,6 +362,7 @@ fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
         ExprKind::ErrorSuppress(inner) => {
             ExprKind::ErrorSuppress(Box::new(rewrite_expr(*inner, defines)))
         }
+        ExprKind::Print(inner) => ExprKind::Print(Box::new(rewrite_expr(*inner, defines))),
         ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
             value: Box::new(rewrite_expr(*value, defines)),
             default: Box::new(rewrite_expr(*default, defines)),

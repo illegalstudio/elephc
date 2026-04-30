@@ -132,6 +132,7 @@ The type checker computes the type of every expression:
 | `Int <=> Int` | spaceship | `Int` (-1, 0, or 1) |
 | `expr instanceof ClassName` | class/interface metadata check | `Bool` |
 | `expr ?? expr` | null coalescing | Type of the non-null operand |
+| `print expr` | output expression | `Int` (`1`) |
 
 ### Function calls
 
@@ -139,7 +140,7 @@ Built-in functions have hardcoded type signatures (see below). User-defined func
 
 ## Built-in function signatures
 
-**Files:** `src/types/checker/builtins/`, plus `src/types/checker/mod.rs` and `src/types/checker/inference/` for special expression forms such as `ExprKind::PtrCast` and `ExprKind::InstanceOf`
+**Files:** `src/types/checker/builtins/`, plus `src/types/checker/mod.rs` and `src/types/checker/inference/` for special expression forms such as `ExprKind::PtrCast`, `ExprKind::InstanceOf`, and `ExprKind::Print`
 
 Every built-in function has a registered type signature:
 

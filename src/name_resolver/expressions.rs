@@ -29,6 +29,9 @@ pub(super) fn resolve_expr(
         ExprKind::Throw(inner) => {
             ExprKind::Throw(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
         }
+        ExprKind::Print(inner) => {
+            ExprKind::Print(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
+        }
         ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
             value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
             default: Box::new(resolve_expr(default, current_namespace, imports, symbols)),

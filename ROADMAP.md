@@ -102,7 +102,7 @@ Proper type system for PHP compatibility.
 - [x] `copy()`, `rename()`, `unlink()`, `mkdir()`, `rmdir()`
 - [x] `scandir()`, `glob()`, `getcwd()`, `chdir()`
 - [x] `tempnam()`, `sys_get_temp_dir()`
-- [x] `print` as alias for `echo`
+- [x] Statement-form `print` output
 - [x] `var_dump()`, `print_r()` for debugging
 
 ## v0.6.x — Associative arrays and switch (done)
@@ -336,6 +336,7 @@ Proper type system for PHP compatibility.
 - [x] Relational and loose-comparison contradiction guards for dead-code elimination
 - [x] Advanced static property parity — PHP-style static property redeclaration rules and direct array element writes such as `ClassName::$items[] = $value`
 - [x] Short ternary operator `?:` — PHP Elvis form with single evaluation of the left-hand expression
+- [x] `print` expression form — writes output and returns `1`, including statement-form `print $x;` as `ExprStmt(Print(...))`
 - [x] Constant propagation v2 — known-subject `switch` path merges, non-throwing `try` / unreachable-catch env merges, known `match` folding, and scalar indexed/associative array-literal access folding
 - [x] Constant propagation v3 — local loop path summaries for `while(false)`, `do...while(false)`, `while(true)` / `for(;;)` break exits, branch-local loop-exit merges, and safe pruning around `do...while(false)` loop exits
 - [ ] Constant propagation v4 — full fixed-point / basic-block propagation across arbitrary loops and general path merges once there are measured cases that justify the extra pass complexity
@@ -426,7 +427,6 @@ Features that are feasible but complex. Not currently planned for any specific v
 | Captured closures as callback values | Medium | Forward hidden `use (...)` capture environments through callback-style built-ins such as `array_map`, `array_filter`, and `call_user_func`. |
 | Closure and arrow return type annotations | Low | Parse and validate `function (...): T {}` and `fn(...): T => expr`, adding a closure return-type field to the AST and threading it through closure `FunctionSig` creation. |
 | Full first-class callable targets | Medium | Support `static::method(...)` and `$object->method(...)` first-class callable syntax in addition to function, `ClassName::`, `self::`, and `parent::` targets. |
-| `print` expression form | Low | Model `print` as an expression that writes output and returns `1`, instead of only accepting it as an echo-like statement. |
 | OOP property parity v2 | High | Cover abstract properties, `readonly static` properties, instance property redeclaration rules, and the remaining by-reference constructor-promotion gaps (`readonly` and default values). |
 | Buffer ergonomics v2 | Medium | Consider dynamic resize/push/pop, `foreach`, array conversion, and automatic cleanup for `buffer<T>` while keeping the hot-path POD contract explicit. |
 | Broader date, regex, and JSON PHP parity | High | Expand `strtotime()` relative formats, PCRE-compatible regex features/captures/backreferences, and `json_decode()` structured array/object decoding. |

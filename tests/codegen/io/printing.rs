@@ -13,6 +13,36 @@ fn test_print_int() {
 }
 
 #[test]
+fn test_print_expression_returns_one() {
+    let out = compile_and_run("<?php $ok = print \"hello\"; echo \"\\n\"; echo $ok;");
+    assert_eq!(out, "hello\n1");
+}
+
+#[test]
+fn test_print_expression_can_be_nested_in_echo() {
+    let out = compile_and_run("<?php echo print \"x\";");
+    assert_eq!(out, "x1");
+}
+
+#[test]
+fn test_print_expression_operand_accepts_short_ternary() {
+    let out = compile_and_run("<?php echo print false ?: \"fallback\";");
+    assert_eq!(out, "fallback1");
+}
+
+#[test]
+fn test_print_expression_binds_tighter_than_word_and() {
+    let out = compile_and_run("<?php echo print \"x\" and false;");
+    assert_eq!(out, "x");
+}
+
+#[test]
+fn test_print_expression_lowers_magic_constants() {
+    let out = compile_and_run("<?php print __FILE__;");
+    assert!(out.ends_with("test.php"), "unexpected __FILE__ output: {out}");
+}
+
+#[test]
 fn test_var_dump_int() {
     let out = compile_and_run("<?php var_dump(42);");
     assert_eq!(out, "int(42)\n");

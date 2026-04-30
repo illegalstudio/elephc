@@ -34,6 +34,10 @@ impl Checker {
                 Ok(PhpType::Bool)
             }
             ExprKind::ErrorSuppress(inner) => self.infer_type(inner, env),
+            ExprKind::Print(inner) => {
+                self.infer_type(inner, env)?;
+                Ok(PhpType::Int)
+            }
             ExprKind::PreIncrement(name)
             | ExprKind::PostIncrement(name)
             | ExprKind::PreDecrement(name)
@@ -748,6 +752,7 @@ fn expr_must_not_use_this(expr: &Expr, span: crate::span::Span) -> Result<(), Co
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
         | ExprKind::ErrorSuppress(inner)
+        | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
         | ExprKind::PtrCast { expr: inner, .. }
         | ExprKind::Cast { expr: inner, .. } => expr_must_not_use_this(inner, span),

@@ -49,6 +49,30 @@ fn test_word_logical_xor_higher_than_or() {
 }
 
 #[test]
+fn test_print_expression_binds_tighter_than_word_and() {
+    let stmts = parse_source("<?php echo print $a and $b;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::print(Expr::var("a")),
+        BinOp::And,
+        Expr::var("b"),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
+fn test_print_expression_operand_accepts_short_ternary() {
+    let stmts = parse_source("<?php echo print $a ?: $b;");
+    let expected = Stmt::echo(Expr::print(Expr::new(
+        ExprKind::ShortTernary {
+            value: Box::new(Expr::var("a")),
+            default: Box::new(Expr::var("b")),
+        },
+        elephc::span::Span::dummy(),
+    )));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
 fn test_parse_instanceof_expression() {
     let stmts = parse_source("<?php echo $a instanceof Foo;");
     let expected = Stmt::echo(Expr::instance_of(

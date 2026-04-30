@@ -101,6 +101,11 @@ fn test_error_control_requires_operand() {
 }
 
 #[test]
+fn test_error_print_requires_operand() {
+    expect_error("<?php print;", "Unexpected token");
+}
+
+#[test]
 fn test_error_single_ampersand() {
     expect_error("<?php &;", "Unexpected token");
 }

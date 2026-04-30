@@ -49,6 +49,16 @@ pub(super) fn parse_echo(tokens: &[(Token, Span)], pos: &mut usize, span: Span) 
     Ok(Stmt::new(StmtKind::Echo(expr), span))
 }
 
+pub(super) fn parse_expr_stmt(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let expr = parse_expr(tokens, pos)?;
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
+}
+
 pub(super) fn parse_return(
     tokens: &[(Token, Span)],
     pos: &mut usize,

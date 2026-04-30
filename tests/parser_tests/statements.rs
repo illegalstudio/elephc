@@ -50,10 +50,14 @@ fn test_missing_condition_parens() {
     assert!(parse_fails("<?php if 1 { echo \"a\"; }"));
 }
 
-// --- Strict comparison ---
-
 #[test]
-fn test_print_parses_as_echo_statement() {
+fn test_print_parses_as_expression_statement() {
     let stmts = parse_source("<?php print \"hello\";");
-    assert_eq!(stmts, vec![Stmt::echo(Expr::string_lit("hello"))]);
+    assert_eq!(
+        stmts,
+        vec![Stmt::new(
+            StmtKind::ExprStmt(Expr::print(Expr::string_lit("hello"))),
+            elephc::span::Span::dummy(),
+        )]
+    );
 }

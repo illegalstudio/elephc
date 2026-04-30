@@ -176,6 +176,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::PtrCast { expr: inner, .. }
         | ExprKind::Spread(inner) => expr_effect(inner),
+        ExprKind::Print(inner) => expr_effect(inner).with_side_effects(),
         ExprKind::BinaryOp { left, right, .. } => expr_effect(left).combine(expr_effect(right)),
         ExprKind::InstanceOf { value, .. } => expr_effect(value),
         ExprKind::Throw(inner) => expr_effect(inner).with_side_effects().with_may_throw(),

@@ -201,4 +201,20 @@ $c = [...$a, ...$b]; // [1, 2, 3, 4]
 
 ## print
 
-`print` works as an alias for `echo`. Always returns 1 but cannot be used as expression.
+`print` is a PHP language construct expression. It writes its operand to stdout
+using the same scalar output rules as `echo`, then returns `1`.
+
+```php
+<?php
+$ok = print "ready\n";
+echo $ok;             // 1
+
+echo print "nested";  // prints "nested1"
+```
+
+As in PHP, `print` can also stand alone as a statement:
+
+```php
+<?php
+print "hello\n";
+```

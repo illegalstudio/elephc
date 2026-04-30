@@ -268,6 +268,7 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
         | ExprKind::ErrorSuppress(inner)
+        | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
         | ExprKind::PtrCast { expr: inner, .. }
         | ExprKind::Cast { expr: inner, .. } => expr_local_writes(inner),
