@@ -182,6 +182,7 @@ impl Checker {
             active_globals: HashSet::new(),
             active_statics: HashSet::new(),
             break_continue_depth: 0,
+            finally_break_continue_bases: Vec::new(),
         }
     }
 

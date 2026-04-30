@@ -85,12 +85,27 @@ impl Checker {
         levels: usize,
     ) -> Result<(), CompileError> {
         if levels <= self.break_continue_depth {
-            Ok(())
+            if self.loop_exit_stays_inside_finally(levels) {
+                Ok(())
+            } else {
+                Err(CompileError::new(
+                    span,
+                    "Cannot jump out of a finally block",
+                ))
+            }
         } else {
             Err(CompileError::new(
                 span,
                 &format!("Cannot '{}' {} levels", keyword, levels),
             ))
         }
+    }
+
+    fn loop_exit_stays_inside_finally(&self, levels: usize) -> bool {
+        let Some(finally_base_depth) = self.finally_break_continue_bases.last() else {
+            return true;
+        };
+        let local_target_depth = self.break_continue_depth - finally_base_depth;
+        levels <= local_target_depth
     }
 }

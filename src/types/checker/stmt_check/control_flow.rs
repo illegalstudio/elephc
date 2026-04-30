@@ -204,11 +204,10 @@ impl Checker {
                     }
                 }
                 if let Some(body) = finally_body {
-                    for s in body {
-                        if let Err(error) = self.check_stmt(s, env) {
-                            errors.extend(error.flatten());
-                        }
-                    }
+                    self.finally_break_continue_bases
+                        .push(self.break_continue_depth);
+                    errors.extend(self.check_body(body, env));
+                    self.finally_break_continue_bases.pop();
                 }
                 if errors.is_empty() {
                     Ok(())

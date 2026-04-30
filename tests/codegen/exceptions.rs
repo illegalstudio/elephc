@@ -182,3 +182,11 @@ fn test_exception_finally_runs_on_return_break_continue() {
     );
     assert_eq!(out, "15230919");
 }
+
+#[test]
+fn test_exception_finally_allows_local_loop_break() {
+    let out = compile_and_run(
+        "<?php try { echo 1; } finally { while (1) { echo 2; break; } echo 3; } echo 4;",
+    );
+    assert_eq!(out, "1234");
+}

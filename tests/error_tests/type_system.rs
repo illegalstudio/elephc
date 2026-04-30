@@ -102,6 +102,30 @@ fn test_error_continue_too_many_levels() {
 }
 
 #[test]
+fn test_error_break_cannot_jump_out_of_finally() {
+    expect_error(
+        "<?php while (1) { try { echo 1; } finally { break; } }",
+        "Cannot jump out of a finally block",
+    );
+}
+
+#[test]
+fn test_error_continue_cannot_jump_out_of_finally() {
+    expect_error(
+        "<?php while (1) { try { echo 1; } finally { continue; } }",
+        "Cannot jump out of a finally block",
+    );
+}
+
+#[test]
+fn test_error_multilevel_break_cannot_jump_out_of_finally() {
+    expect_error(
+        "<?php while (1) { try { echo 1; } finally { while (1) { break 2; } } }",
+        "Cannot jump out of a finally block",
+    );
+}
+
+#[test]
 fn test_error_undefined_function() {
     expect_error("<?php nope();", "Undefined function: nope");
 }

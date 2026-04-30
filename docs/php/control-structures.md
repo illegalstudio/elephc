@@ -96,6 +96,9 @@ for ($row = 0; $row < 3; $row++) {
 
 The level counts enclosing loops and `switch` statements, matching PHP. `break;`
 and `continue;` are equivalent to `break 1;` and `continue 1;`.
+Inside a `finally` block, `break` and `continue` may only target loops or
+switches created inside that same `finally`; jumping out of `finally` is
+rejected, matching PHP.
 
 ## switch / case / default
 
