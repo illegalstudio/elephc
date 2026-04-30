@@ -9,11 +9,26 @@ pub(super) fn emit_assignment_expr(
     value: &Expr,
     result_target: Option<&Expr>,
     prelude: &[Stmt],
+    conditional_value_temp: Option<&str>,
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
     emit_assignment_prelude(prelude, emitter, ctx, data);
+
+    if let Some(temp_name) = conditional_value_temp {
+        if let Some(ty) = emit_conditional_non_local_null_coalesce_assignment(
+            temp_name,
+            target,
+            value,
+            result_target,
+            emitter,
+            ctx,
+            data,
+        ) {
+            return ty;
+        }
+    }
 
     let ExprKind::Variable(name) = &target.kind else {
         return emit_non_local_assignment_expr(target, value, result_target, emitter, ctx, data);
@@ -34,6 +49,56 @@ pub(super) fn emit_non_local_assignment_expr(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
+    emit_non_local_assignment_write(target, value, emitter, ctx, data);
+
+    super::emit_expr(result_target.unwrap_or(target), emitter, ctx, data)
+}
+
+fn emit_conditional_non_local_null_coalesce_assignment(
+    temp_name: &str,
+    target: &Expr,
+    value: &Expr,
+    result_target: Option<&Expr>,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    let ExprKind::NullCoalesce {
+        value: current,
+        default,
+    } = &value.kind
+    else {
+        return None;
+    };
+
+    if matches!(default.kind, ExprKind::Null) {
+        return Some(super::emit_expr(result_target.unwrap_or(target), emitter, ctx, data));
+    }
+
+    let current_ty = super::emit_expr(current, emitter, ctx, data);
+    if current_ty != PhpType::Void {
+        let keep_label = ctx.next_label("nca_expr_keep");
+        super::super::stmt::emit_branch_if_result_non_null(&current_ty, &keep_label, emitter);
+        super::super::stmt::emit_assign_stmt(temp_name, default, emitter, ctx, data);
+        let temp_value = Expr::new(ExprKind::Variable(temp_name.to_string()), default.span);
+        emit_non_local_assignment_write(target, &temp_value, emitter, ctx, data);
+        emitter.label(&keep_label);
+    } else {
+        super::super::stmt::emit_assign_stmt(temp_name, default, emitter, ctx, data);
+        let temp_value = Expr::new(ExprKind::Variable(temp_name.to_string()), default.span);
+        emit_non_local_assignment_write(target, &temp_value, emitter, ctx, data);
+    }
+
+    Some(super::emit_expr(result_target.unwrap_or(target), emitter, ctx, data))
+}
+
+fn emit_non_local_assignment_write(
+    target: &Expr,
+    value: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
     match &target.kind {
         ExprKind::ArrayAccess { array, index } => match &array.kind {
             ExprKind::Variable(array) => {
@@ -51,7 +116,6 @@ pub(super) fn emit_non_local_assignment_expr(
             }
             _ => {
                 emitter.comment("WARNING: assignment expression target is not supported in codegen");
-                return PhpType::Int;
             }
         },
         ExprKind::PropertyAccess { object, property } => {
@@ -66,11 +130,8 @@ pub(super) fn emit_non_local_assignment_expr(
         }
         _ => {
             emitter.comment("WARNING: assignment expression target is not supported in codegen");
-            return PhpType::Int;
         }
     }
-
-    super::emit_expr(result_target.unwrap_or(target), emitter, ctx, data)
 }
 
 fn emit_assignment_prelude(

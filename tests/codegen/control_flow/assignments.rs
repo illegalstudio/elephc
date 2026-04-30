@@ -398,6 +398,77 @@ echo ":" . $items[0];
 }
 
 #[test]
+fn test_null_coalesce_assignment_expression_uses_rhs_mutated_variable_index() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [10, 20];
+$i = 2;
+echo ($items[$i] ??= ($i = 1));
+echo ":" . $items[0] . ":" . $items[1] . ":" . $i;
+"#,
+    );
+    assert_eq!(out, "1:10:1:1");
+}
+
+#[test]
+fn test_null_coalesce_assignment_expression_short_circuits_rhs_mutated_index() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [10, 20];
+$i = 0;
+echo ($items[$i] ??= ($i = 1));
+echo ":" . $items[0] . ":" . $items[1] . ":" . $i;
+"#,
+    );
+    assert_eq!(out, "10:10:20:0");
+}
+
+#[test]
+fn test_null_coalesce_assignment_expression_stabilizes_computed_index_before_rhs() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [10, 20];
+$i = 0;
+echo ($items[$i + 0] ??= ($i = 1));
+echo ":" . $items[0] . ":" . $items[1] . ":" . $i;
+"#,
+    );
+    assert_eq!(out, "10:10:20:0");
+}
+
+#[test]
+fn test_null_coalesce_assignment_expression_effectful_index_mutating_rhs_runs_once() {
+    let out = compile_and_run(
+        r#"<?php
+function idx(): int {
+    echo "i";
+    return 2;
+}
+$items = [10, 20];
+$i = 0;
+echo ($items[idx()] ??= ($i = 1));
+echo ":" . $items[2] . ":" . $i;
+"#,
+    );
+    assert_eq!(out, "i1:1:1");
+}
+
+#[test]
+fn test_static_property_null_coalesce_assignment_expression_rhs_mutated_index() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    public static $items = [10, 20];
+}
+$i = 2;
+echo (Registry::$items[$i] ??= ($i = 1));
+echo ":" . Registry::$items[1] . ":" . $i;
+"#,
+    );
+    assert_eq!(out, "1:1:1");
+}
+
+#[test]
 fn test_assignment_expression_right_associative_codegen() {
     let out = compile_and_run("<?php $x = $y = 4; echo $x; echo ':'; echo $y;");
     assert_eq!(out, "4:4");

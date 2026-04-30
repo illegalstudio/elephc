@@ -34,6 +34,7 @@ pub(super) fn collect_expr_reads(
             value,
             result_target,
             prelude,
+            ..
         } => {
             for stmt in prelude {
                 collect_assignment_prelude_reads(stmt, scope, warnings);

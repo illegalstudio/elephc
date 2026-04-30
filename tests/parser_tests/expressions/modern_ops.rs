@@ -243,6 +243,7 @@ fn test_non_local_assignment_expression_stabilizes_effectful_index() {
                 value,
                 result_target,
                 prelude,
+                ..
             } => {
                 assert_eq!(prelude.len(), 2);
                 assert!(result_target.is_some());
@@ -270,6 +271,7 @@ fn test_non_local_assignment_expression_delays_simple_variable_index() {
                 value,
                 result_target,
                 prelude,
+                ..
             } => {
                 assert_eq!(prelude.len(), 1);
                 assert!(result_target.is_some());
@@ -279,6 +281,64 @@ fn test_non_local_assignment_expression_delays_simple_variable_index() {
                         assert!(matches!(index.kind, ExprKind::Variable(ref name) if name == "i"));
                     }
                     other => panic!("expected array target, got {:?}", other),
+                }
+            }
+            other => panic!("expected assignment expression, got {:?}", other),
+        },
+        other => panic!("expected Echo, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_null_coalesce_assignment_expression_uses_conditional_value_temp() {
+    let stmts = parse_source("<?php echo ($items[$i] ??= ($i = 1));");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::Assignment {
+                target,
+                value,
+                result_target,
+                prelude,
+                conditional_value_temp,
+            } => {
+                assert!(prelude.is_empty());
+                assert!(result_target.is_some());
+                assert!(conditional_value_temp.is_some());
+                assert!(matches!(value.kind, ExprKind::NullCoalesce { .. }));
+                match &target.kind {
+                    ExprKind::ArrayAccess { index, .. } => {
+                        assert!(matches!(index.kind, ExprKind::Variable(ref name) if name == "i"));
+                    }
+                    other => panic!("expected array target, got {:?}", other),
+                }
+            }
+            other => panic!("expected assignment expression, got {:?}", other),
+        },
+        other => panic!("expected Echo, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_null_coalesce_assignment_expression_stabilizes_computed_mutated_index() {
+    let stmts = parse_source("<?php echo ($items[$i + 0] ??= ($i = 1));");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::Assignment {
+                target,
+                value,
+                result_target,
+                prelude,
+                conditional_value_temp,
+            } => {
+                assert_eq!(prelude.len(), 1);
+                assert!(result_target.is_some());
+                assert!(conditional_value_temp.is_some());
+                assert!(matches!(value.kind, ExprKind::NullCoalesce { .. }));
+                match &target.kind {
+                    ExprKind::ArrayAccess { index, .. } => {
+                        assert!(matches!(index.kind, ExprKind::Variable(_)));
+                    }
+                    other => panic!("expected stabilized array target, got {:?}", other),
                 }
             }
             other => panic!("expected assignment expression, got {:?}", other),

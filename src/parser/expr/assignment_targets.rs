@@ -51,6 +51,10 @@ impl AssignmentExpressionLowerer {
         self.bind_temp(value)
     }
 
+    pub(super) fn reserve_value_temp(&mut self) -> String {
+        self.next_temp_name()
+    }
+
     pub(super) fn finish(self) -> Vec<Stmt> {
         self.prelude
     }
@@ -156,11 +160,7 @@ impl AssignmentExpressionLowerer {
     }
 
     fn bind_temp(&mut self, value: Expr) -> Expr {
-        let name = format!(
-            "__elephc_assign_expr_{}_{}_{}",
-            self.span.line, self.span.col, self.next_temp
-        );
-        self.next_temp += 1;
+        let name = self.next_temp_name();
         self.prelude.push(Stmt::new(
             StmtKind::Assign {
                 name: name.clone(),
@@ -169,6 +169,15 @@ impl AssignmentExpressionLowerer {
             self.span,
         ));
         Expr::new(ExprKind::Variable(name), self.span)
+    }
+
+    fn next_temp_name(&mut self) -> String {
+        let name = format!(
+            "__elephc_assign_expr_{}_{}_{}",
+            self.span.line, self.span.col, self.next_temp
+        );
+        self.next_temp += 1;
+        name
     }
 }
 
@@ -290,7 +299,13 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
 
 fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> bool {
     match &expr.kind {
-        ExprKind::Assignment { target, value, prelude, result_target } => {
+        ExprKind::Assignment {
+            target,
+            value,
+            prelude,
+            result_target,
+            ..
+        } => {
             assignment_target_may_write_dependency(target, dependencies)
                 || expr_may_write_dependency(value, dependencies)
                 || prelude

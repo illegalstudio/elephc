@@ -517,11 +517,13 @@ fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             value,
             result_target,
             prelude,
+            conditional_value_temp,
         } => ExprKind::Assignment {
             target: Box::new(walk_expr(*target, pass)),
             value: Box::new(walk_expr(*value, pass)),
             result_target: result_target.map(|target| Box::new(walk_expr(*target, pass))),
             prelude: prelude.into_iter().map(|stmt| walk_stmt(stmt, pass)).collect(),
+            conditional_value_temp,
         },
         ExprKind::FunctionCall { name, args } => ExprKind::FunctionCall {
             name,

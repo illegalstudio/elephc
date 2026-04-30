@@ -219,16 +219,13 @@ pub(super) fn parse_expr_bp(
             let rhs = parse_expr_bp(tokens, pos, r_bp)?;
             if is_non_local_assignment_target(&lhs) {
                 let null_coalesce_assign = matches!(op, AssignmentOperator::NullCoalesce);
-                if null_coalesce_assign && assignment_value_may_mutate_target_dependency(&lhs, &rhs)
-                {
-                    return Err(CompileError::new(
-                        lhs.span,
-                        "Null coalescing assignment expression target must stay stable across the assigned value",
-                    ));
-                }
+                let needs_conditional_value_temp =
+                    null_coalesce_assign && assignment_value_may_mutate_target_dependency(&lhs, &rhs);
 
                 let mut lowerer = AssignmentExpressionLowerer::new(span);
                 let target = lowerer.stabilize_non_local_target(lhs, &rhs);
+                let conditional_value_temp = needs_conditional_value_temp
+                    .then(|| lowerer.reserve_value_temp());
                 let rhs = if null_coalesce_assign {
                     rhs
                 } else {
@@ -242,6 +239,7 @@ pub(super) fn parse_expr_bp(
                         value: Box::new(value),
                         result_target: Some(Box::new(target)),
                         prelude,
+                        conditional_value_temp,
                     },
                     span,
                 );
@@ -253,6 +251,7 @@ pub(super) fn parse_expr_bp(
                         value: Box::new(value),
                         result_target: None,
                         prelude: Vec::new(),
+                        conditional_value_temp: None,
                     },
                     span,
                 );

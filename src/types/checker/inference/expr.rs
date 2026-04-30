@@ -22,6 +22,7 @@ impl Checker {
                 value,
                 result_target,
                 prelude,
+                ..
             } => {
                 self.check_assignment_expression(
                     target,
@@ -485,6 +486,7 @@ impl Checker {
                 value,
                 result_target,
                 prelude,
+                ..
             } => {
                 let mut scoped_env = env.clone();
                 self.check_assignment_expression(

@@ -204,9 +204,20 @@ fn collect_assignment_expr_vars(expr: &Expr, ctx: &mut Context, sig: &FunctionSi
             value,
             result_target,
             prelude,
+            conditional_value_temp,
         } => {
             collect_local_vars(prelude, ctx, sig);
             collect_assignment_expr_vars(value, ctx, sig);
+            if let Some(temp_name) = conditional_value_temp {
+                if !ctx.variables.contains_key(temp_name) {
+                    let static_ty = infer_conditional_assignment_temp_type(value, sig, ctx);
+                    ctx.alloc_var_with_static_type(
+                        temp_name,
+                        static_ty.codegen_repr(),
+                        static_ty,
+                    );
+                }
+            }
             if let ExprKind::Variable(name) = &target.kind {
                 if !ctx.variables.contains_key(name) {
                     let static_ty = infer_local_type(value, sig, Some(ctx));
@@ -318,6 +329,17 @@ fn collect_assignment_expr_vars(expr: &Expr, ctx: &mut Context, sig: &FunctionSi
             }
         }
         _ => {}
+    }
+}
+
+fn infer_conditional_assignment_temp_type(
+    value: &Expr,
+    sig: &FunctionSig,
+    ctx: &Context,
+) -> PhpType {
+    match &value.kind {
+        ExprKind::NullCoalesce { default, .. } => infer_local_type(default, sig, Some(ctx)),
+        _ => infer_local_type(value, sig, Some(ctx)),
     }
 }
 

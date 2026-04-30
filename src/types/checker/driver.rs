@@ -553,6 +553,7 @@ impl Checker {
                 value,
                 result_target,
                 prelude,
+                ..
             } => {
                 Self::expr_contains_method_call(target)
                     || Self::expr_contains_method_call(value)

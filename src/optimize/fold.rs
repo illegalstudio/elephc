@@ -99,11 +99,13 @@ pub(super) fn fold_expr(expr: Expr) -> Expr {
             value,
             result_target,
             prelude,
+            conditional_value_temp,
         } => ExprKind::Assignment {
             target: Box::new(fold_expr(*target)),
             value: Box::new(fold_expr(*value)),
             result_target: result_target.map(|target| Box::new(fold_expr(*target))),
             prelude: fold_block(prelude),
+            conditional_value_temp,
         },
         ExprKind::PreIncrement(name) => ExprKind::PreIncrement(name),
         ExprKind::PostIncrement(name) => ExprKind::PostIncrement(name),

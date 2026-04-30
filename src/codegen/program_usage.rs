@@ -203,6 +203,7 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
             value,
             result_target,
             prelude,
+            ..
         } => {
             collect_required_class_names_in_body(prelude, names);
             collect_required_class_names_in_expr(target, names);
@@ -529,6 +530,7 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
             value,
             result_target,
             prelude,
+            ..
         } => {
             prelude.iter().any(|stmt| stmt_uses_variable(stmt, needle))
                 || expr_uses_variable(target, needle)

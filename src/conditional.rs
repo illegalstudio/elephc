@@ -372,11 +372,13 @@ fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
             value,
             result_target,
             prelude,
+            conditional_value_temp,
         } => ExprKind::Assignment {
             target: Box::new(rewrite_expr(*target, defines)),
             value: Box::new(rewrite_expr(*value, defines)),
             result_target: result_target.map(|target| Box::new(rewrite_expr(*target, defines))),
             prelude: apply_stmts(prelude, defines),
+            conditional_value_temp,
         },
         ExprKind::FunctionCall { name, args } => ExprKind::FunctionCall {
             name,

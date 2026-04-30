@@ -79,14 +79,6 @@ fn test_error_assignment_expression_rejects_non_lvalue() {
 }
 
 #[test]
-fn test_error_null_coalesce_assignment_expression_rejects_mutated_non_local_target_dependency() {
-    expect_error(
-        "<?php $items = [null, 2]; $i = 0; echo ($items[$i] ??= ($i = 1));",
-        "Null coalescing assignment expression target must stay stable across the assigned value",
-    );
-}
-
-#[test]
 fn test_error_short_circuit_assignment_effect_is_not_definite() {
     expect_error(
         "<?php echo false && ($x = 1); echo $x;",

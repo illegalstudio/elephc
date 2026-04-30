@@ -87,12 +87,14 @@ pub fn emit_expr(
             value,
             result_target,
             prelude,
+            conditional_value_temp,
         } => {
             assignment::emit_assignment_expr(
                 target,
                 value,
                 result_target.as_deref(),
                 prelude,
+                conditional_value_temp.as_deref(),
                 emitter,
                 ctx,
                 data,

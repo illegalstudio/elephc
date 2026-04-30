@@ -41,6 +41,7 @@ pub enum ExprKind {
         value: Box<Expr>,
         result_target: Option<Box<Expr>>,
         prelude: Vec<Stmt>,
+        conditional_value_temp: Option<String>,
     },
     PreIncrement(String),
     PostIncrement(String),

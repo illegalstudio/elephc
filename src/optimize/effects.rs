@@ -186,6 +186,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             value,
             result_target,
             prelude,
+            ..
         } => block_effect(prelude)
             .combine(expr_effect(target))
             .combine(expr_effect(value))
