@@ -18,6 +18,17 @@ pub(crate) use declarations::propagate_params;
 use declarations::{propagate_enum_case, propagate_method, propagate_property};
 use env::{env_after_list_unpack, env_after_scalar_assign};
 
+fn env_after_expr_side_effects(env: ConstantEnv, exprs: &[&Expr]) -> ConstantEnv {
+    if exprs
+        .iter()
+        .any(|expr| expr_effect(expr).has_side_effects)
+    {
+        HashMap::new()
+    } else {
+        env
+    }
+}
+
 pub(crate) fn propagate_block(body: Vec<Stmt>, mut env: ConstantEnv) -> (Vec<Stmt>, ConstantEnv) {
     let mut propagated = Vec::new();
     for stmt in body {
@@ -41,7 +52,8 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
         }
         StmtKind::Echo(expr) => {
             let expr = propagate_expr(expr, &env);
-            (Stmt::new(StmtKind::Echo(expr), span), env)
+            let next_env = env_after_expr_side_effects(env, &[&expr]);
+            (Stmt::new(StmtKind::Echo(expr), span), next_env)
         }
         StmtKind::Assign { name, value } => {
             let value = propagate_expr(value, &env);
@@ -93,7 +105,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
         } => {
             let index = propagate_expr(index, &env);
             let value = propagate_expr(value, &env);
-            let mut next_env = env;
+            let mut next_env = env_after_expr_side_effects(env, &[&index, &value]);
             next_env.remove(&array);
             (
                 Stmt::new(
@@ -109,7 +121,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
         }
         StmtKind::ArrayPush { array, value } => {
             let value = propagate_expr(value, &env);
-            let mut next_env = env;
+            let mut next_env = env_after_expr_side_effects(env, &[&value]);
             next_env.remove(&array);
             (
                 Stmt::new(StmtKind::ArrayPush { array, value }, span),
@@ -307,96 +319,125 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             object,
             property,
             value,
-        } => (
-            Stmt::new(
-                StmtKind::PropertyAssign {
-                    object: Box::new(propagate_expr(*object, &env)),
-                    property,
-                    value: propagate_expr(value, &env),
-                },
-                span,
-            ),
-            env,
-        ),
+        } => {
+            let object = propagate_expr(*object, &env);
+            let value = propagate_expr(value, &env);
+            let next_env = env_after_expr_side_effects(env, &[&object, &value]);
+            (
+                Stmt::new(
+                    StmtKind::PropertyAssign {
+                        object: Box::new(object),
+                        property,
+                        value,
+                    },
+                    span,
+                ),
+                next_env,
+            )
+        }
         StmtKind::StaticPropertyAssign {
             receiver,
             property,
             value,
-        } => (
-            Stmt::new(
-                StmtKind::StaticPropertyAssign {
-                    receiver,
-                    property,
-                    value: propagate_expr(value, &env),
-                },
-                span,
-            ),
-            env,
-        ),
+        } => {
+            let value = propagate_expr(value, &env);
+            let next_env = env_after_expr_side_effects(env, &[&value]);
+            (
+                Stmt::new(
+                    StmtKind::StaticPropertyAssign {
+                        receiver,
+                        property,
+                        value,
+                    },
+                    span,
+                ),
+                next_env,
+            )
+        }
         StmtKind::StaticPropertyArrayPush {
             receiver,
             property,
             value,
-        } => (
-            Stmt::new(
-                StmtKind::StaticPropertyArrayPush {
-                    receiver,
-                    property,
-                    value: propagate_expr(value, &env),
-                },
-                span,
-            ),
-            env,
-        ),
+        } => {
+            let value = propagate_expr(value, &env);
+            let next_env = env_after_expr_side_effects(env, &[&value]);
+            (
+                Stmt::new(
+                    StmtKind::StaticPropertyArrayPush {
+                        receiver,
+                        property,
+                        value,
+                    },
+                    span,
+                ),
+                next_env,
+            )
+        }
         StmtKind::StaticPropertyArrayAssign {
             receiver,
             property,
             index,
             value,
-        } => (
-            Stmt::new(
-                StmtKind::StaticPropertyArrayAssign {
-                    receiver,
-                    property,
-                    index: propagate_expr(index, &env),
-                    value: propagate_expr(value, &env),
-                },
-                span,
-            ),
-            env,
-        ),
+        } => {
+            let index = propagate_expr(index, &env);
+            let value = propagate_expr(value, &env);
+            let next_env = env_after_expr_side_effects(env, &[&index, &value]);
+            (
+                Stmt::new(
+                    StmtKind::StaticPropertyArrayAssign {
+                        receiver,
+                        property,
+                        index,
+                        value,
+                    },
+                    span,
+                ),
+                next_env,
+            )
+        }
         StmtKind::PropertyArrayPush {
             object,
             property,
             value,
-        } => (
-            Stmt::new(
-                StmtKind::PropertyArrayPush {
-                    object: Box::new(propagate_expr(*object, &env)),
-                    property,
-                    value: propagate_expr(value, &env),
-                },
-                span,
-            ),
-            env,
-        ),
+        } => {
+            let object = propagate_expr(*object, &env);
+            let value = propagate_expr(value, &env);
+            let next_env = env_after_expr_side_effects(env, &[&object, &value]);
+            (
+                Stmt::new(
+                    StmtKind::PropertyArrayPush {
+                        object: Box::new(object),
+                        property,
+                        value,
+                    },
+                    span,
+                ),
+                next_env,
+            )
+        }
         StmtKind::PropertyArrayAssign {
             object,
             property,
             index,
             value,
-        } => (
-            Stmt::new(
-                StmtKind::PropertyArrayAssign {
-                    object: Box::new(propagate_expr(*object, &env)),
-                    property,
-                    index: propagate_expr(index, &env),
-                    value: propagate_expr(value, &env),
-                },
-                span,
-            ),
-            env,
-        ),
+        } => {
+            let object = propagate_expr(*object, &env);
+            let index = propagate_expr(index, &env);
+            let value = propagate_expr(value, &env);
+            let next_env = env_after_expr_side_effects(env, &[&object, &index, &value]);
+            (
+                Stmt::new(
+                    StmtKind::PropertyArrayAssign {
+                        object: Box::new(object),
+                        property,
+                        index,
+                        value,
+                    },
+                    span,
+                ),
+                next_env,
+            )
+        }
         StmtKind::ExternFunctionDecl {
             name,
             params,

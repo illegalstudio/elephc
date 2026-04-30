@@ -512,6 +512,10 @@ fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             value: Box::new(walk_expr(*value, pass)),
             default: Box::new(walk_expr(*default, pass)),
         },
+        ExprKind::Assignment { target, value } => ExprKind::Assignment {
+            target: Box::new(walk_expr(*target, pass)),
+            value: Box::new(walk_expr(*value, pass)),
+        },
         ExprKind::FunctionCall { name, args } => ExprKind::FunctionCall {
             name,
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),

@@ -29,6 +29,12 @@ pub(super) fn collect_expr_reads(
             collect_expr_reads(value, scope, warnings);
             collect_expr_reads(default, scope, warnings);
         }
+        ExprKind::Assignment { target, value } => {
+            if !matches!(target.kind, ExprKind::Variable(_)) {
+                collect_expr_reads(target, scope, warnings);
+            }
+            collect_expr_reads(value, scope, warnings);
+        }
         ExprKind::PreIncrement(name)
         | ExprKind::PostIncrement(name)
         | ExprKind::PreDecrement(name)

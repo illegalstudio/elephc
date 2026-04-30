@@ -288,6 +288,7 @@ pub(super) fn infer_local_type(
             let right = infer_local_type(default, sig, ctx);
             wider_of(&left, &right)
         }
+        ExprKind::Assignment { value, .. } => infer_local_type(value, sig, ctx),
         ExprKind::Ternary {
             then_expr,
             else_expr,

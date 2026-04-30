@@ -281,6 +281,15 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
             expr_local_writes(value)?,
             expr_local_writes(default)?,
         ]),
+        ExprKind::Assignment { target, value } => {
+            let mut writes = expr_local_writes(value)?;
+            if let ExprKind::Variable(name) = &target.kind {
+                writes.insert(name.clone());
+            } else {
+                writes.extend(expr_local_writes(target)?);
+            }
+            Some(writes)
+        }
         ExprKind::ArrayLiteral(items) => items.iter().try_fold(HashSet::new(), |mut acc, item| {
             acc.extend(expr_local_writes(item)?);
             Some(acc)

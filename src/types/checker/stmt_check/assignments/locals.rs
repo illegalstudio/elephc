@@ -66,13 +66,18 @@ pub(super) fn check_assign(
     let null_coalesce_default = null_coalesce_assignment_default(name, value);
     let ty = if let Some(default) = null_coalesce_default {
         if let Some(existing) = env.get(name).cloned() {
-            let default_ty = checker.infer_type(default, env)?;
+            let default_ty = if existing == PhpType::Void {
+                checker.infer_type_with_assignment_effects(default, env)?
+            } else {
+                let mut default_env = env.clone();
+                checker.infer_type_with_assignment_effects(default, &mut default_env)?
+            };
             null_coalesce_assignment_type(checker, name, &existing, &default_ty, default, span)?
         } else {
-            checker.infer_type(value, env)?
+            checker.infer_type_with_assignment_effects(value, env)?
         }
     } else {
-        checker.infer_type(value, env)?
+        checker.infer_type_with_assignment_effects(value, env)?
     };
     let callable_source = if let Some(default) = null_coalesce_default {
         if matches!(env.get(name), Some(existing) if *existing == PhpType::Void) {
@@ -85,6 +90,21 @@ pub(super) fn check_assign(
     };
     update_callable_assignment_metadata(checker, name, callable_source, &ty, env)?;
     merge_local_assignment_type(checker, name, &ty, span, env)
+}
+
+impl Checker {
+    pub(crate) fn check_local_assignment_expression(
+        &mut self,
+        name: &str,
+        value: &Expr,
+        span: Span,
+        env: &mut TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        check_assign(self, name, value, span, env)?;
+        env.get(name).cloned().ok_or_else(|| {
+            CompileError::new(span, &format!("Undefined variable: ${}", name))
+        })
+    }
 }
 
 fn update_callable_assignment_metadata(

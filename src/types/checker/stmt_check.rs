@@ -26,7 +26,7 @@ impl Checker {
                 "Unresolved namespace/use statement",
             )),
             StmtKind::Echo(expr) => {
-                self.infer_type(expr, env)?;
+                self.infer_type_with_assignment_effects(expr, env)?;
                 Ok(())
             }
             StmtKind::Assign { .. }
@@ -58,13 +58,13 @@ impl Checker {
             StmtKind::Break(levels) => self.check_loop_exit(stmt.span, "break", *levels),
             StmtKind::Continue(levels) => self.check_loop_exit(stmt.span, "continue", *levels),
             StmtKind::ExprStmt(expr) => {
-                self.infer_type(expr, env)?;
+                self.infer_type_with_assignment_effects(expr, env)?;
                 Ok(())
             }
             StmtKind::FunctionDecl { .. } => Ok(()),
             StmtKind::Return(expr) => {
                 if let Some(e) = expr {
-                    self.infer_type(e, env)?;
+                    self.infer_type_with_assignment_effects(e, env)?;
                 }
                 Ok(())
             }

@@ -20,7 +20,7 @@ pub(super) fn check_static_property_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let val_ty = checker.infer_type(value, env)?;
+    let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
 
     if target.property_has_declared_type {
@@ -51,7 +51,7 @@ pub(super) fn check_static_property_array_push(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let val_ty = checker.infer_type(value, env)?;
+    let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
     let updated_prop_ty = match target.prop_ty {
         PhpType::Array(elem_ty) => {
@@ -109,8 +109,8 @@ pub(super) fn check_static_property_array_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let idx_ty = checker.infer_type(index, env)?;
-    let val_ty = checker.infer_type(value, env)?;
+    let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
+    let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
     if idx_ty != PhpType::Int {
         return Err(CompileError::new(span, "Array index must be integer"));

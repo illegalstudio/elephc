@@ -17,7 +17,7 @@ impl Checker {
                 value_var,
                 body,
             } => {
-                let arr_ty = self.infer_type(array, env)?;
+                let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
                 if let PhpType::Array(elem_ty) = &arr_ty {
                     if let Some(k) = key_var {
                         env.insert(k.clone(), PhpType::Int);
@@ -48,11 +48,11 @@ impl Checker {
                 cases,
                 default,
             } => {
-                self.infer_type(subject, env)?;
+                self.infer_type_with_assignment_effects(subject, env)?;
                 let mut errors = Vec::new();
                 for (values, _) in cases {
                     for v in values {
-                        self.infer_type(v, env)?;
+                        self.infer_type_with_assignment_effects(v, env)?;
                     }
                 }
                 self.break_continue_depth += 1;
@@ -75,7 +75,7 @@ impl Checker {
                 elseif_clauses,
                 else_body,
             } => {
-                self.infer_type(condition, env)?;
+                self.infer_type_with_assignment_effects(condition, env)?;
                 let mut errors = Vec::new();
                 for s in then_body {
                     if let Err(error) = self.check_stmt(s, env) {
@@ -83,7 +83,7 @@ impl Checker {
                     }
                 }
                 for (cond, body) in elseif_clauses {
-                    self.infer_type(cond, env)?;
+                    self.infer_type_with_assignment_effects(cond, env)?;
                     for s in body {
                         if let Err(error) = self.check_stmt(s, env) {
                             errors.extend(error.flatten());
@@ -105,7 +105,7 @@ impl Checker {
             }
             StmtKind::DoWhile { body, condition } => {
                 let errors = self.check_break_continue_target_body(body, env);
-                self.infer_type(condition, env)?;
+                self.infer_type_with_assignment_effects(condition, env)?;
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -113,7 +113,7 @@ impl Checker {
                 }
             }
             StmtKind::While { condition, body } => {
-                self.infer_type(condition, env)?;
+                self.infer_type_with_assignment_effects(condition, env)?;
                 let errors = self.check_break_continue_target_body(body, env);
                 if errors.is_empty() {
                     Ok(())
@@ -131,7 +131,7 @@ impl Checker {
                     self.check_stmt(s, env)?;
                 }
                 if let Some(c) = condition {
-                    self.infer_type(c, env)?;
+                    self.infer_type_with_assignment_effects(c, env)?;
                 }
                 if let Some(s) = update {
                     self.check_stmt(s, env)?;
@@ -144,7 +144,7 @@ impl Checker {
                 }
             }
             StmtKind::Throw(expr) => {
-                let thrown_ty = self.infer_type(expr, env)?;
+                let thrown_ty = self.infer_type_with_assignment_effects(expr, env)?;
                 match thrown_ty {
                     PhpType::Object(type_name)
                         if self.object_type_implements_throwable(&type_name) =>

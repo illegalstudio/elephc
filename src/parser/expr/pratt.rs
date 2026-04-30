@@ -200,6 +200,34 @@ pub(super) fn parse_expr_bp(
             continue;
         }
 
+        if let Some((op, l_bp, r_bp)) = assignment_bp(&tokens[*pos].0) {
+            if l_bp < min_bp {
+                break;
+            }
+
+            if !matches!(&lhs.kind, ExprKind::Variable(_)) {
+                let message = if is_non_local_assignment_target(&lhs) {
+                    "Assignment expressions currently support variable targets only"
+                } else {
+                    "Invalid assignment target"
+                };
+                return Err(CompileError::new(lhs.span, message));
+            }
+
+            let span = tokens[*pos].1;
+            *pos += 1;
+            let rhs = parse_expr_bp(tokens, pos, r_bp)?;
+            let value = assignment_value(lhs.clone(), op, rhs, span);
+            lhs = Expr::new(
+                ExprKind::Assignment {
+                    target: Box::new(lhs),
+                    value: Box::new(value),
+                },
+                span,
+            );
+            continue;
+        }
+
         let (op, l_bp, r_bp) = match infix_bp(&tokens[*pos].0) {
             Some(binding) => binding,
             None => break,
@@ -233,6 +261,64 @@ pub(super) fn parse_expr_bp(
     }
 
     Ok(lhs)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum AssignmentOperator {
+    Assign,
+    Compound(BinOp),
+    NullCoalesce,
+}
+
+fn assignment_bp(token: &Token) -> Option<(AssignmentOperator, u8, u8)> {
+    let op = match token {
+        Token::Assign => AssignmentOperator::Assign,
+        Token::PlusAssign => AssignmentOperator::Compound(BinOp::Add),
+        Token::MinusAssign => AssignmentOperator::Compound(BinOp::Sub),
+        Token::StarAssign => AssignmentOperator::Compound(BinOp::Mul),
+        Token::StarStarAssign => AssignmentOperator::Compound(BinOp::Pow),
+        Token::SlashAssign => AssignmentOperator::Compound(BinOp::Div),
+        Token::PercentAssign => AssignmentOperator::Compound(BinOp::Mod),
+        Token::DotAssign => AssignmentOperator::Compound(BinOp::Concat),
+        Token::AmpAssign => AssignmentOperator::Compound(BinOp::BitAnd),
+        Token::PipeAssign => AssignmentOperator::Compound(BinOp::BitOr),
+        Token::CaretAssign => AssignmentOperator::Compound(BinOp::BitXor),
+        Token::LessLessAssign => AssignmentOperator::Compound(BinOp::ShiftLeft),
+        Token::GreaterGreaterAssign => AssignmentOperator::Compound(BinOp::ShiftRight),
+        Token::QuestionQuestionAssign => AssignmentOperator::NullCoalesce,
+        _ => return None,
+    };
+    Some((op, 7, 6))
+}
+
+fn assignment_value(target: Expr, op: AssignmentOperator, rhs: Expr, span: Span) -> Expr {
+    match op {
+        AssignmentOperator::Assign => rhs,
+        AssignmentOperator::Compound(op) => Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(target),
+                op,
+                right: Box::new(rhs),
+            },
+            span,
+        ),
+        AssignmentOperator::NullCoalesce => Expr::new(
+            ExprKind::NullCoalesce {
+                value: Box::new(target),
+                default: Box::new(rhs),
+            },
+            span,
+        ),
+    }
+}
+
+fn is_non_local_assignment_target(expr: &Expr) -> bool {
+    matches!(
+        &expr.kind,
+        ExprKind::ArrayAccess { .. }
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+    )
 }
 
 fn parse_instanceof_target(

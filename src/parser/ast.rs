@@ -36,6 +36,10 @@ pub enum ExprKind {
         value: Box<Expr>,
         default: Box<Expr>,
     },
+    Assignment {
+        target: Box<Expr>,
+        value: Box<Expr>,
+    },
     PreIncrement(String),
     PostIncrement(String),
     PreDecrement(String),

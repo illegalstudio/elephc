@@ -1,7 +1,7 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
-use crate::parser::expr::parse_assignment_value_expr;
+use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
 
 use super::super::expect_semicolon;
@@ -18,6 +18,7 @@ pub(super) fn parse_assign(
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
+    let start = *pos;
     let name = match &tokens[*pos].0 {
         Token::Variable(n) => n.clone(),
         _ => unreachable!(),
@@ -33,6 +34,15 @@ pub(super) fn parse_assign(
     *pos += 1;
 
     let rhs = parse_assignment_value_expr(tokens, pos)?;
+    if matches!(
+        tokens.get(*pos).map(|(token, _)| token),
+        Some(Token::And | Token::Or | Token::Xor)
+    ) {
+        *pos = start;
+        let expr = parse_expr(tokens, pos)?;
+        expect_semicolon(tokens, pos)?;
+        return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
+    }
     expect_semicolon(tokens, pos)?;
 
     let target = Expr::new(ExprKind::Variable(name.clone()), span);

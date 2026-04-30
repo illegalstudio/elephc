@@ -8,6 +8,13 @@ pub(crate) fn captured_constant_env(captures: &[String], env: &ConstantEnv) -> C
 }
 
 pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
+    let empty_env;
+    let env = if expr_local_writes(&expr).is_some_and(|writes| !writes.is_empty()) {
+        empty_env = HashMap::new();
+        &empty_env
+    } else {
+        env
+    };
     let span = expr.span;
     let kind = match expr.kind {
         ExprKind::StringLiteral(value) => ExprKind::StringLiteral(value),
@@ -39,6 +46,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
             value: Box::new(propagate_expr(*value, env)),
             default: Box::new(propagate_expr(*default, env)),
+        },
+        ExprKind::Assignment { target, value } => ExprKind::Assignment {
+            target,
+            value: Box::new(propagate_expr(*value, env)),
         },
         ExprKind::PreIncrement(name) => ExprKind::PreIncrement(name),
         ExprKind::PostIncrement(name) => ExprKind::PostIncrement(name),

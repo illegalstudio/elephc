@@ -17,8 +17,8 @@ pub(super) fn check_array_assign(
         .get(array)
         .cloned()
         .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
-    checker.infer_type(index, env)?;
-    let val_ty = checker.infer_type(value, env)?;
+    let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
+    let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     if arr_ty == PhpType::Str {
         return Err(CompileError::new(
             span,
@@ -39,7 +39,7 @@ pub(super) fn check_array_assign(
     {
         let merged_key = merge_array_key_types(
             *key.clone(),
-            normalized_array_key_type(index, checker.infer_type(index, env)?),
+            normalized_array_key_type(index, idx_ty),
         );
         let merged_value = if **existing_value == val_ty {
             *existing_value.clone()
@@ -54,7 +54,7 @@ pub(super) fn check_array_assign(
             },
         );
     } else if let PhpType::Buffer(elem_ty) = &arr_ty {
-        if !matches!(checker.infer_type(index, env)?, PhpType::Int) {
+        if !matches!(idx_ty, PhpType::Int) {
             return Err(CompileError::new(span, "Buffer index must be integer"));
         }
         match elem_ty.as_ref() {
@@ -90,7 +90,7 @@ pub(super) fn check_array_push(
         .get(array)
         .cloned()
         .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
-    let val_ty = checker.infer_type(value, env)?;
+    let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     if let PhpType::Array(elem_ty) = &arr_ty {
         if **elem_ty != val_ty {
             let merged_ty = checker

@@ -13,8 +13,8 @@ pub(super) fn check_property_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let obj_ty = checker.infer_type(object, env)?;
-    let val_ty = checker.infer_type(value, env)?;
+    let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
+    let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     if let PhpType::Object(class_name) = &obj_ty {
         check_object_property_write(checker, object, class_name, property, value, &val_ty, span)?;
         refine_object_property_type(checker, class_name, property, &val_ty);
@@ -33,8 +33,8 @@ pub(super) fn check_property_array_push(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let obj_ty = checker.infer_type(object, env)?;
-    let val_ty = checker.infer_type(value, env)?;
+    let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
+    let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     match &obj_ty {
         PhpType::Object(class_name) => {
             let (prop_ty, property_has_declared_type) =
@@ -87,9 +87,9 @@ pub(super) fn check_property_array_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let obj_ty = checker.infer_type(object, env)?;
-    let idx_ty = checker.infer_type(index, env)?;
-    let val_ty = checker.infer_type(value, env)?;
+    let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
+    let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
+    let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     match &obj_ty {
         PhpType::Object(class_name) => {
             let (prop_ty, property_has_declared_type) =
