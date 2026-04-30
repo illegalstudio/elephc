@@ -212,7 +212,7 @@ fn collect_straight_line_direct_assignments(
             StmtKind::Assign { name, value } => {
                 assignments.insert(name.clone(), infer_local_type(value, sig, Some(ctx)));
             }
-            StmtKind::Return(_) | StmtKind::Break | StmtKind::Continue => {
+            StmtKind::Return(_) | StmtKind::Break(_) | StmtKind::Continue(_) => {
                 may_fall_through = false;
             }
             _ => {}

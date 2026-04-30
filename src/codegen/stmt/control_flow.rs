@@ -73,8 +73,8 @@ pub(super) fn emit_for_stmt(
     loops::emit_for_stmt(init, condition, update, body, emitter, ctx, data)
 }
 
-pub(super) fn emit_break_stmt(emitter: &mut Emitter, ctx: &Context) {
-    loops::emit_break_stmt(emitter, ctx)
+pub(super) fn emit_break_stmt(levels: usize, emitter: &mut Emitter, ctx: &Context) {
+    loops::emit_break_stmt(levels, emitter, ctx)
 }
 
 pub(super) fn emit_branch_through_finally(emitter: &mut Emitter, ctx: &Context, target_label: &str) {
@@ -110,8 +110,8 @@ pub(super) fn emit_try_stmt(
     exceptions::emit_try_stmt(try_body, catches, finally_body, emitter, ctx, data)
 }
 
-pub(super) fn emit_continue_stmt(emitter: &mut Emitter, ctx: &Context) {
-    loops::emit_continue_stmt(emitter, ctx)
+pub(super) fn emit_continue_stmt(levels: usize, emitter: &mut Emitter, ctx: &Context) {
+    loops::emit_continue_stmt(levels, emitter, ctx)
 }
 
 pub(super) fn emit_switch_stmt(

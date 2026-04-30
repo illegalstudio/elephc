@@ -64,6 +64,82 @@ fn test_while_continue() {
     assert_eq!(out, "1245");
 }
 
+#[test]
+fn test_multilevel_break_exits_nested_loops() {
+    let out = compile_and_run(
+        r#"<?php
+for ($i = 0; $i < 3; $i++) {
+    echo "i" . $i . ":";
+    for ($j = 0; $j < 3; $j++) {
+        if ($i == 1) { break 2; }
+        echo $j;
+    }
+}
+echo "end";
+"#,
+    );
+    assert_eq!(out, "i0:012i1:end");
+}
+
+#[test]
+fn test_multilevel_continue_targets_outer_loop_update() {
+    let out = compile_and_run(
+        r#"<?php
+for ($i = 0; $i < 3; $i++) {
+    echo "i" . $i . ":";
+    for ($j = 0; $j < 3; $j++) {
+        if ($j == 1) { continue 2; }
+        echo $j;
+    }
+    echo "x";
+}
+echo "end";
+"#,
+    );
+    assert_eq!(out, "i0:0i1:0i2:0end");
+}
+
+#[test]
+fn test_multilevel_continue_from_switch_targets_outer_loop() {
+    let out = compile_and_run(
+        r#"<?php
+for ($i = 0; $i < 3; $i++) {
+    echo "a";
+    switch ($i) {
+        case 1:
+            echo "b";
+            continue 2;
+        default:
+            echo "c";
+    }
+    echo "d";
+}
+"#,
+    );
+    assert_eq!(out, "acdabacd");
+}
+
+#[test]
+fn test_multilevel_break_through_finally_runs_finally_once() {
+    let out = compile_and_run(
+        r#"<?php
+for ($i = 0; $i < 2; $i++) {
+    for ($j = 0; $j < 2; $j++) {
+        try {
+            echo "t";
+            break 2;
+        } finally {
+            echo "f";
+        }
+    }
+    echo "x";
+}
+echo "e";
+"#,
+    );
+    assert_eq!(out, "tfe");
+}
+
 // --- for ---
 
 #[test]

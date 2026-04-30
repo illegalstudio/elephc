@@ -11,7 +11,7 @@ fn test_propagate_constants_uses_known_switch_subject_for_merge() {
                     vec![Expr::int_lit(1)],
                     vec![
                         Stmt::assign("base", Expr::int_lit(2)),
-                        Stmt::new(StmtKind::Break, Span::dummy()),
+                        Stmt::new(StmtKind::Break(1), Span::dummy()),
                     ],
                 )],
                 default: Some(vec![Stmt::assign("base", Expr::int_lit(9))]),
@@ -69,7 +69,7 @@ fn test_propagate_constants_tracks_assignment_through_for_infinite_break() {
                 update: None,
                 body: vec![
                     Stmt::assign("base", Expr::int_lit(2)),
-                    Stmt::new(StmtKind::Break, Span::dummy()),
+                    Stmt::new(StmtKind::Break(1), Span::dummy()),
                 ],
             },
             Span::dummy(),

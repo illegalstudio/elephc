@@ -72,12 +72,20 @@ fn simulate_loop_block_constant_paths_from(
 
 fn simulate_loop_stmt_constant_paths(stmt: &Stmt, env: ConstantEnv) -> ConstantLoopPathSummary {
     match &stmt.kind {
-        StmtKind::Break => ConstantLoopPathSummary {
+        StmtKind::Break(1) => ConstantLoopPathSummary {
             break_paths: vec![env],
             ..ConstantLoopPathSummary::default()
         },
-        StmtKind::Continue => ConstantLoopPathSummary {
+        StmtKind::Break(_) => ConstantLoopPathSummary {
+            exits_current_block: true,
+            ..ConstantLoopPathSummary::default()
+        },
+        StmtKind::Continue(1) => ConstantLoopPathSummary {
             continue_paths: vec![env],
+            ..ConstantLoopPathSummary::default()
+        },
+        StmtKind::Continue(_) => ConstantLoopPathSummary {
+            exits_current_block: true,
             ..ConstantLoopPathSummary::default()
         },
         StmtKind::Return(_) | StmtKind::Throw(_) => ConstantLoopPathSummary {

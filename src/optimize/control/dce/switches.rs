@@ -263,7 +263,7 @@ fn dce_switch_cases_with_guards(
     guards: &GuardState,
 ) -> Vec<(Vec<Expr>, Vec<Stmt>)> {
     let trim_switch_noop_break = |body: Vec<Stmt>| {
-        if body.len() == 1 && matches!(body[0].kind, StmtKind::Break) {
+        if body.len() == 1 && matches!(body[0].kind, StmtKind::Break(1)) {
             Vec::new()
         } else {
             body
@@ -319,6 +319,17 @@ pub(super) fn dce_switch_stmt(
     }
     let default = normalize_optional_block(default.map(|body| dce_block_with_guards(body, guards.clone())));
 
+    if switch_has_level_sensitive_loop_exit(&cases, &default) {
+        return vec![Stmt::new(
+            StmtKind::Switch {
+                subject,
+                cases,
+                default,
+            },
+            span,
+        )];
+    }
+
     if cases.iter().all(|(_, body)| body.is_empty()) && default.is_none() {
         return expr_to_effect_stmt(subject);
     }
@@ -364,6 +375,12 @@ pub(super) fn dce_switch_stmt_with_tail(
         cases.pop();
     }
     let mut default = normalize_optional_block(default.map(|body| dce_block_with_guards(body, guards.clone())));
+
+    if switch_has_level_sensitive_loop_exit(&cases, &default) {
+        let mut stmts = dce_switch_stmt(subject, cases, default, span, guards);
+        stmts.extend(tail);
+        return stmts;
+    }
 
     if tail.is_empty() {
         return dce_switch_stmt(subject, cases, default, span, guards);

@@ -84,6 +84,48 @@ fn test_error_short_ternary_missing_default() {
 }
 
 #[test]
+fn test_error_break_outside_loop_or_switch() {
+    expect_error("<?php break;", "Cannot 'break' 1 levels");
+}
+
+#[test]
+fn test_error_break_too_many_levels() {
+    expect_error("<?php while (1) { break 2; }", "Cannot 'break' 2 levels");
+}
+
+#[test]
+fn test_error_continue_too_many_levels() {
+    expect_error(
+        "<?php while (1) { continue 2; }",
+        "Cannot 'continue' 2 levels",
+    );
+}
+
+#[test]
+fn test_error_break_cannot_jump_out_of_finally() {
+    expect_error(
+        "<?php while (1) { try { echo 1; } finally { break; } }",
+        "Cannot jump out of a finally block",
+    );
+}
+
+#[test]
+fn test_error_continue_cannot_jump_out_of_finally() {
+    expect_error(
+        "<?php while (1) { try { echo 1; } finally { continue; } }",
+        "Cannot jump out of a finally block",
+    );
+}
+
+#[test]
+fn test_error_multilevel_break_cannot_jump_out_of_finally() {
+    expect_error(
+        "<?php while (1) { try { echo 1; } finally { while (1) { break 2; } } }",
+        "Cannot jump out of a finally block",
+    );
+}
+
+#[test]
 fn test_error_undefined_function() {
     expect_error("<?php nope();", "Undefined function: nope");
 }

@@ -23,7 +23,7 @@ fn test_build_switch_cfg_tracks_case_successors() {
         (vec![Expr::int_lit(1)], Vec::new()),
         (
             vec![Expr::int_lit(2)],
-            vec![Stmt::new(StmtKind::Break, Span::dummy())],
+            vec![Stmt::new(StmtKind::Break(1), Span::dummy())],
         ),
     ];
     let default = Some(vec![Stmt::echo(Expr::int_lit(9))]);
@@ -76,7 +76,7 @@ fn test_collect_reachable_switch_cfg_blocks_follows_only_reachable_suffix() {
     let cases = vec![
         (
             vec![Expr::int_lit(1)],
-            vec![Stmt::new(StmtKind::Break, Span::dummy())],
+            vec![Stmt::new(StmtKind::Break(1), Span::dummy())],
         ),
         (vec![Expr::int_lit(2)], vec![Stmt::echo(Expr::int_lit(8))]),
     ];
@@ -93,7 +93,7 @@ fn test_switch_tail_reachability_tracks_break_and_fallthrough_paths() {
     let cases = vec![
         (
             vec![Expr::int_lit(1)],
-            vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+            vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())],
         ),
         (vec![Expr::int_lit(2)], vec![Stmt::echo(Expr::int_lit(8))]),
     ];
@@ -115,7 +115,7 @@ fn test_switch_tail_reachability_marks_mixed_break_paths_unknown() {
         vec![Stmt::new(
             StmtKind::If {
                 condition: Expr::var("flag"),
-                then_body: vec![Stmt::new(StmtKind::Break, Span::dummy())],
+                then_body: vec![Stmt::new(StmtKind::Break(1), Span::dummy())],
                 elseif_clauses: Vec::new(),
                 else_body: Some(vec![Stmt::new(
                     StmtKind::Return(Some(Expr::int_lit(7))),
@@ -264,7 +264,7 @@ fn test_build_try_cfg_tracks_try_catch_and_finally_successors() {
         crate::parser::ast::CatchClause {
             exception_types: vec!["Exception".into()],
             variable: Some("e".into()),
-            body: vec![Stmt::new(StmtKind::Break, Span::dummy())],
+            body: vec![Stmt::new(StmtKind::Break(1), Span::dummy())],
         },
         crate::parser::ast::CatchClause {
             exception_types: vec!["RuntimeException".into()],

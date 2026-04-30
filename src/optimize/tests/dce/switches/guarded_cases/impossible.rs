@@ -39,7 +39,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_switch_bool_guard_case(
                                 },
                                 Span::dummy(),
                             ),
-                            Stmt::new(StmtKind::Break, Span::dummy()),
+                            Stmt::new(StmtKind::Break(1), Span::dummy()),
                         ],
                     )],
                     default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
@@ -60,7 +60,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_switch_bool_guard_case(
     };
     assert_eq!(
         cases[0].1,
-        vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())]
+        vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())]
     );
     assert_eq!(default, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
 }
@@ -262,7 +262,7 @@ fn test_eliminate_dead_code_invalidates_switch_bool_guard_after_local_write() {
                                 },
                                 Span::dummy(),
                             ),
-                            Stmt::new(StmtKind::Break, Span::dummy()),
+                            Stmt::new(StmtKind::Break(1), Span::dummy()),
                         ],
                     )],
                     default: None,

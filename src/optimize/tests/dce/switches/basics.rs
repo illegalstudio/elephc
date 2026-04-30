@@ -29,7 +29,7 @@ fn test_eliminate_dead_code_drops_empty_switch_shell_created_by_branch_dce() {
                         vec![Expr::int_lit(1)],
                         vec![
                             Stmt::new(StmtKind::ExprStmt(pure_builtin), Span::dummy()),
-                            Stmt::new(StmtKind::Break, Span::dummy()),
+                            Stmt::new(StmtKind::Break(1), Span::dummy()),
                         ],
                     )],
                     default: None,

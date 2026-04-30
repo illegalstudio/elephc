@@ -16,14 +16,14 @@ fn test_eliminate_dead_code_drops_switch_case_shadowed_by_terminating_duplicate_
                             vec![Expr::int_lit(1)],
                             vec![
                                 Stmt::echo(Expr::int_lit(7)),
-                                Stmt::new(StmtKind::Break, Span::dummy()),
+                                Stmt::new(StmtKind::Break(1), Span::dummy()),
                             ],
                         ),
                         (
                             vec![Expr::int_lit(1)],
                             vec![
                                 Stmt::echo(Expr::int_lit(8)),
-                                Stmt::new(StmtKind::Break, Span::dummy()),
+                                Stmt::new(StmtKind::Break(1), Span::dummy()),
                             ],
                         ),
                     ],
@@ -49,7 +49,7 @@ fn test_eliminate_dead_code_drops_switch_case_shadowed_by_terminating_duplicate_
         cases[0].1,
         vec![
             Stmt::echo(Expr::int_lit(7)),
-            Stmt::new(StmtKind::Break, Span::dummy()),
+            Stmt::new(StmtKind::Break(1), Span::dummy()),
         ]
     );
     assert_eq!(default, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
@@ -72,7 +72,7 @@ fn test_eliminate_dead_code_merges_fallthrough_body_from_fully_shadowed_switch_c
                             vec![Expr::int_lit(1)],
                             vec![
                                 Stmt::echo(Expr::int_lit(8)),
-                                Stmt::new(StmtKind::Break, Span::dummy()),
+                                Stmt::new(StmtKind::Break(1), Span::dummy()),
                             ],
                         ),
                     ],
@@ -99,7 +99,7 @@ fn test_eliminate_dead_code_merges_fallthrough_body_from_fully_shadowed_switch_c
         vec![
             Stmt::echo(Expr::int_lit(7)),
             Stmt::echo(Expr::int_lit(8)),
-            Stmt::new(StmtKind::Break, Span::dummy()),
+            Stmt::new(StmtKind::Break(1), Span::dummy()),
         ]
     );
     assert_eq!(default, &None);
@@ -134,7 +134,7 @@ fn test_eliminate_dead_code_prunes_dead_label_inside_live_mixed_switch_case() {
                                             vec![Expr::int_lit(0)],
                                             vec![
                                                 Stmt::echo(Expr::int_lit(7)),
-                                                Stmt::new(StmtKind::Break, Span::dummy()),
+                                                Stmt::new(StmtKind::Break(1), Span::dummy()),
                                             ],
                                         ),
                                         (

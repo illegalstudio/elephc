@@ -212,7 +212,7 @@ fn test_program_function_effects_merge_callable_aliases_across_switch_paths() {
                                         },
                                         Span::dummy(),
                                     ),
-                                    Stmt::new(StmtKind::Break, Span::dummy()),
+                                    Stmt::new(StmtKind::Break(1), Span::dummy()),
                                 ],
                             ),
                             (vec![Expr::int_lit(2)], Vec::new()),

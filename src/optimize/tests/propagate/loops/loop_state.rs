@@ -22,7 +22,7 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_loop_with_switch(
                             vec![Expr::int_lit(1)],
                             vec![
                                 Stmt::echo(Expr::var("i")),
-                                Stmt::new(StmtKind::Break, Span::dummy()),
+                                Stmt::new(StmtKind::Break(1), Span::dummy()),
                             ],
                         )],
                         default: Some(vec![Stmt::echo(Expr::var("i"))]),

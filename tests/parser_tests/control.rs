@@ -57,7 +57,21 @@ fn test_for_parses() {
 fn test_break_parses() {
     let stmts = parse_source("<?php while (1) { break; }");
     if let StmtKind::While { body, .. } = &stmts[0].kind {
-        assert!(matches!(&body[0].kind, StmtKind::Break));
+        assert!(matches!(&body[0].kind, StmtKind::Break(1)));
+    }
+}
+
+#[test]
+fn test_multilevel_break_parses() {
+    let stmts = parse_source("<?php while (1) { while (1) { break 2; } }");
+    if let StmtKind::While { body, .. } = &stmts[0].kind {
+        if let StmtKind::While { body, .. } = &body[0].kind {
+            assert!(matches!(&body[0].kind, StmtKind::Break(2)));
+        } else {
+            panic!("expected nested While");
+        }
+    } else {
+        panic!("expected While");
     }
 }
 
@@ -65,7 +79,21 @@ fn test_break_parses() {
 fn test_continue_parses() {
     let stmts = parse_source("<?php while (1) { continue; }");
     if let StmtKind::While { body, .. } = &stmts[0].kind {
-        assert!(matches!(&body[0].kind, StmtKind::Continue));
+        assert!(matches!(&body[0].kind, StmtKind::Continue(1)));
+    }
+}
+
+#[test]
+fn test_multilevel_continue_parses() {
+    let stmts = parse_source("<?php while (1) { while (1) { continue (2); } }");
+    if let StmtKind::While { body, .. } = &stmts[0].kind {
+        if let StmtKind::While { body, .. } = &body[0].kind {
+            assert!(matches!(&body[0].kind, StmtKind::Continue(2)));
+        } else {
+            panic!("expected nested While");
+        }
+    } else {
+        panic!("expected While");
     }
 }
 

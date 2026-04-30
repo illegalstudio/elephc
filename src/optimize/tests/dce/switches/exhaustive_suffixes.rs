@@ -25,7 +25,7 @@ fn test_eliminate_dead_code_prunes_negated_strict_switch_true_case() {
                             cases: vec![
                                 (
                                     vec![Expr::binop(Expr::var("value"), BinOp::StrictEq, Expr::int_lit(1))],
-                                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                                 ),
                                 (vec![negated_strict_eq], vec![Stmt::echo(Expr::int_lit(8))]),
                             ],
@@ -74,11 +74,11 @@ fn test_eliminate_dead_code_prunes_exhaustive_negated_and_switch_true_default() 
                     cases: vec![
                         (
                             vec![conjunction],
-                            vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                            vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                         ),
                         (
                             vec![negated_conjunction],
-                            vec![Stmt::echo(Expr::int_lit(8)), Stmt::new(StmtKind::Break, Span::dummy())],
+                            vec![Stmt::echo(Expr::int_lit(8)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                         ),
                     ],
                     default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
@@ -117,11 +117,11 @@ fn test_eliminate_dead_code_prunes_exhaustive_negated_or_switch_true_default() {
                     cases: vec![
                         (
                             vec![disjunction],
-                            vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                            vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                         ),
                         (
                             vec![negated_disjunction],
-                            vec![Stmt::echo(Expr::int_lit(8)), Stmt::new(StmtKind::Break, Span::dummy())],
+                            vec![Stmt::echo(Expr::int_lit(8)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                         ),
                     ],
                     default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
@@ -162,7 +162,7 @@ fn test_eliminate_dead_code_prunes_switch_true_suffix_after_exhaustive_multi_pat
                     cases: vec![
                         (
                             exhaustive_patterns.clone(),
-                            vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                            vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                         ),
                         (vec![Expr::var("other")], vec![Stmt::echo(Expr::int_lit(8))]),
                     ],
@@ -186,7 +186,7 @@ fn test_eliminate_dead_code_prunes_switch_true_suffix_after_exhaustive_multi_pat
     assert_eq!(cases[0].0, exhaustive_patterns);
     assert_eq!(
         cases[0].1,
-        vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())]
+        vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())]
     );
     assert!(default.is_none());
 }
@@ -218,7 +218,7 @@ fn test_eliminate_dead_code_prunes_scalar_switch_suffix_after_exhaustive_multi_p
                                     exhaustive_patterns.clone(),
                                     vec![
                                         Stmt::echo(Expr::int_lit(7)),
-                                        Stmt::new(StmtKind::Break, Span::dummy()),
+                                        Stmt::new(StmtKind::Break(1), Span::dummy()),
                                     ],
                                 ),
                                 (vec![Expr::int_lit(3)], vec![Stmt::echo(Expr::int_lit(8))]),
@@ -251,7 +251,7 @@ fn test_eliminate_dead_code_prunes_scalar_switch_suffix_after_exhaustive_multi_p
     assert_eq!(cases[0].0, vec![Expr::int_lit(2)]);
     assert_eq!(
         cases[0].1,
-        vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())]
+        vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())]
     );
     assert!(default.is_none());
 }

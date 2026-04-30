@@ -5,11 +5,9 @@ use crate::codegen::expr::{coerce_result_to_type, emit_expr, expr_result_heap_ow
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
-pub(crate) fn emit_break_stmt(emitter: &mut Emitter, ctx: &Context) {
-    let labels = ctx
-        .loop_stack
-        .last()
-        .expect("codegen bug: break statement outside loop (should have been caught by type checker)");
+pub(crate) fn emit_break_stmt(levels: usize, emitter: &mut Emitter, ctx: &Context) {
+    let (labels, sp_adjust) = target_loop_labels(ctx, levels, "break");
+    emit_skipped_switch_stack_cleanup(emitter, sp_adjust);
     if !ctx.finally_stack.is_empty() {
         super::super::emit_branch_through_finally(emitter, ctx, &labels.break_label);
     } else {
@@ -47,14 +45,38 @@ pub(crate) fn emit_return_stmt(
     }
 }
 
-pub(crate) fn emit_continue_stmt(emitter: &mut Emitter, ctx: &Context) {
-    let labels = ctx
-        .loop_stack
-        .last()
-        .expect("codegen bug: continue statement outside loop (should have been caught by type checker)");
+pub(crate) fn emit_continue_stmt(levels: usize, emitter: &mut Emitter, ctx: &Context) {
+    let (labels, sp_adjust) = target_loop_labels(ctx, levels, "continue");
+    emit_skipped_switch_stack_cleanup(emitter, sp_adjust);
     if !ctx.finally_stack.is_empty() {
         super::super::emit_branch_through_finally(emitter, ctx, &labels.continue_label);
     } else {
         crate::codegen::abi::emit_jump(emitter, &labels.continue_label);         // unconditional branch to loop continue label
+    }
+}
+
+fn target_loop_labels<'a>(
+    ctx: &'a Context,
+    levels: usize,
+    keyword: &str,
+) -> (&'a crate::codegen::context::LoopLabels, usize) {
+    let index = ctx.loop_stack.len().checked_sub(levels).unwrap_or_else(|| {
+        panic!(
+            "codegen bug: {} statement targets {} levels with only {} active targets",
+            keyword,
+            levels,
+            ctx.loop_stack.len()
+        )
+    });
+    let sp_adjust = ctx.loop_stack[index + 1..]
+        .iter()
+        .map(|labels| labels.sp_adjust)
+        .sum();
+    (&ctx.loop_stack[index], sp_adjust)
+}
+
+fn emit_skipped_switch_stack_cleanup(emitter: &mut Emitter, sp_adjust: usize) {
+    if sp_adjust > 0 {
+        crate::codegen::abi::emit_release_temporary_stack(emitter, sp_adjust);     // release switch subject slots skipped by a multi-level loop exit
     }
 }

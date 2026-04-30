@@ -8,7 +8,7 @@ mod simple;
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::names::{Name, NameKind};
-use crate::parser::ast::{Stmt, StmtKind};
+use crate::parser::ast::{ExprKind, Stmt, StmtKind};
 use crate::parser::control;
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
@@ -92,17 +92,47 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::Foreach => control::parse_foreach(tokens, pos, span),
         Token::Break => {
             *pos += 1;
+            let levels = parse_loop_exit_level("break", tokens, pos)?;
             expect_semicolon(tokens, pos)?;
-            Ok(Stmt::new(StmtKind::Break, span))
+            Ok(Stmt::new(StmtKind::Break(levels), span))
         }
         Token::Continue => {
             *pos += 1;
+            let levels = parse_loop_exit_level("continue", tokens, pos)?;
             expect_semicolon(tokens, pos)?;
-            Ok(Stmt::new(StmtKind::Continue, span))
+            Ok(Stmt::new(StmtKind::Continue(levels), span))
         }
         other => Err(CompileError::new(
             span,
             &format!("Unexpected token at statement position: {:?}", other),
+        )),
+    }
+}
+
+fn parse_loop_exit_level(
+    keyword: &str,
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+) -> Result<usize, CompileError> {
+    if tokens[*pos].0 == Token::Semicolon {
+        return Ok(1);
+    }
+
+    let expr = parse_expr(tokens, pos)?;
+    match expr.kind {
+        ExprKind::IntLiteral(level) if level > 0 => usize::try_from(level).map_err(|_| {
+            CompileError::new(
+                expr.span,
+                &format!("{} operator accepts only positive integers", keyword),
+            )
+        }),
+        ExprKind::IntLiteral(_) => Err(CompileError::new(
+            expr.span,
+            &format!("{} operator accepts only positive integers", keyword),
+        )),
+        _ => Err(CompileError::new(
+            expr.span,
+            &format!("{} operator requires an integer literal level", keyword),
         )),
     }
 }

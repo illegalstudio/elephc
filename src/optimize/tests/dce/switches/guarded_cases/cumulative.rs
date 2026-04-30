@@ -14,14 +14,14 @@ fn test_eliminate_dead_code_prunes_exhaustive_switch_true_default_from_cumulativ
                     cases: vec![
                         (
                             vec![Expr::var("flag")],
-                            vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                            vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                         ),
                         (
                             vec![Expr::new(
                                 ExprKind::Not(Box::new(Expr::var("flag"))),
                                 Span::dummy(),
                             )],
-                            vec![Stmt::echo(Expr::int_lit(8)), Stmt::new(StmtKind::Break, Span::dummy())],
+                            vec![Stmt::echo(Expr::int_lit(8)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                         ),
                     ],
                     default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
@@ -75,7 +75,7 @@ fn test_eliminate_dead_code_uses_cumulative_switch_true_guards_inside_case_body(
                             cases: vec![
                                 (
                                     vec![composite],
-                                    vec![Stmt::echo(Expr::int_lit(1)), Stmt::new(StmtKind::Break, Span::dummy())],
+                                    vec![Stmt::echo(Expr::int_lit(1)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                                 ),
                                 (
                                     vec![Expr::new(ExprKind::Not(Box::new(Expr::var("c"))), Span::dummy())],
@@ -89,7 +89,7 @@ fn test_eliminate_dead_code_uses_cumulative_switch_true_guards_inside_case_body(
                                             },
                                             Span::dummy(),
                                         ),
-                                        Stmt::new(StmtKind::Break, Span::dummy()),
+                                        Stmt::new(StmtKind::Break(1), Span::dummy()),
                                     ],
                                 ),
                             ],
@@ -118,6 +118,6 @@ fn test_eliminate_dead_code_uses_cumulative_switch_true_guards_inside_case_body(
         panic!("expected switch");
     };
     assert_eq!(cases.len(), 2);
-    assert_eq!(cases[1].1, vec![Stmt::echo(Expr::int_lit(3)), Stmt::new(StmtKind::Break, Span::dummy())]);
+    assert_eq!(cases[1].1, vec![Stmt::echo(Expr::int_lit(3)), Stmt::new(StmtKind::Break(1), Span::dummy())]);
     assert!(default.is_none());
 }

@@ -127,8 +127,8 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
                 .collect(),
             finally_body: finally_body.map(fold_block),
         },
-        StmtKind::Break => StmtKind::Break,
-        StmtKind::Continue => StmtKind::Continue,
+        StmtKind::Break(levels) => StmtKind::Break(levels),
+        StmtKind::Continue(levels) => StmtKind::Continue(levels),
         StmtKind::ExprStmt(expr) => StmtKind::ExprStmt(fold_expr(expr)),
         StmtKind::NamespaceDecl { name } => StmtKind::NamespaceDecl { name },
         StmtKind::NamespaceBlock { name, body } => StmtKind::NamespaceBlock {

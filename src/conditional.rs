@@ -146,8 +146,8 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
                 .collect(),
             finally_body: finally_body.map(|body| apply_stmts(body, defines)),
         },
-        StmtKind::Break => StmtKind::Break,
-        StmtKind::Continue => StmtKind::Continue,
+        StmtKind::Break(levels) => StmtKind::Break(levels),
+        StmtKind::Continue(levels) => StmtKind::Continue(levels),
         StmtKind::ExprStmt(expr) => StmtKind::ExprStmt(rewrite_expr(expr, defines)),
         StmtKind::FunctionDecl {
             name,

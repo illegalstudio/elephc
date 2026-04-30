@@ -117,7 +117,7 @@ pub(super) fn collect_scope_reads(
             | StmtKind::ExprStmt(expr)
             | StmtKind::ConstDecl { value: expr, .. } => collect_expr_reads(expr, scope, warnings),
             StmtKind::Return(Some(expr)) => collect_expr_reads(expr, scope, warnings),
-            StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue => {}
+            StmtKind::Return(None) | StmtKind::Break(_) | StmtKind::Continue(_) => {}
             StmtKind::If {
                 condition,
                 then_body,

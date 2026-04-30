@@ -51,7 +51,7 @@ fn test_propagate_constants_tracks_assignment_through_while_true_break() {
                 condition: Expr::new(ExprKind::BoolLiteral(true), Span::dummy()),
                 body: vec![
                     Stmt::assign("base", Expr::int_lit(2)),
-                    Stmt::new(StmtKind::Break, Span::dummy()),
+                    Stmt::new(StmtKind::Break(1), Span::dummy()),
                 ],
             },
             Span::dummy(),
@@ -78,12 +78,12 @@ fn test_propagate_constants_merges_branch_breaks_through_while_true() {
                         condition: Expr::var("flag"),
                         then_body: vec![
                             Stmt::assign("base", Expr::int_lit(2)),
-                            Stmt::new(StmtKind::Break, Span::dummy()),
+                            Stmt::new(StmtKind::Break(1), Span::dummy()),
                         ],
                         elseif_clauses: Vec::new(),
                         else_body: Some(vec![
                             Stmt::assign("base", Expr::int_lit(2)),
-                            Stmt::new(StmtKind::Break, Span::dummy()),
+                            Stmt::new(StmtKind::Break(1), Span::dummy()),
                         ]),
                     },
                     Span::dummy(),
@@ -109,7 +109,7 @@ fn test_propagate_constants_tracks_continue_through_do_while_false() {
             StmtKind::DoWhile {
                 body: vec![
                     Stmt::assign("base", Expr::int_lit(2)),
-                    Stmt::new(StmtKind::Continue, Span::dummy()),
+                    Stmt::new(StmtKind::Continue(1), Span::dummy()),
                 ],
                 condition: Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
             },

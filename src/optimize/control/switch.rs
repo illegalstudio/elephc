@@ -21,6 +21,17 @@ pub(crate) fn prune_switch_stmt(
         return expr_to_effect_stmt(subject);
     }
 
+    if switch_has_level_sensitive_loop_exit(&cases, &default) {
+        return vec![Stmt {
+            kind: StmtKind::Switch {
+                subject,
+                cases,
+                default,
+            },
+            span,
+        }];
+    }
+
     if cases.is_empty() {
         let mut stmts = expr_to_effect_stmt(subject);
         if let Some(default_body) = default {

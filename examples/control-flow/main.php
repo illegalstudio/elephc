@@ -1,5 +1,5 @@
 <?php
-// Control flow: if/elseif/else, while, for, break, continue
+// Control flow: if/elseif/else, while, for, break, continue, multi-level exits
 
 // Classify a number
 function classify($n) {
@@ -33,6 +33,18 @@ while ($n <= 100) {
     }
     $n++;
 }
+
+// Leave nested loops once a combined condition is reached
+echo "Grid walk until row 2 / col 3:\n";
+for ($row = 1; $row <= 3; $row++) {
+    for ($col = 1; $col <= 4; $col++) {
+        if ($row == 2 && $col == 3) {
+            break 2;
+        }
+        echo "(" . $row . "," . $col . ") ";
+    }
+}
+echo "\n";
 
 // Nested loops: multiplication table header
 echo "\nMultiplication table (1-5):\n";

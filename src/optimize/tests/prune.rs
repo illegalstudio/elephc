@@ -73,7 +73,7 @@ fn test_prune_keeps_do_while_false_with_loop_exit() {
         StmtKind::DoWhile {
             body: vec![
                 Stmt::echo(Expr::int_lit(2)),
-                Stmt::new(StmtKind::Continue, Span::dummy()),
+                Stmt::new(StmtKind::Continue(1), Span::dummy()),
             ],
             condition: Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
         },
@@ -88,7 +88,7 @@ fn test_prune_keeps_do_while_false_with_loop_exit() {
             StmtKind::DoWhile {
                 body: vec![
                     Stmt::echo(Expr::int_lit(2)),
-                    Stmt::new(StmtKind::Continue, Span::dummy()),
+                    Stmt::new(StmtKind::Continue(1), Span::dummy()),
                 ],
                 condition: Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
             },
@@ -280,7 +280,7 @@ fn test_prune_switch_case_body_drops_statements_after_break() {
             cases: vec![(
                 vec![Expr::int_lit(1)],
                 vec![
-                    Stmt::new(StmtKind::Break, Span::dummy()),
+                    Stmt::new(StmtKind::Break(1), Span::dummy()),
                     Stmt::echo(Expr::int_lit(9)),
                 ],
             )],
@@ -410,7 +410,7 @@ fn test_prune_switch_drops_leading_non_matching_cases() {
                 (vec![Expr::int_lit(1)], vec![Stmt::echo(Expr::int_lit(10))]),
                 (
                     vec![Expr::int_lit(3)],
-                    vec![Stmt::echo(Expr::int_lit(20)), Stmt::new(StmtKind::Break, Span::dummy())],
+                    vec![Stmt::echo(Expr::int_lit(20)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                 ),
             ],
             default: Some(vec![Stmt::echo(Expr::int_lit(30))]),

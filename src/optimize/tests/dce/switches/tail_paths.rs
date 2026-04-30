@@ -30,7 +30,7 @@ fn test_eliminate_dead_code_drops_trailing_empty_switch_cases() {
                             vec![Expr::int_lit(1)],
                             vec![
                                 Stmt::echo(Expr::int_lit(7)),
-                                Stmt::new(StmtKind::Break, Span::dummy()),
+                                Stmt::new(StmtKind::Break(1), Span::dummy()),
                             ],
                         ),
                         (
@@ -60,7 +60,7 @@ fn test_eliminate_dead_code_drops_trailing_empty_switch_cases() {
                     vec![Expr::int_lit(1)],
                     vec![
                         Stmt::echo(Expr::int_lit(7)),
-                        Stmt::new(StmtKind::Break, Span::dummy()),
+                        Stmt::new(StmtKind::Break(1), Span::dummy()),
                     ],
                 )],
                 default: None,
@@ -134,7 +134,7 @@ fn test_eliminate_dead_code_sinks_tail_into_switch_break_paths() {
                                 vec![Expr::int_lit(1)],
                                 vec![
                                     Stmt::echo(Expr::int_lit(7)),
-                                    Stmt::new(StmtKind::Break, Span::dummy()),
+                                    Stmt::new(StmtKind::Break(1), Span::dummy()),
                                 ],
                             ),
                             (vec![Expr::int_lit(2)], vec![Stmt::echo(Expr::int_lit(8))]),
@@ -162,7 +162,7 @@ fn test_eliminate_dead_code_sinks_tail_into_switch_break_paths() {
         vec![
             Stmt::echo(Expr::int_lit(7)),
             Stmt::echo(Expr::int_lit(10)),
-            Stmt::new(StmtKind::Break, Span::dummy()),
+            Stmt::new(StmtKind::Break(1), Span::dummy()),
         ]
     );
     assert_eq!(

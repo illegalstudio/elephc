@@ -186,7 +186,7 @@ pub(crate) fn materialize_switch_execution(
 
     let push_body = |body: &[Stmt], out: &mut Vec<Stmt>| -> bool {
         for stmt in body.iter().cloned() {
-            if matches!(stmt.kind, StmtKind::Break) {
+            if matches!(stmt.kind, StmtKind::Break(1)) {
                 return true;
             }
 
@@ -213,6 +213,73 @@ pub(crate) fn materialize_switch_execution(
     }
 
     out
+}
+
+pub(crate) fn switch_has_level_sensitive_loop_exit(
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: &Option<Vec<Stmt>>,
+) -> bool {
+    cases
+        .iter()
+        .any(|(_, body)| block_has_level_sensitive_loop_exit(body))
+        || default
+            .as_ref()
+            .is_some_and(|body| block_has_level_sensitive_loop_exit(body))
+}
+
+fn block_has_level_sensitive_loop_exit(body: &[Stmt]) -> bool {
+    body.iter().any(stmt_has_level_sensitive_loop_exit)
+}
+
+fn stmt_has_level_sensitive_loop_exit(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Break(levels) => *levels > 1,
+        StmtKind::Continue(_) => true,
+        StmtKind::Synthetic(stmts) => block_has_level_sensitive_loop_exit(stmts),
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            block_has_level_sensitive_loop_exit(then_body)
+                || elseif_clauses
+                    .iter()
+                    .any(|(_, body)| block_has_level_sensitive_loop_exit(body))
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| block_has_level_sensitive_loop_exit(body))
+        }
+        StmtKind::IfDef {
+            then_body, else_body, ..
+        } => {
+            block_has_level_sensitive_loop_exit(then_body)
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| block_has_level_sensitive_loop_exit(body))
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::For { body, .. }
+        | StmtKind::Foreach { body, .. } => block_has_level_sensitive_loop_exit(body),
+        StmtKind::Switch { cases, default, .. } => {
+            switch_has_level_sensitive_loop_exit(cases, default)
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            block_has_level_sensitive_loop_exit(try_body)
+                || catches
+                    .iter()
+                    .any(|catch| block_has_level_sensitive_loop_exit(&catch.body))
+                || finally_body
+                    .as_ref()
+                    .is_some_and(|body| block_has_level_sensitive_loop_exit(body))
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn split_hoistable_try_prefix(mut try_body: Vec<Stmt>) -> (Vec<Stmt>, Vec<Stmt>) {

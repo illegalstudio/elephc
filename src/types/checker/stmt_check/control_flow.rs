@@ -1,5 +1,5 @@
 use crate::errors::CompileError;
-use crate::parser::ast::StmtKind;
+use crate::parser::ast::{Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -31,12 +31,7 @@ impl Checker {
                 } else {
                     return Err(CompileError::new(stmt.span, "foreach requires an array"));
                 }
-                let mut errors = Vec::new();
-                for s in body {
-                    if let Err(error) = self.check_stmt(s, env) {
-                        errors.extend(error.flatten());
-                    }
-                }
+                let errors = self.check_break_continue_target_body(body, env);
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -50,23 +45,19 @@ impl Checker {
             } => {
                 self.infer_type(subject, env)?;
                 let mut errors = Vec::new();
-                for (values, body) in cases {
+                for (values, _) in cases {
                     for v in values {
                         self.infer_type(v, env)?;
                     }
-                    for s in body {
-                        if let Err(error) = self.check_stmt(s, env) {
-                            errors.extend(error.flatten());
-                        }
-                    }
+                }
+                self.break_continue_depth += 1;
+                for (_, body) in cases {
+                    errors.extend(self.check_body(body, env));
                 }
                 if let Some(body) = default {
-                    for s in body {
-                        if let Err(error) = self.check_stmt(s, env) {
-                            errors.extend(error.flatten());
-                        }
-                    }
+                    errors.extend(self.check_body(body, env));
                 }
+                self.break_continue_depth -= 1;
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -108,12 +99,7 @@ impl Checker {
                 }
             }
             StmtKind::DoWhile { body, condition } => {
-                let mut errors = Vec::new();
-                for s in body {
-                    if let Err(error) = self.check_stmt(s, env) {
-                        errors.extend(error.flatten());
-                    }
-                }
+                let errors = self.check_break_continue_target_body(body, env);
                 self.infer_type(condition, env)?;
                 if errors.is_empty() {
                     Ok(())
@@ -123,12 +109,7 @@ impl Checker {
             }
             StmtKind::While { condition, body } => {
                 self.infer_type(condition, env)?;
-                let mut errors = Vec::new();
-                for s in body {
-                    if let Err(error) = self.check_stmt(s, env) {
-                        errors.extend(error.flatten());
-                    }
-                }
+                let errors = self.check_break_continue_target_body(body, env);
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -150,12 +131,7 @@ impl Checker {
                 if let Some(s) = update {
                     self.check_stmt(s, env)?;
                 }
-                let mut errors = Vec::new();
-                for s in body {
-                    if let Err(error) = self.check_stmt(s, env) {
-                        errors.extend(error.flatten());
-                    }
-                }
+                let errors = self.check_break_continue_target_body(body, env);
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -228,11 +204,10 @@ impl Checker {
                     }
                 }
                 if let Some(body) = finally_body {
-                    for s in body {
-                        if let Err(error) = self.check_stmt(s, env) {
-                            errors.extend(error.flatten());
-                        }
-                    }
+                    self.finally_break_continue_bases
+                        .push(self.break_continue_depth);
+                    errors.extend(self.check_body(body, env));
+                    self.finally_break_continue_bases.pop();
                 }
                 if errors.is_empty() {
                     Ok(())
@@ -242,5 +217,26 @@ impl Checker {
             }
             _ => unreachable!("non-control-flow statement routed to control-flow checker"),
         }
+    }
+
+    fn check_break_continue_target_body(
+        &mut self,
+        body: &[Stmt],
+        env: &mut TypeEnv,
+    ) -> Vec<CompileError> {
+        self.break_continue_depth += 1;
+        let errors = self.check_body(body, env);
+        self.break_continue_depth -= 1;
+        errors
+    }
+
+    fn check_body(&mut self, body: &[Stmt], env: &mut TypeEnv) -> Vec<CompileError> {
+        let mut errors = Vec::new();
+        for stmt in body {
+            if let Err(error) = self.check_stmt(stmt, env) {
+                errors.extend(error.flatten());
+            }
+        }
+        errors
     }
 }

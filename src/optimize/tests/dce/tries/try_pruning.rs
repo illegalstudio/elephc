@@ -112,7 +112,7 @@ fn test_eliminate_dead_code_keeps_unknown_truthy_switch_entry_before_matching_ca
                                         Expr::var("other"),
                                         Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
                                     ],
-                                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                                 ),
                                 (
                                     vec![Expr::new(ExprKind::BoolLiteral(true), Span::dummy())],
@@ -147,7 +147,7 @@ fn test_eliminate_dead_code_keeps_unknown_truthy_switch_entry_before_matching_ca
     assert_eq!(cases[0].0, vec![Expr::var("other")]);
     assert_eq!(
         cases[0].1,
-        vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())]
+        vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())]
     );
     assert_eq!(cases[1].0, vec![Expr::new(ExprKind::BoolLiteral(true), Span::dummy())]);
     assert_eq!(cases[1].1, vec![Stmt::echo(Expr::int_lit(8))]);

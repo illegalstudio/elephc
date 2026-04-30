@@ -17,7 +17,7 @@ fn test_eliminate_dead_code_prunes_truthy_switch_cases_and_default() {
                             cases: vec![
                                 (
                                     vec![Expr::new(ExprKind::BoolLiteral(false), Span::dummy())],
-                                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                                 ),
                                 (
                                     vec![Expr::new(ExprKind::BoolLiteral(true), Span::dummy())],
@@ -79,7 +79,7 @@ fn test_eliminate_dead_code_prunes_falsy_scalar_labels_from_truthy_switch_subjec
                             cases: vec![
                                 (
                                     vec![Expr::int_lit(0), Expr::string_lit("")],
-                                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                                 ),
                                 (
                                     vec![
@@ -149,7 +149,7 @@ fn test_eliminate_dead_code_combines_exclusion_and_truthy_switch_guards() {
                                     cases: vec![
                                         (
                                             vec![Expr::int_lit(1), Expr::int_lit(0)],
-                                            vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                                            vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                                         ),
                                         (
                                             vec![Expr::int_lit(2), Expr::new(ExprKind::BoolLiteral(true), Span::dummy())],

@@ -10,7 +10,7 @@ fn test_propagate_constants_merges_identical_switch_assignments() {
                     vec![Expr::int_lit(1)],
                     vec![
                         Stmt::assign("base", Expr::int_lit(2)),
-                        Stmt::new(StmtKind::Break, Span::dummy()),
+                        Stmt::new(StmtKind::Break(1), Span::dummy()),
                     ],
                 )],
                 default: Some(vec![Stmt::assign("base", Expr::int_lit(2))]),

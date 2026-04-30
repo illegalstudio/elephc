@@ -6,7 +6,7 @@
 - [x] Integers, strings (double and single quoted), echo, variables, comments
 - [x] Arithmetic (`+`, `-`, `*`, `/`, `%`), comparison (`==`, `!=`, `<`, `>`, `<=`, `>=`)
 - [x] String concatenation (`.`) with automatic int coercion
-- [x] `if` / `elseif` / `else`, `while`, `for`, `do...while`, `break`, `continue`
+- [x] `if` / `elseif` / `else`, `while`, `for`, `do...while`, `break`, `continue`, including multi-level `break N` / `continue N`
 - [x] Functions with local scope, return, recursion, nested calls
 - [x] Pre/post increment/decrement (`++$i`, `$i++`, `--$i`, `$i--`)
 - [x] Logical operators: `&&`, `||`, `and`, `or`, `xor`, `!` (`and`/`or`/symbolic forms use short-circuit evaluation)
@@ -422,7 +422,6 @@ Features that are feasible but complex. Not currently planned for any specific v
 | Full PHP list destructuring | Medium | Extend `[$a, $b] = ...` beyond plain variables and indexed RHS values to cover skipped entries, nested patterns, and associative-key destructuring. |
 | Heterogeneous indexed arrays | Medium | Allow mixed payloads in indexed arrays instead of requiring homogeneous indexed values. This would complete PHP array-union edge cases such as non-empty indexed arrays whose missing right-side numeric keys have a different value type. |
 | Mixed indexed/associative array union | Medium | Model `array + array` cases where one operand is represented as an indexed array and the other as an associative hash, preserving PHP's shared int/string key space and left-key precedence. |
-| Multi-level `break` / `continue` | Low | Parse and lower numeric depths such as `break 2;` and `continue 2;` through nested loop/switch/finally exits. |
 | Named-argument parity for built-ins, extern calls, and spread | Medium | Extend call validation/lowering so named arguments work outside user-defined calls and interact correctly with spread arguments. |
 | Captured closures as callback values | Medium | Forward hidden `use (...)` capture environments through callback-style built-ins such as `array_map`, `array_filter`, and `call_user_func`. |
 | Closure and arrow return type annotations | Low | Parse and validate `function (...): T {}` and `fn(...): T => expr`, adding a closure return-type field to the AST and threading it through closure `FunctionSig` creation. |

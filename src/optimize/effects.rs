@@ -145,8 +145,8 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         | StmtKind::TraitDecl { .. }
         | StmtKind::Global { .. }
         | StmtKind::Return(None)
-        | StmtKind::Break
-        | StmtKind::Continue
+        | StmtKind::Break(_)
+        | StmtKind::Continue(_)
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. } => Effect::PURE,

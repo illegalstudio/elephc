@@ -327,8 +327,8 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
         | StmtKind::StaticVar { .. }
         | StmtKind::Return(None)
         | StmtKind::ListUnpack { .. }
-        | StmtKind::Break
-        | StmtKind::Continue
+        | StmtKind::Break(_)
+        | StmtKind::Continue(_)
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. } => {}

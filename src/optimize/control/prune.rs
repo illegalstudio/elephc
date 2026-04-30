@@ -344,7 +344,7 @@ fn block_contains_loop_exit(body: &[Stmt]) -> bool {
 
 fn stmt_contains_loop_exit(stmt: &Stmt) -> bool {
     match &stmt.kind {
-        StmtKind::Break | StmtKind::Continue => true,
+        StmtKind::Break(_) | StmtKind::Continue(_) => true,
         StmtKind::If {
             then_body,
             elseif_clauses,

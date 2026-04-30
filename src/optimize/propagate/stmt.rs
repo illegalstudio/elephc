@@ -151,8 +151,8 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             catches,
             finally_body,
         } => propagate_try_stmt(try_body, catches, finally_body, span, env),
-        StmtKind::Break => (Stmt::new(StmtKind::Break, span), env),
-        StmtKind::Continue => (Stmt::new(StmtKind::Continue, span), env),
+        StmtKind::Break(levels) => (Stmt::new(StmtKind::Break(levels), span), env),
+        StmtKind::Continue(levels) => (Stmt::new(StmtKind::Continue(levels), span), env),
         StmtKind::ExprStmt(expr) => {
             let expr = propagate_expr(expr, &env);
             let next_env = if let Some(name) = unset_target_name(&expr) {

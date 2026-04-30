@@ -257,16 +257,22 @@ impl Checker {
         let saved_ref_params = self.active_ref_params.clone();
         let saved_globals = self.active_globals.clone();
         let saved_statics = self.active_statics.clone();
+        let saved_break_continue_depth = self.break_continue_depth;
+        let saved_finally_break_continue_bases = self.finally_break_continue_bases.clone();
 
         self.active_ref_params = ref_param_names.into_iter().collect();
         self.active_globals.clear();
         self.active_statics.clear();
+        self.break_continue_depth = 0;
+        self.finally_break_continue_bases.clear();
 
         let result = f(self);
 
         self.active_ref_params = saved_ref_params;
         self.active_globals = saved_globals;
         self.active_statics = saved_statics;
+        self.break_continue_depth = saved_break_continue_depth;
+        self.finally_break_continue_bases = saved_finally_break_continue_bases;
 
         result
     }

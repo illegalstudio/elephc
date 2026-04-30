@@ -212,10 +212,10 @@ fn sink_tail_into_terminal_stmt(stmt: Stmt, tail: Vec<Stmt>, target: TailSinkTar
             stmts.extend(tail);
             stmts
         }
-        StmtKind::Break if matches!(target, TailSinkTarget::Breaks) => {
+        StmtKind::Break(1) if matches!(target, TailSinkTarget::Breaks) => {
             let mut stmts = tail;
             if block_reaches_following_stmt(&stmts) {
-                stmts.push(Stmt::new(StmtKind::Break, span));
+                stmts.push(Stmt::new(StmtKind::Break(1), span));
             }
             stmts
         }

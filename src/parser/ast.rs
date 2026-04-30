@@ -379,8 +379,8 @@ pub enum StmtKind {
         catches: Vec<CatchClause>,
         finally_body: Option<Vec<Stmt>>,
     },
-    Break,
-    Continue,
+    Break(usize),
+    Continue(usize),
     ExprStmt(Expr),
     NamespaceDecl {
         name: Option<Name>,

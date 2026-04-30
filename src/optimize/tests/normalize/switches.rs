@@ -8,11 +8,11 @@ fn test_normalize_control_flow_materializes_constant_switch_match() {
             cases: vec![
                 (
                     vec![Expr::int_lit(1)],
-                    vec![Stmt::echo(Expr::int_lit(5)), Stmt::new(StmtKind::Break, Span::dummy())],
+                    vec![Stmt::echo(Expr::int_lit(5)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                 ),
                 (
                     vec![Expr::int_lit(2)],
-                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                 ),
             ],
             default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
@@ -34,7 +34,7 @@ fn test_normalize_control_flow_materializes_constant_switch_fallthrough() {
                 (vec![Expr::int_lit(1)], Vec::new()),
                 (
                     vec![Expr::int_lit(2)],
-                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                 ),
             ],
             default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
@@ -54,7 +54,7 @@ fn test_normalize_control_flow_materializes_constant_switch_default() {
             subject: Expr::int_lit(3),
             cases: vec![(
                 vec![Expr::int_lit(1)],
-                vec![Stmt::echo(Expr::int_lit(5)), Stmt::new(StmtKind::Break, Span::dummy())],
+                vec![Stmt::echo(Expr::int_lit(5)), Stmt::new(StmtKind::Break(1), Span::dummy())],
             )],
             default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
         },
@@ -73,7 +73,7 @@ fn test_normalize_control_flow_rewrites_single_case_switch_to_if() {
             subject: Expr::var("x"),
             cases: vec![(
                 vec![Expr::int_lit(1)],
-                vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break(1), Span::dummy())],
             )],
             default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
         },
@@ -113,7 +113,7 @@ fn test_normalize_control_flow_rewrites_single_case_switch_to_if() {
 fn test_normalize_control_flow_merges_adjacent_identical_switch_cases() {
     let shared_body = vec![
         Stmt::echo(Expr::int_lit(7)),
-        Stmt::new(StmtKind::Break, Span::dummy()),
+        Stmt::new(StmtKind::Break(1), Span::dummy()),
     ];
     let program = vec![Stmt::new(
         StmtKind::Switch {
@@ -123,7 +123,7 @@ fn test_normalize_control_flow_merges_adjacent_identical_switch_cases() {
                 (vec![Expr::int_lit(2)], shared_body.clone()),
                 (
                     vec![Expr::int_lit(3)],
-                    vec![Stmt::echo(Expr::int_lit(9)), Stmt::new(StmtKind::Break, Span::dummy())],
+                    vec![Stmt::echo(Expr::int_lit(9)), Stmt::new(StmtKind::Break(1), Span::dummy())],
                 ),
             ],
             default: None,
@@ -147,7 +147,7 @@ fn test_normalize_control_flow_merges_adjacent_identical_switch_cases() {
             assert_eq!(cases[1].0, vec![Expr::int_lit(3)]);
             assert_eq!(
                 cases[1].1,
-                vec![Stmt::echo(Expr::int_lit(9)), Stmt::new(StmtKind::Break, Span::dummy())]
+                vec![Stmt::echo(Expr::int_lit(9)), Stmt::new(StmtKind::Break(1), Span::dummy())]
             );
             assert!(default.is_none());
         }
@@ -159,7 +159,7 @@ fn test_normalize_control_flow_merges_adjacent_identical_switch_cases() {
 fn test_normalize_control_flow_merges_fallthrough_switch_labels_into_next_case() {
     let shared_body = vec![
         Stmt::echo(Expr::int_lit(7)),
-        Stmt::new(StmtKind::Break, Span::dummy()),
+        Stmt::new(StmtKind::Break(1), Span::dummy()),
     ];
     let program = vec![Stmt::new(
         StmtKind::Switch {

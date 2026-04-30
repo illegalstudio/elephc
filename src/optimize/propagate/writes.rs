@@ -77,8 +77,8 @@ pub(crate) fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
         | StmtKind::Return(Some(expr)) => expr_local_writes(expr),
         StmtKind::Throw(expr) => expr_local_writes(expr),
         StmtKind::Return(None)
-        | StmtKind::Break
-        | StmtKind::Continue
+        | StmtKind::Break(_)
+        | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
         | StmtKind::FunctionDecl { .. }

@@ -72,6 +72,10 @@ pub(crate) struct Checker {
     pub active_globals: HashSet<String>,
     /// Names introduced via `static` in the current local scope.
     pub active_statics: HashSet<String>,
+    /// Active break/continue targets in the current function or closure body.
+    pub break_continue_depth: usize,
+    /// Active break/continue depth at each enclosing finally block boundary.
+    pub finally_break_continue_bases: Vec<usize>,
 }
 
 #[derive(Clone)]
