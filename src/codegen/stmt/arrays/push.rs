@@ -45,10 +45,15 @@ pub(super) fn emit_array_push_stmt(
         None => PhpType::Int,
     };
     let mut val_ty = emit_expr(value, emitter, ctx, data);
-    if matches!(elem_ty, PhpType::Mixed) && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_)) {
+    let boxed_iterable =
+        crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut val_ty);
+    if !boxed_iterable
+        && matches!(elem_ty, PhpType::Mixed)
+        && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
+    {
         crate::codegen::emit_box_current_value_as_mixed(emitter, &val_ty);
         val_ty = PhpType::Mixed;
-    } else {
+    } else if !boxed_iterable {
         super::super::helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
     }
     emitter.instruction("ldr x9, [sp], #16");                                   // pop saved array pointer into x9
@@ -119,10 +124,15 @@ fn emit_array_push_stmt_linux_x86_64(
         None => PhpType::Int,
     };
     let mut val_ty = emit_expr(value, emitter, ctx, data);
-    if matches!(elem_ty, PhpType::Mixed) && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_)) {
+    let boxed_iterable =
+        crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut val_ty);
+    if !boxed_iterable
+        && matches!(elem_ty, PhpType::Mixed)
+        && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
+    {
         crate::codegen::emit_box_current_value_as_mixed(emitter, &val_ty);
         val_ty = PhpType::Mixed;
-    } else {
+    } else if !boxed_iterable {
         super::super::helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
     }
     abi::emit_pop_reg(emitter, "r11");                                            // restore the indexed-array pointer after evaluating the appended value

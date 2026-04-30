@@ -18,6 +18,7 @@ pub enum PhpType {
     Bool,
     Void,
     Never,
+    Iterable,
     Mixed,
     Array(Box<PhpType>),
     AssocArray {
@@ -42,6 +43,7 @@ impl PhpType {
             PhpType::Str => 16,
             PhpType::Void => 8,              // null sentinel stored as 8 bytes
             PhpType::Never => 0,             // never materialized — functions with :never do not return
+            PhpType::Iterable => 8,          // type-erased pointer (array|Traversable)
             PhpType::Mixed => 8,             // pointer to heap-tagged mixed cell
             PhpType::Array(_) => 8,          // pointer to heap
             PhpType::AssocArray { .. } => 8, // pointer to heap
@@ -63,6 +65,7 @@ impl PhpType {
             PhpType::Str => 2,
             PhpType::Void => 0,
             PhpType::Never => 0,
+            PhpType::Iterable => 1,
             PhpType::Mixed => 1,
             PhpType::Array(_) => 1,
             PhpType::AssocArray { .. } => 1,
@@ -84,7 +87,8 @@ impl PhpType {
     pub fn is_refcounted(&self) -> bool {
         matches!(
             self,
-            PhpType::Mixed
+            PhpType::Iterable
+                | PhpType::Mixed
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)
@@ -93,6 +97,8 @@ impl PhpType {
     }
 
     /// Lower high-level checker-only types to the runtime representation used by codegen.
+    /// `Iterable` keeps its own runtime shape (raw heap pointer dispatched via the heap-kind tag),
+    /// so it is no longer collapsed to `Mixed` here.
     pub fn codegen_repr(&self) -> PhpType {
         match self {
             PhpType::Union(_) => PhpType::Mixed,
@@ -178,6 +184,7 @@ impl fmt::Display for PhpType {
             PhpType::Bool => write!(f, "bool"),
             PhpType::Void => write!(f, "null"),
             PhpType::Never => write!(f, "never"),
+            PhpType::Iterable => write!(f, "iterable"),
             PhpType::Mixed => write!(f, "mixed"),
             PhpType::Array(inner) => write!(f, "array<{}>", inner),
             PhpType::AssocArray { key, value } => write!(f, "array<{}, {}>", key, value),

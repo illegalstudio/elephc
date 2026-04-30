@@ -43,6 +43,7 @@ impl Checker {
                 }
                 PhpType::Void
                 | PhpType::Never
+                | PhpType::Iterable
                 | PhpType::Mixed
                 | PhpType::Union(_)
                 | PhpType::Array(_)

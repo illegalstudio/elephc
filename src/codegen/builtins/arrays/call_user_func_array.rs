@@ -323,6 +323,7 @@ pub fn emit(
             PhpType::Int
             | PhpType::Bool
             | PhpType::Callable
+            | PhpType::Iterable
             | PhpType::Mixed
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }

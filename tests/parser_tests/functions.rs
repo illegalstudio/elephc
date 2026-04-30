@@ -333,6 +333,24 @@ fn test_parse_typed_ref_param() {
     }
 }
 
+#[test]
+fn test_parse_iterable_type() {
+    let stmts = parse_source("<?php function walk(iterable $items): iterable { return $items; }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl {
+            name,
+            params,
+            return_type,
+            ..
+        } => {
+            assert_eq!(name, "walk");
+            assert_eq!(params[0].1, Some(TypeExpr::Iterable));
+            assert_eq!(return_type.as_ref(), Some(&TypeExpr::Iterable));
+        }
+        other => panic!("Expected FunctionDecl, got {:?}", other),
+    }
+}
+
 // --- Variadic and Spread ---
 
 #[test]

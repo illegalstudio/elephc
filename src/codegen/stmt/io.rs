@@ -72,6 +72,7 @@ fn stabilize_x86_64_echo_result(emitter: &mut Emitter, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Bool
         | PhpType::Int
+        | PhpType::Iterable
         | PhpType::Mixed
         | PhpType::Union(_)
         | PhpType::Array(_)

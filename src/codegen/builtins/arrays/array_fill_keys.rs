@@ -23,7 +23,8 @@ pub fn emit(
     let keys_ty = emit_expr(&args[0], emitter, ctx, data);
     // -- save keys array, evaluate fill value --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push keys array pointer onto stack
-    let value_ty = emit_expr(&args[1], emitter, ctx, data);
+    let mut value_ty = emit_expr(&args[1], emitter, ctx, data);
+    crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut value_ty);
     let key_elem_ty = match &keys_ty {
         PhpType::Array(key) => (**key).clone(),
         _ => PhpType::Str,
@@ -55,7 +56,8 @@ fn emit_array_fill_keys_linux_x86_64(
 ) -> Option<PhpType> {
     let keys_ty = emit_expr(&args[0], emitter, ctx, data);
     abi::emit_push_reg(emitter, "rax");                                         // preserve the indexed array of keys while evaluating the fill payload expression
-    let value_ty = emit_expr(&args[1], emitter, ctx, data);
+    let mut value_ty = emit_expr(&args[1], emitter, ctx, data);
+    crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut value_ty);
     let key_elem_ty = match &keys_ty {
         PhpType::Array(key) => (**key).clone(),
         _ => PhpType::Str,

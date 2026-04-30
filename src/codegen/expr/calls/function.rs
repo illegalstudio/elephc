@@ -56,27 +56,31 @@ pub(super) fn emit_function_call(
 
     if prepared.is_variadic {
         if let Some(spread_expr) = prepared.spread_arg.as_ref() {
-            let _ = args::emit_spread_variadic_array_arg(
+            let variadic_ty = args::emit_spread_variadic_array_arg(
                 spread_expr,
                 "spread array as variadic param",
                 emitter,
                 ctx,
                 data,
             );
+            arg_types.push(variadic_ty);
         } else if prepared.variadic_args.is_empty() {
-            let _ = args::emit_empty_variadic_array_arg("empty variadic array", emitter);
+            arg_types.push(args::emit_empty_variadic_array_arg(
+                "empty variadic array",
+                emitter,
+            ));
         } else {
-            let _ = args::emit_variadic_array_arg_from_exprs(
+            let variadic_ty = args::emit_variadic_array_arg_from_exprs(
                 &prepared.variadic_args,
                 "build variadic array",
-                false,
-                false,
+                true,
+                true,
                 emitter,
                 ctx,
                 data,
             );
+            arg_types.push(variadic_ty);
         }
-        arg_types.push(PhpType::Array(Box::new(PhpType::Int)));
     }
 
     let assignments =

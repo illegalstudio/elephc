@@ -106,7 +106,7 @@ pub(super) fn emit_new_object(
                     abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), object_reg, offset);
                     abi::emit_store_zero_to_address(emitter, object_reg, offset + 8);
                 }
-                PhpType::Mixed => {
+                PhpType::Mixed | PhpType::Iterable => {
                     abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), object_reg, offset);
                     let tag_reg = abi::temp_int_reg(emitter.target);
                     abi::emit_load_int_immediate(emitter, tag_reg, 7);

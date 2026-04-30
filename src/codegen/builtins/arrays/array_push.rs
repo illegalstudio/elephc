@@ -24,7 +24,8 @@ pub fn emit(
 
     // -- save array pointer, evaluate value to push --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
-    let val_ty = emit_expr(&args[1], emitter, ctx, data);
+    let mut val_ty = emit_expr(&args[1], emitter, ctx, data);
+    crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut val_ty);
     emitter.instruction("ldr x9, [sp], #16");                                   // pop saved array pointer into x9
     match &val_ty {
         PhpType::Int | PhpType::Bool => {
@@ -44,7 +45,7 @@ pub fn emit(
             emitter.instruction("mov x0, x9");                                  // move array pointer to x0
             emitter.instruction("bl __rt_array_push_str");                      // call runtime: persist + append string to array
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+        PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
             // -- push nested refcounted pointer onto array --
             emitter.instruction("mov x1, x0");                                  // move pointer value to x1
             emitter.instruction("mov x0, x9");                                  // move outer array pointer to x0
@@ -72,7 +73,8 @@ fn emit_array_push_linux_x86_64(
     data: &mut DataSection,
 ) {
     abi::emit_push_reg(emitter, "rax");                                          // preserve the indexed-array pointer while evaluating the appended value
-    let val_ty = emit_expr(&args[1], emitter, ctx, data);
+    let mut val_ty = emit_expr(&args[1], emitter, ctx, data);
+    crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut val_ty);
     abi::emit_pop_reg(emitter, "r11");                                           // restore the indexed-array pointer after evaluating the appended value
     match &val_ty {
         PhpType::Int | PhpType::Bool => {
@@ -95,7 +97,7 @@ fn emit_array_push_linux_x86_64(
             emitter.instruction("mov rdi, r11");                                // place the indexed-array pointer in the x86_64 runtime receiver register
             abi::emit_call_label(emitter, "__rt_array_push_int");                // append the callable pointer bits as a plain scalar slot
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+        PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
             emitter.instruction("mov rsi, rax");                                // place the retained refcounted payload pointer in the x86_64 runtime child register
             emitter.instruction("mov rdi, r11");                                // place the indexed-array pointer in the x86_64 runtime receiver register
             abi::emit_call_label(emitter, "__rt_array_push_refcounted");         // append the retained heap payload and stamp the indexed-array value_type metadata

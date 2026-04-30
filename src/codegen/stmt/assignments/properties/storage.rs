@@ -34,7 +34,7 @@ pub(super) fn store_property_value(emitter: &mut Emitter, object_reg: &str, val_
             abi::emit_store_to_address(emitter, temp_reg, object_reg, offset);
             abi::emit_store_zero_to_address(emitter, object_reg, offset + 8);
         }
-        PhpType::Mixed | PhpType::Union(_) => {
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, object_reg, offset);
             abi::emit_load_int_immediate(emitter, temp_reg, 7);
@@ -144,7 +144,7 @@ pub(super) fn store_referenced_value(
             abi::emit_store_to_address(emitter, temp_reg, pointer_reg, 0);
             abi::emit_store_zero_to_address(emitter, pointer_reg, 8);
         }
-        PhpType::Mixed | PhpType::Union(_) => {
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, pointer_reg, 0);
             abi::emit_load_int_immediate(emitter, temp_reg, 7);

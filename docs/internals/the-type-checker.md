@@ -33,6 +33,7 @@ pub enum PhpType {
     Bool,
     Void,                          // null
     Never,                         // marks a function/method that never returns (always throws / exits / loops)
+    Iterable,                      // PHP `iterable` pseudo-type (array | Traversable), type-erased
     Mixed,                         // runtime-boxed heterogeneous assoc-array value
     Array(Box<PhpType>),           // e.g., Array(Int) = int[]
     AssocArray {                    // e.g., AssocArray { key: Str, value: Int }
@@ -51,6 +52,8 @@ pub enum PhpType {
 This is still much smaller than full PHP's runtime type system, but it now includes user-written union and nullable annotations where the language subset supports them. `Union(...)` values are lowered to the same boxed runtime representation used by `Mixed`. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`).
 
 `Never` is a return-position-only marker: a function annotated `: never` must always diverge (throw, call `exit()`/`die()`, or loop forever). The type checker rejects any reachable `return value;` from such a function, and the runtime size is zero because the value is never materialized. `: never` is rejected as a parameter or local-variable type — same restriction as `: void`.
+
+`Iterable` represents PHP's `iterable` pseudo-type (`array | Traversable`). It is treated as a type-erased 8-byte raw heap pointer at runtime — the checker accepts `Array` and `AssocArray` arguments for parameters declared `iterable`, and `foreach` over an `iterable` local types both `$key` and `$value` as `Mixed`. Direct operations on iterable values (`foreach`, `echo`, `gettype()`, `var_dump()`, `===`, scalar casts, `is_iterable()`) dispatch through the `__rt_heap_kind` runtime helper. Indexed-array iterables use the value-type tag stored in the array header to box loop values as `Mixed`; associative iterables reuse the hash iterator payload tag. Object-backed `Traversable` is not modeled yet and still routes to `__rt_iterable_unsupported_kind`.
 
 `Callable` is used for anonymous functions (closures), arrow functions, and first-class callables. A callable value is stored as a function pointer (8 bytes) on the stack, and is invoked via an indirect branch (`blr`).
 
@@ -88,6 +91,7 @@ The first assignment determines a variable's type. After that, reassignment is o
 | `Pointer(None)` | `Pointer(Some("T"))` | Yes (merged to the more specific pointer tag) |
 | `Pointer(Some("A"))` | `Pointer(Some("B"))` | Yes, but merged to opaque `Pointer(None)` if tags differ |
 | `Pointer(*)` | `Int` / `Str` / `Array` | **No** — compile error |
+| `Array(_)` / `AssocArray(_, _)` | `Iterable` parameter | Yes (PHP `iterable` accepts arrays at the call boundary) |
 
 This means elephc rejects code that PHP would allow:
 

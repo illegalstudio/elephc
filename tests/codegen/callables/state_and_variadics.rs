@@ -322,6 +322,19 @@ echo $arr[0];
     assert_eq!(out, "42");
 }
 
+#[test]
+fn test_variadic_array_arg_preserves_runtime_element_tag() {
+    let out = compile_and_run(
+        r#"<?php
+function wrap(...$items) {
+    echo json_encode($items);
+}
+wrap([1, 2]);
+"#,
+    );
+    assert_eq!(out, "[[1,2]]");
+}
+
 // --- Spread operator ---
 
 #[test]
@@ -411,4 +424,3 @@ prefix("x");
     );
     assert_eq!(out, "0");
 }
-

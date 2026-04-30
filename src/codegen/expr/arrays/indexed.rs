@@ -48,11 +48,15 @@ pub(crate) fn emit_array_literal(
 
     let mut actual_elem_ty = PhpType::Int;
     for (i, elem) in elems.iter().enumerate() {
-        let ty = emit_expr(elem, emitter, ctx, data);
+        let mut ty = emit_expr(elem, emitter, ctx, data);
+        let boxed_iterable =
+            crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut ty);
         if i == 0 {
             actual_elem_ty = ty.clone();
         }
-        retain_borrowed_heap_arg(emitter, elem, &ty);
+        if !boxed_iterable {
+            retain_borrowed_heap_arg(emitter, elem, &ty);
+        }
         emitter.instruction("ldr x9, [sp]");                                    // peek array pointer from stack (no pop)
         if i == 0 {
             emit_array_value_type_stamp(emitter, "x9", &ty);
@@ -68,7 +72,7 @@ pub(crate) fn emit_array_literal(
                 emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16)); //store string pointer at data offset
                 emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8)); //store string length right after pointer
             }
-            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
                 emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); // store array/object pointer at data offset
             }
             _ => {}
@@ -108,11 +112,15 @@ fn emit_array_literal_linux_x86_64(
 
     let mut actual_elem_ty = first_ty;
     for (i, elem) in elems.iter().enumerate() {
-        let ty = emit_expr(elem, emitter, ctx, data);
+        let mut ty = emit_expr(elem, emitter, ctx, data);
+        let boxed_iterable =
+            crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut ty);
         if i == 0 {
             actual_elem_ty = ty.clone();
         }
-        retain_borrowed_heap_arg(emitter, elem, &ty);
+        if !boxed_iterable {
+            retain_borrowed_heap_arg(emitter, elem, &ty);
+        }
         emitter.instruction("mov r11, QWORD PTR [rsp]");                        // peek array pointer from the temporary stack slot
         if i == 0 {
             emit_array_value_type_stamp(emitter, "r11", &ty);                   // stamp the packed x86_64 array value_type tag once the first literal element fixes the runtime family
@@ -139,7 +147,7 @@ fn emit_array_literal_linux_x86_64(
                 abi::emit_store_to_address(emitter, ptr_reg, "r11", 24 + i * 16);
                 abi::emit_store_to_address(emitter, len_reg, "r11", 24 + i * 16 + 8);
             }
-            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
                 abi::emit_store_to_address(
                     emitter,
                     abi::int_result_reg(emitter),
@@ -195,11 +203,15 @@ pub(crate) fn emit_array_literal_with_spread(
             }
             emitter.instruction("str x0, [sp]");                                // persist the possibly-grown dest array pointer after the spread merge
         } else {
-            let ty = emit_expr(elem, emitter, ctx, data);
+            let mut ty = emit_expr(elem, emitter, ctx, data);
+            let boxed_iterable =
+                crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut ty);
             if i == 0 || actual_elem_ty == PhpType::Int {
                 actual_elem_ty = ty.clone();
             }
-            retain_borrowed_heap_arg(emitter, elem, &ty);
+            if !boxed_iterable {
+                retain_borrowed_heap_arg(emitter, elem, &ty);
+            }
             emitter.instruction("ldr x9, [sp]");                                // peek dest array pointer from stack
             match &ty {
                 PhpType::Int | PhpType::Bool => {
@@ -266,11 +278,15 @@ fn emit_array_literal_with_spread_linux_x86_64(
             }
             emitter.instruction("mov QWORD PTR [rsp], rax");                    // persist the possibly-grown destination indexed-array pointer after the spread merge
         } else {
-            let ty = emit_expr(elem, emitter, ctx, data);
+            let mut ty = emit_expr(elem, emitter, ctx, data);
+            let boxed_iterable =
+                crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut ty);
             if i == 0 || actual_elem_ty == PhpType::Int {
                 actual_elem_ty = ty.clone();
             }
-            retain_borrowed_heap_arg(emitter, elem, &ty);
+            if !boxed_iterable {
+                retain_borrowed_heap_arg(emitter, elem, &ty);
+            }
             emitter.instruction("mov r11, QWORD PTR [rsp]");                    // reload the destination indexed-array pointer from the stack without popping it
             match &ty {
                 PhpType::Int | PhpType::Bool => {

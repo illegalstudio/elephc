@@ -61,6 +61,20 @@ pub(super) fn coerce_to_string(
             // -- mixed strings dispatch on the boxed payload at runtime --
             abi::emit_call_label(emitter, "__rt_mixed_cast_string");            // cast the boxed mixed payload to string in the ABI string result registers
         }
+        PhpType::Iterable => {
+            // -- iterable values stringify to the literal "Array", matching PHP --
+            let (label, len) = data.add_string(b"Array");
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            abi::emit_symbol_address(emitter, ptr_reg, &label);                 // materialize the literal "Array" address in the active string-pointer result register
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction(&format!("mov {}, #{}", len_reg, len)); // load the literal "Array" byte length into the active AArch64 string-length result register
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("mov {}, {}", len_reg, len));  // load the literal "Array" byte length into the active x86_64 string-length result register
+                }
+            }
+        }
         PhpType::Object(class_name) => {
             if ctx
                 .classes
@@ -240,8 +254,8 @@ pub(super) fn coerce_to_truthiness(emitter: &mut Emitter, ctx: &mut Context, ty:
                 emitter.instruction("movzx rax, al");                           // widen the boolean byte into the canonical integer result register
             }
         }
-    } else if matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-        // -- arrays are truthy when their runtime length is non-zero --
+    } else if matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable) {
+        // -- arrays and iterable hash payloads are truthy when their runtime length is non-zero --
         match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction("ldr x0, [x0]");                            // load the runtime array length from the header

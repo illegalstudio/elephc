@@ -34,6 +34,79 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("gettype()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
+    if matches!(ty, PhpType::Iterable) {
+        let (array_label, array_len) = data.add_string(b"array");
+        let (object_label, object_len) = data.add_string(b"object");
+        let (unknown_label, unknown_len) = data.add_string(b"unknown type");
+        let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+        let array_case = ctx.next_label("builtin_gettype_iter_array");
+        let object_case = ctx.next_label("builtin_gettype_iter_object");
+        let unknown_case = ctx.next_label("builtin_gettype_iter_unknown");
+        let done = ctx.next_label("builtin_gettype_iter_done");
+
+        // -- iterable values are raw heap pointers; resolve their PHP type by reading
+        //    the runtime heap kind and mapping array/hash kinds to "array" --
+        abi::emit_call_label(emitter, "__rt_heap_kind");                        // probe the runtime heap kind tag for the iterable operand
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("cmp x0, #2");                              // is the iterable backed by an indexed array?
+                emitter.instruction(&format!("b.eq {}", array_case));           // indexed arrays report PHP type \"array\"
+                emitter.instruction("cmp x0, #3");                              // is the iterable backed by a hash table?
+                emitter.instruction(&format!("b.eq {}", array_case));           // hash tables also report PHP type \"array\"
+                emitter.instruction("cmp x0, #4");                              // is the iterable backed by an object instance?
+                emitter.instruction(&format!("b.eq {}", object_case));          // object instances report PHP type \"object\"
+                emitter.instruction(&format!("b {}", unknown_case));            // any other heap kind falls back to \"unknown type\"
+            }
+            Arch::X86_64 => {
+                emitter.instruction("cmp rax, 2");                              // is the iterable backed by an indexed array?
+                emitter.instruction(&format!("je {}", array_case));             // indexed arrays report PHP type \"array\"
+                emitter.instruction("cmp rax, 3");                              // is the iterable backed by a hash table?
+                emitter.instruction(&format!("je {}", array_case));             // hash tables also report PHP type \"array\"
+                emitter.instruction("cmp rax, 4");                              // is the iterable backed by an object instance?
+                emitter.instruction(&format!("je {}", object_case));            // object instances report PHP type \"object\"
+                emitter.instruction(&format!("jmp {}", unknown_case));          // any other heap kind falls back to \"unknown type\"
+            }
+        }
+
+        emitter.label(&array_case);
+        abi::emit_symbol_address(emitter, ptr_reg, &array_label);               // materialize the array type-name literal in the active string-pointer result register
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("mov {}, #{}", len_reg, array_len)); // load the array type-name byte length into the active AArch64 string-length result register
+                emitter.instruction(&format!("b {}", done));                    // finish after selecting the array type string on AArch64
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("mov {}, {}", len_reg, array_len)); // load the array type-name byte length into the active x86_64 string-length result register
+                emitter.instruction(&format!("jmp {}", done));                  // finish after selecting the array type string on x86_64
+            }
+        }
+
+        emitter.label(&object_case);
+        abi::emit_symbol_address(emitter, ptr_reg, &object_label);              // materialize the object type-name literal in the active string-pointer result register
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("mov {}, #{}", len_reg, object_len)); // load the object type-name byte length into the active AArch64 string-length result register
+                emitter.instruction(&format!("b {}", done));                    // finish after selecting the object type string on AArch64
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("mov {}, {}", len_reg, object_len)); // load the object type-name byte length into the active x86_64 string-length result register
+                emitter.instruction(&format!("jmp {}", done));                  // finish after selecting the object type string on x86_64
+            }
+        }
+
+        emitter.label(&unknown_case);
+        abi::emit_symbol_address(emitter, ptr_reg, &unknown_label);             // materialize the unknown type-name literal in the active string-pointer result register
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("mov {}, #{}", len_reg, unknown_len)); // load the unknown type-name byte length into the active AArch64 string-length result register
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("mov {}, {}", len_reg, unknown_len)); // load the unknown type-name byte length into the active x86_64 string-length result register
+            }
+        }
+        emitter.label(&done);
+        return Some(PhpType::Str);
+    }
     if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
         let (integer_label, integer_len) = data.add_string(b"integer");
         let (double_label, double_len) = data.add_string(b"double");
@@ -195,6 +268,7 @@ pub fn emit(
         PhpType::Pointer(_) => b"pointer".as_slice(),
         PhpType::Buffer(_) => b"buffer".as_slice(),
         PhpType::Packed(_) => b"packed".as_slice(),
+        PhpType::Iterable => unreachable!("iterable handled above via runtime heap-kind dispatch"),
         PhpType::Mixed | PhpType::Union(_) => unreachable!("mixed handled above"),
     };
     emit_type_name_result(emitter, data, type_str)

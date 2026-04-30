@@ -221,6 +221,7 @@ if ($x === 3) {
 | `bool` | `true`, `false` |
 | `null` | `null` |
 | `mixed` | `mixed $x = 42;`, `function show(mixed $x): string { ... }` |
+| `iterable` | `function walk(iterable $items): iterable { ... }` (array-backed PHP `array \| Traversable` pseudo-type; Traversable objects are future work) |
 | `array` | `[1, 2, 3]`, `["key" => "value"]`, `[[1,2],[3,4]]` (indexed, associative, multi-dimensional, copy-on-write, union with `+`) |
 | `object` | `new Foo()`, `$user->name` |
 | `pointer` | `ptr($x)`, `ptr_null()`, `ptr_cast<int>($p)` |
@@ -239,7 +240,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **Control flow**: if/elseif/else, while, do-while, for, foreach, switch, match, break/continue including multi-level depths, try/catch/finally/throw
 - **Statements and literals**: `const` / `define()` constants, `global` declarations, `static` locals, `print` expressions, list unpacking, PHP numeric literal forms, heredoc / nowdoc strings
 - **Operators**: arithmetic, comparison, `instanceof`, logical, bitwise, ternary, null coalescing (`??`), null coalescing assignment (`??=`), error control (`@`), and compound assignments
-- **Types**: union types (`int|string`), nullable (`?int`), `never` return type, type casting, typed properties, typed function, method, closure, and arrow parameters and returns
+- **Types**: union types (`int|string`), nullable (`?int`), `never` return type, `iterable` pseudo-type, type casting, typed properties, typed function, method, closure, and arrow parameters and returns
 - **Modules**: namespaces, use imports, include/require/require_once, PHP magic constants
 - **FFI**: extern functions, extern blocks, extern globals, extern classes, pointer builtins
 - **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`
@@ -252,7 +253,7 @@ The full list of supported constructs, operators, and control structures is in t
 
 **Math:** `abs`, `floor`, `ceil`, `round`, `sqrt`, `pow`, `min`, `max`, `intdiv`, `fmod`, `fdiv`, `rand`, `mt_rand`, `random_int`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `log`, `log2`, `log10`, `exp`, `hypot`, `deg2rad`, `rad2deg`, `pi`
 
-**Types:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `boolval`, `floatval`
+**Types:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `is_iterable`, `boolval`, `floatval`
 
 **I/O:** `fopen`, `fclose`, `fread`, `fwrite`, `fgets`, `feof`, `readline`, `fseek`, `ftell`, `rewind`, `file_get_contents`, `file_put_contents`, `file`, `fgetcsv`, `fputcsv`, `file_exists`, `is_file`, `is_dir`, `is_readable`, `is_writable`, `filesize`, `filemtime`, `copy`, `rename`, `unlink`, `mkdir`, `rmdir`, `scandir`, `glob`, `getcwd`, `chdir`, `tempnam`, `sys_get_temp_dir`, `var_dump`, `print_r`
 

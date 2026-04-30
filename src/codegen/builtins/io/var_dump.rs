@@ -226,6 +226,53 @@ pub fn emit(
         PhpType::Str => emit_var_dump_string(emitter, data),
         PhpType::Bool => emit_var_dump_bool(emitter, ctx, data),
         PhpType::Void | PhpType::Never => emit_var_dump_null(emitter, data),
+        PhpType::Iterable => {
+            // Iterable values are raw heap pointers. Probe the heap kind and reuse
+            // the array/object var_dump helpers directly, instead of routing through
+            // __rt_mixed_unbox which expects a Mixed cell layout.
+            let array_case = ctx.next_label("vd_iter_array");
+            let object_case = ctx.next_label("vd_iter_object");
+            let null_case = ctx.next_label("vd_iter_null");
+            let done = ctx.next_label("vd_iter_done");
+
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // preserve iterable pointer across heap-kind probe
+            abi::emit_call_label(emitter, "__rt_heap_kind");                    // x0/rax = heap kind tag for the iterable payload
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("cmp x0, #2");                          // iterable backed by indexed array?
+                    emit_branch_if_eq(emitter, &array_case);                    // dispatch the array var_dump path
+                    emitter.instruction("cmp x0, #3");                          // iterable backed by hash table?
+                    emit_branch_if_eq(emitter, &array_case);                    // hash tables also use the array var_dump path
+                    emitter.instruction("cmp x0, #4");                          // iterable backed by an object?
+                    emit_branch_if_eq(emitter, &object_case);                   // dispatch the object var_dump path
+                }
+                Arch::X86_64 => {
+                    emitter.instruction("cmp rax, 2");                          // iterable backed by indexed array?
+                    emit_branch_if_eq(emitter, &array_case);                    // dispatch the array var_dump path
+                    emitter.instruction("cmp rax, 3");                          // iterable backed by hash table?
+                    emit_branch_if_eq(emitter, &array_case);                    // hash tables also use the array var_dump path
+                    emitter.instruction("cmp rax, 4");                          // iterable backed by an object?
+                    emit_branch_if_eq(emitter, &object_case);                   // dispatch the object var_dump path
+                }
+            }
+            abi::emit_jump(emitter, &null_case);                                // null pointers and unknown kinds print as NULL
+
+            emitter.label(&array_case);
+            abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));           // restore the iterable container pointer for the array var_dump prologue
+            emit_var_dump_array(emitter, data);
+            abi::emit_jump(emitter, &done);                                     // finish after printing the array shell
+
+            emitter.label(&object_case);
+            abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));           // restore the iterable object pointer for the object var_dump prologue
+            emit_var_dump_dynamic_object(emitter, ctx, data);
+            abi::emit_jump(emitter, &done);                                     // finish after printing the object marker
+
+            emitter.label(&null_case);
+            abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));           // discard the saved iterable pointer on the null/fallback path
+            emit_var_dump_null(emitter, data);                                  // print NULL for null/unknown iterable payloads
+
+            emitter.label(&done);
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             let int_case = ctx.next_label("vd_mixed_int");
             let string_case = ctx.next_label("vd_mixed_string");

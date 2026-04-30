@@ -454,6 +454,6 @@ fn resolve_buffer_element_type(type_expr: &TypeExpr, ctx: &Context) -> PhpType {
         }
         TypeExpr::Str => PhpType::Str,
         TypeExpr::Void => PhpType::Void,
-        TypeExpr::Nullable(_) | TypeExpr::Union(_) => PhpType::Int,
+        TypeExpr::Nullable(_) | TypeExpr::Union(_) | TypeExpr::Iterable => PhpType::Int,
     }
 }

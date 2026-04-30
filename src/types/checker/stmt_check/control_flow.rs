@@ -28,6 +28,11 @@ impl Checker {
                         env.insert(k.clone(), *key.clone());
                     }
                     env.insert(value_var.clone(), *value.clone());
+                } else if let PhpType::Iterable = &arr_ty {
+                    if let Some(k) = key_var {
+                        env.insert(k.clone(), PhpType::Mixed);
+                    }
+                    env.insert(value_var.clone(), PhpType::Mixed);
                 } else {
                     return Err(CompileError::new(stmt.span, "foreach requires an array"));
                 }

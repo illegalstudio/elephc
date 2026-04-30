@@ -23,6 +23,7 @@ pub(super) fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &P
         }
         PhpType::Void
         | PhpType::Never
+        | PhpType::Iterable
         | PhpType::Mixed
         | PhpType::Union(_)
         | PhpType::Array(_)
@@ -57,6 +58,7 @@ pub(super) fn emit_extern_global_load(emitter: &mut Emitter, name: &str, ty: &Ph
         }
         PhpType::Void
         | PhpType::Never
+        | PhpType::Iterable
         | PhpType::Mixed
         | PhpType::Union(_)
         | PhpType::Array(_)

@@ -532,6 +532,7 @@ pub enum TypeExpr {
     Str,
     Void,
     Never,
+    Iterable,
     Ptr(Option<Name>),
     Buffer(Box<TypeExpr>),
     Named(Name),

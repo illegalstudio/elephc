@@ -188,12 +188,15 @@ fn prepare_property_array_assign_value(
     elem_ty: &PhpType,
 ) -> PhpType {
     let mut val_ty = emit_expr(value, emitter, ctx, data);
-    if matches!(elem_ty, PhpType::Mixed)
+    let boxed_iterable =
+        crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut val_ty);
+    if !boxed_iterable
+        && matches!(elem_ty, PhpType::Mixed)
         && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
     {
         crate::codegen::emit_box_current_value_as_mixed(emitter, &val_ty);
         val_ty = PhpType::Mixed;
-    } else {
+    } else if !boxed_iterable {
         helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
     }
     match &val_ty {

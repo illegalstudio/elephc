@@ -132,6 +132,10 @@ fn parse_atomic_type_expr(
             *pos += 1;
             Ok(TypeExpr::Never)
         }
+        Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("iterable") => {
+            *pos += 1;
+            Ok(TypeExpr::Iterable)
+        }
         Some(Token::Identifier(name)) if matches!(name.as_str(), "ptr" | "pointer") => {
             *pos += 1;
             if *pos < tokens.len() && tokens[*pos].0 == Token::Less {

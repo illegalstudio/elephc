@@ -261,6 +261,7 @@ pub(crate) fn runtime_value_tag(ty: &PhpType) -> u8 {
         PhpType::Object(_) => 6,
         PhpType::Mixed => 7,
         PhpType::Union(_) => 7,
+        PhpType::Iterable => 7,
         PhpType::Void => 8,
         PhpType::Callable | PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) | PhpType::Never => 0,
     }
@@ -291,6 +292,7 @@ pub(crate) fn emit_box_runtime_payload_as_mixed(
 pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Mixed | PhpType::Union(_) => {}
+        PhpType::Iterable => emit_box_iterable_as_mixed(emitter),
         PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction("mov x1, x0");                              // move the current scalar payload into the mixed helper argument register
@@ -362,6 +364,57 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
                     emitter.instruction("call __rt_mixed_from_value");          // box the raw pointer bits into a mixed cell
                 }
             }
+        }
+    }
+}
+
+pub(crate) fn emit_box_iterable_value_for_mixed_container(
+    emitter: &mut Emitter,
+    ty: &mut PhpType,
+) -> bool {
+    if !matches!(ty, PhpType::Iterable) {
+        return false;
+    }
+    emit_box_iterable_as_mixed(emitter);
+    *ty = PhpType::Mixed;
+    true
+}
+
+fn emit_box_iterable_as_mixed(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("str x0, [sp, #-16]!");                         // preserve the iterable heap pointer while probing its concrete heap kind
+            emitter.instruction("bl __rt_heap_kind");                           // classify the raw iterable pointer by its heap-kind tag
+            emitter.instruction("mov x9, x0");                                  // keep the heap kind available for tag normalization
+            emitter.instruction("cmp x0, #2");                                  // is the heap kind at least the indexed-array tag?
+            emitter.instruction("cset x10, hs");                                // record whether the iterable is in the supported heap-backed range lower bound
+            emitter.instruction("cmp x0, #4");                                  // is the heap kind no greater than the object tag?
+            emitter.instruction("cset x11, ls");                                // record whether the iterable is in the supported heap-backed range upper bound
+            emitter.instruction("and x10, x10, x11");                           // combine the lower and upper bound checks into one predicate
+            emitter.instruction("add x9, x9, #2");                              // map heap kind 2/3/4 to mixed tag 4/5/6
+            emitter.instruction("mov x0, #8");                                  // default unknown iterable payloads to the null mixed tag
+            emitter.instruction("cmp x10, #0");                                 // did the heap kind fall inside the supported iterable range?
+            emitter.instruction("csel x0, x9, x0, ne");                         // choose the mapped concrete mixed tag when the range check succeeded
+            emitter.instruction("ldr x1, [sp], #16");                           // restore the iterable heap pointer as the mixed payload low word
+            emitter.instruction("mov x2, xzr");                                 // iterable payloads do not use a high payload word
+            emitter.instruction("bl __rt_mixed_from_value");                    // retain the concrete heap payload and return an owned mixed cell
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(emitter, "rax");                                  // preserve the iterable heap pointer while probing its concrete heap kind
+            emitter.instruction("call __rt_heap_kind");                         // classify the raw iterable pointer by its heap-kind tag
+            emitter.instruction("mov r10, rax");                                // keep the heap kind available for tag normalization
+            emitter.instruction("cmp rax, 2");                                  // is the heap kind at least the indexed-array tag?
+            emitter.instruction("setae r11b");                                  // record whether the iterable is in the supported heap-backed range lower bound
+            emitter.instruction("cmp rax, 4");                                  // is the heap kind no greater than the object tag?
+            emitter.instruction("setbe dl");                                    // record whether the iterable is in the supported heap-backed range upper bound
+            emitter.instruction("and dl, r11b");                                // combine the lower and upper bound checks into one predicate byte
+            emitter.instruction("add r10, 2");                                  // map heap kind 2/3/4 to mixed tag 4/5/6
+            emitter.instruction("mov rax, 8");                                  // default unknown iterable payloads to the null mixed tag
+            emitter.instruction("test dl, dl");                                 // did the heap kind fall inside the supported iterable range?
+            emitter.instruction("cmovne rax, r10");                             // choose the mapped concrete mixed tag when the range check succeeded
+            abi::emit_pop_reg(emitter, "rdi");                                   // restore the iterable heap pointer as the mixed payload low word
+            emitter.instruction("xor rsi, rsi");                                // iterable payloads do not use a high payload word
+            emitter.instruction("call __rt_mixed_from_value");                  // retain the concrete heap payload and return an owned mixed cell
         }
     }
 }

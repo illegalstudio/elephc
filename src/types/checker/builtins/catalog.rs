@@ -111,6 +111,7 @@ pub(crate) fn is_supported_builtin_function(name: &str) -> bool {
             | "is_float"
             | "is_infinite"
             | "is_int"
+            | "is_iterable"
             | "is_nan"
             | "is_null"
             | "is_numeric"

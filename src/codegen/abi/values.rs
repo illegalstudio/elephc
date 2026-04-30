@@ -23,7 +23,8 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
         PhpType::Void | PhpType::Never => {
             store_at_offset(emitter, int_result_reg(emitter), offset);                  // store null sentinel
         }
-        PhpType::Mixed
+        PhpType::Iterable
+        | PhpType::Mixed
         | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
@@ -68,6 +69,9 @@ pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
         PhpType::Object(_) => {
             emit_call_label(emitter, "__rt_decref_object");                             // release object reference
         }
+        PhpType::Iterable => {
+            emit_call_label(emitter, "__rt_decref_any");                                // release the erased iterable payload by inspecting its heap kind
+        }
         _ => {}
     }
 }
@@ -88,7 +92,8 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
         PhpType::Void | PhpType::Never => {
             load_at_offset(emitter, int_result_reg(emitter), offset);                   // load null sentinel
         }
-        PhpType::Mixed
+        PhpType::Iterable
+        | PhpType::Mixed
         | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
@@ -221,6 +226,9 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
         }
         PhpType::Mixed | PhpType::Union(_) => {
             emit_call_label(emitter, "__rt_mixed_write_stdout");
+        }
+        PhpType::Iterable => {
+            emit_call_label(emitter, "__rt_iterable_write_stdout");                     // dispatch echo iterable through the heap-kind-aware writer instead of the mixed-cell writer
         }
         PhpType::Void
         | PhpType::Never

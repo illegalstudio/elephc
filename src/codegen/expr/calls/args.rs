@@ -344,6 +344,14 @@ fn store_current_array_element(
     }
 }
 
+fn variadic_container_elem_ty(elem_ty: &PhpType) -> PhpType {
+    if matches!(elem_ty.codegen_repr(), PhpType::Iterable) {
+        PhpType::Mixed
+    } else {
+        elem_ty.clone()
+    }
+}
+
 pub(crate) fn emit_spread_into_named_params(
     spread_expr: &Expr,
     sig: Option<&FunctionSig>,
@@ -425,7 +433,8 @@ pub(crate) fn emit_variadic_array_arg_from_exprs(
 ) -> PhpType {
     let elem_count = variadic_args.len();
     let first_elem_ty = functions::infer_contextual_type(&variadic_args[0], ctx);
-    let elem_size = match first_elem_ty.codegen_repr() {
+    let container_elem_ty = variadic_container_elem_ty(&first_elem_ty);
+    let elem_size = match container_elem_ty.codegen_repr() {
         PhpType::Str => 16,
         _ => 8,
     };
@@ -438,11 +447,20 @@ pub(crate) fn emit_variadic_array_arg_from_exprs(
     abi::emit_load_int_immediate(emitter, capacity_reg, elem_count as i64);
     abi::emit_load_int_immediate(emitter, elem_size_reg, elem_size as i64);
     abi::emit_call_label(emitter, "__rt_array_new");
-    abi::emit_push_result_value(emitter, &PhpType::Array(Box::new(first_elem_ty.clone())));
+    abi::emit_push_result_value(emitter, &PhpType::Array(Box::new(container_elem_ty.clone())));
 
     for (idx, variadic_arg) in variadic_args.iter().enumerate() {
-        let elem_ty = super::super::emit_expr(variadic_arg, emitter, ctx, data);
-        if retain_heap_values {
+        let mut elem_ty = super::super::emit_expr(variadic_arg, emitter, ctx, data);
+        let boxed_for_container = if matches!(container_elem_ty, PhpType::Mixed)
+            && !matches!(elem_ty, PhpType::Mixed | PhpType::Union(_))
+        {
+            crate::codegen::emit_box_current_value_as_mixed(emitter, &elem_ty);
+            elem_ty = PhpType::Mixed;
+            true
+        } else {
+            false
+        };
+        if retain_heap_values && !boxed_for_container {
             super::super::retain_borrowed_heap_arg(emitter, variadic_arg, &elem_ty);
         }
         match emitter.target.arch {
@@ -461,5 +479,5 @@ pub(crate) fn emit_variadic_array_arg_from_exprs(
         abi::emit_store_to_address(emitter, len_reg, peek_reg, 0);
     }
 
-    PhpType::Array(Box::new(first_elem_ty))
+    PhpType::Array(Box::new(container_elem_ty))
 }

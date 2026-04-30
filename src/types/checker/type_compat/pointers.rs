@@ -42,6 +42,7 @@ impl Checker {
             crate::parser::ast::TypeExpr::Str => Ok(PhpType::Str),
             crate::parser::ast::TypeExpr::Void => Ok(PhpType::Void),
             crate::parser::ast::TypeExpr::Never => Ok(PhpType::Never),
+            crate::parser::ast::TypeExpr::Iterable => Ok(PhpType::Iterable),
             crate::parser::ast::TypeExpr::Nullable(inner) => {
                 let inner_ty = self.resolve_type_expr(inner, span)?;
                 Ok(self.normalize_union_type(vec![inner_ty, PhpType::Void]))

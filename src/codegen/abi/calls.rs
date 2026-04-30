@@ -131,7 +131,8 @@ pub fn emit_store_incoming_param(
             }
         }
         PhpType::Void | PhpType::Never => {}
-        PhpType::Mixed
+        PhpType::Iterable
+        | PhpType::Mixed
         | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
@@ -238,6 +239,7 @@ pub fn emit_push_result_value(emitter: &mut Emitter, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Bool
         | PhpType::Int
+        | PhpType::Iterable
         | PhpType::Mixed
         | PhpType::Union(_)
         | PhpType::Array(_)
@@ -449,6 +451,7 @@ pub fn materialize_outgoing_args(
         match &assignment.ty {
             PhpType::Bool
             | PhpType::Int
+            | PhpType::Iterable
             | PhpType::Mixed
             | PhpType::Union(_)
             | PhpType::Array(_)

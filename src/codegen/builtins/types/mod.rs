@@ -7,6 +7,7 @@ mod is_finite;
 mod is_float;
 mod is_infinite;
 mod is_int;
+mod is_iterable;
 mod is_nan;
 mod is_null;
 mod is_numeric;
@@ -34,6 +35,7 @@ pub fn emit(
         "floatval" => floatval::emit(name, args, emitter, ctx, data),
         "is_float" => is_float::emit(name, args, emitter, ctx, data),
         "is_int" => is_int::emit(name, args, emitter, ctx, data),
+        "is_iterable" => is_iterable::emit(name, args, emitter, ctx, data),
         "is_string" => is_string::emit(name, args, emitter, ctx, data),
         "is_numeric" => is_numeric::emit(name, args, emitter, ctx, data),
         "is_nan" => is_nan::emit(name, args, emitter, ctx, data),

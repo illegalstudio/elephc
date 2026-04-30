@@ -32,7 +32,10 @@ pub(super) fn emit_cast(
                     abi::emit_call_label(emitter, "__rt_atoi");                 // parse the current string result into the active integer result register
                 }
                 PhpType::Array(_) | PhpType::AssocArray { .. } => {
-                    emitter.instruction("ldr x0, [x0]");                        // load array length from header (first field)
+                    emitter.instruction("ldr x0, [x0]");                        // load array/hash container length from header (first field; iterable hash kind shares this layout)
+                }
+                PhpType::Iterable => {
+                    emit_iterable_nonempty_as_int(emitter, ctx);                 // PHP casts array-backed iterables to 0/1 based on emptiness
                 }
                 PhpType::Mixed | PhpType::Union(_) => {
                     abi::emit_call_label(emitter, "__rt_mixed_cast_int");       // cast the boxed mixed payload to int through the target-aware helper
@@ -65,6 +68,10 @@ pub(super) fn emit_cast(
                 PhpType::Mixed | PhpType::Union(_) => {
                     abi::emit_call_label(emitter, "__rt_mixed_cast_float");     // cast the boxed mixed payload to float through the target-aware helper
                 }
+                PhpType::Iterable => {
+                    emit_iterable_nonempty_as_int(emitter, ctx);                 // PHP casts array-backed iterables to 0/1 before float widening
+                    abi::emit_int_result_to_float_result(emitter);              // convert the normalized iterable integer cast to double
+                }
                 PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Callable
@@ -73,7 +80,7 @@ pub(super) fn emit_cast(
                 | PhpType::Packed(_)
                 | PhpType::Pointer(_) => {
                     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
-                    abi::emit_int_result_to_float_result(emitter);              // convert to 0.0 double
+                    abi::emit_int_result_to_float_result(emitter);              // convert to 0.0 double (iterable joins the array group for elephc cast semantics)
                 }
             }
             PhpType::Float
@@ -108,6 +115,70 @@ pub(super) fn emit_cast(
             PhpType::Array(Box::new(PhpType::Int))
         }
     }
+}
+
+fn emit_iterable_nonempty_as_int(emitter: &mut Emitter, ctx: &mut Context) {
+    let array_case = ctx.next_label("iterable_cast_array");
+    let true_case = ctx.next_label("iterable_cast_true");
+    let false_case = ctx.next_label("iterable_cast_false");
+    let done = ctx.next_label("iterable_cast_done");
+
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the erased iterable pointer while checking its heap kind
+    abi::emit_call_label(emitter, "__rt_heap_kind");                            // classify the iterable payload by heap kind before reading its layout
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            emitter.instruction("cmp x0, #2");                                  // is the iterable backed by an indexed array?
+            emitter.instruction(&format!("b.eq {}", array_case));               // arrays cast by checking whether their length is non-zero
+            emitter.instruction("cmp x0, #3");                                  // is the iterable backed by an associative array?
+            emitter.instruction(&format!("b.eq {}", array_case));               // hashes cast by checking whether their length is non-zero
+            emitter.instruction("cmp x0, #4");                                  // is the iterable backed by an object?
+            emitter.instruction(&format!("b.eq {}", true_case));                // objects cast to 1 like PHP object values
+            emitter.instruction(&format!("b {}", false_case));                  // null or unknown payloads cast to 0
+
+            emitter.label(&array_case);
+            abi::emit_pop_reg(emitter, "x9");                                   // restore the array/hash pointer for the length read
+            emitter.instruction("ldr x0, [x9]");                                // load the runtime container length from the shared header
+            emitter.instruction("cmp x0, #0");                                  // check whether the iterable container is empty
+            emitter.instruction("cset x0, ne");                                 // PHP numeric array casts return 1 for non-empty arrays
+            emitter.instruction(&format!("b {}", done));                        // finish after materializing the array-backed cast result
+
+            emitter.label(&true_case);
+            emitter.instruction("add sp, sp, #16");                             // discard the preserved iterable pointer before returning 1
+            emitter.instruction("mov x0, #1");                                  // object-backed iterables cast to integer 1
+            emitter.instruction(&format!("b {}", done));                        // finish after materializing the truthy object cast
+
+            emitter.label(&false_case);
+            emitter.instruction("add sp, sp, #16");                             // discard the preserved iterable pointer before returning 0
+            emitter.instruction("mov x0, #0");                                  // null or unknown iterable payloads cast to integer 0
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            emitter.instruction("cmp rax, 2");                                  // is the iterable backed by an indexed array?
+            emitter.instruction(&format!("je {}", array_case));                 // arrays cast by checking whether their length is non-zero
+            emitter.instruction("cmp rax, 3");                                  // is the iterable backed by an associative array?
+            emitter.instruction(&format!("je {}", array_case));                 // hashes cast by checking whether their length is non-zero
+            emitter.instruction("cmp rax, 4");                                  // is the iterable backed by an object?
+            emitter.instruction(&format!("je {}", true_case));                  // objects cast to 1 like PHP object values
+            emitter.instruction(&format!("jmp {}", false_case));                // null or unknown payloads cast to 0
+
+            emitter.label(&array_case);
+            abi::emit_pop_reg(emitter, "r10");                                  // restore the array/hash pointer for the length read
+            emitter.instruction("mov rax, QWORD PTR [r10]");                    // load the runtime container length from the shared header
+            emitter.instruction("test rax, rax");                               // check whether the iterable container is empty
+            emitter.instruction("setne al");                                    // PHP numeric array casts return 1 for non-empty arrays
+            emitter.instruction("movzx rax, al");                               // widen the boolean byte to the canonical integer result
+            emitter.instruction(&format!("jmp {}", done));                      // finish after materializing the array-backed cast result
+
+            emitter.label(&true_case);
+            abi::emit_pop_reg(emitter, "r10");                                  // discard the preserved iterable pointer before returning 1
+            emitter.instruction("mov rax, 1");                                  // object-backed iterables cast to integer 1
+            emitter.instruction(&format!("jmp {}", done));                      // finish after materializing the truthy object cast
+
+            emitter.label(&false_case);
+            abi::emit_pop_reg(emitter, "r10");                                  // discard the preserved iterable pointer before returning 0
+            emitter.instruction("xor eax, eax");                                // null or unknown iterable payloads cast to integer 0
+        }
+    }
+    emitter.label(&done);
 }
 
 pub(super) fn emit_strict_compare(
@@ -358,13 +429,14 @@ pub(super) fn emit_strict_compare(
             }
             PhpType::Array(_)
             | PhpType::AssocArray { .. }
+            | PhpType::Iterable
             | PhpType::Callable
             | PhpType::Object(_)
             | PhpType::Buffer(_)
             | PhpType::Packed(_)
             | PhpType::Pointer(_) => {
                 let left_reg = abi::symbol_scratch_reg(emitter);
-                abi::emit_pop_reg(emitter, left_reg);                           // pop the saved left array/callable/object pointer from the temporary comparison stack
+                abi::emit_pop_reg(emitter, left_reg);                           // pop the saved left array/callable/object/iterable pointer from the temporary comparison stack
                 emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter))); // compare the two pointers for reference equality
                 match emitter.target.arch {
                     crate::codegen::platform::Arch::AArch64 => {

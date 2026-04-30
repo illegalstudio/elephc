@@ -184,6 +184,8 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_mixed_cast_string(emitter);
     arrays::emit_mixed_write_stdout(emitter);
     arrays::emit_mixed_strict_eq(emitter);
+    arrays::emit_iterable_unsupported_kind(emitter);
+    arrays::emit_iterable_write_stdout(emitter);
     buffers::emit_buffer_new(emitter);
     buffers::emit_buffer_len(emitter);
     buffers::emit_buffer_bounds_fail(emitter);

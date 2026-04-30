@@ -7,6 +7,14 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 use super::super::{Checker, FnDecl};
 
 impl Checker {
+    fn variadic_container_elem_ty(elem_ty: PhpType) -> PhpType {
+        if matches!(elem_ty, PhpType::Iterable) {
+            PhpType::Mixed
+        } else {
+            elem_ty
+        }
+    }
+
     pub fn check_function_call(
         &mut self,
         name: &str,
@@ -329,6 +337,7 @@ impl Checker {
             } else {
                 PhpType::Int
             };
+            let variadic_elem_ty = Self::variadic_container_elem_ty(variadic_elem_ty);
             param_types.push((vp.clone(), PhpType::Array(Box::new(variadic_elem_ty))));
         }
 
@@ -374,6 +383,7 @@ impl Checker {
                 for actual_ty in actual_arg_types.iter().skip(regular_param_count + 1) {
                     elem_ty = Self::wider_type(&elem_ty, actual_ty);
                 }
+                elem_ty = Self::variadic_container_elem_ty(elem_ty);
                 if let Some((_, PhpType::Array(existing_elem_ty))) = stored_sig.params.last_mut() {
                     **existing_elem_ty = Self::wider_type(existing_elem_ty.as_ref(), &elem_ty);
                 }

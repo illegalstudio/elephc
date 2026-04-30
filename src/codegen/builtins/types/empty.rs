@@ -71,6 +71,72 @@ pub fn emit(
                 }
             }
         }
+        PhpType::Iterable => {
+            // -- iterable values are raw heap pointers, so inspect the heap kind before applying empty() --
+            let array_case = ctx.next_label("empty_iterable_array");
+            let false_case = ctx.next_label("empty_iterable_false");
+            let true_case = ctx.next_label("empty_iterable_true");
+            let done = ctx.next_label("empty_iterable_done");
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("str x0, [sp, #-16]!");                 // preserve the iterable pointer while checking its heap kind
+                    emitter.instruction("bl __rt_heap_kind");                   // classify the raw iterable pointer by heap kind
+                    emitter.instruction("cmp x0, #2");                          // is this iterable backed by an indexed array?
+                    emitter.instruction(&format!("b.eq {}", array_case));       // indexed arrays are empty only when their length is zero
+                    emitter.instruction("cmp x0, #3");                          // is this iterable backed by an associative array?
+                    emitter.instruction(&format!("b.eq {}", array_case));       // associative arrays are empty only when their length is zero
+                    emitter.instruction("cmp x0, #4");                          // is this iterable backed by an object?
+                    emitter.instruction(&format!("b.eq {}", false_case));       // objects are never empty in PHP
+                    emitter.instruction(&format!("b {}", true_case));           // null/unknown iterable payloads are treated as empty
+
+                    emitter.label(&array_case);
+                    emitter.instruction("ldr x9, [sp], #16");                   // restore the array/hash pointer from the temporary stack slot
+                    emitter.instruction("ldr x0, [x9]");                        // load the container element count from the shared header layout
+                    emitter.instruction("cmp x0, #0");                          // compare the iterable container length against zero
+                    emitter.instruction("cset x0, eq");                         // return true only when the iterable container has no elements
+                    emitter.instruction(&format!("b {}", done));                // finish after the array/hash empty result is materialized
+
+                    emitter.label(&false_case);
+                    emitter.instruction("add sp, sp, #16");                     // discard the preserved iterable pointer before returning false
+                    emitter.instruction("mov x0, #0");                          // object-backed iterables are not empty
+                    emitter.instruction(&format!("b {}", done));                // finish after the false result is materialized
+
+                    emitter.label(&true_case);
+                    emitter.instruction("add sp, sp, #16");                     // discard the preserved iterable pointer before returning true
+                    emitter.instruction("mov x0, #1");                          // null or unknown iterable payloads are empty
+                    emitter.label(&done);
+                }
+                Arch::X86_64 => {
+                    abi::emit_push_reg(emitter, "rax");                         // preserve the iterable pointer while checking its heap kind
+                    emitter.instruction("call __rt_heap_kind");                 // classify the raw iterable pointer by heap kind
+                    emitter.instruction("cmp rax, 2");                          // is this iterable backed by an indexed array?
+                    emitter.instruction(&format!("je {}", array_case));         // indexed arrays are empty only when their length is zero
+                    emitter.instruction("cmp rax, 3");                          // is this iterable backed by an associative array?
+                    emitter.instruction(&format!("je {}", array_case));         // associative arrays are empty only when their length is zero
+                    emitter.instruction("cmp rax, 4");                          // is this iterable backed by an object?
+                    emitter.instruction(&format!("je {}", false_case));         // objects are never empty in PHP
+                    emitter.instruction(&format!("jmp {}", true_case));         // null/unknown iterable payloads are treated as empty
+
+                    emitter.label(&array_case);
+                    abi::emit_pop_reg(emitter, "r10");                          // restore the array/hash pointer from the temporary stack slot
+                    emitter.instruction("mov rax, QWORD PTR [r10]");            // load the container element count from the shared header layout
+                    emitter.instruction("cmp rax, 0");                          // compare the iterable container length against zero
+                    emitter.instruction("sete al");                             // return true only when the iterable container has no elements
+                    emitter.instruction("movzx rax, al");                       // widen the boolean byte into the canonical integer result
+                    emitter.instruction(&format!("jmp {}", done));              // finish after the array/hash empty result is materialized
+
+                    emitter.label(&false_case);
+                    abi::emit_pop_reg(emitter, "r10");                          // discard the preserved iterable pointer before returning false
+                    emitter.instruction("xor eax, eax");                        // object-backed iterables are not empty
+                    emitter.instruction(&format!("jmp {}", done));              // finish after the false result is materialized
+
+                    emitter.label(&true_case);
+                    abi::emit_pop_reg(emitter, "r10");                          // discard the preserved iterable pointer before returning true
+                    emitter.instruction("mov eax, 1");                          // null or unknown iterable payloads are empty
+                    emitter.label(&done);
+                }
+            }
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             // -- mixed values use PHP empty() semantics for the boxed payload --
             abi::emit_call_label(emitter, "__rt_mixed_is_empty");               // inspect the boxed payload instead of the mixed box pointer through the target-aware runtime helper

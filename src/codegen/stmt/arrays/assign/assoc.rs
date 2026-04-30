@@ -32,10 +32,15 @@ pub(super) fn emit_assoc_array_assign(
     abi::emit_push_reg_pair(emitter, key_ptr_reg, key_len_reg);                       // preserve the computed key pointer and length while evaluating the value expression
 
     let mut val_ty = emit_expr(value, emitter, ctx, data);
-    if matches!(target.elem_ty, PhpType::Mixed) && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_)) {
+    let boxed_iterable =
+        crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut val_ty);
+    if !boxed_iterable
+        && matches!(target.elem_ty, PhpType::Mixed)
+        && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
+    {
         super::super::super::super::emit_box_current_value_as_mixed(emitter, &val_ty);
         val_ty = PhpType::Mixed;
-    } else {
+    } else if !boxed_iterable {
         super::super::super::helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
     }
 

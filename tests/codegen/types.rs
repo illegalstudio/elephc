@@ -13,3 +13,5 @@ mod named_arguments;
 mod examples;
 #[path = "types/never.rs"]
 mod never;
+#[path = "types/iterable.rs"]
+mod iterable;
