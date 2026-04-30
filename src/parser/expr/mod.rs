@@ -1,3 +1,4 @@
+mod assignment_targets;
 mod calls;
 mod prefix;
 mod prefix_complex;

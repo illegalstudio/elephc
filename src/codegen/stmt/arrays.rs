@@ -7,7 +7,7 @@ use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use crate::parser::ast::Expr;
 
-pub(super) fn emit_array_assign_stmt(
+pub(crate) fn emit_array_assign_stmt(
     array: &str,
     index: &Expr,
     value: &Expr,

@@ -164,6 +164,122 @@ echo $x;
 }
 
 #[test]
+fn test_array_assignment_expression_returns_assigned_value() {
+    let out = compile_and_run("<?php $items = [1, 2]; echo ($items[1] = 9); echo ':' . $items[1];");
+    assert_eq!(out, "9:9");
+}
+
+#[test]
+fn test_array_assignment_expression_variable_index_returns_assigned_value() {
+    let out = compile_and_run("<?php $items = [1, 2]; $i = 1; echo ($items[$i] = 9); echo ':' . $items[1];");
+    assert_eq!(out, "9:9");
+}
+
+#[test]
+fn test_array_compound_assignment_expression_returns_new_value() {
+    let out = compile_and_run("<?php $items = [3]; echo ($items[0] += 4); echo ':' . $items[0];");
+    assert_eq!(out, "7:7");
+}
+
+#[test]
+fn test_assoc_array_assignment_expression_returns_assigned_value() {
+    let out = compile_and_run(
+        r#"<?php
+$items = ["count" => 2];
+echo ($items["count"] += 5);
+echo ":" . $items["count"];
+"#,
+    );
+    assert_eq!(out, "7:7");
+}
+
+#[test]
+fn test_array_null_coalesce_assignment_expression_returns_slot_value() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [5, 8];
+echo ($items[0] ??= 5);
+echo ":";
+echo ($items[1] ??= 6);
+echo ":" . $items[0] . ":" . $items[1];
+"#,
+    );
+    assert_eq!(out, "5:8:5:8");
+}
+
+#[test]
+fn test_property_assignment_expression_returns_assigned_value() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public $value = 1;
+}
+$box = new Box();
+echo ($box->value += 4);
+echo ":" . $box->value;
+"#,
+    );
+    assert_eq!(out, "5:5");
+}
+
+#[test]
+fn test_property_array_assignment_expression_returns_assigned_value() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public $items = [2, 4];
+}
+$box = new Box();
+echo ($box->items[1] *= 3);
+echo ":" . $box->items[1];
+"#,
+    );
+    assert_eq!(out, "12:12");
+}
+
+#[test]
+fn test_static_property_assignment_expression_returns_assigned_value() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    public static $count = 10;
+}
+echo (Registry::$count += 5);
+echo ":" . Registry::$count;
+"#,
+    );
+    assert_eq!(out, "15:15");
+}
+
+#[test]
+fn test_static_property_array_assignment_expression_returns_assigned_value() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    public static $items = [3, 5];
+}
+echo (Registry::$items[0] += 3);
+echo ":" . Registry::$items[0];
+"#,
+    );
+    assert_eq!(out, "6:6");
+}
+
+#[test]
+fn test_static_property_null_coalesce_assignment_expression_returns_value() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    public static ?int $value = null;
+}
+echo (Registry::$value ??= 6);
+echo ":" . Registry::$value;
+"#,
+    );
+    assert_eq!(out, "6:6");
+}
+
+#[test]
 fn test_assignment_expression_right_associative_codegen() {
     let out = compile_and_run("<?php $x = $y = 4; echo $x; echo ':'; echo $y;");
     assert_eq!(out, "4:4");

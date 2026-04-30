@@ -182,6 +182,57 @@ fn test_assignment_expression_is_right_associative() {
 }
 
 #[test]
+fn test_non_local_assignment_expression_parses_array_target() {
+    let stmts = parse_source("<?php echo ($items[$i] = 2);");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::Assignment { target, value } => {
+                assert!(matches!(value.kind, ExprKind::IntLiteral(2)));
+                match &target.kind {
+                    ExprKind::ArrayAccess { array, index } => {
+                        assert!(matches!(array.kind, ExprKind::Variable(ref name) if name == "items"));
+                        assert!(matches!(index.kind, ExprKind::Variable(ref name) if name == "i"));
+                    }
+                    other => panic!("expected array target, got {:?}", other),
+                }
+            }
+            other => panic!("expected assignment expression, got {:?}", other),
+        },
+        other => panic!("expected Echo, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_non_local_assignment_expression_parses_property_target() {
+    let stmts = parse_source("<?php echo ($box->value += 2);");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::Assignment { target, value } => {
+                assert!(matches!(target.kind, ExprKind::PropertyAccess { .. }));
+                assert!(matches!(value.kind, ExprKind::BinaryOp { op: BinOp::Add, .. }));
+            }
+            other => panic!("expected assignment expression, got {:?}", other),
+        },
+        other => panic!("expected Echo, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_non_local_assignment_expression_parses_static_property_target() {
+    let stmts = parse_source("<?php echo (Registry::$count ??= 1);");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::Assignment { target, value } => {
+                assert!(matches!(target.kind, ExprKind::StaticPropertyAccess { .. }));
+                assert!(matches!(value.kind, ExprKind::NullCoalesce { .. }));
+            }
+            other => panic!("expected assignment expression, got {:?}", other),
+        },
+        other => panic!("expected Echo, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_short_ternary_expression() {
     let stmts = parse_source("<?php echo $a ?: $b;");
     let expected = Stmt::echo(Expr::new(

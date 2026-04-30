@@ -442,7 +442,29 @@ fn collect_expr_written_names(expr: &Expr, written: &mut Vec<String>) {
         | ExprKind::PostIncrement(name)
         | ExprKind::PreDecrement(name)
         | ExprKind::PostDecrement(name) => push_written_name(written, name),
+        ExprKind::Assignment { target, value } => {
+            collect_expr_written_names(value, written);
+            collect_assignment_target_written_names(target, written);
+        }
         _ => {}
+    }
+}
+
+fn collect_assignment_target_written_names(target: &Expr, written: &mut Vec<String>) {
+    match &target.kind {
+        ExprKind::Variable(name) => push_written_name(written, name),
+        ExprKind::ArrayAccess { array, index } => {
+            if let ExprKind::Variable(name) = &array.kind {
+                push_written_name(written, name);
+            }
+            collect_expr_written_names(array, written);
+            collect_expr_written_names(index, written);
+        }
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::NullsafePropertyAccess { object, .. } => {
+            collect_expr_written_names(object, written);
+        }
+        _ => collect_expr_written_names(target, written),
     }
 }
 

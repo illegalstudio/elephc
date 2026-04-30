@@ -2,9 +2,14 @@ use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::names::Name;
 use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind};
+use crate::parser::stmt::can_replay_assignment_target;
 use crate::parser::stmt::parse_name;
 use crate::span::Span;
 
+use super::assignment_targets::{
+    assignment_value_may_mutate_target_dependency, is_assignment_expression_target,
+    is_non_local_assignment_target,
+};
 use super::calls::parse_first_class_callable_parens;
 use super::parse_args;
 use super::prefix::parse_prefix;
@@ -205,18 +210,27 @@ pub(super) fn parse_expr_bp(
                 break;
             }
 
-            if !matches!(&lhs.kind, ExprKind::Variable(_)) {
-                let message = if is_non_local_assignment_target(&lhs) {
-                    "Assignment expressions currently support variable targets only"
-                } else {
-                    "Invalid assignment target"
-                };
-                return Err(CompileError::new(lhs.span, message));
+            if !is_assignment_expression_target(&lhs) {
+                return Err(CompileError::new(lhs.span, "Invalid assignment target"));
+            }
+            if is_non_local_assignment_target(&lhs) && !can_replay_assignment_target(&lhs) {
+                return Err(CompileError::new(
+                    lhs.span,
+                    "Non-local assignment expression target must be replayable",
+                ));
             }
 
             let span = tokens[*pos].1;
             *pos += 1;
             let rhs = parse_expr_bp(tokens, pos, r_bp)?;
+            if is_non_local_assignment_target(&lhs)
+                && assignment_value_may_mutate_target_dependency(&lhs, &rhs)
+            {
+                return Err(CompileError::new(
+                    lhs.span,
+                    "Non-local assignment expression target must stay stable across the assigned value",
+                ));
+            }
             let value = assignment_value(lhs.clone(), op, rhs, span);
             lhs = Expr::new(
                 ExprKind::Assignment {
@@ -310,15 +324,6 @@ fn assignment_value(target: Expr, op: AssignmentOperator, rhs: Expr, span: Span)
             span,
         ),
     }
-}
-
-fn is_non_local_assignment_target(expr: &Expr) -> bool {
-    matches!(
-        &expr.kind,
-        ExprKind::ArrayAccess { .. }
-            | ExprKind::PropertyAccess { .. }
-            | ExprKind::StaticPropertyAccess { .. }
-    )
 }
 
 fn parse_instanceof_target(

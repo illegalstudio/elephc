@@ -11,6 +11,9 @@ pub(super) use locals::{
     parse_static_var,
     parse_typed_assign,
 };
+pub(crate) use postfix::{
+    can_replay_assignment_target,
+};
 pub(super) use postfix::{
     try_parse_postfix_assignment,
     try_parse_scoped_property_assignment,

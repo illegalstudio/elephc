@@ -1,5 +1,8 @@
 use crate::errors::CompileError;
-use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
+use crate::parser::ast::{
+    BinOp, CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
+};
+use crate::span::Span;
 use crate::types::{
     merge_array_key_types, normalized_array_key_type, packed_type_size, PhpType, TypeEnv,
 };
@@ -14,18 +17,9 @@ impl Checker {
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
         match &expr.kind {
-            ExprKind::Assignment { target, value } => match &target.kind {
-                ExprKind::Variable(name) => {
-                    self.check_local_assignment_expression(name, value, expr.span, env)
-                }
-                ExprKind::ArrayAccess { .. }
-                | ExprKind::PropertyAccess { .. }
-                | ExprKind::StaticPropertyAccess { .. } => Err(CompileError::new(
-                    expr.span,
-                    "Assignment expressions currently support variable targets only",
-                )),
-                _ => Err(CompileError::new(expr.span, "Invalid assignment target")),
-            },
+            ExprKind::Assignment { target, value } => {
+                self.check_assignment_expression(target, value, expr.span, env)
+            }
             ExprKind::BinaryOp { left, op, right } => {
                 self.infer_type_with_assignment_effects(left, env)?;
                 if matches!(op, BinOp::And | BinOp::Or) {
@@ -474,24 +468,10 @@ impl Checker {
                     Ok(wider_type_syntactic(&vt, &dt))
                 }
             }
-            ExprKind::Assignment { target, value } => match &target.kind {
-                ExprKind::Variable(name) => {
-                    let mut scoped_env = env.clone();
-                    self.check_local_assignment_expression(
-                        name,
-                        value,
-                        expr.span,
-                        &mut scoped_env,
-                    )
-                }
-                ExprKind::ArrayAccess { .. }
-                | ExprKind::PropertyAccess { .. }
-                | ExprKind::StaticPropertyAccess { .. } => Err(CompileError::new(
-                    expr.span,
-                    "Assignment expressions currently support variable targets only",
-                )),
-                _ => Err(CompileError::new(expr.span, "Invalid assignment target")),
-            },
+            ExprKind::Assignment { target, value } => {
+                let mut scoped_env = env.clone();
+                self.check_assignment_expression(target, value, expr.span, &mut scoped_env)
+            }
             ExprKind::ConstRef(name) => {
                 self.constants.get(name.as_str()).cloned().ok_or_else(|| {
                     CompileError::new(expr.span, &format!("Undefined constant: {}", name))
@@ -623,6 +603,60 @@ impl Checker {
                 unreachable!("MagicConstant must be lowered before type inference")
             }
         }
+    }
+
+    fn check_assignment_expression(
+        &mut self,
+        target: &Expr,
+        value: &Expr,
+        span: Span,
+        env: &mut TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        if let ExprKind::Variable(name) = &target.kind {
+            return self.check_local_assignment_expression(name, value, span, env);
+        }
+
+        let stmt_kind = match &target.kind {
+            ExprKind::ArrayAccess { array, index } => match &array.kind {
+                ExprKind::Variable(array) => StmtKind::ArrayAssign {
+                    array: array.clone(),
+                    index: *index.clone(),
+                    value: value.clone(),
+                },
+                ExprKind::PropertyAccess { object, property } => StmtKind::PropertyArrayAssign {
+                    object: object.clone(),
+                    property: property.clone(),
+                    index: *index.clone(),
+                    value: value.clone(),
+                },
+                ExprKind::StaticPropertyAccess { receiver, property } => {
+                    StmtKind::StaticPropertyArrayAssign {
+                        receiver: receiver.clone(),
+                        property: property.clone(),
+                        index: *index.clone(),
+                        value: value.clone(),
+                    }
+                }
+                _ => return Err(CompileError::new(span, "Invalid assignment target")),
+            },
+            ExprKind::PropertyAccess { object, property } => StmtKind::PropertyAssign {
+                object: object.clone(),
+                property: property.clone(),
+                value: value.clone(),
+            },
+            ExprKind::StaticPropertyAccess { receiver, property } => {
+                StmtKind::StaticPropertyAssign {
+                    receiver: receiver.clone(),
+                    property: property.clone(),
+                    value: value.clone(),
+                }
+            }
+            _ => return Err(CompileError::new(span, "Invalid assignment target")),
+        };
+
+        let stmt = Stmt::new(stmt_kind, span);
+        self.check_assignment_like_stmt(&stmt, env)?;
+        self.infer_type(target, env)
     }
 
 }

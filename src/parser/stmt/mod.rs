@@ -15,6 +15,7 @@ use crate::span::Span;
 
 pub use ffi::parse_extern_stmts;
 pub(crate) use params::{looks_like_typed_param, parse_type_expr};
+pub(crate) use assign::can_replay_assignment_target;
 
 pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, CompileError> {
     let span = tokens[*pos].1;

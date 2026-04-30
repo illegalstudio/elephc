@@ -22,7 +22,14 @@ pub(crate) use null_coalesce_assign::{
     null_coalesce_static_property_array_target,
     null_coalesce_static_property_target,
 };
-pub(crate) use assignments::emit_assign_stmt;
+pub(crate) use arrays::emit_array_assign_stmt;
+pub(crate) use assignments::{
+    emit_assign_stmt,
+    emit_property_array_assign_stmt,
+    emit_property_assign_stmt,
+    emit_static_property_array_assign_stmt,
+    emit_static_property_assign_stmt,
+};
 pub(crate) use io::emit_expr_to_stdout;
 
 fn current_function_name(ctx: &Context) -> String {

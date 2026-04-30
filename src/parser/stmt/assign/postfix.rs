@@ -180,7 +180,7 @@ fn find_top_level_assignment(
     None
 }
 
-fn can_replay_assignment_target(expr: &Expr) -> bool {
+pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
         ExprKind::ArrayAccess { array, index } => {

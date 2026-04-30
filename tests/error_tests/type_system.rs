@@ -79,10 +79,18 @@ fn test_error_assignment_expression_rejects_non_lvalue() {
 }
 
 #[test]
-fn test_error_assignment_expression_rejects_non_local_target() {
+fn test_error_assignment_expression_rejects_effectful_non_local_target() {
     expect_error(
-        "<?php echo ($items[0] = 2);",
-        "Assignment expressions currently support variable targets only",
+        "<?php function idx() { return 0; } $items = [1]; echo ($items[idx()] = 2);",
+        "Non-local assignment expression target must be replayable",
+    );
+}
+
+#[test]
+fn test_error_assignment_expression_rejects_mutated_non_local_target_dependency() {
+    expect_error(
+        "<?php $items = [1, 2]; $i = 0; echo ($items[$i] = ($i = 1));",
+        "Non-local assignment expression target must stay stable across the assigned value",
     );
 }
 
