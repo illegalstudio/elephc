@@ -98,6 +98,19 @@ $x = "hello";  // ← Type error: cannot reassign $x from Int to Str
 
 This is intentional — it lets the compiler know exactly what `$x` is at every point, without needing runtime type tags.
 
+## Statement checks
+
+Statement checking validates control-flow constraints that are not expression
+types. `foreach` requires an indexed or associative array input and binds the
+key/value variables to the inferred element types. `break` and `continue`
+track the active loop/switch target depth, so `break 2;` is accepted only when
+two enclosing break/continue targets exist in the current function or closure
+body. Function, method, and closure bodies reset that depth so an inner
+declaration cannot target an outer loop. `finally` bodies also record the
+target depth at entry: `break` or `continue` may target loops/switches created
+inside that `finally`, but jumping out of a `finally` block is rejected to match
+PHP.
+
 ## Expression type inference
 
 The type checker computes the type of every expression:

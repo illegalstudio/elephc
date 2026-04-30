@@ -758,6 +758,10 @@ before jumping to the selected target or shared function epilogue. If the exit
 crosses a `finally`, codegen records the selected target and runs the active
 `finally` chain before resuming the branch.
 
+The type checker rejects `break` / `continue` that would jump out of a
+`finally` body, so codegen only has to route legal exits from protected `try` or
+`catch` bodies through `finally_stack`.
+
 ### Exceptions and `finally`
 
 Exception lowering lives in `src/codegen/stmt/control_flow/exceptions.rs`. The basic strategy is:
@@ -766,7 +770,7 @@ Exception lowering lives in `src/codegen/stmt/control_flow/exceptions.rs`. The b
 2. Call `__rt_throw_current`, which unwinds activation records and `longjmp`s into the nearest handler
 3. For `try`, emit a `_setjmp` resume point plus a linked handler record in `_exc_handler_top`
 4. Test each catch target by class id or interface id through `__rt_exception_matches`
-5. Route `return`, `break`, `continue`, and rethrow through `finally_stack` so every enclosing `finally` runs before control leaves the protected region
+5. Route `return`, `break`, `continue`, and rethrow through `finally_stack` so every enclosing `finally` runs before control leaves the protected region. The checker rejects `break` / `continue` that would originate inside a `finally` and target an outer loop/switch.
 
 This means `finally` is part of ordinary control-flow lowering, not a separate runtime pass. The runtime only unwinds frames and chooses the landing pad; the compiler-generated labels still decide whether execution resumes in a matching `catch`, in a `finally`, or in an outer handler.
 

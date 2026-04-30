@@ -325,11 +325,12 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `true` / `false` | Return `BoolLiteral` node |
 | `null` | Return `Null` node |
 | `Variable` | Return `Variable` node (with postfix `++`/`--` check) |
-| `throw` | Parse the following expression and wrap it in `ExprKind::Throw` |
-| `-` (minus) | Parse inner expr at bp=27, return `Negate` |
-| `!` (not) | Parse inner expr at bp=27, return `Not` |
-| `~` (bitwise not) | Parse inner expr at bp=27, return `BitNot` |
-| `@` (error control) | Parse inner expr at unary precedence, return `ErrorSuppress` |
+| `throw` | Parse the following expression at the lowest precedence and wrap it in `ExprKind::Throw` |
+| `print` | Parse the operand at ternary-level precedence (bp=7, above word logical operators) and wrap it in `ExprKind::Print` |
+| `-` (minus) | Parse inner expr at unary precedence (bp=35), return `Negate` |
+| `!` (not) | Parse inner expr at unary precedence (bp=35), return `Not` |
+| `~` (bitwise not) | Parse inner expr at unary precedence (bp=35), return `BitNot` |
+| `@` (error control) | Parse inner expr at unary precedence (bp=35), return `ErrorSuppress` |
 | `++` / `--` | Return `PreIncrement` / `PreDecrement` |
 | `(int)` / `(float)` / ... | Parse inner expr, return `Cast` |
 | `(` | Parse inner expr, expect `)`, return inner expr (and allow a later postfix call like `(expr)(args)`) |

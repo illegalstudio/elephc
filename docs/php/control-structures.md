@@ -188,3 +188,4 @@ Supported subset:
 - multiple `catch` clauses
 - `try { ... } finally { ... }`
 - `return`, `break`, and `continue` run enclosing `finally` blocks before leaving
+- `break` and `continue` written inside a `finally` block cannot target an outer loop or `switch`

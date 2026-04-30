@@ -19,7 +19,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 
 - [Types](php/types.md) — int, float, string, bool, array, null, mixed, callable, enum, union types, extension types, type casting
 - [Operators](php/operators.md) — arithmetic, comparison, `instanceof`, logical, bitwise, string, assignment, ternary, null coalescing, error control
-- [Control Structures](php/control-structures.md) — if/else, while, for, foreach, switch, match, try/catch/finally
+- [Control Structures](php/control-structures.md) — if/else, while, for, foreach, switch, match, multi-level break/continue, try/catch/finally
 - [Functions](php/functions.md) — declarations, closures, arrow functions, variadic, spread, pass-by-reference, static variables
 - [Strings](php/strings.md) — escape sequences, interpolation, heredoc/nowdoc, 55+ built-in string functions
 - [Arrays](php/arrays.md) — indexed, associative, copy-on-write, 50+ built-in array functions
