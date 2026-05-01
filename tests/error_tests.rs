@@ -201,3 +201,33 @@ fn test_error_iterator_aggregate_cannot_be_redeclared() {
         "Cannot redeclare built-in interface: IteratorAggregate",
     );
 }
+
+#[test]
+fn test_error_iterator_method_requires_declared_return_type() {
+    expect_error(
+        "<?php
+class Bad implements Iterator {
+    public function current() { return 1; }
+    public function key(): mixed { return 0; }
+    public function next(): void {}
+    public function valid(): bool { return true; }
+    public function rewind(): void {}
+}",
+        "Cannot implement interface method Bad::current without declaring a compatible return type",
+    );
+}
+
+#[test]
+fn test_error_iterator_method_rejects_incompatible_return_type() {
+    expect_error(
+        "<?php
+class Bad implements Iterator {
+    public function current(): mixed { return 1; }
+    public function key(): mixed { return 0; }
+    public function next(): void {}
+    public function valid(): int { return 1; }
+    public function rewind(): void {}
+}",
+        "Cannot implement interface method Bad::valid with incompatible return type int",
+    );
+}

@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
-use crate::parser::ast::{ClassMethod, Visibility};
+use crate::names::Name;
+use crate::parser::ast::{ClassMethod, TypeExpr, Visibility};
 use crate::types::traits::FlattenedClass;
-use crate::types::PhpType;
 
-use super::Checker;
 use super::builtin_types::InterfaceDeclInfo;
 
 pub(crate) fn inject_builtin_iterators(
@@ -27,11 +26,11 @@ pub(crate) fn inject_builtin_iterators(
             name: "Iterator".to_string(),
             extends: Vec::new(),
             methods: vec![
-                builtin_iterator_method("current"),
-                builtin_iterator_method("key"),
-                builtin_iterator_method("next"),
-                builtin_iterator_method("valid"),
-                builtin_iterator_method("rewind"),
+                builtin_iterator_method("current", TypeExpr::Named(Name::unqualified("mixed"))),
+                builtin_iterator_method("key", TypeExpr::Named(Name::unqualified("mixed"))),
+                builtin_iterator_method("next", TypeExpr::Void),
+                builtin_iterator_method("valid", TypeExpr::Bool),
+                builtin_iterator_method("rewind", TypeExpr::Void),
             ],
             span: crate::span::Span::dummy(),
         },
@@ -42,7 +41,10 @@ pub(crate) fn inject_builtin_iterators(
         InterfaceDeclInfo {
             name: "IteratorAggregate".to_string(),
             extends: Vec::new(),
-            methods: vec![builtin_iterator_method("getIterator")],
+            methods: vec![builtin_iterator_method(
+                "getIterator",
+                TypeExpr::Named(Name::unqualified("Iterator")),
+            )],
             span: crate::span::Span::dummy(),
         },
     );
@@ -50,7 +52,7 @@ pub(crate) fn inject_builtin_iterators(
     Ok(())
 }
 
-fn builtin_iterator_method(name: &str) -> ClassMethod {
+fn builtin_iterator_method(name: &str, return_type: TypeExpr) -> ClassMethod {
     ClassMethod {
         name: name.to_string(),
         visibility: Visibility::Public,
@@ -60,31 +62,8 @@ fn builtin_iterator_method(name: &str) -> ClassMethod {
         has_body: false,
         params: Vec::new(),
         variadic: None,
-        return_type: None,
+        return_type: Some(return_type),
         body: Vec::new(),
         span: crate::span::Span::dummy(),
-    }
-}
-
-pub(crate) fn patch_builtin_iterator_signatures(checker: &mut Checker) {
-    if let Some(info) = checker.interfaces.get_mut("Iterator") {
-        for (name, ty) in &[
-            ("current", PhpType::Mixed),
-            ("key", PhpType::Mixed),
-            ("next", PhpType::Void),
-            ("valid", PhpType::Bool),
-            ("rewind", PhpType::Void),
-        ] {
-            if let Some(sig) = info.methods.get_mut(*name) {
-                sig.return_type = ty.clone();
-            }
-        }
-    }
-    if let Some(info) = checker.interfaces.get_mut("IteratorAggregate") {
-        if let Some(sig) = info.methods.get_mut("getIterator") {
-            // PHP returns Traversable; elephc treats it as Iterator since
-            // we don't model Traversable as a separate parent interface.
-            sig.return_type = PhpType::Object("Iterator".to_string());
-        }
     }
 }

@@ -7,7 +7,8 @@ use crate::types::traits::FlattenedClass;
 
 use super::super::{infer_expr_type_syntactic, Checker};
 use super::validation::{
-    build_constructor_param_map, build_method_sig, validate_override_signature,
+    build_constructor_param_map, build_method_sig, declared_return_type_compatible,
+    validate_override_signature,
     validate_signature_compatibility, visibility_rank,
 };
 
@@ -656,7 +657,7 @@ pub(crate) fn build_class_info_recursive(
     }
 
     for interface_name in &interfaces {
-        let interface_info = checker.interfaces.get(interface_name).ok_or_else(|| {
+        let interface_info = checker.interfaces.get(interface_name).cloned().ok_or_else(|| {
             CompileError::new(
                 crate::span::Span::dummy(),
                 &format!("Unknown interface: {}", interface_name),
@@ -719,8 +720,26 @@ pub(crate) fn build_class_info_recursive(
                     ),
                 ));
             }
+            if let PhpType::Object(actual_name) = &actual_sig.return_type {
+                if actual_name != &class.name
+                    && class_map.contains_key(actual_name)
+                    && !checker.classes.contains_key(actual_name)
+                {
+                    build_class_info_recursive(
+                        actual_name,
+                        class_map,
+                        checker,
+                        next_class_id,
+                        building,
+                    )?;
+                }
+            }
             if required_sig.declared_return
-                && !Checker::types_compatible(&required_sig.return_type, &actual_sig.return_type)
+                && !declared_return_type_compatible(
+                    checker,
+                    &required_sig.return_type,
+                    &actual_sig.return_type,
+                )
             {
                 return Err(CompileError::new(
                     actual_method.map(|m| m.span).unwrap_or_else(crate::span::Span::dummy),

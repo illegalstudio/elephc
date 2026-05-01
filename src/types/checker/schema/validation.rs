@@ -180,6 +180,14 @@ pub(crate) fn validate_signature_compatibility(
     Ok(())
 }
 
+pub(crate) fn declared_return_type_compatible(
+    checker: &Checker,
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    matches!(actual, PhpType::Never) || checker.type_accepts(expected, actual)
+}
+
 pub(crate) fn validate_override_signature(
     checker: &Checker,
     class_name: &str,
@@ -211,7 +219,7 @@ pub(crate) fn validate_override_signature(
         ));
     }
     if parent_sig.declared_return
-        && !Checker::types_compatible(&parent_sig.return_type, &child_sig.return_type)
+        && !declared_return_type_compatible(checker, &parent_sig.return_type, &child_sig.return_type)
     {
         return Err(CompileError::new(
             method.span,
