@@ -158,6 +158,29 @@ consume(new Range(0, 3));
 }
 
 #[test]
+fn test_foreach_over_empty_iterable_iterator_preserves_existing_value_variable() {
+    let out = compile_and_run(
+        r#"<?php
+class EmptyIteratorImpl implements Iterator {
+    public function rewind(): void {}
+    public function valid(): bool { return false; }
+    public function current(): int { return 1; }
+    public function key(): int { return 2; }
+    public function next(): void {}
+}
+function consume(iterable $items): void {
+    $value = 'old';
+    foreach ($items as $value) {
+    }
+    echo $value;
+}
+consume(new EmptyIteratorImpl());
+"#,
+    );
+    assert_eq!(out, "old");
+}
+
+#[test]
 fn test_foreach_over_iterable_indexed_can_reuse_receiver_variable() {
     let out = compile_and_run(
         "<?php

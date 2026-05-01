@@ -102,7 +102,7 @@ pub fn collect_local_vars(
                     if !ctx.variables.contains_key(k) {
                         let key_ty = match &arr_ty {
                             PhpType::AssocArray { key, .. } => *key.clone(),
-                            PhpType::Iterable => PhpType::Mixed,
+                            PhpType::Iterable | PhpType::Object(_) => PhpType::Mixed,
                             _ => PhpType::Int,
                         };
                         ctx.alloc_var(k, key_ty.codegen_repr());
@@ -112,7 +112,7 @@ pub fn collect_local_vars(
                     let elem_ty = match &arr_ty {
                         PhpType::Array(t) => *t.clone(),
                         PhpType::AssocArray { value, .. } => *value.clone(),
-                        PhpType::Iterable => PhpType::Mixed,
+                        PhpType::Iterable | PhpType::Object(_) => PhpType::Mixed,
                         _ => PhpType::Int,
                     };
                     ctx.alloc_var_with_static_type(value_var, elem_ty.codegen_repr(), elem_ty);

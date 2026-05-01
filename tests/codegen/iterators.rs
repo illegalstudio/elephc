@@ -203,3 +203,70 @@ consume(new Range(0, 3));
     );
     assert_eq!(out, "012");
 }
+
+#[test]
+fn test_empty_iterator_preserves_existing_key_and_value_variables() {
+    let out = compile_and_run(
+        r#"<?php
+class EmptyIteratorImpl implements Iterator {
+    public function rewind(): void {}
+    public function valid(): bool { return false; }
+    public function current(): int { return 1; }
+    public function key(): int { return 2; }
+    public function next(): void {}
+}
+$k = 'key';
+$v = 'old';
+foreach (new EmptyIteratorImpl() as $k => $v) {
+}
+echo $k;
+echo ':';
+echo $v;
+"#,
+    );
+    assert_eq!(out, "key:old");
+}
+
+#[test]
+fn test_empty_iterator_preserves_receiver_variable_when_reused_as_value() {
+    let out = compile_and_run(
+        r#"<?php
+class EmptyIteratorImpl implements Iterator {
+    public function rewind(): void {}
+    public function valid(): bool { return false; }
+    public function current(): int { return 1; }
+    public function key(): int { return 2; }
+    public function next(): void {}
+}
+$it = new EmptyIteratorImpl();
+foreach ($it as $it) {
+}
+echo is_iterable($it) ? 'iterable' : 'lost';
+"#,
+    );
+    assert_eq!(out, "iterable");
+}
+
+#[test]
+fn test_empty_iterator_initializes_fresh_function_loop_variables_as_null() {
+    let out = compile_and_run(
+        r#"<?php
+class EmptyIteratorImpl implements Iterator {
+    public function rewind(): void {}
+    public function valid(): bool { return false; }
+    public function current(): int { return 1; }
+    public function key(): int { return 2; }
+    public function next(): void {}
+}
+function probe(): void {
+    foreach (new EmptyIteratorImpl() as $k => $v) {
+    }
+    echo is_null($k) ? 'null' : 'key';
+    echo ':';
+    echo is_null($v) ? 'null' : 'value';
+}
+probe();
+"#,
+    );
+    assert_eq!(out, "null:null");
+}

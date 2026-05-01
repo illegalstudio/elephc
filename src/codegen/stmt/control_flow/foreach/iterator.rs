@@ -4,9 +4,9 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::expr::objects::dispatch::{
     emit_dispatch_instance_method, emit_dispatch_interface_method,
 };
+use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::stmt::emit_stmt;
-use crate::codegen::abi;
 use crate::parser::ast::Stmt;
 use crate::types::PhpType;
 
@@ -57,13 +57,15 @@ pub(crate) fn emit_iterator_foreach(
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // park iterator receiver pointer in a 16-byte stack slot
     let mut deferred_receiver_release = None;
     if let Some(kv) = key_var {
-        deferred_receiver_release = deferred_receiver_release.or_else(|| {
-            reset_iterator_mixed_slot(kv, receiver_var, emitter, ctx)
-        });
+        deferred_receiver_release =
+            normalize_iterator_mixed_slot(kv, receiver_var, emitter, ctx);
     }
-    deferred_receiver_release = deferred_receiver_release.or_else(|| {
-        reset_iterator_mixed_slot(value_var, receiver_var, emitter, ctx)
-    });
+    if key_var.as_deref() != Some(value_var) {
+        let release = normalize_iterator_mixed_slot(value_var, receiver_var, emitter, ctx);
+        if deferred_receiver_release.is_none() {
+            deferred_receiver_release = release;
+        }
+    }
 
     reload_iterator_receiver(emitter);
     dispatch_target.dispatch("rewind", emitter, ctx);
@@ -296,54 +298,93 @@ fn store_iterator_mixed_result(
     ctx.update_var_type_and_ownership(var_name, PhpType::Mixed, HeapOwnership::Owned);
 }
 
-fn reset_iterator_mixed_slot(
+fn normalize_iterator_mixed_slot(
     var_name: &str,
     receiver_var: Option<&str>,
     emitter: &mut Emitter,
-    ctx: &Context,
+    ctx: &mut Context,
 ) -> Option<PhpType> {
     let Some(var) = ctx.variables.get(var_name) else {
         return None;
     };
+    let old_ty = var.ty.codegen_repr();
+    let old_static_ty = var.static_ty.clone();
+    let old_offset = var.stack_offset;
+    let old_ownership = var.ownership;
     let aliases_receiver = receiver_var == Some(var_name);
-    let mut deferred_receiver_release = None;
-    if var.ownership == HeapOwnership::Owned && var.ty.is_refcounted() {
-        if aliases_receiver {
-            if matches!(var.ty, PhpType::Mixed | PhpType::Union(_)) {
-                retain_saved_iterator_receiver(emitter);
-                let result_reg = abi::int_result_reg(emitter);
-                let scratch_reg = match emitter.target.arch {
-                    Arch::AArch64 => "x10",
-                    Arch::X86_64 => "r10",
-                };
-                crate::codegen::abi::load_at_offset_scratch(
-                    emitter,
-                    result_reg,
-                    var.stack_offset,
-                    scratch_reg,
-                );
-                crate::codegen::abi::emit_decref_if_refcounted(emitter, &var.ty);
-                deferred_receiver_release = Some(PhpType::Object(String::new()));
-            } else {
-                deferred_receiver_release = Some(var.ty.clone());
+
+    let deferred_receiver_release = if aliases_receiver {
+        retain_saved_iterator_receiver(emitter);
+        Some(PhpType::Object(String::new()))
+    } else {
+        None
+    };
+
+    if matches!(old_ty, PhpType::Mixed | PhpType::Union(_)) {
+        return deferred_receiver_release;
+    }
+
+    abi::emit_load(emitter, &old_ty, old_offset);
+    crate::codegen::emit_box_current_value_as_mixed(emitter, &old_ty);
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the boxed previous foreach variable while cleaning up its old slot
+    cleanup_replaced_iterator_slot(&old_ty, old_offset, old_ownership, emitter);
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the boxed previous foreach variable after cleanup
+    crate::codegen::abi::store_at_offset_scratch(
+        emitter,
+        abi::int_result_reg(emitter),
+        old_offset,
+        match emitter.target.arch {
+            Arch::AArch64 => "x10",
+            Arch::X86_64 => "r10",
+        },
+    );
+    ctx.update_var_type_static_and_ownership(
+        var_name,
+        PhpType::Mixed,
+        old_static_ty,
+        HeapOwnership::Owned,
+    );
+    deferred_receiver_release
+}
+
+fn cleanup_replaced_iterator_slot(
+    old_ty: &PhpType,
+    old_offset: usize,
+    old_ownership: HeapOwnership,
+    emitter: &mut Emitter,
+) {
+    if old_ownership != HeapOwnership::Owned {
+        return;
+    }
+    let result_reg = abi::int_result_reg(emitter);
+    let scratch_reg = match emitter.target.arch {
+        Arch::AArch64 => "x10",
+        Arch::X86_64 => "r10",
+    };
+    match old_ty {
+        PhpType::Str => {
+            if emitter.target.arch == Arch::X86_64 {
+                return;
             }
-        } else {
-            let result_reg = abi::int_result_reg(emitter);
-            let scratch_reg = match emitter.target.arch {
-                Arch::AArch64 => "x10",
-                Arch::X86_64 => "r10",
-            };
             crate::codegen::abi::load_at_offset_scratch(
                 emitter,
                 result_reg,
-                var.stack_offset,
+                old_offset,
                 scratch_reg,
             );
-            crate::codegen::abi::emit_decref_if_refcounted(emitter, &var.ty);
+            abi::emit_call_label(emitter, "__rt_heap_free_safe");               // release the old owned string slot after boxing its PHP value
         }
+        ty if ty.is_refcounted() => {
+            crate::codegen::abi::load_at_offset_scratch(
+                emitter,
+                result_reg,
+                old_offset,
+                scratch_reg,
+            );
+            crate::codegen::abi::emit_decref_if_refcounted(emitter, ty);
+        }
+        _ => {}
     }
-    crate::codegen::abi::emit_store_zero_to_local_slot(emitter, var.stack_offset);
-    deferred_receiver_release
 }
 
 fn retain_saved_iterator_receiver(emitter: &mut Emitter) {
