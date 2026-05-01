@@ -141,20 +141,70 @@ echo $o->getInner()->get();
 }
 
 #[test]
-fn test_nullable_object_property_access_on_null_receiver_is_fatal() {
+fn test_nullable_object_null_receiver_fatal_skips_arguments() {
     let err = compile_and_run_expect_failure(
+        r#"<?php
+function noisy(): string {
+    file_get_contents("missing-nullable-method-arg.txt");
+    return "unused";
+}
+class Inner {
+    public function get(string $unused): string { return "never"; }
+}
+class Outer {
+    public ?Inner $inner = null;
+    public function getInner(): ?Inner { return $this->inner; }
+}
+$o = new Outer();
+echo $o->getInner()->get(noisy());
+"#,
+    );
+    assert!(
+        err.contains("Call to a member function get() on null"),
+        "{err}"
+    );
+    assert!(
+        !err.contains("file_get_contents"),
+        "argument side effect ran before nullable receiver fatal: {err}"
+    );
+}
+
+#[test]
+fn test_nullable_object_property_access_on_null_receiver_warns_and_returns_null() {
+    let out = compile_and_run_capture(
         r#"<?php
 class Holder {
     public string $msg = "unused";
 }
 function read(?Holder $h): void {
-    echo $h->msg;
+    echo $h->msg ?? "fallback";
 }
 read(null);
 "#,
     );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "fallback");
     assert!(
-        err.contains("Attempt to read property \"msg\" on null"),
-        "{err}"
+        out.stderr.contains("Warning: Attempt to read property \"msg\" on null"),
+        "{}",
+        out.stderr
     );
+}
+
+#[test]
+fn test_error_control_suppresses_nullable_property_warning() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Holder {
+    public string $msg = "unused";
+}
+function read(?Holder $h): void {
+    echo @$h->msg ?? "fallback";
+}
+read(null);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "fallback");
+    assert_eq!(out.stderr, "");
 }

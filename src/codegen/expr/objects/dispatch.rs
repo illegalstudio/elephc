@@ -239,19 +239,12 @@ pub(super) fn emit_method_call(
             return PhpType::Int;
         }
     };
-    let sig = ctx
-        .classes
-        .get(&class_name)
-        .and_then(|class_info| class_info.methods.get(method))
-        .cloned();
-    let arg_types = eval_and_push_args(args, sig.as_ref(), emitter, ctx, data);
-
-    // Re-evaluate the receiver expression so its result lands in the
-    // current result register. When the receiver's codegen-level type is
-    // Mixed (the runtime representation for nullable / union object
-    // parameters), the result register holds a pointer to a boxed mixed
-    // cell rather than the raw object — unbox it so the downstream
-    // method dispatch receives the underlying object pointer.
+    // Evaluate the receiver before arguments, matching PHP's left-to-right
+    // call order. When the receiver's codegen-level type is Mixed (the
+    // runtime representation for nullable / union object parameters), the
+    // result register holds a pointer to a boxed mixed cell rather than the
+    // raw object — unbox it so the downstream method dispatch receives the
+    // underlying object pointer.
     let runtime_obj_ty = emit_expr(object, emitter, ctx, data);
     if matches!(runtime_obj_ty, PhpType::Mixed | PhpType::Union(_)) {
         let message = format!(
@@ -265,9 +258,16 @@ pub(super) fn emit_method_call(
             data,
         );
     }
-    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                 // push $this pointer for the active target ABI
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                 // save the receiver below later argument temporaries for PHP evaluation order
 
-    emit_method_call_with_pushed_args(&class_name, method, &arg_types, emitter, ctx)
+    let sig = ctx
+        .classes
+        .get(&class_name)
+        .and_then(|class_info| class_info.methods.get(method))
+        .cloned();
+    let arg_types = eval_and_push_args(args, sig.as_ref(), emitter, ctx, data);
+
+    emit_method_call_with_saved_receiver_below_args(&class_name, method, &arg_types, emitter, ctx)
 }
 
 pub(super) fn emit_immediate_class_id(emitter: &mut Emitter, class_id: u64) {

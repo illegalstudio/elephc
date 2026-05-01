@@ -84,6 +84,30 @@ echo receiver()?->label(side());
 }
 
 #[test]
+fn test_method_call_evaluates_receiver_before_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+function receiver() {
+    echo "receiver|";
+    return new Box();
+}
+function side() {
+    echo "arg|";
+    return "value";
+}
+class Box {
+    public function label($value): string {
+        echo "method|";
+        return $value;
+    }
+}
+echo receiver()->label(side());
+"#,
+    );
+    assert_eq!(out, "receiver|arg|method|value");
+}
+
+#[test]
 fn test_nullsafe_chained_access_short_circuits_each_hop() {
     let out = compile_and_run(
         r#"<?php

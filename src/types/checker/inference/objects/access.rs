@@ -18,14 +18,18 @@ impl Checker {
         }
         // Non-nullsafe property access on a nullable / union object type
         // (`?Foo`, `Foo|null`) is allowed when the union resolves to a
-        // single class. Codegen guards null receivers before member
-        // access, while the type-checker pulls the class through so the
-        // rest of the analysis keeps the right property type.
+        // single class. A null receiver emits a PHP-style warning and
+        // evaluates to null, so the inferred type remains nullable.
         if let PhpType::Union(_) = &obj_ty {
-            if let Some((class_name, _nullable)) =
+            if let Some((class_name, nullable)) =
                 self.nullsafe_object_receiver(&obj_ty, expr, "property access")?
             {
-                return self.infer_property_on_class_type(&class_name, property, expr);
+                let property_ty = self.infer_property_on_class_type(&class_name, property, expr)?;
+                return if nullable {
+                    Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]))
+                } else {
+                    Ok(property_ty)
+                };
             }
         }
         if let PhpType::Pointer(Some(class_name)) = &obj_ty {

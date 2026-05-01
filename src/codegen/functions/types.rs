@@ -649,17 +649,25 @@ pub(super) fn infer_local_type(
         }
         ExprKind::PropertyAccess { object, property } => {
             if let Some(c) = ctx {
-                let obj_ty = infer_local_type(object, sig, Some(c));
-                if let Some(cn) = singular_object_class(&obj_ty) {
-                    if let Some(ci) = c.classes.get(cn) {
+                if let Some((cn, nullable)) = nullsafe_context_class(object, sig, c) {
+                    if let Some(ci) = c.classes.get(&cn) {
                         if let Some((_, ty)) = ci.properties.iter().find(|(n, _)| n == property) {
-                            return ty.clone();
+                            return if nullable {
+                                merge_union_members(vec![ty.clone(), PhpType::Void])
+                            } else {
+                                ty.clone()
+                            };
                         }
                         if let Some(sig) = ci.methods.get("__get") {
-                            return sig.return_type.clone();
+                            return if nullable {
+                                merge_union_members(vec![sig.return_type.clone(), PhpType::Void])
+                            } else {
+                                sig.return_type.clone()
+                            };
                         }
                     }
                 }
+                let obj_ty = infer_local_type(object, sig, Some(c));
                 if let PhpType::Pointer(Some(cn)) = &obj_ty {
                     if let Some(ci) = c.extern_classes.get(cn) {
                         if let Some(field) = ci.fields.iter().find(|field| field.name == *property)

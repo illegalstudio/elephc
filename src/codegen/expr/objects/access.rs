@@ -25,23 +25,10 @@ pub(super) fn emit_property_access(
         .map(|name| name.to_string());
     let obj_ty = emit_expr(object, emitter, ctx, data);
     if let Some(class_name) = static_class.as_ref() {
-        if matches!(obj_ty, PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)) {
-            // For Mixed-typed receivers (nullable object union storage),
-            // the result register currently holds a boxed mixed pointer.
-            // Unbox it so the downstream property access reads from the
-            // underlying object header rather than the wrapper cell.
-            if matches!(obj_ty, PhpType::Mixed | PhpType::Union(_)) {
-                let message = format!(
-                    "Fatal error: Attempt to read property \"{}\" on null\n",
-                    property
-                );
-                super::emit_unbox_mixed_object_or_fatal(
-                    message.as_bytes(),
-                    emitter,
-                    ctx,
-                    data,
-                );
-            }
+        if matches!(obj_ty, PhpType::Mixed | PhpType::Union(_)) {
+            return emit_nullable_object_property_access(class_name, property, emitter, ctx, data);
+        }
+        if matches!(obj_ty, PhpType::Object(_)) {
             return emit_loaded_object_property_access(class_name, property, emitter, ctx, data);
         }
     }
@@ -173,6 +160,30 @@ pub(super) fn emit_property_access(
     }
 
     prop_ty
+}
+
+fn emit_nullable_object_property_access(
+    class_name: &str,
+    property: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let null_label = ctx.next_label("nullable_prop_null");
+    let done_label = ctx.next_label("nullable_prop_done");
+    let message = format!("Warning: Attempt to read property \"{}\" on null\n", property);
+
+    super::emit_unbox_mixed_object_or_null_branch(&null_label, emitter);
+    let property_ty = emit_loaded_object_property_access(class_name, property, emitter, ctx, data);
+    super::box_nullable_result(&property_ty, emitter);
+    abi::emit_jump(emitter, &done_label);                                      // skip the nullable property null path after a real property read
+
+    emitter.label(&null_label);
+    super::emit_runtime_warning(message.as_bytes(), emitter, data);
+    super::emit_boxed_null(emitter);
+
+    emitter.label(&done_label);
+    PhpType::Mixed
 }
 
 pub(super) fn emit_loaded_object_property_access(

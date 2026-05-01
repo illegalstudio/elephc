@@ -33,16 +33,16 @@ pub(super) fn emit_nullsafe_property_access(
     let done_label = ctx.next_label("nullsafe_prop_done");
     let receiver_ty = emit_expr(object, emitter, ctx, data);
     if !emit_nullable_receiver_to_object(&receiver_ty, &null_label, emitter) {
-        emit_boxed_null(emitter);
+        super::emit_boxed_null(emitter);
         return PhpType::Mixed;
     }
 
     let property_ty =
         access::emit_loaded_object_property_access(&class_name, property, emitter, ctx, data);
-    box_nullable_result(&property_ty, emitter);
+    super::box_nullable_result(&property_ty, emitter);
     abi::emit_jump(emitter, &done_label);
     emitter.label(&null_label);
-    emit_boxed_null(emitter);
+    super::emit_boxed_null(emitter);
     emitter.label(&done_label);
     PhpType::Mixed
 }
@@ -66,7 +66,7 @@ pub(super) fn emit_nullsafe_method_call(
     let done_label = ctx.next_label("nullsafe_method_done");
     let receiver_ty = emit_expr(object, emitter, ctx, data);
     if nullable && !emit_nullable_receiver_to_object(&receiver_ty, &null_label, emitter) {
-        emit_boxed_null(emitter);
+        super::emit_boxed_null(emitter);
         return PhpType::Mixed;
     }
 
@@ -87,10 +87,10 @@ pub(super) fn emit_nullsafe_method_call(
     if !nullable {
         return return_ty;
     }
-    box_nullable_result(&return_ty, emitter);
+    super::box_nullable_result(&return_ty, emitter);
     abi::emit_jump(emitter, &done_label);
     emitter.label(&null_label);
-    emit_boxed_null(emitter);
+    super::emit_boxed_null(emitter);
     emitter.label(&done_label);
     PhpType::Mixed
 }
@@ -141,17 +141,6 @@ fn emit_nullable_receiver_to_object(
         }
         _ => true,
     }
-}
-
-fn box_nullable_result(result_ty: &PhpType, emitter: &mut Emitter) {
-    if !matches!(result_ty.codegen_repr(), PhpType::Mixed) {
-        crate::codegen::emit_box_current_value_as_mixed(emitter, result_ty);
-    }
-}
-
-fn emit_boxed_null(emitter: &mut Emitter) {
-    emit_plain_null(emitter);
-    crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Void);
 }
 
 fn emit_plain_null(emitter: &mut Emitter) {
