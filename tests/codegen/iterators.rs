@@ -149,3 +149,57 @@ dump_values(new Range(2, 5));
     );
     assert_eq!(out, "0=2 1=3 2=4 ");
 }
+
+#[test]
+fn test_foreach_iterator_value_can_reuse_receiver_variable() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $current;
+    private int $end;
+    public function __construct(int $start, int $end) {
+        $this->current = $start;
+        $this->end = $end;
+    }
+    public function rewind(): void {}
+    public function valid(): bool { return $this->current < $this->end; }
+    public function current(): int { return $this->current; }
+    public function key(): int { return $this->current; }
+    public function next(): void { $this->current = $this->current + 1; }
+}
+$it = new Range(0, 3);
+foreach ($it as $it) {
+    echo $it;
+}
+"#,
+    );
+    assert_eq!(out, "012");
+}
+
+#[test]
+fn test_foreach_iterator_typed_parameter_can_reuse_receiver_variable() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $current;
+    private int $end;
+    public function __construct(int $start, int $end) {
+        $this->current = $start;
+        $this->end = $end;
+    }
+    public function rewind(): void {}
+    public function valid(): bool { return $this->current < $this->end; }
+    public function current(): int { return $this->current; }
+    public function key(): int { return $this->current; }
+    public function next(): void { $this->current = $this->current + 1; }
+}
+function consume(Iterator $it): void {
+    foreach ($it as $it) {
+        echo $it;
+    }
+}
+consume(new Range(0, 3));
+"#,
+    );
+    assert_eq!(out, "012");
+}

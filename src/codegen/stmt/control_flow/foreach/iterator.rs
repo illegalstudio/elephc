@@ -12,8 +12,9 @@ use crate::types::PhpType;
 
 /// Foreach over an object implementing the Iterator interface.
 ///
-/// On entry, x0 already holds the iterator object pointer (left there by
-/// `emit_expr` on the foreach iterable expression).
+/// On entry, the target integer result register already holds the iterator
+/// object pointer (left there by `emit_expr` on the foreach iterable
+/// expression).
 ///
 /// Loop shape:
 ///
@@ -35,6 +36,7 @@ use crate::types::PhpType;
 /// call reloads `x0` from that slot before dispatching through the vtable.
 pub(crate) fn emit_iterator_foreach(
     class_name: &str,
+    receiver_var: Option<&str>,
     key_var: &Option<String>,
     value_var: &str,
     body: &[Stmt],
@@ -53,10 +55,15 @@ pub(crate) fn emit_iterator_foreach(
     }
 
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // park iterator receiver pointer in a 16-byte stack slot
+    let mut deferred_receiver_release = None;
     if let Some(kv) = key_var {
-        reset_iterator_mixed_slot(kv, emitter, ctx);
+        deferred_receiver_release = deferred_receiver_release.or_else(|| {
+            reset_iterator_mixed_slot(kv, receiver_var, emitter, ctx)
+        });
     }
-    reset_iterator_mixed_slot(value_var, emitter, ctx);
+    deferred_receiver_release = deferred_receiver_release.or_else(|| {
+        reset_iterator_mixed_slot(value_var, receiver_var, emitter, ctx)
+    });
 
     reload_iterator_receiver(emitter);
     dispatch_target.dispatch("rewind", emitter, ctx);
@@ -103,10 +110,14 @@ pub(crate) fn emit_iterator_foreach(
     abi::emit_jump(emitter, loop_start);                                        // continue the iteration
 
     emitter.label(loop_end);
+    if let Some(release_ty) = deferred_receiver_release.as_ref() {
+        release_saved_iterator_receiver(release_ty, emitter);
+    }
     abi::emit_release_temporary_stack(emitter, 16);                             // discard the parked receiver slot
 }
 
 pub(crate) fn emit_iterable_object_foreach(
+    receiver_var: Option<&str>,
     key_var: &Option<String>,
     value_var: &str,
     body: &[Stmt],
@@ -141,6 +152,7 @@ pub(crate) fn emit_iterable_object_foreach(
     let direct_cont = ctx.next_label("foreach_iter_object_iterator_cont");
     emit_iterator_foreach(
         "Iterator",
+        receiver_var,
         key_var,
         value_var,
         body,
@@ -162,6 +174,7 @@ pub(crate) fn emit_iterable_object_foreach(
     let aggregate_cont = ctx.next_label("foreach_iter_object_aggregate_cont");
     emit_iterator_foreach(
         "Iterator",
+        None,
         key_var,
         value_var,
         body,
@@ -283,25 +296,81 @@ fn store_iterator_mixed_result(
     ctx.update_var_type_and_ownership(var_name, PhpType::Mixed, HeapOwnership::Owned);
 }
 
-fn reset_iterator_mixed_slot(var_name: &str, emitter: &mut Emitter, ctx: &Context) {
+fn reset_iterator_mixed_slot(
+    var_name: &str,
+    receiver_var: Option<&str>,
+    emitter: &mut Emitter,
+    ctx: &Context,
+) -> Option<PhpType> {
     let Some(var) = ctx.variables.get(var_name) else {
-        return;
+        return None;
     };
+    let aliases_receiver = receiver_var == Some(var_name);
+    let mut deferred_receiver_release = None;
     if var.ownership == HeapOwnership::Owned && var.ty.is_refcounted() {
-        let result_reg = abi::int_result_reg(emitter);
-        let scratch_reg = match emitter.target.arch {
-            Arch::AArch64 => "x10",
-            Arch::X86_64 => "r10",
-        };
-        crate::codegen::abi::load_at_offset_scratch(
-            emitter,
-            result_reg,
-            var.stack_offset,
-            scratch_reg,
-        );
-        crate::codegen::abi::emit_decref_if_refcounted(emitter, &var.ty);
+        if aliases_receiver {
+            if matches!(var.ty, PhpType::Mixed | PhpType::Union(_)) {
+                retain_saved_iterator_receiver(emitter);
+                let result_reg = abi::int_result_reg(emitter);
+                let scratch_reg = match emitter.target.arch {
+                    Arch::AArch64 => "x10",
+                    Arch::X86_64 => "r10",
+                };
+                crate::codegen::abi::load_at_offset_scratch(
+                    emitter,
+                    result_reg,
+                    var.stack_offset,
+                    scratch_reg,
+                );
+                crate::codegen::abi::emit_decref_if_refcounted(emitter, &var.ty);
+                deferred_receiver_release = Some(PhpType::Object(String::new()));
+            } else {
+                deferred_receiver_release = Some(var.ty.clone());
+            }
+        } else {
+            let result_reg = abi::int_result_reg(emitter);
+            let scratch_reg = match emitter.target.arch {
+                Arch::AArch64 => "x10",
+                Arch::X86_64 => "r10",
+            };
+            crate::codegen::abi::load_at_offset_scratch(
+                emitter,
+                result_reg,
+                var.stack_offset,
+                scratch_reg,
+            );
+            crate::codegen::abi::emit_decref_if_refcounted(emitter, &var.ty);
+        }
     }
     crate::codegen::abi::emit_store_zero_to_local_slot(emitter, var.stack_offset);
+    deferred_receiver_release
+}
+
+fn retain_saved_iterator_receiver(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x0, [sp]");                                // reload the saved iterator receiver before retaining it for alias safety
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, QWORD PTR [rsp]");                    // reload the saved iterator receiver before retaining it for alias safety
+        }
+    }
+    crate::codegen::abi::emit_incref_if_refcounted(
+        emitter,
+        &PhpType::Object(String::new()),
+    );
+}
+
+fn release_saved_iterator_receiver(release_ty: &PhpType, emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x0, [sp]");                                // reload the saved iterator receiver before deferred alias cleanup
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, QWORD PTR [rsp]");                    // reload the saved iterator receiver before deferred alias cleanup
+        }
+    }
+    crate::codegen::abi::emit_decref_if_refcounted(emitter, release_ty);
 }
 
 fn move_result_to_receiver_arg(emitter: &mut Emitter) {

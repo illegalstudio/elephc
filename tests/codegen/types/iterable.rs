@@ -130,6 +130,68 @@ dump(new Values());
 }
 
 #[test]
+fn test_foreach_over_iterable_iterator_can_reuse_receiver_variable() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $current;
+    private int $end;
+    public function __construct(int $start, int $end) {
+        $this->current = $start;
+        $this->end = $end;
+    }
+    public function rewind(): void {}
+    public function valid(): bool { return $this->current < $this->end; }
+    public function current(): int { return $this->current; }
+    public function key(): int { return $this->current; }
+    public function next(): void { $this->current = $this->current + 1; }
+}
+function consume(iterable $items): void {
+    foreach ($items as $items) {
+        echo $items;
+    }
+}
+consume(new Range(0, 3));
+"#,
+    );
+    assert_eq!(out, "012");
+}
+
+#[test]
+fn test_foreach_over_iterable_indexed_can_reuse_receiver_variable() {
+    let out = compile_and_run(
+        "<?php
+        function consume(iterable $items): void {
+            foreach ($items as $items) {
+                echo $items;
+                echo ';';
+            }
+        }
+        consume([10, 20, 30]);
+        ",
+    );
+    assert_eq!(out, "10;20;30;");
+}
+
+#[test]
+fn test_foreach_over_iterable_assoc_key_can_reuse_receiver_variable() {
+    let out = compile_and_run(
+        "<?php
+        function consume(iterable $items): void {
+            foreach ($items as $items => $value) {
+                echo $items;
+                echo '=';
+                echo $value;
+                echo ';';
+            }
+        }
+        consume(['a' => 1, 'b' => 2]);
+        ",
+    );
+    assert_eq!(out, "a=1;b=2;");
+}
+
+#[test]
 fn test_iterable_foreach_key_remains_mixed_after_runtime_branch() {
     let out = compile_and_run(
         "<?php
