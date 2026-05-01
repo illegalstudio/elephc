@@ -6,6 +6,7 @@ use crate::codegen::expr::objects::dispatch::{
 };
 use crate::codegen::platform::Arch;
 use crate::codegen::stmt::emit_stmt;
+use crate::codegen::abi;
 use crate::parser::ast::Stmt;
 use crate::types::PhpType;
 
@@ -44,34 +45,30 @@ pub(crate) fn emit_iterator_foreach(
     ctx: &mut Context,
     data: &mut DataSection,
 ) {
-    if emitter.target.arch != Arch::AArch64 {
-        unimplemented!("foreach over Iterator object is only implemented for AArch64 in this slice");
-    }
-
     let mut dispatch_target = iterator_dispatch_target(class_name, ctx);
     if !dispatch_target.implements_iterator(ctx) {
+        move_result_to_receiver_arg(emitter);
         let ret_ty = dispatch_target.dispatch("getIterator", emitter, ctx);
         dispatch_target = iterator_return_dispatch_target(&ret_ty, ctx);
     }
 
-    emitter.instruction("str x0, [sp, #-16]!");                                 // park iterator receiver pointer in a 16-byte stack slot
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // park iterator receiver pointer in a 16-byte stack slot
     if let Some(kv) = key_var {
         reset_iterator_mixed_slot(kv, emitter, ctx);
     }
     reset_iterator_mixed_slot(value_var, emitter, ctx);
 
-    emitter.instruction("ldr x0, [sp]");                                        // reload receiver into x0 for rewind() dispatch
+    reload_iterator_receiver(emitter);
     dispatch_target.dispatch("rewind", emitter, ctx);
 
     emitter.label(loop_start);
 
-    emitter.instruction("ldr x0, [sp]");                                        // reload receiver into x0 for valid() dispatch
+    reload_iterator_receiver(emitter);
     dispatch_target.dispatch("valid", emitter, ctx);
-    emitter.instruction("cmp x0, #0");                                          // valid() returned 0 -> end of iteration
-    emitter.instruction(&format!("b.eq {}", loop_end));                         // exit foreach when valid() returns false
+    emit_branch_if_invalid_iterator(emitter, loop_end);
 
     if let Some(kv) = key_var {
-        emitter.instruction("ldr x0, [sp]");                                    // reload receiver into x0 for key() dispatch
+        reload_iterator_receiver(emitter);
         let key_ty = dispatch_target.dispatch("key", emitter, ctx);
         if let Some(kvar) = ctx.variables.get(kv) {
             let k_offset = kvar.stack_offset;
@@ -81,7 +78,7 @@ pub(crate) fn emit_iterator_foreach(
         }
     }
 
-    emitter.instruction("ldr x0, [sp]");                                        // reload receiver into x0 for current() dispatch
+    reload_iterator_receiver(emitter);
     let current_ty = dispatch_target.dispatch("current", emitter, ctx);
     if let Some(vvar) = ctx.variables.get(value_var) {
         let v_offset = vvar.stack_offset;
@@ -101,12 +98,12 @@ pub(crate) fn emit_iterator_foreach(
     ctx.loop_stack.pop();
 
     emitter.label(loop_cont);
-    emitter.instruction("ldr x0, [sp]");                                        // reload receiver into x0 for next() dispatch
+    reload_iterator_receiver(emitter);
     dispatch_target.dispatch("next", emitter, ctx);
-    emitter.instruction(&format!("b {}", loop_start));                          // continue the iteration
+    abi::emit_jump(emitter, loop_start);                                        // continue the iteration
 
     emitter.label(loop_end);
-    emitter.instruction("add sp, sp, #16");                                     // discard the parked receiver slot
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the parked receiver slot
 }
 
 #[derive(Clone)]
@@ -197,11 +194,22 @@ fn store_iterator_mixed_result(
     ctx: &mut Context,
 ) {
     crate::codegen::emit_box_current_value_as_mixed(emitter, &result_ty.codegen_repr());
-    emitter.instruction("str x0, [sp, #-16]!");                                 // preserve the freshly returned mixed value across previous-value cleanup
-    crate::codegen::abi::load_at_offset_scratch(emitter, "x0", offset, "x10");
-    emitter.instruction("bl __rt_decref_mixed");                                // release the previous owned foreach mixed value before overwriting it
-    emitter.instruction("ldr x0, [sp], #16");                                   // restore the new mixed value after cleanup
-    crate::codegen::abi::store_at_offset_scratch(emitter, "x0", offset, "x10");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("str x0, [sp, #-16]!");                         // preserve the freshly returned mixed value across previous-value cleanup
+            crate::codegen::abi::load_at_offset_scratch(emitter, "x0", offset, "x10");
+            emitter.instruction("bl __rt_decref_mixed");                        // release the previous owned foreach mixed value before overwriting it
+            emitter.instruction("ldr x0, [sp], #16");                           // restore the new mixed value after cleanup
+            crate::codegen::abi::store_at_offset_scratch(emitter, "x0", offset, "x10");
+        }
+        Arch::X86_64 => {
+            crate::codegen::abi::emit_push_reg(emitter, "rax");                 // preserve the freshly returned mixed value across previous-value cleanup
+            crate::codegen::abi::load_at_offset_scratch(emitter, "rax", offset, "r10");
+            emitter.instruction("call __rt_decref_mixed");                      // release the previous owned foreach mixed value before overwriting it
+            crate::codegen::abi::emit_pop_reg(emitter, "rax");                  // restore the new mixed value after cleanup
+            crate::codegen::abi::store_at_offset_scratch(emitter, "rax", offset, "r10");
+        }
+    }
     ctx.update_var_type_and_ownership(var_name, PhpType::Mixed, HeapOwnership::Owned);
 }
 
@@ -210,13 +218,48 @@ fn reset_iterator_mixed_slot(var_name: &str, emitter: &mut Emitter, ctx: &Contex
         return;
     };
     if var.ownership == HeapOwnership::Owned && var.ty.is_refcounted() {
+        let result_reg = abi::int_result_reg(emitter);
+        let scratch_reg = match emitter.target.arch {
+            Arch::AArch64 => "x10",
+            Arch::X86_64 => "r10",
+        };
         crate::codegen::abi::load_at_offset_scratch(
             emitter,
-            "x0",
+            result_reg,
             var.stack_offset,
-            "x10",
+            scratch_reg,
         );
         crate::codegen::abi::emit_decref_if_refcounted(emitter, &var.ty);
     }
     crate::codegen::abi::emit_store_zero_to_local_slot(emitter, var.stack_offset);
+}
+
+fn move_result_to_receiver_arg(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("mov rdi, rax");                                    // move the object result into the SysV receiver argument register
+    }
+}
+
+fn reload_iterator_receiver(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x0, [sp]");                                // reload receiver into x0 for the next Iterator method dispatch
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rdi, QWORD PTR [rsp]");                    // reload receiver into rdi for the next Iterator method dispatch
+        }
+    }
+}
+
+fn emit_branch_if_invalid_iterator(emitter: &mut Emitter, loop_end: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #0");                                  // valid() returned 0 means the iterator is exhausted
+            emitter.instruction(&format!("b.eq {}", loop_end));                 // exit foreach when valid() returns false
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test rax, rax");                               // valid() returned 0 means the iterator is exhausted
+            emitter.instruction(&format!("je {}", loop_end));                   // exit foreach when valid() returns false
+        }
+    }
 }
