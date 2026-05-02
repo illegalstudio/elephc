@@ -7,6 +7,39 @@ fn test_basename_simple() {
 }
 
 #[test]
+fn test_path_builtins_are_case_insensitive() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("anchor.txt", "");
+echo BASENAME("/etc/passwd") . "|";
+echo DIRNAME("/etc/passwd") . "|";
+echo FNMATCH("*.txt", "report.txt") ? "match" : "miss";
+echo "|";
+echo PATHINFO("/var/log/syslog.log", PATHINFO_EXTENSION) . "|";
+$resolved = REALPATH("anchor.txt");
+echo $resolved !== false ? "real" : "false";
+"#,
+    );
+    assert_eq!(out, "passwd|/etc|match|log|real");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_path_builtins_fall_back_to_global_namespace() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+echo basename("/etc/passwd") . "|";
+echo dirname("/etc/passwd") . "|";
+echo fnmatch("*.txt", "report.txt") ? "match" : "miss";
+echo "|";
+echo pathinfo("/var/log/syslog.log", 8);
+"#,
+    );
+    assert_eq!(out, "passwd|/etc|match|syslog");
+}
+
+#[test]
 fn test_basename_no_separator() {
     let out = compile_and_run(r#"<?php echo basename("foo");"#);
     assert_eq!(out, "foo");
