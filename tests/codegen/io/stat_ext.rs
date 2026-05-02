@@ -156,6 +156,36 @@ echo is_link("plain.txt") ? "y" : "n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+#[cfg(unix)]
+#[test]
+fn test_filetype_and_is_link_for_symlink() {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let source = r#"<?php
+echo filetype("link.txt") . "|";
+echo is_link("link.txt") ? "y" : "n";
+"#;
+    let (user_asm, _runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    fs::write(dir.join("target.txt"), "payload").unwrap();
+    std::os::unix::fs::symlink("target.txt", dir.join("link.txt")).unwrap();
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "link|y");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn test_is_writeable_alias_of_is_writable() {
     let (out, dir) = compile_and_run_in_dir(
