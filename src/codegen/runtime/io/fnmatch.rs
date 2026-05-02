@@ -199,6 +199,7 @@ fn emit_fnmatch_linux_x86_64(emitter: &mut Emitter) {
     //   r10 = star_i (-1 if no star)
     //   r11 = star_j
 
+    emitter.instruction("push rbx");                                            // preserve the callee-saved scratch register used for class-range indexing
     emitter.instruction("xor r8d, r8d");                                        // i = 0
     emitter.instruction("xor r9d, r9d");                                        // j = 0
     emitter.instruction("mov r10, -1");                                         // star_i = -1
@@ -346,9 +347,11 @@ fn emit_fnmatch_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fnmatch_match_x86");
     emitter.instruction("mov rax, 1");                                          // success
+    emitter.instruction("pop rbx");                                             // restore the caller's callee-saved scratch register before returning
     emitter.instruction("ret");                                                 // return
 
     emitter.label("__rt_fnmatch_fail_x86");
     emitter.instruction("xor eax, eax");                                        // failure
+    emitter.instruction("pop rbx");                                             // restore the caller's callee-saved scratch register before returning
     emitter.instruction("ret");                                                 // return
 }

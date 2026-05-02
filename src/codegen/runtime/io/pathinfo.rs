@@ -54,7 +54,7 @@ pub fn emit_pathinfo_str(emitter: &mut Emitter) {
 
     emitter.label("__rt_pathinfo_extension");
     emitter.instruction("mov x3, #0");                                          // basename with empty suffix
-    emitter.instruction("mov x4, #0");
+    emitter.instruction("mov x4, #0");                                          // suffix length 0
     emitter.instruction("bl __rt_basename");                                    // x1/x2 now point at the basename slice
     // Find the last '.' in the basename slice.
     emitter.instruction("mov x5, x2");                                          // scan index = length
@@ -82,7 +82,7 @@ pub fn emit_pathinfo_str(emitter: &mut Emitter) {
 
     emitter.label("__rt_pathinfo_filename");
     emitter.instruction("mov x3, #0");                                          // basename with empty suffix
-    emitter.instruction("mov x4, #0");
+    emitter.instruction("mov x4, #0");                                          // suffix length 0
     emitter.instruction("bl __rt_basename");                                    // x1/x2 = basename slice
     // Find the last '.' that is NOT at position 0 (PHP keeps ".bashrc" → ".bashrc").
     emitter.instruction("mov x5, x2");                                          // scan index = length
@@ -342,8 +342,8 @@ fn emit_pathinfo_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save path pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save path length
 
-    emitter.instruction("mov rax, 16");                                         // initial capacity
-    emitter.instruction("mov rdi, 1");                                          // value type = Str (the runtime currently expects rdi as the second arg here)
+    emitter.instruction("mov rdi, 16");                                         // initial capacity
+    emitter.instruction("mov rsi, 1");                                          // value type = Str
     emitter.instruction("call __rt_hash_new");                                  // allocate empty hash; rax = hash pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save hash pointer
 
