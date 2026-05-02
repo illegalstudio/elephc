@@ -2,6 +2,7 @@ mod exceptions;
 mod buffers;
 mod preprocessor;
 mod namespaces;
+mod case_insensitive_symbols;
 mod cli;
 mod benchmarks;
 mod echo_vars;

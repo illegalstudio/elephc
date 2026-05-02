@@ -124,6 +124,29 @@ fn test_instanceof_keyword_is_case_insensitive() {
 }
 
 #[test]
+fn test_php_language_keywords_are_case_insensitive() {
+    let t = tokens("<?php IF (TRUE) { ECHO NULL; } ELSEIF (FALSE) { PRINT 1; }");
+    assert_eq!(t[1], Token::If);
+    assert_eq!(t[3], Token::True);
+    assert_eq!(t[6], Token::Echo);
+    assert_eq!(t[7], Token::Null);
+    assert_eq!(t[10], Token::ElseIf);
+    assert_eq!(t[12], Token::False);
+    assert_eq!(t[15], Token::Print);
+}
+
+#[test]
+fn test_php_constant_tokens_remain_case_sensitive() {
+    let t = tokens("<?php PHP_OS php_os INF inf STDOUT stdout");
+    assert_eq!(t[1], Token::PhpOs);
+    assert_eq!(t[2], Token::Identifier("php_os".into()));
+    assert_eq!(t[3], Token::Inf);
+    assert_eq!(t[4], Token::Identifier("inf".into()));
+    assert_eq!(t[5], Token::Stdout);
+    assert_eq!(t[6], Token::Identifier("stdout".into()));
+}
+
+#[test]
 fn test_boolean_keywords() {
     let t = tokens("<?php true false");
     assert_eq!(t[1..3], [Token::True, Token::False]);

@@ -65,6 +65,30 @@ fn test_error_function_typed_param_rejects_wrong_argument() {
 }
 
 #[test]
+fn test_error_duplicate_functions_differing_only_by_case() {
+    expect_error(
+        "<?php function Foo() { return 1; } function foo() { return 2; }",
+        "Duplicate function declaration: foo",
+    );
+}
+
+#[test]
+fn test_error_cannot_redeclare_builtin_function_differing_only_by_case() {
+    expect_error(
+        "<?php function STRLEN(string $value): int { return 0; }",
+        "Cannot redeclare built-in function: strlen",
+    );
+}
+
+#[test]
+fn test_error_user_constants_are_case_sensitive() {
+    expect_error(
+        "<?php const MyConst = 1; echo myconst;",
+        "Undefined constant: myconst",
+    );
+}
+
+#[test]
 fn test_error_typed_default_parameter_rejects_mismatched_default() {
     expect_error(
         "<?php function foo(int $x = \"hello\") { echo $x; }",
