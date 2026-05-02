@@ -1,4 +1,4 @@
-use crate::names::Name;
+use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
     BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
     Program, Stmt, StmtKind, TypeExpr,
@@ -362,7 +362,7 @@ fn collect_program_private_instance_method_bodies(
 }
 
 fn method_effect_key(class_name: &str, method_name: &str) -> String {
-    format!("{class_name}::{method_name}")
+    format!("{class_name}::{}", php_symbol_key(method_name))
 }
 
 fn is_never_return_type(return_type: &Option<TypeExpr>) -> bool {

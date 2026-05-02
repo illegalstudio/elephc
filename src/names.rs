@@ -129,6 +129,10 @@ pub fn canonical_name_for_decl(namespace: Option<&str>, local_name: &str) -> Str
     local_name.to_string()
 }
 
+pub fn php_symbol_key(name: &str) -> String {
+    name.to_ascii_lowercase()
+}
+
 pub fn mangle_fqn(name: &str) -> String {
     let mut mangled = String::new();
     for ch in name.chars() {

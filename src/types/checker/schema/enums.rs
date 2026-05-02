@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{ExprKind, Visibility};
 use crate::types::{ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo, FunctionSig, PhpType};
 
@@ -74,9 +75,19 @@ pub(crate) fn build_enum_info(
     checker: &mut Checker,
     next_class_id: &mut u64,
 ) -> Result<(), CompileError> {
-    if checker.classes.contains_key(name)
-        || checker.interfaces.contains_key(name)
-        || checker.enums.contains_key(name)
+    let enum_key = php_symbol_key(name);
+    if checker
+        .classes
+        .keys()
+        .any(|existing| php_symbol_key(existing) == enum_key)
+        || checker
+            .interfaces
+            .keys()
+            .any(|existing| php_symbol_key(existing) == enum_key)
+        || checker
+            .enums
+            .keys()
+            .any(|existing| php_symbol_key(existing) == enum_key)
     {
         return Err(CompileError::new(
             span,
@@ -208,7 +219,7 @@ pub(crate) fn build_enum_info(
     static_method_declaring_classes.insert("cases".to_string(), name.to_string());
     static_method_impl_classes.insert("cases".to_string(), name.to_string());
     if let Some(backing_ty) = &resolved_backing {
-        for method_name in ["from", "tryFrom"] {
+        for method_name in ["from", "tryfrom"] {
             static_methods.insert(
                 method_name.to_string(),
                 FunctionSig {

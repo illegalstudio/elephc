@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{
     ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind, TypeExpr, Visibility,
 };
@@ -32,7 +33,14 @@ pub(crate) fn inject_builtin_throwables(
     class_map: &mut HashMap<String, FlattenedClass>,
 ) -> Result<(), CompileError> {
     for builtin_name in ["Throwable", "Exception"] {
-        if interface_map.contains_key(builtin_name) || class_map.contains_key(builtin_name) {
+        let builtin_key = php_symbol_key(builtin_name);
+        if interface_map
+            .keys()
+            .any(|name| php_symbol_key(name) == builtin_key)
+            || class_map
+                .keys()
+                .any(|name| php_symbol_key(name) == builtin_key)
+        {
             return Err(CompileError::new(
                 crate::span::Span::dummy(),
                 &format!("Cannot redeclare built-in exception type: {}", builtin_name),
@@ -163,7 +171,7 @@ fn builtin_throwable_get_message_method() -> ClassMethod {
 
 pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
     if let Some(interface_info) = checker.interfaces.get_mut("Throwable") {
-        if let Some(sig) = interface_info.methods.get_mut("getMessage") {
+        if let Some(sig) = interface_info.methods.get_mut(&php_symbol_key("getMessage")) {
             sig.return_type = PhpType::Str;
         }
     }
@@ -174,7 +182,7 @@ pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
             }
             sig.return_type = PhpType::Void;
         }
-        if let Some(sig) = class_info.methods.get_mut("getMessage") {
+        if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getMessage")) {
             sig.return_type = PhpType::Str;
         }
     }
@@ -202,8 +210,8 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
     let mut errors = Vec::new();
     for (class_name, class_info) in &checker.classes {
         for method in &class_info.method_decls {
-            match method.name.as_str() {
-                "__toString" => {
+            match php_symbol_key(&method.name).as_str() {
+                "__tostring" => {
                     if method.is_static {
                         errors.push(CompileError::new(
                             method.span,
@@ -233,7 +241,7 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                     }
                     if class_info
                         .methods
-                        .get("__toString")
+                        .get("__tostring")
                         .map(|sig| sig.return_type.clone())
                         != Some(PhpType::Str)
                     {

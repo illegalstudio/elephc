@@ -1,4 +1,5 @@
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::ClassMethod;
 use crate::types::{traits::FlattenedClass, PhpType, TypeEnv};
 
@@ -21,6 +22,7 @@ impl Checker {
                     if method.is_abstract {
                         continue;
                     }
+                    let method_key = php_symbol_key(&method.name);
                     let mut method_env: TypeEnv = global_env.clone();
                     if !method.is_static {
                         method_env.insert("this".to_string(), PhpType::Object(class.name.clone()));
@@ -28,12 +30,12 @@ impl Checker {
                     let sig_params = if method.is_static {
                         self.classes
                             .get(&class.name)
-                            .and_then(|c| c.static_methods.get(&method.name))
+                            .and_then(|c| c.static_methods.get(&method_key))
                             .map(|s| s.params.clone())
                     } else {
                         self.classes
                             .get(&class.name)
-                            .and_then(|c| c.methods.get(&method.name))
+                            .and_then(|c| c.methods.get(&method_key))
                             .map(|s| s.params.clone())
                     };
                     for (i, (pname, type_ann, _, _)) in method.params.iter().enumerate() {
@@ -60,12 +62,12 @@ impl Checker {
                             .unwrap_or(PhpType::Array(Box::new(PhpType::Int)));
                         method_env.insert(variadic_name.clone(), ty);
                     }
-                    if method.name == "__construct" {
+                    if method_key == "__construct" {
                         self.patch_constructor_method_env(class, method, &mut method_env);
                     }
 
                     self.current_class = Some(class.name.clone());
-                    self.current_method = Some(method.name.clone());
+                    self.current_method = Some(method_key.clone());
                     self.current_method_is_static = method.is_static;
                     let method_ref_params: Vec<String> = method
                         .params
@@ -231,12 +233,12 @@ impl Checker {
         };
         if !method.is_static {
             if let Some(ci) = self.classes.get_mut(&class.name) {
-                if let Some(sig) = ci.methods.get_mut(&method.name) {
+                if let Some(sig) = ci.methods.get_mut(&php_symbol_key(&method.name)) {
                     sig.return_type = effective_return;
                 }
             }
         } else if let Some(ci) = self.classes.get_mut(&class.name) {
-            if let Some(sig) = ci.static_methods.get_mut(&method.name) {
+            if let Some(sig) = ci.static_methods.get_mut(&php_symbol_key(&method.name)) {
                 sig.return_type = effective_return;
             }
         }

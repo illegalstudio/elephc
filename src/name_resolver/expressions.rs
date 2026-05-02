@@ -1,7 +1,9 @@
+use crate::names::php_symbol_key;
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
 
 use super::names::{
-    resolve_constant_name, resolve_function_name, resolve_special_or_class_name, resolve_type_expr,
+    resolve_constant_name, resolve_function_name, resolve_special_or_class_name,
+    resolve_type_expr, resolved_class_constant_name,
 };
 use super::statements::{resolve_params, resolve_stmt_list};
 use super::{resolved_name, rewrite_callback_literal_args, Imports, Symbols};
@@ -24,6 +26,7 @@ pub(super) fn resolve_expr(
                 target,
                 current_namespace,
                 imports,
+                symbols,
             )),
         },
         ExprKind::Throw(inner) => {
@@ -36,24 +39,22 @@ pub(super) fn resolve_expr(
             value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
             default: Box::new(resolve_expr(default, current_namespace, imports, symbols)),
         },
-        ExprKind::FunctionCall { name, args } => ExprKind::FunctionCall {
-            name: resolved_name(resolve_function_name(
-                name,
-                current_namespace,
-                imports,
-                symbols,
-            )),
-            args: rewrite_callback_literal_args(
-                name.as_str(),
-                args,
-                current_namespace,
-                imports,
-                symbols,
-            )
-            .into_iter()
-            .map(|arg| resolve_expr(&arg, current_namespace, imports, symbols))
-            .collect(),
-        },
+        ExprKind::FunctionCall { name, args } => {
+            let function_name = resolve_function_name(name, current_namespace, imports, symbols);
+            ExprKind::FunctionCall {
+                name: resolved_name(function_name.clone()),
+                args: rewrite_callback_literal_args(
+                    &function_name,
+                    args,
+                    current_namespace,
+                    imports,
+                    symbols,
+                )
+                .into_iter()
+                .map(|arg| resolve_expr(&arg, current_namespace, imports, symbols))
+                .collect(),
+            }
+        }
         ExprKind::ArrayLiteral(values) => ExprKind::ArrayLiteral(
             values
                 .iter()
@@ -127,7 +128,7 @@ pub(super) fn resolve_expr(
             variadic: variadic.clone(),
             return_type: return_type
                 .as_ref()
-                .map(|ty| resolve_type_expr(ty, current_namespace, imports)),
+                .map(|ty| resolve_type_expr(ty, current_namespace, imports, symbols)),
             body: resolve_stmt_list(body, current_namespace, imports, symbols)
                 .expect("name resolver bug: closure body resolution failed"),
             is_arrow: *is_arrow,
@@ -165,6 +166,7 @@ pub(super) fn resolve_expr(
                 enum_name,
                 current_namespace,
                 imports,
+                symbols,
             )),
             case_name: case_name.clone(),
         },
@@ -173,6 +175,7 @@ pub(super) fn resolve_expr(
                 class_name,
                 current_namespace,
                 imports,
+                symbols,
             )),
             args: args
                 .iter()
@@ -192,7 +195,7 @@ pub(super) fn resolve_expr(
         ExprKind::StaticPropertyAccess { receiver, property } => ExprKind::StaticPropertyAccess {
             receiver: match receiver {
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
-                    resolve_special_or_class_name(name, current_namespace, imports),
+                    resolve_special_or_class_name(name, current_namespace, imports, symbols),
                 )),
                 _ => receiver.clone(),
             },
@@ -201,7 +204,7 @@ pub(super) fn resolve_expr(
         ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant {
             receiver: match receiver {
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
-                    resolve_special_or_class_name(name, current_namespace, imports),
+                    resolved_class_constant_name(name, current_namespace, imports),
                 )),
                 _ => receiver.clone(),
             },
@@ -209,7 +212,7 @@ pub(super) fn resolve_expr(
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver: match receiver {
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
-                    resolve_special_or_class_name(name, current_namespace, imports),
+                    resolve_special_or_class_name(name, current_namespace, imports, symbols),
                 )),
                 _ => receiver.clone(),
             },
@@ -220,7 +223,7 @@ pub(super) fn resolve_expr(
         },
         ExprKind::MethodCall { object, method, args } => ExprKind::MethodCall {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
-            method: method.clone(),
+            method: php_symbol_key(method),
             args: args
                 .iter()
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
@@ -228,7 +231,7 @@ pub(super) fn resolve_expr(
         },
         ExprKind::NullsafeMethodCall { object, method, args } => ExprKind::NullsafeMethodCall {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
-            method: method.clone(),
+            method: php_symbol_key(method),
             args: args
                 .iter()
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
@@ -241,11 +244,11 @@ pub(super) fn resolve_expr(
         } => ExprKind::StaticMethodCall {
             receiver: match receiver {
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
-                    resolve_special_or_class_name(name, current_namespace, imports),
+                    resolve_special_or_class_name(name, current_namespace, imports, symbols),
                 )),
                 _ => receiver.clone(),
             },
-            method: method.clone(),
+            method: php_symbol_key(method),
             args: args
                 .iter()
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
@@ -258,15 +261,15 @@ pub(super) fn resolve_expr(
             CallableTarget::StaticMethod { receiver, method } => CallableTarget::StaticMethod {
                 receiver: match receiver {
                     StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
-                        resolve_special_or_class_name(name, current_namespace, imports),
+                        resolve_special_or_class_name(name, current_namespace, imports, symbols),
                     )),
                     _ => receiver.clone(),
                 },
-                method: method.clone(),
+                method: php_symbol_key(method),
             },
             CallableTarget::Method { object, method } => CallableTarget::Method {
                 object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
-                method: method.clone(),
+                method: php_symbol_key(method),
             },
         }),
         ExprKind::PtrCast { target_type, expr } => ExprKind::PtrCast {
@@ -274,7 +277,7 @@ pub(super) fn resolve_expr(
             expr: Box::new(resolve_expr(expr, current_namespace, imports, symbols)),
         },
         ExprKind::BufferNew { element_type, len } => ExprKind::BufferNew {
-            element_type: resolve_type_expr(element_type, current_namespace, imports),
+            element_type: resolve_type_expr(element_type, current_namespace, imports, symbols),
             len: Box::new(resolve_expr(len, current_namespace, imports, symbols)),
         },
         _ => expr.kind.clone(),

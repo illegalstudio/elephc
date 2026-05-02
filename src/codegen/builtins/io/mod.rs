@@ -1,10 +1,13 @@
+mod basename;
 mod chdir;
 mod clearstatcache;
 mod copy;
+mod dirname;
 mod fclose;
 mod feof;
 mod fgetcsv;
 mod fgets;
+mod fnmatch;
 mod file;
 mod file_exists;
 mod file_get_contents;
@@ -33,8 +36,10 @@ mod is_link;
 mod is_readable;
 mod is_writable;
 mod mkdir;
+mod pathinfo;
 mod print_r;
 mod readline;
+mod realpath;
 mod rename;
 mod rewind;
 mod rmdir;
@@ -111,6 +116,11 @@ pub fn emit(
         "stat" => stat::emit(name, args, emitter, ctx, data),
         "lstat" => lstat::emit(name, args, emitter, ctx, data),
         "fstat" => fstat::emit(name, args, emitter, ctx, data),
+        "basename" => basename::emit(name, args, emitter, ctx, data),
+        "dirname" => dirname::emit(name, args, emitter, ctx, data),
+        "fnmatch" => fnmatch::emit(name, args, emitter, ctx, data),
+        "realpath" => realpath::emit(name, args, emitter, ctx, data),
+        "pathinfo" => pathinfo::emit(name, args, emitter, ctx, data),
         _ => None,
     }
 }

@@ -38,6 +38,16 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
 - Fully-qualified `\Lib\Tool` always refers to global canonical name
 - Included files keep their own namespace and imports; an include cannot inherit the caller's namespace scope
 
+## Case sensitivity
+
+elephc follows PHP's symbol case rules:
+
+- PHP keywords are case-insensitive (`IF`, `Echo`, and `function` are equivalent)
+- Built-in and user-defined function calls are case-insensitive, including string-literal callback names used by `function_exists()`, `call_user_func()`, `array_map()`, and related callback built-ins
+- Class, interface, trait, and method lookup is case-insensitive
+- Variables, object properties, string array keys, and user-defined constants remain case-sensitive
+- Built-in constant names such as `PHP_OS`, `INF`, and `STDOUT` remain case-sensitive
+
 ## Namespaces and callbacks
 String-literal callback names follow the same resolution rules as function calls.
 

@@ -18,6 +18,26 @@ pub(super) fn collect_constants(
             PhpType::Str,
         ),
     );
+    constants.insert(
+        "PATHINFO_DIRNAME".to_string(),
+        (ExprKind::IntLiteral(1), PhpType::Int),
+    );
+    constants.insert(
+        "PATHINFO_BASENAME".to_string(),
+        (ExprKind::IntLiteral(2), PhpType::Int),
+    );
+    constants.insert(
+        "PATHINFO_EXTENSION".to_string(),
+        (ExprKind::IntLiteral(4), PhpType::Int),
+    );
+    constants.insert(
+        "PATHINFO_FILENAME".to_string(),
+        (ExprKind::IntLiteral(8), PhpType::Int),
+    );
+    constants.insert(
+        "PATHINFO_ALL".to_string(),
+        (ExprKind::IntLiteral(15), PhpType::Int),
+    );
     for stmt in program {
         match &stmt.kind {
             StmtKind::ConstDecl { name, value } => {

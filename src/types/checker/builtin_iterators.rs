@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::names::Name;
 use crate::parser::ast::{ClassMethod, TypeExpr, Visibility};
 use crate::types::traits::FlattenedClass;
@@ -12,7 +13,14 @@ pub(crate) fn inject_builtin_iterators(
     class_map: &mut HashMap<String, FlattenedClass>,
 ) -> Result<(), CompileError> {
     for builtin_name in ["Iterator", "IteratorAggregate"] {
-        if interface_map.contains_key(builtin_name) || class_map.contains_key(builtin_name) {
+        let builtin_key = php_symbol_key(builtin_name);
+        if interface_map
+            .keys()
+            .any(|name| php_symbol_key(name) == builtin_key)
+            || class_map
+                .keys()
+                .any(|name| php_symbol_key(name) == builtin_key)
+        {
             return Err(CompileError::new(
                 crate::span::Span::dummy(),
                 &format!("Cannot redeclare built-in interface: {}", builtin_name),

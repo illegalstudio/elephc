@@ -88,6 +88,46 @@ echo $s->hidden();
 }
 
 #[test]
+fn test_error_duplicate_classes_differing_only_by_case() {
+    expect_error(
+        "<?php class Box {} class box {}",
+        "Duplicate class declaration: box",
+    );
+}
+
+#[test]
+fn test_error_duplicate_interfaces_differing_only_by_case() {
+    expect_error(
+        "<?php interface Named {} interface named {}",
+        "Duplicate interface declaration: named",
+    );
+}
+
+#[test]
+fn test_error_duplicate_traits_differing_only_by_case() {
+    expect_error(
+        "<?php trait Reusable {} trait reusable {}",
+        "Duplicate trait declaration: reusable",
+    );
+}
+
+#[test]
+fn test_error_duplicate_enums_differing_only_by_case() {
+    expect_error(
+        "<?php enum Mode { case A; } enum mode { case B; }",
+        "Duplicate class or enum declaration: mode",
+    );
+}
+
+#[test]
+fn test_error_duplicate_methods_differing_only_by_case() {
+    expect_error(
+        "<?php class Box { public function Save() { return 1; } public function save() { return 2; } }",
+        "Duplicate method declaration in Box: save",
+    );
+}
+
+#[test]
 fn test_error_parent_without_parent_class() {
     expect_error(
         "<?php class Solo { public function boot() { return parent::boot(); } } $s = new Solo(); $s->boot();",

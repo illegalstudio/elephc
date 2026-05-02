@@ -326,6 +326,7 @@ pub(super) fn resolve_stmt_list(
                                     type_expr,
                                     namespace.as_deref(),
                                     &imports,
+                                    symbols,
                                 ),
                                 name: name.clone(),
                                 value: resolve_expr(value, namespace.as_deref(), &imports, symbols),
@@ -435,6 +436,7 @@ pub(super) fn resolve_stmt_list(
                                                 name,
                                                 namespace.as_deref(),
                                                 &imports,
+                                                symbols,
                                             ),
                                         ))
                                     }
@@ -460,6 +462,7 @@ pub(super) fn resolve_stmt_list(
                                                 name,
                                                 namespace.as_deref(),
                                                 &imports,
+                                                symbols,
                                             ),
                                         ))
                                     }
@@ -486,6 +489,7 @@ pub(super) fn resolve_stmt_list(
                                                 name,
                                                 namespace.as_deref(),
                                                 &imports,
+                                                symbols,
                                             ),
                                         ))
                                     }
@@ -572,6 +576,7 @@ pub(super) fn resolve_catch_clause(
                     name,
                     current_namespace,
                     imports,
+                    symbols,
                 ))
             })
             .collect(),
@@ -593,7 +598,7 @@ pub(super) fn resolve_params(
                 name.clone(),
                 type_ann
                     .as_ref()
-                    .map(|ty| resolve_type_expr(ty, current_namespace, imports)),
+                    .map(|ty| resolve_type_expr(ty, current_namespace, imports, symbols)),
                 default
                     .as_ref()
                     .map(|expr| resolve_expr(expr, current_namespace, imports, symbols)),

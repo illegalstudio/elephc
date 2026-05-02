@@ -212,7 +212,10 @@ class Wad {
         PhpType::Array(Box::new(PhpType::Object("Entry".to_string())))
     );
 
-    let load_entries = wad.methods.get("loadEntries").expect("missing loadEntries");
+    let load_entries = wad
+        .methods
+        .get(&elephc::names::php_symbol_key("loadEntries"))
+        .expect("missing loadEntries");
     assert_eq!(
         load_entries.return_type,
         PhpType::Array(Box::new(PhpType::Object("Entry".to_string())))

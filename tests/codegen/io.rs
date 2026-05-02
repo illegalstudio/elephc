@@ -12,3 +12,5 @@ mod filesystem;
 mod misc;
 #[path = "io/stat_ext.rs"]
 mod stat_ext;
+#[path = "io/paths.rs"]
+mod paths;

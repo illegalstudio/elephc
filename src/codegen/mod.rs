@@ -15,7 +15,9 @@ mod stmt;
 
 use std::collections::{HashMap, HashSet};
 
-use crate::names::{interface_method_wrapper_symbol, method_symbol, static_method_symbol};
+use crate::names::{
+    interface_method_wrapper_symbol, method_symbol, php_symbol_key, static_method_symbol,
+};
 use crate::parser::ast::{Program, StmtKind};
 use crate::types::{
     ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
@@ -115,12 +117,13 @@ pub fn generate_user_asm(
     sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in sorted_classes {
         for method in &class_info.method_decls {
+                let method_key = php_symbol_key(&method.name);
                 if method.is_abstract {
                     continue;
                 }
                 let (label, sig) = if method.is_static {
-                    let label = static_method_symbol(class_name, &method.name);
-                    let class_static_sig = class_info.static_methods.get(&method.name);
+                    let label = static_method_symbol(class_name, &method_key);
+                    let class_static_sig = class_info.static_methods.get(&method_key);
                     let mut params: Vec<(String, PhpType)> =
                         vec![("__elephc_called_class_id".to_string(), PhpType::Int)];
                     if let Some(sig) = class_static_sig {
@@ -176,8 +179,8 @@ pub fn generate_user_asm(
                         },
                     )
                 } else {
-                    let label = method_symbol(class_name, &method.name);
-                    let class_method_sig = class_info.methods.get(&method.name);
+                    let label = method_symbol(class_name, &method_key);
+                    let class_method_sig = class_info.methods.get(&method_key);
                     let mut params: Vec<(String, PhpType)> = vec![
                         ("this".to_string(), PhpType::Object(class_name.clone())),
                     ];
@@ -240,7 +243,7 @@ pub fn generate_user_asm(
                     functions, &global_constants, interfaces, classes, packed_classes, class_name,
                     extern_functions, extern_classes, extern_globals,
                 );
-            }
+        }
     }
 
     emit_interface_return_wrappers(

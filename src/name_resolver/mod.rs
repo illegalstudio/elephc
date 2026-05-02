@@ -19,13 +19,13 @@ struct Imports {
 
 #[derive(Default)]
 struct Symbols {
-    functions: HashSet<String>,
-    classes: HashSet<String>,
-    interfaces: HashSet<String>,
-    traits: HashSet<String>,
+    functions: HashMap<String, String>,
+    classes: HashMap<String, String>,
+    interfaces: HashMap<String, String>,
+    traits: HashMap<String, String>,
     constants: HashSet<String>,
-    extern_functions: HashSet<String>,
-    extern_classes: HashSet<String>,
+    extern_functions: HashMap<String, String>,
+    extern_classes: HashMap<String, String>,
 }
 
 pub fn resolve(program: Program) -> Result<Program, CompileError> {
@@ -96,4 +96,8 @@ fn namespace_name(name: &Option<Name>) -> String {
 
 pub(crate) fn is_builtin_function(name: &str) -> bool {
     crate::types::checker::builtins::is_supported_builtin_function(name)
+}
+
+pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
+    crate::types::checker::builtins::canonical_builtin_function_name(name)
 }

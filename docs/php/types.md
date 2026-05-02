@@ -128,6 +128,9 @@ $b = (bool)0;        // false
 $a = (array)42;      // [42]
 ```
 
+Cast names and aliases are case-insensitive, matching PHP. For example,
+`(INT)`, `(Integer)`, and `(integer)` are equivalent.
+
 Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 
 ### Type functions
@@ -161,6 +164,14 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 - `??=` is checked against typed assignment storage for variables, object properties, static properties, and non-append array elements. For concrete local variable types, the fallback must keep the same type or be a literal `null`.
 - elephc does not model PHP's uninitialized typed-property state; property slots without explicit defaults start from the compiler's existing zero/null-like object-slot initialization until assigned.
 - Plain array numeric casts (`(int)$array`, `(float)$array`) follow elephc's existing array cast semantics (return the element count rather than PHP's `0`/`1`). Direct `iterable` numeric casts use PHP's empty/non-empty `0`/`1` semantics.
+
+### Filesystem functions not implemented
+
+These standard PHP filesystem functions are intentionally absent from elephc because they have no meaningful semantics in a compiled native binary:
+
+- `move_uploaded_file()`, `is_uploaded_file()` — both rely on the PHP-FPM/SAPI request lifecycle (the `$_FILES` superglobal and a per-request "uploaded files" registry). A standalone compiled binary has no such request scope.
+- `realpath_cache_get()`, `realpath_cache_size()` — expose a per-request realpath cache that elephc does not maintain. `clearstatcache()` is provided as a no-op for source-level compatibility.
+- `fgetss()` — deprecated in PHP 7.3 and removed in PHP 8.0. New code should use `strip_tags()` on the result of `fgets()`.
 
 ### Compiler diagnostics
 

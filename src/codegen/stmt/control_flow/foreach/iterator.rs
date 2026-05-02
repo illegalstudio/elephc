@@ -50,7 +50,7 @@ pub(crate) fn emit_iterator_foreach(
     let mut dispatch_target = iterator_dispatch_target(class_name, ctx);
     if !dispatch_target.implements_iterator(ctx) {
         move_result_to_receiver_arg(emitter);
-        let ret_ty = dispatch_target.dispatch("getIterator", emitter, ctx);
+        let ret_ty = dispatch_target.dispatch("getiterator", emitter, ctx);
         dispatch_target = iterator_return_dispatch_target(&ret_ty, ctx);
     }
 
@@ -170,7 +170,7 @@ pub(crate) fn emit_iterable_object_foreach(
     emitter.label(&aggregate_case);
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the IteratorAggregate object pointer before getIterator()
     move_result_to_receiver_arg(emitter);
-    emit_dispatch_interface_method("IteratorAggregate", "getIterator", emitter, ctx);
+    emit_dispatch_interface_method("IteratorAggregate", "getiterator", emitter, ctx);
     let aggregate_start = ctx.next_label("foreach_iter_object_aggregate_start");
     let aggregate_end = ctx.next_label("foreach_iter_object_aggregate_end");
     let aggregate_cont = ctx.next_label("foreach_iter_object_aggregate_cont");

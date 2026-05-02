@@ -13,7 +13,7 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::Checker;
 
-pub(crate) use catalog::is_supported_builtin_function;
+pub(crate) use catalog::{canonical_builtin_function_name, is_supported_builtin_function};
 
 impl Checker {
     fn require_linux_builtin_library(&mut self, library: &str) {

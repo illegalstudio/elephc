@@ -137,4 +137,20 @@ fn test_cast_boolean_alias() {
     assert_eq!(out, "1");
 }
 
+#[test]
+fn test_cast_keywords_are_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+echo (INTEGER)3.7;
+echo ":";
+echo (DOUBLE)"2.5";
+echo ":";
+echo (STRING)42;
+echo ":";
+echo (BOOLEAN)0 ? "true" : "false";
+"#,
+    );
+    assert_eq!(out, "3:2.5:42:false");
+}
+
 // --- gettype ---

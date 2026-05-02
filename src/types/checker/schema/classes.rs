@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassProperty, Visibility};
 use crate::types::{ClassInfo, PhpType};
 use crate::types::traits::FlattenedClass;
@@ -423,6 +424,7 @@ pub(crate) fn build_class_info_recursive(
     }
 
     for method in &class.methods {
+        let method_key = php_symbol_key(&method.name);
         let sig = build_method_sig(checker, method)?;
         if method.is_abstract && method.is_final {
             return Err(CompileError::new(
@@ -461,9 +463,9 @@ pub(crate) fn build_class_info_recursive(
             ));
         }
         if method.is_static {
-            if final_methods.contains(&method.name) {
+            if final_methods.contains(&method_key) {
                 let declaring_class = method_declaring_classes
-                    .get(&method.name)
+                    .get(&method_key)
                     .cloned()
                     .unwrap_or_else(|| class.name.clone());
                 return Err(CompileError::new(
@@ -474,7 +476,7 @@ pub(crate) fn build_class_info_recursive(
                     ),
                 ));
             }
-            if method_sigs.contains_key(&method.name) {
+            if method_sigs.contains_key(&method_key) {
                 return Err(CompileError::new(
                     method.span,
                     &format!(
@@ -483,9 +485,9 @@ pub(crate) fn build_class_info_recursive(
                     ),
                 ));
             }
-            if final_static_methods.contains(&method.name) {
+            if final_static_methods.contains(&method_key) {
                 let declaring_class = static_method_declaring_classes
-                    .get(&method.name)
+                    .get(&method_key)
                     .cloned()
                     .unwrap_or_else(|| class.name.clone());
                 return Err(CompileError::new(
@@ -496,7 +498,7 @@ pub(crate) fn build_class_info_recursive(
                     ),
                 ));
             }
-            if let Some(parent_visibility) = static_method_visibilities.get(&method.name) {
+            if let Some(parent_visibility) = static_method_visibilities.get(&method_key) {
                 if visibility_rank(&method.visibility) < visibility_rank(parent_visibility) {
                     return Err(CompileError::new(
                         method.span,
@@ -507,10 +509,10 @@ pub(crate) fn build_class_info_recursive(
                     ));
                 }
             }
-            if let Some(parent_sig) = static_sigs.get(&method.name) {
+            if let Some(parent_sig) = static_sigs.get(&method_key) {
                 validate_override_signature(checker, &class.name, method, parent_sig, true)?;
             }
-            if method.is_abstract && static_method_impl_classes.contains_key(&method.name) {
+            if method.is_abstract && static_method_impl_classes.contains_key(&method_key) {
                 return Err(CompileError::new(
                     method.span,
                     &format!(
@@ -519,30 +521,30 @@ pub(crate) fn build_class_info_recursive(
                     ),
                 ));
             }
-            static_sigs.insert(method.name.clone(), sig);
-            static_method_visibilities.insert(method.name.clone(), method.visibility.clone());
+            static_sigs.insert(method_key.clone(), sig);
+            static_method_visibilities.insert(method_key.clone(), method.visibility.clone());
             if method.is_final {
-                final_static_methods.insert(method.name.clone());
+                final_static_methods.insert(method_key.clone());
             } else {
-                final_static_methods.remove(&method.name);
+                final_static_methods.remove(&method_key);
             }
-            static_method_declaring_classes.insert(method.name.clone(), class.name.clone());
+            static_method_declaring_classes.insert(method_key.clone(), class.name.clone());
             if method.is_abstract {
-                static_method_impl_classes.remove(&method.name);
+                static_method_impl_classes.remove(&method_key);
             } else {
-                static_method_impl_classes.insert(method.name.clone(), class.name.clone());
+                static_method_impl_classes.insert(method_key.clone(), class.name.clone());
             }
             if method.visibility != Visibility::Private
-                && !static_vtable_slots.contains_key(&method.name)
+                && !static_vtable_slots.contains_key(&method_key)
             {
                 let slot = static_vtable_methods.len();
-                static_vtable_slots.insert(method.name.clone(), slot);
-                static_vtable_methods.push(method.name.clone());
+                static_vtable_slots.insert(method_key.clone(), slot);
+                static_vtable_methods.push(method_key.clone());
             }
         } else {
-            if final_static_methods.contains(&method.name) {
+            if final_static_methods.contains(&method_key) {
                 let declaring_class = static_method_declaring_classes
-                    .get(&method.name)
+                    .get(&method_key)
                     .cloned()
                     .unwrap_or_else(|| class.name.clone());
                 return Err(CompileError::new(
@@ -553,7 +555,7 @@ pub(crate) fn build_class_info_recursive(
                     ),
                 ));
             }
-            if static_sigs.contains_key(&method.name) {
+            if static_sigs.contains_key(&method_key) {
                 return Err(CompileError::new(
                     method.span,
                     &format!(
@@ -562,9 +564,9 @@ pub(crate) fn build_class_info_recursive(
                     ),
                 ));
             }
-            if final_methods.contains(&method.name) {
+            if final_methods.contains(&method_key) {
                 let declaring_class = method_declaring_classes
-                    .get(&method.name)
+                    .get(&method_key)
                     .cloned()
                     .unwrap_or_else(|| class.name.clone());
                 return Err(CompileError::new(
@@ -575,7 +577,7 @@ pub(crate) fn build_class_info_recursive(
                     ),
                 ));
             }
-            if let Some(parent_visibility) = method_visibilities.get(&method.name) {
+            if let Some(parent_visibility) = method_visibilities.get(&method_key) {
                 if visibility_rank(&method.visibility) < visibility_rank(parent_visibility) {
                     return Err(CompileError::new(
                         method.span,
@@ -586,10 +588,10 @@ pub(crate) fn build_class_info_recursive(
                     ));
                 }
             }
-            if let Some(parent_sig) = method_sigs.get(&method.name) {
+            if let Some(parent_sig) = method_sigs.get(&method_key) {
                 validate_override_signature(checker, &class.name, method, parent_sig, false)?;
             }
-            if method.is_abstract && method_impl_classes.contains_key(&method.name) {
+            if method.is_abstract && method_impl_classes.contains_key(&method_key) {
                 return Err(CompileError::new(
                     method.span,
                     &format!(
@@ -598,24 +600,24 @@ pub(crate) fn build_class_info_recursive(
                     ),
                 ));
             }
-            method_sigs.insert(method.name.clone(), sig);
-            method_visibilities.insert(method.name.clone(), method.visibility.clone());
+            method_sigs.insert(method_key.clone(), sig);
+            method_visibilities.insert(method_key.clone(), method.visibility.clone());
             if method.is_final {
-                final_methods.insert(method.name.clone());
+                final_methods.insert(method_key.clone());
             } else {
-                final_methods.remove(&method.name);
+                final_methods.remove(&method_key);
             }
-            method_declaring_classes.insert(method.name.clone(), class.name.clone());
+            method_declaring_classes.insert(method_key.clone(), class.name.clone());
             if method.is_abstract {
-                method_impl_classes.remove(&method.name);
+                method_impl_classes.remove(&method_key);
             } else {
-                method_impl_classes.insert(method.name.clone(), class.name.clone());
+                method_impl_classes.insert(method_key.clone(), class.name.clone());
             }
-            if method.visibility != Visibility::Private && !vtable_slots.contains_key(&method.name)
+            if method.visibility != Visibility::Private && !vtable_slots.contains_key(&method_key)
             {
                 let slot = vtable_methods.len();
-                vtable_slots.insert(method.name.clone(), slot);
-                vtable_methods.push(method.name.clone());
+                vtable_slots.insert(method_key.clone(), slot);
+                vtable_methods.push(method_key.clone());
             }
         }
     }
@@ -710,7 +712,10 @@ pub(crate) fn build_class_info_recursive(
                 "method",
                 "implementing interface",
             )?;
-            let actual_method = class.methods.iter().find(|m| m.name == *method_name);
+            let actual_method = class
+                .methods
+                .iter()
+                .find(|m| php_symbol_key(&m.name) == *method_name);
             if required_sig.declared_return && !actual_sig.declared_return {
                 return Err(CompileError::new(
                     actual_method.map(|m| m.span).unwrap_or_else(crate::span::Span::dummy),
@@ -788,7 +793,11 @@ pub(crate) fn build_class_info_recursive(
         }
     }
 
-    let constructor_param_to_prop = if class.methods.iter().any(|m| m.name == "__construct") {
+    let constructor_param_to_prop = if class
+        .methods
+        .iter()
+        .any(|m| php_symbol_key(&m.name) == "__construct")
+    {
         build_constructor_param_map(&class.methods)
     } else if let Some(parent) = &parent_info {
         parent.constructor_param_to_prop.clone()

@@ -1,5 +1,5 @@
 use crate::errors::CompileError;
-use crate::names::canonical_name_for_decl;
+use crate::names::{canonical_name_for_decl, php_symbol_key};
 use crate::parser::ast::{ClassProperty, Stmt, StmtKind, TraitAdaptation, TraitUse};
 
 use super::expressions::resolve_expr;
@@ -29,7 +29,7 @@ pub(super) fn resolve_decl_stmt(
                     variadic: variadic.clone(),
                     return_type: return_type
                         .as_ref()
-                        .map(|ty| resolve_type_expr(ty, namespace, imports)),
+                        .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
                     body,
                 },
                 stmt.span,
@@ -55,7 +55,7 @@ pub(super) fn resolve_decl_stmt(
                         return_type: method
                             .return_type
                             .as_ref()
-                            .map(|ty| resolve_type_expr(ty, namespace, imports)),
+                            .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
                         body,
                         ..method.clone()
                     })
@@ -63,17 +63,17 @@ pub(super) fn resolve_decl_stmt(
                 .collect::<Result<Vec<_>, CompileError>>()?;
             let trait_uses = trait_uses
                 .iter()
-                .map(|trait_use| resolve_trait_use(trait_use, namespace, imports))
+                .map(|trait_use| resolve_trait_use(trait_use, namespace, imports, symbols))
                 .collect::<Result<Vec<_>, CompileError>>()?;
             Ok(Some(Stmt::new(
                 StmtKind::ClassDecl {
                     name: canonical_name_for_decl(namespace, name),
                     extends: extends
                         .as_ref()
-                        .map(|name| resolved_name(resolved_class_name(name, namespace, imports))),
+                        .map(|name| resolved_name(resolved_class_name(name, namespace, imports, symbols))),
                     implements: implements
                         .iter()
-                        .map(|name| resolved_name(resolved_class_name(name, namespace, imports)))
+                        .map(|name| resolved_name(resolved_class_name(name, namespace, imports, symbols)))
                         .collect(),
                     is_abstract: *is_abstract,
                     is_final: *is_final,
@@ -115,7 +115,7 @@ pub(super) fn resolve_decl_stmt(
                 .iter()
                 .map(|field| crate::parser::ast::PackedField {
                     name: field.name.clone(),
-                    type_expr: resolve_type_expr(&field.type_expr, namespace, imports),
+                    type_expr: resolve_type_expr(&field.type_expr, namespace, imports, symbols),
                     span: field.span,
                 })
                 .collect();
@@ -137,7 +137,7 @@ pub(super) fn resolve_decl_stmt(
                         return_type: method
                             .return_type
                             .as_ref()
-                            .map(|ty| resolve_type_expr(ty, namespace, imports)),
+                            .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
                         body,
                         ..method.clone()
                     })
@@ -148,7 +148,7 @@ pub(super) fn resolve_decl_stmt(
                     name: canonical_name_for_decl(namespace, name),
                     extends: extends
                         .iter()
-                        .map(|name| resolved_name(resolved_class_name(name, namespace, imports)))
+                        .map(|name| resolved_name(resolved_class_name(name, namespace, imports, symbols)))
                         .collect(),
                     methods: resolved_methods,
                 },
@@ -170,7 +170,7 @@ pub(super) fn resolve_decl_stmt(
                         return_type: method
                             .return_type
                             .as_ref()
-                            .map(|ty| resolve_type_expr(ty, namespace, imports)),
+                            .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
                         body,
                         ..method.clone()
                     })
@@ -178,7 +178,7 @@ pub(super) fn resolve_decl_stmt(
                 .collect::<Result<Vec<_>, CompileError>>()?;
             let trait_uses = trait_uses
                 .iter()
-                .map(|trait_use| resolve_trait_use(trait_use, namespace, imports))
+                .map(|trait_use| resolve_trait_use(trait_use, namespace, imports, symbols))
                 .collect::<Result<Vec<_>, CompileError>>()?;
             Ok(Some(Stmt::new(
                 StmtKind::TraitDecl {
@@ -234,7 +234,7 @@ fn resolve_properties(
             type_expr: property
                 .type_expr
                 .as_ref()
-                .map(|ty| resolve_type_expr(ty, namespace, imports)),
+                .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
             default: property
                 .default
                 .as_ref()
@@ -248,12 +248,20 @@ pub(super) fn resolve_trait_use(
     trait_use: &TraitUse,
     current_namespace: Option<&str>,
     imports: &Imports,
+    symbols: &Symbols,
 ) -> Result<TraitUse, CompileError> {
     Ok(TraitUse {
         trait_names: trait_use
             .trait_names
             .iter()
-            .map(|name| resolved_name(resolved_class_name(name, current_namespace, imports)))
+            .map(|name| {
+                resolved_name(resolved_class_name(
+                    name,
+                    current_namespace,
+                    imports,
+                    symbols,
+                ))
+            })
             .collect(),
         adaptations: trait_use
             .adaptations
@@ -267,9 +275,16 @@ pub(super) fn resolve_trait_use(
                 } => Ok(TraitAdaptation::Alias {
                     trait_name: trait_name
                         .as_ref()
-                        .map(|name| resolved_name(resolved_class_name(name, current_namespace, imports))),
-                    method: method.clone(),
-                    alias: alias.clone(),
+                        .map(|name| {
+                            resolved_name(resolved_class_name(
+                                name,
+                                current_namespace,
+                                imports,
+                                symbols,
+                            ))
+                        }),
+                    method: php_symbol_key(method),
+                    alias: alias.as_ref().map(|alias| php_symbol_key(alias)),
                     visibility: visibility.clone(),
                 }),
                 TraitAdaptation::InsteadOf {
@@ -279,11 +294,25 @@ pub(super) fn resolve_trait_use(
                 } => Ok(TraitAdaptation::InsteadOf {
                     trait_name: trait_name
                         .as_ref()
-                        .map(|name| resolved_name(resolved_class_name(name, current_namespace, imports))),
-                    method: method.clone(),
+                        .map(|name| {
+                            resolved_name(resolved_class_name(
+                                name,
+                                current_namespace,
+                                imports,
+                                symbols,
+                            ))
+                        }),
+                    method: php_symbol_key(method),
                     instead_of: instead_of
                         .iter()
-                        .map(|name| resolved_name(resolved_class_name(name, current_namespace, imports)))
+                        .map(|name| {
+                            resolved_name(resolved_class_name(
+                                name,
+                                current_namespace,
+                                imports,
+                                symbols,
+                            ))
+                        })
                         .collect(),
                 }),
             })

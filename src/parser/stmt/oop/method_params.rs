@@ -38,7 +38,7 @@ pub(super) fn parse_method_params(
         }
 
         let promotion = parse_promoted_param_modifiers(tokens, pos)?;
-        if promotion.is_some() && method_name != "__construct" {
+        if promotion.is_some() && !method_name.eq_ignore_ascii_case("__construct") {
             return Err(CompileError::new(
                 span,
                 "Cannot declare promoted property outside a constructor",

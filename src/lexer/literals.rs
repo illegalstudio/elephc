@@ -340,18 +340,6 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         }
     }
 
-    if word.eq_ignore_ascii_case("and") {
-        return Ok(Token::And);
-    }
-    if word.eq_ignore_ascii_case("or") {
-        return Ok(Token::Or);
-    }
-    if word.eq_ignore_ascii_case("xor") {
-        return Ok(Token::Xor);
-    }
-    if word.eq_ignore_ascii_case("instanceof") {
-        return Ok(Token::InstanceOf);
-    }
     if word.eq_ignore_ascii_case("__DIR__") {
         return Ok(Token::DunderDir);
     }
@@ -378,6 +366,34 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
     }
 
     match word.as_str() {
+        "INF" => return Ok(Token::Inf),
+        "NAN" => return Ok(Token::Nan),
+        "PHP_INT_MAX" => return Ok(Token::PhpIntMax),
+        "PHP_INT_MIN" => return Ok(Token::PhpIntMin),
+        "PHP_FLOAT_MAX" => return Ok(Token::PhpFloatMax),
+        "M_PI" => return Ok(Token::MPi),
+        "M_E" => return Ok(Token::ME),
+        "M_SQRT2" => return Ok(Token::MSqrt2),
+        "M_PI_2" => return Ok(Token::MPi2),
+        "M_PI_4" => return Ok(Token::MPi4),
+        "M_LOG2E" => return Ok(Token::MLog2e),
+        "M_LOG10E" => return Ok(Token::MLog10e),
+        "PHP_FLOAT_MIN" => return Ok(Token::PhpFloatMin),
+        "PHP_FLOAT_EPSILON" => return Ok(Token::PhpFloatEpsilon),
+        "STDIN" => return Ok(Token::Stdin),
+        "STDOUT" => return Ok(Token::Stdout),
+        "STDERR" => return Ok(Token::Stderr),
+        "PHP_EOL" => return Ok(Token::PhpEol),
+        "PHP_OS" => return Ok(Token::PhpOs),
+        "DIRECTORY_SEPARATOR" => return Ok(Token::DirectorySeparator),
+        _ => {}
+    }
+
+    match word.to_ascii_lowercase().as_str() {
+        "and" => Ok(Token::And),
+        "or" => Ok(Token::Or),
+        "xor" => Ok(Token::Xor),
+        "instanceof" => Ok(Token::InstanceOf),
         "echo" => Ok(Token::Echo),
         "if" => Ok(Token::If),
         "ifdef" => Ok(Token::IfDef),
@@ -404,20 +420,6 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "interface" => Ok(Token::Interface),
         "abstract" => Ok(Token::Abstract),
         "final" => Ok(Token::Final),
-        "INF" => Ok(Token::Inf),
-        "NAN" => Ok(Token::Nan),
-        "PHP_INT_MAX" => Ok(Token::PhpIntMax),
-        "PHP_INT_MIN" => Ok(Token::PhpIntMin),
-        "PHP_FLOAT_MAX" => Ok(Token::PhpFloatMax),
-        "M_PI" => Ok(Token::MPi),
-        "M_E" => Ok(Token::ME),
-        "M_SQRT2" => Ok(Token::MSqrt2),
-        "M_PI_2" => Ok(Token::MPi2),
-        "M_PI_4" => Ok(Token::MPi4),
-        "M_LOG2E" => Ok(Token::MLog2e),
-        "M_LOG10E" => Ok(Token::MLog10e),
-        "PHP_FLOAT_MIN" => Ok(Token::PhpFloatMin),
-        "PHP_FLOAT_EPSILON" => Ok(Token::PhpFloatEpsilon),
         "print" => Ok(Token::Print),
         "switch" => Ok(Token::Switch),
         "case" => Ok(Token::Case),
@@ -427,9 +429,6 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "include_once" => Ok(Token::IncludeOnce),
         "require" => Ok(Token::Require),
         "require_once" => Ok(Token::RequireOnce),
-        "STDIN" => Ok(Token::Stdin),
-        "STDOUT" => Ok(Token::Stdout),
-        "STDERR" => Ok(Token::Stderr),
         "fn" => Ok(Token::Fn),
         "use" => Ok(Token::Use),
         "namespace" => Ok(Token::Namespace),
@@ -449,9 +448,6 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "readonly" => Ok(Token::ReadOnly),
         "extern" => Ok(Token::Extern),
         "packed" => Ok(Token::Packed),
-        "PHP_EOL" => Ok(Token::PhpEol),
-        "PHP_OS" => Ok(Token::PhpOs),
-        "DIRECTORY_SEPARATOR" => Ok(Token::DirectorySeparator),
         _ => Ok(Token::Identifier(word)),
     }
 }

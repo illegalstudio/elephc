@@ -169,7 +169,7 @@ impl Checker {
                     class_name.to_string(),
                 ))))
             }
-            "from" | "tryFrom" => {
+            "from" | "tryfrom" => {
                 let Some(backing_ty) = enum_info.backing_type.as_ref() else {
                     return Err(CompileError::new(
                         span,

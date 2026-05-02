@@ -1,4 +1,5 @@
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, Expr, ExprKind, StmtKind, Visibility};
 use crate::types::{FunctionSig, PhpType};
 
@@ -63,7 +64,10 @@ pub(crate) fn build_method_sig(
 
 pub(crate) fn build_constructor_param_map(methods: &[ClassMethod]) -> Vec<Option<String>> {
     let mut param_to_prop = Vec::new();
-    if let Some(constructor) = methods.iter().find(|m| m.name == "__construct") {
+    if let Some(constructor) = methods
+        .iter()
+        .find(|m| php_symbol_key(&m.name) == "__construct")
+    {
         param_to_prop = constructor
             .params
             .iter()
@@ -197,7 +201,7 @@ pub(crate) fn validate_override_signature(
 ) -> Result<(), CompileError> {
     let kind = if is_static { "static method" } else { "method" };
     let child_sig = build_method_sig(checker, method)?;
-    if method.name == "__construct" {
+    if php_symbol_key(&method.name) == "__construct" {
         return Ok(());
     }
     validate_signature_compatibility(

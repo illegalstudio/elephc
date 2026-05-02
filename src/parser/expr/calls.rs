@@ -91,14 +91,23 @@ pub(super) fn peek_cast(tokens: &[(Token, Span)], pos: usize) -> Option<CastType
         return None;
     }
     match &tokens[pos + 1].0 {
-        Token::Identifier(name) => match name.as_str() {
-            "int" | "integer" => Some(CastType::Int),
-            "float" | "double" | "real" => Some(CastType::Float),
-            "string" => Some(CastType::String),
-            "bool" | "boolean" => Some(CastType::Bool),
-            "array" => Some(CastType::Array),
-            _ => None,
-        },
+        Token::Identifier(name) if matches_case_insensitive(name, &["int", "integer"]) => {
+            Some(CastType::Int)
+        }
+        Token::Identifier(name) if matches_case_insensitive(name, &["float", "double", "real"]) => {
+            Some(CastType::Float)
+        }
+        Token::Identifier(name) if name.eq_ignore_ascii_case("string") => Some(CastType::String),
+        Token::Identifier(name) if matches_case_insensitive(name, &["bool", "boolean"]) => {
+            Some(CastType::Bool)
+        }
+        Token::Identifier(name) if name.eq_ignore_ascii_case("array") => Some(CastType::Array),
         _ => None,
     }
+}
+
+fn matches_case_insensitive(name: &str, keywords: &[&str]) -> bool {
+    keywords
+        .iter()
+        .any(|keyword| name.eq_ignore_ascii_case(keyword))
 }

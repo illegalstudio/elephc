@@ -79,12 +79,12 @@ pub(super) fn coerce_to_string(
             if ctx
                 .classes
                 .get(class_name)
-                .is_some_and(|class_info| class_info.methods.contains_key("__toString"))
+                .is_some_and(|class_info| class_info.methods.contains_key("__tostring"))
             {
                 abi::emit_push_reg(emitter, abi::int_result_reg(emitter));      // push $this pointer for __toString dispatch using the active target ABI
                 super::objects::emit_method_call_with_pushed_args(
                     class_name,
-                    "__toString",
+                    "__tostring",
                     &[],
                     emitter,
                     ctx,

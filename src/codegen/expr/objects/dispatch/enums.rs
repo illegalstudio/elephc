@@ -24,7 +24,7 @@ pub(super) fn emit_enum_static_method_call(
     match method {
         "cases" => emit_enum_cases(enum_name, &enum_info, emitter, ctx),
         "from" => emit_enum_from_like(enum_name, &enum_info, args, emitter, ctx, data, false),
-        "tryFrom" => emit_enum_from_like(enum_name, &enum_info, args, emitter, ctx, data, true),
+        "tryfrom" => emit_enum_from_like(enum_name, &enum_info, args, emitter, ctx, data, true),
         _ => {
             emitter.comment(&format!("WARNING: undefined enum method {}::{}", enum_name, method));
             PhpType::Int

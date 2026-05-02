@@ -121,6 +121,20 @@ fn test_cast_int_parses() {
 }
 
 #[test]
+fn test_cast_keywords_are_case_insensitive() {
+    let stmts = parse_source("<?php echo (INTEGER)3.14;");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::Cast { target, .. } => {
+                assert_eq!(*target, elephc::parser::ast::CastType::Int);
+            }
+            other => panic!("expected cast expression, got {:?}", other),
+        },
+        other => panic!("expected echo statement, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_cast_not_confused_with_parens() {
     // (1 + 2) should NOT be parsed as a cast
     let stmts = parse_source("<?php echo (1 + 2);");

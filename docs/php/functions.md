@@ -15,6 +15,10 @@ function add($a, $b) {
 echo add(3, 4); // 7
 ```
 
+Function lookup is case-insensitive like PHP. The declaration keeps its original
+name, but calls such as `ADD(3, 4)`, `Add(3, 4)`, and `add(3, 4)` resolve to the
+same function. Built-in function names follow the same rule.
+
 ## Parameter and return type hints
 
 ```php

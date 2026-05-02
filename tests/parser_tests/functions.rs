@@ -17,6 +17,19 @@ fn test_function_declaration_parses() {
 }
 
 #[test]
+fn test_parse_mixed_case_php_keywords() {
+    let stmts = parse_source("<?php FUNCTION Foo() { RETURN TRUE; } IF (FALSE) { ECHO 1; }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl { name, body, .. } => {
+            assert_eq!(name, "Foo");
+            assert!(matches!(body[0].kind, StmtKind::Return(Some(_))));
+        }
+        other => panic!("expected FunctionDecl, got {:?}", other),
+    }
+    assert!(matches!(stmts[1].kind, StmtKind::If { .. }));
+}
+
+#[test]
 fn test_function_no_params() {
     let stmts = parse_source("<?php function noop() { return; }");
     if let StmtKind::FunctionDecl { params, .. } = &stmts[0].kind {

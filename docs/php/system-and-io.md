@@ -135,6 +135,20 @@ Uses POSIX extended regex with common PCRE shorthand translation (`\s`, `\d`, `\
 
 > `stat()` / `lstat()` / `fstat()` return an empty associative array on failure. The 13 fields are always inserted in PHP's documented order.
 
+## Path manipulation
+
+| Function | Signature | Description |
+|---|---|---|
+| `basename()` | `basename($path [, $suffix]): string` | Trailing name component. `$suffix` is trimmed when it is a strict suffix of the result. |
+| `dirname()` | `dirname($path [, $levels = 1]): string` | Parent directory. Repeats the parent lookup when `$levels` is greater than 1. |
+| `pathinfo()` | `pathinfo($path [, $flag]): array\|string` | Without a flag, or with compile-time `PATHINFO_ALL`: associative array with keys `dirname`, `basename`, `extension` (when the basename contains a dot), `filename`. With compile-time component flags (`DIRNAME`, `BASENAME`, `EXTENSION`, `FILENAME`): the corresponding string. |
+| `realpath()` | `realpath($path): string\|false` | Canonicalized absolute path, or `false` when the path does not exist. |
+| `fnmatch()` | `fnmatch($pattern, $filename [, $flags = 0]): bool` | Shell-glob match. Supports `*`, `?`, `[abc]`, `[a-z]`, `[!abc]`/`[^abc]`, `\\<char>`. |
+
+> `pathinfo()` accepts compile-time `PATHINFO_DIRNAME` (1), `PATHINFO_BASENAME` (2), `PATHINFO_EXTENSION` (4), `PATHINFO_FILENAME` (8), and `PATHINFO_ALL` (15) constants, integer literals, and bitmasks such as `PATHINFO_DIRNAME | PATHINFO_EXTENSION`. Component bitmasks follow PHP priority: dirname, basename, extension, then filename. The component-flag form returns the requested component as a string (or empty string when it is absent — e.g. `pathinfo("foo", PATHINFO_EXTENSION)` returns `""`). The no-flag and `PATHINFO_ALL` forms return an associative array; the `extension` key is omitted only when the basename has no dot, matching PHP's behaviour.
+
+> `fnmatch()` accepts the optional flags argument only when it is `0`. Non-zero flags (`FNM_PATHNAME`, `FNM_PERIOD`, `FNM_CASEFOLD`, `FNM_NOESCAPE`) are tracked in `ROADMAP.md`.
+
 ## Debugging
 
 | Function | Signature | Description |

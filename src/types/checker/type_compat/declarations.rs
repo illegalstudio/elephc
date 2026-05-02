@@ -218,10 +218,14 @@ impl Checker {
         method_name: &str,
         is_static: bool,
     ) -> Vec<bool> {
+        let method_key = crate::names::php_symbol_key(method_name);
         class_info
             .method_decls
             .iter()
-            .find(|method| method.name == method_name && method.is_static == is_static)
+            .find(|method| {
+                crate::names::php_symbol_key(&method.name) == method_key
+                    && method.is_static == is_static
+            })
             .map(|method| {
                 method
                     .params

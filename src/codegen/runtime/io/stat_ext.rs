@@ -341,19 +341,19 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r9d, DWORD PTR [rsp + {}]", mode_off));   // load st_mode
     emitter.instruction("and r9d, 0xF000");                                     // mask with S_IFMT
     emitter.instruction("cmp r9d, 0x8000");                                     // S_IFREG?
-    emitter.instruction("je __rt_filetype_file");
+    emitter.instruction("je __rt_filetype_file");                               // return "file" for regular files
     emitter.instruction("cmp r9d, 0x4000");                                     // S_IFDIR?
-    emitter.instruction("je __rt_filetype_dir");
+    emitter.instruction("je __rt_filetype_dir");                                // return "dir" for directories
     emitter.instruction("cmp r9d, 0xA000");                                     // S_IFLNK?
-    emitter.instruction("je __rt_filetype_link");
+    emitter.instruction("je __rt_filetype_link");                               // return "link" for symlinks
     emitter.instruction("cmp r9d, 0x2000");                                     // S_IFCHR?
-    emitter.instruction("je __rt_filetype_char");
+    emitter.instruction("je __rt_filetype_char");                               // return "char" for character devices
     emitter.instruction("cmp r9d, 0x6000");                                     // S_IFBLK?
-    emitter.instruction("je __rt_filetype_block");
+    emitter.instruction("je __rt_filetype_block");                              // return "block" for block devices
     emitter.instruction("cmp r9d, 0x1000");                                     // S_IFIFO?
-    emitter.instruction("je __rt_filetype_fifo");
+    emitter.instruction("je __rt_filetype_fifo");                               // return "fifo" for named pipes
     emitter.instruction("cmp r9d, 0xC000");                                     // S_IFSOCK?
-    emitter.instruction("je __rt_filetype_socket");
+    emitter.instruction("je __rt_filetype_socket");                             // return "socket" for sockets
     emitter.instruction("jmp __rt_filetype_unknown");                           // fall-through → "unknown"
 
     let ft_emit = |emitter: &mut Emitter, sym: &str, len: i64| {

@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{
     ClassMethod, ClassProperty, Program, StmtKind, TraitAdaptation, TraitUse, Visibility,
 };
@@ -40,7 +41,8 @@ struct ImportedMethod {
 
 pub fn flatten_classes(program: &Program) -> (Vec<FlattenedClass>, Vec<CompileError>) {
     let mut trait_map = HashMap::new();
-    let mut class_names = HashSet::new();
+    let mut trait_keys = HashSet::new();
+    let mut class_like_keys = HashSet::new();
     let mut errors = Vec::new();
 
     for stmt in program {
@@ -51,7 +53,8 @@ pub fn flatten_classes(program: &Program) -> (Vec<FlattenedClass>, Vec<CompileEr
                 properties,
                 methods,
             } => {
-                if class_names.contains(name) || trait_map.contains_key(name) {
+                let trait_key = php_symbol_key(name);
+                if class_like_keys.contains(&trait_key) || !trait_keys.insert(trait_key) {
                     errors.push(CompileError::new(
                         stmt.span,
                         &format!("Duplicate trait declaration: {}", name),
@@ -71,13 +74,15 @@ pub fn flatten_classes(program: &Program) -> (Vec<FlattenedClass>, Vec<CompileEr
             StmtKind::ClassDecl { name, .. }
             | StmtKind::EnumDecl { name, .. }
             | StmtKind::InterfaceDecl { name, .. } => {
-                if trait_map.contains_key(name) || !class_names.insert(name.clone()) {
+                let class_like_key = php_symbol_key(name);
+                if trait_keys.contains(&class_like_key) {
                     errors.push(CompileError::new(
                         stmt.span,
                         &format!("Duplicate class or interface declaration: {}", name),
                     ));
                     continue;
                 }
+                class_like_keys.insert(class_like_key);
             }
             _ => {}
         }
@@ -262,11 +267,12 @@ fn resolve_trait_uses(
                 )?;
             }
             for method in expanded.methods {
-                if !candidates.contains_key(&method.name) {
-                    method_order.push(method.name.clone());
+                let method_key = php_symbol_key(&method.name);
+                if !candidates.contains_key(&method_key) {
+                    method_order.push(method_key.clone());
                 }
                 candidates
-                    .entry(method.name.clone())
+                    .entry(method_key)
                     .or_default()
                     .push(ImportedMethod {
                         source_trait: trait_name.to_string(),
@@ -312,7 +318,7 @@ fn resolve_trait_uses(
                             ));
                         }
                         suppressed
-                            .entry(method.clone())
+                            .entry(php_symbol_key(method))
                             .or_default()
                             .insert(loser.to_string());
                     }
@@ -329,8 +335,9 @@ fn resolve_trait_uses(
                         &candidates,
                         trait_use.span,
                     )?;
+                    let method_key = php_symbol_key(method);
                     let imported = candidates
-                        .get(method)
+                        .get(&method_key)
                         .and_then(|methods| {
                             methods
                                 .iter()
@@ -359,7 +366,7 @@ fn resolve_trait_uses(
                         });
                     } else if let Some(visibility) = visibility {
                         visibility_overrides
-                            .insert((selected_trait, method.clone()), visibility.clone());
+                            .insert((selected_trait, php_symbol_key(method)), visibility.clone());
                     }
                 }
             }
@@ -478,13 +485,13 @@ fn merge_methods(
 
     let mut local_keys = HashSet::new();
     for method in local {
-        local_keys.insert((method.name.clone(), method.is_static));
+        local_keys.insert((php_symbol_key(&method.name), method.is_static));
     }
 
     let mut merged = Vec::new();
     let mut seen_imported = HashSet::new();
     for imported_method in imported {
-        let key = (imported_method.name.clone(), imported_method.is_static);
+        let key = (php_symbol_key(&imported_method.name), imported_method.is_static);
         if local_keys.contains(&key) {
             continue;
         }
@@ -512,10 +519,10 @@ fn merge_imported_method_set(
 ) -> Result<(), CompileError> {
     let mut seen: HashSet<(String, bool)> = existing
         .iter()
-        .map(|method| (method.name.clone(), method.is_static))
+        .map(|method| (php_symbol_key(&method.name), method.is_static))
         .collect();
     for method in incoming {
-        let key = (method.name.clone(), method.is_static);
+        let key = (php_symbol_key(&method.name), method.is_static);
         if !seen.insert(key) {
             return Err(CompileError::new(
                 span,
@@ -552,7 +559,7 @@ fn validate_direct_method_duplicates(
 ) -> Result<(), CompileError> {
     let mut seen = HashSet::new();
     for method in methods {
-        let key = (method.name.clone(), method.is_static);
+        let key = (php_symbol_key(&method.name), method.is_static);
         if !seen.insert(key) {
             return Err(CompileError::new(
                 span,
@@ -569,7 +576,8 @@ fn resolve_adaptation_source(
     candidates: &HashMap<String, Vec<ImportedMethod>>,
     span: Span,
 ) -> Result<String, CompileError> {
-    let options = candidates.get(method).ok_or_else(|| {
+    let method_key = php_symbol_key(method);
+    let options = candidates.get(&method_key).ok_or_else(|| {
         CompileError::new(
             span,
             &format!("Trait adaptation references undefined method '{}'", method),

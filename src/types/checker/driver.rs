@@ -2,10 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Platform;
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, Program, StmtKind, TypeExpr};
 use crate::types::{
     ctype_stack_size, ctype_to_php_type, packed_type_size,
-    traits::{flatten_classes, FlattenedClass},
+    traits::flatten_classes,
     ExternClassInfo, ExternFieldInfo, ExternFunctionSig, FunctionSig, PackedClassInfo,
     PackedFieldInfo, PhpType, TypeEnv,
 };
@@ -27,16 +28,24 @@ pub(super) fn check_types_impl(
     let mut checker = Checker::new(target_platform);
     let mut errors = Vec::new();
 
-    checker.collect_function_decls(program);
+    checker.collect_function_decls(program, &mut errors);
 
     let (flattened_classes, flatten_errors) = flatten_classes(program);
     errors.extend(flatten_errors);
-    let mut class_map: HashMap<String, FlattenedClass> = flattened_classes
-        .iter()
-        .cloned()
-        .map(|class| (class.name.clone(), class))
-        .collect();
-    let mut interface_map = HashMap::new();
+    let mut seen_classes = HashSet::new();
+    let mut class_map = HashMap::new();
+    for class in &flattened_classes {
+        let key = php_symbol_key(&class.name);
+        if !seen_classes.insert(key) {
+            errors.push(CompileError::new(
+                crate::span::Span::dummy(),
+                &format!("Duplicate class declaration: {}", class.name),
+            ));
+            continue;
+        }
+        class_map.insert(class.name.clone(), class.clone());
+    }
+    let mut interface_map: HashMap<String, InterfaceDeclInfo> = HashMap::new();
     checker.declared_classes = class_map.keys().cloned().collect();
     for stmt in program {
         if let StmtKind::InterfaceDecl {
@@ -45,7 +54,14 @@ pub(super) fn check_types_impl(
             methods,
         } = &stmt.kind
         {
-            if interface_map.contains_key(name) {
+            let interface_key = php_symbol_key(name);
+            if interface_map
+                .keys()
+                .any(|existing| php_symbol_key(existing) == interface_key)
+                || class_map
+                    .keys()
+                    .any(|existing| php_symbol_key(existing) == interface_key)
+            {
                 errors.push(CompileError::new(
                     stmt.span,
                     &format!("Duplicate interface declaration: {}", name),
@@ -159,6 +175,11 @@ impl Checker {
     fn new(target_platform: Platform) -> Self {
         let mut constants = HashMap::new();
         constants.insert("PHP_OS".to_string(), PhpType::Str);
+        constants.insert("PATHINFO_DIRNAME".to_string(), PhpType::Int);
+        constants.insert("PATHINFO_BASENAME".to_string(), PhpType::Int);
+        constants.insert("PATHINFO_EXTENSION".to_string(), PhpType::Int);
+        constants.insert("PATHINFO_FILENAME".to_string(), PhpType::Int);
+        constants.insert("PATHINFO_ALL".to_string(), PhpType::Int);
 
         Self {
             target_platform,
@@ -190,7 +211,8 @@ impl Checker {
         }
     }
 
-    fn collect_function_decls(&mut self, program: &Program) {
+    fn collect_function_decls(&mut self, program: &Program, errors: &mut Vec<CompileError>) {
+        let mut seen_functions = HashSet::new();
         for stmt in program {
             if let StmtKind::FunctionDecl {
                 name,
@@ -201,6 +223,22 @@ impl Checker {
                 ..
             } = &stmt.kind
             {
+                if !seen_functions.insert(php_symbol_key(name)) {
+                    errors.push(CompileError::new(
+                        stmt.span,
+                        &format!("Duplicate function declaration: {}", name),
+                    ));
+                    continue;
+                }
+                if let Some(builtin) =
+                    crate::types::checker::builtins::canonical_builtin_function_name(name)
+                {
+                    errors.push(CompileError::new(
+                        stmt.span,
+                        &format!("Cannot redeclare built-in function: {}", builtin),
+                    ));
+                    continue;
+                }
                 let param_names: Vec<String> = params.iter().map(|(n, _, _, _)| n.clone()).collect();
                 let param_type_anns: Vec<Option<TypeExpr>> =
                     params.iter().map(|(_, t, _, _)| t.clone()).collect();
@@ -233,7 +271,10 @@ impl Checker {
                     return_type,
                     library,
                 } => {
-                    if self.extern_functions.contains_key(name) || self.fn_decls.contains_key(name) {
+                    if self.extern_functions.contains_key(name)
+                        || self.fn_decls.contains_key(name)
+                        || self.has_function_decl_folded(name)
+                    {
                         errors.push(CompileError::new(
                             stmt.span,
                             &format!("Duplicate function declaration: {}", name),
@@ -282,7 +323,10 @@ impl Checker {
                     }
                 }
                 StmtKind::ExternClassDecl { name, fields } => {
-                    if self.extern_classes.contains_key(name) || self.classes.contains_key(name) {
+                    if self.extern_classes.contains_key(name)
+                        || self.classes.contains_key(name)
+                        || self.has_class_decl_folded(name)
+                    {
                         errors.push(CompileError::new(
                             stmt.span,
                             &format!("Duplicate class declaration: {}", name),
@@ -332,6 +376,7 @@ impl Checker {
                     if self.packed_classes.contains_key(name)
                         || self.classes.contains_key(name)
                         || self.extern_classes.contains_key(name)
+                        || self.has_class_decl_folded(name)
                     {
                         errors.push(CompileError::new(
                             stmt.span,
@@ -397,6 +442,32 @@ impl Checker {
                 _ => {}
             }
         }
+    }
+
+    fn has_function_decl_folded(&self, name: &str) -> bool {
+        let key = php_symbol_key(name);
+        self.fn_decls
+            .keys()
+            .any(|existing| php_symbol_key(existing) == key)
+            || self
+                .extern_functions
+                .keys()
+                .any(|existing| php_symbol_key(existing) == key)
+    }
+
+    fn has_class_decl_folded(&self, name: &str) -> bool {
+        let key = php_symbol_key(name);
+        self.classes
+            .keys()
+            .any(|existing| php_symbol_key(existing) == key)
+            || self
+                .extern_classes
+                .keys()
+                .any(|existing| php_symbol_key(existing) == key)
+            || self
+                .packed_classes
+                .keys()
+                .any(|existing| php_symbol_key(existing) == key)
     }
 
     fn resolve_unchecked_functions(&mut self, errors: &mut Vec<CompileError>) {

@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::Visibility;
 use crate::types::InterfaceInfo;
 
@@ -104,7 +105,18 @@ pub(crate) fn build_interface_info_recursive(
         }
     }
 
+    let mut direct_method_keys = HashSet::new();
     for method in &interface.methods {
+        let method_key = php_symbol_key(&method.name);
+        if !direct_method_keys.insert(method_key.clone()) {
+            return Err(CompileError::new(
+                method.span,
+                &format!(
+                    "Duplicate interface method declaration: {}::{}",
+                    interface.name, method.name
+                ),
+            ));
+        }
         if method.visibility != Visibility::Public {
             return Err(CompileError::new(
                 method.span,
@@ -143,7 +155,7 @@ pub(crate) fn build_interface_info_recursive(
         }
 
         let sig = build_method_sig(checker, method)?;
-        if let Some(parent_sig) = methods.get(&method.name) {
+        if let Some(parent_sig) = methods.get(&method_key) {
             validate_signature_compatibility(
                 method.span,
                 &interface.name,
@@ -154,12 +166,12 @@ pub(crate) fn build_interface_info_recursive(
                 "redeclaring interface",
             )?;
         }
-        methods.insert(method.name.clone(), sig);
-        method_declaring_interfaces.insert(method.name.clone(), interface.name.clone());
-        if !method_slots.contains_key(&method.name) {
+        methods.insert(method_key.clone(), sig);
+        method_declaring_interfaces.insert(method_key.clone(), interface.name.clone());
+        if !method_slots.contains_key(&method_key) {
             let slot = method_order.len();
-            method_slots.insert(method.name.clone(), slot);
-            method_order.push(method.name.clone());
+            method_slots.insert(method_key.clone(), slot);
+            method_order.push(method_key.clone());
         }
     }
 

@@ -27,6 +27,11 @@ class Point {
 }
 ```
 
+Class, interface, trait, and method lookup is case-insensitive like PHP:
+`new point()`, `POINT::origin()`, and `$p->MAGNITUDE()` resolve to `Point` and
+its declared methods. Object properties remain case-sensitive, so `$p->x` and
+`$p->X` are distinct property names.
+
 ## Interfaces
 ```php
 <?php
@@ -247,6 +252,10 @@ echo \App\Logger::class;             // "App\Logger"
 Supported receivers: `Class::class`, `\Vendor\Class::class`, `self::class`, `parent::class`, `static::class`.
 
 `static::class` follows PHP late static binding and resolves to the called class.
+For named receivers, elephc preserves PHP's written/imported spelling for the
+`::class` string while still using case-insensitive class lookup for executable
+operations such as `new`, `instanceof`, static method calls, and static property
+access.
 
 ## Late static binding constructors (`new self()`, `new static()`, `new parent()`)
 
