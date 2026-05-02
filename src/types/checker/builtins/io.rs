@@ -144,8 +144,7 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Bool))
         }
-        "filesize" | "filemtime" | "fileatime" | "filectime" | "fileperms"
-        | "fileowner" | "filegroup" | "fileinode" => {
+        "filesize" | "filemtime" => {
             if args.len() != 1 {
                 return Err(CompileError::new(
                     span,
@@ -155,12 +154,22 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Int))
         }
+        "fileatime" | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 1 argument", name),
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(checker.normalize_union_type(vec![PhpType::Int, PhpType::Bool])))
+        }
         "filetype" => {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "filetype() takes exactly 1 argument"));
             }
             checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Str))
+            Ok(Some(checker.normalize_union_type(vec![PhpType::Str, PhpType::Bool])))
         }
         "clearstatcache" => {
             // PHP signature is `clearstatcache(bool $clear_realpath_cache = false, string $filename = ""): void`.
@@ -185,10 +194,13 @@ pub(super) fn check_builtin(
                 ));
             }
             checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::AssocArray {
-                key: Box::new(PhpType::Mixed),
-                value: Box::new(PhpType::Int),
-            }))
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Int),
+                },
+                PhpType::Bool,
+            ])))
         }
         "copy" | "rename" => {
             if args.len() != 2 {

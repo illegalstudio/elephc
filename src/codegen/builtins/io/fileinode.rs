@@ -5,6 +5,7 @@ use crate::codegen::expr::emit_expr;
 use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
+use super::stat_result::box_stat_int_or_false_result;
 
 pub fn emit(
     _name: &str,
@@ -16,5 +17,6 @@ pub fn emit(
     emitter.comment("fileinode()");
     emit_expr(&args[0], emitter, ctx, data);
     abi::emit_call_label(emitter, "__rt_fileinode");                            // call the target-aware runtime helper that loads st_ino
-    Some(PhpType::Int)
+    box_stat_int_or_false_result(emitter, ctx);
+    Some(PhpType::Mixed)
 }

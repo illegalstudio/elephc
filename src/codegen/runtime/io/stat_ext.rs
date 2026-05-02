@@ -5,8 +5,9 @@ use crate::codegen::{emit::Emitter, platform::Arch};
 ///
 /// These all share the same skeleton as the existing `__rt_filesize` /
 /// `__rt_filemtime` runtime helpers in `stat.rs`: stat() the path into a stack
-/// buffer and load the requested field. On stat failure they return `0` /
-/// `false` / `"unknown"`, mirroring PHP's behaviour for missing paths.
+/// buffer and load the requested field. Scalar stat getters return the payload
+/// plus a success flag so codegen can distinguish legitimate zero values from
+/// PHP-compatible `false` failures.
 pub fn emit_stat_ext(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_stat_ext_linux_x86_64(emitter);
@@ -54,11 +55,13 @@ pub fn emit_stat_ext(emitter: &mut Emitter) {
         emitter.label_global(label);
         emit_prologue(emitter);
         emitter.instruction("cmp x0, #0");                                      // did stat() succeed?
-        emitter.instruction(&format!("b.ne {}_fail", label));                   // failure path: return 0
+        emitter.instruction(&format!("b.ne {}_fail", label));                   // failure path: return false flag
         emitter.instruction(&format!("ldr x0, [sp, #{}]", off));                // load tv_sec at the requested timespec offset
+        emitter.instruction("mov x1, #1");                                      // success flag for codegen-side int|false boxing
         emit_epilogue(emitter);
         emitter.label(&format!("{}_fail", label));
-        emitter.instruction("mov x0, #0");                                      // stat failed: return 0
+        emitter.instruction("mov x0, #0");                                      // stat failed: integer payload defaults to 0
+        emitter.instruction("mov x1, #0");                                      // failure flag tells codegen to box PHP false
         emit_epilogue(emitter);
     }
 
@@ -71,11 +74,13 @@ pub fn emit_stat_ext(emitter: &mut Emitter) {
     emitter.label_global("__rt_fileperms");
     emit_prologue(emitter);
     emitter.instruction("cmp x0, #0");                                          // stat success?
-    emitter.instruction("b.ne __rt_fileperms_fail");                            // failure → 0
+    emitter.instruction("b.ne __rt_fileperms_fail");                            // failure → false flag
     emitter.instruction(&plat.stat_mode_load_instr("w0", "sp", mode_off));      // load full st_mode (zero-extended into x0)
+    emitter.instruction("mov x1, #1");                                          // success flag for codegen-side int|false boxing
     emit_epilogue(emitter);
     emitter.label("__rt_fileperms_fail");
-    emitter.instruction("mov x0, #0");                                          // stat failed: return 0
+    emitter.instruction("mov x0, #0");                                          // stat failed: integer payload defaults to 0
+    emitter.instruction("mov x1, #0");                                          // failure flag tells codegen to box PHP false
     emit_epilogue(emitter);
 
     // ================================================================
@@ -91,11 +96,13 @@ pub fn emit_stat_ext(emitter: &mut Emitter) {
         emitter.label_global(label);
         emit_prologue(emitter);
         emitter.instruction("cmp x0, #0");                                      // stat success?
-        emitter.instruction(&format!("b.ne {}_fail", label));                   // failure → 0
+        emitter.instruction(&format!("b.ne {}_fail", label));                   // failure → false flag
         emitter.instruction(&format!("ldr w0, [sp, #{}]", off));                // load 32-bit uid/gid (zero-extended)
+        emitter.instruction("mov x1, #1");                                      // success flag for codegen-side int|false boxing
         emit_epilogue(emitter);
         emitter.label(&format!("{}_fail", label));
-        emitter.instruction("mov x0, #0");                                      // stat failed: return 0
+        emitter.instruction("mov x0, #0");                                      // stat failed: integer payload defaults to 0
+        emitter.instruction("mov x1, #0");                                      // failure flag tells codegen to box PHP false
         emit_epilogue(emitter);
     }
 
@@ -108,11 +115,13 @@ pub fn emit_stat_ext(emitter: &mut Emitter) {
     emitter.label_global("__rt_fileinode");
     emit_prologue(emitter);
     emitter.instruction("cmp x0, #0");                                          // stat success?
-    emitter.instruction("b.ne __rt_fileinode_fail");                            // failure → 0
+    emitter.instruction("b.ne __rt_fileinode_fail");                            // failure → false flag
     emitter.instruction(&format!("ldr x0, [sp, #{}]", ino_off));                // load 64-bit st_ino
+    emitter.instruction("mov x1, #1");                                          // success flag for codegen-side int|false boxing
     emit_epilogue(emitter);
     emitter.label("__rt_fileinode_fail");
-    emitter.instruction("mov x0, #0");                                          // stat failed: return 0
+    emitter.instruction("mov x0, #0");                                          // stat failed: integer payload defaults to 0
+    emitter.instruction("mov x1, #0");                                          // failure flag tells codegen to box PHP false
     emit_epilogue(emitter);
 
     // ================================================================
@@ -131,7 +140,7 @@ pub fn emit_stat_ext(emitter: &mut Emitter) {
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(340);                                                       // lstat64 (Darwin 340 / Linux remap to fstatat)
     emitter.instruction("cmp x0, #0");                                          // lstat success?
-    emitter.instruction("b.ne __rt_filetype_unknown");                          // lstat failed → "unknown"
+    emitter.instruction("b.ne __rt_filetype_fail");                             // lstat failed → PHP false
 
     emitter.instruction(&plat.stat_mode_load_instr("w9", "sp", mode_off));      // load st_mode
     emitter.instruction("and w9, w9, #0xF000");                                 // mask with S_IFMT
@@ -182,6 +191,12 @@ pub fn emit_stat_ext(emitter: &mut Emitter) {
     ft_emit(emitter, "_filetype_socket", 6);
     emitter.label("__rt_filetype_unknown");
     ft_emit(emitter, "_filetype_unknown", 7);
+    emitter.label("__rt_filetype_fail");
+    emitter.instruction("mov x1, #0");                                          // null string pointer tells codegen to box PHP false
+    emitter.instruction("mov x2, #0");                                          // failure string length is zero
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
+    emitter.instruction("ret");                                                 // return the failure sentinel
 
     // ================================================================
     // __rt_is_executable: access(path, X_OK) — same skeleton as is_readable
@@ -261,7 +276,8 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
         emitter.instruction("call lstat");                                      // libc lstat() into the buffer
     };
     let unwind_zero = |emitter: &mut Emitter| {
-        emitter.instruction("xor eax, eax");                                    // failure path returns 0 / false
+        emitter.instruction("xor eax, eax");                                    // failure path returns a zero payload
+        emitter.instruction("xor edx, edx");                                    // clear the success flag for int|false callers
         emitter.instruction(&format!("add rsp, {}", frame_size));               // release the stat buffer
         emitter.instruction("pop rbp");                                         // restore caller frame pointer
         emitter.instruction("ret");                                             // return zero result
@@ -282,8 +298,9 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
         emitter.label_global(label);
         stat_call(emitter);
         emitter.instruction("cmp rax, 0");                                      // stat() success?
-        emitter.instruction(&format!("jne {}_fail", label));                    // failure → 0
+        emitter.instruction(&format!("jne {}_fail", label));                    // failure → false flag
         emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", off));    // load tv_sec at offset
+        emitter.instruction("mov rdx, 1");                                      // success flag for codegen-side int|false boxing
         unwind_with_rax(emitter);
         emitter.label(&format!("{}_fail", label));
         unwind_zero(emitter);
@@ -295,8 +312,9 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_fileperms");
     stat_call(emitter);
     emitter.instruction("cmp rax, 0");                                          // stat() success?
-    emitter.instruction("jne __rt_fileperms_fail");                             // failure → 0
+    emitter.instruction("jne __rt_fileperms_fail");                             // failure → false flag
     emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", mode_off));   // load 32-bit st_mode (zero-extends into rax)
+    emitter.instruction("mov rdx, 1");                                          // success flag for codegen-side int|false boxing
     unwind_with_rax(emitter);
     emitter.label("__rt_fileperms_fail");
     unwind_zero(emitter);
@@ -311,8 +329,9 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
         emitter.label_global(label);
         stat_call(emitter);
         emitter.instruction("cmp rax, 0");                                      // stat() success?
-        emitter.instruction(&format!("jne {}_fail", label));                    // failure → 0
+        emitter.instruction(&format!("jne {}_fail", label));                    // failure → false flag
         emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", off));    // load 32-bit uid/gid
+        emitter.instruction("mov rdx, 1");                                      // success flag for codegen-side int|false boxing
         unwind_with_rax(emitter);
         emitter.label(&format!("{}_fail", label));
         unwind_zero(emitter);
@@ -324,8 +343,9 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_fileinode");
     stat_call(emitter);
     emitter.instruction("cmp rax, 0");                                          // stat() success?
-    emitter.instruction("jne __rt_fileinode_fail");                             // failure → 0
+    emitter.instruction("jne __rt_fileinode_fail");                             // failure → false flag
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", ino_off));    // load 64-bit st_ino
+    emitter.instruction("mov rdx, 1");                                          // success flag for codegen-side int|false boxing
     unwind_with_rax(emitter);
     emitter.label("__rt_fileinode_fail");
     unwind_zero(emitter);
@@ -336,7 +356,7 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_filetype");
     lstat_call(emitter);
     emitter.instruction("cmp rax, 0");                                          // lstat() success?
-    emitter.instruction("jne __rt_filetype_unknown");                           // failure → "unknown"
+    emitter.instruction("jne __rt_filetype_fail");                              // failure → PHP false
     emitter.instruction(&format!("mov r9d, DWORD PTR [rsp + {}]", mode_off));   // load st_mode
     emitter.instruction("and r9d, 0xF000");                                     // mask with S_IFMT
     emitter.instruction("cmp r9d, 0x8000");                                     // S_IFREG?
@@ -378,6 +398,12 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
     ft_emit(emitter, "_filetype_socket", 6);
     emitter.label("__rt_filetype_unknown");
     ft_emit(emitter, "_filetype_unknown", 7);
+    emitter.label("__rt_filetype_fail");
+    emitter.instruction("xor eax, eax");                                        // null string pointer tells codegen to box PHP false
+    emitter.instruction("xor edx, edx");                                        // failure string length is zero
+    emitter.instruction(&format!("add rsp, {}", frame_size));                   // release the stat buffer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return the failure sentinel
 
     // -- is_executable --
     emitter.blank();

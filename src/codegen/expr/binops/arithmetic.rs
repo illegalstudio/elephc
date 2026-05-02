@@ -79,7 +79,7 @@ pub(super) fn emit_pow_binop(
     data: &mut DataSection,
 ) -> PhpType {
     let left_ty = emit_expr(left, emitter, ctx, data);
-    coerce_null_to_zero(emitter, &left_ty);
+    coerce_numeric_mixed_to_int(emitter, &left_ty);
     if left_ty != PhpType::Float {
         emit_promote_int_to_float(
             emitter,
@@ -89,7 +89,7 @@ pub(super) fn emit_pow_binop(
     }
     abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));
     let right_ty = emit_expr(right, emitter, ctx, data);
-    coerce_null_to_zero(emitter, &right_ty);
+    coerce_numeric_mixed_to_int(emitter, &right_ty);
     if right_ty != PhpType::Float {
         emit_promote_int_to_float(
             emitter,
@@ -123,7 +123,7 @@ pub(super) fn emit_numeric_binop(
     data: &mut DataSection,
 ) -> PhpType {
     let left_ty = emit_expr(left, emitter, ctx, data);
-    coerce_null_to_zero(emitter, &left_ty);
+    coerce_numeric_mixed_to_int(emitter, &left_ty);
     let use_float = left_ty == PhpType::Float;
     if use_float {
         abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));
@@ -131,7 +131,7 @@ pub(super) fn emit_numeric_binop(
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     }
     let right_ty = emit_expr(right, emitter, ctx, data);
-    coerce_null_to_zero(emitter, &right_ty);
+    coerce_numeric_mixed_to_int(emitter, &right_ty);
 
     if left_ty == PhpType::Float || right_ty == PhpType::Float || *op == BinOp::Div {
         if right_ty != PhpType::Float {
@@ -241,10 +241,10 @@ pub(super) fn emit_bitwise_binop(
     data: &mut DataSection,
 ) -> PhpType {
     let left_ty = emit_expr(left, emitter, ctx, data);
-    coerce_null_to_zero(emitter, &left_ty);
+    coerce_numeric_mixed_to_int(emitter, &left_ty);
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     let right_ty = emit_expr(right, emitter, ctx, data);
-    coerce_null_to_zero(emitter, &right_ty);
+    coerce_numeric_mixed_to_int(emitter, &right_ty);
     let left_reg = match emitter.target.arch {
         Arch::AArch64 => "x1",
         Arch::X86_64 => "r10",
@@ -292,6 +292,13 @@ pub(super) fn emit_bitwise_binop(
         _ => unreachable!(),
     }
     PhpType::Int
+}
+
+fn coerce_numeric_mixed_to_int(emitter: &mut Emitter, ty: &PhpType) {
+    coerce_null_to_zero(emitter, ty);
+    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(emitter, "__rt_mixed_cast_int");                   // normalize boxed int|bool|string values before numeric/bitwise operations
+    }
 }
 
 fn emit_int_mod(emitter: &mut Emitter, ctx: &mut Context, left_reg: &str, result_reg: &str) {

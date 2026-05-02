@@ -532,7 +532,9 @@ pub(super) fn infer_local_type(
                 | "str_ends_with" | "ctype_alpha" | "ctype_digit" | "ctype_alnum"
                 | "ctype_space" | "function_exists" | "ptr_is_null" => PhpType::Bool,
                 "define" => PhpType::Bool,
-                "strpos" | "strrpos" | "array_search" | "file_get_contents" => PhpType::Mixed,
+                "strpos" | "strrpos" | "array_search" | "file_get_contents" | "fileatime"
+                | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
+                | "filetype" | "stat" | "lstat" | "fstat" => PhpType::Mixed,
                 "abs" => {
                     if !args.is_empty() {
                         let t = infer_local_type(&args[0], sig, ctx);

@@ -107,7 +107,7 @@ pub(super) fn emit_order_compare_binop(
     data: &mut DataSection,
 ) -> PhpType {
     let left_ty = emit_expr(left, emitter, ctx, data);
-    coerce_null_to_zero(emitter, &left_ty);
+    coerce_numeric_mixed_to_int(emitter, &left_ty);
     let use_float = left_ty == PhpType::Float;
     if use_float {
         abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));
@@ -115,7 +115,7 @@ pub(super) fn emit_order_compare_binop(
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     }
     let right_ty = emit_expr(right, emitter, ctx, data);
-    coerce_null_to_zero(emitter, &right_ty);
+    coerce_numeric_mixed_to_int(emitter, &right_ty);
 
     if left_ty == PhpType::Float || right_ty == PhpType::Float {
         if right_ty != PhpType::Float {
@@ -158,7 +158,7 @@ pub(super) fn emit_spaceship_binop(
     data: &mut DataSection,
 ) -> PhpType {
     let left_ty = emit_expr(left, emitter, ctx, data);
-    coerce_null_to_zero(emitter, &left_ty);
+    coerce_numeric_mixed_to_int(emitter, &left_ty);
     let use_float = left_ty == PhpType::Float;
     if use_float {
         abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));
@@ -166,7 +166,7 @@ pub(super) fn emit_spaceship_binop(
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     }
     let right_ty = emit_expr(right, emitter, ctx, data);
-    coerce_null_to_zero(emitter, &right_ty);
+    coerce_numeric_mixed_to_int(emitter, &right_ty);
 
     if left_ty == PhpType::Float || right_ty == PhpType::Float {
         if right_ty != PhpType::Float {
@@ -221,4 +221,11 @@ pub(super) fn emit_spaceship_binop(
         }
     }
     PhpType::Int
+}
+
+fn coerce_numeric_mixed_to_int(emitter: &mut Emitter, ty: &PhpType) {
+    coerce_null_to_zero(emitter, ty);
+    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(emitter, "__rt_mixed_cast_int");                   // normalize boxed int|bool|string values before numeric comparisons
+    }
 }

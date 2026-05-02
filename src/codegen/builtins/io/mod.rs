@@ -47,6 +47,7 @@ mod fstat;
 mod lstat;
 mod scandir;
 mod stat;
+mod stat_result;
 mod sys_get_temp_dir;
 mod tempnam;
 mod unlink;

@@ -101,11 +101,26 @@ rmdir("mydir");
 }
 
 #[test]
-fn test_filetype_unknown_for_missing() {
+fn test_filetype_missing_is_strict_false() {
     let out = compile_and_run(
-        r#"<?php echo filetype("/nonexistent/path/xyz");"#,
+        r#"<?php echo filetype("/nonexistent/path/xyz") === false ? "false" : "string";"#,
     );
-    assert_eq!(out, "unknown");
+    assert_eq!(out, "false");
+}
+
+#[test]
+fn test_scalar_stat_getters_missing_are_strict_false() {
+    let out = compile_and_run(
+        r#"<?php
+echo fileatime("missing.txt") === false ? "a" : "!";
+echo filectime("missing.txt") === false ? "c" : "!";
+echo fileperms("missing.txt") === false ? "p" : "!";
+echo fileowner("missing.txt") === false ? "o" : "!";
+echo filegroup("missing.txt") === false ? "g" : "!";
+echo fileinode("missing.txt") === false ? "i" : "!";
+"#,
+    );
+    assert_eq!(out, "acpogi");
 }
 
 #[test]
@@ -181,6 +196,18 @@ echo $info["size"] . "|" . ($info["mode"] & 0xF000) . "|" . ($info[7] === $info[
 }
 
 #[test]
+fn test_stat_lstat_fstat_failures_are_strict_false() {
+    let out = compile_and_run(
+        r#"<?php
+echo stat("missing.txt") === false ? "s" : "!";
+echo lstat("missing.txt") === false ? "l" : "!";
+echo fstat(-1) === false ? "f" : "!";
+"#,
+    );
+    assert_eq!(out, "slf");
+}
+
+#[test]
 fn test_stat_array_size_matches_filesize() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -234,4 +261,3 @@ echo $info["size"];
     assert_eq!(out, "10");
     let _ = fs::remove_dir_all(&dir);
 }
-

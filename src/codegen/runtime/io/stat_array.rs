@@ -12,8 +12,7 @@ use crate::codegen::{emit::Emitter, platform::Arch};
 /// ```
 ///
 /// All values are inserted as `Int` (tag = 0). On stat failure the runtime
-/// returns an empty hash (still typed as `Int` values), which mirrors the
-/// `string|false` handling used elsewhere — empty output stands in for false.
+/// returns a null hash pointer so builtin codegen can box PHP `false`.
 pub fn emit_stat_array(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_stat_array_linux_x86_64(emitter);
@@ -103,13 +102,6 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
         emitter.instruction(&format!("ldr x0, [sp, #{}]", hash_slot));          // load final hash pointer into result register
     };
 
-    // Helper that emits the empty-hash failure path used when stat fails.
-    let emit_empty_hash = |emitter: &mut Emitter| {
-        emitter.instruction("mov x0, #16");                                     // capacity
-        emitter.instruction("mov x1, #0");                                      // value type = Int
-        emitter.instruction("bl __rt_hash_new");                                // empty hash, returned in x0
-    };
-
     // -------------- __rt_stat_array (path-based, follows symlinks) ----------
     emitter.blank();
     emitter.raw("    .p2align 2");                                              // ensure 4-byte alignment for the next runtime helper
@@ -122,16 +114,16 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer
     emitter.syscall(338);                                                       // stat(path, buf)
     emitter.instruction("cmp x0, #0");                                          // success?
-    emitter.instruction("b.ne __rt_stat_array_fail");                           // failure → empty hash
+    emitter.instruction("b.ne __rt_stat_array_fail");                           // failure → null hash pointer
     emit_build_hash(emitter);
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate frame
     emitter.instruction("ret");                                                 // return hash in x0
     emitter.label("__rt_stat_array_fail");
-    emit_empty_hash(emitter);
+    emitter.instruction("mov x0, #0");                                          // null hash pointer tells codegen to box PHP false
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address (failure path)
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate frame (failure path)
-    emitter.instruction("ret");                                                 // return empty hash
+    emitter.instruction("ret");                                                 // return the failure sentinel
 
     // -------------- __rt_lstat_array (path-based, does not follow symlinks) -
     emitter.blank();
@@ -145,16 +137,16 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer
     emitter.syscall(340);                                                       // lstat(path, buf)
     emitter.instruction("cmp x0, #0");                                          // success?
-    emitter.instruction("b.ne __rt_lstat_array_fail");                          // failure → empty hash
+    emitter.instruction("b.ne __rt_lstat_array_fail");                          // failure → null hash pointer
     emit_build_hash(emitter);
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate frame
     emitter.instruction("ret");                                                 // return hash in x0
     emitter.label("__rt_lstat_array_fail");
-    emit_empty_hash(emitter);
+    emitter.instruction("mov x0, #0");                                          // null hash pointer tells codegen to box PHP false
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address (failure path)
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate frame (failure path)
-    emitter.instruction("ret");                                                 // return empty hash
+    emitter.instruction("ret");                                                 // return the failure sentinel
 
     // -------------- __rt_fstat_array (fd-based, no path conversion) ---------
     emitter.blank();
@@ -169,16 +161,16 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer
     emitter.syscall(339);                                                       // fstat(fd, buf)
     emitter.instruction("cmp x0, #0");                                          // success?
-    emitter.instruction("b.ne __rt_fstat_array_fail");                          // failure → empty hash
+    emitter.instruction("b.ne __rt_fstat_array_fail");                          // failure → null hash pointer
     emit_build_hash(emitter);
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate frame
     emitter.instruction("ret");                                                 // return hash in x0
     emitter.label("__rt_fstat_array_fail");
-    emit_empty_hash(emitter);
+    emitter.instruction("mov x0, #0");                                          // null hash pointer tells codegen to box PHP false
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address (failure path)
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate frame (failure path)
-    emitter.instruction("ret");                                                 // return empty hash
+    emitter.instruction("ret");                                                 // return the failure sentinel
 }
 
 fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
@@ -255,12 +247,6 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
         emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", hash_slot_neg)); // result in rax
     };
 
-    let emit_empty_hash = |emitter: &mut Emitter| {
-        emitter.instruction("mov rdi, 16");                                     // first hash_new argument: capacity
-        emitter.instruction("mov rsi, 0");                                      // second hash_new argument: value type = Int
-        emitter.instruction("call __rt_hash_new");                              // empty hash in rax
-    };
-
     // -- stat --
     emitter.blank();
     emitter.comment("--- runtime: stat (associative array) ---");
@@ -273,16 +259,16 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_neg));              // second libc stat() argument: stat buffer
     emitter.instruction("call stat");                                           // libc stat()
     emitter.instruction("cmp rax, 0");                                          // success?
-    emitter.instruction("jne __rt_stat_array_fail_x86");                        // failure → empty hash
+    emitter.instruction("jne __rt_stat_array_fail_x86");                        // failure → null hash pointer
     emit_build_hash(emitter, &entries);
     emitter.instruction(&format!("add rsp, {}", frame));                        // release frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return hash in rax
     emitter.label("__rt_stat_array_fail_x86");
-    emit_empty_hash(emitter);
+    emitter.instruction("xor eax, eax");                                        // null hash pointer tells codegen to box PHP false
     emitter.instruction(&format!("add rsp, {}", frame));                        // release frame (failure path)
     emitter.instruction("pop rbp");                                             // restore caller frame pointer (failure path)
-    emitter.instruction("ret");                                                 // return empty hash
+    emitter.instruction("ret");                                                 // return the failure sentinel
 
     // -- lstat --
     emitter.blank();
@@ -296,16 +282,16 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_neg));              // second libc lstat() argument
     emitter.instruction("call lstat");                                          // libc lstat()
     emitter.instruction("cmp rax, 0");                                          // success?
-    emitter.instruction("jne __rt_lstat_array_fail_x86");                       // failure → empty hash
+    emitter.instruction("jne __rt_lstat_array_fail_x86");                       // failure → null hash pointer
     emit_build_hash(emitter, &entries);
     emitter.instruction(&format!("add rsp, {}", frame));                        // release frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return hash in rax
     emitter.label("__rt_lstat_array_fail_x86");
-    emit_empty_hash(emitter);
+    emitter.instruction("xor eax, eax");                                        // null hash pointer tells codegen to box PHP false
     emitter.instruction(&format!("add rsp, {}", frame));                        // release frame (failure path)
     emitter.instruction("pop rbp");                                             // restore caller frame pointer (failure path)
-    emitter.instruction("ret");                                                 // return empty hash
+    emitter.instruction("ret");                                                 // return the failure sentinel
 
     // -- fstat --
     emitter.blank();
@@ -319,14 +305,14 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_neg));              // second libc fstat() argument
     emitter.instruction("call fstat");                                          // libc fstat()
     emitter.instruction("cmp rax, 0");                                          // success?
-    emitter.instruction("jne __rt_fstat_array_fail_x86");                       // failure → empty hash
+    emitter.instruction("jne __rt_fstat_array_fail_x86");                       // failure → null hash pointer
     emit_build_hash(emitter, &entries);
     emitter.instruction(&format!("add rsp, {}", frame));                        // release frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return hash in rax
     emitter.label("__rt_fstat_array_fail_x86");
-    emit_empty_hash(emitter);
+    emitter.instruction("xor eax, eax");                                        // null hash pointer tells codegen to box PHP false
     emitter.instruction(&format!("add rsp, {}", frame));                        // release frame (failure path)
     emitter.instruction("pop rbp");                                             // restore caller frame pointer (failure path)
-    emitter.instruction("ret");                                                 // return empty hash
+    emitter.instruction("ret");                                                 // return the failure sentinel
 }

@@ -245,8 +245,53 @@ pub(crate) fn emit_array_access(
         return PhpType::Str;
     }
 
-    if let PhpType::AssocArray { value, .. } = &arr_ty {
-        let val_ty = *value.clone();
+    let assoc_value_ty = match &arr_ty {
+        PhpType::AssocArray { value, .. } => Some(*value.clone()),
+        PhpType::Union(members) => members.iter().find_map(|member| {
+            if let PhpType::AssocArray { value, .. } = member {
+                Some(*value.clone())
+            } else {
+                None
+            }
+        }),
+        PhpType::Mixed => Some(PhpType::Mixed),
+        _ => None,
+    };
+
+    if let Some(val_ty) = assoc_value_ty {
+        let done = ctx.next_label("hash_done");
+        if matches!(arr_ty, PhpType::Mixed | PhpType::Union(_)) {
+            let hash_payload = ctx.next_label("hash_payload");
+            abi::emit_call_label(emitter, "__rt_mixed_unbox");                  // inspect a boxed array|false value before associative-array access
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("cmp x0, #5");                          // runtime tag 5 = associative array
+                    emitter.instruction(&format!("b.eq {}", hash_payload));     // continue only when the boxed payload is a hash
+                    if matches!(val_ty, PhpType::Mixed | PhpType::Union(_)) {
+                        emitter.instruction("mov x0, #0");                      // null payload low word for non-array access
+                        crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Void);
+                    } else {
+                        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), i64::MAX - 1);
+                    }
+                    emitter.instruction(&format!("b {}", done));                // skip hash lookup when the boxed value is false/null
+                    emitter.label(&hash_payload);
+                    emitter.instruction("mov x0, x1");                          // move the unboxed hash pointer into the standard result register
+                }
+                Arch::X86_64 => {
+                    emitter.instruction("cmp rax, 5");                          // runtime tag 5 = associative array
+                    emitter.instruction(&format!("je {}", hash_payload));       // continue only when the boxed payload is a hash
+                    if matches!(val_ty, PhpType::Mixed | PhpType::Union(_)) {
+                        emitter.instruction("xor eax, eax");                    // null payload low word for non-array access
+                        crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Void);
+                    } else {
+                        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), i64::MAX - 1);
+                    }
+                    emitter.instruction(&format!("jmp {}", done));              // skip hash lookup when the boxed value is false/null
+                    emitter.label(&hash_payload);
+                    emitter.instruction("mov rax, rdi");                        // move the unboxed hash pointer into the standard result register
+                }
+            }
+        }
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the hash-table pointer while evaluating the string key expression
         crate::codegen::emit_normalized_hash_key(index, emitter, ctx, data);
         let (key_ptr_reg, key_len_reg) = abi::string_result_regs(emitter);
@@ -265,7 +310,6 @@ pub(crate) fn emit_array_access(
         abi::emit_call_label(emitter, "__rt_hash_get");                            // lookup key and return found-flag plus borrowed payload words through the target runtime ABI
 
         let not_found = ctx.next_label("hash_miss");
-        let done = ctx.next_label("hash_done");
         abi::emit_branch_if_int_result_zero(emitter, &not_found);                  // jump to the not-found handler when the hash lookup misses
 
         match emitter.target.arch {
