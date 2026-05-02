@@ -253,6 +253,21 @@ echo fstat(-1) === false ? "f" : "!";
 }
 
 #[test]
+fn test_failed_stat_array_access_still_evaluates_key() {
+    let out = compile_and_run(
+        r#"<?php
+function stat_key() {
+    echo "key|";
+    return "size";
+}
+stat("missing.txt")[stat_key()];
+echo "done";
+"#,
+    );
+    assert_eq!(out, "key|done");
+}
+
+#[test]
 fn test_stat_array_size_matches_filesize() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
