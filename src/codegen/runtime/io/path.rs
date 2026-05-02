@@ -293,3 +293,65 @@ fn emit_dirname_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_dirname_done_x86");
     emitter.instruction("ret");                                                 // return parent-dir slice in rax/rdx
 }
+
+/// dirname_levels: apply dirname() repeatedly for PHP's second argument.
+/// Input:  x1/x2 = path string, x3 = levels
+/// Output: x1/x2 = parent directory after `levels` applications
+pub fn emit_dirname_levels(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_dirname_levels_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.raw("    .p2align 2");                                              // ensure 4-byte alignment after preceding runtime literals
+    emitter.comment("--- runtime: dirname levels ---");
+    emitter.label_global("__rt_dirname_levels");
+
+    emitter.instruction("sub sp, sp, #32");                                     // reserve a small frame for the loop counter and return address
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across dirname calls
+    emitter.instruction("add x29, sp, #16");                                    // establish a stable frame pointer for the loop frame
+    emitter.instruction("str x3, [sp, #0]");                                    // store the requested parent depth as the remaining loop count
+
+    emitter.label("__rt_dirname_levels_loop");
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the remaining dirname applications
+    emitter.instruction("cmp x9, #0");                                          // have all requested levels been consumed?
+    emitter.instruction("b.le __rt_dirname_levels_done");                       // zero or negative levels leave the current path unchanged
+    emitter.instruction("bl __rt_dirname");                                     // replace the current path with its parent directory
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the remaining level count after dirname clobbered scratch regs
+    emitter.instruction("sub x9, x9, #1");                                      // account for the dirname application just performed
+    emitter.instruction("str x9, [sp, #0]");                                    // persist the decremented remaining level count
+    emitter.instruction("b __rt_dirname_levels_loop");                          // continue until the requested number of levels has been applied
+
+    emitter.label("__rt_dirname_levels_done");
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the dirname-levels frame
+    emitter.instruction("ret");                                                 // return the repeated dirname result in x1/x2
+}
+
+fn emit_dirname_levels_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: dirname levels ---");
+    emitter.label_global("__rt_dirname_levels");
+
+    // ABI: rax=path_ptr, rdx=path_len, rdi=levels. Returns rax/rdx.
+    emitter.instruction("push rbp");                                            // preserve caller frame pointer before the loop helper uses a spill slot
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the remaining level count
+    emitter.instruction("sub rsp, 16");                                         // reserve aligned spill space for the remaining level count
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested parent depth as the remaining loop count
+
+    emitter.label("__rt_dirname_levels_loop_x86");
+    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the remaining dirname applications
+    emitter.instruction("test r8, r8");                                         // have all requested levels been consumed?
+    emitter.instruction("jle __rt_dirname_levels_done_x86");                    // zero or negative levels leave the current path unchanged
+    emitter.instruction("call __rt_dirname");                                   // replace the current path with its parent directory
+    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the remaining level count after dirname clobbered scratch regs
+    emitter.instruction("sub r8, 1");                                           // account for the dirname application just performed
+    emitter.instruction("mov QWORD PTR [rbp - 8], r8");                         // persist the decremented remaining level count
+    emitter.instruction("jmp __rt_dirname_levels_loop_x86");                    // continue until the requested number of levels has been applied
+
+    emitter.label("__rt_dirname_levels_done_x86");
+    emitter.instruction("add rsp, 16");                                         // release the dirname-levels spill space
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return the repeated dirname result in rax/rdx
+}

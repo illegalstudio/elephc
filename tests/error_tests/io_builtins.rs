@@ -269,6 +269,32 @@ fn test_error_fputcsv_wrong_args() {
     expect_error("<?php fputcsv(1);", "fputcsv() takes 2 to 4 arguments");
 }
 
+#[test]
+fn test_error_dirname_wrong_args() {
+    expect_error("<?php dirname();", "dirname() takes 1 or 2 arguments");
+}
+
+#[test]
+fn test_error_dirname_rejects_static_levels_below_one() {
+    expect_error(
+        r#"<?php dirname("/tmp/file", 0);"#,
+        "dirname() levels must be greater than or equal to 1",
+    );
+}
+
+#[test]
+fn test_error_fnmatch_wrong_args() {
+    expect_error("<?php fnmatch(\"*.txt\");", "fnmatch() takes 2 or 3 arguments");
+}
+
+#[test]
+fn test_error_fnmatch_rejects_unsupported_flags() {
+    expect_error(
+        r#"<?php fnmatch("*.TXT", "file.txt", 16);"#,
+        "fnmatch() flags other than 0 are not supported yet",
+    );
+}
+
 // --- v0.6: switch/match/array errors ---
 
 #[test]

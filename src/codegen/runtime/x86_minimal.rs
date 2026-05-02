@@ -208,6 +208,7 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     io::emit_getcwd(emitter);
     io::emit_basename(emitter);
     io::emit_dirname(emitter);
+    io::emit_dirname_levels(emitter);
     io::emit_fnmatch(emitter);
     io::emit_realpath(emitter);
     io::emit_pathinfo_str(emitter);

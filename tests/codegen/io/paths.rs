@@ -125,8 +125,26 @@ fn test_dirname_dot() {
 }
 
 #[test]
+fn test_dirname_levels() {
+    let out = compile_and_run(r#"<?php echo dirname("/usr/local/bin/tool", 2);"#);
+    assert_eq!(out, "/usr/local");
+}
+
+#[test]
+fn test_dirname_levels_past_root_stays_root() {
+    let out = compile_and_run(r#"<?php echo dirname("/usr", 3);"#);
+    assert_eq!(out, "/");
+}
+
+#[test]
 fn test_fnmatch_literal_match() {
     let out = compile_and_run(r#"<?php echo fnmatch("file.txt", "file.txt") ? "y" : "n";"#);
+    assert_eq!(out, "y");
+}
+
+#[test]
+fn test_fnmatch_accepts_zero_flags_argument() {
+    let out = compile_and_run(r#"<?php echo fnmatch("*.txt", "report.txt", 0) ? "y" : "n";"#);
     assert_eq!(out, "y");
 }
 

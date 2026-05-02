@@ -117,14 +117,14 @@ Uses POSIX extended regex with common PCRE shorthand translation (`\s`, `\d`, `\
 | Function | Signature | Description |
 |---|---|---|
 | `basename()` | `basename($path [, $suffix]): string` | Trailing name component. `$suffix` is trimmed when it is a strict suffix of the result. |
-| `dirname()` | `dirname($path): string` | Parent directory. Returns `"."` when the path has no separator and `"/"` for paths that resolve to root. |
-| `pathinfo()` | `pathinfo($path [, $flag]): array\|string` | Without a flag: associative array with keys `dirname`, `basename`, `extension` (only if present), `filename`. With a `PATHINFO_*` flag (`DIRNAME`, `BASENAME`, `EXTENSION`, `FILENAME`): the corresponding string. |
+| `dirname()` | `dirname($path [, $levels = 1]): string` | Parent directory. Repeats the parent lookup when `$levels` is greater than 1. |
+| `pathinfo()` | `pathinfo($path [, $flag]): array\|string` | Without a flag, or with `PATHINFO_ALL`: associative array with keys `dirname`, `basename`, `extension` (only if present), `filename`. With component flags (`DIRNAME`, `BASENAME`, `EXTENSION`, `FILENAME`): the corresponding string. |
 | `realpath()` | `realpath($path): string\|false` | Canonicalized absolute path, or `false` when the path does not exist. |
-| `fnmatch()` | `fnmatch($pattern, $filename): bool` | Shell-glob match. Supports `*`, `?`, `[abc]`, `[a-z]`, `[!abc]`/`[^abc]`, `\\<char>`. |
+| `fnmatch()` | `fnmatch($pattern, $filename [, $flags = 0]): bool` | Shell-glob match. Supports `*`, `?`, `[abc]`, `[a-z]`, `[!abc]`/`[^abc]`, `\\<char>`. |
 
-> `pathinfo()` accepts `PATHINFO_DIRNAME` (1), `PATHINFO_BASENAME` (2), `PATHINFO_EXTENSION` (4), `PATHINFO_FILENAME` (8), and `PATHINFO_ALL` (15). The flag form returns the requested component as a string (or empty string when it is absent — e.g. `pathinfo("foo", PATHINFO_EXTENSION)` returns `""`). The no-flag form returns an associative array; the `extension` key is omitted when the basename has no recognised extension, matching PHP's behaviour.
+> `pathinfo()` accepts `PATHINFO_DIRNAME` (1), `PATHINFO_BASENAME` (2), `PATHINFO_EXTENSION` (4), `PATHINFO_FILENAME` (8), and `PATHINFO_ALL` (15). The component-flag form returns the requested component as a string (or empty string when it is absent — e.g. `pathinfo("foo", PATHINFO_EXTENSION)` returns `""`). The no-flag and `PATHINFO_ALL` forms return an associative array; the `extension` key is omitted when the basename has no recognised extension, matching PHP's behaviour.
 
-> `fnmatch()` flags (`FNM_PATHNAME`, `FNM_PERIOD`, `FNM_CASEFOLD`, `FNM_NOESCAPE`) are not yet supported.
+> `fnmatch()` accepts the optional flags argument only when it is `0`. Non-zero flags (`FNM_PATHNAME`, `FNM_PERIOD`, `FNM_CASEFOLD`, `FNM_NOESCAPE`) are tracked in `ROADMAP.md`.
 
 ## Debugging
 

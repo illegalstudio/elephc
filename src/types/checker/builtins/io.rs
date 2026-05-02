@@ -237,18 +237,35 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Str))
         }
         "dirname" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "dirname() takes exactly 1 argument"));
-            }
-            checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Str))
-        }
-        "fnmatch" => {
-            if args.len() != 2 {
-                return Err(CompileError::new(span, "fnmatch() takes exactly 2 arguments"));
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(span, "dirname() takes 1 or 2 arguments"));
             }
             for arg in args {
                 checker.infer_type(arg, env)?;
+            }
+            if matches!(args.get(1).map(|arg| &arg.kind), Some(ExprKind::IntLiteral(levels)) if *levels < 1)
+            {
+                return Err(CompileError::new(
+                    span,
+                    "dirname() levels must be greater than or equal to 1",
+                ));
+            }
+            Ok(Some(PhpType::Str))
+        }
+        "fnmatch" => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(CompileError::new(span, "fnmatch() takes 2 or 3 arguments"));
+            }
+            for arg in &args[..2] {
+                checker.infer_type(arg, env)?;
+            }
+            if let Some(flags) = args.get(2) {
+                if !matches!(flags.kind, ExprKind::IntLiteral(0)) {
+                    return Err(CompileError::new(
+                        span,
+                        "fnmatch() flags other than 0 are not supported yet",
+                    ));
+                }
             }
             Ok(Some(PhpType::Bool))
         }

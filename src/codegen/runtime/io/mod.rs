@@ -35,6 +35,7 @@ pub(crate) use getcwd::emit_getcwd;
 pub(crate) use glob::emit_glob;
 pub(crate) use path::emit_basename;
 pub(crate) use path::emit_dirname;
+pub(crate) use path::emit_dirname_levels;
 pub(crate) use pathinfo::emit_pathinfo_array;
 pub(crate) use pathinfo::emit_pathinfo_str;
 pub(crate) use realpath::emit_realpath;
