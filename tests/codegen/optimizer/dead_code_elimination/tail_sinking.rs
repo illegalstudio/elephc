@@ -4,11 +4,11 @@ use super::*;
 fn test_dead_code_elimination_preserves_effectful_empty_if_condition() {
     let out = compile_and_run(
         r#"<?php
-function touch() {
+function poke() {
     echo "t";
     return true;
 }
-if (touch()) {
+if (poke()) {
 }
 echo "!";
 "#,
@@ -21,7 +21,7 @@ echo "!";
 fn test_dead_code_elimination_reduces_empty_if_chain_to_needed_condition_checks() {
     let out = compile_and_run(
         r#"<?php
-function touch() {
+function poke() {
     echo "a";
     return false;
 }
@@ -31,7 +31,7 @@ function tap() {
     return false;
 }
 
-if (touch()) {
+if (poke()) {
     strlen("abc");
 } elseif (tap()) {
     strlen("def");

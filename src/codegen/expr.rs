@@ -125,17 +125,10 @@ pub fn emit_expr(
             if ctx.extern_functions.contains_key(name.as_str()) {
                 return super::ffi::emit_extern_call(name.as_str(), args, emitter, ctx, data);
             }
-            // User-declared functions shadow built-ins of the same name (this
-            // matches the type-checker resolution order so test fixtures and
-            // existing programs that redeclare a name continue to call into
-            // their own implementation).
-            let user_defined = ctx.functions.contains_key(name.as_str());
-            if !user_defined {
-                if let Some(ty) =
-                    super::builtins::emit_builtin_call(name.as_str(), args, emitter, ctx, data)
-                {
-                    return ty;
-                }
+            if let Some(ty) =
+                super::builtins::emit_builtin_call(name.as_str(), args, emitter, ctx, data)
+            {
+                return ty;
             }
             emit_function_call(name.as_str(), args, emitter, ctx, data)
         }

@@ -4,7 +4,7 @@ use super::*;
 fn test_dead_code_elimination_rebuilds_empty_elseif_tail_as_needed_guard() {
     let out = compile_and_run(
         r#"<?php
-function touch() {
+function poke() {
     echo "a";
     return false;
 }
@@ -14,7 +14,7 @@ function tap() {
     return true;
 }
 
-if (touch()) {
+if (poke()) {
     echo "x";
 } elseif (tap()) {
     strlen("abc");

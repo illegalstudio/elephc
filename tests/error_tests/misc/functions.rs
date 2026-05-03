@@ -81,6 +81,14 @@ fn test_error_cannot_redeclare_builtin_function_differing_only_by_case() {
 }
 
 #[test]
+fn test_error_cannot_redeclare_filesystem_builtin_function() {
+    expect_error(
+        "<?php function touch(string $path): bool { return true; }",
+        "Cannot redeclare built-in function: touch",
+    );
+}
+
+#[test]
 fn test_error_user_constants_are_case_sensitive() {
     expect_error(
         "<?php const MyConst = 1; echo myconst;",

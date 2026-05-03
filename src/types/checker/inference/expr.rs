@@ -448,14 +448,8 @@ impl Checker {
                 if self.extern_functions.contains_key(name.as_str()) {
                     return self.check_extern_function_call(name.as_str(), &args, expr.span, env);
                 }
-                // User-declared functions shadow built-ins of the same name.
-                // This protects existing programs (and test fixtures) when
-                // elephc later promotes a name to a built-in: redeclaring the
-                // name continues to compile against the user's signature.
-                if !self.fn_decls.contains_key(name.as_str()) {
-                    if let Some(ty) = self.check_builtin(name.as_str(), &args, expr.span, env)? {
-                        return Ok(ty);
-                    }
+                if let Some(ty) = self.check_builtin(name.as_str(), &args, expr.span, env)? {
+                    return Ok(ty);
                 }
                 self.check_function_call(name.as_str(), &args, expr.span, env)
             }
