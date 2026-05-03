@@ -374,7 +374,7 @@ Proper type system for PHP compatibility.
 Close the small, well-scoped PHP filesystem/runtime compatibility gaps that are
 already adjacent to the current implementation.
 
-- [ ] `fnmatch()` non-zero flag parity for `FNM_PATHNAME`, `FNM_PERIOD`, `FNM_CASEFOLD`, and `FNM_NOESCAPE`
+- [x] `fnmatch()` non-zero flag parity for `FNM_PATHNAME`, `FNM_PERIOD`, `FNM_CASEFOLD`, and `FNM_NOESCAPE`
 - [ ] Dynamic `pathinfo($path, $flag)` parity for runtime flags that may evaluate to `PATHINFO_ALL`; current support requires compile-time pathinfo flags so the return shape is known statically
 - [ ] PHP resource type compatibility — model file handles and future extension handles separately from integers
 - [ ] Runtime-dynamic include paths — model or explicitly reject runtime-evaluated `include` / `require` path expressions beyond the current compile-time string-folder (`$path`, function calls, ternaries, property access)

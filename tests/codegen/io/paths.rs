@@ -149,6 +149,81 @@ fn test_fnmatch_accepts_zero_flags_argument() {
 }
 
 #[test]
+fn test_fnmatch_pathname_flag_keeps_slash_special() {
+    let out = compile_and_run(
+        r#"<?php
+echo fnmatch("*.txt", "dir/file.txt") ? "y" : "n";
+echo "|";
+echo fnmatch("*.txt", "dir/file.txt", FNM_PATHNAME) ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "y|n");
+}
+
+#[test]
+fn test_fnmatch_period_flag_blocks_leading_dot_wildcard() {
+    let out = compile_and_run(
+        r#"<?php
+echo fnmatch("*", ".env") ? "y" : "n";
+echo "|";
+echo fnmatch("*", ".env", FNM_PERIOD) ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "y|n");
+}
+
+#[test]
+fn test_fnmatch_casefold_flag_matches_case_insensitively() {
+    let out = compile_and_run(
+        r#"<?php
+echo fnmatch("*.TXT", "file.txt") ? "y" : "n";
+echo "|";
+echo fnmatch("*.TXT", "file.txt", FNM_CASEFOLD) ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "n|y");
+}
+
+#[test]
+fn test_fnmatch_noescape_flag_treats_backslash_as_literal() {
+    let out = compile_and_run(
+        r#"<?php
+echo fnmatch('a\\*b', 'a*b') ? "y" : "n";
+echo "|";
+echo fnmatch('a\\*b', 'a*b', FNM_NOESCAPE) ? "y" : "n";
+echo "|";
+echo fnmatch('a\\*b', 'a\\xxb', FNM_NOESCAPE) ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "y|n|y");
+}
+
+#[test]
+fn test_fnmatch_combined_runtime_flags() {
+    let out = compile_and_run(
+        r#"<?php
+$flags = FNM_PATHNAME | FNM_CASEFOLD;
+echo fnmatch("*.TXT", "dir/file.txt", $flags) ? "y" : "n";
+echo "|";
+echo fnmatch("dir/*.TXT", "dir/file.txt", $flags) ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "n|y");
+}
+
+#[test]
+fn test_fnmatch_combined_constant_flags() {
+    let out = compile_and_run(
+        r#"<?php
+echo fnmatch("*/*.txt", ".hidden/file.txt", FNM_PATHNAME | FNM_PERIOD) ? "y" : "n";
+echo "|";
+echo fnmatch("*/*.txt", "visible/file.txt", FNM_PATHNAME | FNM_PERIOD) ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "n|y");
+}
+
+#[test]
 fn test_fnmatch_literal_mismatch() {
     let out = compile_and_run(r#"<?php echo fnmatch("file.txt", "file.png") ? "y" : "n";"#);
     assert_eq!(out, "n");

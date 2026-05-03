@@ -25,6 +25,8 @@ echo pathinfo("/srv/app/index.php", PATHINFO_EXTENSION) . "\n";
 // fnmatch() runs a shell-style glob against a name (no filesystem hit).
 echo (fnmatch("*.log", "system.log") ? "y" : "n") . "\n";
 echo (fnmatch("*.log", "system.txt") ? "y" : "n") . "\n";
+echo (fnmatch("*.LOG", "system.log", FNM_CASEFOLD) ? "y" : "n") . "\n";
+echo (fnmatch("*.log", "logs/system.log", FNM_PATHNAME) ? "y" : "n") . "\n";
 
 // realpath() resolves the canonical absolute path of an existing file.
 // On a missing path PHP returns false; elephc surfaces that as an empty

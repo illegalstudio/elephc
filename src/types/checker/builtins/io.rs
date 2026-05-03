@@ -400,10 +400,11 @@ pub(super) fn check_builtin(
                 checker.infer_type(arg, env)?;
             }
             if let Some(flags) = args.get(2) {
-                if !matches!(flags.kind, ExprKind::IntLiteral(0)) {
+                let flags_ty = checker.infer_type(flags, env)?;
+                if flags_ty != PhpType::Int {
                     return Err(CompileError::new(
                         span,
-                        "fnmatch() flags other than 0 are not supported yet",
+                        "fnmatch() flags must be int",
                     ));
                 }
             }

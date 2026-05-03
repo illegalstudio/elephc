@@ -314,5 +314,9 @@ fn is_builtin_global_constant(name: &str) -> bool {
             | "PATHINFO_EXTENSION"
             | "PATHINFO_FILENAME"
             | "PATHINFO_ALL"
+            | "FNM_NOESCAPE"
+            | "FNM_PATHNAME"
+            | "FNM_PERIOD"
+            | "FNM_CASEFOLD"
     )
 }

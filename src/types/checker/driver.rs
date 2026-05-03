@@ -180,6 +180,10 @@ impl Checker {
         constants.insert("PATHINFO_EXTENSION".to_string(), PhpType::Int);
         constants.insert("PATHINFO_FILENAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_ALL".to_string(), PhpType::Int);
+        constants.insert("FNM_NOESCAPE".to_string(), PhpType::Int);
+        constants.insert("FNM_PATHNAME".to_string(), PhpType::Int);
+        constants.insert("FNM_PERIOD".to_string(), PhpType::Int);
+        constants.insert("FNM_CASEFOLD".to_string(), PhpType::Int);
 
         Self {
             target_platform,

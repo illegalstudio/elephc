@@ -313,10 +313,10 @@ fn test_error_fnmatch_wrong_args() {
 }
 
 #[test]
-fn test_error_fnmatch_rejects_unsupported_flags() {
+fn test_error_fnmatch_rejects_non_int_flags() {
     expect_error(
-        r#"<?php fnmatch("*.TXT", "file.txt", 16);"#,
-        "fnmatch() flags other than 0 are not supported yet",
+        r#"<?php fnmatch("*.TXT", "file.txt", "casefold");"#,
+        "fnmatch() flags must be int",
     );
 }
 

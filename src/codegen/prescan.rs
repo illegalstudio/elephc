@@ -38,6 +38,26 @@ pub(super) fn collect_constants(
         "PATHINFO_ALL".to_string(),
         (ExprKind::IntLiteral(15), PhpType::Int),
     );
+    let (fnm_noescape, fnm_pathname) = match target_platform {
+        Platform::MacOS => (1, 2),
+        Platform::Linux => (2, 1),
+    };
+    constants.insert(
+        "FNM_NOESCAPE".to_string(),
+        (ExprKind::IntLiteral(fnm_noescape), PhpType::Int),
+    );
+    constants.insert(
+        "FNM_PATHNAME".to_string(),
+        (ExprKind::IntLiteral(fnm_pathname), PhpType::Int),
+    );
+    constants.insert(
+        "FNM_PERIOD".to_string(),
+        (ExprKind::IntLiteral(4), PhpType::Int),
+    );
+    constants.insert(
+        "FNM_CASEFOLD".to_string(),
+        (ExprKind::IntLiteral(16), PhpType::Int),
+    );
     for stmt in program {
         match &stmt.kind {
             StmtKind::ConstDecl { name, value } => {
@@ -279,5 +299,32 @@ pub(super) fn collect_main_try_slots(stmts: &[Stmt], ctx: &mut Context) {
             | StmtKind::TraitDecl { .. } => {}
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn int_constant(constants: &HashMap<String, (ExprKind, PhpType)>, name: &str) -> i64 {
+        match &constants[name].0 {
+            ExprKind::IntLiteral(value) => *value,
+            _ => panic!("{name} is not an integer constant"),
+        }
+    }
+
+    #[test]
+    fn test_fnmatch_constants_follow_target_platform() {
+        let mac = collect_constants(&vec![], Platform::MacOS);
+        assert_eq!(int_constant(&mac, "FNM_NOESCAPE"), 1);
+        assert_eq!(int_constant(&mac, "FNM_PATHNAME"), 2);
+        assert_eq!(int_constant(&mac, "FNM_PERIOD"), 4);
+        assert_eq!(int_constant(&mac, "FNM_CASEFOLD"), 16);
+
+        let linux = collect_constants(&vec![], Platform::Linux);
+        assert_eq!(int_constant(&linux, "FNM_NOESCAPE"), 2);
+        assert_eq!(int_constant(&linux, "FNM_PATHNAME"), 1);
+        assert_eq!(int_constant(&linux, "FNM_PERIOD"), 4);
+        assert_eq!(int_constant(&linux, "FNM_CASEFOLD"), 16);
     }
 }

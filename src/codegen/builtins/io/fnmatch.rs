@@ -19,15 +19,27 @@ pub fn emit(
         Arch::AArch64 => {
             emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the pattern ptr/len while the filename expression is evaluated
             emit_expr(&args[1], emitter, ctx, data);
-            emitter.instruction("mov x3, x1");                                  // move the filename pointer into the secondary runtime string-argument pair
-            emitter.instruction("mov x4, x2");                                  // move the filename length into the secondary runtime string-argument pair
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the filename ptr/len while the flags expression is evaluated
+            if let Some(flags) = args.get(2) {
+                emit_expr(flags, emitter, ctx, data);
+                emitter.instruction("mov x5, x0");                              // move the runtime flags into the fnmatch helper flag register
+            } else {
+                emitter.instruction("mov x5, #0");                              // default flags = 0
+            }
+            emitter.instruction("ldp x3, x4, [sp], #16");                       // restore the filename ptr/len into the secondary runtime string-argument pair
             emitter.instruction("ldp x1, x2, [sp], #16");                       // restore the pattern ptr/len after evaluating the filename expression
         }
         Arch::X86_64 => {
             abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // preserve the pattern ptr/len while the filename expression is evaluated
             emit_expr(&args[1], emitter, ctx, data);
-            emitter.instruction("mov rdi, rax");                                // move the filename pointer into the x86_64 secondary runtime string-argument slot
-            emitter.instruction("mov rsi, rdx");                                // move the filename length into the x86_64 secondary runtime string-argument slot
+            abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // preserve the filename ptr/len while the flags expression is evaluated
+            if let Some(flags) = args.get(2) {
+                emit_expr(flags, emitter, ctx, data);
+                emitter.instruction("mov rcx, rax");                            // move the runtime flags into the fnmatch helper flag register
+            } else {
+                emitter.instruction("xor ecx, ecx");                            // default flags = 0
+            }
+            abi::emit_pop_reg_pair(emitter, "rdi", "rsi");                      // restore the filename ptr/len into the secondary runtime string-argument slots
             abi::emit_pop_reg_pair(emitter, "rax", "rdx");                      // restore the pattern ptr/len after evaluating the filename expression
         }
     }
