@@ -50,7 +50,10 @@ const BUILTINS: &[&str] = &[
     "fgets", "feof", "readline", "fseek", "ftell", "rewind",
     "file_get_contents", "file_put_contents", "file", "file_exists",
     "is_file", "is_dir", "is_readable", "is_writable", "filesize",
-    "filemtime", "copy", "rename", "unlink", "mkdir", "rmdir",
+    "filemtime", "fileatime", "filectime", "fileperms", "fileowner",
+    "filegroup", "fileinode", "filetype", "is_executable", "is_link",
+    "is_writeable", "stat", "lstat", "fstat", "clearstatcache",
+    "copy", "rename", "unlink", "mkdir", "rmdir",
     "scandir", "glob", "getcwd", "chdir", "tempnam", "sys_get_temp_dir",
     "fgetcsv", "fputcsv",
 ];

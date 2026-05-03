@@ -340,6 +340,14 @@ impl Checker {
                         // Assoc arrays accept string or int keys
                         Ok(*value.clone())
                     }
+                    PhpType::Union(members) => {
+                        for member in members {
+                            if let PhpType::AssocArray { value, .. } = member {
+                                return Ok(*value.clone());
+                            }
+                        }
+                        Err(CompileError::new(expr.span, "Cannot index non-array"))
+                    }
                     PhpType::Buffer(elem_ty) => {
                         if idx_ty != PhpType::Int {
                             return Err(CompileError::new(

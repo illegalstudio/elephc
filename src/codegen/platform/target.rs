@@ -103,6 +103,102 @@ impl Platform {
         }
     }
 
+    pub fn stat_atime_offset(&self) -> usize {
+        match self {
+            Platform::MacOS => 32,
+            Platform::Linux => 72,
+        }
+    }
+
+    pub fn stat_ctime_offset(&self) -> usize {
+        match self {
+            Platform::MacOS => 64,
+            Platform::Linux => 104,
+        }
+    }
+
+    pub fn stat_ino_offset(&self) -> usize {
+        match self {
+            Platform::MacOS => 8,
+            Platform::Linux => 8,
+        }
+    }
+
+    pub fn stat_uid_offset(&self) -> usize {
+        match self {
+            Platform::MacOS => 16,
+            Platform::Linux => 24,
+        }
+    }
+
+    pub fn stat_gid_offset(&self) -> usize {
+        match self {
+            Platform::MacOS => 20,
+            Platform::Linux => 28,
+        }
+    }
+
+    pub fn stat_dev_offset(&self) -> usize {
+        match self {
+            // st_dev is int32_t on Darwin and __dev_t (8 bytes) on Linux.
+            Platform::MacOS => 0,
+            Platform::Linux => 0,
+        }
+    }
+
+    pub fn stat_rdev_offset(&self) -> usize {
+        match self {
+            Platform::MacOS => 24,
+            Platform::Linux => 32,
+        }
+    }
+
+    pub fn stat_nlink_offset(&self) -> usize {
+        match self {
+            Platform::MacOS => 6,
+            Platform::Linux => 20,
+        }
+    }
+
+    pub fn stat_blksize_offset(&self) -> usize {
+        match self {
+            Platform::MacOS => 112,
+            Platform::Linux => 56,
+        }
+    }
+
+    pub fn stat_blocks_offset(&self) -> usize {
+        match self {
+            Platform::MacOS => 104,
+            Platform::Linux => 64,
+        }
+    }
+
+    /// Width of `st_dev` and the corresponding zero-extending load instruction.
+    /// Darwin keeps `st_dev` in a signed 32-bit field; Linux uses a 64-bit value.
+    pub fn stat_dev_load_instr(&self, dest_x: &str, base: &str, offset: usize) -> String {
+        match self {
+            Platform::MacOS => format!("ldrsw {}, [{}, #{}]", dest_x, base, offset),
+            Platform::Linux => format!("ldr {}, [{}, #{}]", dest_x, base, offset),
+        }
+    }
+
+    /// Same idea for `st_rdev`.
+    pub fn stat_rdev_load_instr(&self, dest_x: &str, base: &str, offset: usize) -> String {
+        match self {
+            Platform::MacOS => format!("ldrsw {}, [{}, #{}]", dest_x, base, offset),
+            Platform::Linux => format!("ldr {}, [{}, #{}]", dest_x, base, offset),
+        }
+    }
+
+    /// Width of `st_nlink`. Darwin packs it in 16 bits, Linux uses 32 bits.
+    pub fn stat_nlink_load_instr(&self, dest_w: &str, base: &str, offset: usize) -> String {
+        match self {
+            Platform::MacOS => format!("ldrh {}, [{}, #{}]", dest_w, base, offset),
+            Platform::Linux => format!("ldr {}, [{}, #{}]", dest_w, base, offset),
+        }
+    }
+
     pub fn dirent_name_offset(&self) -> usize {
         match self {
             Platform::MacOS => 21,
@@ -274,6 +370,12 @@ impl Target {
                     emitter.instruction("mov x1, x0");                          // shift path to x1
                     emitter.instruction("mov x0, #-100");                       // AT_FDCWD
                     emitter.instruction("mov x3, #0");                          // flags = 0
+                }
+                340 => {
+                    emitter.instruction("mov x2, x1");                          // shift buf to x2
+                    emitter.instruction("mov x1, x0");                          // shift path to x1
+                    emitter.instruction("mov x0, #-100");                       // AT_FDCWD
+                    emitter.instruction("mov x3, #0x100");                      // AT_SYMLINK_NOFOLLOW (lstat semantics)
                 }
                 5 => {
                     emitter.instruction("mov x3, x2");                          // shift mode to x3

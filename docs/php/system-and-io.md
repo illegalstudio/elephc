@@ -112,6 +112,27 @@ Uses POSIX extended regex with common PCRE shorthand translation (`\s`, `\d`, `\
 | `tempnam()` | `tempnam($dir, $prefix): string` | Create temp filename |
 | `sys_get_temp_dir()` | `sys_get_temp_dir(): string` | System temp directory |
 
+## File metadata
+
+| Function | Signature | Description |
+|---|---|---|
+| `fileatime()` | `fileatime($filename): int\|false` | Last access time as Unix timestamp, or `false` on failure |
+| `filectime()` | `filectime($filename): int\|false` | Inode-change time as Unix timestamp, or `false` on failure |
+| `fileperms()` | `fileperms($filename): int\|false` | Full `st_mode` (file-type bits + permissions), or `false` on failure |
+| `fileowner()` | `fileowner($filename): int\|false` | Owner UID, or `false` on failure |
+| `filegroup()` | `filegroup($filename): int\|false` | Group GID, or `false` on failure |
+| `fileinode()` | `fileinode($filename): int\|false` | Inode number, or `false` on failure |
+| `filetype()` | `filetype($filename): string\|false` | One of `"file"`, `"dir"`, `"link"`, `"char"`, `"block"`, `"fifo"`, `"socket"`, `"unknown"` for stated paths, or `false` on `lstat()` failure. Uses `lstat()` semantics. |
+| `is_executable()` | `is_executable($filename): bool` | `access(path, X_OK)` |
+| `is_link()` | `is_link($filename): bool` | True for symlinks (uses `lstat()`) |
+| `is_writeable()` | `is_writeable($filename): bool` | Alias of `is_writable()` |
+| `stat()` | `stat($filename): array\|false` | Associative array with both numeric (0..=12) and string keys (`dev`, `ino`, `mode`, `nlink`, `uid`, `gid`, `rdev`, `size`, `atime`, `mtime`, `ctime`, `blksize`, `blocks`), or `false` on failure. |
+| `lstat()` | `lstat($filename): array\|false` | Same shape as `stat()` but does not follow symlinks, or `false` on failure |
+| `fstat()` | `fstat($handle): array\|false` | Same shape as `stat()` but operates on an open file descriptor, or `false` on failure |
+| `clearstatcache()` | `clearstatcache($clear_realpath_cache = false, $filename = ""): void` | No-op (elephc does not cache `stat()` results). Arguments are still evaluated. |
+
+> The 13 `stat()` / `lstat()` / `fstat()` fields are inserted in PHP's documented order. Check the return value against `false` before reading fields when the path or descriptor may be invalid.
+
 ## Path manipulation
 
 | Function | Signature | Description |

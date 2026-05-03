@@ -90,6 +90,27 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     }
     out.push('\n');
 
+    out.push_str(".globl _filetype_file\n_filetype_file:\n    .ascii \"file\"\n");
+    out.push_str(".globl _filetype_dir\n_filetype_dir:\n    .ascii \"dir\"\n");
+    out.push_str(".globl _filetype_link\n_filetype_link:\n    .ascii \"link\"\n");
+    out.push_str(".globl _filetype_char\n_filetype_char:\n    .ascii \"char\"\n");
+    out.push_str(".globl _filetype_block\n_filetype_block:\n    .ascii \"block\"\n");
+    out.push_str(".globl _filetype_fifo\n_filetype_fifo:\n    .ascii \"fifo\"\n");
+    out.push_str(".globl _filetype_socket\n_filetype_socket:\n    .ascii \"socket\"\n");
+    out.push_str(".globl _filetype_unknown\n_filetype_unknown:\n    .ascii \"unknown\"\n");
+    out.push_str(".globl _stat_key_dev\n_stat_key_dev:\n    .ascii \"dev\"\n");
+    out.push_str(".globl _stat_key_ino\n_stat_key_ino:\n    .ascii \"ino\"\n");
+    out.push_str(".globl _stat_key_mode\n_stat_key_mode:\n    .ascii \"mode\"\n");
+    out.push_str(".globl _stat_key_nlink\n_stat_key_nlink:\n    .ascii \"nlink\"\n");
+    out.push_str(".globl _stat_key_uid\n_stat_key_uid:\n    .ascii \"uid\"\n");
+    out.push_str(".globl _stat_key_gid\n_stat_key_gid:\n    .ascii \"gid\"\n");
+    out.push_str(".globl _stat_key_rdev\n_stat_key_rdev:\n    .ascii \"rdev\"\n");
+    out.push_str(".globl _stat_key_size\n_stat_key_size:\n    .ascii \"size\"\n");
+    out.push_str(".globl _stat_key_atime\n_stat_key_atime:\n    .ascii \"atime\"\n");
+    out.push_str(".globl _stat_key_mtime\n_stat_key_mtime:\n    .ascii \"mtime\"\n");
+    out.push_str(".globl _stat_key_ctime\n_stat_key_ctime:\n    .ascii \"ctime\"\n");
+    out.push_str(".globl _stat_key_blksize\n_stat_key_blksize:\n    .ascii \"blksize\"\n");
+    out.push_str(".globl _stat_key_blocks\n_stat_key_blocks:\n    .ascii \"blocks\"\n");
     out.push_str(".globl _dirname_dot\n_dirname_dot:\n    .ascii \".\"\n");
     out.push_str(".globl _dirname_slash\n_dirname_slash:\n    .ascii \"/\"\n");
     out.push_str(&format!(

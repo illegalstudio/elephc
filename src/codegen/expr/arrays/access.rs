@@ -245,27 +245,86 @@ pub(crate) fn emit_array_access(
         return PhpType::Str;
     }
 
-    if let PhpType::AssocArray { value, .. } = &arr_ty {
-        let val_ty = *value.clone();
-        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the hash-table pointer while evaluating the string key expression
-        crate::codegen::emit_normalized_hash_key(index, emitter, ctx, data);
-        let (key_ptr_reg, key_len_reg) = abi::string_result_regs(emitter);
-        abi::emit_push_reg_pair(emitter, key_ptr_reg, key_len_reg);                 // preserve the computed key pointer and length while restoring the hash-table pointer
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                abi::emit_pop_reg_pair(emitter, "x1", "x2");                        // restore the key pointer and length from the top stack slot into the hash-get helper argument registers
-                abi::emit_pop_reg(emitter, "x0");                                   // restore the saved hash-table pointer into the first hash-get helper argument register
+    let assoc_value_ty = match &arr_ty {
+        PhpType::AssocArray { value, .. } => Some(*value.clone()),
+        PhpType::Union(members) => members.iter().find_map(|member| {
+            if let PhpType::AssocArray { value, .. } = member {
+                Some(*value.clone())
+            } else {
+                None
             }
-            Arch::X86_64 => {
-                abi::emit_pop_reg_pair(emitter, "rsi", "rdx");                      // restore the key pointer and length from the top stack slot into the remaining SysV hash-get helper argument registers
-                abi::emit_pop_reg(emitter, "rdi");                                  // restore the saved hash-table pointer into the first SysV hash-get helper argument register
+        }),
+        PhpType::Mixed => Some(PhpType::Mixed),
+        _ => None,
+    };
+
+    if let Some(val_ty) = assoc_value_ty {
+        let done = ctx.next_label("hash_done");
+        if matches!(arr_ty, PhpType::Mixed | PhpType::Union(_)) {
+            let hash_payload = ctx.next_label("hash_payload");
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // preserve the boxed array|false value while evaluating the key expression
+            crate::codegen::emit_normalized_hash_key(index, emitter, ctx, data);
+            let (key_ptr_reg, key_len_reg) = abi::string_result_regs(emitter);
+            abi::emit_push_reg_pair(emitter, key_ptr_reg, key_len_reg);         // preserve the normalized key while unboxing the array|false value
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_load_temporary_stack_slot(emitter, "x0", 16);
+                    abi::emit_call_label(emitter, "__rt_mixed_unbox");          // inspect a boxed array|false value after the key expression has run
+                    emitter.instruction("cmp x0, #5");                          // runtime tag 5 = associative array
+                    emitter.instruction(&format!("b.eq {}", hash_payload));     // continue only when the boxed payload is a hash
+                    abi::emit_release_temporary_stack(emitter, 32);             // discard the saved key and boxed base before returning the null-like fallback
+                    if matches!(val_ty, PhpType::Mixed | PhpType::Union(_)) {
+                        emitter.instruction("mov x0, #0");                      // null payload low word for non-array access
+                        crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Void);
+                    } else {
+                        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), i64::MAX - 1);
+                    }
+                    emitter.instruction(&format!("b {}", done));                // skip hash lookup when the boxed value is false/null
+                    emitter.label(&hash_payload);
+                    emitter.instruction("mov x0, x1");                          // move the unboxed hash pointer into the standard result register
+                    abi::emit_pop_reg_pair(emitter, "x1", "x2");                // restore the normalized key into the hash-get helper argument registers
+                    abi::emit_release_temporary_stack(emitter, 16);             // discard the original boxed base after extracting its hash payload
+                }
+                Arch::X86_64 => {
+                    abi::emit_load_temporary_stack_slot(emitter, "rax", 16);
+                    abi::emit_call_label(emitter, "__rt_mixed_unbox");          // inspect a boxed array|false value after the key expression has run
+                    emitter.instruction("cmp rax, 5");                          // runtime tag 5 = associative array
+                    emitter.instruction(&format!("je {}", hash_payload));       // continue only when the boxed payload is a hash
+                    abi::emit_release_temporary_stack(emitter, 32);             // discard the saved key and boxed base before returning the null-like fallback
+                    if matches!(val_ty, PhpType::Mixed | PhpType::Union(_)) {
+                        emitter.instruction("xor eax, eax");                    // null payload low word for non-array access
+                        crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Void);
+                    } else {
+                        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), i64::MAX - 1);
+                    }
+                    emitter.instruction(&format!("jmp {}", done));              // skip hash lookup when the boxed value is false/null
+                    emitter.label(&hash_payload);
+                    emitter.instruction("mov r8, rdi");                         // preserve the unboxed hash pointer while restoring the normalized key
+                    abi::emit_pop_reg_pair(emitter, "rsi", "rdx");              // restore the normalized key into the hash-get helper argument registers
+                    abi::emit_release_temporary_stack(emitter, 16);             // discard the original boxed base after extracting its hash payload
+                    emitter.instruction("mov rdi, r8");                         // pass the unboxed hash pointer as the first hash-get argument
+                }
+            }
+        } else {
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // preserve the hash-table pointer while evaluating the string key expression
+            crate::codegen::emit_normalized_hash_key(index, emitter, ctx, data);
+            let (key_ptr_reg, key_len_reg) = abi::string_result_regs(emitter);
+            abi::emit_push_reg_pair(emitter, key_ptr_reg, key_len_reg);         // preserve the computed key pointer and length while restoring the hash-table pointer
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_pop_reg_pair(emitter, "x1", "x2");                // restore the key pointer and length from the top stack slot into the hash-get helper argument registers
+                    abi::emit_pop_reg(emitter, "x0");                           // restore the saved hash-table pointer into the first hash-get helper argument register
+                }
+                Arch::X86_64 => {
+                    abi::emit_pop_reg_pair(emitter, "rsi", "rdx");              // restore the key pointer and length from the top stack slot into the remaining SysV hash-get helper argument registers
+                    abi::emit_pop_reg(emitter, "rdi");                          // restore the saved hash-table pointer into the first SysV hash-get helper argument register
+                }
             }
         }
         emitter.comment("assoc array access");
         abi::emit_call_label(emitter, "__rt_hash_get");                            // lookup key and return found-flag plus borrowed payload words through the target runtime ABI
 
         let not_found = ctx.next_label("hash_miss");
-        let done = ctx.next_label("hash_done");
         abi::emit_branch_if_int_result_zero(emitter, &not_found);                  // jump to the not-found handler when the hash lookup misses
 
         match emitter.target.arch {

@@ -182,7 +182,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "htmlspecialchars" | "html_entity_decode" | "urlencode" | "urldecode"
             | "base64_encode" | "base64_decode" | "bin2hex" | "hex2bin" | "number_format"
             | "date" | "json_encode" | "gettype" | "str_word_count" | "chunk_split" => PhpType::Str,
-            "strpos" | "strrpos" | "array_search" => PhpType::Mixed,
+            "strpos" | "strrpos" | "array_search" | "fileatime" | "filectime" | "fileperms"
+            | "fileowner" | "filegroup" | "fileinode" | "filetype" | "stat" | "lstat"
+            | "fstat" => PhpType::Mixed,
             "strlen" | "ord" | "count" | "intval" | "abs" | "intdiv"
             | "rand" | "time" => PhpType::Int,
             "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" | "fmod" | "sin" | "cos"

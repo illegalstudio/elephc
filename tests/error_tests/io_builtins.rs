@@ -204,6 +204,31 @@ fn test_error_filemtime_wrong_args() {
 }
 
 #[test]
+fn test_error_extended_stat_builtins_wrong_args() {
+    for (source, message) in [
+        ("<?php fileatime();", "fileatime() takes exactly 1 argument"),
+        ("<?php filectime();", "filectime() takes exactly 1 argument"),
+        ("<?php fileperms();", "fileperms() takes exactly 1 argument"),
+        ("<?php fileowner();", "fileowner() takes exactly 1 argument"),
+        ("<?php filegroup();", "filegroup() takes exactly 1 argument"),
+        ("<?php fileinode();", "fileinode() takes exactly 1 argument"),
+        ("<?php filetype();", "filetype() takes exactly 1 argument"),
+        ("<?php is_executable();", "is_executable() takes exactly 1 argument"),
+        ("<?php is_link();", "is_link() takes exactly 1 argument"),
+        ("<?php is_writeable();", "is_writeable() takes exactly 1 argument"),
+        ("<?php stat();", "stat() takes exactly 1 argument"),
+        ("<?php lstat();", "lstat() takes exactly 1 argument"),
+        ("<?php fstat();", "fstat() takes exactly 1 argument"),
+        (
+            "<?php clearstatcache(false, \"a\", \"extra\");",
+            "clearstatcache() takes at most 2 arguments",
+        ),
+    ] {
+        expect_error(source, message);
+    }
+}
+
+#[test]
 fn test_error_unlink_wrong_args() {
     expect_error("<?php unlink();", "unlink() takes exactly 1 argument");
 }

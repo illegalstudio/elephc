@@ -17,6 +17,8 @@ pub(super) fn map_syscall(macos_num: u32) -> u32 {
         137 => 35,
         199 => 62,
         338 => 79,
+        339 => 80,
+        340 => 79,
         _ => panic!(
             "unknown macOS syscall number {} — cannot map to Linux",
             macos_num
@@ -84,7 +86,7 @@ fn is_c_symbol(name: &str) -> bool {
 
 #[allow(dead_code)]
 pub(super) fn needs_at_fdcwd(macos_num: u32) -> bool {
-    matches!(macos_num, 5 | 10 | 33 | 128 | 136 | 137 | 338)
+    matches!(macos_num, 5 | 10 | 33 | 128 | 136 | 137 | 338 | 340)
 }
 
 #[allow(dead_code)]
@@ -129,6 +131,13 @@ pub(super) fn transform_for_linux(asm: &str) -> String {
                         result.push_str(&format!("{}mov x1, x0\n", indent));
                         result.push_str(&format!("{}mov x0, #-100\n", indent));
                         result.push_str(&format!("{}mov x3, #0\n", indent));
+                    }
+                    340 => {
+                        // lstat() → newfstatat(AT_FDCWD, path, buf, AT_SYMLINK_NOFOLLOW)
+                        result.push_str(&format!("{}mov x2, x1\n", indent));
+                        result.push_str(&format!("{}mov x1, x0\n", indent));
+                        result.push_str(&format!("{}mov x0, #-100\n", indent));
+                        result.push_str(&format!("{}mov x3, #0x100\n", indent));
                     }
                     5 => {
                         result.push_str(&format!("{}mov x3, x2\n", indent));

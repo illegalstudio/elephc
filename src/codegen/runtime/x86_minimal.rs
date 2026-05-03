@@ -204,6 +204,8 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     io::emit_file_put_contents(emitter);
     io::emit_file(emitter);
     io::emit_stat(emitter);
+    io::emit_stat_ext(emitter);
+    io::emit_stat_array(emitter);
     io::emit_fs(emitter);
     io::emit_getcwd(emitter);
     io::emit_basename(emitter);

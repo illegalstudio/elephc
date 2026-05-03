@@ -10,5 +10,7 @@ mod streams;
 mod filesystem;
 #[path = "io/misc.rs"]
 mod misc;
+#[path = "io/stat_ext.rs"]
+mod stat_ext;
 #[path = "io/paths.rs"]
 mod paths;
