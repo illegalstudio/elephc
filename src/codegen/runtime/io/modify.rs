@@ -142,8 +142,8 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return predicate
 
     // ================================================================
-    // __rt_touch: touch(path, mtime, atime)
-    // Input:  x1/x2 = path, x3 = mtime (-1 → current), x4 = atime (-1 → current)
+    // __rt_touch: touch(path, mtime, atime, current_mask)
+    // Input:  x1/x2 = path, x3 = mtime, x4 = atime, x5 bit0/bit1 = atime/mtime current
     // Output: x0 = 1 on success, 0 on failure
     //
     // Implementation: opens the file with O_WRONLY|O_CREAT to create it if
@@ -154,7 +154,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     //   sp+ 0  : path cstr pointer
     //   sp+ 8  : mtime
     //   sp+16  : atime
-    //   sp+24  : reserved
+    //   sp+24  : current-time mask
     //   sp+32  : timespec[0] = atime  (.tv_sec=8, .tv_nsec=8)
     //   sp+48  : timespec[1] = mtime
     //   sp+? saved frame regs at end
@@ -170,18 +170,19 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x29, sp, #{}", save_off));                // establish new frame pointer
     emitter.instruction("str x3, [sp, #8]");                                    // save mtime arg
     emitter.instruction("str x4, [sp, #16]");                                   // save atime arg
+    emitter.instruction("str x5, [sp, #24]");                                   // save current-time mask
     emitter.instruction("bl __rt_cstr");                                        // path → C string in x0
     emitter.instruction("str x0, [sp, #0]");                                    // save C path pointer
 
-    // -- create the file if missing via open(path, O_WRONLY|O_CREAT, 0644) --
+    // -- create the file if missing via open(path, O_WRONLY|O_CREAT, 0666) --
     // Use the raw syscall (#5) rather than libc open() because Darwin's
     // ARM64 ABI passes variadic libc args on the stack: open()'s third
     // mode argument would be ignored when set in x2, leaving the kernel
     // to read garbage and create the file with bogus permissions.
     let plat = emitter.platform;
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload C path pointer for the open syscall
-    emitter.instruction(&format!("mov x1, #0x{:X}", plat.o_wronly_creat_trunc() & !0x400)); // O_WRONLY|O_CREAT (drop O_TRUNC bit so existing files keep their contents)
-    emitter.instruction("mov x2, #0x1A4");                                      // mode 0644
+    emitter.instruction(&format!("mov x1, #0x{:X}", plat.o_wronly_creat()));    // O_WRONLY|O_CREAT without truncating existing files
+    emitter.instruction("mov x2, #0x1B6");                                      // mode 0666 before umask
     emitter.syscall(5);                                                         // sys_open: returns fd in x0 (errno on failure)
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: negative return = error
@@ -193,29 +194,31 @@ pub fn emit_modify(emitter: &mut Emitter) {
 
     emitter.label("__rt_touch_set_times");
     // Build timespec[2]: atime at sp+32, mtime at sp+48
-    emitter.instruction("ldr x9, [sp, #16]");                                   // load atime arg
-    emitter.instruction("cmn x9, #1");                                          // is atime == -1 (use current)?
-    emitter.instruction("b.ne __rt_touch_atime_explicit");                      // explicit atime
-    // UTIME_NOW = 0x3FFFFFFF
-    emitter.instruction("str xzr, [sp, #32]");                                  // tv_sec = 0 (ignored when nsec is UTIME_NOW)
-    emitter.instruction("mov x9, #0x3FFFFFFF");                                 // UTIME_NOW
-    emitter.instruction("str x9, [sp, #40]");                                   // tv_nsec = UTIME_NOW
-    emitter.instruction("b __rt_touch_handle_mtime");                           // proceed to mtime
-    emitter.label("__rt_touch_atime_explicit");
+    let utime_now = plat.utime_now_nsec();
+    emitter.instruction("ldr x10, [sp, #24]");                                  // load current-time mask
+    emitter.instruction("tbnz x10, #0, __rt_touch_atime_now");                  // use current time for atime?
+    emitter.instruction("ldr x9, [sp, #16]");                                   // load explicit atime seconds
     emitter.instruction("str x9, [sp, #32]");                                   // tv_sec = atime
     emitter.instruction("str xzr, [sp, #40]");                                  // tv_nsec = 0
+    emitter.instruction("b __rt_touch_handle_mtime");                           // proceed to mtime
+    emitter.label("__rt_touch_atime_now");
+    emitter.instruction("str xzr, [sp, #32]");                                  // tv_sec = 0 (ignored when nsec is UTIME_NOW)
+    emitter.instruction(&format!("mov x9, #{}", utime_now));                    // platform UTIME_NOW sentinel
+    emitter.instruction("str x9, [sp, #40]");                                   // tv_nsec = UTIME_NOW
+    emitter.instruction("b __rt_touch_handle_mtime");                           // proceed to mtime
 
     emitter.label("__rt_touch_handle_mtime");
-    emitter.instruction("ldr x9, [sp, #8]");                                    // load mtime arg
-    emitter.instruction("cmn x9, #1");                                          // is mtime == -1?
-    emitter.instruction("b.ne __rt_touch_mtime_explicit");                      // explicit mtime
-    emitter.instruction("str xzr, [sp, #48]");                                  // tv_sec = 0
-    emitter.instruction("mov x9, #0x3FFFFFFF");                                 // UTIME_NOW
-    emitter.instruction("str x9, [sp, #56]");                                   // tv_nsec = UTIME_NOW
-    emitter.instruction("b __rt_touch_call_utimensat");                         // proceed to syscall
-    emitter.label("__rt_touch_mtime_explicit");
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload current-time mask
+    emitter.instruction("tbnz x10, #1, __rt_touch_mtime_now");                  // use current time for mtime?
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load explicit mtime seconds
     emitter.instruction("str x9, [sp, #48]");                                   // tv_sec = mtime
     emitter.instruction("str xzr, [sp, #56]");                                  // tv_nsec = 0
+    emitter.instruction("b __rt_touch_call_utimensat");                         // proceed to syscall
+    emitter.label("__rt_touch_mtime_now");
+    emitter.instruction("str xzr, [sp, #48]");                                  // tv_sec = 0
+    emitter.instruction(&format!("mov x9, #{}", utime_now));                    // platform UTIME_NOW sentinel
+    emitter.instruction("str x9, [sp, #56]");                                   // tv_nsec = UTIME_NOW
+    emitter.instruction("b __rt_touch_call_utimensat");                         // proceed to syscall
 
     emitter.label("__rt_touch_call_utimensat");
     emitter.instruction(&format!("mov x0, #{}", plat.at_fdcwd()));              // AT_FDCWD (platform-dependent: -2 Darwin, -100 Linux)
@@ -335,24 +338,27 @@ fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: touch ---");
     emitter.label_global("__rt_touch");
     let plat = emitter.platform;
-    let open_flags = plat.o_wronly_creat_trunc() & !0x400; // drop O_TRUNC
+    let open_flags = plat.o_wronly_creat();
+    let utime_now = plat.utime_now_nsec();
     // Frame layout (rbp-relative):
     //   [rbp -  8] : C path pointer
     //   [rbp - 16] : mtime arg
     //   [rbp - 24] : atime arg
-    //   [rbp - 40] : timespec[0] (tv_sec=[rbp-40], tv_nsec=[rbp-32])
-    //   [rbp - 56] : timespec[1] (tv_sec=[rbp-56], tv_nsec=[rbp-48])
+    //   [rbp - 32] : current-time mask
+    //   [rbp - 48] : timespec[0] (tv_sec=[rbp-48], tv_nsec=[rbp-40])
+    //   [rbp - 64] : timespec[1] (tv_sec=[rbp-64], tv_nsec=[rbp-56])
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish frame
-    emitter.instruction("sub rsp, 64");                                         // reserve frame
+    emitter.instruction("sub rsp, 80");                                         // reserve aligned frame
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // save mtime arg
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save atime arg
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save current-time mask
     emitter.instruction("call __rt_cstr");                                      // path → C string in rax
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save C path pointer
 
     emitter.instruction("mov rdi, rax");                                        // first arg = path
     emitter.instruction(&format!("mov rsi, 0x{:X}", open_flags));               // open flags
-    emitter.instruction("mov rdx, 0x1A4");                                      // mode 0644
+    emitter.instruction("mov rdx, 0x1B6");                                      // mode 0666 before umask
     emitter.instruction("call open");                                           // libc open()
     emitter.instruction("cmp rax, 0");                                          // success?
     emitter.instruction("jl __rt_touch_set_times_x86");                         // skip close on failure
@@ -361,37 +367,39 @@ fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_touch_set_times_x86");
     // atime
-    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // load atime arg
-    emitter.instruction("cmp r8, -1");                                          // current time?
-    emitter.instruction("jne __rt_touch_atime_explicit_x86");                   // explicit atime
-    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // tv_sec = 0
-    emitter.instruction("mov QWORD PTR [rbp - 32], 0x3FFFFFFF");                // tv_nsec = UTIME_NOW
+    emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // load current-time mask
+    emitter.instruction("test r8, 1");                                          // use current time for atime?
+    emitter.instruction("jnz __rt_touch_atime_now_x86");                        // current atime path
+    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // load explicit atime seconds
+    emitter.instruction("mov QWORD PTR [rbp - 48], r8");                        // tv_sec = atime
+    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // tv_nsec = 0
     emitter.instruction("jmp __rt_touch_handle_mtime_x86");                     // continue with mtime selection
-    emitter.label("__rt_touch_atime_explicit_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // tv_sec = atime
-    emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // tv_nsec = 0
+    emitter.label("__rt_touch_atime_now_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // tv_sec = 0
+    emitter.instruction(&format!("mov QWORD PTR [rbp - 40], {}", utime_now));   // tv_nsec = platform UTIME_NOW sentinel
 
     emitter.label("__rt_touch_handle_mtime_x86");
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // load mtime arg
-    emitter.instruction("cmp r8, -1");                                          // current time?
-    emitter.instruction("jne __rt_touch_mtime_explicit_x86");                   // explicit mtime
-    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // tv_sec = 0
-    emitter.instruction("mov QWORD PTR [rbp - 48], 0x3FFFFFFF");                // tv_nsec = UTIME_NOW
+    emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // reload current-time mask
+    emitter.instruction("test r8, 2");                                          // use current time for mtime?
+    emitter.instruction("jnz __rt_touch_mtime_now_x86");                        // current mtime path
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // load explicit mtime seconds
+    emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // tv_sec = mtime
+    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // tv_nsec = 0
     emitter.instruction("jmp __rt_touch_call_utimensat_x86");                   // call utimensat with prepared timestamps
-    emitter.label("__rt_touch_mtime_explicit_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 56], r8");                        // tv_sec = mtime
-    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // tv_nsec = 0
+    emitter.label("__rt_touch_mtime_now_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // tv_sec = 0
+    emitter.instruction(&format!("mov QWORD PTR [rbp - 56], {}", utime_now));   // tv_nsec = platform UTIME_NOW sentinel
 
     emitter.label("__rt_touch_call_utimensat_x86");
     emitter.instruction(&format!("mov rdi, {}", plat.at_fdcwd()));              // AT_FDCWD (platform-dependent: -2 Darwin, -100 Linux)
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // C path pointer
-    emitter.instruction("lea rdx, [rbp - 40]");                                 // pointer to timespec[0]
+    emitter.instruction("lea rdx, [rbp - 48]");                                 // pointer to timespec[0]
     emitter.instruction("mov rcx, 0");                                          // flags = 0
     emitter.instruction("call utimensat");                                      // libc utimensat()
     emitter.instruction("cmp rax, 0");                                          // success?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
-    emitter.instruction("add rsp, 64");                                         // release frame
+    emitter.instruction("add rsp, 80");                                         // release frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return predicate
 }

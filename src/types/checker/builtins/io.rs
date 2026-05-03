@@ -323,8 +323,23 @@ pub(super) fn check_builtin(
             if args.is_empty() || args.len() > 3 {
                 return Err(CompileError::new(span, "touch() takes 1, 2, or 3 arguments"));
             }
-            for arg in args {
-                checker.infer_type(arg, env)?;
+            checker.infer_type(&args[0], env)?;
+            for arg in args.iter().skip(1) {
+                let ty = checker.infer_type(arg, env)?;
+                if !matches!(ty, PhpType::Int | PhpType::Void) {
+                    return Err(CompileError::new(
+                        arg.span,
+                        "touch() timestamp arguments must be int or null",
+                    ));
+                }
+            }
+            if matches!(args.get(1).map(|arg| &arg.kind), Some(ExprKind::Null))
+                && matches!(args.get(2), Some(arg) if !matches!(&arg.kind, ExprKind::Null))
+            {
+                return Err(CompileError::new(
+                    span,
+                    "touch() mtime cannot be null when atime is provided",
+                ));
             }
             Ok(Some(PhpType::Bool))
         }

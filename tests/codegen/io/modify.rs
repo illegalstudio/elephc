@@ -215,6 +215,20 @@ echo file_get_contents("readback.txt");
 }
 
 #[test]
+fn test_touch_creates_file_with_php_default_permissions() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$old = umask(0);
+touch("mode.txt");
+umask($old);
+echo sprintf("%04o", fileperms("mode.txt") & 0o777);
+"#,
+    );
+    assert_eq!(out, "0666");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_touch_does_not_truncate_existing_file() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -228,6 +242,19 @@ echo file_get_contents("preserved.txt");
 }
 
 #[test]
+fn test_touch_null_mtime_uses_current_time() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("current.txt", "");
+$ok = touch("current.txt", null);
+echo ($ok ? "y" : "n") . "|" . (filemtime("current.txt") > 1000000000 ? "y" : "n");
+"#,
+    );
+    assert_eq!(out, "y|y");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_touch_with_explicit_mtime() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -237,6 +264,32 @@ echo filemtime("mtime.txt");
 "#,
     );
     assert_eq!(out, "1000000000");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_touch_negative_one_is_explicit_timestamp() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("negative.txt", "");
+touch("negative.txt", -1);
+echo filemtime("negative.txt");
+"#,
+    );
+    assert_eq!(out, "-1");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_touch_null_atime_defaults_to_explicit_mtime() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("null_atime.txt", "");
+touch("null_atime.txt", 1000000000, null);
+echo filemtime("null_atime.txt") . "|" . fileatime("null_atime.txt");
+"#,
+    );
+    assert_eq!(out, "1000000000|1000000000");
     let _ = fs::remove_dir_all(&dir);
 }
 

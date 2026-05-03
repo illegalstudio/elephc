@@ -331,6 +331,18 @@ echo pathinfo("foo.txt", $flag);
     );
 }
 
+#[test]
+fn test_error_touch_rejects_invalid_timestamp_args() {
+    expect_error(
+        r#"<?php touch("file.txt", "now");"#,
+        "touch() timestamp arguments must be int or null",
+    );
+    expect_error(
+        r#"<?php touch("file.txt", null, 1000);"#,
+        "touch() mtime cannot be null when atime is provided",
+    );
+}
+
 // --- v0.6: switch/match/array errors ---
 
 #[test]
