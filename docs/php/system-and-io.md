@@ -147,6 +147,24 @@ Uses POSIX extended regex with common PCRE shorthand translation (`\s`, `\d`, `\
 
 > `fnmatch()` accepts the optional flags argument only when it is `0`. Non-zero flags (`FNM_PATHNAME`, `FNM_PERIOD`, `FNM_CASEFOLD`, `FNM_NOESCAPE`) are tracked in `ROADMAP.md`.
 
+## File modification
+
+| Function | Signature | Description |
+|---|---|---|
+| `touch()` | `touch($filename [, $mtime [, $atime]]): bool` | Set access/modification times. Creates the file with permissions `0666 & umask` if missing. With no `$mtime`, or `$mtime = null`, uses the current time; with no `$atime`, or `$atime = null`, defaults to `$mtime`. |
+| `chmod()` | `chmod($filename, $mode): bool` | Change file mode. |
+| `chown()` | `chown($filename, $user): bool` | Change owner by UID or user name. The group is left unchanged. |
+| `chgrp()` | `chgrp($filename, $group): bool` | Change group by GID or group name. The owner is left unchanged. |
+| `umask()` | `umask([$mask]): int` | Set the process umask and return the previous value. With no argument, returns the current umask without changing it (implemented by setting `umask(0)` and immediately restoring the original). |
+| `ftruncate()` | `ftruncate($handle, $size): bool` | Truncate or extend an open file to `$size` bytes. |
+| `fflush()` | `fflush($handle): bool` | Flush buffered output. Implemented as `fsync()` since elephc has no userspace stdio buffer. |
+| `fsync()` | `fsync($handle): bool` | Flush data and metadata to durable storage. |
+| `fdatasync()` | `fdatasync($handle): bool` | Flush data only. On macOS (which lacks a `fdatasync` libc entry point) this falls back to `fsync()`. |
+
+> All file-modification functions return `true` on success and `false` on failure.
+
+> `touch()` accepts integer Unix timestamps or `null` for `$mtime` / `$atime`. Numeric values, including `-1`, are treated as explicit timestamps; `null` and omitted arguments select PHP's default/current-time behaviour.
+
 ## Debugging
 
 | Function | Signature | Description |

@@ -14,3 +14,5 @@ mod misc;
 mod stat_ext;
 #[path = "io/paths.rs"]
 mod paths;
+#[path = "io/modify.rs"]
+mod modify;

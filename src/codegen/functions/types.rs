@@ -530,8 +530,12 @@ pub(super) fn infer_local_type(
                 | "is_file" | "is_dir" | "is_readable" | "is_writable" | "file_exists"
                 | "in_array" | "array_key_exists" | "str_contains" | "str_starts_with"
                 | "str_ends_with" | "ctype_alpha" | "ctype_digit" | "ctype_alnum"
-                | "ctype_space" | "function_exists" | "ptr_is_null" => PhpType::Bool,
+                | "ctype_space" | "function_exists" | "chmod" | "chown" | "chgrp"
+                | "touch" | "ftruncate" | "fflush" | "fsync" | "fdatasync" | "ptr_is_null" => {
+                    PhpType::Bool
+                }
                 "define" => PhpType::Bool,
+                "umask" => PhpType::Int,
                 "strpos" | "strrpos" | "array_search" | "file_get_contents" | "fileatime"
                 | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
                 | "filetype" | "stat" | "lstat" | "fstat" => PhpType::Mixed,

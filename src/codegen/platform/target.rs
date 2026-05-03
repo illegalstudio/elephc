@@ -50,6 +50,13 @@ impl Platform {
         }
     }
 
+    pub fn o_wronly_creat(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x201,
+            Platform::Linux => 0x41,
+        }
+    }
+
     pub fn o_wronly_creat_append(&self) -> u32 {
         match self {
             Platform::MacOS => 0x209,
@@ -196,6 +203,22 @@ impl Platform {
         match self {
             Platform::MacOS => format!("ldrh {}, [{}, #{}]", dest_w, base, offset),
             Platform::Linux => format!("ldr {}, [{}, #{}]", dest_w, base, offset),
+        }
+    }
+
+    /// Value of `AT_FDCWD` on this platform. Differs between macOS (-2) and
+    /// Linux (-100); the libc *at() functions consume the platform-native value.
+    pub fn at_fdcwd(&self) -> i64 {
+        match self {
+            Platform::MacOS => -2,
+            Platform::Linux => -100,
+        }
+    }
+
+    pub fn utime_now_nsec(&self) -> i64 {
+        match self {
+            Platform::MacOS => -1,
+            Platform::Linux => 0x3FFF_FFFF,
         }
     }
 

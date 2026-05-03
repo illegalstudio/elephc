@@ -281,10 +281,10 @@ fn test_leading_zero_float_is_decimal() {
 fn test_octal_literal_default_param() {
     let out = compile_and_run(
         "<?php
-        function chmod(int $mode = 0o777): int {
+        function default_mode(int $mode = 0o777): int {
             return $mode;
         }
-        echo chmod();
+        echo default_mode();
         ",
     );
     assert_eq!(out, "511");

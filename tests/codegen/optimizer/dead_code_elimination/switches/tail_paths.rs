@@ -5,12 +5,12 @@ fn test_dead_code_elimination_collapses_empty_switch_shell_after_branch_dce() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_empty_switch_shell");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
         r#"<?php
-function touch() {
+function poke() {
     echo "s";
     return 1;
 }
 
-switch (touch()) {
+switch (poke()) {
     case 1:
         strlen("abc");
         break;

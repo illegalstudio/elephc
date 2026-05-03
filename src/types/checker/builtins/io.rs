@@ -276,6 +276,97 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Int))
         }
+        "chmod" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 2 arguments", name),
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            let mode_ty = checker.infer_type(&args[1], env)?;
+            if mode_ty != PhpType::Int {
+                return Err(CompileError::new(
+                    args[1].span,
+                    "chmod() mode must be int",
+                ));
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "chown" | "chgrp" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 2 arguments", name),
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            let principal_ty = checker.infer_type(&args[1], env)?;
+            if !matches!(principal_ty, PhpType::Int | PhpType::Str) {
+                return Err(CompileError::new(
+                    args[1].span,
+                    &format!("{}() owner/group must be int or string", name),
+                ));
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "umask" => {
+            if args.len() > 1 {
+                return Err(CompileError::new(span, "umask() takes 0 or 1 arguments"));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Int))
+        }
+        "ftruncate" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    "ftruncate() takes exactly 2 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "fsync" | "fflush" | "fdatasync" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 1 argument", name),
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Bool))
+        }
+        "touch" => {
+            if args.is_empty() || args.len() > 3 {
+                return Err(CompileError::new(span, "touch() takes 1, 2, or 3 arguments"));
+            }
+            checker.infer_type(&args[0], env)?;
+            let mut timestamp_types = Vec::new();
+            for arg in args.iter().skip(1) {
+                let ty = checker.infer_type(arg, env)?;
+                if !matches!(ty, PhpType::Int | PhpType::Void) {
+                    return Err(CompileError::new(
+                        arg.span,
+                        "touch() timestamp arguments must be int or null",
+                    ));
+                }
+                timestamp_types.push(ty);
+            }
+            if matches!(timestamp_types.first(), Some(PhpType::Void))
+                && matches!(timestamp_types.get(1), Some(ty) if !matches!(ty, PhpType::Void))
+            {
+                return Err(CompileError::new(
+                    span,
+                    "touch() mtime cannot be null when atime is provided",
+                ));
+            }
+            Ok(Some(PhpType::Bool))
+        }
         "basename" => {
             if args.is_empty() || args.len() > 2 {
                 return Err(CompileError::new(span, "basename() takes 1 or 2 arguments"));
