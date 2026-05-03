@@ -22,6 +22,12 @@ echo "extension: " . $parts["extension"] . "\n";
 // Asking for a single component returns it directly.
 echo pathinfo("/srv/app/index.php", PATHINFO_EXTENSION) . "\n";
 
+// Runtime-computed flags work too. Exact PATHINFO_ALL returns the same
+// associative-array shape as the no-flag form.
+$flag = PATHINFO_ALL;
+$dynamic = pathinfo("/srv/app/index.php", $flag);
+echo "dynamic:   " . $dynamic["basename"] . "\n";
+
 // fnmatch() runs a shell-style glob against a name (no filesystem hit).
 echo (fnmatch("*.log", "system.log") ? "y" : "n") . "\n";
 echo (fnmatch("*.log", "system.txt") ? "y" : "n") . "\n";

@@ -375,7 +375,7 @@ Close the small, well-scoped PHP filesystem/runtime compatibility gaps that are
 already adjacent to the current implementation.
 
 - [x] `fnmatch()` non-zero flag parity for `FNM_PATHNAME`, `FNM_PERIOD`, `FNM_CASEFOLD`, and `FNM_NOESCAPE`
-- [ ] Dynamic `pathinfo($path, $flag)` parity for runtime flags that may evaluate to `PATHINFO_ALL`; current support requires compile-time pathinfo flags so the return shape is known statically
+- [x] Dynamic `pathinfo($path, $flag)` parity for runtime flags that may evaluate to `PATHINFO_ALL`; runtime exact `PATHINFO_ALL` now returns the associative-array shape while component flags return strings
 - [ ] PHP resource type compatibility — model file handles and future extension handles separately from integers
 - [ ] Runtime-dynamic include paths — model or explicitly reject runtime-evaluated `include` / `require` path expressions beyond the current compile-time string-folder (`$path`, function calls, ternaries, property access)
 - [ ] Runtime-order-aware `include_once` / `require_once` — add runtime guards inside functions, methods, loops, and conditional branches so skipped files match PHP execution order rather than only compile-time traversal order
