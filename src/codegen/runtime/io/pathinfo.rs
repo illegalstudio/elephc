@@ -7,7 +7,9 @@ use crate::codegen::{emit::Emitter, platform::Arch};
 /// PHP accepts component bitmasks; when several component bits are present it
 /// returns the first component in DIRNAME → BASENAME → EXTENSION → FILENAME
 /// order. Exact PATHINFO_ALL is handled by the array helper before reaching
-/// this routine, so dynamic exact-15 flags fail closed to an empty string.
+/// this routine; if a caller reaches this helper with exact 15 anyway, it
+/// fails closed to an empty string rather than returning a misleading
+/// component.
 ///
 /// EXTENSION / FILENAME are computed by first reducing the path to its
 /// basename (via `__rt_basename`) and then locating the last `.` in the
@@ -29,7 +31,7 @@ pub fn emit_pathinfo_str(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
 
     // -- dispatch on the flag value --
-    emitter.instruction("cmp x3, #15");                                         // dynamic PATHINFO_ALL reaches the string helper only when not statically known
+    emitter.instruction("cmp x3, #15");                                         // guard against direct PATHINFO_ALL calls to the string helper
     emitter.instruction("b.eq __rt_pathinfo_empty");                            // fail closed instead of returning a misleading component string
     emitter.instruction("and x9, x3, #1");                                      // does the bitmask request PATHINFO_DIRNAME first?
     emitter.instruction("cbnz x9, __rt_pathinfo_dirname");                      // delegate to dirname runtime when dirname is present

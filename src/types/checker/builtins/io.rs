@@ -424,23 +424,33 @@ pub(super) fn check_builtin(
                     "pathinfo() takes 1 or 2 arguments",
                 ));
             }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
+            checker.infer_type(&args[0], env)?;
             let flag = match args.get(1) {
-                Some(flag) => Some(pathinfo_static_flag_value(flag).ok_or_else(|| {
-                    CompileError::new(
-                        span,
-                        "pathinfo() flag must be a compile-time PATHINFO_* constant, bitmask, or integer literal",
-                    )
-                })?),
+                Some(flag) => {
+                    let flag_ty = checker.infer_type(flag, env)?;
+                    if flag_ty != PhpType::Int {
+                        return Err(CompileError::new(
+                            flag.span,
+                            "pathinfo() flag must be int",
+                        ));
+                    }
+                    pathinfo_static_flag_value(flag)
+                }
                 None => None,
             };
-            if flag.is_none() || flag == Some(15) {
+            if args.get(1).is_none() || flag == Some(15) {
                 Ok(Some(PhpType::AssocArray {
                     key: Box::new(PhpType::Str),
                     value: Box::new(PhpType::Str),
                 }))
+            } else if flag.is_none() {
+                Ok(Some(checker.normalize_union_type(vec![
+                    PhpType::Str,
+                    PhpType::AssocArray {
+                        key: Box::new(PhpType::Str),
+                        value: Box::new(PhpType::Str),
+                    },
+                ])))
             } else {
                 Ok(Some(PhpType::Str))
             }

@@ -1,5 +1,5 @@
 use crate::codegen::context::Context;
-use crate::parser::ast::{Expr, ExprKind, TypeExpr};
+use crate::parser::ast::{BinOp, Expr, ExprKind, TypeExpr};
 use crate::types::{
     array_key_type_from_value_type, merge_array_key_types, normalized_array_key_type, FunctionSig,
     PhpType,
@@ -539,6 +539,7 @@ pub(super) fn infer_local_type(
                 "strpos" | "strrpos" | "array_search" | "file_get_contents" | "fileatime"
                 | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
                 | "filetype" | "stat" | "lstat" | "fstat" => PhpType::Mixed,
+                "pathinfo" => infer_pathinfo_type(args),
                 "abs" => {
                     if !args.is_empty() {
                         let t = infer_local_type(&args[0], sig, ctx);
@@ -835,6 +836,47 @@ pub(super) fn infer_local_type(
         }
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),
         _ => PhpType::Int,
+    }
+}
+
+fn infer_pathinfo_type(args: &[Expr]) -> PhpType {
+    match args.get(1).and_then(pathinfo_static_flag_value) {
+        None if args.len() == 1 => PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Str),
+        },
+        Some(15) => PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Str),
+        },
+        Some(_) => PhpType::Str,
+        None => PhpType::Mixed,
+    }
+}
+
+fn pathinfo_static_flag_value(flag: &Expr) -> Option<i64> {
+    match &flag.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::ConstRef(name) => match name.as_str() {
+            "PATHINFO_DIRNAME" => Some(1),
+            "PATHINFO_BASENAME" => Some(2),
+            "PATHINFO_EXTENSION" => Some(4),
+            "PATHINFO_FILENAME" => Some(8),
+            "PATHINFO_ALL" => Some(15),
+            _ => None,
+        },
+        ExprKind::Negate(inner) => pathinfo_static_flag_value(inner).map(|value| -value),
+        ExprKind::BinaryOp { left, op, right } => {
+            let left = pathinfo_static_flag_value(left)?;
+            let right = pathinfo_static_flag_value(right)?;
+            match op {
+                BinOp::BitAnd => Some(left & right),
+                BinOp::BitOr => Some(left | right),
+                BinOp::BitXor => Some(left ^ right),
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 
