@@ -76,8 +76,18 @@ fn test_error_fclose_wrong_args() {
 }
 
 #[test]
+fn test_error_fclose_requires_resource_handle() {
+    expect_error("<?php fclose(1);", "fclose() expects resource, got int");
+}
+
+#[test]
 fn test_error_fread_wrong_args() {
     expect_error("<?php fread(1);", "fread() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_fread_requires_resource_handle() {
+    expect_error("<?php fread(1, 1);", "fread() expects resource, got int");
 }
 
 #[test]
@@ -86,13 +96,31 @@ fn test_error_fwrite_wrong_args() {
 }
 
 #[test]
+fn test_error_fwrite_requires_resource_handle() {
+    expect_error(
+        r#"<?php fwrite(1, "x");"#,
+        "fwrite() expects resource, got int",
+    );
+}
+
+#[test]
 fn test_error_fgets_wrong_args() {
     expect_error("<?php fgets();", "fgets() takes exactly 1 argument");
 }
 
 #[test]
+fn test_error_fgets_requires_resource_handle() {
+    expect_error("<?php fgets(1);", "fgets() expects resource, got int");
+}
+
+#[test]
 fn test_error_feof_wrong_args() {
     expect_error("<?php feof();", "feof() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_fstat_requires_resource_handle() {
+    expect_error("<?php fstat(-1);", "fstat() expects resource, got int");
 }
 
 #[test]

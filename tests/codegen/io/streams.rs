@@ -3,19 +3,101 @@ use super::*;
 #[test]
 fn test_stdin_constant() {
     let out = compile_and_run("<?php echo STDIN;");
-    assert_eq!(out, "0");
+    assert_eq!(out, "Resource id #1");
 }
 
 #[test]
 fn test_stdout_constant() {
     let out = compile_and_run("<?php echo STDOUT;");
-    assert_eq!(out, "1");
+    assert_eq!(out, "Resource id #2");
 }
 
 #[test]
 fn test_stderr_constant() {
     let out = compile_and_run("<?php echo STDERR;");
-    assert_eq!(out, "2");
+    assert_eq!(out, "Resource id #3");
+}
+
+#[test]
+fn test_standard_stream_constants_are_resources() {
+    let out = compile_and_run(
+        r#"<?php
+echo gettype(STDIN) . "|";
+echo gettype(STDOUT) . "|";
+echo gettype(STDERR);
+"#,
+    );
+    assert_eq!(out, "resource|resource|resource");
+}
+
+#[test]
+fn test_standard_stream_constants_resolve_from_namespace() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+echo gettype(STDOUT) . "|";
+echo STDOUT;
+"#,
+    );
+    assert_eq!(out, "resource|Resource id #2");
+}
+
+#[test]
+fn test_fopen_returns_stream_resource() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("resource.txt", "w");
+echo gettype($f) . "|";
+echo $f;
+fclose($f);
+unlink("resource.txt");
+"#,
+    );
+    assert!(out.starts_with("resource|Resource id #"), "unexpected output: {out}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_mixed_file_handle_preserves_resource_type() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+function identity(mixed $value): mixed {
+    return $value;
+}
+$f = fopen("mixed-resource.txt", "w");
+$m = identity($f);
+echo gettype($m) . "|";
+echo $m;
+fclose($f);
+unlink("mixed-resource.txt");
+"#,
+    );
+    assert!(out.starts_with("resource|Resource id #"), "unexpected output: {out}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_resource_concatenation_uses_php_display_string() {
+    let out = compile_and_run("<?php echo \"stream=\" . STDOUT;");
+    assert_eq!(out, "stream=Resource id #2");
+}
+
+#[test]
+fn test_resource_truthiness_does_not_use_raw_descriptor_zero() {
+    let out = compile_and_run(
+        r#"<?php
+echo (bool)STDIN ? "truthy" : "falsy";
+echo "|";
+echo empty(STDIN) ? "empty" : "not-empty";
+"#,
+    );
+    assert_eq!(out, "truthy|not-empty");
+}
+
+#[test]
+fn test_var_dump_resource_uses_stream_shape() {
+    let out = compile_and_run("<?php var_dump(STDOUT);");
+    assert_eq!(out, "resource(2) of type (stream)\n");
 }
 
 #[test]

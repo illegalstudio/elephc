@@ -246,7 +246,8 @@ fn test_stat_lstat_fstat_failures_are_strict_false() {
         r#"<?php
 echo stat("missing.txt") === false ? "s" : "!";
 echo lstat("missing.txt") === false ? "l" : "!";
-echo fstat(-1) === false ? "f" : "!";
+$f = fopen("missing.txt", "r");
+echo fstat($f) === false ? "f" : "!";
 "#,
     );
     assert_eq!(out, "slf");
