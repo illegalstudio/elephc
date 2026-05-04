@@ -13,7 +13,8 @@ mod state;
 mod stmt_exprs;
 
 use crate::errors::CompileError;
-use crate::parser::ast::Program;
+use crate::parser::ast::{Program, Stmt, StmtKind};
+use crate::span::Span;
 
 use contains::has_includes;
 use discovery::discover_include_declarations;
@@ -27,7 +28,7 @@ pub fn resolve(program: Program, base_dir: &Path) -> Result<Program, CompileErro
         return Ok(program);
     }
 
-    let mut discovered_declarations = discover_include_declarations(&program, base_dir)?;
+    let discovered_declarations = discover_include_declarations(&program, base_dir)?;
     let mut declared_once: HashSet<PathBuf> = HashSet::new();
     let mut include_chain: Vec<PathBuf> = Vec::new();
     let mut state = ResolveState::default();
@@ -39,6 +40,21 @@ pub fn resolve(program: Program, base_dir: &Path) -> Result<Program, CompileErro
         &mut state,
     )?;
 
-    discovered_declarations.extend(resolved);
-    Ok(discovered_declarations)
+    if discovered_declarations.is_empty() {
+        return Ok(resolved);
+    }
+
+    let prelude_span = discovered_declarations
+        .first()
+        .map(|stmt| stmt.span)
+        .unwrap_or_else(Span::dummy);
+    let mut resolved_with_prelude = vec![Stmt::new(
+        StmtKind::NamespaceBlock {
+            name: None,
+            body: discovered_declarations,
+        },
+        prelude_span,
+    )];
+    resolved_with_prelude.extend(resolved);
+    Ok(resolved_with_prelude)
 }

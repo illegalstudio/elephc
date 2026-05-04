@@ -411,7 +411,17 @@ fn discover_include(
 
     include_chain.pop();
     loaded_paths.insert(canonical);
-    declarations.extend(extract_discoverable_declarations(&resolved_declarations));
+
+    let file_declarations = extract_discoverable_declarations(&resolved_declarations);
+    if !file_declarations.is_empty() {
+        declarations.push(Stmt::new(
+            StmtKind::NamespaceBlock {
+                name: None,
+                body: file_declarations,
+            },
+            span,
+        ));
+    }
 
     Ok(())
 }

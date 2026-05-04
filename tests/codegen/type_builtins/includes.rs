@@ -385,6 +385,125 @@ class Box implements Labelled {
 }
 
 #[test]
+fn test_discovered_namespaced_declarations_do_not_leak_to_caller() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+function load_lib() {
+    require 'lib.php';
+}
+
+load_lib();
+
+class Root {}
+
+echo Root::class;
+echo '|';
+echo \Lib\label();
+"#,
+            ),
+            (
+                "lib.php",
+                r#"<?php
+namespace Lib;
+
+function label() {
+    return 'lib';
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "Root|lib");
+}
+
+#[test]
+fn test_discovered_use_imports_do_not_leak_to_caller() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+function load_lib() {
+    require 'lib.php';
+}
+
+load_lib();
+
+class Alias {}
+
+echo Alias::class;
+echo '|';
+echo imported_alias_name();
+"#,
+            ),
+            (
+                "lib.php",
+                r#"<?php
+use Vendor\Thing as Alias;
+
+function imported_alias_name() {
+    return Alias::class;
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "Alias|Vendor\\Thing");
+}
+
+#[test]
+fn test_discovered_namespaces_do_not_leak_between_included_files() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+function load_a() {
+    require 'a.php';
+}
+
+function load_b() {
+    require 'b.php';
+}
+
+load_a();
+load_b();
+
+echo \Lib\a();
+echo '|';
+echo b();
+"#,
+            ),
+            (
+                "a.php",
+                r#"<?php
+namespace Lib;
+
+function a() {
+    return 'a';
+}
+"#,
+            ),
+            (
+                "b.php",
+                r#"<?php
+function b() {
+    return 'b';
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "a|b");
+}
+
+#[test]
 fn test_regular_reinclude_still_reports_duplicate_declaration() {
     assert!(compile_files_fails(
         &[
