@@ -20,7 +20,7 @@ pub(super) fn discover_include_declarations(
     stmts: &[Stmt],
     base_dir: &Path,
 ) -> Result<Vec<Stmt>, CompileError> {
-    let mut declarations = Vec::new();
+    let mut output = DiscoveryOutput::default();
     let mut loaded_paths = HashSet::new();
     let mut include_chain = Vec::new();
     let mut state = ResolveState::default();
@@ -31,10 +31,142 @@ pub(super) fn discover_include_declarations(
         &mut loaded_paths,
         &mut include_chain,
         &mut state,
-        &mut declarations,
+        &mut output,
     )?;
 
-    Ok(declarations)
+    Ok(output.into_stmts())
+}
+
+#[derive(Clone)]
+struct DiscoveryEntry {
+    canonical: PathBuf,
+    span: crate::span::Span,
+    declarations: Vec<Stmt>,
+    repeatable: bool,
+}
+
+#[derive(Default)]
+struct DiscoveryOutput {
+    entries: Vec<DiscoveryEntry>,
+}
+
+impl DiscoveryOutput {
+    fn push(
+        &mut self,
+        canonical: PathBuf,
+        span: crate::span::Span,
+        declarations: Vec<Stmt>,
+        repeatable: bool,
+    ) {
+        if declarations.is_empty() {
+            return;
+        }
+        if !repeatable && self.contains_canonical(&canonical) {
+            return;
+        }
+        self.entries.push(DiscoveryEntry {
+            canonical,
+            span,
+            declarations,
+            repeatable,
+        });
+    }
+
+    fn extend(&mut self, other: DiscoveryOutput) {
+        self.entries.extend(other.entries);
+    }
+
+    fn contains_canonical(&self, canonical: &Path) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.canonical.as_path() == canonical)
+    }
+
+    fn extend_once_guarded(&mut self, mut other: DiscoveryOutput) {
+        for entry in &mut other.entries {
+            entry.repeatable = false;
+        }
+        self.extend(other);
+    }
+
+    fn extend_loop_body(&mut self, other: DiscoveryOutput) {
+        let repeated = other
+            .entries
+            .iter()
+            .filter(|entry| entry.repeatable)
+            .cloned()
+            .collect::<Vec<_>>();
+        self.extend(other);
+        self.entries.extend(repeated);
+    }
+
+    fn merge_alternatives(alternatives: Vec<DiscoveryOutput>) -> DiscoveryOutput {
+        let mut order: Vec<PathBuf> = Vec::new();
+        let mut merged: HashMap<PathBuf, (DiscoveryEntry, usize)> = HashMap::new();
+
+        for alternative in alternatives {
+            let mut branch_order: Vec<PathBuf> = Vec::new();
+            let mut branch: HashMap<PathBuf, (DiscoveryEntry, usize)> = HashMap::new();
+
+            for entry in alternative.entries {
+                let key = entry.canonical.clone();
+                let branch_entry = branch.entry(key.clone()).or_insert_with(|| {
+                    branch_order.push(key);
+                    (entry.clone(), 0)
+                });
+                branch_entry.0.repeatable |= entry.repeatable;
+                branch_entry.1 += 1;
+            }
+
+            for key in branch_order {
+                let (entry, count) = branch.remove(&key).expect("branch key should exist");
+                let merged_entry = merged.entry(key.clone()).or_insert_with(|| {
+                    order.push(key);
+                    (entry.clone(), 0)
+                });
+                merged_entry.0.repeatable |= entry.repeatable;
+                merged_entry.1 = merged_entry.1.max(count);
+            }
+        }
+
+        let mut output = DiscoveryOutput::default();
+        for key in order {
+            let (entry, count) = merged.remove(&key).expect("merged key should exist");
+            for _ in 0..count {
+                output.entries.push(entry.clone());
+            }
+        }
+        output
+    }
+
+    fn into_stmts(self) -> Vec<Stmt> {
+        self.entries
+            .into_iter()
+            .map(|entry| {
+                Stmt::new(
+                    StmtKind::NamespaceBlock {
+                        name: None,
+                        body: entry.declarations,
+                    },
+                    entry.span,
+                )
+            })
+            .collect()
+    }
+}
+
+struct BranchDiscovery {
+    output: DiscoveryOutput,
+    loaded_paths: HashSet<PathBuf>,
+}
+
+impl BranchDiscovery {
+    fn empty(loaded_paths: &HashSet<PathBuf>) -> Self {
+        Self {
+            output: DiscoveryOutput::default(),
+            loaded_paths: loaded_paths.clone(),
+        }
+    }
 }
 
 fn discover_stmts(
@@ -43,10 +175,10 @@ fn discover_stmts(
     loaded_paths: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &mut ResolveState,
-    declarations: &mut Vec<Stmt>,
+    output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
     for stmt in stmts {
-        discover_stmt(stmt, base_dir, loaded_paths, include_chain, state, declarations)?;
+        discover_stmt(stmt, base_dir, loaded_paths, include_chain, state, output)?;
     }
     Ok(())
 }
@@ -57,7 +189,7 @@ fn discover_stmt(
     loaded_paths: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &mut ResolveState,
-    declarations: &mut Vec<Stmt>,
+    output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
     match &stmt.kind {
         StmtKind::Include { path, once, required } => {
@@ -70,18 +202,18 @@ fn discover_stmt(
                 loaded_paths,
                 include_chain,
                 state,
-                declarations,
+                output,
             )?;
         }
         StmtKind::ConstDecl { name, value } => {
-            discover_expr(value, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
             if let Ok(s) = fold_include_path(value, state) {
                 let key = canonical_name_for_decl(state.namespace.as_deref(), name);
                 state.constants.insert(key, s);
             }
         }
         StmtKind::ExprStmt(expr) => {
-            discover_expr(expr, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(expr, base_dir, loaded_paths, include_chain, state, output)?;
             if let ExprKind::FunctionCall { name, args } = &expr.kind {
                 if is_define_call_name(name) && args.len() == 2 {
                     if let ExprKind::StringLiteral(const_name) = &args[0].kind {
@@ -103,7 +235,7 @@ fn discover_stmt(
             let saved_imports = state.const_imports.clone();
             state.namespace = Some(namespace_string(name));
             state.const_imports = HashMap::new();
-            discover_stmts(body, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_stmts(body, base_dir, loaded_paths, include_chain, state, output)?;
             state.namespace = saved_namespace;
             state.const_imports = saved_imports;
         }
@@ -117,87 +249,107 @@ fn discover_stmt(
                 loaded_paths,
                 include_chain,
                 state,
-                declarations,
+                output,
             )?;
         }
         StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
-            discover_expr(condition, base_dir, loaded_paths, include_chain, state, declarations)?;
-            discover_isolated(
-                then_body,
-                base_dir,
-                loaded_paths,
-                include_chain,
-                state,
-                declarations,
-            )?;
-            for (condition, body) in elseif_clauses {
-                discover_expr(condition, base_dir, loaded_paths, include_chain, state, declarations)?;
-                discover_isolated(
-                    body,
+            discover_expr(condition, base_dir, loaded_paths, include_chain, state, output)?;
+
+            match constant_truthiness(condition) {
+                Some(true) => {
+                    discover_isolated(
+                        then_body,
+                        base_dir,
+                        loaded_paths,
+                        include_chain,
+                        state,
+                        output,
+                    )?;
+                }
+                Some(false) => discover_if_tail(
+                    elseif_clauses,
+                    else_body.as_deref(),
                     base_dir,
                     loaded_paths,
                     include_chain,
                     state,
-                    declarations,
-                )?;
-            }
-            if let Some(body) = else_body {
-                discover_isolated(
-                    body,
-                    base_dir,
-                    loaded_paths,
-                    include_chain,
-                    state,
-                    declarations,
-                )?;
+                    output,
+                    Vec::new(),
+                )?,
+                None => {
+                    let then_output = discover_branch_output(
+                        then_body,
+                        base_dir,
+                        loaded_paths,
+                        include_chain,
+                        state,
+                    )?;
+                    discover_if_tail(
+                        elseif_clauses,
+                        else_body.as_deref(),
+                        base_dir,
+                        loaded_paths,
+                        include_chain,
+                        state,
+                        output,
+                        vec![then_output],
+                    )?;
+                }
             }
         }
-        StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
-            discover_expr(condition, base_dir, loaded_paths, include_chain, state, declarations)?;
-            discover_isolated(
-                body,
-                base_dir,
-                loaded_paths,
-                include_chain,
-                state,
-                declarations,
-            )?;
+        StmtKind::While { condition, body } => {
+            discover_expr(condition, base_dir, loaded_paths, include_chain, state, output)?;
+            if constant_truthiness(condition) != Some(false) {
+                let body_output =
+                    discover_isolated_output(body, base_dir, loaded_paths, include_chain, state)?;
+                output.extend_loop_body(body_output);
+            }
+        }
+        StmtKind::DoWhile { condition, body } => {
+            let body_output =
+                discover_isolated_output(body, base_dir, loaded_paths, include_chain, state)?;
+            discover_expr(condition, base_dir, loaded_paths, include_chain, state, output)?;
+            if constant_truthiness(condition) == Some(false) {
+                output.extend(body_output);
+            } else {
+                output.extend_loop_body(body_output);
+            }
         }
         StmtKind::For { init, condition, update, body } => {
             if let Some(init) = init {
-                discover_stmt(init, base_dir, loaded_paths, include_chain, state, declarations)?;
+                discover_stmt(init, base_dir, loaded_paths, include_chain, state, output)?;
             }
             if let Some(condition) = condition {
-                discover_expr(condition, base_dir, loaded_paths, include_chain, state, declarations)?;
+                discover_expr(condition, base_dir, loaded_paths, include_chain, state, output)?;
             }
-            if let Some(update) = update {
-                discover_stmt(update, base_dir, loaded_paths, include_chain, state, declarations)?;
+            if condition.as_ref().and_then(constant_truthiness) != Some(false) {
+                let mut loop_output =
+                    discover_isolated_output(body, base_dir, loaded_paths, include_chain, state)?;
+                if let Some(update) = update {
+                    let mut update_state = state.clone();
+                    discover_stmt(
+                        update,
+                        base_dir,
+                        loaded_paths,
+                        include_chain,
+                        &mut update_state,
+                        &mut loop_output,
+                    )?;
+                }
+                output.extend_loop_body(loop_output);
             }
-            discover_isolated(
-                body,
-                base_dir,
-                loaded_paths,
-                include_chain,
-                state,
-                declarations,
-            )?;
         }
         StmtKind::Foreach { array, body, .. } => {
-            discover_expr(array, base_dir, loaded_paths, include_chain, state, declarations)?;
-            discover_isolated(
-                body,
-                base_dir,
-                loaded_paths,
-                include_chain,
-                state,
-                declarations,
-            )?;
+            discover_expr(array, base_dir, loaded_paths, include_chain, state, output)?;
+            let body_output =
+                discover_isolated_output(body, base_dir, loaded_paths, include_chain, state)?;
+            output.extend_loop_body(body_output);
         }
         StmtKind::Switch { subject, cases, default } => {
-            discover_expr(subject, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(subject, base_dir, loaded_paths, include_chain, state, output)?;
             for (values, body) in cases {
                 for value in values {
-                    discover_expr(value, base_dir, loaded_paths, include_chain, state, declarations)?;
+                    discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
                 }
                 discover_isolated(
                     body,
@@ -205,7 +357,7 @@ fn discover_stmt(
                     loaded_paths,
                     include_chain,
                     state,
-                    declarations,
+                    output,
                 )?;
             }
             if let Some(body) = default {
@@ -215,7 +367,7 @@ fn discover_stmt(
                     loaded_paths,
                     include_chain,
                     state,
-                    declarations,
+                    output,
                 )?;
             }
         }
@@ -226,7 +378,7 @@ fn discover_stmt(
                 loaded_paths,
                 include_chain,
                 state,
-                declarations,
+                output,
             )?;
             for CatchClause { body, .. } in catches {
                 discover_isolated(
@@ -235,7 +387,7 @@ fn discover_stmt(
                     loaded_paths,
                     include_chain,
                     state,
-                    declarations,
+                    output,
                 )?;
             }
             if let Some(body) = finally_body {
@@ -245,19 +397,19 @@ fn discover_stmt(
                     loaded_paths,
                     include_chain,
                     state,
-                    declarations,
+                    output,
                 )?;
             }
         }
         StmtKind::FunctionDecl { params, body, .. } => {
-            discover_params(params, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_params(params, base_dir, loaded_paths, include_chain, state, output)?;
             discover_isolated(
                 body,
                 base_dir,
                 loaded_paths,
                 include_chain,
                 state,
-                declarations,
+                output,
             )?;
         }
         StmtKind::ClassDecl { properties, methods, .. }
@@ -268,7 +420,7 @@ fn discover_stmt(
                 loaded_paths,
                 include_chain,
                 state,
-                declarations,
+                output,
             )?;
             discover_methods(
                 methods,
@@ -276,7 +428,7 @@ fn discover_stmt(
                 loaded_paths,
                 include_chain,
                 state,
-                declarations,
+                output,
             )?;
         }
         StmtKind::InterfaceDecl { methods, .. } => {
@@ -286,13 +438,13 @@ fn discover_stmt(
                 loaded_paths,
                 include_chain,
                 state,
-                declarations,
+                output,
             )?;
         }
         StmtKind::EnumDecl { cases, .. } => {
             for case in cases {
                 if let Some(value) = &case.value {
-                    discover_expr(value, base_dir, loaded_paths, include_chain, state, declarations)?;
+                    discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
                 }
             }
         }
@@ -306,18 +458,18 @@ fn discover_stmt(
         | StmtKind::ArrayPush { value: expr, .. }
         | StmtKind::StaticPropertyAssign { value: expr, .. }
         | StmtKind::StaticPropertyArrayPush { value: expr, .. } => {
-            discover_expr(expr, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(expr, base_dir, loaded_paths, include_chain, state, output)?;
         }
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. }
         | StmtKind::PropertyArrayAssign { index, value, .. } => {
-            discover_expr(index, base_dir, loaded_paths, include_chain, state, declarations)?;
-            discover_expr(value, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(index, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
         }
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
-            discover_expr(object, base_dir, loaded_paths, include_chain, state, declarations)?;
-            discover_expr(value, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
         }
         StmtKind::Return(None)
         | StmtKind::IncludeOnceMark { .. }
@@ -344,7 +496,7 @@ fn discover_include(
     loaded_paths: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &mut ResolveState,
-    declarations: &mut Vec<Stmt>,
+    output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
     let path_str = fold_include_path(path, state).map_err(|msg| CompileError::new(span, &msg))?;
     let resolved = resolve_path(&path_str, base_dir);
@@ -388,13 +540,14 @@ fn discover_include(
     let saved_imports = state.const_imports.clone();
     state.namespace = None;
     state.const_imports = HashMap::new();
+    let mut nested_output = DiscoveryOutput::default();
     discover_stmts(
         &included_stmts,
         included_dir,
         loaded_paths,
         include_chain,
         state,
-        declarations,
+        &mut nested_output,
     )?;
     state.namespace = saved_namespace;
     state.const_imports = saved_imports;
@@ -410,20 +563,37 @@ fn discover_include(
     )?;
 
     include_chain.pop();
-    loaded_paths.insert(canonical);
-
-    let file_declarations = extract_discoverable_declarations(&resolved_declarations);
-    if !file_declarations.is_empty() {
-        declarations.push(Stmt::new(
-            StmtKind::NamespaceBlock {
-                name: None,
-                body: file_declarations,
-            },
-            span,
-        ));
+    loaded_paths.insert(canonical.clone());
+    if once {
+        output.extend_once_guarded(nested_output);
+    } else {
+        output.extend(nested_output);
     }
 
+    let file_declarations = extract_discoverable_declarations(&resolved_declarations);
+    output.push(canonical, span, file_declarations, !once);
+
     Ok(())
+}
+
+fn discover_isolated_output(
+    stmts: &[Stmt],
+    base_dir: &Path,
+    loaded_paths: &mut HashSet<PathBuf>,
+    include_chain: &mut Vec<PathBuf>,
+    state: &ResolveState,
+) -> Result<DiscoveryOutput, CompileError> {
+    let mut local = state.clone();
+    let mut output = DiscoveryOutput::default();
+    discover_stmts(
+        stmts,
+        base_dir,
+        loaded_paths,
+        include_chain,
+        &mut local,
+        &mut output,
+    )?;
+    Ok(output)
 }
 
 fn discover_isolated(
@@ -432,17 +602,120 @@ fn discover_isolated(
     loaded_paths: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &ResolveState,
-    declarations: &mut Vec<Stmt>,
+    output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
-    let mut local = state.clone();
-    discover_stmts(
+    output.extend(discover_isolated_output(
         stmts,
         base_dir,
         loaded_paths,
         include_chain,
-        &mut local,
-        declarations,
-    )
+        state,
+    )?);
+    Ok(())
+}
+
+fn discover_branch_output(
+    stmts: &[Stmt],
+    base_dir: &Path,
+    loaded_paths: &HashSet<PathBuf>,
+    include_chain: &[PathBuf],
+    state: &ResolveState,
+) -> Result<BranchDiscovery, CompileError> {
+    let mut local_state = state.clone();
+    let mut local_loaded_paths = loaded_paths.clone();
+    let mut local_include_chain = include_chain.to_vec();
+    let mut output = DiscoveryOutput::default();
+    discover_stmts(
+        stmts,
+        base_dir,
+        &mut local_loaded_paths,
+        &mut local_include_chain,
+        &mut local_state,
+        &mut output,
+    )?;
+    Ok(BranchDiscovery {
+        output,
+        loaded_paths: local_loaded_paths,
+    })
+}
+
+fn merge_branch_discoveries(
+    branches: Vec<BranchDiscovery>,
+    loaded_paths: &mut HashSet<PathBuf>,
+) -> DiscoveryOutput {
+    let mut outputs = Vec::with_capacity(branches.len());
+    let mut merged_loaded_paths: Option<HashSet<PathBuf>> = None;
+
+    for branch in branches {
+        match &mut merged_loaded_paths {
+            Some(paths) => {
+                paths.retain(|path| branch.loaded_paths.contains(path));
+            }
+            None => {
+                merged_loaded_paths = Some(branch.loaded_paths);
+            }
+        }
+        outputs.push(branch.output);
+    }
+
+    if let Some(paths) = merged_loaded_paths {
+        *loaded_paths = paths;
+    }
+
+    DiscoveryOutput::merge_alternatives(outputs)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn discover_if_tail(
+    elseif_clauses: &[(Expr, Vec<Stmt>)],
+    else_body: Option<&[Stmt]>,
+    base_dir: &Path,
+    loaded_paths: &mut HashSet<PathBuf>,
+    include_chain: &mut Vec<PathBuf>,
+    state: &ResolveState,
+    output: &mut DiscoveryOutput,
+    mut alternatives: Vec<BranchDiscovery>,
+) -> Result<(), CompileError> {
+    for (condition, body) in elseif_clauses {
+        let mut condition_state = state.clone();
+        discover_expr(
+            condition,
+            base_dir,
+            loaded_paths,
+            include_chain,
+            &mut condition_state,
+            output,
+        )?;
+
+        match constant_truthiness(condition) {
+            Some(false) => {}
+            Some(true) => {
+                alternatives.push(discover_branch_output(
+                    body,
+                    base_dir,
+                    loaded_paths,
+                    include_chain,
+                    state,
+                )?);
+                output.extend(merge_branch_discoveries(alternatives, loaded_paths));
+                return Ok(());
+            }
+            None => alternatives.push(discover_branch_output(
+                body,
+                base_dir,
+                loaded_paths,
+                include_chain,
+                state,
+            )?),
+        }
+    }
+
+    alternatives.push(match else_body {
+        Some(body) => discover_branch_output(body, base_dir, loaded_paths, include_chain, state)?,
+        None => BranchDiscovery::empty(loaded_paths),
+    });
+    output.extend(merge_branch_discoveries(alternatives, loaded_paths));
+    Ok(())
 }
 
 fn discover_params(
@@ -451,11 +724,11 @@ fn discover_params(
     loaded_paths: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &mut ResolveState,
-    declarations: &mut Vec<Stmt>,
+    output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
     for (_, _, default, _) in params {
         if let Some(default) = default {
-            discover_expr(default, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(default, base_dir, loaded_paths, include_chain, state, output)?;
         }
     }
     Ok(())
@@ -467,11 +740,11 @@ fn discover_properties(
     loaded_paths: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &mut ResolveState,
-    declarations: &mut Vec<Stmt>,
+    output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
     for property in properties {
         if let Some(default) = &property.default {
-            discover_expr(default, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(default, base_dir, loaded_paths, include_chain, state, output)?;
         }
     }
     Ok(())
@@ -483,7 +756,7 @@ fn discover_methods(
     loaded_paths: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &ResolveState,
-    declarations: &mut Vec<Stmt>,
+    output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
     for method in methods {
         let mut local = state.clone();
@@ -493,7 +766,7 @@ fn discover_methods(
             loaded_paths,
             include_chain,
             &mut local,
-            declarations,
+            output,
         )?;
         discover_isolated(
             &method.body,
@@ -501,7 +774,7 @@ fn discover_methods(
             loaded_paths,
             include_chain,
             state,
-            declarations,
+            output,
         )?;
     }
     Ok(())
@@ -513,12 +786,12 @@ fn discover_expr(
     loaded_paths: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &mut ResolveState,
-    declarations: &mut Vec<Stmt>,
+    output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
     match &expr.kind {
         ExprKind::BinaryOp { left, right, .. } => {
-            discover_expr(left, base_dir, loaded_paths, include_chain, state, declarations)?;
-            discover_expr(right, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(left, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_expr(right, base_dir, loaded_paths, include_chain, state, output)?;
         }
         ExprKind::InstanceOf { value, .. }
         | ExprKind::Negate(value)
@@ -530,17 +803,17 @@ fn discover_expr(
         | ExprKind::Spread(value)
         | ExprKind::PtrCast { expr: value, .. }
         | ExprKind::BufferNew { len: value, .. } => {
-            discover_expr(value, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
         }
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ArrayAccess { array: value, index: default }
         | ExprKind::ShortTernary { value, default } => {
-            discover_expr(value, base_dir, loaded_paths, include_chain, state, declarations)?;
-            discover_expr(default, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_expr(default, base_dir, loaded_paths, include_chain, state, output)?;
         }
         ExprKind::Assignment { target, value, result_target, prelude, .. } => {
-            discover_expr(target, base_dir, loaded_paths, include_chain, state, declarations)?;
-            discover_expr(value, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(target, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
             if let Some(result_target) = result_target {
                 discover_expr(
                     result_target,
@@ -548,7 +821,7 @@ fn discover_expr(
                     loaded_paths,
                     include_chain,
                     state,
-                    declarations,
+                    output,
                 )?;
             }
             discover_isolated(
@@ -557,7 +830,7 @@ fn discover_expr(
                 loaded_paths,
                 include_chain,
                 state,
-                declarations,
+                output,
             )?;
         }
         ExprKind::FunctionCall { args, .. }
@@ -565,19 +838,19 @@ fn discover_expr(
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. }
         | ExprKind::NewScopedObject { args, .. } => {
-            discover_exprs(args, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_exprs(args, base_dir, loaded_paths, include_chain, state, output)?;
         }
         ExprKind::ArrayLiteral(items) => {
-            discover_exprs(items, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_exprs(items, base_dir, loaded_paths, include_chain, state, output)?;
         }
         ExprKind::ArrayLiteralAssoc(entries) => {
             for (key, value) in entries {
-                discover_expr(key, base_dir, loaded_paths, include_chain, state, declarations)?;
-                discover_expr(value, base_dir, loaded_paths, include_chain, state, declarations)?;
+                discover_expr(key, base_dir, loaded_paths, include_chain, state, output)?;
+                discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
             }
         }
         ExprKind::Match { subject, arms, default } => {
-            discover_expr(subject, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(subject, base_dir, loaded_paths, include_chain, state, output)?;
             for (patterns, value) in arms {
                 discover_exprs(
                     patterns,
@@ -585,48 +858,48 @@ fn discover_expr(
                     loaded_paths,
                     include_chain,
                     state,
-                    declarations,
+                    output,
                 )?;
-                discover_expr(value, base_dir, loaded_paths, include_chain, state, declarations)?;
+                discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
             }
             if let Some(default) = default {
-                discover_expr(default, base_dir, loaded_paths, include_chain, state, declarations)?;
+                discover_expr(default, base_dir, loaded_paths, include_chain, state, output)?;
             }
         }
         ExprKind::Ternary { condition, then_expr, else_expr } => {
-            discover_expr(condition, base_dir, loaded_paths, include_chain, state, declarations)?;
-            discover_expr(then_expr, base_dir, loaded_paths, include_chain, state, declarations)?;
-            discover_expr(else_expr, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(condition, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_expr(then_expr, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_expr(else_expr, base_dir, loaded_paths, include_chain, state, output)?;
         }
         ExprKind::Cast { expr, .. } | ExprKind::NamedArg { value: expr, .. } => {
-            discover_expr(expr, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(expr, base_dir, loaded_paths, include_chain, state, output)?;
         }
         ExprKind::Closure { params, body, .. } => {
-            discover_params(params, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_params(params, base_dir, loaded_paths, include_chain, state, output)?;
             discover_isolated(
                 body,
                 base_dir,
                 loaded_paths,
                 include_chain,
                 state,
-                declarations,
+                output,
             )?;
         }
         ExprKind::ExprCall { callee, args } => {
-            discover_expr(callee, base_dir, loaded_paths, include_chain, state, declarations)?;
-            discover_exprs(args, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(callee, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_exprs(args, base_dir, loaded_paths, include_chain, state, output)?;
         }
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => {
-            discover_expr(object, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
         }
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
-            discover_expr(object, base_dir, loaded_paths, include_chain, state, declarations)?;
-            discover_exprs(args, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_exprs(args, base_dir, loaded_paths, include_chain, state, output)?;
         }
         ExprKind::FirstClassCallable(crate::parser::ast::CallableTarget::Method { object, .. }) => {
-            discover_expr(object, base_dir, loaded_paths, include_chain, state, declarations)?;
+            discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
         }
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
@@ -655,10 +928,21 @@ fn discover_exprs(
     loaded_paths: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &mut ResolveState,
-    declarations: &mut Vec<Stmt>,
+    output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
     for expr in exprs {
-        discover_expr(expr, base_dir, loaded_paths, include_chain, state, declarations)?;
+        discover_expr(expr, base_dir, loaded_paths, include_chain, state, output)?;
     }
     Ok(())
+}
+
+fn constant_truthiness(expr: &Expr) -> Option<bool> {
+    match &expr.kind {
+        ExprKind::BoolLiteral(value) => Some(*value),
+        ExprKind::Null => Some(false),
+        ExprKind::IntLiteral(value) => Some(*value != 0),
+        ExprKind::FloatLiteral(value) => Some(*value != 0.0),
+        ExprKind::StringLiteral(value) => Some(!(value.is_empty() || value == "0")),
+        _ => None,
+    }
 }

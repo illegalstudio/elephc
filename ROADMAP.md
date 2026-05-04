@@ -387,6 +387,7 @@ Finish language-level PHP behavior that is visible in everyday source code and
 does not require a new backend or product mode.
 
 - [x] Include graph declaration discovery — pre-scan all statically resolvable `include` / `require` targets for function/class/interface/trait declarations before name resolution and type checking, so symbol references are not sensitive to source include order while top-level include execution order remains PHP-compatible
+- [x] Path-sensitive include declaration discovery — avoid false duplicate declaration errors when the same statically resolvable regular `include` / `require` target is reachable only through mutually exclusive control-flow paths, while still reporting duplicates for sequential loads and potentially repeated loop loads
 - [ ] Mixed nullsafe/member chains — match PHP's full chain semantics for forms that mix `?->` and `->`, such as `$a?->b->c`
 - [ ] Dynamic `instanceof` targets — support PHP forms such as `$obj instanceof $className` with runtime validation for class-string/object target expressions
 - [ ] Full PHP list destructuring — skipped entries, nested patterns, associative-key destructuring, and non-local destructuring targets where PHP permits them

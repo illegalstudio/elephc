@@ -85,6 +85,12 @@ branches, or nested include files participate in normal symbol resolution,
 while executable top-level statements from included files still run at their
 include point.
 
+Declaration discovery is path-aware for the same resolved regular include
+target across mutually exclusive `if` / `else` branches, so the same file is
+not treated as redeclared just because it appears in both branches. Sequential
+regular includes and regular includes that can repeat through loops still report
+duplicate declaration errors, matching PHP's redeclaration behavior.
+
 ### Path expressions
 
 The path may be any **compile-time-constant string expression**:

@@ -521,6 +521,184 @@ include 'lib.php';
 }
 
 #[test]
+fn test_regular_include_same_file_in_exclusive_branches_discovers_once() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+$pick = time() > 0;
+if ($pick) {
+    include 'lib.php';
+} else {
+    include 'lib.php';
+}
+echo branch_value();
+"#,
+            ),
+            ("lib.php", "<?php function branch_value() { return 'ok'; }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_regular_include_in_constant_false_branch_does_not_duplicate_later_include() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+if (false) {
+    include 'lib.php';
+}
+include 'lib.php';
+echo false_branch_value();
+"#,
+            ),
+            ("lib.php", "<?php function false_branch_value() { return 'ok'; }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_regular_include_in_constant_false_elseif_chain_does_not_duplicate_later_include() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+if (false) {
+    include 'lib.php';
+} elseif (false) {
+    include 'lib.php';
+}
+include 'lib.php';
+echo false_elseif_value();
+"#,
+            ),
+            ("lib.php", "<?php function false_elseif_value() { return 'ok'; }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_regular_include_possible_branch_then_later_include_still_reports_duplicate() {
+    assert!(compile_files_fails(
+        &[
+            (
+                "main.php",
+                r#"<?php
+if (time() > 0) {
+    include 'lib.php';
+}
+include 'lib.php';
+"#,
+            ),
+            ("lib.php", "<?php function maybe_duplicated() { return 1; }"),
+        ],
+        "main.php",
+    ));
+}
+
+#[test]
+fn test_regular_include_declaration_in_loop_reports_duplicate() {
+    assert!(compile_files_fails(
+        &[
+            (
+                "main.php",
+                r#"<?php
+$i = 0;
+while ($i < 2) {
+    include 'lib.php';
+    $i = $i + 1;
+}
+"#,
+            ),
+            ("lib.php", "<?php function loop_duplicated() { return 1; }"),
+        ],
+        "main.php",
+    ));
+}
+
+#[test]
+fn test_include_once_in_loop_with_nested_regular_include_discovers_once() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+$i = 0;
+while ($i < 2) {
+    include_once 'outer.php';
+    $i = $i + 1;
+}
+echo nested_once_value();
+"#,
+            ),
+            ("outer.php", "<?php include 'inner.php';"),
+            ("inner.php", "<?php function nested_once_value() { return 'ok'; }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_include_once_possible_branch_then_later_include_once_discovers_once() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+if (time() < 0) {
+    include_once 'lib.php';
+}
+include_once 'lib.php';
+echo once_later_value();
+"#,
+            ),
+            ("lib.php", "<?php function once_later_value() { return 'ok'; }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_include_once_exclusive_branches_scan_context_sensitive_nested_includes() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+$pick = time() < 0;
+if ($pick) {
+    define('TARGET_FILE', 'a.php');
+    include_once 'outer.php';
+    echo branch_a_value();
+} else {
+    define('TARGET_FILE', 'b.php');
+    include_once 'outer.php';
+    echo branch_b_value();
+}
+"#,
+            ),
+            ("outer.php", "<?php include TARGET_FILE;"),
+            ("a.php", "<?php function branch_a_value() { return 'a'; }"),
+            ("b.php", "<?php function branch_b_value() { return 'b'; }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "b");
+}
+
+#[test]
 fn test_include_nested() {
     // a.php includes b.php which includes c.php
     let out = compile_and_run_files(
