@@ -462,11 +462,11 @@ The `emit_runtime()` function calls every AArch64 routine emitter in a fixed ord
 
 ```rust
 pub fn emit_runtime(emitter: &mut Emitter) {
-    // strings: itoa, ftoa, concat, atoi, equality, formatting, trim/mask,
+    // diagnostics: runtime warning emission and @ suppression state
+    // strings: itoa, resource display/stdout, ftoa, concat, atoi, equality, formatting, trim/mask,
     // search/replace, explode/implode, hashing, encoding, sscanf, ...
     // system: argv, time, getenv, shell, date/mktime/strtotime, JSON, regex
     // exceptions: cleanup walk, catch matching, throw/rethrow helpers
-    // diagnostics: runtime warning emission and @ suppression state
     // arrays: heap alloc/free, array/hash helpers, sort, callbacks, refcount
     // buffers: contiguous buffer allocation, bounds checking, UAF traps
     // io: c-string buffers, file I/O, stat/fs helpers, scandir/glob/tempnam, CSV

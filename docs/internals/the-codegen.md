@@ -155,7 +155,7 @@ pub struct VarInfo {
 
 `HeapOwnership` is a codegen-only ownership lattice used for heap-backed values flowing through stack slots:
 
-- `NonHeap` — integers, floats, bools, null, raw pointers
+- `NonHeap` — integers, floats, bools, null, resources, raw pointers
 - `Owned` — this slot definitely owns the current heap-backed value
 - `Borrowed` — this slot currently aliases heap storage owned elsewhere
 - `MaybeOwned` — control flow merged heap-backed paths with different ownership states
@@ -196,10 +196,10 @@ Floats are stored as their raw 64-bit IEEE 754 bit patterns (`.quad` directive).
 
 | Type | Result location |
 |---|---|
-| `Int` / `Bool` / `Void` | `x0` |
+| `Int` / `Bool` / `Void` / `Resource` | `x0` |
 | `Float` | `d0` |
 | `Str` | `x1` (pointer), `x2` (length) |
-| `Array` / `AssocArray` | `x0` (heap pointer) |
+| `Array` / `AssocArray` / `Iterable` | `x0` (heap pointer) |
 | `Mixed` | `x0` (pointer to boxed mixed cell) |
 | `Object` | `x0` (heap pointer) |
 | `Callable` / `Pointer` | `x0` |
@@ -944,10 +944,10 @@ Stores the current result to a stack variable. Uses `store_at_offset()` internal
 
 | Type | What it stores |
 |---|---|
-| `Int` / `Bool` | `stur x0, [x29, #-offset]` (or 2-insn sequence for large offsets) |
+| `Int` / `Bool` / `Resource` | `stur x0, [x29, #-offset]` (or 2-insn sequence for large offsets) |
 | `Float` | `stur d0, [x29, #-offset]` |
 | `Str` | `bl __rt_str_persist`, then `stur x1, [x29, #-offset]` + `stur x2, [x29, #-(offset-8)]` |
-| `Array` / `AssocArray` | `stur x0, [x29, #-offset]` |
+| `Array` / `AssocArray` / `Iterable` | `stur x0, [x29, #-offset]` |
 | `Mixed` | `stur x0, [x29, #-offset]` |
 | `Object` | `stur x0, [x29, #-offset]` |
 | `Callable` / `Pointer` | `stur x0, [x29, #-offset]` |

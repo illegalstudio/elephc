@@ -45,6 +45,7 @@ pub enum PhpType {
     Object(String),                // class instance, e.g., Object("Point") or Object("App\\Point")
     Packed(String),
     Pointer(Option<String>),       // opaque ptr or typed ptr<Class>
+    Resource(Option<String>),      // generic resource or typed resource such as resource<stream>
     Union(Vec<PhpType>),
 }
 ```
@@ -60,6 +61,8 @@ This is still much smaller than full PHP's runtime type system, but it now inclu
 `Object(String)` represents a class instance. The string carries the canonical class name after name resolution (for example `"Point"` or `"App\\Point"`). Objects are heap-allocated pointers (8 bytes on the stack).
 
 `Pointer(Option<String>)` represents a raw 64-bit address. `Pointer(None)` is an opaque pointer, while `Pointer(Some("Point"))` is a pointer tagged with a checked pointee type. The tag affects static checking, but the runtime value is still just an address in `x0`.
+
+`Resource(Option<String>)` represents PHP resource handles. `Resource(None)` is a generic resource, while `Resource(Some("stream"))` is the stream-handle shape used by successful `fopen()` calls and the `STDIN` / `STDOUT` / `STDERR` constants. Resource values are stored as one 8-byte native payload in codegen, but the type checker keeps them distinct from integers so stream built-ins can reject plain numeric descriptors.
 
 ## How inference works
 
@@ -91,6 +94,8 @@ The first assignment determines a variable's type. After that, reassignment is o
 | `Pointer(None)` | `Pointer(Some("T"))` | Yes (merged to the more specific pointer tag) |
 | `Pointer(Some("A"))` | `Pointer(Some("B"))` | Yes, but merged to opaque `Pointer(None)` if tags differ |
 | `Pointer(*)` | `Int` / `Str` / `Array` | **No** — compile error |
+| `Resource(None)` | `Resource(Some("stream"))` (or vice versa) | Yes (generic resource accepts typed resources) |
+| `Resource(Some("stream"))` | `Int` | **No** — stream handles are not plain numeric descriptors |
 | `Array(_)` / `AssocArray(_, _)` / object implementing `Iterator` or `IteratorAggregate` | `Iterable` parameter | Yes (PHP `iterable` accepts arrays and Traversable objects at the call boundary) |
 
 This means elephc rejects code that PHP would allow:
@@ -170,6 +175,7 @@ substr($str: Str, $start: Int, $len?: Int) → Str
 strpos($hay: Str, $needle: Str) → Int|Bool
 array_search($needle, $arr: Array|AssocArray) → Int|Str|Bool
 file_get_contents($filename: Str) → Str|Bool
+fopen($filename: Str, $mode: Str) → resource<stream>|Bool
 fileatime($filename: Str) / filectime($filename: Str) → Int|Bool
 fileperms($filename: Str) / fileowner($filename: Str) / filegroup($filename: Str) / fileinode($filename: Str) → Int|Bool
 filetype($filename: Str) → Str|Bool

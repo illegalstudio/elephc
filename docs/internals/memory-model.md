@@ -78,11 +78,13 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 | `Str` | 16 bytes | 8-byte pointer + 8-byte length |
 | `Array` | 8 bytes | Pointer to heap-allocated header |
 | `AssocArray` | 8 bytes | Pointer to heap-allocated hash table |
+| `Iterable` | 8 bytes | Type-erased heap pointer for arrays or Traversable objects |
 | `Mixed` | 8 bytes | Pointer to heap-allocated boxed mixed cell |
 | `Void` (null) | 8 bytes | Sentinel value `0x7FFFFFFFFFFFFFFE` |
 | `Object` | 8 bytes | Pointer to heap-allocated object |
 | `Callable` | 8 bytes | Function pointer |
 | `Pointer` | 8 bytes | Raw 64-bit address |
+| `Resource` | 8 bytes | Native resource payload, such as a stream descriptor |
 | `Buffer` | 8 bytes | Pointer to buffer header |
 | `Packed` | 8 bytes | Metadata-only nominal type, accessed via pointer |
 | `Union` | 8 bytes | Boxed runtime-tagged payload (same storage as Mixed) |
@@ -409,7 +411,7 @@ The runtime data layer is split into `emit_runtime_data_fixed()` (shared buffers
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
 - `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_enum_from_msg`, `_static_prop_private_access_msg` — fatal runtime error strings for buffers, `match`, enums, and late-bound private static-property access
-- `_rt_diag_suppression`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — runtime warning suppression depth and warning strings used by `@`
+- `_rt_diag_suppression`, `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — runtime warning suppression depth and warning strings used by `@`
 - `_php_uname_mode_len_msg`, `_php_uname_mode_value_msg` — fatal `php_uname()` diagnostics for invalid mode arguments
 - `_pcre_space`, `_pcre_digit`, `_pcre_word`, `_pcre_nspace`, `_pcre_ndigit`, `_pcre_nword` — regex shorthand replacement strings used by the POSIX regex bridge
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings (4, 5, and 4 bytes) used by `json_encode` for boolean and null values

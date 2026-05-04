@@ -241,7 +241,7 @@ src/
 │   │   ├── arrays/            count, array_push, buffer_new/len/free, sort, array_map, usort, ... (58 files)
 │   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, sin, cos, ... (32 files)
 │   │   ├── types/             is_*, gettype, empty, unset, settype, ... (17 files)
-│   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (64 files)
+│   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (65 files)
 │   │   ├── pointers/          ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ... (12 files)
 │   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, ... (25 files)
 │   │
@@ -251,7 +251,7 @@ src/
 │       ├── diagnostics.rs     Suppressible runtime-warning channel used by `@`
 │       ├── emitters.rs        Shared emit helpers used across runtime categories
 │       ├── x86_minimal.rs     Minimal x86_64 runtime slice for the Linux x86_64 target
-│       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (53 files)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (55 files)
 │       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (112 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (27 files)
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
@@ -270,14 +270,14 @@ src/
 
 | What | Register | Notes |
 |---|---|---|
-| Integer result | `x0` | After emit_expr for Int/Bool/Void |
+| Integer result | `x0` | After emit_expr for Int/Bool/Void/Resource |
 | Float result | `d0` | After emit_expr for Float |
 | String result | `x1` (ptr), `x2` (len) | After emit_expr for Str |
-| Array result | `x0` (heap ptr) | After emit_expr for Array/AssocArray |
+| Array result | `x0` (heap ptr) | After emit_expr for Array/AssocArray/Iterable |
 | Mixed result | `x0` (heap ptr) | Pointer to boxed mixed cell |
 | Object result | `x0` (heap ptr) | After emit_expr for Object |
 | Pointer / Buffer / Packed / Callable result | `x0` | Raw address, contiguous buffer pointer, packed-record pointer, or function pointer |
-| Function args (int) | `x0`-`x7` | Int/Bool/Array/AssocArray/Mixed/Object/Pointer/Buffer/Packed/Callable = 1 reg, Str = 2 regs |
+| Function args (int) | `x0`-`x7` | Int/Bool/Resource/Array/AssocArray/Iterable/Mixed/Object/Pointer/Buffer/Packed/Callable/Union = 1 reg, Str = 2 regs |
 | Function args (float) | `d0`-`d7` | Separate index from int regs |
 | Frame pointer | `x29` | Saved in prologue |
 | Link register | `x30` | Saved in prologue |

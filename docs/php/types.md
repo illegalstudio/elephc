@@ -144,6 +144,7 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `is_string()`   | `is_string($val): bool`      | Returns true if string         |
 | `is_numeric()`  | `is_numeric($val): bool`     | Returns true if int or float   |
 | `is_bool()`     | `is_bool($val): bool`        | Returns true if bool           |
+| `is_iterable()` | `is_iterable($val): bool`    | Returns true if array or Traversable-compatible iterable |
 | `is_nan()`      | `is_nan($val): bool`         | Returns true if NAN            |
 | `is_finite()`   | `is_finite($val): bool`      | Returns true if not INF/NAN    |
 | `is_infinite()` | `is_infinite($val): bool`    | Returns true if INF or -INF    |

@@ -158,10 +158,10 @@ File handles are PHP `resource` values, not integers. `gettype(fopen(...))` retu
 | `chown()` | `chown($filename, $user): bool` | Change owner by UID or user name. The group is left unchanged. |
 | `chgrp()` | `chgrp($filename, $group): bool` | Change group by GID or group name. The owner is left unchanged. |
 | `umask()` | `umask([$mask]): int` | Set the process umask and return the previous value. With no argument, returns the current umask without changing it (implemented by setting `umask(0)` and immediately restoring the original). |
-| `ftruncate()` | `ftruncate($handle, $size): bool` | Truncate or extend an open file to `$size` bytes. |
-| `fflush()` | `fflush($handle): bool` | Flush buffered output. Implemented as `fsync()` since elephc has no userspace stdio buffer. |
-| `fsync()` | `fsync($handle): bool` | Flush data and metadata to durable storage. |
-| `fdatasync()` | `fdatasync($handle): bool` | Flush data only. On macOS (which lacks a `fdatasync` libc entry point) this falls back to `fsync()`. |
+| `ftruncate()` | `ftruncate(resource $handle, $size): bool` | Truncate or extend an open file to `$size` bytes. |
+| `fflush()` | `fflush(resource $handle): bool` | Flush buffered output. Implemented as `fsync()` since elephc has no userspace stdio buffer. |
+| `fsync()` | `fsync(resource $handle): bool` | Flush data and metadata to durable storage. |
+| `fdatasync()` | `fdatasync(resource $handle): bool` | Flush data only. On macOS (which lacks a `fdatasync` libc entry point) this falls back to `fsync()`. |
 
 > All file-modification functions return `true` on success and `false` on failure.
 
