@@ -68,6 +68,7 @@ ifdef PLATFORM_MAC {
 
 | Flag | Description |
 |---|---|
+| `--target TARGET` | Compile for `macos-aarch64`, `linux-aarch64`, or `linux-x86_64` instead of auto-detecting the host target |
 | `--heap-size=BYTES` | Set heap buffer size (default 8MB, min 64KB) |
 | `--gc-stats` | Print GC allocation/free statistics at exit |
 | `--heap-debug` | Enable runtime heap verification (slow) |
@@ -76,3 +77,6 @@ ifdef PLATFORM_MAC {
 | `--timings` | Print per-phase compiler timings to stderr |
 | `--source-map` | Write a sidecar `.map` file next to generated assembly |
 | `--define SYMBOL` | Define compile-time symbol for `ifdef` |
+| `--link LIB` / `-lLIB` | Link an extra native library |
+| `--link-path DIR` / `-LDIR` | Add an extra native library search path |
+| `--framework NAME` | Link a macOS framework |

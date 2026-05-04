@@ -8,6 +8,7 @@ pub(super) fn collect_oop_warnings(stmts: &[Stmt], warnings: &mut Vec<CompileWar
                 collect_method_modifier_warnings(methods, warnings);
             }
             StmtKind::NamespaceBlock { body, .. } => collect_oop_warnings(body, warnings),
+            StmtKind::IncludeOnceGuard { body, .. } => collect_oop_warnings(body, warnings),
             _ => {}
         }
     }

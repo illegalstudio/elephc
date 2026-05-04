@@ -14,6 +14,10 @@ pub fn collect_local_vars(
             StmtKind::Synthetic(stmts) => {
                 collect_local_vars(stmts, ctx, sig);
             }
+            StmtKind::IncludeOnceGuard { body, .. } => {
+                collect_local_vars(body, ctx, sig);
+            }
+            StmtKind::IncludeOnceMark { .. } => {}
             StmtKind::Assign { name, value } => {
                 collect_assignment_expr_vars(value, ctx, sig);
                 if !ctx.variables.contains_key(name) {

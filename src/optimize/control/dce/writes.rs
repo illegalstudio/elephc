@@ -375,7 +375,10 @@ fn collect_written_names(stmt: &Stmt, written: &mut Vec<String>) {
         }
         StmtKind::While { body, .. }
         | StmtKind::DoWhile { body, .. }
-        | StmtKind::NamespaceBlock { body, .. } => collect_written_names_in_block(body, written),
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. } => {
+            collect_written_names_in_block(body, written)
+        }
         StmtKind::For {
             init,
             update,

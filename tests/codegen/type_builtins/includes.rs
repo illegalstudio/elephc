@@ -92,6 +92,173 @@ echo double(5);
 }
 
 #[test]
+fn test_include_once_skipped_branch_does_not_claim_file() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+if (false) {
+    include_once 'piece.php';
+}
+include_once 'piece.php';
+"#,
+            ),
+            ("piece.php", "<?php echo \"piece\";"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "piece");
+}
+
+#[test]
+fn test_include_once_in_loop_executes_file_once() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+$i = 0;
+while ($i < 3) {
+    include_once 'tick.php';
+    $i = $i + 1;
+}
+"#,
+            ),
+            ("tick.php", "<?php echo \"tick\";"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "tick");
+}
+
+#[test]
+fn test_require_once_in_function_is_global_once() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+function load_piece() {
+    require_once 'piece.php';
+}
+load_piece();
+load_piece();
+"#,
+            ),
+            ("piece.php", "<?php echo \"piece\";"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "piece");
+}
+
+#[test]
+fn test_require_once_in_method_is_global_once() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+class Loader {
+    public function load() {
+        require_once 'piece.php';
+    }
+}
+$loader = new Loader();
+$loader->load();
+$loader->load();
+"#,
+            ),
+            ("piece.php", "<?php echo \"piece\";"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "piece");
+}
+
+#[test]
+fn test_require_once_in_closure_is_global_once() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+$load = function() {
+    require_once 'piece.php';
+};
+$load();
+$load();
+"#,
+            ),
+            ("piece.php", "<?php echo \"piece\";"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "piece");
+}
+
+#[test]
+fn test_regular_include_in_closure_marks_later_include_once() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+$load = function() {
+    include 'piece.php';
+};
+$load();
+include_once 'piece.php';
+"#,
+            ),
+            ("piece.php", "<?php echo \"piece\";"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "piece");
+}
+
+#[test]
+fn test_regular_include_marks_later_include_once_declarations() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+include 'lib.php';
+include_once 'lib.php';
+echo seven();
+"#,
+            ),
+            ("lib.php", "<?php function seven() { return 7; }"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_skipped_regular_include_does_not_make_include_once_skip() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+if (false) {
+    include 'piece.php';
+}
+include_once 'piece.php';
+"#,
+            ),
+            ("piece.php", "<?php echo \"piece\";"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "piece");
+}
+
+#[test]
 fn test_include_nested() {
     // a.php includes b.php which includes c.php
     let out = compile_and_run_files(

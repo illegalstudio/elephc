@@ -141,7 +141,8 @@ fn collect_global_vars_in_body(stmts: &[Stmt], names: &mut HashSet<String>) {
             StmtKind::While { body, .. }
             | StmtKind::DoWhile { body, .. }
             | StmtKind::For { body, .. }
-            | StmtKind::Foreach { body, .. } => collect_global_vars_in_body(body, names),
+            | StmtKind::Foreach { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. } => collect_global_vars_in_body(body, names),
             StmtKind::Try {
                 try_body,
                 catches,
@@ -216,7 +217,8 @@ fn collect_static_vars_in_body(
             StmtKind::While { body, .. }
             | StmtKind::DoWhile { body, .. }
             | StmtKind::For { body, .. }
-            | StmtKind::Foreach { body, .. } => {
+            | StmtKind::Foreach { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. } => {
                 collect_static_vars_in_body(func_name, body, statics, global_env);
             }
             StmtKind::Try {
@@ -285,7 +287,8 @@ pub(super) fn collect_main_try_slots(stmts: &[Stmt], ctx: &mut Context) {
             }
             StmtKind::While { body, .. }
             | StmtKind::DoWhile { body, .. }
-            | StmtKind::Foreach { body, .. } => collect_main_try_slots(body, ctx),
+            | StmtKind::Foreach { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. } => collect_main_try_slots(body, ctx),
             StmtKind::For {
                 init, update, body, ..
             } => {

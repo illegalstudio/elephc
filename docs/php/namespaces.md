@@ -60,7 +60,8 @@ include_once 'utils.php';
 require_once 'lib.php';
 ```
 
-All resolved at compile time (inlined). Paths relative to including file.
+Paths are resolved at compile time and inlined. Paths are relative to the
+including file.
 
 | Form | Missing file | Already included |
 |---|---|---|
@@ -70,6 +71,12 @@ All resolved at compile time (inlined). Paths relative to including file.
 | `require_once` | Compile error | Skipped |
 
 Both `include 'f';` and `include('f');` syntax supported.
+
+`include_once` and `require_once` use a runtime guard per resolved file. The
+guard is shared across top-level code, functions, closures, methods, loops, and
+branches, so a file is marked as included only when execution reaches the
+include point. Skipped branches do not make a later `include_once` skip the
+file, and repeated calls or loop iterations do not re-run a `*_once` file.
 
 ### Path expressions
 
@@ -107,7 +114,7 @@ Rejected (compile error):
 
 `const` or `define()` calls inside functions, methods, loops, and branches are scoped to that resolved body during include expansion. They do not leak into the surrounding top-level include path resolver.
 
-**Other limitations:** Included files must start with `<?php`. Runtime-dynamic include paths are not supported by the current AOT resolver. Runtime-order-perfect `include_once` / `require_once` behavior inside functions and conditional control flow remains a future compatibility item.
+**Other limitations:** Included files must start with `<?php`. Runtime-dynamic include paths are not supported by the current AOT resolver. Function, class, interface, and trait declarations from included files are still discovered in resolver traversal order, so references can remain sensitive to source include order until include-graph declaration discovery is implemented.
 
 ## Constants
 ```php

@@ -24,6 +24,8 @@ pub(super) fn stmt_may_throw(stmt: &Stmt) -> bool {
 pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
     match &stmt.kind {
         StmtKind::Synthetic(stmts) => block_effect(stmts),
+        StmtKind::IncludeOnceMark { .. } => Effect::PURE.with_side_effects(),
+        StmtKind::IncludeOnceGuard { body, .. } => block_effect(body).with_side_effects(),
         StmtKind::Echo(expr) => expr_effect(expr).with_side_effects(),
         StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }

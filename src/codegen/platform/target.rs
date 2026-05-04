@@ -3,12 +3,10 @@ use super::toolchain::host_has_native_aarch64_toolchain;
 
 /// Target platform for code generation.
 ///
-/// elephc currently emits real AArch64 assembly only, but target selection is
-/// already split into platform and architecture so backend-specific work can
-/// grow without reintroducing "Linux => ARM64" assumptions. Platform still
-/// controls the syscall convention, relocation syntax, symbol naming, and
-/// struct layouts. On AArch64 Linux we currently reuse the existing same-ISA
-/// post-processing path from the macOS-flavoured backend.
+/// elephc emits target-specific assembly for the supported platform/architecture
+/// pairs while keeping OS concerns separate from ISA concerns. Platform controls
+/// syscall convention, relocation syntax, symbol naming, and struct layouts;
+/// architecture controls registers, calling convention, and runtime slices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
     MacOS,

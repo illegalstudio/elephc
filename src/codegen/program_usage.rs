@@ -48,6 +48,10 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
             StmtKind::NamespaceBlock { body, .. } => {
                 collect_required_class_names_in_body(body, names);
             }
+            StmtKind::IncludeOnceGuard { body, .. } => {
+                collect_required_class_names_in_body(body, names);
+            }
+            StmtKind::IncludeOnceMark { .. } => {}
             StmtKind::FunctionDecl { body, .. } => {
                 collect_required_class_names_in_body(body, names);
             }
@@ -480,7 +484,9 @@ fn stmt_uses_variable(stmt: &Stmt, needle: &str) -> bool {
                 || expr_uses_variable(index, needle)
                 || expr_uses_variable(value, needle)
         }
-        StmtKind::FunctionDecl { body, .. } | StmtKind::NamespaceBlock { body, .. } => {
+        StmtKind::FunctionDecl { body, .. }
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. } => {
             body.iter().any(|stmt| stmt_uses_variable(stmt, needle))
         }
         StmtKind::ClassDecl { methods, .. }
@@ -498,6 +504,7 @@ fn stmt_uses_variable(stmt: &Stmt, needle: &str) -> bool {
         }),
         StmtKind::Global { vars } => vars.iter().any(|name| name == needle),
         StmtKind::PackedClassDecl { .. }
+        | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Include { .. }
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }

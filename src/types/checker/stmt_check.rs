@@ -16,6 +16,13 @@ impl Checker {
                 }
                 Ok(())
             }
+            StmtKind::IncludeOnceMark { .. } => Ok(()),
+            StmtKind::IncludeOnceGuard { body, .. } => {
+                for stmt in body {
+                    self.check_stmt(stmt, env)?;
+                }
+                Ok(())
+            }
             StmtKind::IfDef { .. } => {
                 Err(CompileError::new(stmt.span, "Unresolved ifdef statement"))
             }

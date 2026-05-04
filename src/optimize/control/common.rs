@@ -261,7 +261,8 @@ fn stmt_has_level_sensitive_loop_exit(stmt: &Stmt) -> bool {
         StmtKind::While { body, .. }
         | StmtKind::DoWhile { body, .. }
         | StmtKind::For { body, .. }
-        | StmtKind::Foreach { body, .. } => block_has_level_sensitive_loop_exit(body),
+        | StmtKind::Foreach { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. } => block_has_level_sensitive_loop_exit(body),
         StmtKind::Switch { cases, default, .. } => {
             switch_has_level_sensitive_loop_exit(cases, default)
         }

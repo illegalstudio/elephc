@@ -178,6 +178,12 @@ fn collect_assignment_prelude_reads(
                 collect_assignment_prelude_reads(stmt, scope, warnings);
             }
         }
+        StmtKind::IncludeOnceGuard { body, .. } => {
+            for stmt in body {
+                collect_assignment_prelude_reads(stmt, scope, warnings);
+            }
+        }
+        StmtKind::IncludeOnceMark { .. } => {}
         StmtKind::Assign { value, .. } => collect_expr_reads(value, scope, warnings),
         _ => {}
     }
@@ -190,6 +196,12 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
                 collect_closure_warnings_in_stmt(stmt, warnings);
             }
         }
+        StmtKind::IncludeOnceGuard { body, .. } => {
+            for stmt in body {
+                collect_closure_warnings_in_stmt(stmt, warnings);
+            }
+        }
+        StmtKind::IncludeOnceMark { .. } => {}
         StmtKind::Echo(expr)
         | StmtKind::Throw(expr)
         | StmtKind::ExprStmt(expr)

@@ -52,6 +52,28 @@ pub(super) fn resolve_stmt_list(
                             stmt.span,
                         ));
                     }
+                    StmtKind::IncludeOnceMark { label } => {
+                        resolved.push(Stmt::new(
+                            StmtKind::IncludeOnceMark {
+                                label: label.clone(),
+                            },
+                            stmt.span,
+                        ));
+                    }
+                    StmtKind::IncludeOnceGuard { label, body } => {
+                        resolved.push(Stmt::new(
+                            StmtKind::IncludeOnceGuard {
+                                label: label.clone(),
+                                body: resolve_stmt_list(
+                                    body,
+                                    namespace.as_deref(),
+                                    &imports,
+                                    symbols,
+                                )?,
+                            },
+                            stmt.span,
+                        ));
+                    }
                     StmtKind::If {
                         condition,
                         then_body,

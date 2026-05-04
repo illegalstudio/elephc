@@ -2,6 +2,7 @@ mod assignments;
 mod arrays;
 mod control_flow;
 mod helpers;
+mod includes;
 mod io;
 mod null_coalesce_assign;
 mod storage;
@@ -67,6 +68,12 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             for stmt in stmts {
                 emit_stmt(stmt, emitter, ctx, data);
             }
+        }
+        StmtKind::IncludeOnceMark { label } => {
+            includes::emit_include_once_mark(label, emitter, data);
+        }
+        StmtKind::IncludeOnceGuard { label, body } => {
+            includes::emit_include_once_guard(label, body, emitter, ctx, data);
         }
         StmtKind::IfDef { .. } => {
             emitter.comment("WARNING: unresolved ifdef reached codegen");

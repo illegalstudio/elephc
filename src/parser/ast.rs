@@ -380,6 +380,13 @@ pub enum StmtKind {
         once: bool,
         required: bool,
     },
+    IncludeOnceMark {
+        label: String,
+    },
+    IncludeOnceGuard {
+        label: String,
+        body: Vec<Stmt>,
+    },
     Throw(Expr),
     Synthetic(Vec<Stmt>),
     Try {

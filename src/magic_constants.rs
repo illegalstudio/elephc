@@ -118,6 +118,11 @@ fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
     let span = stmt.span;
     let kind = match stmt.kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(walk_program(stmts, pass)),
+        StmtKind::IncludeOnceMark { label } => StmtKind::IncludeOnceMark { label },
+        StmtKind::IncludeOnceGuard { label, body } => StmtKind::IncludeOnceGuard {
+            label,
+            body: walk_program(body, pass),
+        },
         StmtKind::Echo(e) => StmtKind::Echo(walk_expr(e, pass)),
         StmtKind::Throw(e) => StmtKind::Throw(walk_expr(e, pass)),
         StmtKind::ExprStmt(e) => StmtKind::ExprStmt(walk_expr(e, pass)),

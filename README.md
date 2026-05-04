@@ -134,6 +134,9 @@ elephc --timings hello.php
 # Emit assembly and a simple source-map sidecar
 elephc --emit-asm --source-map hello.php
 
+# Run the front-end checks without writing assembly or a binary
+elephc --check hello.php
+
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
@@ -245,7 +248,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **Statements and literals**: `const` / `define()` constants, `global` declarations, `static` locals, `print` expressions, list unpacking, PHP numeric literal forms, heredoc / nowdoc strings
 - **Operators**: arithmetic, comparison, `instanceof`, logical, bitwise, ternary, null coalescing (`??`), assignment expressions for local and stabilized non-local targets, null coalescing assignment (`??=`), error control (`@`), and compound assignments
 - **Types**: union types (`int|string`), nullable (`?int`), `never` return type, `iterable` pseudo-type, inferred `resource|false` values for `fopen()` and `resource` values for standard streams, type casting, typed properties, typed function, method, closure, and arrow parameters and returns
-- **Modules**: namespaces, use imports, include/require/require_once, PHP magic constants
+- **Modules**: namespaces, use imports, include/require/include_once/require_once, PHP magic constants
 - **FFI**: extern functions, extern blocks, extern globals, extern classes, pointer builtins
 - **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`
 
@@ -274,7 +277,7 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-PHP source → Lexer → Parser (AST) → Magic constants (per-file) → Conditional (ifdef/--define) → Resolver (include + per-file constants for included files) → NameResolver (namespaces/use/FQNs) → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → Codegen → as + ld → native executable
+PHP source → Lexer → Parser (AST) → Magic constants (per-file) → Conditional (ifdef/--define) → Resolver (include/require inlining, per-file constants, once guards) → NameResolver (namespaces/use/FQNs) → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → Codegen → as + ld → native executable
 ```
 
 The compiler emits human-readable assembly for the selected target. You can inspect the `.s` file to see exactly what your PHP becomes:
@@ -346,7 +349,7 @@ src/
 ├── span.rs              # Source position tracking (line, col)
 ├── conditional.rs       # Build-time `ifdef` pass driven by --define
 ├── magic_constants.rs   # Per-file PHP magic constant lowering
-├── resolver.rs          # Include/require file resolution
+├── resolver.rs          # Include/require file resolution and once-guard lowering
 ├── runtime_cache.rs     # Preassembled runtime object cache
 ├── source_map.rs        # Assembly/source-map sidecar emission
 ├── termination.rs       # Structured terminal-effect analysis

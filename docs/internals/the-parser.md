@@ -113,6 +113,8 @@ Things that do something:
 | `Break(usize)` | `break;`, `break 2;` |
 | `Continue(usize)` | `continue;`, `continue 2;` |
 | `Include { path, once, required }` | `include 'file.php';` |
+| `IncludeOnceMark { label }` | Internal resolver lowering for regular `include` / `require`, marking the resolved file as loaded for later `*_once` guards |
+| `IncludeOnceGuard { label, body }` | Internal resolver lowering for `include_once` / `require_once`; codegen checks a per-file flag before emitting the guarded body |
 | `Throw(Expr)` | `throw new Exception("boom");` |
 | `Try { try_body, catches, finally_body }` | `try { ... } catch (Exception $e) { ... } finally { ... }` |
 | `ConstDecl { name, value }` | `const MAX = 100;` |
@@ -408,7 +410,7 @@ Statement parsing is simpler — after `parse()` has peeled off top-level `exter
 | `Return` | Return with optional expression |
 | `Break` | Break statement with optional positive integer level |
 | `Continue` | Continue statement with optional positive integer level |
-| `Include`/`Require` | Include statement (path is parsed as an expression and later folded by the resolver when it is a compile-time string) |
+| `Include` / `Require` / `IncludeOnce` / `RequireOnce` | Include statement (path is parsed as an expression and later folded by the resolver when it is a compile-time string) |
 | `Const` | Constant declaration (`const NAME = value;`) |
 | `Namespace` | Namespace declaration (`namespace App\Core;` or `namespace App\Core { ... }`) |
 | `Use` | Namespace import declaration (`use Foo\Bar;`, `use function Foo\bar as baz;`) |

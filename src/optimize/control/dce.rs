@@ -246,6 +246,17 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
         }],
+        StmtKind::IncludeOnceMark { label } => vec![Stmt {
+            kind: StmtKind::IncludeOnceMark { label },
+            span,
+        }],
+        StmtKind::IncludeOnceGuard { label, body } => vec![Stmt {
+            kind: StmtKind::IncludeOnceGuard {
+                label,
+                body: dce_block_with_guards(body, guards.clone()),
+            },
+            span,
+        }],
         StmtKind::If {
             condition,
             then_body,

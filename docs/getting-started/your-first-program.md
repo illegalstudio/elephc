@@ -90,13 +90,14 @@ When you run `elephc hello.php`, the compiler:
 
 1. **Lexes** the source into tokens
 2. **Parses** tokens into an AST (Abstract Syntax Tree)
-3. **Resolves** includes and namespaces
-4. **Folds constant expressions** that are already statically known
-5. **Type-checks** the program
-6. **Prunes dead constant control flow** after the checker has collected diagnostics
-7. **Generates** assembly for the selected target
-8. **Assembles** the `.s` file with `as`
-9. **Links** the `.o` file with `ld` into a native executable
+3. **Lowers** file-local magic constants and applies `ifdef` branches from `--define`
+4. **Resolves** `include` / `require` files, compile-time include paths, and `*_once` runtime guards
+5. **Resolves** namespaces, imports, and fully-qualified names
+6. **Folds** constant expressions that are already statically known
+7. **Type-checks** the program and collects non-fatal warnings
+8. **Optimizes** checked AST control flow through propagation, pruning, normalization, and dead-code elimination
+9. **Generates** assembly for the selected target
+10. **Assembles and links** the `.s` / `.o` files into a native executable
 
 The intermediate `.s` and `.o` files are cleaned up automatically. You're left with a single executable.
 

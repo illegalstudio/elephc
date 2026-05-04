@@ -4,6 +4,11 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
     let span = stmt.span;
     let kind = match stmt.kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(fold_block(stmts)),
+        StmtKind::IncludeOnceMark { label } => StmtKind::IncludeOnceMark { label },
+        StmtKind::IncludeOnceGuard { label, body } => StmtKind::IncludeOnceGuard {
+            label,
+            body: fold_block(body),
+        },
         StmtKind::Echo(expr) => StmtKind::Echo(fold_expr(expr)),
         StmtKind::Assign { name, value } => StmtKind::Assign {
             name,

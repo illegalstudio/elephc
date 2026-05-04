@@ -41,8 +41,8 @@ PHP source (.php)
      ▼
 ┌─────────┐
 │ Resolver │  src/resolver.rs
-│          │  Resolves include/require by inlining referenced files.
-│          │  Recursively parses and merges included ASTs.
+│          │  Resolves include/require by recursively parsing files.
+│          │  Inlines ASTs and lowers *_once forms to runtime guards.
 └────┬─────┘
      │
      ▼
@@ -134,7 +134,7 @@ src/
 ├── span.rs                    Source position (line, col)
 ├── magic_constants.rs         Per-file lowering for PHP magic constants
 ├── conditional.rs             Build-time `ifdef` pass
-├── resolver.rs                Include/require file resolution
+├── resolver.rs                Include/require file resolution and once-guard lowering
 ├── optimize.rs                Public optimizer entry points and effect context
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination
 ├── runtime_cache.rs           Cached shared runtime object preparation
@@ -206,6 +206,7 @@ src/
 │   │   ├── control_flow.rs    Control-flow dispatch
 │   │   ├── control_flow/      `branching/`, `foreach/`, `loops/`, `exceptions/`
 │   │   ├── helpers.rs         Shared statement-codegen helpers
+│   │   ├── includes.rs        Runtime guard flags for include_once/require_once
 │   │   ├── io.rs              Echo / print helpers
 │   │   ├── null_coalesce_assign.rs `??=` read-modify-write helpers for non-local targets
 │   │   ├── storage.rs         Global / static / extern-global dispatch
@@ -364,6 +365,7 @@ The runtime data emission in `src/codegen/runtime/data.rs` is split into `emit_r
 | Runtime diagnostics | `_rt_diag_suppression`, `_diag_*`, `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_enum_from_msg`, `_uncaught_exc_msg`, `_heap_dbg_*` | Suppressible warning state/text plus fatal error messages and heap-debug summary/failure strings |
 | GC statistics and cycle state | `_gc_allocs`, `_gc_frees`, `_gc_live`, `_gc_peak`, `_gc_collecting`, `_gc_release_suppressed` | Allocation/free/live-byte counters plus targeted-cycle-collector coordination flags |
 | Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_class_parent_ids` | Active handler stack, activation cleanup stack, current exception object, and parent links used for catch matching |
+| Include-once guards | `_include_once_<hash>` | Per-resolved-file loaded flags used by `include_once` / `require_once` runtime guards |
 | I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags` | Syscall-oriented C-string scratch buffers and EOF bookkeeping |
 | String/regex tables | `_fmt_g`, `_b64_encode_tbl`, `_b64_decode_tbl`, `_pcre_*` | Formatting and lookup tables for runtime helpers |
 | JSON/date tables | `_json_true`, `_json_false`, `_json_null`, `_day_names`, `_month_names` | Static data used by JSON and date routines |

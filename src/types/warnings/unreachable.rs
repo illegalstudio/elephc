@@ -32,7 +32,10 @@ pub(super) fn collect_unreachable_recursive(stmts: &[Stmt], warnings: &mut Vec<C
             }
             StmtKind::While { body, .. }
             | StmtKind::DoWhile { body, .. }
-            | StmtKind::Foreach { body, .. } => collect_unreachable_recursive(body, warnings),
+            | StmtKind::Foreach { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. } => {
+                collect_unreachable_recursive(body, warnings)
+            }
             StmtKind::For {
                 init, update, body, ..
             } => {

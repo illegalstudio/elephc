@@ -50,6 +50,17 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             let (stmts, next_env) = propagate_block(stmts, env);
             (Stmt::new(StmtKind::Synthetic(stmts), span), next_env)
         }
+        StmtKind::IncludeOnceMark { label } => (
+            Stmt::new(StmtKind::IncludeOnceMark { label }, span),
+            HashMap::new(),
+        ),
+        StmtKind::IncludeOnceGuard { label, body } => {
+            let (body, _) = propagate_block(body, HashMap::new());
+            (
+                Stmt::new(StmtKind::IncludeOnceGuard { label, body }, span),
+                HashMap::new(),
+            )
+        }
         StmtKind::Echo(expr) => {
             let expr = propagate_expr(expr, &env);
             let next_env = env_after_expr_side_effects(env, &[&expr]);

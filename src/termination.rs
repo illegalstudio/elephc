@@ -197,7 +197,9 @@ fn block_may_leave_current_switch_before_function_exit(stmts: &[Stmt]) -> bool {
 fn stmt_may_break_current_loop(stmt: &Stmt, breakable_depth_to_loop: usize) -> bool {
     match &stmt.kind {
         StmtKind::Break(level) => *level >= breakable_depth_to_loop,
-        StmtKind::Synthetic(stmts) | StmtKind::NamespaceBlock { body: stmts, .. } => stmts
+        StmtKind::Synthetic(stmts)
+        | StmtKind::NamespaceBlock { body: stmts, .. }
+        | StmtKind::IncludeOnceGuard { body: stmts, .. } => stmts
             .iter()
             .any(|stmt| stmt_may_break_current_loop(stmt, breakable_depth_to_loop)),
         StmtKind::If {
@@ -287,7 +289,9 @@ fn stmt_may_leave_current_switch(stmt: &Stmt, breakable_depth_to_switch: usize) 
         StmtKind::Break(level) | StmtKind::Continue(level) => {
             *level >= breakable_depth_to_switch
         }
-        StmtKind::Synthetic(stmts) | StmtKind::NamespaceBlock { body: stmts, .. } => stmts
+        StmtKind::Synthetic(stmts)
+        | StmtKind::NamespaceBlock { body: stmts, .. }
+        | StmtKind::IncludeOnceGuard { body: stmts, .. } => stmts
             .iter()
             .any(|stmt| stmt_may_leave_current_switch(stmt, breakable_depth_to_switch)),
         StmtKind::If {

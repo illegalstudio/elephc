@@ -240,6 +240,8 @@ pub(super) fn apply_stmt_callable_aliases(stmt: &Stmt, aliases: &mut HashMap<Str
         | StmtKind::DoWhile { .. }
         | StmtKind::For { .. }
         | StmtKind::Foreach { .. }
+        | StmtKind::IncludeOnceMark { .. }
+        | StmtKind::IncludeOnceGuard { .. }
         | StmtKind::Include { .. } => aliases.clear(),
         _ => {}
     }

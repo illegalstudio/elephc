@@ -96,7 +96,11 @@ In this example, there are no `ifdef` blocks, so the AST passes through unchange
 
 **File:** `src/resolver.rs`
 
-If the program had `include` or `require` statements, the resolver would parse those files, lower their file-local magic constants, and inline their ASTs. It also folds compile-time include path expressions, including namespace-aware `const`, `use const`, and `define()` references. In this example, there's nothing to resolve — the AST passes through unchanged.
+If the program had `include` or `require` statements, the resolver would parse those files, lower their file-local magic constants, and inline their ASTs. It also folds compile-time include path expressions, including namespace-aware `const`, `use const`, and `define()` references.
+
+For `include_once` and `require_once`, declarations are still hoisted into the compile-time AST so functions, classes, interfaces, traits, and constants remain visible to later AOT passes, while executable statements are wrapped in an internal runtime guard. That guard is shared per resolved file, so skipped branches, functions, closures, methods, and loop iterations follow PHP execution order instead of compile-time traversal order.
+
+In this example, there's nothing to resolve — the AST passes through unchanged.
 
 ## Phase 6: Name resolution
 
