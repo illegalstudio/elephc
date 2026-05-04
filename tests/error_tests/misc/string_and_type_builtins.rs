@@ -221,3 +221,9 @@ expect_builtin_arity_error!(
     "<?php is_numeric();",
     "is_numeric() takes exactly 1 argument"
 );
+
+expect_builtin_arity_error!(
+    test_error_is_iterable_wrong_args,
+    "<?php is_iterable();",
+    "is_iterable() takes exactly 1 argument"
+);

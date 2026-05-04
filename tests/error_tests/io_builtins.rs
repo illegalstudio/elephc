@@ -124,6 +124,30 @@ fn test_error_fstat_requires_resource_handle() {
 }
 
 #[test]
+fn test_error_stream_modify_builtins_wrong_args() {
+    for (source, message) in [
+        ("<?php ftruncate(1);", "ftruncate() takes exactly 2 arguments"),
+        ("<?php fsync();", "fsync() takes exactly 1 argument"),
+        ("<?php fflush();", "fflush() takes exactly 1 argument"),
+        ("<?php fdatasync();", "fdatasync() takes exactly 1 argument"),
+    ] {
+        expect_error(source, message);
+    }
+}
+
+#[test]
+fn test_error_stream_modify_builtins_require_resource_handle() {
+    for (source, message) in [
+        ("<?php ftruncate(1, 0);", "ftruncate() expects resource, got int"),
+        ("<?php fsync(1);", "fsync() expects resource, got int"),
+        ("<?php fflush(1);", "fflush() expects resource, got int"),
+        ("<?php fdatasync(1);", "fdatasync() expects resource, got int"),
+    ] {
+        expect_error(source, message);
+    }
+}
+
+#[test]
 fn test_error_file_get_contents_wrong_args() {
     expect_error(
         "<?php file_get_contents();",
@@ -328,6 +352,11 @@ fn test_error_dirname_wrong_args() {
 }
 
 #[test]
+fn test_error_basename_wrong_args() {
+    expect_error("<?php basename();", "basename() takes 1 or 2 arguments");
+}
+
+#[test]
 fn test_error_dirname_rejects_static_levels_below_one() {
     expect_error(
         r#"<?php dirname("/tmp/file", 0);"#,
@@ -357,6 +386,11 @@ echo pathinfo("foo.txt", $flag);
 "#,
         "pathinfo() flag must be int",
     );
+}
+
+#[test]
+fn test_error_realpath_wrong_args() {
+    expect_error("<?php realpath();", "realpath() takes exactly 1 argument");
 }
 
 #[test]
@@ -392,6 +426,11 @@ fn test_error_file_ownership_builtins_reject_invalid_principals() {
         r#"<?php chgrp("file.txt", null);"#,
         "chgrp() owner/group must be int or string",
     );
+}
+
+#[test]
+fn test_error_umask_wrong_args() {
+    expect_error("<?php umask(1, 2);", "umask() takes 0 or 1 arguments");
 }
 
 // --- v0.6: switch/match/array errors ---

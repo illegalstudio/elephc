@@ -220,9 +220,12 @@ if ($x === 3) {
 | `string` | `"hello\n"`, `'raw'` |
 | `bool` | `true`, `false` |
 | `null` | `null` |
+| `void` | `function log_it(): void { echo "ok"; }` |
+| `never` | `function fail(): never { throw new Exception("boom"); }` |
 | `mixed` | `mixed $x = 42;`, `function show(mixed $x): string { ... }` |
 | `iterable` | `function walk(iterable $items): iterable { ... }` (PHP `array \| Traversable` pseudo-type; accepts indexed arrays, associative arrays, `Iterator`, and `IteratorAggregate`) |
 | `resource` | Successful `$f = fopen("file.txt", "r")`, `STDIN`, `STDOUT`, `STDERR` |
+| `callable` | `function apply(callable $fn): int { return $fn(); }` |
 | `array` | `[1, 2, 3]`, `["key" => "value"]`, `[[1,2],[3,4]]` (indexed, associative, multi-dimensional, copy-on-write, union with `+`) |
 | `object` | `new Foo()`, `$user->name` |
 | `pointer` | `ptr($x)`, `ptr_null()`, `ptr_cast<int>($p)` |
@@ -305,6 +308,8 @@ The static type system tracks these runtime shapes at compile time:
 - **Str** — pointer + length pair
 - **Bool** — `true`/`false`, coerces to 0/1
 - **Void / null** — null sentinel value, coerces to 0/""
+- **Never** — non-returning function/method/closure return type
+- **Iterable** — type-erased array / `Traversable` pseudo-type
 - **Array** — indexed arrays with inferred element type
 - **AssocArray** — associative arrays with key/value types
 - **Buffer** — fixed-size contiguous `buffer<T>` storage for hot-path values
@@ -313,6 +318,7 @@ The static type system tracks these runtime shapes at compile time:
 - **Object** — heap-allocated class instances
 - **Packed** — nominal packed-record metadata used with pointers and buffers
 - **Pointer** — raw 64-bit addresses, optionally tagged via `ptr_cast<T>()`
+- **Resource** — stream handles such as successful `fopen()` results and standard streams
 - **Union** — declared union types lowered to boxed tagged runtime payloads
 
 A variable's type is set at first assignment. Compatible types (int/float/bool/null) can be reassigned between each other.
