@@ -93,6 +93,10 @@ Accepted forms (foldable at compile time):
 - References to `const` / `define()`-d string constants — the constant must be defined **before** the include statement (ordering matches PHP runtime semantics)
 - Namespace-aware constant references, including `use const` aliases
 
+Runtime-dynamic path expressions are rejected during include resolution. The
+AOT compiler only has the source files available at compile time, so it cannot
+ask the generated binary to discover and inline new PHP files at runtime.
+
 Rejected (compile error):
 
 - Variables (`$path`)

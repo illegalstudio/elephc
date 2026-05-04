@@ -48,6 +48,75 @@ fn test_error_include_non_string_path() {
         "message did not mention compile-time-constant string: {}",
         err.message
     );
+    assert!(
+        !err.message.contains("Runtime-dynamic"),
+        "static non-string path should not be reported as runtime-dynamic: {}",
+        err.message
+    );
+}
+
+fn expect_runtime_dynamic_include_path_error(src: &str, expected_detail: &str) {
+    let err = resolver_error(src);
+    assert!(
+        err.message
+            .contains("Runtime-dynamic include/require path expressions are not supported"),
+        "message did not reject runtime-dynamic include paths: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains(expected_detail),
+        "message '{}' did not contain '{}'",
+        err.message,
+        expected_detail
+    );
+}
+
+#[test]
+fn test_error_include_variable_path_is_explicitly_rejected() {
+    expect_runtime_dynamic_include_path_error(
+        "<?php function load($path) { require $path; }",
+        "variable `$path` is resolved at runtime",
+    );
+}
+
+#[test]
+fn test_error_include_concat_variable_path_reports_runtime_part() {
+    expect_runtime_dynamic_include_path_error(
+        "<?php function load($path) { require 'lib/' . $path; }",
+        "variable `$path` is resolved at runtime",
+    );
+}
+
+#[test]
+fn test_error_include_once_variable_path_is_explicitly_rejected() {
+    expect_runtime_dynamic_include_path_error(
+        "<?php function load($path) { include_once $path; }",
+        "variable `$path` is resolved at runtime",
+    );
+}
+
+#[test]
+fn test_error_include_function_call_path_is_explicitly_rejected() {
+    expect_runtime_dynamic_include_path_error(
+        "<?php function pick() { return 'helper.php'; } require pick();",
+        "function call `pick()` is resolved at runtime",
+    );
+}
+
+#[test]
+fn test_error_include_ternary_path_is_explicitly_rejected() {
+    expect_runtime_dynamic_include_path_error(
+        "<?php require true ? 'debug.php' : 'prod.php';",
+        "ternary path selection is resolved at runtime",
+    );
+}
+
+#[test]
+fn test_error_include_property_path_is_explicitly_rejected() {
+    expect_runtime_dynamic_include_path_error(
+        "<?php require $config->path;",
+        "property access `->path` is resolved at runtime",
+    );
 }
 
 // --- INF/NAN function errors ---
