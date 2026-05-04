@@ -4,6 +4,10 @@
 require_once 'math.php';
 require_once 'greet.php';
 
+for ($i = 0; $i < 2; $i = $i + 1) {
+    require_once 'bootstrap.php';
+}
+
 hello("World");
 
 echo "3 + 4 = " . add(3, 4) . "\n";
