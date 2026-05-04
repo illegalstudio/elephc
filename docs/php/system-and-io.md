@@ -86,7 +86,7 @@ Uses POSIX extended regex with common PCRE shorthand translation (`\s`, `\d`, `\
 | `fgetcsv()` | `fgetcsv(resource $handle [, $sep]): array` | Read CSV line |
 | `fputcsv()` | `fputcsv(resource $handle, $fields [, $sep]): int` | Write CSV line |
 
-File handles are PHP `resource` values, not integers. `gettype(fopen(...))` returns `"resource"` on success and `"boolean"` on failure, `gettype(STDIN)` returns `"resource"`, and passing a plain `int` to stream functions is rejected. Failed `fopen()` calls, including invalid or empty modes, emit a suppressible runtime warning and return `false`; passing that `false` to stream functions is a fatal runtime TypeError, matching PHP's guard-before-use pattern.
+File handles are PHP `resource` values, not integers. `gettype(fopen(...))` returns `"resource"` on success and `"boolean"` on failure, `gettype(STDIN)` returns `"resource"`, and passing a plain `int` to stream functions is rejected. Failed `fopen()` calls, including invalid or empty modes, emit a suppressible runtime warning and return `false`; passing that `false` to stream functions is a fatal runtime TypeError with PHP-style "false given" wording, matching PHP's guard-before-use pattern.
 
 ## File system
 

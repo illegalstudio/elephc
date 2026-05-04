@@ -187,8 +187,26 @@ echo "done";
     );
     assert!(!out.success, "program unexpectedly succeeded");
     assert!(
-        out.stderr.contains("TypeError: fgets()"),
+        out.stderr.contains("TypeError: fgets()") && out.stderr.contains("false given"),
         "expected fgets TypeError, got stderr={}",
+        out.stderr
+    );
+}
+
+#[test]
+fn test_stream_type_error_reports_runtime_string_type() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function identity(mixed $value): mixed {
+    return $value;
+}
+fgets(identity("not a stream"));
+"#,
+    );
+    assert!(!out.success, "program unexpectedly succeeded");
+    assert!(
+        out.stderr.contains("TypeError: fgets()") && out.stderr.contains("string given"),
+        "expected string TypeError, got stderr={}",
         out.stderr
     );
 }

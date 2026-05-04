@@ -263,7 +263,7 @@ fstat($f);
     );
     assert!(!out.success, "program unexpectedly succeeded");
     assert!(
-        out.stderr.contains("TypeError: fstat()"),
+        out.stderr.contains("TypeError: fstat()") && out.stderr.contains("false given"),
         "expected fstat TypeError, got stderr={}",
         out.stderr
     );
