@@ -36,6 +36,7 @@ impl Checker {
                 PhpType::Str
                 | PhpType::Int
                 | PhpType::Bool
+                | PhpType::Resource(_)
                 | PhpType::Pointer(_)
                 | PhpType::Buffer(_)
                 | PhpType::Callable => {

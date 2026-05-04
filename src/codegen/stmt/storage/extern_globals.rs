@@ -8,6 +8,7 @@ pub(super) fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &P
     match ty {
         PhpType::Bool
         | PhpType::Int
+        | PhpType::Resource(_)
         | PhpType::Pointer(_)
         | PhpType::Buffer(_)
         | PhpType::Packed(_)
@@ -43,6 +44,7 @@ pub(super) fn emit_extern_global_load(emitter: &mut Emitter, name: &str, ty: &Ph
     match ty {
         PhpType::Bool
         | PhpType::Int
+        | PhpType::Resource(_)
         | PhpType::Pointer(_)
         | PhpType::Buffer(_)
         | PhpType::Packed(_)

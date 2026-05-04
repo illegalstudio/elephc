@@ -31,6 +31,8 @@ pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_cast_bool_from_array");                // arrays are truthy when non-empty
     emitter.instruction("cmp x0, #5");                                          // does the mixed payload hold an associative array?
     emitter.instruction("b.eq __rt_mixed_cast_bool_from_array");                // hashes are truthy when non-empty
+    emitter.instruction("cmp x0, #9");                                          // does the mixed payload hold a resource?
+    emitter.instruction("b.eq __rt_mixed_cast_bool_from_resource");             // resources are always truthy
     emitter.instruction("mov x0, #0");                                          // null and unsupported payloads are falsy for now
     emitter.instruction("b __rt_mixed_cast_bool_done");                         // return the normalized boolean result
 
@@ -66,6 +68,10 @@ pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x1]");                                        // load the current container element count from the header
     emitter.instruction("cmp x0, #0");                                          // compare the element count against zero
     emitter.instruction("cset x0, ne");                                         // containers are truthy when non-empty
+    emitter.instruction("b __rt_mixed_cast_bool_done");                         // return the container truthiness result
+
+    emitter.label("__rt_mixed_cast_bool_from_resource");
+    emitter.instruction("mov x0, #1");                                          // resources are always truthy
 
     emitter.label("__rt_mixed_cast_bool_done");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
@@ -94,6 +100,8 @@ fn emit_mixed_cast_bool_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_cast_bool_from_array_linux_x86_64");     // arrays are truthy when non-empty
     emitter.instruction("cmp rax, 5");                                          // does the mixed payload hold an associative array?
     emitter.instruction("je __rt_mixed_cast_bool_from_array_linux_x86_64");     // hashes are truthy when non-empty
+    emitter.instruction("cmp rax, 9");                                          // does the mixed payload hold a resource?
+    emitter.instruction("je __rt_mixed_cast_bool_from_resource_linux_x86_64");  // resources are always truthy
     emitter.instruction("mov rax, 0");                                          // null and unsupported payloads are falsy for now
     emitter.instruction("jmp __rt_mixed_cast_bool_done_linux_x86_64");          // return the normalized boolean result
 
@@ -137,6 +145,10 @@ fn emit_mixed_cast_bool_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // compare the container element count against zero
     emitter.instruction("setne al");                                            // containers are truthy when non-empty
     emitter.instruction("movzx rax, al");                                       // normalize the boolean result back to a full integer register
+    emitter.instruction("jmp __rt_mixed_cast_bool_done_linux_x86_64");          // return the container truthiness result
+
+    emitter.label("__rt_mixed_cast_bool_from_resource_linux_x86_64");
+    emitter.instruction("mov rax, 1");                                          // resources are always truthy
 
     emitter.label("__rt_mixed_cast_bool_done_linux_x86_64");
     emitter.instruction("add rsp, 16");                                         // release the aligned temporary slot reserved for nested helper calls

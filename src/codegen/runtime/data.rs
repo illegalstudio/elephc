@@ -69,6 +69,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".globl _heap_dbg_live_blocks_short_label\n_heap_dbg_live_blocks_short_label:\n    .ascii \"live_blocks=\"\n");
     out.push_str(".globl _heap_dbg_clean_label\n_heap_dbg_clean_label:\n    .ascii \"clean\\n\"\n");
     out.push_str(".globl _heap_dbg_newline\n_heap_dbg_newline:\n    .ascii \"\\n\"\n");
+    out.push_str(".globl _resource_id_prefix\n_resource_id_prefix:\n    .ascii \"Resource id #\"\n");
     out.push_str(".globl _fmt_g\n_fmt_g:\n    .asciz \"%.14G\"\n");
     out.push_str(".globl _b64_encode_tbl\n_b64_encode_tbl:\n    .ascii \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"\n");
     out.push_str(".globl _b64_decode_tbl\n_b64_decode_tbl:\n");
@@ -395,6 +396,7 @@ pub(crate) fn emit_runtime_data_user(
                         PhpType::Mixed => 7,
                         PhpType::Union(_) => 7,
                         PhpType::Iterable => 7,
+                        PhpType::Resource(_) => 9,
                         PhpType::Callable
                         | PhpType::Pointer(_)
                         | PhpType::Buffer(_)

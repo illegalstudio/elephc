@@ -13,6 +13,7 @@ pub(super) fn hash_value_type_tag(ty: &PhpType) -> u8 {
         PhpType::Union(_) => 7,
         PhpType::Iterable => 7,
         PhpType::Void => 8,
+        PhpType::Resource(_) => 9,
         PhpType::Callable | PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) | PhpType::Never => 0,
     }
 }

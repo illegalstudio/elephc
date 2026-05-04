@@ -119,6 +119,7 @@ fn pop_saved_result_value(emitter: &mut Emitter, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Bool
         | PhpType::Int
+        | PhpType::Resource(_)
         | PhpType::Iterable
         | PhpType::Mixed
         | PhpType::Union(_)

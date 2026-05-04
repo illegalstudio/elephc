@@ -58,6 +58,18 @@ pub(super) fn collect_constants(
         "FNM_CASEFOLD".to_string(),
         (ExprKind::IntLiteral(16), PhpType::Int),
     );
+    constants.insert(
+        "STDIN".to_string(),
+        (ExprKind::IntLiteral(0), PhpType::stream_resource()),
+    );
+    constants.insert(
+        "STDOUT".to_string(),
+        (ExprKind::IntLiteral(1), PhpType::stream_resource()),
+    );
+    constants.insert(
+        "STDERR".to_string(),
+        (ExprKind::IntLiteral(2), PhpType::stream_resource()),
+    );
     for stmt in program {
         match &stmt.kind {
             StmtKind::ConstDecl { name, value } => {

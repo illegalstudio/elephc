@@ -33,5 +33,5 @@ pub fn emit(
             abi::emit_call_label(emitter, "__rt_fopen");                        // open the file through the target-aware runtime helper
         }
     }
-    Some(PhpType::Int)
+    Some(PhpType::stream_resource())
 }

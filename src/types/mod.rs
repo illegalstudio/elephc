@@ -30,10 +30,26 @@ pub enum PhpType {
     Object(String),
     Packed(String),
     Pointer(Option<String>), // None = opaque ptr, Some("Class") = typed ptr<Class>
+    Resource(Option<String>), // None = generic resource, Some("stream") = file/stdio stream
     Union(Vec<PhpType>),
 }
 
 impl PhpType {
+    pub fn stream_resource() -> PhpType {
+        PhpType::Resource(Some("stream".to_string()))
+    }
+
+    pub fn resource_types_compatible(expected: &PhpType, actual: &PhpType) -> bool {
+        match (expected, actual) {
+            (PhpType::Resource(None), PhpType::Resource(_))
+            | (PhpType::Resource(_), PhpType::Resource(None)) => true,
+            (PhpType::Resource(Some(expected)), PhpType::Resource(Some(actual))) => {
+                expected == actual
+            }
+            _ => false,
+        }
+    }
+
     /// Size in bytes on the stack.
     pub fn stack_size(&self) -> usize {
         match self {
@@ -52,6 +68,7 @@ impl PhpType {
             PhpType::Object(_) => 8,         // pointer to heap
             PhpType::Packed(_) => 8,         // metadata-only nominal type, usually accessed by pointer
             PhpType::Pointer(_) => 8,        // 64-bit address
+            PhpType::Resource(_) => 8,       // runtime resource id / native handle
             PhpType::Union(_) => 8,          // boxed runtime-tagged payload (same storage as Mixed)
         }
     }
@@ -74,6 +91,7 @@ impl PhpType {
             PhpType::Object(_) => 1,
             PhpType::Packed(_) => 1,
             PhpType::Pointer(_) => 1,
+            PhpType::Resource(_) => 1,
             PhpType::Union(_) => 1,
         }
     }
@@ -102,6 +120,7 @@ impl PhpType {
     pub fn codegen_repr(&self) -> PhpType {
         match self {
             PhpType::Union(_) => PhpType::Mixed,
+            PhpType::Resource(_) => PhpType::Int,
             PhpType::Never => PhpType::Void, // never should not be materialized; fallback to void sentinel
             _ => self.clone(),
         }
@@ -194,6 +213,8 @@ impl fmt::Display for PhpType {
             PhpType::Packed(name) => write!(f, "packed {}", name),
             PhpType::Pointer(Some(name)) => write!(f, "ptr<{}>", name),
             PhpType::Pointer(None) => write!(f, "ptr"),
+            PhpType::Resource(Some(kind)) => write!(f, "resource<{}>", kind),
+            PhpType::Resource(None) => write!(f, "resource"),
             PhpType::Union(members) => {
                 for (i, member) in members.iter().enumerate() {
                     if i > 0 {
@@ -416,7 +437,11 @@ pub fn packed_type_size(
     packed_classes: &HashMap<String, PackedClassInfo>,
 ) -> Option<usize> {
     match ty {
-        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Pointer(_) => Some(8),
+        PhpType::Int
+        | PhpType::Float
+        | PhpType::Bool
+        | PhpType::Pointer(_)
+        | PhpType::Resource(_) => Some(8),
         PhpType::Packed(name) => packed_classes.get(name).map(|info| info.total_size),
         _ => None,
     }

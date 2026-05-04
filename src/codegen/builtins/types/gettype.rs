@@ -115,6 +115,7 @@ pub fn emit(
         let (null_label, null_len) = data.add_string(b"NULL");
         let (array_label, array_len) = data.add_string(b"array");
         let (object_label, object_len) = data.add_string(b"object");
+        let (resource_label, resource_len) = data.add_string(b"resource");
         let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
         let integer_case = ctx.next_label("builtin_gettype_mixed_integer");
         let double_case = ctx.next_label("builtin_gettype_mixed_double");
@@ -123,6 +124,7 @@ pub fn emit(
         let null_case = ctx.next_label("builtin_gettype_mixed_null");
         let array_case = ctx.next_label("builtin_gettype_mixed_array");
         let object_case = ctx.next_label("builtin_gettype_mixed_object");
+        let resource_case = ctx.next_label("builtin_gettype_mixed_resource");
         let done = ctx.next_label("builtin_gettype_mixed_done");
 
         // -- mixed gettype() unwraps the payload and dispatches on its concrete runtime tag --
@@ -143,6 +145,8 @@ pub fn emit(
                 emitter.instruction(&format!("b.eq {}", array_case));           // associative arrays also map to PHP's array type name
                 emitter.instruction("cmp x0, #6");                              // check whether the unboxed mixed tag denotes an object payload
                 emitter.instruction(&format!("b.eq {}", object_case));          // objects map to PHP's object type name
+                emitter.instruction("cmp x0, #9");                              // check whether the unboxed mixed tag denotes a resource payload
+                emitter.instruction(&format!("b.eq {}", resource_case));        // resources map to PHP's resource type name
                 emitter.instruction(&format!("b {}", null_case));               // null and unknown tags fall back to PHP's NULL type name
             }
             Arch::X86_64 => {
@@ -160,6 +164,8 @@ pub fn emit(
                 emitter.instruction(&format!("je {}", array_case));             // associative arrays also map to PHP's array type name
                 emitter.instruction("cmp rax, 6");                              // check whether the unboxed mixed tag denotes an object payload
                 emitter.instruction(&format!("je {}", object_case));            // objects map to PHP's object type name
+                emitter.instruction("cmp rax, 9");                              // check whether the unboxed mixed tag denotes a resource payload
+                emitter.instruction(&format!("je {}", resource_case));          // resources map to PHP's resource type name
                 emitter.instruction(&format!("jmp {}", null_case));             // null and unknown tags fall back to PHP's NULL type name
             }
         }
@@ -247,9 +253,22 @@ pub fn emit(
         match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction(&format!("mov {}, #{}", len_reg, object_len)); // load the object type-name byte length into the active AArch64 string-length result register
+                emitter.instruction(&format!("b {}", done));                    // finish after selecting the object type string on AArch64
             }
             Arch::X86_64 => {
                 emitter.instruction(&format!("mov {}, {}", len_reg, object_len)); // load the object type-name byte length into the active x86_64 string-length result register
+                emitter.instruction(&format!("jmp {}", done));                  // finish after selecting the object type string on x86_64
+            }
+        }
+
+        emitter.label(&resource_case);
+        abi::emit_symbol_address(emitter, ptr_reg, &resource_label);            // materialize the resource type-name literal in the active string-pointer result register
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("mov {}, #{}", len_reg, resource_len)); // load the resource type-name byte length into the active AArch64 string-length result register
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("mov {}, {}", len_reg, resource_len)); // load the resource type-name byte length into the active x86_64 string-length result register
             }
         }
         emitter.label(&done);
@@ -268,6 +287,7 @@ pub fn emit(
         PhpType::Pointer(_) => b"pointer".as_slice(),
         PhpType::Buffer(_) => b"buffer".as_slice(),
         PhpType::Packed(_) => b"packed".as_slice(),
+        PhpType::Resource(_) => b"resource".as_slice(),
         PhpType::Iterable => unreachable!("iterable handled above via runtime heap-kind dispatch"),
         PhpType::Mixed | PhpType::Union(_) => unreachable!("mixed handled above"),
     };

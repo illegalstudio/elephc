@@ -539,6 +539,7 @@ pub(super) fn infer_local_type(
                 "strpos" | "strrpos" | "array_search" | "file_get_contents" | "fileatime"
                 | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
                 | "filetype" | "stat" | "lstat" | "fstat" => PhpType::Mixed,
+                "fopen" => PhpType::stream_resource(),
                 "pathinfo" => infer_pathinfo_type(args),
                 "abs" => {
                     if !args.is_empty() {

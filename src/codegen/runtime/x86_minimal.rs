@@ -37,6 +37,8 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_ksort(emitter);
     arrays::emit_natsort(emitter);
     strings::emit_itoa(emitter);
+    strings::emit_resource_to_string(emitter);
+    strings::emit_resource_write_stdout(emitter);
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
     strings::emit_atoi(emitter);

@@ -156,7 +156,7 @@ pub fn emit_expr(
         ExprKind::ClosureCall { var, args } => emit_closure_call(var, args, emitter, ctx, data),
         ExprKind::ExprCall { callee, args } => emit_expr_call(callee, args, emitter, ctx, data),
         ExprKind::ConstRef(name) => {
-            let (value, _ty) = match ctx.constants.get(name.as_str()) {
+            let (value, ty) = match ctx.constants.get(name.as_str()) {
                 Some(c) => c.clone(),
                 None => {
                     emitter.comment(&format!("WARNING: undefined constant {}", name));
@@ -164,7 +164,8 @@ pub fn emit_expr(
                 }
             };
             let synthetic_expr = Expr::new(value, expr.span);
-            emit_expr(&synthetic_expr, emitter, ctx, data)
+            emit_expr(&synthetic_expr, emitter, ctx, data);
+            ty
         }
         ExprKind::EnumCase { enum_name, case_name } => {
             objects::emit_enum_case(enum_name.as_str(), case_name, emitter, ctx)

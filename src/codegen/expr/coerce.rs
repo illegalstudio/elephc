@@ -17,6 +17,10 @@ pub(super) fn coerce_to_string(
             // -- convert integer in x0 to string in x1/x2 --
             abi::emit_call_label(emitter, "__rt_itoa");                         // runtime: integer-to-ASCII string conversion
         }
+        PhpType::Resource(_) => {
+            // -- convert resource in x0/rax to PHP's display string --
+            abi::emit_call_label(emitter, "__rt_resource_to_string");           // runtime: resource-to-display-string conversion
+        }
         PhpType::Float => {
             // -- convert float in d0 to string in x1/x2 --
             abi::emit_call_label(emitter, "__rt_ftoa");                         // runtime: float-to-ASCII string conversion
@@ -252,6 +256,16 @@ pub(super) fn coerce_to_truthiness(emitter: &mut Emitter, ctx: &mut Context, ty:
                 emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // compare the normalized scalar/pointer value against zero
                 emitter.instruction("setne al");                                // produce a boolean byte when the scalar/pointer value is non-zero
                 emitter.instruction("movzx rax, al");                           // widen the boolean byte into the canonical integer result register
+            }
+        }
+    } else if matches!(ty, PhpType::Resource(_)) {
+        // -- PHP resources are truthy regardless of their underlying native handle value --
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("mov x0, #1");                              // resources always coerce to true
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rax, 1");                              // resources always coerce to true
             }
         }
     } else if matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable) {

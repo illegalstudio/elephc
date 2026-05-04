@@ -8,8 +8,8 @@ use super::registers::{float_result_reg, int_result_reg, string_result_regs};
 
 pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
-        PhpType::Bool | PhpType::Int => {
-            store_at_offset(emitter, int_result_reg(emitter), offset);                  // store int/bool to stack
+        PhpType::Bool | PhpType::Int | PhpType::Resource(_) => {
+            store_at_offset(emitter, int_result_reg(emitter), offset);                  // store scalar integer-like value to stack
         }
         PhpType::Float => {
             store_at_offset(emitter, float_result_reg(emitter), offset);                // store float to stack
@@ -78,8 +78,8 @@ pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
 
 pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
-        PhpType::Bool | PhpType::Int => {
-            load_at_offset(emitter, int_result_reg(emitter), offset);                   // load int/bool from stack
+        PhpType::Bool | PhpType::Int | PhpType::Resource(_) => {
+            load_at_offset(emitter, int_result_reg(emitter), offset);                   // load scalar integer-like value from stack
         }
         PhpType::Float => {
             load_at_offset(emitter, float_result_reg(emitter), offset);                 // load float from stack
@@ -215,6 +215,9 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
         PhpType::Bool | PhpType::Int => {
             emit_call_label(emitter, "__rt_itoa");
             emit_write_current_string_stdout(emitter);
+        }
+        PhpType::Resource(_) => {
+            emit_call_label(emitter, "__rt_resource_write_stdout");
         }
         PhpType::Float => {
             emit_call_label(emitter, "__rt_ftoa");

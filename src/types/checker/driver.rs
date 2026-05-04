@@ -184,6 +184,9 @@ impl Checker {
         constants.insert("FNM_PATHNAME".to_string(), PhpType::Int);
         constants.insert("FNM_PERIOD".to_string(), PhpType::Int);
         constants.insert("FNM_CASEFOLD".to_string(), PhpType::Int);
+        constants.insert("STDIN".to_string(), PhpType::stream_resource());
+        constants.insert("STDOUT".to_string(), PhpType::stream_resource());
+        constants.insert("STDERR".to_string(), PhpType::stream_resource());
 
         Self {
             target_platform,

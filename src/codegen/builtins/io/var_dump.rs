@@ -126,6 +126,24 @@ fn emit_var_dump_bool(emitter: &mut Emitter, ctx: &mut Context, data: &mut DataS
     emitter.label(&done);
 }
 
+fn emit_var_dump_resource(emitter: &mut Emitter, data: &mut DataSection) {
+    let result_reg = abi::int_result_reg(emitter);
+    abi::emit_push_reg(emitter, result_reg);                                    // preserve the native resource payload before prefix writes clobber the result register
+    emit_write_literal(emitter, data, b"resource(");
+    abi::emit_pop_reg(emitter, result_reg);                                     // restore the native resource payload for display-id formatting
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("add x0, x0, #1");                              // convert the native resource payload into the 1-based display id
+        }
+        Arch::X86_64 => {
+            emitter.instruction("add rax, 1");                                  // convert the native resource payload into the 1-based display id
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_itoa");                                 // convert the resource display id to decimal text
+    emit_write_current_string(emitter);                                         // write the converted resource id to stdout
+    emit_write_literal(emitter, data, b") of type (stream)\n");
+}
+
 fn emit_var_dump_null(emitter: &mut Emitter, data: &mut DataSection) {
     emit_write_literal(emitter, data, b"NULL\n");
 }
@@ -225,6 +243,7 @@ pub fn emit(
         PhpType::Float => emit_var_dump_float(emitter, data),
         PhpType::Str => emit_var_dump_string(emitter, data),
         PhpType::Bool => emit_var_dump_bool(emitter, ctx, data),
+        PhpType::Resource(_) => emit_var_dump_resource(emitter, data),
         PhpType::Void | PhpType::Never => emit_var_dump_null(emitter, data),
         PhpType::Iterable => {
             // Iterable values are raw heap pointers. Probe the heap kind and reuse
@@ -278,6 +297,7 @@ pub fn emit(
             let string_case = ctx.next_label("vd_mixed_string");
             let float_case = ctx.next_label("vd_mixed_float");
             let bool_case = ctx.next_label("vd_mixed_bool");
+            let resource_case = ctx.next_label("vd_mixed_resource");
             let array_case = ctx.next_label("vd_mixed_array");
             let object_case = ctx.next_label("vd_mixed_object");
             let null_case = ctx.next_label("vd_mixed_null");
@@ -294,6 +314,8 @@ pub fn emit(
                     emit_branch_if_eq(emitter, &float_case);                    // floats reuse the ordinary float var_dump formatter
                     emitter.instruction("cmp x0, #3");                          // does the mixed payload hold a bool?
                     emit_branch_if_eq(emitter, &bool_case);                     // bools reuse the ordinary bool var_dump formatter
+                    emitter.instruction("cmp x0, #9");                          // does the mixed payload hold a resource?
+                    emit_branch_if_eq(emitter, &resource_case);                 // resources reuse the ordinary resource var_dump formatter
                     emitter.instruction("cmp x0, #4");                          // does the mixed payload hold an indexed array?
                     emit_branch_if_eq(emitter, &array_case);                    // arrays reuse the ordinary array var_dump formatter
                     emitter.instruction("cmp x0, #5");                          // does the mixed payload hold an associative array?
@@ -310,6 +332,8 @@ pub fn emit(
                     emit_branch_if_eq(emitter, &float_case);                    // floats reuse the ordinary float var_dump formatter
                     emitter.instruction("cmp rax, 3");                          // does the mixed payload hold a bool?
                     emit_branch_if_eq(emitter, &bool_case);                     // bools reuse the ordinary bool var_dump formatter
+                    emitter.instruction("cmp rax, 9");                          // does the mixed payload hold a resource?
+                    emit_branch_if_eq(emitter, &resource_case);                 // resources reuse the ordinary resource var_dump formatter
                     emitter.instruction("cmp rax, 4");                          // does the mixed payload hold an indexed array?
                     emit_branch_if_eq(emitter, &array_case);                    // arrays reuse the ordinary array var_dump formatter
                     emitter.instruction("cmp rax, 5");                          // does the mixed payload hold an associative array?
@@ -365,6 +389,18 @@ pub fn emit(
             }
             emit_var_dump_bool(emitter, ctx, data);
             abi::emit_jump(emitter, &done);                                     // finish after printing the mixed bool payload
+
+            emitter.label(&resource_case);
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("mov x0, x1");                          // move the unboxed resource payload into the standard integer result register
+                }
+                Arch::X86_64 => {
+                    emitter.instruction("mov rax, rdi");                        // move the unboxed resource payload into the standard integer result register
+                }
+            }
+            emit_var_dump_resource(emitter, data);
+            abi::emit_jump(emitter, &done);                                     // finish after printing the mixed resource payload
 
             emitter.label(&array_case);
             match emitter.target.arch {

@@ -31,6 +31,14 @@ pub(super) fn emit_cast(
                 PhpType::Str => {
                     abi::emit_call_label(emitter, "__rt_atoi");                 // parse the current string result into the active integer result register
                 }
+                PhpType::Resource(_) => match emitter.target.arch {
+                    crate::codegen::platform::Arch::AArch64 => {
+                        emitter.instruction("add x0, x0, #1");                  // convert the native resource payload into the 1-based display id
+                    }
+                    crate::codegen::platform::Arch::X86_64 => {
+                        emitter.instruction("add rax, 1");                      // convert the native resource payload into the 1-based display id
+                    }
+                },
                 PhpType::Array(_) | PhpType::AssocArray { .. } => {
                     emitter.instruction("ldr x0, [x0]");                        // load array/hash container length from header (first field; iterable hash kind shares this layout)
                 }
@@ -53,6 +61,17 @@ pub(super) fn emit_cast(
                 PhpType::Float => {}
                 PhpType::Int | PhpType::Bool => {
                     abi::emit_int_result_to_float_result(emitter);              // signed int to double conversion
+                }
+                PhpType::Resource(_) => {
+                    match emitter.target.arch {
+                        crate::codegen::platform::Arch::AArch64 => {
+                            emitter.instruction("add x0, x0, #1");              // convert the native resource payload into the 1-based display id
+                        }
+                        crate::codegen::platform::Arch::X86_64 => {
+                            emitter.instruction("add rax, 1");                  // convert the native resource payload into the 1-based display id
+                        }
+                    }
+                    abi::emit_int_result_to_float_result(emitter);              // convert the resource display id to double
                 }
                 PhpType::Void | PhpType::Never => {
                     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
@@ -98,7 +117,12 @@ pub(super) fn emit_cast(
                 PhpType::Array(_) | PhpType::AssocArray { .. } => {
                     return src_ty;
                 }
-                PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Buffer(_) | PhpType::Packed(_) => {
+                PhpType::Int
+                | PhpType::Bool
+                | PhpType::Resource(_)
+                | PhpType::Callable
+                | PhpType::Buffer(_)
+                | PhpType::Packed(_) => {
                     emitter.instruction("str x0, [sp, #-16]!");                 // save scalar value during allocation
                     emitter.instruction("mov x0, #1");                          // capacity: 1 element (exact fit)
                     emitter.instruction("mov x1, #8");                          // element size: 8 bytes
@@ -376,7 +400,7 @@ pub(super) fn emit_strict_compare(
         }
 
         match &lt {
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {
+            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::Resource(_) => {
                 let left_reg = abi::symbol_scratch_reg(emitter);
                 abi::emit_pop_reg(emitter, left_reg);                           // pop the saved left scalar or pointer-like value from the temporary comparison stack
                 emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter))); // compare the left and right scalar values

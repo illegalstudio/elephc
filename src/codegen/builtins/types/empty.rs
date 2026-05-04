@@ -182,6 +182,17 @@ pub fn emit(
                 }
             }
         }
+        PhpType::Resource(_) => {
+            // -- resources are never empty in PHP --
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("mov x0, #0");                          // resource values are never empty, so return false in the native AArch64 integer result register
+                }
+                Arch::X86_64 => {
+                    emitter.instruction("xor eax, eax");                        // resource values are never empty, so return false in the native x86_64 integer result register
+                }
+            }
+        }
         PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) => {
             // -- pointer is empty only when it is the null pointer --
             match emitter.target.arch {

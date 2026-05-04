@@ -204,7 +204,12 @@ pub(crate) fn coerce_current_value_to_target(
     let boxed_to_mixed = matches!(pushed_ty, PhpType::Mixed) && !matches!(source_repr, PhpType::Mixed);
 
     if source_repr != pushed_ty {
-        super::super::coerce_result_to_type(emitter, ctx, data, &source_repr, &pushed_ty);
+        let coerce_source_ty = if matches!(pushed_ty, PhpType::Mixed) {
+            source_ty
+        } else {
+            &source_repr
+        };
+        super::super::coerce_result_to_type(emitter, ctx, data, coerce_source_ty, &pushed_ty);
     }
 
     (pushed_ty, boxed_to_mixed)
@@ -306,7 +311,7 @@ pub(crate) fn push_loaded_array_element_arg(
 ) -> PhpType {
     let source_repr = source_elem_ty.codegen_repr();
     let (pushed_ty, boxed_to_mixed) =
-        coerce_current_value_to_target(emitter, ctx, data, &source_repr, target_ty);
+        coerce_current_value_to_target(emitter, ctx, data, source_elem_ty, target_ty);
     if !boxed_to_mixed {
         abi::emit_incref_if_refcounted(emitter, &source_repr);
     }

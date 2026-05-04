@@ -21,6 +21,8 @@ pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_write_stdout_bool");                   // booleans need PHP echo semantics
     emitter.instruction("cmp x9, #0");                                          // is the boxed value an integer?
     emitter.instruction("b.eq __rt_mixed_write_stdout_int");                    // integers print via itoa
+    emitter.instruction("cmp x9, #9");                                          // is the boxed value a resource?
+    emitter.instruction("b.eq __rt_mixed_write_stdout_resource");               // resources print with PHP's Resource id marker
     emitter.instruction("cmp x9, #2");                                          // is the boxed value a float?
     emitter.instruction("b.eq __rt_mixed_write_stdout_float");                  // floats print via ftoa
     emitter.instruction("cmp x9, #1");                                          // is the boxed value a string?
@@ -45,6 +47,11 @@ pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
     emitter.instruction("b __rt_mixed_write_stdout_done");                      // restore x30 and return after printing the boxed integer
+
+    emitter.label("__rt_mixed_write_stdout_resource");
+    emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed native resource payload
+    emitter.instruction("bl __rt_resource_write_stdout");                       // print the resource marker through the shared helper
+    emitter.instruction("b __rt_mixed_write_stdout_done");                      // restore x30 and return after printing the boxed resource
 
     emitter.label("__rt_mixed_write_stdout_float");
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the boxed float bits
@@ -76,6 +83,8 @@ fn emit_mixed_write_stdout_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_write_stdout_bool");                     // booleans need PHP echo semantics
     emitter.instruction("cmp r10, 0");                                          // is the boxed value an integer?
     emitter.instruction("je __rt_mixed_write_stdout_int");                      // integers print through the shared integer-to-string helper
+    emitter.instruction("cmp r10, 9");                                          // is the boxed value a resource?
+    emitter.instruction("je __rt_mixed_write_stdout_resource");                 // resources print with PHP's Resource id marker
     emitter.instruction("cmp r10, 2");                                          // is the boxed value a float?
     emitter.instruction("je __rt_mixed_write_stdout_float");                    // floats print through the shared float-to-string helper
     emitter.instruction("cmp r10, 1");                                          // is the boxed value a string?
@@ -106,6 +115,11 @@ fn emit_mixed_write_stdout_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
     emitter.instruction("syscall");                                             // write the converted integer string payload to stdout
     emitter.instruction("jmp __rt_mixed_write_stdout_done");                    // return after printing the boxed integer payload
+
+    emitter.label("__rt_mixed_write_stdout_resource");
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed native resource payload
+    emitter.instruction("call __rt_resource_write_stdout");                     // print the resource marker through the shared helper
+    emitter.instruction("jmp __rt_mixed_write_stdout_done");                    // return after printing the boxed resource payload
 
     emitter.label("__rt_mixed_write_stdout_float");
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the boxed float bits into a scratch register before the float conversion call

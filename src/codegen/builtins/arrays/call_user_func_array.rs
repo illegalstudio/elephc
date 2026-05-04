@@ -322,6 +322,7 @@ pub fn emit(
         match stored_ty {
             PhpType::Int
             | PhpType::Bool
+            | PhpType::Resource(_)
             | PhpType::Callable
             | PhpType::Iterable
             | PhpType::Mixed

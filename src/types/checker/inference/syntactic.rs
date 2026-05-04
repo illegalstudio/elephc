@@ -185,6 +185,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             "strpos" | "strrpos" | "array_search" | "fileatime" | "filectime" | "fileperms"
             | "fileowner" | "filegroup" | "fileinode" | "filetype" | "stat" | "lstat"
             | "fstat" => PhpType::Mixed,
+            "fopen" => PhpType::stream_resource(),
             "strlen" | "ord" | "count" | "intval" | "abs" | "intdiv"
             | "rand" | "time" => PhpType::Int,
             "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" | "fmod" | "sin" | "cos"

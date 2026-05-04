@@ -76,6 +76,7 @@ impl Checker {
                 _ => false,
             },
             PhpType::Pointer(_) => Self::pointer_types_compatible(expected, actual),
+            PhpType::Resource(_) => PhpType::resource_types_compatible(expected, actual),
             _ => false,
         }
     }
@@ -151,6 +152,20 @@ impl Checker {
                     PhpType::Pointer(Some(tag.clone()))
                 }
                 _ => PhpType::Pointer(None),
+            });
+        }
+        if PhpType::resource_types_compatible(existing, new_ty) {
+            return Some(match (existing, new_ty) {
+                (PhpType::Resource(Some(left)), PhpType::Resource(Some(right)))
+                    if left == right =>
+                {
+                    PhpType::Resource(Some(left.clone()))
+                }
+                (PhpType::Resource(None), PhpType::Resource(Some(kind)))
+                | (PhpType::Resource(Some(kind)), PhpType::Resource(None)) => {
+                    PhpType::Resource(Some(kind.clone()))
+                }
+                _ => PhpType::Resource(None),
             });
         }
         None

@@ -263,6 +263,7 @@ pub(crate) fn runtime_value_tag(ty: &PhpType) -> u8 {
         PhpType::Union(_) => 7,
         PhpType::Iterable => 7,
         PhpType::Void => 8,
+        PhpType::Resource(_) => 9,
         PhpType::Callable | PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) | PhpType::Never => 0,
     }
 }
@@ -293,7 +294,7 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
     match ty {
         PhpType::Mixed | PhpType::Union(_) => {}
         PhpType::Iterable => emit_box_iterable_as_mixed(emitter),
-        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => match emitter.target.arch {
+        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::Resource(_) => match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction("mov x1, x0");                              // move the current scalar payload into the mixed helper argument register
                 emitter.instruction("mov x2, xzr");                             // scalar mixed payloads do not use a second word

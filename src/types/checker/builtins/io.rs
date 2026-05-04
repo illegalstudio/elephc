@@ -6,6 +6,24 @@ use super::super::Checker;
 
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
+fn ensure_stream_resource(
+    checker: &mut Checker,
+    name: &str,
+    arg: &Expr,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    let actual = checker.infer_type(arg, env)?;
+    let expected = PhpType::stream_resource();
+    if checker.type_accepts(&expected, &actual) {
+        Ok(())
+    } else {
+        Err(CompileError::new(
+            arg.span,
+            &format!("{}() expects resource, got {}", name, actual),
+        ))
+    }
+}
+
 pub(super) fn check_builtin(
     checker: &mut Checker,
     name: &str,
@@ -31,45 +49,43 @@ pub(super) fn check_builtin(
             for arg in args {
                 checker.infer_type(arg, env)?;
             }
-            Ok(Some(PhpType::Int))
+            Ok(Some(PhpType::stream_resource()))
         }
         "fclose" => {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "fclose() takes exactly 1 argument"));
             }
-            checker.infer_type(&args[0], env)?;
+            ensure_stream_resource(checker, name, &args[0], env)?;
             Ok(Some(PhpType::Bool))
         }
         "fread" => {
             if args.len() != 2 {
                 return Err(CompileError::new(span, "fread() takes exactly 2 arguments"));
             }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
+            ensure_stream_resource(checker, name, &args[0], env)?;
+            checker.infer_type(&args[1], env)?;
             Ok(Some(PhpType::Str))
         }
         "fwrite" => {
             if args.len() != 2 {
                 return Err(CompileError::new(span, "fwrite() takes exactly 2 arguments"));
             }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
+            ensure_stream_resource(checker, name, &args[0], env)?;
+            checker.infer_type(&args[1], env)?;
             Ok(Some(PhpType::Int))
         }
         "fgets" => {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "fgets() takes exactly 1 argument"));
             }
-            checker.infer_type(&args[0], env)?;
+            ensure_stream_resource(checker, name, &args[0], env)?;
             Ok(Some(PhpType::Str))
         }
         "feof" => {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "feof() takes exactly 1 argument"));
             }
-            checker.infer_type(&args[0], env)?;
+            ensure_stream_resource(checker, name, &args[0], env)?;
             Ok(Some(PhpType::Bool))
         }
         "readline" => {
@@ -85,7 +101,8 @@ pub(super) fn check_builtin(
             if args.len() < 2 || args.len() > 3 {
                 return Err(CompileError::new(span, "fseek() takes 2 or 3 arguments"));
             }
-            for arg in args {
+            ensure_stream_resource(checker, name, &args[0], env)?;
+            for arg in args.iter().skip(1) {
                 checker.infer_type(arg, env)?;
             }
             Ok(Some(PhpType::Int))
@@ -94,14 +111,14 @@ pub(super) fn check_builtin(
             if args.len() != 1 {
                 return Err(CompileError::new(span, "ftell() takes exactly 1 argument"));
             }
-            checker.infer_type(&args[0], env)?;
+            ensure_stream_resource(checker, name, &args[0], env)?;
             Ok(Some(PhpType::Int))
         }
         "rewind" => {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "rewind() takes exactly 1 argument"));
             }
-            checker.infer_type(&args[0], env)?;
+            ensure_stream_resource(checker, name, &args[0], env)?;
             Ok(Some(PhpType::Bool))
         }
         "file_get_contents" => {
@@ -186,7 +203,7 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Void))
         }
-        "stat" | "lstat" | "fstat" => {
+        "stat" | "lstat" => {
             if args.len() != 1 {
                 return Err(CompileError::new(
                     span,
@@ -194,6 +211,19 @@ pub(super) fn check_builtin(
                 ));
             }
             checker.infer_type(&args[0], env)?;
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Int),
+                },
+                PhpType::Bool,
+            ])))
+        }
+        "fstat" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "fstat() takes exactly 1 argument"));
+            }
+            ensure_stream_resource(checker, name, &args[0], env)?;
             Ok(Some(checker.normalize_union_type(vec![
                 PhpType::AssocArray {
                     key: Box::new(PhpType::Mixed),
@@ -262,7 +292,8 @@ pub(super) fn check_builtin(
             if args.is_empty() || args.len() > 3 {
                 return Err(CompileError::new(span, "fgetcsv() takes 1 to 3 arguments"));
             }
-            for arg in args {
+            ensure_stream_resource(checker, name, &args[0], env)?;
+            for arg in args.iter().skip(1) {
                 checker.infer_type(arg, env)?;
             }
             Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
@@ -271,7 +302,8 @@ pub(super) fn check_builtin(
             if args.len() < 2 || args.len() > 4 {
                 return Err(CompileError::new(span, "fputcsv() takes 2 to 4 arguments"));
             }
-            for arg in args {
+            ensure_stream_resource(checker, name, &args[0], env)?;
+            for arg in args.iter().skip(1) {
                 checker.infer_type(arg, env)?;
             }
             Ok(Some(PhpType::Int))
@@ -326,9 +358,8 @@ pub(super) fn check_builtin(
                     "ftruncate() takes exactly 2 arguments",
                 ));
             }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
+            ensure_stream_resource(checker, name, &args[0], env)?;
+            checker.infer_type(&args[1], env)?;
             Ok(Some(PhpType::Bool))
         }
         "fsync" | "fflush" | "fdatasync" => {
@@ -338,7 +369,7 @@ pub(super) fn check_builtin(
                     &format!("{}() takes exactly 1 argument", name),
                 ));
             }
-            checker.infer_type(&args[0], env)?;
+            ensure_stream_resource(checker, name, &args[0], env)?;
             Ok(Some(PhpType::Bool))
         }
         "touch" => {

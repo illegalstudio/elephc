@@ -21,6 +21,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
 
     // String runtime functions
     strings::emit_itoa(emitter);
+    strings::emit_resource_to_string(emitter);
+    strings::emit_resource_write_stdout(emitter);
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
     strings::emit_atoi(emitter);

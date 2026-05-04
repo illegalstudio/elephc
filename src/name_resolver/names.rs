@@ -318,5 +318,8 @@ fn is_builtin_global_constant(name: &str) -> bool {
             | "FNM_PATHNAME"
             | "FNM_PERIOD"
             | "FNM_CASEFOLD"
+            | "STDIN"
+            | "STDOUT"
+            | "STDERR"
     )
 }

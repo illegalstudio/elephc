@@ -69,7 +69,7 @@ pub fn emit_store_incoming_param(
     }
 
     match ty {
-        PhpType::Bool | PhpType::Int => {
+        PhpType::Bool | PhpType::Int | PhpType::Resource(_) => {
             if !cursor.int_stack_only && cursor.int_reg_idx < int_reg_limit {
                 let reg = int_arg_reg_name(emitter.target, cursor.int_reg_idx);
                 emitter.comment(&format!("param ${} from {}", name, reg));
@@ -239,6 +239,7 @@ pub fn emit_push_result_value(emitter: &mut Emitter, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Bool
         | PhpType::Int
+        | PhpType::Resource(_)
         | PhpType::Iterable
         | PhpType::Mixed
         | PhpType::Union(_)
@@ -451,6 +452,7 @@ pub fn materialize_outgoing_args(
         match &assignment.ty {
             PhpType::Bool
             | PhpType::Int
+            | PhpType::Resource(_)
             | PhpType::Iterable
             | PhpType::Mixed
             | PhpType::Union(_)

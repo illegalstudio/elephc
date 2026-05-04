@@ -129,6 +129,9 @@ impl Checker {
             (PhpType::Int, PhpType::Bool | PhpType::Void) => true,
             (PhpType::Bool, PhpType::Int | PhpType::Void) => true,
             (PhpType::Pointer(_), PhpType::Pointer(_) | PhpType::Void) => true,
+            (PhpType::Resource(_), PhpType::Resource(_)) => {
+                PhpType::resource_types_compatible(expected, actual)
+            }
             (PhpType::Callable, PhpType::Callable) => true,
             _ => false,
         }

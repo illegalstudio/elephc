@@ -91,9 +91,24 @@ pub(super) fn parse_prefix(
             span,
             ExprKind::FloatLiteral(f64::EPSILON),
         ),
-        Token::Stdin => parse_simple(tokens, pos, span, ExprKind::IntLiteral(0)),
-        Token::Stdout => parse_simple(tokens, pos, span, ExprKind::IntLiteral(1)),
-        Token::Stderr => parse_simple(tokens, pos, span, ExprKind::IntLiteral(2)),
+        Token::Stdin => parse_simple(
+            tokens,
+            pos,
+            span,
+            ExprKind::ConstRef(Name::unqualified("STDIN")),
+        ),
+        Token::Stdout => parse_simple(
+            tokens,
+            pos,
+            span,
+            ExprKind::ConstRef(Name::unqualified("STDOUT")),
+        ),
+        Token::Stderr => parse_simple(
+            tokens,
+            pos,
+            span,
+            ExprKind::ConstRef(Name::unqualified("STDERR")),
+        ),
         Token::PhpEol => parse_simple(tokens, pos, span, ExprKind::StringLiteral("\n".to_string())),
         Token::PhpOs => parse_simple(
             tokens,

@@ -30,6 +30,8 @@ pub fn emit_mixed_cast_int(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_cast_int_from_array");                 // arrays cast to their current element count
     emitter.instruction("cmp x0, #5");                                          // does the mixed payload hold an associative array?
     emitter.instruction("b.eq __rt_mixed_cast_int_from_array");                 // hashes cast to their current element count
+    emitter.instruction("cmp x0, #9");                                          // does the mixed payload hold a resource?
+    emitter.instruction("b.eq __rt_mixed_cast_int_from_resource");              // resources cast to their display id
     emitter.instruction("mov x0, #0");                                          // null and unsupported payloads cast to zero for now
     emitter.instruction("b __rt_mixed_cast_int_done");                          // return the normalized integer result
 
@@ -57,6 +59,10 @@ pub fn emit_mixed_cast_int(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_int_zero");
     emitter.instruction("mov x0, #0");                                          // null containers cast to zero
+    emitter.instruction("b __rt_mixed_cast_int_done");                          // return the null-container cast result
+
+    emitter.label("__rt_mixed_cast_int_from_resource");
+    emitter.instruction("add x0, x1, #1");                                      // convert the native resource payload into the 1-based display id
 
     emitter.label("__rt_mixed_cast_int_done");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
@@ -85,6 +91,8 @@ fn emit_mixed_cast_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_cast_int_from_array_linux_x86_64");      // arrays cast to their current element count
     emitter.instruction("cmp rax, 5");                                          // does the mixed payload hold an associative array?
     emitter.instruction("je __rt_mixed_cast_int_from_array_linux_x86_64");      // hashes cast to their current element count
+    emitter.instruction("cmp rax, 9");                                          // does the mixed payload hold a resource?
+    emitter.instruction("je __rt_mixed_cast_int_from_resource_linux_x86_64");   // resources cast to their display id
     emitter.instruction("mov rax, 0");                                          // null and unsupported payloads cast to zero for now
     emitter.instruction("jmp __rt_mixed_cast_int_done_linux_x86_64");           // return the normalized integer result
 
@@ -114,6 +122,10 @@ fn emit_mixed_cast_int_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_int_zero_linux_x86_64");
     emitter.instruction("mov rax, 0");                                          // null containers cast to zero
+    emitter.instruction("jmp __rt_mixed_cast_int_done_linux_x86_64");           // return the null-container cast result
+
+    emitter.label("__rt_mixed_cast_int_from_resource_linux_x86_64");
+    emitter.instruction("lea rax, [rdi + 1]");                                  // convert the native resource payload into the 1-based display id
 
     emitter.label("__rt_mixed_cast_int_done_linux_x86_64");
     emitter.instruction("add rsp, 16");                                         // release the aligned temporary slot reserved for nested helper calls

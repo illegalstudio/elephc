@@ -50,6 +50,8 @@ mod sscanf;
 mod rtrim_mask;
 mod ltrim_mask;
 mod trim_mask;
+mod resource_to_string;
+mod resource_write_stdout;
 
 pub use itoa::emit_itoa;
 pub use concat::emit_concat;
@@ -103,3 +105,5 @@ pub use sscanf::emit_sscanf;
 pub use rtrim_mask::emit_rtrim_mask;
 pub use ltrim_mask::emit_ltrim_mask;
 pub use trim_mask::emit_trim_mask;
+pub use resource_to_string::emit_resource_to_string;
+pub use resource_write_stdout::emit_resource_write_stdout;
