@@ -19,6 +19,12 @@ if (is_readable("greeting.txt")) {
     echo "It is readable\n";
 }
 
+// fopen() failures return false
+$missing = @fopen("missing.txt", "r");
+if ($missing === false) {
+    echo "Missing file open failed\n";
+}
+
 // Use fopen/fwrite/fclose for line-by-line writing
 $f = fopen("numbers.txt", "w");
 echo "Handle type: " . gettype($f) . "\n";

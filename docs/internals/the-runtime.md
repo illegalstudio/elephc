@@ -381,7 +381,7 @@ These routines handle file and filesystem operations through target-aware libc/s
 | Routine | What it does |
 |---|---|
 | `__rt_cstr` | Convert PHP string (ptr+len) to null-terminated C string |
-| `__rt_fopen` | Open file via `open()` syscall |
+| `__rt_fopen` | Open file via target-aware `open()` handling, or return `-1` after emitting a suppressible warning for open failures and invalid modes |
 | `__rt_fgets` | Read line from file descriptor |
 | `__rt_feof` | Check end-of-file flag for a file descriptor |
 | `__rt_fread` | Read N bytes from file descriptor |
@@ -525,7 +525,7 @@ Additionally, the runtime emits static data tables:
 - `_heap_dbg_bad_refcount_msg`, `_heap_dbg_double_free_msg`, `_heap_dbg_free_list_msg` — fatal heap-debug error strings enabled by `--heap-debug`
 - `_heap_dbg_*` summary labels — fixed strings used by `__rt_heap_debug_report` for alloc/free/live/leak output
 - `_uncaught_exc_msg` — fatal exception string written by `__rt_throw_current` when no handler exists
-- `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — suppressible runtime warning text routed through `__rt_diag_warning`
+- `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — suppressible runtime warning text routed through `__rt_diag_warning`
 - `_php_uname_mode_len_msg`, `_php_uname_mode_value_msg` — fatal `php_uname()` argument diagnostics for invalid mode strings
 - `_pcre_space`, `_pcre_digit`, `_pcre_word`, `_pcre_nspace`, `_pcre_ndigit`, `_pcre_nword` — PCRE shorthand replacement strings for regex translation
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings used by `__rt_json_encode_bool` and `__rt_json_encode_null`

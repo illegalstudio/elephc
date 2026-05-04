@@ -73,7 +73,7 @@ Uses POSIX extended regex with common PCRE shorthand translation (`\s`, `\d`, `\
 
 | Function | Signature | Description |
 |---|---|---|
-| `fopen()` | `fopen($filename, $mode): resource` | Open file (modes: r, w, a, r+, w+, a+) |
+| `fopen()` | `fopen($filename, $mode): resource\|false` | Open file (modes: r, w, a, r+, w+, a+), or `false` on failure |
 | `fclose()` | `fclose(resource $handle): bool` | Close file handle |
 | `fread()` | `fread(resource $handle, $length): string` | Read up to $length bytes |
 | `fwrite()` | `fwrite(resource $handle, $data): int` | Write to file |
@@ -86,7 +86,7 @@ Uses POSIX extended regex with common PCRE shorthand translation (`\s`, `\d`, `\
 | `fgetcsv()` | `fgetcsv(resource $handle [, $sep]): array` | Read CSV line |
 | `fputcsv()` | `fputcsv(resource $handle, $fields [, $sep]): int` | Write CSV line |
 
-File handles are PHP `resource` values, not integers. `gettype(fopen(...))` and `gettype(STDIN)` return `"resource"`, and passing a plain `int` to stream functions is rejected. Open-failure `resource|false` parity is not complete yet; failed `fopen()` calls currently produce an invalid stream resource for the follow-up stream operation.
+File handles are PHP `resource` values, not integers. `gettype(fopen(...))` returns `"resource"` on success and `"boolean"` on failure, `gettype(STDIN)` returns `"resource"`, and passing a plain `int` to stream functions is rejected. Failed `fopen()` calls, including invalid or empty modes, emit a suppressible runtime warning and return `false`; passing that `false` to stream functions is a fatal runtime TypeError, matching PHP's guard-before-use pattern.
 
 ## File system
 

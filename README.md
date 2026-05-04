@@ -222,7 +222,7 @@ if ($x === 3) {
 | `null` | `null` |
 | `mixed` | `mixed $x = 42;`, `function show(mixed $x): string { ... }` |
 | `iterable` | `function walk(iterable $items): iterable { ... }` (PHP `array \| Traversable` pseudo-type; accepts indexed arrays, associative arrays, `Iterator`, and `IteratorAggregate`) |
-| `resource` | `$f = fopen("file.txt", "r")`, `STDIN`, `STDOUT`, `STDERR` |
+| `resource` | Successful `$f = fopen("file.txt", "r")`, `STDIN`, `STDOUT`, `STDERR` |
 | `array` | `[1, 2, 3]`, `["key" => "value"]`, `[[1,2],[3,4]]` (indexed, associative, multi-dimensional, copy-on-write, union with `+`) |
 | `object` | `new Foo()`, `$user->name` |
 | `pointer` | `ptr($x)`, `ptr_null()`, `ptr_cast<int>($p)` |
@@ -241,7 +241,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **Control flow**: if/elseif/else, while, do-while, for, foreach, switch, match, break/continue including multi-level depths, try/catch/finally/throw
 - **Statements and literals**: `const` / `define()` constants, `global` declarations, `static` locals, `print` expressions, list unpacking, PHP numeric literal forms, heredoc / nowdoc strings
 - **Operators**: arithmetic, comparison, `instanceof`, logical, bitwise, ternary, null coalescing (`??`), assignment expressions for local and stabilized non-local targets, null coalescing assignment (`??=`), error control (`@`), and compound assignments
-- **Types**: union types (`int|string`), nullable (`?int`), `never` return type, `iterable` pseudo-type, inferred `resource` values for file handles and standard streams, type casting, typed properties, typed function, method, closure, and arrow parameters and returns
+- **Types**: union types (`int|string`), nullable (`?int`), `never` return type, `iterable` pseudo-type, inferred `resource|false` values for `fopen()` and `resource` values for standard streams, type casting, typed properties, typed function, method, closure, and arrow parameters and returns
 - **Modules**: namespaces, use imports, include/require/require_once, PHP magic constants
 - **FFI**: extern functions, extern blocks, extern globals, extern classes, pointer builtins
 - **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`
