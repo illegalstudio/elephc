@@ -1,8 +1,8 @@
 use elephc::lexer::tokenize;
 use elephc::names::Name;
 use elephc::parser::ast::{
-    BinOp, CallableTarget, CatchClause, Expr, ExprKind, MagicConstant, StaticReceiver, Stmt, StmtKind,
-    TraitAdaptation, TypeExpr, UseKind, Visibility,
+    BinOp, CallableTarget, CatchClause, Expr, ExprKind, MagicConstant, StaticReceiver, Stmt,
+    StmtKind, TraitAdaptation, TypeExpr, UseKind, Visibility,
 };
 use elephc::parser::parse;
 

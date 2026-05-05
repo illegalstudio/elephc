@@ -83,6 +83,50 @@ fn test_parse_instanceof_expression() {
 }
 
 #[test]
+fn test_parse_dynamic_instanceof_variable_target() {
+    let stmts = parse_source("<?php echo $a instanceof $className;");
+    let expected = Stmt::echo(Expr::dynamic_instance_of(
+        Expr::var("a"),
+        Expr::var("className"),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
+fn test_parse_dynamic_instanceof_property_and_array_targets() {
+    let stmts = parse_source("<?php echo $a instanceof $holder->className; echo $a instanceof $names[0];");
+    let property_target = Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(Expr::var("holder")),
+            property: "className".to_string(),
+        },
+        elephc::span::Span::dummy(),
+    );
+    let array_target = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(Expr::var("names")),
+            index: Box::new(Expr::int_lit(0)),
+        },
+        elephc::span::Span::dummy(),
+    );
+    assert_eq!(
+        stmts,
+        vec![
+            Stmt::echo(Expr::dynamic_instance_of(Expr::var("a"), property_target)),
+            Stmt::echo(Expr::dynamic_instance_of(Expr::var("a"), array_target)),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_parenthesized_dynamic_instanceof_expression_target() {
+    let stmts = parse_source("<?php echo $a instanceof ($prefix . $suffix);");
+    let target = Expr::binop(Expr::var("prefix"), BinOp::Concat, Expr::var("suffix"));
+    let expected = Stmt::echo(Expr::dynamic_instance_of(Expr::var("a"), target));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
 fn test_instanceof_binds_tighter_than_not() {
     let stmts = parse_source("<?php echo !$a instanceof Foo;");
     let expected = Stmt::echo(Expr::new(
@@ -107,11 +151,32 @@ fn test_instanceof_binds_tighter_than_addition() {
 }
 
 #[test]
+fn test_dynamic_instanceof_binds_tighter_than_concat() {
+    let stmts = parse_source("<?php echo $a instanceof $className . \"!\";");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::dynamic_instance_of(Expr::var("a"), Expr::var("className")),
+        BinOp::Concat,
+        Expr::string_lit("!"),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
 fn test_instanceof_chains_left_to_right() {
     let stmts = parse_source("<?php echo $a instanceof Foo instanceof Bar;");
     let expected = Stmt::echo(Expr::instance_of(
         Expr::instance_of(Expr::var("a"), Name::unqualified("Foo")),
         Name::unqualified("Bar"),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
+fn test_dynamic_instanceof_chains_left_to_right() {
+    let stmts = parse_source("<?php echo $a instanceof $className instanceof Foo;");
+    let expected = Stmt::echo(Expr::instance_of(
+        Expr::dynamic_instance_of(Expr::var("a"), Expr::var("className")),
+        Name::unqualified("Foo"),
     ));
     assert_eq!(stmts, vec![expected]);
 }

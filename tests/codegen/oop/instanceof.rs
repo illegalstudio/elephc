@@ -126,3 +126,236 @@ echo (maybe(false) instanceof User) ? "T" : "F";
     );
     assert_eq!(out, "TTFTF");
 }
+
+#[test]
+fn test_dynamic_instanceof_string_class_and_interface_targets() {
+    let out = compile_and_run(
+        r#"<?php
+interface Named {}
+class User implements Named {}
+class Other {}
+
+$user = new User();
+$className = "User";
+$interfaceName = "Named";
+$otherName = "Other";
+$lowerName = "user";
+$absoluteName = "\\User";
+$missing = "Missing";
+
+echo ($user instanceof $className) ? "T" : "F";
+echo ($user instanceof $interfaceName) ? "T" : "F";
+echo ($user instanceof $otherName) ? "T" : "F";
+echo ($user instanceof $lowerName) ? "T" : "F";
+echo ($user instanceof $absoluteName) ? "T" : "F";
+echo ($user instanceof $missing) ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "TTFTTF");
+}
+
+#[test]
+fn test_dynamic_instanceof_namespaced_string_targets() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+class User {}
+
+$user = new User();
+$localName = "User";
+$qualifiedName = "App\\User";
+$absoluteName = "\\App\\User";
+
+echo ($user instanceof $localName) ? "T" : "F";
+echo ($user instanceof $qualifiedName) ? "T" : "F";
+echo ($user instanceof $absoluteName) ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "FTT");
+}
+
+#[test]
+fn test_dynamic_instanceof_transitive_interface_string_target() {
+    let out = compile_and_run(
+        r#"<?php
+interface Root {}
+interface Child extends Root {}
+class User implements Child {}
+
+$user = new User();
+$target = "Root";
+echo ($user instanceof $target) ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "T");
+}
+
+#[test]
+fn test_dynamic_instanceof_object_target_uses_target_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+class A {}
+class B {}
+
+$a = new A();
+$targetA = new A();
+$targetB = new B();
+
+echo ($a instanceof $targetA) ? "T" : "F";
+echo ($a instanceof $targetB) ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "TF");
+}
+
+#[test]
+fn test_dynamic_instanceof_mixed_targets_and_scalar_lhs() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+class Other {}
+
+function id(mixed $value): mixed {
+    return $value;
+}
+
+function maybe(bool $flag): ?User {
+    if ($flag) {
+        return new User();
+    }
+    return null;
+}
+
+$target = id("User");
+$missingTarget = id("Missing");
+$objectTarget = id(new Other());
+$object = id(new User());
+$scalar = id(7);
+
+echo ($object instanceof $target) ? "T" : "F";
+echo ($scalar instanceof $target) ? "T" : "F";
+echo ($scalar instanceof $missingTarget) ? "T" : "F";
+echo ($scalar instanceof $objectTarget) ? "T" : "F";
+echo (maybe(true) instanceof $target) ? "T" : "F";
+echo (maybe(false) instanceof $target) ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "TFFFTF");
+}
+
+#[test]
+fn test_dynamic_instanceof_parenthesized_expression_target() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+$user = new User();
+$prefix = "Us";
+$suffix = "er";
+echo ($user instanceof ($prefix . $suffix)) ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "T");
+}
+
+#[test]
+fn test_dynamic_instanceof_parenthesized_class_constant_target() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+$user = new User();
+echo ($user instanceof (User::class)) ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "T");
+}
+
+#[test]
+fn test_dynamic_instanceof_invalid_target_fails_for_object_lhs() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class User {}
+$user = new User();
+$target = 42;
+echo ($user instanceof $target) ? "T" : "F";
+"#,
+    );
+    assert!(!out.success, "program unexpectedly succeeded: {}", out.stdout);
+    assert!(
+        out.stderr
+            .contains("Fatal error: Class name must be a valid object or a string"),
+        "unexpected stderr: {}",
+        out.stderr
+    );
+}
+
+#[test]
+fn test_dynamic_instanceof_invalid_target_evaluates_lhs_then_target() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function lhs(): int {
+    echo "L";
+    return 7;
+}
+
+function rhs(): int {
+    echo "R";
+    return 42;
+}
+
+echo (lhs() instanceof (rhs())) ? "T" : "F";
+"#,
+    );
+    assert!(!out.success, "program unexpectedly succeeded: {}", out.stdout);
+    assert_eq!(out.stdout, "LR");
+    assert!(
+        out.stderr
+            .contains("Fatal error: Class name must be a valid object or a string"),
+        "unexpected stderr: {}",
+        out.stderr
+    );
+}
+
+#[test]
+fn test_dynamic_instanceof_null_object_target_fails() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class User {}
+
+function maybe(bool $flag): ?User {
+    if ($flag) {
+        return new User();
+    }
+    return null;
+}
+
+$user = new User();
+$target = maybe(false);
+echo ($user instanceof $target) ? "T" : "F";
+"#,
+    );
+    assert!(!out.success, "program unexpectedly succeeded: {}", out.stdout);
+    assert!(
+        out.stderr
+            .contains("Fatal error: Class name must be a valid object or a string"),
+        "unexpected stderr: {}",
+        out.stderr
+    );
+}
+
+#[test]
+fn test_dynamic_instanceof_invalid_target_fails_for_scalar_lhs() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$value = 7;
+$target = 42;
+echo ($value instanceof $target) ? "T" : "F";
+"#,
+    );
+    assert!(!out.success, "program unexpectedly succeeded: {}", out.stdout);
+    assert!(
+        out.stderr
+            .contains("Fatal error: Class name must be a valid object or a string"),
+        "unexpected stderr: {}",
+        out.stderr
+    );
+}
