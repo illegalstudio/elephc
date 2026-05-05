@@ -2,6 +2,7 @@ use super::super::abi;
 use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
+use crate::names::{function_symbol, function_variant_active_symbol};
 use crate::parser::ast::Stmt;
 
 pub(super) fn emit_include_once_mark(
@@ -39,6 +40,22 @@ pub(super) fn emit_include_once_guard(
     }
 
     emitter.label(&skip_label);
+}
+
+pub(super) fn emit_function_variant_mark(
+    name: &str,
+    variant: &str,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    let active_symbol = function_variant_active_symbol(name);
+    data.add_comm(active_symbol.clone(), 8);
+
+    emitter.blank();
+    emitter.comment(&format!("activate conditional function variant for {}", name));
+    let variant_reg = abi::temp_int_reg(emitter.target);
+    abi::emit_symbol_address(emitter, variant_reg, &function_symbol(variant));
+    abi::emit_store_reg_to_symbol(emitter, variant_reg, &active_symbol, 0);
 }
 
 fn mark_included(label: &str, emitter: &mut Emitter) {

@@ -7,6 +7,7 @@ mod driver_support;
 mod emit;
 mod expr;
 mod ffi;
+mod function_variants;
 mod functions;
 mod interface_wrappers;
 mod main_emission;
@@ -16,7 +17,7 @@ mod program_usage;
 mod runtime;
 mod stmt;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::parser::ast::{Program, StmtKind};
 use crate::types::{
@@ -70,9 +71,16 @@ pub fn generate_user_asm(
     let all_static_vars = collect_static_vars(program, global_env);
 
     // Emit user-defined functions before _main (skip extern functions)
+    let function_variant_groups = function_variants::collect_function_variant_groups(program);
+    let function_variant_group_names: HashSet<String> =
+        function_variant_groups.keys().cloned().collect();
     for (name, sig) in functions {
         if extern_functions.contains_key(name) {
             continue; // extern functions have no body — they're linked from C
+        }
+        if function_variant_groups.contains_key(name) {
+            function_variants::emit_function_variant_dispatcher(&mut emitter, &mut data, name);
+            continue;
         }
         let body = program
             .iter()
@@ -84,6 +92,7 @@ pub fn generate_user_asm(
 
         functions::emit_function(
             &mut emitter, &mut data, name, sig, body, functions,
+            &function_variant_group_names,
             &global_constants, &all_global_var_names, &all_static_vars,
             interfaces,
             Some(classes),
@@ -116,6 +125,7 @@ pub fn generate_user_asm(
             class_name,
             class_info,
             functions,
+            &function_variant_group_names,
             &global_constants,
             interfaces,
             classes,
@@ -139,6 +149,7 @@ pub fn generate_user_asm(
         program,
         global_env,
         functions,
+        &function_variant_group_names,
         interfaces,
         classes,
         enums,

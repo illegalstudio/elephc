@@ -7,6 +7,7 @@ mod discovery;
 mod engine;
 mod exprs;
 mod files;
+mod function_variants;
 mod include_once;
 mod include_path;
 mod state;
@@ -28,7 +29,7 @@ pub fn resolve(program: Program, base_dir: &Path) -> Result<Program, CompileErro
         return Ok(program);
     }
 
-    let discovered_declarations = discover_include_declarations(&program, base_dir)?;
+    let discovery = discover_include_declarations(&program, base_dir)?;
     let mut declared_once: HashSet<PathBuf> = HashSet::new();
     let mut include_chain: Vec<PathBuf> = Vec::new();
     let mut state = ResolveState::default();
@@ -38,20 +39,22 @@ pub fn resolve(program: Program, base_dir: &Path) -> Result<Program, CompileErro
         &mut declared_once,
         &mut include_chain,
         &mut state,
+        &discovery.function_variants,
     )?;
 
-    if discovered_declarations.is_empty() {
+    if discovery.declarations.is_empty() {
         return Ok(resolved);
     }
 
-    let prelude_span = discovered_declarations
+    let prelude_span = discovery
+        .declarations
         .first()
         .map(|stmt| stmt.span)
         .unwrap_or_else(Span::dummy);
     let mut resolved_with_prelude = vec![Stmt::new(
         StmtKind::NamespaceBlock {
             name: None,
-            body: discovered_declarations,
+            body: discovery.declarations,
         },
         prelude_span,
     )];

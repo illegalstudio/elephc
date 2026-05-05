@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -17,6 +17,7 @@ pub(super) fn emit_class_methods(
     class_name: &str,
     class_info: &ClassInfo,
     functions: &HashMap<String, FunctionSig>,
+    function_variant_groups: &HashSet<String>,
     global_constants: &HashMap<String, (ExprKind, PhpType)>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
@@ -44,6 +45,7 @@ pub(super) fn emit_class_methods(
             &sig,
             &method.body,
             functions,
+            function_variant_groups,
             global_constants,
             interfaces,
             classes,

@@ -204,6 +204,13 @@ pub(super) fn resolve_decl_stmt(
             },
             stmt.span,
         ))),
+        StmtKind::FunctionVariantGroup { name, variants } => Ok(Some(Stmt::new(
+            StmtKind::FunctionVariantGroup {
+                name: name.clone(),
+                variants: variants.clone(),
+            },
+            stmt.span,
+        ))),
         StmtKind::ExternClassDecl { name, fields } => Ok(Some(Stmt::new(
             StmtKind::ExternClassDecl {
                 name: canonical_name_for_decl(namespace, name),

@@ -414,6 +414,14 @@ pub enum StmtKind {
         return_type: Option<TypeExpr>,
         body: Vec<Stmt>,
     },
+    FunctionVariantGroup {
+        name: String,
+        variants: Vec<String>,
+    },
+    FunctionVariantMark {
+        name: String,
+        variant: String,
+    },
     Return(Option<Expr>),
     ConstDecl {
         name: String,

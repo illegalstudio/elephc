@@ -288,6 +288,8 @@ pub(super) fn collect_scope_reads(
             | StmtKind::NamespaceBlock { .. }
             | StmtKind::UseDecl { .. }
             | StmtKind::Include { .. }
+            | StmtKind::FunctionVariantGroup { .. }
+            | StmtKind::FunctionVariantMark { .. }
             | StmtKind::ExternFunctionDecl { .. }
             | StmtKind::ExternClassDecl { .. }
             | StmtKind::ExternGlobalDecl { .. } => collect_closure_warnings_in_stmt(stmt, warnings),

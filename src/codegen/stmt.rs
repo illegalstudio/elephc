@@ -72,6 +72,10 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
         StmtKind::IncludeOnceMark { label } => {
             includes::emit_include_once_mark(label, emitter, data);
         }
+        StmtKind::FunctionVariantGroup { .. } => {}
+        StmtKind::FunctionVariantMark { name, variant } => {
+            includes::emit_function_variant_mark(name, variant, emitter, data);
+        }
         StmtKind::IncludeOnceGuard { label, body } => {
             includes::emit_include_once_guard(label, body, emitter, ctx, data);
         }

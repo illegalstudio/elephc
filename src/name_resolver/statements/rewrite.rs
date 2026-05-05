@@ -13,6 +13,10 @@ pub(super) fn resolve_regular_stmt(
         StmtKind::IncludeOnceMark { label } => StmtKind::IncludeOnceMark {
             label: label.clone(),
         },
+        StmtKind::FunctionVariantMark { name, variant } => StmtKind::FunctionVariantMark {
+            name: name.clone(),
+            variant: variant.clone(),
+        },
         StmtKind::IncludeOnceGuard { label, body } => StmtKind::IncludeOnceGuard {
             label: label.clone(),
             body: ctx.stmt_list(body)?,

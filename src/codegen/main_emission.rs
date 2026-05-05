@@ -25,6 +25,7 @@ pub(super) fn emit_main_and_finalize(
     program: &Program,
     global_env: &TypeEnv,
     functions: &HashMap<String, FunctionSig>,
+    function_variant_groups: &HashSet<String>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
@@ -41,6 +42,7 @@ pub(super) fn emit_main_and_finalize(
 ) -> String {
     let mut ctx = build_main_context(
         functions,
+        function_variant_groups,
         interfaces,
         classes,
         enums,
@@ -93,6 +95,7 @@ pub(super) fn emit_main_and_finalize(
 #[allow(clippy::too_many_arguments)]
 fn build_main_context(
     functions: &HashMap<String, FunctionSig>,
+    function_variant_groups: &HashSet<String>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
@@ -106,6 +109,7 @@ fn build_main_context(
 ) -> Context {
     let mut ctx = Context::new();
     ctx.functions = functions.clone();
+    ctx.function_variant_groups = function_variant_groups.clone();
     ctx.constants = global_constants.clone();
     ctx.in_main = true;
     ctx.return_type = PhpType::Void;
@@ -234,6 +238,7 @@ fn emit_top_level_statements(
         if matches!(
             &s.kind,
             StmtKind::FunctionDecl { .. }
+                | StmtKind::FunctionVariantGroup { .. }
                 | StmtKind::ClassDecl { .. }
                 | StmtKind::InterfaceDecl { .. }
                 | StmtKind::TraitDecl { .. }

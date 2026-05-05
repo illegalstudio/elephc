@@ -292,6 +292,12 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
         StmtKind::ExternGlobalDecl { name, c_type } => {
             StmtKind::ExternGlobalDecl { name, c_type }
         }
+        StmtKind::FunctionVariantGroup { name, variants } => {
+            StmtKind::FunctionVariantGroup { name, variants }
+        }
+        StmtKind::FunctionVariantMark { name, variant } => {
+            StmtKind::FunctionVariantMark { name, variant }
+        }
     };
     Stmt { kind, span }
 }

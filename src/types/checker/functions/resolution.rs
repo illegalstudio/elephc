@@ -150,6 +150,11 @@ impl Checker {
             return Ok(sig.return_type);
         }
 
+        if self.function_variant_groups.contains_key(name) {
+            self.ensure_function_variant_group_signature(name, span)?;
+            return self.check_function_call(name, args, span, caller_env);
+        }
+
         let decl = self
             .fn_decls
             .get(name)

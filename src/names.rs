@@ -150,6 +150,10 @@ pub fn function_symbol(name: &str) -> String {
     format!("_fn_{}", mangle_fqn(name))
 }
 
+pub fn function_variant_active_symbol(name: &str) -> String {
+    format!("_fn_variant_active_{}", mangle_fqn(name))
+}
+
 pub fn function_epilogue_symbol(name: &str) -> String {
     format!("{}_epilogue", function_symbol(name))
 }

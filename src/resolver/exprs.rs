@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::errors::CompileError;
 use crate::parser::ast::{CallableTarget, ClassMethod, Expr, ExprKind};
 
+use super::discovery::FunctionVariantRegistry;
 use super::engine::resolve_isolated;
 use super::state::ResolveState;
 
@@ -13,16 +14,17 @@ pub(super) fn resolve_expr(
     declared_once: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &ResolveState,
+    function_variants: &FunctionVariantRegistry,
 ) -> Result<Expr, CompileError> {
     let span = expr.span;
     let kind = match expr.kind {
         ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
-            left: Box::new(resolve_expr(*left, base_dir, declared_once, include_chain, state)?),
+            left: Box::new(resolve_expr(*left, base_dir, declared_once, include_chain, state, function_variants)?),
             op,
-            right: Box::new(resolve_expr(*right, base_dir, declared_once, include_chain, state)?),
+            right: Box::new(resolve_expr(*right, base_dir, declared_once, include_chain, state, function_variants)?),
         },
         ExprKind::InstanceOf { value, target } => ExprKind::InstanceOf {
-            value: Box::new(resolve_expr(*value, base_dir, declared_once, include_chain, state)?),
+            value: Box::new(resolve_expr(*value, base_dir, declared_once, include_chain, state, function_variants)?),
             target,
         },
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(resolve_expr(
@@ -31,6 +33,7 @@ pub(super) fn resolve_expr(
             declared_once,
             include_chain,
             state,
+            function_variants,
         )?)),
         ExprKind::Not(inner) => ExprKind::Not(Box::new(resolve_expr(
             *inner,
@@ -38,6 +41,7 @@ pub(super) fn resolve_expr(
             declared_once,
             include_chain,
             state,
+            function_variants,
         )?)),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(resolve_expr(
             *inner,
@@ -45,6 +49,7 @@ pub(super) fn resolve_expr(
             declared_once,
             include_chain,
             state,
+            function_variants,
         )?)),
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(resolve_expr(
             *inner,
@@ -52,6 +57,7 @@ pub(super) fn resolve_expr(
             declared_once,
             include_chain,
             state,
+            function_variants,
         )?)),
         ExprKind::ErrorSuppress(inner) => ExprKind::ErrorSuppress(Box::new(resolve_expr(
             *inner,
@@ -59,6 +65,7 @@ pub(super) fn resolve_expr(
             declared_once,
             include_chain,
             state,
+            function_variants,
         )?)),
         ExprKind::Print(inner) => ExprKind::Print(Box::new(resolve_expr(
             *inner,
@@ -66,10 +73,11 @@ pub(super) fn resolve_expr(
             declared_once,
             include_chain,
             state,
+            function_variants,
         )?)),
         ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
-            value: Box::new(resolve_expr(*value, base_dir, declared_once, include_chain, state)?),
-            default: Box::new(resolve_expr(*default, base_dir, declared_once, include_chain, state)?),
+            value: Box::new(resolve_expr(*value, base_dir, declared_once, include_chain, state, function_variants)?),
+            default: Box::new(resolve_expr(*default, base_dir, declared_once, include_chain, state, function_variants)?),
         },
         ExprKind::Assignment {
             target,
@@ -78,18 +86,25 @@ pub(super) fn resolve_expr(
             prelude,
             conditional_value_temp,
         } => ExprKind::Assignment {
-            target: Box::new(resolve_expr(*target, base_dir, declared_once, include_chain, state)?),
-            value: Box::new(resolve_expr(*value, base_dir, declared_once, include_chain, state)?),
+            target: Box::new(resolve_expr(*target, base_dir, declared_once, include_chain, state, function_variants)?),
+            value: Box::new(resolve_expr(*value, base_dir, declared_once, include_chain, state, function_variants)?),
             result_target: result_target
-                .map(|target| resolve_expr(*target, base_dir, declared_once, include_chain, state))
+                .map(|target| resolve_expr(*target, base_dir, declared_once, include_chain, state, function_variants))
                 .transpose()?
                 .map(Box::new),
-            prelude: resolve_isolated(prelude, base_dir, declared_once, include_chain, state)?,
+            prelude: resolve_isolated(
+                prelude,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?,
             conditional_value_temp,
         },
         ExprKind::FunctionCall { name, args } => ExprKind::FunctionCall {
             name,
-            args: resolve_exprs(args, base_dir, declared_once, include_chain, state)?,
+            args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         ExprKind::ArrayLiteral(items) => ExprKind::ArrayLiteral(resolve_exprs(
             items,
@@ -97,14 +112,15 @@ pub(super) fn resolve_expr(
             declared_once,
             include_chain,
             state,
+            function_variants,
         )?),
         ExprKind::ArrayLiteralAssoc(entries) => ExprKind::ArrayLiteralAssoc(
             entries
                 .into_iter()
                 .map(|(key, value)| {
                     Ok((
-                        resolve_expr(key, base_dir, declared_once, include_chain, state)?,
-                        resolve_expr(value, base_dir, declared_once, include_chain, state)?,
+                        resolve_expr(key, base_dir, declared_once, include_chain, state, function_variants)?,
+                        resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
                     ))
                 })
                 .collect::<Result<Vec<_>, CompileError>>()?,
@@ -120,24 +136,25 @@ pub(super) fn resolve_expr(
                 declared_once,
                 include_chain,
                 state,
+                function_variants,
             )?),
             arms: arms
                 .into_iter()
                 .map(|(patterns, value)| {
                     Ok((
-                        resolve_exprs(patterns, base_dir, declared_once, include_chain, state)?,
-                        resolve_expr(value, base_dir, declared_once, include_chain, state)?,
+                        resolve_exprs(patterns, base_dir, declared_once, include_chain, state, function_variants)?,
+                        resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
                     ))
                 })
                 .collect::<Result<Vec<_>, CompileError>>()?,
             default: default
-                .map(|expr| resolve_expr(*expr, base_dir, declared_once, include_chain, state))
+                .map(|expr| resolve_expr(*expr, base_dir, declared_once, include_chain, state, function_variants))
                 .transpose()?
                 .map(Box::new),
         },
         ExprKind::ArrayAccess { array, index } => ExprKind::ArrayAccess {
-            array: Box::new(resolve_expr(*array, base_dir, declared_once, include_chain, state)?),
-            index: Box::new(resolve_expr(*index, base_dir, declared_once, include_chain, state)?),
+            array: Box::new(resolve_expr(*array, base_dir, declared_once, include_chain, state, function_variants)?),
+            index: Box::new(resolve_expr(*index, base_dir, declared_once, include_chain, state, function_variants)?),
         },
         ExprKind::Ternary {
             condition,
@@ -150,6 +167,7 @@ pub(super) fn resolve_expr(
                 declared_once,
                 include_chain,
                 state,
+                function_variants,
             )?),
             then_expr: Box::new(resolve_expr(
                 *then_expr,
@@ -157,6 +175,7 @@ pub(super) fn resolve_expr(
                 declared_once,
                 include_chain,
                 state,
+                function_variants,
             )?),
             else_expr: Box::new(resolve_expr(
                 *else_expr,
@@ -164,15 +183,16 @@ pub(super) fn resolve_expr(
                 declared_once,
                 include_chain,
                 state,
+                function_variants,
             )?),
         },
         ExprKind::ShortTernary { value, default } => ExprKind::ShortTernary {
-            value: Box::new(resolve_expr(*value, base_dir, declared_once, include_chain, state)?),
-            default: Box::new(resolve_expr(*default, base_dir, declared_once, include_chain, state)?),
+            value: Box::new(resolve_expr(*value, base_dir, declared_once, include_chain, state, function_variants)?),
+            default: Box::new(resolve_expr(*default, base_dir, declared_once, include_chain, state, function_variants)?),
         },
         ExprKind::Cast { target, expr } => ExprKind::Cast {
             target,
-            expr: Box::new(resolve_expr(*expr, base_dir, declared_once, include_chain, state)?),
+            expr: Box::new(resolve_expr(*expr, base_dir, declared_once, include_chain, state, function_variants)?),
         },
         ExprKind::Closure {
             params,
@@ -183,17 +203,24 @@ pub(super) fn resolve_expr(
             is_static,
             captures,
         } => ExprKind::Closure {
-            params: resolve_params(params, base_dir, declared_once, include_chain, state)?,
+            params: resolve_params(params, base_dir, declared_once, include_chain, state, function_variants)?,
             variadic,
             return_type,
-            body: resolve_isolated(body, base_dir, declared_once, include_chain, state)?,
+            body: resolve_isolated(
+                body,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?,
             is_arrow,
             is_static,
             captures,
         },
         ExprKind::NamedArg { name, value } => ExprKind::NamedArg {
             name,
-            value: Box::new(resolve_expr(*value, base_dir, declared_once, include_chain, state)?),
+            value: Box::new(resolve_expr(*value, base_dir, declared_once, include_chain, state, function_variants)?),
         },
         ExprKind::Spread(inner) => ExprKind::Spread(Box::new(resolve_expr(
             *inner,
@@ -201,10 +228,11 @@ pub(super) fn resolve_expr(
             declared_once,
             include_chain,
             state,
+            function_variants,
         )?)),
         ExprKind::ClosureCall { var, args } => ExprKind::ClosureCall {
             var,
-            args: resolve_exprs(args, base_dir, declared_once, include_chain, state)?,
+            args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         ExprKind::ExprCall { callee, args } => ExprKind::ExprCall {
             callee: Box::new(resolve_expr(
@@ -213,12 +241,13 @@ pub(super) fn resolve_expr(
                 declared_once,
                 include_chain,
                 state,
+                function_variants,
             )?),
-            args: resolve_exprs(args, base_dir, declared_once, include_chain, state)?,
+            args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
             class_name,
-            args: resolve_exprs(args, base_dir, declared_once, include_chain, state)?,
+            args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         ExprKind::PropertyAccess { object, property } => ExprKind::PropertyAccess {
             object: Box::new(resolve_expr(
@@ -227,6 +256,7 @@ pub(super) fn resolve_expr(
                 declared_once,
                 include_chain,
                 state,
+                function_variants,
             )?),
             property,
         },
@@ -238,6 +268,7 @@ pub(super) fn resolve_expr(
                     declared_once,
                     include_chain,
                     state,
+                    function_variants,
                 )?),
                 property,
             }
@@ -249,9 +280,10 @@ pub(super) fn resolve_expr(
                 declared_once,
                 include_chain,
                 state,
+                function_variants,
             )?),
             method,
-            args: resolve_exprs(args, base_dir, declared_once, include_chain, state)?,
+            args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         ExprKind::NullsafeMethodCall {
             object,
@@ -264,9 +296,10 @@ pub(super) fn resolve_expr(
                 declared_once,
                 include_chain,
                 state,
+                function_variants,
             )?),
             method,
-            args: resolve_exprs(args, base_dir, declared_once, include_chain, state)?,
+            args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         ExprKind::StaticMethodCall {
             receiver,
@@ -275,7 +308,7 @@ pub(super) fn resolve_expr(
         } => ExprKind::StaticMethodCall {
             receiver,
             method,
-            args: resolve_exprs(args, base_dir, declared_once, include_chain, state)?,
+            args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         ExprKind::FirstClassCallable(target) => {
             ExprKind::FirstClassCallable(resolve_callable_target(
@@ -284,19 +317,20 @@ pub(super) fn resolve_expr(
                 declared_once,
                 include_chain,
                 state,
+                function_variants,
             )?)
         }
         ExprKind::PtrCast { target_type, expr } => ExprKind::PtrCast {
             target_type,
-            expr: Box::new(resolve_expr(*expr, base_dir, declared_once, include_chain, state)?),
+            expr: Box::new(resolve_expr(*expr, base_dir, declared_once, include_chain, state, function_variants)?),
         },
         ExprKind::BufferNew { element_type, len } => ExprKind::BufferNew {
             element_type,
-            len: Box::new(resolve_expr(*len, base_dir, declared_once, include_chain, state)?),
+            len: Box::new(resolve_expr(*len, base_dir, declared_once, include_chain, state, function_variants)?),
         },
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
-            args: resolve_exprs(args, base_dir, declared_once, include_chain, state)?,
+            args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         other => other,
     };
@@ -309,10 +343,20 @@ fn resolve_exprs(
     declared_once: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &ResolveState,
+    function_variants: &FunctionVariantRegistry,
 ) -> Result<Vec<Expr>, CompileError> {
     exprs
         .into_iter()
-        .map(|expr| resolve_expr(expr, base_dir, declared_once, include_chain, state))
+        .map(|expr| {
+            resolve_expr(
+                expr,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )
+        })
         .collect()
 }
 
@@ -322,6 +366,7 @@ pub(super) fn resolve_params(
     declared_once: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &ResolveState,
+    function_variants: &FunctionVariantRegistry,
 ) -> Result<Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)>, CompileError> {
     params
         .into_iter()
@@ -330,7 +375,16 @@ pub(super) fn resolve_params(
                 name,
                 type_expr,
                 default
-                    .map(|expr| resolve_expr(expr, base_dir, declared_once, include_chain, state))
+                    .map(|expr| {
+                        resolve_expr(
+                            expr,
+                            base_dir,
+                            declared_once,
+                            include_chain,
+                            state,
+                            function_variants,
+                        )
+                    })
                     .transpose()?,
                 is_ref,
             ))
@@ -344,13 +398,23 @@ pub(super) fn resolve_properties(
     declared_once: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &ResolveState,
+    function_variants: &FunctionVariantRegistry,
 ) -> Result<Vec<crate::parser::ast::ClassProperty>, CompileError> {
     properties
         .into_iter()
         .map(|mut property| {
             property.default = property
                 .default
-                .map(|expr| resolve_expr(expr, base_dir, declared_once, include_chain, state))
+                .map(|expr| {
+                    resolve_expr(
+                        expr,
+                        base_dir,
+                        declared_once,
+                        include_chain,
+                        state,
+                        function_variants,
+                    )
+                })
                 .transpose()?;
             Ok(property)
         })
@@ -363,11 +427,19 @@ pub(super) fn resolve_method_exprs(
     declared_once: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &ResolveState,
+    function_variants: &FunctionVariantRegistry,
 ) -> Result<Vec<ClassMethod>, CompileError> {
     methods
         .into_iter()
         .map(|mut method| {
-            method.params = resolve_params(method.params, base_dir, declared_once, include_chain, state)?;
+            method.params = resolve_params(
+                method.params,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?;
             Ok(method)
         })
         .collect()
@@ -379,6 +451,7 @@ fn resolve_callable_target(
     declared_once: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &ResolveState,
+    function_variants: &FunctionVariantRegistry,
 ) -> Result<CallableTarget, CompileError> {
     Ok(match target {
         CallableTarget::Function(name) => CallableTarget::Function(name),
@@ -392,6 +465,7 @@ fn resolve_callable_target(
                 declared_once,
                 include_chain,
                 state,
+                function_variants,
             )?),
             method,
         },

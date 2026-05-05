@@ -2,6 +2,8 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::abi;
+use crate::codegen::platform::Arch;
+use crate::names::function_variant_active_symbol;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::checker::builtins::is_supported_builtin_function;
 use crate::types::PhpType;
@@ -11,7 +13,7 @@ pub fn emit(
     args: &[Expr],
     emitter: &mut Emitter,
     ctx: &mut Context,
-    _data: &mut DataSection,
+    data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("function_exists()");
 
@@ -21,6 +23,11 @@ pub fn emit(
         _ => panic!("function_exists() argument must be a string literal"),
     };
 
+    if ctx.function_variant_groups.contains(&func_name) {
+        emit_variant_function_exists(&func_name, emitter, data);
+        return Some(PhpType::Bool);
+    }
+
     // -- emit constant true/false based on whether function is known --
     if ctx.functions.contains_key(&func_name) || is_supported_builtin_function(&func_name) {
         abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 1);
@@ -29,4 +36,26 @@ pub fn emit(
     }
 
     Some(PhpType::Bool)
+}
+
+fn emit_variant_function_exists(
+    func_name: &str,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    let active_symbol = function_variant_active_symbol(func_name);
+    data.add_comm(active_symbol.clone(), 8);
+    let result_reg = abi::int_result_reg(emitter);
+    abi::emit_load_symbol_to_reg(emitter, result_reg, &active_symbol, 0);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {}, #0", result_reg));            // test whether a conditional include has activated this function
+            emitter.instruction(&format!("cset {}, ne", result_reg));           // return true only when a function variant is active
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // test whether a conditional include has activated this function
+            emitter.instruction("setne al");                                    // return true only when a function variant is active
+            emitter.instruction("movzx rax, al");                               // widen the boolean byte into the integer result register
+        }
+    }
 }

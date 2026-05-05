@@ -87,6 +87,8 @@ fn stmt_has_includes(stmt: &Stmt) -> bool {
             .iter()
             .any(|case| case.value.as_ref().is_some_and(expr_has_includes)),
         StmtKind::IncludeOnceMark { .. }
+        | StmtKind::FunctionVariantGroup { .. }
+        | StmtKind::FunctionVariantMark { .. }
         | StmtKind::IfDef { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)

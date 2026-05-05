@@ -62,6 +62,9 @@ pub(super) fn collect_symbols(
                     canonical_name_for_decl(namespace.as_deref(), name),
                 );
             }
+            StmtKind::FunctionVariantGroup { name, .. } => {
+                insert_folded_symbol(&mut symbols.functions, name.clone());
+            }
             StmtKind::ClassDecl { name, .. }
             | StmtKind::EnumDecl { name, .. }
             | StmtKind::PackedClassDecl { name, .. } => {

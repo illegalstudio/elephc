@@ -244,6 +244,8 @@ pub(crate) fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
         | StmtKind::Global { .. }
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::IncludeOnceGuard { .. }
+        | StmtKind::FunctionVariantGroup { .. }
+        | StmtKind::FunctionVariantMark { .. }
         | StmtKind::Include { .. } => None,
     }
 }

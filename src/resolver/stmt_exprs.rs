@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::errors::CompileError;
 use crate::parser::ast::{Stmt, StmtKind};
 
+use super::discovery::FunctionVariantRegistry;
 use super::engine::resolve_isolated;
 use super::exprs::{resolve_expr, resolve_method_exprs, resolve_params, resolve_properties};
 use super::state::ResolveState;
@@ -14,6 +15,7 @@ pub(super) fn resolve_stmt_exprs(
     declared_once: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &ResolveState,
+    function_variants: &FunctionVariantRegistry,
 ) -> Result<Stmt, CompileError> {
     let span = stmt.span;
     let kind = match stmt.kind {
@@ -23,11 +25,25 @@ pub(super) fn resolve_stmt_exprs(
             declared_once,
             include_chain,
             state,
+            function_variants,
         )?),
         StmtKind::IncludeOnceMark { label } => StmtKind::IncludeOnceMark { label },
+        StmtKind::FunctionVariantGroup { name, variants } => {
+            StmtKind::FunctionVariantGroup { name, variants }
+        }
+        StmtKind::FunctionVariantMark { name, variant } => {
+            StmtKind::FunctionVariantMark { name, variant }
+        }
         StmtKind::IncludeOnceGuard { label, body } => StmtKind::IncludeOnceGuard {
             label,
-            body: resolve_isolated(body, base_dir, declared_once, include_chain, state)?,
+            body: resolve_isolated(
+                body,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?,
         },
         StmtKind::Echo(expr) => StmtKind::Echo(resolve_expr(
             expr,
@@ -35,6 +51,7 @@ pub(super) fn resolve_stmt_exprs(
             declared_once,
             include_chain,
             state,
+            function_variants,
         )?),
         StmtKind::Throw(expr) => StmtKind::Throw(resolve_expr(
             expr,
@@ -42,6 +59,7 @@ pub(super) fn resolve_stmt_exprs(
             declared_once,
             include_chain,
             state,
+            function_variants,
         )?),
         StmtKind::ExprStmt(expr) => StmtKind::ExprStmt(resolve_expr(
             expr,
@@ -49,14 +67,24 @@ pub(super) fn resolve_stmt_exprs(
             declared_once,
             include_chain,
             state,
+            function_variants,
         )?),
         StmtKind::Return(expr) => StmtKind::Return(
-            expr.map(|expr| resolve_expr(expr, base_dir, declared_once, include_chain, state))
+            expr.map(|expr| {
+                resolve_expr(
+                    expr,
+                    base_dir,
+                    declared_once,
+                    include_chain,
+                    state,
+                    function_variants,
+                )
+            })
                 .transpose()?,
         ),
         StmtKind::Assign { name, value } => StmtKind::Assign {
             name,
-            value: resolve_expr(value, base_dir, declared_once, include_chain, state)?,
+            value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::TypedAssign {
             type_expr,
@@ -65,19 +93,19 @@ pub(super) fn resolve_stmt_exprs(
         } => StmtKind::TypedAssign {
             type_expr,
             name,
-            value: resolve_expr(value, base_dir, declared_once, include_chain, state)?,
+            value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::ConstDecl { name, value } => StmtKind::ConstDecl {
             name,
-            value: resolve_expr(value, base_dir, declared_once, include_chain, state)?,
+            value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::ListUnpack { vars, value } => StmtKind::ListUnpack {
             vars,
-            value: resolve_expr(value, base_dir, declared_once, include_chain, state)?,
+            value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::StaticVar { name, init } => StmtKind::StaticVar {
             name,
-            init: resolve_expr(init, base_dir, declared_once, include_chain, state)?,
+            init: resolve_expr(init, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::ArrayAssign {
             array,
@@ -85,12 +113,12 @@ pub(super) fn resolve_stmt_exprs(
             value,
         } => StmtKind::ArrayAssign {
             array,
-            index: resolve_expr(index, base_dir, declared_once, include_chain, state)?,
-            value: resolve_expr(value, base_dir, declared_once, include_chain, state)?,
+            index: resolve_expr(index, base_dir, declared_once, include_chain, state, function_variants)?,
+            value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::ArrayPush { array, value } => StmtKind::ArrayPush {
             array,
-            value: resolve_expr(value, base_dir, declared_once, include_chain, state)?,
+            value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::PropertyAssign {
             object,
@@ -103,9 +131,10 @@ pub(super) fn resolve_stmt_exprs(
                 declared_once,
                 include_chain,
                 state,
+                function_variants,
             )?),
             property,
-            value: resolve_expr(value, base_dir, declared_once, include_chain, state)?,
+            value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::PropertyArrayPush {
             object,
@@ -118,9 +147,10 @@ pub(super) fn resolve_stmt_exprs(
                 declared_once,
                 include_chain,
                 state,
+                function_variants,
             )?),
             property,
-            value: resolve_expr(value, base_dir, declared_once, include_chain, state)?,
+            value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::PropertyArrayAssign {
             object,
@@ -134,10 +164,11 @@ pub(super) fn resolve_stmt_exprs(
                 declared_once,
                 include_chain,
                 state,
+                function_variants,
             )?),
             property,
-            index: resolve_expr(index, base_dir, declared_once, include_chain, state)?,
-            value: resolve_expr(value, base_dir, declared_once, include_chain, state)?,
+            index: resolve_expr(index, base_dir, declared_once, include_chain, state, function_variants)?,
+            value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::StaticPropertyAssign {
             receiver,
@@ -146,7 +177,7 @@ pub(super) fn resolve_stmt_exprs(
         } => StmtKind::StaticPropertyAssign {
             receiver,
             property,
-            value: resolve_expr(value, base_dir, declared_once, include_chain, state)?,
+            value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::StaticPropertyArrayPush {
             receiver,
@@ -155,7 +186,7 @@ pub(super) fn resolve_stmt_exprs(
         } => StmtKind::StaticPropertyArrayPush {
             receiver,
             property,
-            value: resolve_expr(value, base_dir, declared_once, include_chain, state)?,
+            value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::StaticPropertyArrayAssign {
             receiver,
@@ -165,8 +196,8 @@ pub(super) fn resolve_stmt_exprs(
         } => StmtKind::StaticPropertyArrayAssign {
             receiver,
             property,
-            index: resolve_expr(index, base_dir, declared_once, include_chain, state)?,
-            value: resolve_expr(value, base_dir, declared_once, include_chain, state)?,
+            index: resolve_expr(index, base_dir, declared_once, include_chain, state, function_variants)?,
+            value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::If {
             condition,
@@ -174,13 +205,13 @@ pub(super) fn resolve_stmt_exprs(
             elseif_clauses,
             else_body,
         } => StmtKind::If {
-            condition: resolve_expr(condition, base_dir, declared_once, include_chain, state)?,
+            condition: resolve_expr(condition, base_dir, declared_once, include_chain, state, function_variants)?,
             then_body,
             elseif_clauses: elseif_clauses
                 .into_iter()
                 .map(|(condition, body)| {
                     Ok((
-                        resolve_expr(condition, base_dir, declared_once, include_chain, state)?,
+                        resolve_expr(condition, base_dir, declared_once, include_chain, state, function_variants)?,
                         body,
                     ))
                 })
@@ -188,12 +219,12 @@ pub(super) fn resolve_stmt_exprs(
             else_body,
         },
         StmtKind::While { condition, body } => StmtKind::While {
-            condition: resolve_expr(condition, base_dir, declared_once, include_chain, state)?,
+            condition: resolve_expr(condition, base_dir, declared_once, include_chain, state, function_variants)?,
             body,
         },
         StmtKind::DoWhile { body, condition } => StmtKind::DoWhile {
             body,
-            condition: resolve_expr(condition, base_dir, declared_once, include_chain, state)?,
+            condition: resolve_expr(condition, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::For {
             init,
@@ -203,16 +234,39 @@ pub(super) fn resolve_stmt_exprs(
         } => StmtKind::For {
             init: init
                 .map(|stmt| {
-                    resolve_stmt_exprs(*stmt, base_dir, declared_once, include_chain, state)
+                    resolve_stmt_exprs(
+                        *stmt,
+                        base_dir,
+                        declared_once,
+                        include_chain,
+                        state,
+                        function_variants,
+                    )
                         .map(Box::new)
                 })
                 .transpose()?,
             condition: condition
-                .map(|expr| resolve_expr(expr, base_dir, declared_once, include_chain, state))
+                .map(|expr| {
+                    resolve_expr(
+                        expr,
+                        base_dir,
+                        declared_once,
+                        include_chain,
+                        state,
+                        function_variants,
+                    )
+                })
                 .transpose()?,
             update: update
                 .map(|stmt| {
-                    resolve_stmt_exprs(*stmt, base_dir, declared_once, include_chain, state)
+                    resolve_stmt_exprs(
+                        *stmt,
+                        base_dir,
+                        declared_once,
+                        include_chain,
+                        state,
+                        function_variants,
+                    )
                         .map(Box::new)
                 })
                 .transpose()?,
@@ -224,7 +278,7 @@ pub(super) fn resolve_stmt_exprs(
             value_var,
             body,
         } => StmtKind::Foreach {
-            array: resolve_expr(array, base_dir, declared_once, include_chain, state)?,
+            array: resolve_expr(array, base_dir, declared_once, include_chain, state, function_variants)?,
             key_var,
             value_var,
             body,
@@ -234,7 +288,7 @@ pub(super) fn resolve_stmt_exprs(
             cases,
             default,
         } => StmtKind::Switch {
-            subject: resolve_expr(subject, base_dir, declared_once, include_chain, state)?,
+            subject: resolve_expr(subject, base_dir, declared_once, include_chain, state, function_variants)?,
             cases: cases
                 .into_iter()
                 .map(|(values, body)| {
@@ -248,6 +302,7 @@ pub(super) fn resolve_stmt_exprs(
                                     declared_once,
                                     include_chain,
                                     state,
+                                    function_variants,
                                 )
                             })
                             .collect::<Result<Vec<_>, CompileError>>()?,
@@ -274,7 +329,14 @@ pub(super) fn resolve_stmt_exprs(
             body,
         } => StmtKind::FunctionDecl {
             name,
-            params: resolve_params(params, base_dir, declared_once, include_chain, state)?,
+            params: resolve_params(
+                params,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?,
             variadic,
             return_type,
             body,
@@ -303,8 +365,16 @@ pub(super) fn resolve_stmt_exprs(
                 declared_once,
                 include_chain,
                 state,
+                function_variants,
             )?,
-            methods: resolve_method_exprs(methods, base_dir, declared_once, include_chain, state)?,
+            methods: resolve_method_exprs(
+                methods,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?,
         },
         StmtKind::InterfaceDecl {
             name,
@@ -313,7 +383,14 @@ pub(super) fn resolve_stmt_exprs(
         } => StmtKind::InterfaceDecl {
             name,
             extends,
-            methods: resolve_method_exprs(methods, base_dir, declared_once, include_chain, state)?,
+            methods: resolve_method_exprs(
+                methods,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?,
         },
         StmtKind::TraitDecl {
             name,
@@ -329,8 +406,16 @@ pub(super) fn resolve_stmt_exprs(
                 declared_once,
                 include_chain,
                 state,
+                function_variants,
             )?,
-            methods: resolve_method_exprs(methods, base_dir, declared_once, include_chain, state)?,
+            methods: resolve_method_exprs(
+                methods,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?,
         },
         StmtKind::EnumDecl {
             name,
@@ -345,7 +430,14 @@ pub(super) fn resolve_stmt_exprs(
                     case.value = case
                         .value
                         .map(|expr| {
-                            resolve_expr(expr, base_dir, declared_once, include_chain, state)
+                            resolve_expr(
+                                expr,
+                                base_dir,
+                                declared_once,
+                                include_chain,
+                                state,
+                                function_variants,
+                            )
                         })
                         .transpose()?;
                     Ok(case)
@@ -375,4 +467,3 @@ pub(super) fn resolve_stmt_exprs(
     };
     Ok(Stmt::new(kind, span))
 }
-

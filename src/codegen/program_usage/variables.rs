@@ -149,6 +149,8 @@ fn stmt_uses_variable(stmt: &Stmt, needle: &str) -> bool {
         StmtKind::Global { vars } => vars.iter().any(|name| name == needle),
         StmtKind::PackedClassDecl { .. }
         | StmtKind::IncludeOnceMark { .. }
+        | StmtKind::FunctionVariantGroup { .. }
+        | StmtKind::FunctionVariantMark { .. }
         | StmtKind::Include { .. }
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }

@@ -31,6 +31,7 @@ use schema::propagate_abstract_return_types;
 pub(crate) struct Checker {
     pub target_platform: Platform,
     pub fn_decls: HashMap<String, FnDecl>,
+    pub function_variant_groups: HashMap<String, Vec<String>>,
     pub functions: HashMap<String, FunctionSig>,
     pub constants: HashMap<String, PhpType>,
     /// Tracks the return type of closures assigned to variables.

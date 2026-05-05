@@ -75,6 +75,7 @@ pub struct Context {
     pub loop_stack: Vec<LoopLabels>,
     pub return_label: Option<String>,
     pub functions: HashMap<String, FunctionSig>,
+    pub function_variant_groups: HashSet<String>,
     pub deferred_closures: Vec<DeferredClosure>,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
     /// Variables declared with `global $var` in the current function scope.
@@ -162,6 +163,7 @@ impl Context {
             loop_stack: Vec::new(),
             return_label: None,
             functions: HashMap::new(),
+            function_variant_groups: HashSet::new(),
             deferred_closures: Vec::new(),
             constants: HashMap::new(),
             global_vars: HashSet::new(),

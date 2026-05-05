@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, Program, StmtKind, TypeExpr};
+use crate::types::FunctionSig;
 
 use super::super::{Checker, FnDecl};
 
@@ -14,6 +15,27 @@ impl Checker {
     ) {
         let mut seen_functions = HashSet::new();
         for stmt in program {
+            if let StmtKind::FunctionVariantGroup { name, variants } = &stmt.kind {
+                if !seen_functions.insert(php_symbol_key(name)) {
+                    errors.push(CompileError::new(
+                        stmt.span,
+                        &format!("Duplicate function declaration: {}", name),
+                    ));
+                    continue;
+                }
+                if let Some(builtin) =
+                    crate::types::checker::builtins::canonical_builtin_function_name(name)
+                {
+                    errors.push(CompileError::new(
+                        stmt.span,
+                        &format!("Cannot redeclare built-in function: {}", builtin),
+                    ));
+                    continue;
+                }
+                self.function_variant_groups
+                    .insert(name.clone(), variants.clone());
+                continue;
+            }
             if let StmtKind::FunctionDecl {
                 name,
                 params,
@@ -69,6 +91,10 @@ impl Checker {
             .keys()
             .any(|existing| php_symbol_key(existing) == key)
             || self
+                .function_variant_groups
+                .keys()
+                .any(|existing| php_symbol_key(existing) == key)
+            || self
                 .extern_functions
                 .keys()
                 .any(|existing| php_symbol_key(existing) == key)
@@ -95,5 +121,114 @@ impl Checker {
                 }
             }
         }
+        self.resolve_function_variant_groups(errors);
+    }
+
+    fn resolve_function_variant_groups(&mut self, errors: &mut Vec<CompileError>) {
+        let names: Vec<String> = self.function_variant_groups.keys().cloned().collect();
+        for name in names {
+            if self.functions.contains_key(&name) {
+                continue;
+            }
+            if let Err(error) =
+                self.ensure_function_variant_group_signature(&name, crate::span::Span::dummy())
+            {
+                errors.extend(error.flatten());
+            }
+        }
+    }
+
+    pub(crate) fn ensure_function_variant_group_signature(
+        &mut self,
+        name: &str,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        if self.functions.contains_key(name) {
+            return Ok(());
+        }
+        let variants = self
+            .function_variant_groups
+            .get(name)
+            .cloned()
+            .ok_or_else(|| CompileError::new(span, &format!("Undefined function: {}", name)))?;
+        let first_variant = variants
+            .first()
+            .ok_or_else(|| CompileError::new(span, &format!("Function '{}' has no variants", name)))?
+            .clone();
+
+        if let Some(provisional) = self.provisional_variant_group_sig(&first_variant)? {
+            self.functions.insert(name.to_string(), provisional);
+        }
+
+        for variant in &variants {
+            if self.functions.contains_key(variant) {
+                continue;
+            }
+            let decl = self.fn_decls.get(variant).cloned().ok_or_else(|| {
+                CompileError::new(
+                    span,
+                    &format!(
+                        "Compiler error: function variant '{}' for '{}' has no declaration",
+                        variant, name
+                    ),
+                )
+            })?;
+            let param_types = self.initial_function_param_types(variant, &decl)?;
+            self.resolve_function_signature(variant, &decl, param_types)?;
+        }
+
+        let mut sigs = variants.iter().map(|variant| {
+            self.functions.get(variant).cloned().ok_or_else(|| {
+                CompileError::new(
+                    span,
+                    &format!(
+                        "Compiler error: function variant '{}' for '{}' has no signature",
+                        variant, name
+                    ),
+                )
+            })
+        });
+        let first = sigs
+            .next()
+            .transpose()?
+            .ok_or_else(|| CompileError::new(span, &format!("Function '{}' has no variants", name)))?;
+        for sig in sigs {
+            let sig = sig?;
+            if sig != first {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Conditional function variants for '{}' must have identical signatures",
+                        name
+                    ),
+                ));
+            }
+        }
+        self.functions.insert(name.to_string(), first);
+        Ok(())
+    }
+
+    fn provisional_variant_group_sig(
+        &mut self,
+        first_variant: &str,
+    ) -> Result<Option<FunctionSig>, CompileError> {
+        let Some(decl) = self.fn_decls.get(first_variant).cloned() else {
+            return Ok(None);
+        };
+        let param_types = self.initial_function_param_types(first_variant, &decl)?;
+        Ok(Some(FunctionSig {
+            params: param_types,
+            defaults: decl.defaults,
+            return_type: crate::types::PhpType::Int,
+            declared_return: decl.return_type.is_some(),
+            ref_params: decl.ref_params,
+            declared_params: decl
+                .param_types
+                .iter()
+                .map(|type_ann| type_ann.is_some())
+                .chain(decl.variadic.iter().map(|_| false))
+                .collect(),
+            variadic: decl.variadic,
+        }))
     }
 }

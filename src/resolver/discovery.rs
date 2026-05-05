@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
-use crate::names::canonical_name_for_decl;
+use crate::names::{canonical_name_for_decl, php_symbol_key};
 use crate::parser::ast::{
     CatchClause, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind,
 };
@@ -19,7 +19,7 @@ use super::state::{
 pub(super) fn discover_include_declarations(
     stmts: &[Stmt],
     base_dir: &Path,
-) -> Result<Vec<Stmt>, CompileError> {
+) -> Result<IncludeDiscovery, CompileError> {
     let mut output = DiscoveryOutput::default();
     let mut loaded_paths = HashSet::new();
     let mut include_chain = Vec::new();
@@ -34,15 +34,45 @@ pub(super) fn discover_include_declarations(
         &mut output,
     )?;
 
-    Ok(output.into_stmts())
+    Ok(output.into_include_discovery())
 }
 
-#[derive(Clone)]
-struct DiscoveryEntry {
+pub(super) struct IncludeDiscovery {
+    pub declarations: Vec<Stmt>,
+    pub function_variants: FunctionVariantRegistry,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) struct FunctionVariantKey {
     canonical: PathBuf,
-    span: crate::span::Span,
-    declarations: Vec<Stmt>,
-    repeatable: bool,
+    function_key: String,
+}
+
+impl FunctionVariantKey {
+    pub(super) fn new(canonical: &Path, function_name: &str) -> Self {
+        Self {
+            canonical: canonical.to_path_buf(),
+            function_key: php_symbol_key(function_name),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct FunctionVariantInfo {
+    pub public_name: String,
+    pub variant_name: String,
+}
+
+pub(super) type FunctionVariantRegistry = HashMap<FunctionVariantKey, FunctionVariantInfo>;
+
+#[derive(Clone)]
+pub(super) struct DiscoveryEntry {
+    pub canonical: PathBuf,
+    pub span: crate::span::Span,
+    pub declarations: Vec<Stmt>,
+    pub repeatable: bool,
+    pub exclusive_group: Option<String>,
+    pub exclusive_branch: Option<usize>,
 }
 
 #[derive(Default)]
@@ -69,6 +99,8 @@ impl DiscoveryOutput {
             span,
             declarations,
             repeatable,
+            exclusive_group: None,
+            exclusive_branch: None,
         });
     }
 
@@ -100,15 +132,19 @@ impl DiscoveryOutput {
         self.entries.extend(repeated);
     }
 
-    fn merge_alternatives(alternatives: Vec<DiscoveryOutput>) -> DiscoveryOutput {
+    fn merge_alternatives(alternatives: Vec<DiscoveryOutput>, group_id: String) -> DiscoveryOutput {
         let mut order: Vec<PathBuf> = Vec::new();
         let mut merged: HashMap<PathBuf, (DiscoveryEntry, usize)> = HashMap::new();
 
-        for alternative in alternatives {
+        for (branch_idx, alternative) in alternatives.into_iter().enumerate() {
             let mut branch_order: Vec<PathBuf> = Vec::new();
             let mut branch: HashMap<PathBuf, (DiscoveryEntry, usize)> = HashMap::new();
 
-            for entry in alternative.entries {
+            for mut entry in alternative.entries {
+                if entry.exclusive_group.is_none() {
+                    entry.exclusive_group = Some(group_id.clone());
+                    entry.exclusive_branch = Some(branch_idx);
+                }
                 let key = entry.canonical.clone();
                 let branch_entry = branch.entry(key.clone()).or_insert_with(|| {
                     branch_order.push(key);
@@ -139,8 +175,11 @@ impl DiscoveryOutput {
         output
     }
 
-    fn into_stmts(self) -> Vec<Stmt> {
-        self.entries
+    fn into_include_discovery(mut self) -> IncludeDiscovery {
+        let (groups, function_variants) =
+            super::function_variants::rewrite_conditional_function_variants(&mut self.entries);
+        let mut declarations = groups;
+        declarations.extend(self.entries
             .into_iter()
             .map(|entry| {
                 Stmt::new(
@@ -151,8 +190,13 @@ impl DiscoveryOutput {
                     entry.span,
                 )
             })
-            .collect()
+        );
+        IncludeDiscovery {
+            declarations,
+            function_variants,
+        }
     }
+
 }
 
 struct BranchDiscovery {
@@ -254,6 +298,7 @@ fn discover_stmt(
         }
         StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
             discover_expr(condition, base_dir, loaded_paths, include_chain, state, output)?;
+            let group_id = exclusive_group_id(stmt.span, base_dir, include_chain);
 
             match constant_truthiness(condition) {
                 Some(true) => {
@@ -274,6 +319,7 @@ fn discover_stmt(
                     include_chain,
                     state,
                     output,
+                    group_id,
                     Vec::new(),
                 )?,
                 None => {
@@ -292,6 +338,7 @@ fn discover_stmt(
                         include_chain,
                         state,
                         output,
+                        group_id,
                         vec![then_output],
                     )?;
                 }
@@ -473,6 +520,8 @@ fn discover_stmt(
         }
         StmtKind::Return(None)
         | StmtKind::IncludeOnceMark { .. }
+        | StmtKind::FunctionVariantGroup { .. }
+        | StmtKind::FunctionVariantMark { .. }
         | StmtKind::IfDef { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
@@ -554,12 +603,14 @@ fn discover_include(
 
     let mut declaration_declared_once = HashSet::new();
     let mut declaration_include_chain = include_chain.clone();
+    let declaration_function_variants = FunctionVariantRegistry::default();
     let resolved_declarations = resolve_stmts(
         included_stmts.clone(),
         included_dir,
         &mut declaration_declared_once,
         &mut declaration_include_chain,
         &mut declaration_state,
+        &declaration_function_variants,
     )?;
 
     include_chain.pop();
@@ -642,6 +693,7 @@ fn discover_branch_output(
 fn merge_branch_discoveries(
     branches: Vec<BranchDiscovery>,
     loaded_paths: &mut HashSet<PathBuf>,
+    group_id: String,
 ) -> DiscoveryOutput {
     let mut outputs = Vec::with_capacity(branches.len());
     let mut merged_loaded_paths: Option<HashSet<PathBuf>> = None;
@@ -662,7 +714,7 @@ fn merge_branch_discoveries(
         *loaded_paths = paths;
     }
 
-    DiscoveryOutput::merge_alternatives(outputs)
+    DiscoveryOutput::merge_alternatives(outputs, group_id)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -674,6 +726,7 @@ fn discover_if_tail(
     include_chain: &mut Vec<PathBuf>,
     state: &ResolveState,
     output: &mut DiscoveryOutput,
+    group_id: String,
     mut alternatives: Vec<BranchDiscovery>,
 ) -> Result<(), CompileError> {
     for (condition, body) in elseif_clauses {
@@ -697,7 +750,11 @@ fn discover_if_tail(
                     include_chain,
                     state,
                 )?);
-                output.extend(merge_branch_discoveries(alternatives, loaded_paths));
+                output.extend(merge_branch_discoveries(
+                    alternatives,
+                    loaded_paths,
+                    group_id,
+                ));
                 return Ok(());
             }
             None => alternatives.push(discover_branch_output(
@@ -714,8 +771,24 @@ fn discover_if_tail(
         Some(body) => discover_branch_output(body, base_dir, loaded_paths, include_chain, state)?,
         None => BranchDiscovery::empty(loaded_paths),
     });
-    output.extend(merge_branch_discoveries(alternatives, loaded_paths));
+    output.extend(merge_branch_discoveries(
+        alternatives,
+        loaded_paths,
+        group_id,
+    ));
     Ok(())
+}
+
+fn exclusive_group_id(
+    span: crate::span::Span,
+    base_dir: &Path,
+    include_chain: &[PathBuf],
+) -> String {
+    let owner = include_chain
+        .last()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| base_dir.to_string_lossy().into_owned());
+    format!("{}:{}:{}", owner, span.line, span.col)
 }
 
 fn discover_params(

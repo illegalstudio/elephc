@@ -349,6 +349,12 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
         },
         StmtKind::UseDecl { imports } => StmtKind::UseDecl { imports },
         StmtKind::PackedClassDecl { name, fields } => StmtKind::PackedClassDecl { name, fields },
+        StmtKind::FunctionVariantGroup { name, variants } => {
+            StmtKind::FunctionVariantGroup { name, variants }
+        }
+        StmtKind::FunctionVariantMark { name, variant } => {
+            StmtKind::FunctionVariantMark { name, variant }
+        }
     }
 }
 

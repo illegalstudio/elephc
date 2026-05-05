@@ -25,6 +25,7 @@ impl Checker {
         Self {
             target_platform,
             fn_decls: HashMap::new(),
+            function_variant_groups: HashMap::new(),
             functions: HashMap::new(),
             constants,
             closure_return_types: HashMap::new(),

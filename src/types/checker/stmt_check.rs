@@ -17,6 +17,8 @@ impl Checker {
                 Ok(())
             }
             StmtKind::IncludeOnceMark { .. } => Ok(()),
+            StmtKind::FunctionVariantGroup { .. } => Ok(()),
+            StmtKind::FunctionVariantMark { .. } => Ok(()),
             StmtKind::IncludeOnceGuard { body, .. } => {
                 for stmt in body {
                     self.check_stmt(stmt, env)?;

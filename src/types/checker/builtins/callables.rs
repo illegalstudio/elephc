@@ -335,6 +335,10 @@ pub(super) fn check_builtin(
                             .collect();
                         let _ = checker.check_function_call(cb_name, &dummy_args, span, env);
                     }
+                } else if checker.function_variant_groups.contains_key(cb_name.as_str())
+                    && !checker.functions.contains_key(cb_name.as_str())
+                {
+                    let _ = checker.ensure_function_variant_group_signature(cb_name, span);
                 }
             }
             Ok(Some(PhpType::Bool))

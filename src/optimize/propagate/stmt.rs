@@ -474,5 +474,13 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             Stmt::new(StmtKind::ExternGlobalDecl { name, c_type }, span),
             env,
         ),
+        StmtKind::FunctionVariantGroup { name, variants } => (
+            Stmt::new(StmtKind::FunctionVariantGroup { name, variants }, span),
+            env,
+        ),
+        StmtKind::FunctionVariantMark { name, variant } => (
+            Stmt::new(StmtKind::FunctionVariantMark { name, variant }, span),
+            HashMap::new(),
+        ),
     }
 }
