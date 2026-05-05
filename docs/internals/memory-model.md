@@ -31,7 +31,8 @@ This page explains where every value lives in memory at runtime.
 │   Runtime metadata (BSS)     │  _concat_off, _global_argc/_argv,
 │  (heap state, counters,      │  _heap_off, _heap_free_list,
 │   globals, static storage)   │  _heap_small_bins, _gc_allocs/_frees/_live/_peak,
-│                              │  _gc_collecting/_gc_release_suppressed, ...
+│                              │  _gc_collecting/_gc_release_suppressed,
+│                              │  _include_once_*, _fn_variant_active_*, ...
 ├─────────────────────────────┤
 │       Data section           │  String literals, float constants
 │  (.data — read-only)         │

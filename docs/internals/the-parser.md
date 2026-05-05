@@ -193,6 +193,22 @@ NullCoalesce
 
 `instanceof` is represented as `ExprKind::InstanceOf` rather than `BinOp` because PHP's supported RHS form is a class/interface target name (`User`, `self`, `parent`, `static`), not an ordinary expression to evaluate.
 
+### Type expressions (`TypeExpr`)
+
+Parsed type annotations use `TypeExpr` before the checker resolves them into
+`PhpType` values:
+
+```
+Int  Float  Bool  Str  Void  Never  Iterable
+Ptr(Option<Name>)  Buffer(Box<TypeExpr>)  Named(Name)
+Nullable(Box<TypeExpr>)  Union(Vec<TypeExpr>)
+```
+
+`Iterable` represents PHP's `iterable` pseudo-type in parameter, return,
+property, and typed-local annotations. Nullable shorthand (`?T`) and explicit
+unions (`T|U`) are represented separately so the checker can reject invalid
+forms such as `?T|U` and normalize accepted declarations.
+
 ### Class-related types
 
 `ClassDecl` uses several supporting types:

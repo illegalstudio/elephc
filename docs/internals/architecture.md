@@ -40,9 +40,9 @@ PHP source (.php)
      │
      ▼
 ┌─────────┐
-│ Resolver │  src/resolver.rs
-│          │  Resolves include/require by recursively parsing files.
-│          │  Inlines ASTs and lowers *_once forms to runtime guards.
+│ Resolver │  src/resolver/
+│          │  Pre-scans statically resolvable include declarations,
+│          │  inlines executable include bodies, and lowers *_once guards.
 └────┬─────┘
      │
      ▼
@@ -129,12 +129,17 @@ AArch64 remains the most established and best-documented backend (macOS and Linu
 
 ```
 src/
-├── main.rs                    CLI entry point
 ├── lib.rs                     Public module exports
+├── main.rs                    CLI binary entry point
+├── cli.rs                     Command-line option parsing
+├── pipeline.rs                Frontend/backend compilation pipeline
+├── linker.rs                  Assembler and linker invocation
+├── timings.rs                 Phase timing collection/reporting
 ├── span.rs                    Source position (line, col)
 ├── magic_constants.rs         Per-file lowering for PHP magic constants
+├── magic_constants/           File/scope/trait magic-constant walkers
 ├── conditional.rs             Build-time `ifdef` pass
-├── resolver.rs                Include/require file resolution and once-guard lowering
+├── resolver/                  Include/require resolution, declaration discovery, once guards
 ├── optimize.rs                Public optimizer entry points and effect context
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination
 ├── runtime_cache.rs           Cached shared runtime object preparation
@@ -163,7 +168,7 @@ src/
 │   ├── warnings/              Non-fatal diagnostics (unused vars, unreachable code)
 │   └── checker/
 │       ├── mod.rs             Type-checker orchestration boundary
-│       ├── driver.rs          Main checker driver and program passes
+│       ├── driver/            Main checker driver and program passes
 │       ├── builtin_types.rs   Shared builtin/type helper predicates
 │       ├── builtins/          Built-in function type signatures
 │       ├── functions.rs       Function-checking module root / orchestration
@@ -173,7 +178,8 @@ src/
 │       ├── stmt_check.rs      Statement-checking module root
 │       ├── stmt_check/        Assignment and control-flow statement checks
 │       ├── type_compat.rs     Type-compatibility module root
-│       └── type_compat/       Declaration, object, pointer, and union compatibility helpers
+│       ├── type_compat/       Declaration, object, pointer, and union compatibility helpers
+│       └── ...
 │
 ├── codegen/
 │   ├── mod.rs                 generate() orchestration
@@ -206,7 +212,7 @@ src/
 │   │   ├── control_flow.rs    Control-flow dispatch
 │   │   ├── control_flow/      `branching/`, `foreach/`, `loops/`, `exceptions/`
 │   │   ├── helpers.rs         Shared statement-codegen helpers
-│   │   ├── includes.rs        Runtime guard flags for include_once/require_once
+│   │   ├── includes.rs        Runtime guard flags for *_once and include-loaded function variants
 │   │   ├── io.rs              Echo / print helpers
 │   │   ├── null_coalesce_assign.rs `??=` read-modify-write helpers for non-local targets
 │   │   ├── storage.rs         Global / static / extern-global dispatch

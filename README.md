@@ -277,7 +277,7 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-PHP source → Lexer → Parser (AST) → Magic constants (per-file) → Conditional (ifdef/--define) → Resolver (include/require inlining, per-file constants, once guards) → NameResolver (namespaces/use/FQNs) → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → Codegen → as + ld → native executable
+PHP source → Lexer → Parser (AST) → Magic constants (per-file) → Conditional (ifdef/--define) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → Codegen → as + ld → native executable
 ```
 
 The compiler emits human-readable assembly for the selected target. You can inspect the `.s` file to see exactly what your PHP becomes:
@@ -344,12 +344,17 @@ High-level map of the source tree. The codebase contains more focused helper sub
 
 ```
 src/
-├── main.rs              # CLI entry point, assembler + linker invocation
 ├── lib.rs               # Public module exports
+├── main.rs              # CLI binary entry point
+├── cli.rs               # Command-line argument parsing and options
+├── pipeline.rs          # Frontend/backend compilation pipeline
+├── linker.rs            # Assembler + linker invocation
+├── timings.rs           # Phase timing collection/reporting
 ├── span.rs              # Source position tracking (line, col)
 ├── conditional.rs       # Build-time `ifdef` pass driven by --define
 ├── magic_constants.rs   # Per-file PHP magic constant lowering
-├── resolver.rs          # Include/require file resolution and once-guard lowering
+├── magic_constants/     # File/scope/trait magic-constant walkers
+├── resolver/            # Include/require resolution, declaration discovery, once guards
 ├── runtime_cache.rs     # Preassembled runtime object cache
 ├── source_map.rs        # Assembly/source-map sidecar emission
 ├── termination.rs       # Structured terminal-effect analysis
@@ -421,7 +426,7 @@ src/
 
 ## Tests
 
-2200+ tests across lexer, parser, codegen, and error reporting. Each codegen test compiles inline PHP source to a native binary, runs it, and asserts stdout.
+3000+ tests across lexer, parser, codegen, and error reporting. Each codegen test compiles inline PHP source to a native binary, runs it, and asserts stdout.
 
 ```bash
 cargo test                      # all tests

@@ -100,6 +100,10 @@ the same direct `if` / `elseif` / `else` chain include different files that
 declare the same function name, elephc accepts the pattern only if the function
 signatures match exactly, then dispatches to the implementation loaded by the
 branch that actually ran.
+
+Nested/composed branch combinations and `switch` cases are not treated as
+mutually exclusive for duplicate function declarations yet.
+
 Class-like declarations remain strict: duplicate class, interface, trait, enum,
 packed-class, or extern names still report redeclaration errors unless they are
 separated by namespace.
