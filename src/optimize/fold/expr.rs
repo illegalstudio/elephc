@@ -73,7 +73,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         }
         ExprKind::InstanceOf { value, target } => ExprKind::InstanceOf {
             value: Box::new(fold_expr(*value)),
-            target,
+            target: fold_instanceof_target(target),
         },
         ExprKind::BoolLiteral(value) => ExprKind::BoolLiteral(value),
         ExprKind::Null => ExprKind::Null,
@@ -291,6 +291,13 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         }
     };
     Expr { kind, span }
+}
+
+fn fold_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
+    match target {
+        InstanceOfTarget::Name(name) => InstanceOfTarget::Name(name),
+        InstanceOfTarget::Expr(expr) => InstanceOfTarget::Expr(Box::new(fold_expr(*expr))),
+    }
 }
 
 fn fold_callable_target(target: CallableTarget) -> CallableTarget {

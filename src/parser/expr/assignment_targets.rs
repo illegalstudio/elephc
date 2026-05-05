@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::parser::stmt::can_replay_assignment_target;
 use crate::span::Span;
 
@@ -213,8 +213,11 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
             collect_assignment_target_dependencies(left, dependencies);
             collect_assignment_target_dependencies(right, dependencies);
         }
-        ExprKind::InstanceOf { value, .. }
-        | ExprKind::Negate(value)
+        ExprKind::InstanceOf { value, target } => {
+            collect_assignment_target_dependencies(value, dependencies);
+            collect_instanceof_target_dependencies(target, dependencies);
+        }
+        ExprKind::Negate(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
@@ -330,8 +333,11 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
             expr_may_write_dependency(left, dependencies)
                 || expr_may_write_dependency(right, dependencies)
         }
-        ExprKind::InstanceOf { value, .. }
-        | ExprKind::Negate(value)
+        ExprKind::InstanceOf { value, target } => {
+            expr_may_write_dependency(value, dependencies)
+                || instanceof_target_may_write_dependency(target, dependencies)
+        }
+        ExprKind::Negate(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
@@ -440,6 +446,25 @@ fn assignment_target_may_write_dependency(target: &Expr, dependencies: &HashSet<
         }
         ExprKind::StaticPropertyAccess { .. } => false,
         _ => expr_contains_dependency(target, dependencies),
+    }
+}
+
+fn collect_instanceof_target_dependencies(
+    target: &InstanceOfTarget,
+    dependencies: &mut HashSet<String>,
+) {
+    if let InstanceOfTarget::Expr(expr) = target {
+        collect_assignment_target_dependencies(expr, dependencies);
+    }
+}
+
+fn instanceof_target_may_write_dependency(
+    target: &InstanceOfTarget,
+    dependencies: &HashSet<String>,
+) -> bool {
+    match target {
+        InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Expr(expr) => expr_may_write_dependency(expr, dependencies),
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::names::Name;
-use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind};
+use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget};
 use crate::parser::stmt::parse_name;
 use crate::span::Span;
 
@@ -347,26 +347,31 @@ fn parse_instanceof_target(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     span: Span,
-) -> Result<Name, CompileError> {
+) -> Result<InstanceOfTarget, CompileError> {
     match tokens.get(*pos).map(|(token, _)| token) {
         Some(Token::Self_) => {
             *pos += 1;
-            Ok(Name::unqualified("self"))
+            Ok(InstanceOfTarget::Name(Name::unqualified("self")))
         }
         Some(Token::Parent) => {
             *pos += 1;
-            Ok(Name::unqualified("parent"))
+            Ok(InstanceOfTarget::Name(Name::unqualified("parent")))
         }
         Some(Token::Static) => {
             *pos += 1;
-            Ok(Name::unqualified("static"))
+            Ok(InstanceOfTarget::Name(Name::unqualified("static")))
+        }
+        Some(Token::Variable(_)) | Some(Token::LParen) => {
+            let target = parse_expr_bp(tokens, pos, 36)?;
+            Ok(InstanceOfTarget::Expr(Box::new(target)))
         }
         _ => parse_name(
             tokens,
             pos,
             span,
             "Expected class or interface name after 'instanceof'",
-        ),
+        )
+        .map(InstanceOfTarget::Name),
     }
 }
 

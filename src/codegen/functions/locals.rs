@@ -1,5 +1,5 @@
 use crate::codegen::context::Context;
-use crate::parser::ast::{Expr, ExprKind, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, StmtKind};
 use crate::types::{FunctionSig, PhpType};
 
 use super::types::{codegen_declared_type, codegen_static_type, infer_local_type};
@@ -238,8 +238,11 @@ fn collect_assignment_expr_vars(expr: &Expr, ctx: &mut Context, sig: &FunctionSi
             collect_assignment_expr_vars(left, ctx, sig);
             collect_assignment_expr_vars(right, ctx, sig);
         }
-        ExprKind::InstanceOf { value, .. }
-        | ExprKind::Negate(value)
+        ExprKind::InstanceOf { value, target } => {
+            collect_assignment_expr_vars(value, ctx, sig);
+            collect_instanceof_target_vars(target, ctx, sig);
+        }
+        ExprKind::Negate(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
@@ -344,6 +347,16 @@ fn infer_conditional_assignment_temp_type(
     match &value.kind {
         ExprKind::NullCoalesce { default, .. } => infer_local_type(default, sig, Some(ctx)),
         _ => infer_local_type(value, sig, Some(ctx)),
+    }
+}
+
+fn collect_instanceof_target_vars(
+    target: &InstanceOfTarget,
+    ctx: &mut Context,
+    sig: &FunctionSig,
+) {
+    if let InstanceOfTarget::Expr(expr) = target {
+        collect_assignment_expr_vars(expr, ctx, sig);
     }
 }
 

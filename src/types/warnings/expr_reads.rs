@@ -1,5 +1,5 @@
 use crate::errors::CompileWarning;
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 
 use super::scope_usage::{
     ScopeUsage, analyze_function_like_scope, analyze_method_scope, collect_free_reads_in_function_like,
@@ -16,7 +16,10 @@ pub(super) fn collect_expr_reads(
             collect_expr_reads(left, scope, warnings);
             collect_expr_reads(right, scope, warnings);
         }
-        ExprKind::InstanceOf { value, .. } => collect_expr_reads(value, scope, warnings),
+        ExprKind::InstanceOf { value, target } => {
+            collect_expr_reads(value, scope, warnings);
+            collect_instanceof_target_reads(target, scope, warnings);
+        }
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
@@ -186,6 +189,16 @@ fn collect_assignment_prelude_reads(
         StmtKind::IncludeOnceMark { .. } => {}
         StmtKind::Assign { value, .. } => collect_expr_reads(value, scope, warnings),
         _ => {}
+    }
+}
+
+fn collect_instanceof_target_reads(
+    target: &InstanceOfTarget,
+    scope: &mut ScopeUsage,
+    warnings: &mut Vec<CompileWarning>,
+) {
+    if let InstanceOfTarget::Expr(expr) = target {
+        collect_expr_reads(expr, scope, warnings);
     }
 }
 

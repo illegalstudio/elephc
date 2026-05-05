@@ -1,7 +1,7 @@
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
     BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
-    Program, Stmt, StmtKind, TypeExpr,
+    InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
 };
 use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
 use std::cell::RefCell;

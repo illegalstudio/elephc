@@ -1,11 +1,15 @@
 use std::collections::HashSet;
 
-use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Program, Stmt, StmtKind};
 
 pub(in crate::codegen) fn collect_required_class_names(program: &Program) -> HashSet<String> {
     let mut names = HashSet::new();
     collect_required_class_names_in_body(program, &mut names);
     names
+}
+
+pub(in crate::codegen) fn program_has_dynamic_instanceof(program: &Program) -> bool {
+    body_has_dynamic_instanceof(program)
 }
 
 fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<String>) {
@@ -177,6 +181,115 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
     }
 }
 
+fn body_has_dynamic_instanceof(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(stmt_has_dynamic_instanceof)
+}
+
+fn stmt_has_dynamic_instanceof(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::ClassDecl { methods, .. }
+        | StmtKind::TraitDecl { methods, .. }
+        | StmtKind::InterfaceDecl { methods, .. } => methods
+            .iter()
+            .any(|method| body_has_dynamic_instanceof(&method.body)),
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            body_has_dynamic_instanceof(try_body)
+                || catches
+                    .iter()
+                    .any(|catch_clause| body_has_dynamic_instanceof(&catch_clause.body))
+                || finally_body
+                    .as_deref()
+                    .is_some_and(body_has_dynamic_instanceof)
+        }
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::Synthetic(body) => body_has_dynamic_instanceof(body),
+        StmtKind::FunctionDecl { body, .. } => body_has_dynamic_instanceof(body),
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            body_has_dynamic_instanceof(then_body)
+                || else_body
+                    .as_deref()
+                    .is_some_and(body_has_dynamic_instanceof)
+        }
+        StmtKind::Echo(expr)
+        | StmtKind::Throw(expr)
+        | StmtKind::ExprStmt(expr)
+        | StmtKind::ConstDecl { value: expr, .. }
+        | StmtKind::Assign { value: expr, .. }
+        | StmtKind::TypedAssign { value: expr, .. }
+        | StmtKind::StaticVar { init: expr, .. }
+        | StmtKind::ListUnpack { value: expr, .. }
+        | StmtKind::Return(Some(expr))
+        | StmtKind::ArrayPush { value: expr, .. }
+        | StmtKind::PropertyAssign { value: expr, .. }
+        | StmtKind::PropertyArrayPush { value: expr, .. }
+        | StmtKind::StaticPropertyAssign { value: expr, .. }
+        | StmtKind::StaticPropertyArrayPush { value: expr, .. } => {
+            expr_has_dynamic_instanceof(expr)
+        }
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            expr_has_dynamic_instanceof(condition)
+                || body_has_dynamic_instanceof(then_body)
+                || elseif_clauses.iter().any(|(condition, body)| {
+                    expr_has_dynamic_instanceof(condition) || body_has_dynamic_instanceof(body)
+                })
+                || else_body
+                    .as_deref()
+                    .is_some_and(body_has_dynamic_instanceof)
+        }
+        StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
+            expr_has_dynamic_instanceof(condition) || body_has_dynamic_instanceof(body)
+        }
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_deref().is_some_and(stmt_has_dynamic_instanceof)
+                || condition
+                    .as_ref()
+                    .is_some_and(expr_has_dynamic_instanceof)
+                || update.as_deref().is_some_and(stmt_has_dynamic_instanceof)
+                || body_has_dynamic_instanceof(body)
+        }
+        StmtKind::Foreach { array, body, .. } => {
+            expr_has_dynamic_instanceof(array) || body_has_dynamic_instanceof(body)
+        }
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
+            expr_has_dynamic_instanceof(subject)
+                || cases.iter().any(|(patterns, body)| {
+                    patterns.iter().any(expr_has_dynamic_instanceof)
+                        || body_has_dynamic_instanceof(body)
+                })
+                || default.as_deref().is_some_and(body_has_dynamic_instanceof)
+        }
+        StmtKind::ArrayAssign { index, value, .. }
+        | StmtKind::PropertyArrayAssign { index, value, .. }
+        | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+            expr_has_dynamic_instanceof(index) || expr_has_dynamic_instanceof(value)
+        }
+        _ => false,
+    }
+}
+
 fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>) {
     match &expr.kind {
         ExprKind::BinaryOp { left, right, .. } => {
@@ -185,8 +298,12 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         }
         ExprKind::InstanceOf { value, target } => {
             collect_required_class_names_in_expr(value, names);
-            if !matches!(target.as_str(), "self" | "parent" | "static") {
-                names.insert(target.as_str().to_string());
+            match target {
+                InstanceOfTarget::Name(name) if !matches!(name.as_str(), "self" | "parent" | "static") => {
+                    names.insert(name.as_str().to_string());
+                }
+                InstanceOfTarget::Expr(expr) => collect_required_class_names_in_expr(expr, names),
+                _ => {}
             }
         }
         ExprKind::Negate(expr)
@@ -350,6 +467,119 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         | ExprKind::ConstRef(_)
         | ExprKind::EnumCase { .. }
         | ExprKind::This => {}
+        ExprKind::MagicConstant(_) => {
+            unreachable!("MagicConstant must be lowered before codegen analysis")
+        }
+    }
+}
+
+fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::InstanceOf { value, target } => {
+            matches!(target, InstanceOfTarget::Expr(_))
+                || expr_has_dynamic_instanceof(value)
+                || match target {
+                    InstanceOfTarget::Name(_) => false,
+                    InstanceOfTarget::Expr(expr) => expr_has_dynamic_instanceof(expr),
+                }
+        }
+        ExprKind::BinaryOp { left, right, .. } => {
+            expr_has_dynamic_instanceof(left) || expr_has_dynamic_instanceof(right)
+        }
+        ExprKind::Negate(expr)
+        | ExprKind::Not(expr)
+        | ExprKind::BitNot(expr)
+        | ExprKind::Throw(expr)
+        | ExprKind::ErrorSuppress(expr)
+        | ExprKind::Print(expr)
+        | ExprKind::Spread(expr)
+        | ExprKind::Cast { expr, .. }
+        | ExprKind::PtrCast { expr, .. }
+        | ExprKind::NamedArg { value: expr, .. }
+        | ExprKind::BufferNew { len: expr, .. } => expr_has_dynamic_instanceof(expr),
+        ExprKind::NullCoalesce { value, default }
+        | ExprKind::ShortTernary { value, default } => {
+            expr_has_dynamic_instanceof(value) || expr_has_dynamic_instanceof(default)
+        }
+        ExprKind::Assignment {
+            target,
+            value,
+            result_target,
+            prelude,
+            ..
+        } => {
+            body_has_dynamic_instanceof(prelude)
+                || expr_has_dynamic_instanceof(target)
+                || expr_has_dynamic_instanceof(value)
+                || result_target
+                    .as_deref()
+                    .is_some_and(expr_has_dynamic_instanceof)
+        }
+        ExprKind::FunctionCall { args, .. }
+        | ExprKind::ClosureCall { args, .. }
+        | ExprKind::StaticMethodCall { args, .. }
+        | ExprKind::NewObject { args, .. } => args.iter().any(expr_has_dynamic_instanceof),
+        ExprKind::ExprCall { callee, args } => {
+            expr_has_dynamic_instanceof(callee) || args.iter().any(expr_has_dynamic_instanceof)
+        }
+        ExprKind::ArrayLiteral(items) => items.iter().any(expr_has_dynamic_instanceof),
+        ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, value)| {
+            expr_has_dynamic_instanceof(key) || expr_has_dynamic_instanceof(value)
+        }),
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            expr_has_dynamic_instanceof(subject)
+                || arms.iter().any(|(patterns, result)| {
+                    patterns.iter().any(expr_has_dynamic_instanceof)
+                        || expr_has_dynamic_instanceof(result)
+                })
+                || default
+                    .as_deref()
+                    .is_some_and(expr_has_dynamic_instanceof)
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            expr_has_dynamic_instanceof(array) || expr_has_dynamic_instanceof(index)
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            expr_has_dynamic_instanceof(condition)
+                || expr_has_dynamic_instanceof(then_expr)
+                || expr_has_dynamic_instanceof(else_expr)
+        }
+        ExprKind::Closure { body, .. } => body_has_dynamic_instanceof(body),
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::NullsafePropertyAccess { object, .. } => expr_has_dynamic_instanceof(object),
+        ExprKind::MethodCall { object, args, .. }
+        | ExprKind::NullsafeMethodCall { object, args, .. } => {
+            expr_has_dynamic_instanceof(object) || args.iter().any(expr_has_dynamic_instanceof)
+        }
+        ExprKind::FirstClassCallable(crate::parser::ast::CallableTarget::Method {
+            object,
+            ..
+        }) => expr_has_dynamic_instanceof(object),
+        ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_has_dynamic_instanceof),
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::Variable(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::PreIncrement(_)
+        | ExprKind::PostIncrement(_)
+        | ExprKind::PreDecrement(_)
+        | ExprKind::PostDecrement(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::EnumCase { .. }
+        | ExprKind::StaticPropertyAccess { .. }
+        | ExprKind::FirstClassCallable(_)
+        | ExprKind::This
+        | ExprKind::ClassConstant { .. } => false,
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before codegen analysis")
         }

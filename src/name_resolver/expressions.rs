@@ -1,5 +1,5 @@
 use crate::names::php_symbol_key;
-use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver};
 
 use super::names::{
     resolve_constant_name, resolve_function_name, resolve_special_or_class_name,
@@ -22,12 +22,7 @@ pub(super) fn resolve_expr(
         },
         ExprKind::InstanceOf { value, target } => ExprKind::InstanceOf {
             value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
-            target: resolved_name(resolve_special_or_class_name(
-                target,
-                current_namespace,
-                imports,
-                symbols,
-            )),
+            target: resolve_instanceof_target(target, current_namespace, imports, symbols),
         },
         ExprKind::Throw(inner) => {
             ExprKind::Throw(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
@@ -283,4 +278,23 @@ pub(super) fn resolve_expr(
         _ => expr.kind.clone(),
     };
     Expr::new(kind, expr.span)
+}
+
+fn resolve_instanceof_target(
+    target: &InstanceOfTarget,
+    current_namespace: Option<&str>,
+    imports: &Imports,
+    symbols: &Symbols,
+) -> InstanceOfTarget {
+    match target {
+        InstanceOfTarget::Name(name) => InstanceOfTarget::Name(resolved_name(
+            resolve_special_or_class_name(name, current_namespace, imports, symbols),
+        )),
+        InstanceOfTarget::Expr(expr) => InstanceOfTarget::Expr(Box::new(resolve_expr(
+            expr,
+            current_namespace,
+            imports,
+            symbols,
+        ))),
+    }
 }

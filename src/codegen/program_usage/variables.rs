@@ -1,4 +1,4 @@
-use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Program, Stmt, StmtKind};
 
 pub(in crate::codegen) fn program_uses_variable(program: &Program, needle: &str) -> bool {
     program.iter().any(|stmt| stmt_uses_variable(stmt, needle))
@@ -166,7 +166,9 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         ExprKind::BinaryOp { left, right, .. } => {
             expr_uses_variable(left, needle) || expr_uses_variable(right, needle)
         }
-        ExprKind::InstanceOf { value, .. } => expr_uses_variable(value, needle),
+        ExprKind::InstanceOf { value, target } => {
+            expr_uses_variable(value, needle) || instanceof_target_uses_variable(target, needle)
+        }
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
@@ -278,5 +280,12 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before codegen analysis")
         }
+    }
+}
+
+fn instanceof_target_uses_variable(target: &InstanceOfTarget, needle: &str) -> bool {
+    match target {
+        InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Expr(expr) => expr_uses_variable(expr, needle),
     }
 }

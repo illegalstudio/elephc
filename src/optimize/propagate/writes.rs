@@ -280,7 +280,10 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
             expr_local_writes(left)?,
             expr_local_writes(right)?,
         ]),
-        ExprKind::InstanceOf { value, .. } => expr_local_writes(value),
+        ExprKind::InstanceOf { value, target } => merge_write_sets([
+            expr_local_writes(value)?,
+            instanceof_target_local_writes(target)?,
+        ]),
         ExprKind::NullCoalesce { value, default } => merge_write_sets([
             expr_local_writes(value)?,
             expr_local_writes(default)?,
@@ -361,6 +364,13 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => expr_local_writes(object),
         ExprKind::ClassConstant { .. } => Some(HashSet::new()),
+    }
+}
+
+fn instanceof_target_local_writes(target: &InstanceOfTarget) -> Option<HashSet<String>> {
+    match target {
+        InstanceOfTarget::Name(_) => Some(HashSet::new()),
+        InstanceOfTarget::Expr(expr) => expr_local_writes(expr),
     }
 }
 

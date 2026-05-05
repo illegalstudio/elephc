@@ -1,5 +1,5 @@
 use crate::errors::CompileError;
-use crate::parser::ast::{CallableTarget, Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::span::Span;
 
 /// Walk a static closure body and reject any reference to `$this`. PHP forbids
@@ -142,8 +142,11 @@ fn expr_must_not_use_this(expr: &Expr, span: Span) -> Result<(), CompileError> {
             expr_must_not_use_this(left, span)?;
             expr_must_not_use_this(right, span)
         }
-        ExprKind::InstanceOf { value: inner, .. }
-        | ExprKind::Negate(inner)
+        ExprKind::InstanceOf { value, target } => {
+            expr_must_not_use_this(value, span)?;
+            instanceof_target_must_not_use_this(target, span)
+        }
+        ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -245,5 +248,15 @@ fn callable_target_must_not_use_this(
     match target {
         CallableTarget::Method { object, .. } => expr_must_not_use_this(object, span),
         CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => Ok(()),
+    }
+}
+
+fn instanceof_target_must_not_use_this(
+    target: &InstanceOfTarget,
+    span: Span,
+) -> Result<(), CompileError> {
+    match target {
+        InstanceOfTarget::Name(_) => Ok(()),
+        InstanceOfTarget::Expr(expr) => expr_must_not_use_this(expr, span),
     }
 }

@@ -11,8 +11,7 @@ use super::super::emit::Emitter;
 use super::scalars;
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::names::Name;
-use crate::parser::ast::{Expr, StaticReceiver};
+use crate::parser::ast::{Expr, InstanceOfTarget, StaticReceiver};
 use crate::types::PhpType;
 
 pub(super) fn emit_new_object(
@@ -432,7 +431,7 @@ pub(super) fn emit_static_method_call(
 
 pub(super) fn emit_instanceof(
     value: &Expr,
-    target: &Name,
+    target: &InstanceOfTarget,
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,

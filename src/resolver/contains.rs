@@ -1,5 +1,5 @@
 use crate::parser::ast::{
-    CallableTarget, ClassMethod, Expr, ExprKind, Stmt, StmtKind,
+    CallableTarget, ClassMethod, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind,
 };
 
 /// Check if any statement or closure expression recursively contains an Include.
@@ -115,8 +115,10 @@ fn expr_has_includes(expr: &Expr) -> bool {
         ExprKind::BinaryOp { left, right, .. } => {
             expr_has_includes(left) || expr_has_includes(right)
         }
-        ExprKind::InstanceOf { value, .. }
-        | ExprKind::Negate(value)
+        ExprKind::InstanceOf { value, target } => {
+            expr_has_includes(value) || instanceof_target_has_includes(target)
+        }
+        ExprKind::Negate(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
@@ -207,5 +209,12 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::This
         | ExprKind::ClassConstant { .. }
         | ExprKind::MagicConstant(_) => false,
+    }
+}
+
+fn instanceof_target_has_includes(target: &InstanceOfTarget) -> bool {
+    match target {
+        InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Expr(expr) => expr_has_includes(expr),
     }
 }

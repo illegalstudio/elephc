@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Program, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -114,9 +114,8 @@ impl Checker {
             ExprKind::BinaryOp { left, right, .. } => {
                 Self::expr_contains_method_call(left) || Self::expr_contains_method_call(right)
             }
-            ExprKind::InstanceOf { value, .. } => {
-                Self::expr_contains_method_call(value)
-            }
+            ExprKind::InstanceOf { value, target } => Self::expr_contains_method_call(value)
+                || Self::instanceof_target_contains_method_call(target),
             ExprKind::Ternary {
                 condition,
                 then_expr,
@@ -204,6 +203,13 @@ impl Checker {
             ExprKind::MagicConstant(_) => {
                 unreachable!("MagicConstant must be lowered before type checking")
             }
+        }
+    }
+
+    fn instanceof_target_contains_method_call(target: &InstanceOfTarget) -> bool {
+        match target {
+            InstanceOfTarget::Name(_) => false,
+            InstanceOfTarget::Expr(expr) => Self::expr_contains_method_call(expr),
         }
     }
 }

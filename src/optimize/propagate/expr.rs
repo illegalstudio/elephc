@@ -31,7 +31,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         },
         ExprKind::InstanceOf { value, target } => ExprKind::InstanceOf {
             value: Box::new(propagate_expr(*value, env)),
-            target,
+            target: propagate_instanceof_target(target, env),
         },
         ExprKind::BoolLiteral(value) => ExprKind::BoolLiteral(value),
         ExprKind::Null => ExprKind::Null,
@@ -245,6 +245,18 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
     };
 
     fold_expr(Expr { kind, span })
+}
+
+fn propagate_instanceof_target(
+    target: InstanceOfTarget,
+    env: &ConstantEnv,
+) -> InstanceOfTarget {
+    match target {
+        InstanceOfTarget::Name(name) => InstanceOfTarget::Name(name),
+        InstanceOfTarget::Expr(expr) => {
+            InstanceOfTarget::Expr(Box::new(propagate_expr(*expr, env)))
+        }
+    }
 }
 
 pub(crate) fn propagate_callable_target(target: CallableTarget, env: &ConstantEnv) -> CallableTarget {

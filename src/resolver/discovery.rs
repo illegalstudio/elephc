@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::errors::CompileError;
 use crate::names::{canonical_name_for_decl, php_symbol_key};
 use crate::parser::ast::{
-    CatchClause, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind,
+    CatchClause, ClassMethod, ClassProperty, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind,
 };
 
 use super::declarations::extract_discoverable_declarations;
@@ -913,8 +913,11 @@ fn discover_expr(
             discover_expr(left, base_dir, loaded_paths, include_chain, state, output)?;
             discover_expr(right, base_dir, loaded_paths, include_chain, state, output)?;
         }
-        ExprKind::InstanceOf { value, .. }
-        | ExprKind::Negate(value)
+        ExprKind::InstanceOf { value, target } => {
+            discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_instanceof_target(target, base_dir, loaded_paths, include_chain, state, output)?;
+        }
+        ExprKind::Negate(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
@@ -1054,6 +1057,22 @@ fn discover_exprs(
         discover_expr(expr, base_dir, loaded_paths, include_chain, state, output)?;
     }
     Ok(())
+}
+
+fn discover_instanceof_target(
+    target: &InstanceOfTarget,
+    base_dir: &Path,
+    loaded_paths: &mut HashSet<PathBuf>,
+    include_chain: &mut Vec<PathBuf>,
+    state: &mut ResolveState,
+    output: &mut DiscoveryOutput,
+) -> Result<(), CompileError> {
+    match target {
+        InstanceOfTarget::Name(_) => Ok(()),
+        InstanceOfTarget::Expr(expr) => {
+            discover_expr(expr, base_dir, loaded_paths, include_chain, state, output)
+        }
+    }
 }
 
 fn constant_truthiness(expr: &Expr) -> Option<bool> {

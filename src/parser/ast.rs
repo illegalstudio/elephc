@@ -22,7 +22,7 @@ pub enum ExprKind {
     },
     InstanceOf {
         value: Box<Expr>,
-        target: Name,
+        target: InstanceOfTarget,
     },
     BoolLiteral(bool),
     Null,
@@ -188,6 +188,12 @@ pub enum StaticReceiver {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum InstanceOfTarget {
+    Name(Name),
+    Expr(Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum CallableTarget {
     Function(Name),
     StaticMethod {
@@ -243,7 +249,17 @@ impl Expr {
         Self::new(
             ExprKind::InstanceOf {
                 value: Box::new(value),
-                target,
+                target: InstanceOfTarget::Name(target),
+            },
+            Span::dummy(),
+        )
+    }
+
+    pub fn dynamic_instance_of(value: Expr, target: Expr) -> Self {
+        Self::new(
+            ExprKind::InstanceOf {
+                value: Box::new(value),
+                target: InstanceOfTarget::Expr(Box::new(target)),
             },
             Span::dummy(),
         )

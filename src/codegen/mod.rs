@@ -37,7 +37,7 @@ pub(crate) use driver_support::{
 pub use driver_support::generate_runtime;
 use platform::Target;
 use prescan::{collect_constants, collect_global_var_names, collect_static_vars};
-use program_usage::collect_required_class_names;
+use program_usage::{collect_required_class_names, program_has_dynamic_instanceof};
 
 pub fn generate_user_asm(
     program: &Program,
@@ -104,7 +104,9 @@ pub fn generate_user_asm(
     }
 
     // Emit flattened class methods in class-id order for deterministic output.
-    let emitted_class_names = if target.arch == platform::Arch::X86_64 {
+    let emitted_class_names = if target.arch == platform::Arch::X86_64
+        && !program_has_dynamic_instanceof(program)
+    {
         Some(collect_required_class_names(program))
     } else {
         None

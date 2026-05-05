@@ -1,7 +1,7 @@
 use crate::names::Name;
 use crate::parser::ast::{
-    CatchClause, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind, MagicConstant, Stmt,
-    StmtKind,
+    CatchClause, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind, InstanceOfTarget,
+    MagicConstant, Stmt, StmtKind,
 };
 use crate::span::Span;
 
@@ -427,7 +427,7 @@ fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         },
         ExprKind::InstanceOf { value, target } => ExprKind::InstanceOf {
             value: Box::new(walk_expr(*value, pass)),
-            target,
+            target: walk_instanceof_target(target, pass),
         },
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(walk_expr(*inner, pass))),
         ExprKind::Not(inner) => ExprKind::Not(Box::new(walk_expr(*inner, pass))),
@@ -600,4 +600,16 @@ fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         },
     };
     Expr { kind, span }
+}
+
+fn walk_instanceof_target<P: Pass>(
+    target: InstanceOfTarget,
+    pass: &mut P,
+) -> InstanceOfTarget {
+    match target {
+        InstanceOfTarget::Name(name) => InstanceOfTarget::Name(name),
+        InstanceOfTarget::Expr(expr) => {
+            InstanceOfTarget::Expr(Box::new(walk_expr(*expr, pass)))
+        }
+    }
 }

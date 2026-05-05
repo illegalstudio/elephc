@@ -182,7 +182,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::Spread(inner) => expr_effect(inner),
         ExprKind::Print(inner) => expr_effect(inner).with_side_effects(),
         ExprKind::BinaryOp { left, right, .. } => expr_effect(left).combine(expr_effect(right)),
-        ExprKind::InstanceOf { value, .. } => expr_effect(value),
+        ExprKind::InstanceOf { value, target } => {
+            expr_effect(value).combine(instanceof_target_effect(target))
+        }
         ExprKind::Throw(inner) => expr_effect(inner).with_side_effects().with_may_throw(),
         ExprKind::NullCoalesce { value, default } => expr_effect(value).combine(expr_effect(default)),
         ExprKind::Assignment {
@@ -272,6 +274,13 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before optimizer passes")
         }
+    }
+}
+
+fn instanceof_target_effect(target: &InstanceOfTarget) -> Effect {
+    match target {
+        InstanceOfTarget::Name(_) => Effect::PURE,
+        InstanceOfTarget::Expr(expr) => expr_effect(expr),
     }
 }
 

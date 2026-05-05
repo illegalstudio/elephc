@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
-use crate::parser::ast::{CallableTarget, ClassMethod, Expr, ExprKind};
+use crate::parser::ast::{CallableTarget, ClassMethod, Expr, ExprKind, InstanceOfTarget};
 
 use super::discovery::FunctionVariantRegistry;
 use super::engine::resolve_isolated;
@@ -25,7 +25,7 @@ pub(super) fn resolve_expr(
         },
         ExprKind::InstanceOf { value, target } => ExprKind::InstanceOf {
             value: Box::new(resolve_expr(*value, base_dir, declared_once, include_chain, state, function_variants)?),
-            target,
+            target: resolve_instanceof_target(target, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(resolve_expr(
             *inner,
@@ -470,4 +470,25 @@ fn resolve_callable_target(
             method,
         },
     })
+}
+
+fn resolve_instanceof_target(
+    target: InstanceOfTarget,
+    base_dir: &Path,
+    declared_once: &mut HashSet<PathBuf>,
+    include_chain: &mut Vec<PathBuf>,
+    state: &ResolveState,
+    function_variants: &FunctionVariantRegistry,
+) -> Result<InstanceOfTarget, CompileError> {
+    match target {
+        InstanceOfTarget::Name(name) => Ok(InstanceOfTarget::Name(name)),
+        InstanceOfTarget::Expr(expr) => Ok(InstanceOfTarget::Expr(Box::new(resolve_expr(
+            *expr,
+            base_dir,
+            declared_once,
+            include_chain,
+            state,
+            function_variants,
+        )?))),
+    }
 }

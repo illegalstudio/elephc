@@ -105,6 +105,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
 
     // Exception runtime functions
     exceptions::emit_exception_cleanup_frames(emitter);
+    exceptions::emit_dynamic_instanceof(emitter);
     exceptions::emit_exception_matches(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);

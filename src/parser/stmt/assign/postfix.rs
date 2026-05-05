@@ -1,6 +1,6 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
 
@@ -190,8 +190,10 @@ pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
         ExprKind::BinaryOp { left, right, .. } => {
             can_replay_assignment_target(left) && can_replay_assignment_target(right)
         }
-        ExprKind::InstanceOf { value, .. }
-        | ExprKind::Negate(value)
+        ExprKind::InstanceOf { value, target } => {
+            can_replay_assignment_target(value) && can_replay_instanceof_target(target)
+        }
+        ExprKind::Negate(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Cast { expr: value, .. }
@@ -221,6 +223,13 @@ pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
         | ExprKind::EnumCase { .. }
         | ExprKind::MagicConstant(_) => true,
         _ => false,
+    }
+}
+
+fn can_replay_instanceof_target(target: &InstanceOfTarget) -> bool {
+    match target {
+        InstanceOfTarget::Name(_) => true,
+        InstanceOfTarget::Expr(expr) => can_replay_assignment_target(expr),
     }
 }
 

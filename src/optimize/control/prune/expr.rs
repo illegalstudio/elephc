@@ -15,7 +15,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         },
         ExprKind::InstanceOf { value, target } => ExprKind::InstanceOf {
             value: Box::new(prune_expr(*value)),
-            target,
+            target: prune_instanceof_target(target),
         },
         ExprKind::BoolLiteral(value) => ExprKind::BoolLiteral(value),
         ExprKind::Null => ExprKind::Null,
@@ -202,6 +202,13 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
     };
     let kind = prune_unused_pure_subexpressions(kind);
     Expr { kind, span }
+}
+
+fn prune_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
+    match target {
+        InstanceOfTarget::Name(name) => InstanceOfTarget::Name(name),
+        InstanceOfTarget::Expr(expr) => InstanceOfTarget::Expr(Box::new(prune_expr(*expr))),
+    }
 }
 
 pub(crate) fn expr_has_side_effects(expr: &Expr) -> bool {

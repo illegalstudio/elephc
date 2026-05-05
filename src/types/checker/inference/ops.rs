@@ -1,6 +1,6 @@
 use crate::errors::CompileError;
 use crate::names::Name;
-use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, TypeExpr};
+use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, TypeExpr};
 use crate::types::{merge_array_key_types, PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -212,12 +212,19 @@ impl Checker {
     pub(crate) fn infer_instanceof_type(
         &mut self,
         value: &Expr,
-        target: &Name,
+        target: &InstanceOfTarget,
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         self.infer_type(value, env)?;
-        self.resolve_instanceof_target_name(target, expr.span)?;
+        match target {
+            InstanceOfTarget::Name(name) => {
+                self.resolve_instanceof_target_name(name, expr.span)?;
+            }
+            InstanceOfTarget::Expr(target_expr) => {
+                self.infer_type(target_expr, env)?;
+            }
+        }
         Ok(PhpType::Bool)
     }
 
