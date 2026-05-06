@@ -56,6 +56,7 @@ Things that have a value:
 | `Throw(Expr)` | `throw new Exception("boom")` | Throw expression node used both in statements and expression positions such as `??` or ternaries |
 | `Print(Expr)` | `print $x` | PHP print expression. It writes the operand and returns `1`; statement-form `print $x;` is represented as `ExprStmt(Print(...))`. |
 | `NullCoalesce { value, default }` | `$x ?? $y` | Returns `$x` if non-null, otherwise `$y` |
+| `Assignment { target, value, result_target, prelude, conditional_value_temp }` | `$x = 1`, `$arr[$i] ??= "fallback"` | Assignment expression. Complex targets can carry prelude statements and synthetic temporaries so side effects are evaluated once while the assignment still returns the assigned value. |
 | `PreIncrement(String)` | `++$i` | Returns new value |
 | `PostIncrement(String)` | `$i++` | Returns old value |
 | `PreDecrement(String)` | `--$i` | |
@@ -70,7 +71,7 @@ Things that have a value:
 | `ErrorSuppress(Expr)` | `@file_get_contents("missing.txt")` | PHP error-control prefix expression. Codegen wraps the operand in a runtime warning-suppression scope. |
 | `Cast { target, expr }` | `(int)$x` | |
 | `Closure { params, variadic, return_type, body, is_arrow, is_static, captures }` | `function(int $x = 1) use ($y): string { ... }`, `fn(int $x): int => $x * 2`, or `static function(): int { ... }` | Anonymous function / arrow function. Params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` — name, declared type, default, is_ref. `variadic` is an optional parameter name. `return_type` stores the optional declared closure / arrow return `TypeExpr`. `captures` is `Vec<String>` — variables captured via an explicit `use (...)` clause. Arrow functions are still represented as `Closure`, parse with `is_arrow = true`, and do not carry explicit `use (...)` captures in the AST. `is_static` is set when the closure is prefixed with the `static` keyword (PHP `static function () {}` / `static fn () => …`); the type checker rejects any reference to `$this` inside a static closure. |
-| `NamedArg { name, value }` | `foo(name: "Alice")` | Named call argument. Later phases reorder these against the declared parameter list. |
+| `NamedArg { name, value }` | `foo(name: "Alice")` | Named call argument. The parser preserves source order; later phases validate names against the declared parameter list and normalize known-signature calls for ABI lowering. |
 | `ClosureCall { var, args }` | `$fn(1, 2)` | Calling a closure stored in a variable |
 | `ExprCall { callee, args }` | `$arr[0](1, 2)` | Calling the result of an expression (e.g., array access returning a callable) |
 | `Spread(Expr)` | `...$arr` | Spread/unpack operator — expands an array into individual arguments or elements |
@@ -118,6 +119,7 @@ Things that do something:
 | `IncludeOnceMark { label }` | Internal resolver lowering for regular `include` / `require`, marking the resolved file as loaded for later `*_once` guards |
 | `IncludeOnceGuard { label, body }` | Internal resolver lowering for `include_once` / `require_once`; codegen checks a per-file flag before emitting the guarded body |
 | `Throw(Expr)` | `throw new Exception("boom");` |
+| `Synthetic(Vec<Stmt>)` | Internal lowering only; a source construct that has already been expanded into one or more ordinary statements before final codegen |
 | `Try { try_body, catches, finally_body }` | `try { ... } catch (Exception $e) { ... } finally { ... }` |
 | `ConstDecl { name, value }` | `const MAX = 100;` |
 | `IfDef { symbol, then_body, else_body }` | `ifdef DEBUG { ... } else { ... }` |

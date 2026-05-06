@@ -73,3 +73,6 @@ echo "describe(42) = " . describe(42) . "\n";
 echo "describe(null) = " . describe_maybe(null) . "\n";
 echo "add_ten() = " . add_ten() . "\n";
 echo "profile(age: 30, name: \"Ada\") = " . profile(age: 30, name: "Ada") . "\n";
+echo "str_repeat(times: 3, string: \"ha\") = " . str_repeat(times: 3, string: "ha") . "\n";
+$repeat_args = ["ha"];
+echo "str_repeat(..., times: 3) = " . str_repeat(...$repeat_args, times: 3) . "\n";

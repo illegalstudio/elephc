@@ -2,7 +2,7 @@
 
 ## What is this
 
-A PHP-to-native compiler written in Rust. Compiles a static subset of PHP to ARM64 assembly, producing standalone macOS Mach-O binaries. No interpreter, no VM, no runtime dependencies.
+A PHP-to-native compiler written in Rust. Compiles a static subset of PHP to native assembly for the supported target matrix, producing standalone binaries. No interpreter, no VM, no runtime dependencies.
 
 ## Build & run
 
@@ -21,7 +21,7 @@ The compiler outputs a native binary next to the source file (e.g., `file.php` �
 ### Running tests
 
 ```bash
-cargo test                          # run all tests (slow — ~5-6 min due to as+ld per codegen test)
+cargo test                          # run all tests (slow — ~9 min due to as+ld per codegen test)
 cargo test -- --include-ignored     # run ALL tests including those requiring external libs
 cargo test --test codegen_tests     # run only end-to-end tests
 cargo test test_fizzbuzz            # run a specific test
@@ -49,14 +49,28 @@ The full test suite is slow because each codegen test spawns `as` + `ld` + runs 
 2. **When the feature is complete**: run the full suite once (`cargo test`) to check for regressions
 3. **PHP cross-check**: opt-in via `ELEPHC_PHP_CHECK=1 cargo test` — verifies output matches PHP interpreter
 
+### Pre-commit verification
+
+Before committing code changes, run the smallest useful focused tests first, then the full gates:
+
+```bash
+cargo build
+cargo test <feature_or_regression_filter>
+cargo test
+cargo test -- --include-ignored
+git diff --check
+```
+
+For codegen changes, also verify assembly-comment coverage/alignment for any files you touched. For target-specific codegen, run the relevant Docker Linux target script when the change can affect Linux x86_64 or Linux ARM64.
+
 ### Test structure
 
 | File | What it tests | How |
 |---|---|---|
 | `tests/lexer_tests.rs` | Tokenization | Asserts token sequences from source strings |
 | `tests/parser_tests.rs` | AST construction | Asserts AST node structure and operator precedence |
-| `tests/codegen_tests.rs` | Full pipeline (end-to-end) | Compiles PHP → binary, runs it, asserts stdout |
-| `tests/error_tests.rs` | Error reporting | Asserts that invalid programs produce the right error messages |
+| `tests/codegen_tests.rs`, `tests/codegen/` | Full pipeline (end-to-end) | Compiles PHP → binary, runs it, asserts stdout |
+| `tests/error_tests.rs`, `tests/error_tests/` | Error reporting | Asserts that invalid programs produce the right error messages |
 
 ### Test coverage requirements
 
@@ -84,19 +98,28 @@ Each test runs in an isolated temp directory. Tests run in parallel — the `com
 ## Architecture
 
 ```
-PHP source → Lexer (tokens) → Parser (AST) → Resolver (include/require) → NameResolver (namespace/use/FQN canonicalization) → Type Checker → Codegen (ARM64 asm) → as + ld → binary
+PHP source → Lexer → Parser → Magic constants → Conditional compilation → Resolver
+→ NameResolver → Constant folding → Type Checker / warnings → Optimizer passes
+→ Codegen → runtime cache → assembler/linker → binary
 ```
 
 ### Key modules
 
 | Module | Entry point | Responsibility |
 |---|---|---|
+| `src/pipeline.rs` | `compile()` | Orchestrates frontend passes, type checking, optimization, runtime cache, codegen, and linking |
 | `src/lexer/` | `tokenize()` | Source → `Vec<(Token, Span)>` |
 | `src/parser/` | `parse()` | Tokens → `Program` (Vec of Stmt). Pratt parser for expressions |
-| `src/resolver.rs` | `resolve()` | Resolves `include`/`require` by inlining referenced files. Runs before namespace/name canonicalization |
-| `src/name_resolver.rs` | `resolve()` | Applies namespace/use rules, rewrites references to canonical fully-qualified names, and flattens namespace-only AST nodes before type checking |
-| `src/types/` | `check()` | Type checking, returns `CheckResult` with `TypeEnv`, function/class/interface/FFI metadata, and the internal `Mixed` type for heterogeneous assoc-array values |
-| `src/codegen/` | `generate()` | AST → ARM64 assembly string. Top-level orchestration lives in `mod.rs`, while most lowering lives under `expr/`, `stmt/`, and `runtime/` |
+| `src/magic_constants/`, `src/magic_constants.rs` | `substitute_file_and_scope_constants()` | Lowers PHP magic constants before resolver/name-resolver/optimizer passes |
+| `src/conditional.rs` | `apply()` | Applies compiler `ifdef` conditional branches |
+| `src/resolver/` | `resolve()` | Resolves `include`/`require`, discovers declarations, and tracks include-loaded function variants. Runs before namespace/name canonicalization |
+| `src/name_resolver/` | `resolve()` | Applies namespace/use rules, rewrites references to canonical fully-qualified names, handles PHP-style builtin fallback, and flattens namespace-only AST nodes before type checking |
+| `src/types/` | `check()` | Type checking, returns `CheckResult` with `TypeEnv`, function/class/interface/enum/FFI metadata, warnings, required libraries, and the internal `Mixed` type for heterogeneous assoc-array values |
+| `src/optimize/`, `src/optimize.rs` | `fold_constants()`, `propagate_constants()`, `eliminate_dead_code()` | Constant folding/propagation, control-flow pruning/normalization, DCE, and effect modeling |
+| `src/codegen/` | `generate()` / `generate_user_asm()` | AST → target assembly string. Top-level orchestration lives in `mod.rs`, while most lowering lives under `expr/`, `stmt/`, and `runtime/` |
+| `src/codegen/abi/` | ABI helpers | Target-specific argument materialization, frame layout, registers, stack slots, symbols, and call helpers |
+| `src/codegen/program_usage/` | Program scans | Collects codegen metadata such as required classes and variables before emission |
+| `src/runtime_cache.rs` | `prepare_runtime_object()` | Builds/reuses the target runtime object before final linking |
 | `src/errors/` | `report()` | Error formatting with line:col |
 | `src/span.rs` | `Span` | Source position (line, col) attached to all AST nodes |
 
@@ -107,41 +130,106 @@ PHP source → Lexer (tokens) → Parser (AST) → Resolver (include/require) �
 - `src/codegen/runtime/mod.rs` emits runtime code (`__rt_*` routines)
 - `src/codegen/runtime/data.rs` emits runtime `.data` / `.bss` symbols and metadata tables
 - `src/codegen/context.rs` carries variable layout, ownership state, class metadata, and FFI metadata through codegen
+- `src/codegen/abi/` centralizes target-specific register, stack, frame, symbol, and call mechanics. Prefer these helpers over hardcoding ARM64 or x86_64 details in feature emitters.
 
 ### Adding a new operator
 
 1. Add token to `src/lexer/token.rs`
 2. Add scanning logic to `src/lexer/scan.rs`
 3. Add `BinOp` variant to `src/parser/ast.rs`
-4. Add one line to `infix_bp()` in `src/parser/expr.rs` (the Pratt parser binding power table)
-5. Add type checking in `src/types/checker/mod.rs`
-6. Add ARM64 codegen in the relevant file under `src/codegen/expr/` (and only touch `src/codegen/expr.rs` if the dispatcher must learn about a new helper path)
-7. Add tests in all 4 test files
+4. Add one line to `infix_bp()` in `src/parser/expr/pratt.rs` (the Pratt parser binding power table)
+5. Add type checking/inference in the relevant `src/types/checker/` file, usually under `inference/ops.rs` or expression inference
+6. Add optimizer/effect handling when the operator can be folded, propagated, pruned, or has side effects
+7. Add target-aware codegen in the relevant file under `src/codegen/expr/` (and only touch `src/codegen/expr.rs` if the dispatcher must learn about a new helper path)
+8. Add tests in all 4 test files
 
 ### Adding a new statement type
 
 1. Add `StmtKind` variant to `src/parser/ast.rs`
 2. Add parser logic in `src/parser/stmt.rs`
-3. Add type checking in `src/types/checker/mod.rs`
-4. Add codegen in the relevant file under `src/codegen/stmt/` (and only touch `src/codegen/stmt.rs` if the dispatcher must learn about a new helper path)
-5. If it introduces variables, update `collect_local_vars` in `src/codegen/functions.rs`
-6. Add tests
+3. Add resolver/name-resolver handling if the statement can contain names, declarations, includes, function variants, or expressions
+4. Add type checking in the relevant `src/types/checker/` module
+5. Add optimizer/effects/warnings handling if the statement can be folded, pruned, read variables, write variables, or alter control flow
+6. Add codegen in the relevant file under `src/codegen/stmt/` (and only touch `src/codegen/stmt.rs` if the dispatcher must learn about a new helper path)
+7. If it introduces variables or hidden temporaries, update local collection in `src/codegen/functions/locals.rs` and any main-emission allocation needed before frame sizing
+8. Add tests
+
+### Adding or changing an AST node
+
+When adding a new `ExprKind` or `StmtKind`, check every AST-walking pass. The compiler has many passes that deliberately recurse by variant, and missing one usually creates silent miscompilation rather than a compile error.
+
+Common places to audit:
+
+- Parser construction and lowering in `src/parser/`
+- Resolver/include discovery and function-variant handling in `src/resolver/`
+- Namespace/use/FQN rewriting in `src/name_resolver/`
+- Type checking, inference, return analysis, warnings, and type compatibility in `src/types/`
+- Optimizer folding, propagation, DCE, control-flow normalization, and effect modeling in `src/optimize/`
+- Program usage scans in `src/codegen/program_usage/`
+- Local/hidden-slot collection in `src/codegen/functions/locals.rs`
+- Ownership cleanup helpers in `src/codegen/expr/ownership.rs` and related runtime/GC paths
+- Expression/statement codegen dispatchers plus the focused lowering module
+- Lexer/parser/codegen/error/regression tests, depending on the surface area
 
 ### Adding a new built-in function
 
 1. Add the function to `src/types/checker/builtins/catalog.rs`. This is mandatory: it drives PHP-style case-insensitive builtin lookup, namespace fallback, redeclaration checks, and `name_resolver` behavior.
 2. Confirm `function_exists("...")` recognizes the function. The implementation delegates to the canonical catalog; do not add a second builtin-name table without keeping it in lockstep.
-3. Add type signature handling in the appropriate `src/types/checker/builtins/<category>.rs` file (argument count, types, return type).
-4. Add the codegen return type to `src/codegen/functions/types.rs` when local type inference needs to know the result type before the builtin is emitted.
-5. Create a new file in `src/codegen/builtins/<category>/` (e.g., `strings/my_func.rs`).
-6. Add `mod my_func;` plus dispatcher wiring in the category's `mod.rs`.
-7. If the function needs a runtime routine, create it under `src/codegen/runtime/<category>/`.
-8. Add module/re-export wiring in the relevant `runtime/<category>/mod.rs`, then call it from the runtime emitter orchestration.
-9. Add codegen and error tests.
+3. Add or update the call signature in `src/types/signatures.rs`. This is the contract for named arguments: parameter names, default values, variadic name, by-ref/ref-like params, and arity must match PHP. Mark mutating parameters in `ref_params`; named-argument lowering and hidden-temp allocation depend on it.
+4. Add type signature handling in the appropriate `src/types/checker/builtins/<category>.rs` file (argument count, value types, return type, warnings, required Linux libraries).
+5. Add first-class callable support in `first_class_callable_builtin_sig()` if the builtin should work through first-class callable syntax or callable aliases.
+6. Add optimizer effect modeling in `src/optimize/effects/builtins.rs` when purity, reads, writes, or thrown/fatal behavior matters for DCE/constant propagation.
+7. Add the codegen return type to `src/codegen/functions/types/builtins.rs` when local type inference needs to know the result type before the builtin is emitted.
+8. Create a new file in `src/codegen/builtins/<category>/` (e.g., `strings/my_func.rs`).
+9. Add `mod my_func;` plus dispatcher wiring in the category's `mod.rs`.
+10. If the function needs a runtime routine, create it under `src/codegen/runtime/<category>/`.
+11. Add module/re-export wiring in the relevant `runtime/<category>/mod.rs`, then call it from the runtime emitter orchestration.
+12. Update docs and add codegen/error tests. New PHP-visible builtins should include at least one case-insensitive or namespaced call test when relevant.
 
 Do not stop after wiring only the checker and codegen dispatcher. A builtin is not complete until the catalog, `function_exists()`, case-insensitive lookup, and namespace fallback all see it. New builtins should include at least one case-insensitive or namespaced call test when the feature is PHP-visible.
 
 Leaf builtin/runtime files contain exactly **one emitter function**. Keep dispatcher/re-export files (`mod.rs`) as orchestration-only files, and keep runtime data emission in `src/codegen/runtime/data.rs`.
+
+Do not list every builtin in this guide. `src/types/checker/builtins/catalog.rs` and `src/types/signatures.rs` are the canonical sources; update those instead of maintaining parallel lists.
+
+### Call argument semantics
+
+All function-like call surfaces must share the same argument rules instead of normalizing locally in individual emitters:
+
+- Shared named/positional/spread semantics live in `src/types/call_args.rs` whenever they are not codegen-specific.
+- `src/types/call_args.rs` owns the semantic planner (`CallArgPlan` / `plan_call_args`). The checker and codegen should consume that plan; they should not rebuild named-argument matching, duplicate detection, static associative-spread expansion, spread bounds, or the regular/variadic split locally.
+- If a codegen surface uses an internal signature with hidden parameters, such as closure captures, pass the caller-visible regular parameter count through `plan_call_args_with_regular_param_count()` instead of letting the planner infer it from the full internal signature.
+- Type-checker validation and diagnostic mapping lives in `src/types/checker/functions/call_validation.rs`; it maps planner errors to `CompileError` diagnostics instead of owning the semantic rules.
+- `src/codegen/expr/calls/args.rs` is call-argument orchestration: planner consumption, spread checks, and ABI materialization. Source-order named/spread lowering lives in `src/codegen/expr/calls/args/named.rs` and must also consume the shared plan.
+- User-defined calls, builtins, and extern calls must use the same named/spread normalization rules before any callee-specific lowering runs.
+- PHP call unpacking with static string keys maps to named arguments (`f(...["a" => 1])` behaves like `f(a: 1)`). Static numeric keys remain positional, and duplicate static string keys inside one unpack use PHP's last-wins behavior before planning.
+- When adding or extending a builtin, verify `first_class_callable_builtin_sig()` as well as the direct builtin signature so first-class callable syntax and callable aliases stay coherent.
+- PHP source evaluation order is distinct from ABI parameter order. Preserve side effects in source order, then materialize arguments in parameter/ABI order; extern calls follow the same rule before C ABI register loading.
+- Spread arguments before named arguments must be evaluated once, length/overwrite checks must happen at the PHP-observable point, and later named-argument side effects must not be skipped by early codegen checks. Too-short spreads for required parameters must fail instead of reading past the array payload.
+- A positional spread into a variadic callee fills visible regular parameters first; only the remaining tail becomes the variadic array.
+- User-defined variadics accept unknown named arguments as string-keyed variadic entries; internal/builtin variadics reject unknown named arguments like PHP internals.
+- Ref-like parameters, including mutating builtin parameters, must avoid value-temp preevaluation so the original storage is passed/mutated.
+- If hidden named-argument temporaries are introduced, update `src/codegen/functions/locals.rs` and main emission so slots are allocated before frame-size calculation.
+
+### Optimizer and effects
+
+The optimizer assumes side effects are modeled conservatively. When changing calls, operators, expressions, statements, or builtins:
+
+- Update `src/optimize/effects/` if purity, variable reads/writes, call effects, filesystem/runtime state, exceptions/fatals, or by-ref mutation behavior changes.
+- Do not mark a call as pure if it can read or write globals, files, environment, runtime heap state, object properties, array contents, argument storage, or can emit visible output.
+- Keep constant folding in `src/optimize/fold/` limited to PHP-equivalent results. If PHP behavior is edge-case sensitive, cross-check with `php -r`.
+- Add optimizer regression tests under `tests/codegen/optimizer/` when DCE, constant propagation, control-flow pruning, or folding can observe the change.
+- Magic constants must be lowered before optimizer passes. Do not introduce optimizer paths that expect raw `ExprKind::MagicConstant`.
+
+### Runtime ownership, GC, and COW
+
+Refcounted runtime values are not plain scalars. When changing arrays, strings, objects, `Mixed`, `Iterable`, call returns, or temporaries:
+
+- Preserve the boxed `Mixed` cell contract: the runtime tag and payload shape must stay consistent across codegen and runtime helpers.
+- Respect copy-on-write before mutating arrays or hashes. Use the existing ensure-unique helpers instead of mutating shared storage directly.
+- Track whether a value is owned, borrowed, persistent, or a temporary result. Release only values this code path owns.
+- Keep cleanup paths balanced across normal returns, early exits, throws/fatals, and control-flow merges.
+- Add focused tests in `tests/codegen/runtime_gc/` for ownership, aliasing, cycles, heap debug, stack args, and COW changes.
 
 ### File size policy
 
@@ -173,7 +261,14 @@ So the policy is:
 
 In short: prefer **cohesion over mechanical line-count compliance**. A 650-line mono-feature leaf is acceptable; a 350-line multi-purpose orchestrator is already a refactor candidate.
 
-### Codegen conventions (ARM64)
+### Codegen conventions (target-aware)
+
+- Prefer helpers from `src/codegen/abi/` for registers, stack slots, frame layout, argument materialization, symbol addresses, and calls.
+- New feature emitters should either support every active target through `emitter.target` or clearly isolate target-specific code behind existing target helpers.
+- Avoid hardcoding ARM64 register names, x86_64 register names, syscall numbers, object formats, or stack alignment rules in shared lowering code.
+- Test target-sensitive changes on the relevant target. Use the Docker Linux scripts when the change can affect Linux x86_64 or Linux ARM64.
+
+### ARM64 quick reference
 
 - **Integers**: result in `x0`
 - **Floats**: result in `d0`
@@ -181,13 +276,13 @@ In short: prefer **cohesion over mechanical line-count compliance**. A 650-line 
 - **Function args**: `x0`-`x7` (int = 1 reg, string = 2 regs), `d0`-`d7` (floats)
 - **Return value**: same as expression result (`x0`, `d0`, or `x1`/`x2`)
 - **Stack frame**: `x29` = frame pointer, `x30` = link register, locals at negative offsets from `x29`
-- **ABI helpers**: `src/codegen/abi.rs` centralizes load/store/write per type
+- **ABI helpers**: `src/codegen/abi/` centralizes load/store/write per type
 - **Labels**: use `ctx.next_label("prefix")` — global counter prevents collisions across functions
 - **Mixed values**: `PhpType::Mixed` is an internal boxed runtime shape used for heterogeneous associative-array values; codegen/runtime must preserve the boxed cell contract instead of treating it like a plain scalar
 
 ### Assembly comment policy
 
-**Every `emitter.instruction(...)` call MUST have an inline `//` comment** explaining what the ARM64 instruction does. This is mandatory — the codebase is educational and every assembly line must be understandable by someone learning how compilers work.
+**Every `emitter.instruction(...)` call MUST have an inline `//` comment** explaining what the assembly instruction does. This is mandatory — the codebase is educational and every assembly line must be understandable by someone learning how compilers work.
 
 Rules:
 
@@ -253,6 +348,9 @@ The `docs/` directory is the project's complete documentation, organized into th
 ```
 docs/
 ├── README.md              # Main index
+├── getting-started/       # Installation and first program
+│   ├── installation.md
+│   └── your-first-program.md
 ├── php/                   # PHP syntax (standard PHP features)
 │   ├── types.md
 │   ├── operators.md
@@ -263,6 +361,7 @@ docs/
 │   ├── math.md
 │   ├── classes.md
 │   ├── namespaces.md
+│   ├── magic-constants.md
 │   └── system-and-io.md
 ├── beyond-php/            # Compiler extensions (not valid PHP)
 │   ├── pointers.md
@@ -276,6 +375,7 @@ docs/
     ├── the-lexer.md
     ├── the-parser.md
     ├── the-type-checker.md
+    ├── the-optimizer.md
     ├── the-codegen.md
     ├── the-runtime.md
     ├── memory-model.md
@@ -308,7 +408,7 @@ sidebar:
 
 1. **PHP syntax feature** (operator, built-in, statement, etc.) → update the relevant page in `docs/php/`. Add the function signature, parameters, return type, and a short example.
 2. **Compiler extension** (pointer, buffer, extern, ifdef) → update the relevant page in `docs/beyond-php/`.
-3. **Compiler internals change** (pipeline, codegen, runtime) → update the relevant page in `docs/internals/`.
+3. **Compiler internals change** (pipeline, type checker, optimizer, codegen, runtime, ABI, memory model) → update the relevant page in `docs/internals/`.
 4. If a feature was previously listed as "not supported", remove that note.
 5. If there are known incompatibilities with PHP, document them in `docs/php/types.md` (incompatibilities section).
 6. Update `docs/README.md` index if adding a new page.
@@ -326,6 +426,6 @@ sidebar:
 - No `Co-Authored-By` lines in commits
 - Use commit message prefixes such as `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, or `test:`
 - Keep commit messages concise
-- Run `cargo test` before committing — all tests must pass
+- Run the pre-commit verification above before committing code changes — all tests must pass
 - Zero compiler warnings policy (`cargo build` must be clean)
 - Never run `cargo fmt` in this repo. Use targeted manual edits only; global formatting creates noisy churn here.

@@ -375,11 +375,12 @@ fn emit_loaded_method_call(
         .get(class_name)
         .and_then(|class_info| class_info.methods.get(method))
         .cloned();
-    let arg_types = objects::emit_pushed_method_args(args, sig.as_ref(), emitter, ctx, data);
+    let emitted_args = objects::emit_pushed_method_args(args, sig.as_ref(), emitter, ctx, data);
     objects::emit_method_call_with_saved_receiver_below_args(
         class_name,
         method,
-        &arg_types,
+        &emitted_args.arg_types,
+        emitted_args.source_temp_bytes,
         emitter,
         ctx,
     )

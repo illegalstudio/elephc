@@ -403,6 +403,14 @@ impl Checker {
             .cloned()
             .ok_or_else(|| CompileError::new(span, &format!("Undefined function: {}", name)))?;
 
+        let normalized_args = self.normalize_named_call_args(
+            &sig,
+            args,
+            span,
+            &format!("Extern function '{}'", name),
+        )?;
+        let args = normalized_args.as_slice();
+
         self.check_call_arity("Extern function", name, &sig, args, span)?;
 
         for (idx, arg) in args.iter().enumerate() {

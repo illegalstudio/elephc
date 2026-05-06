@@ -58,6 +58,16 @@ pub(super) fn emit_main_and_finalize(
     let uses_argc = program_uses_variable(program, "argc");
     let uses_argv = program_uses_variable(program, "argv");
     allocate_main_variables(global_env, &mut ctx, uses_argc, uses_argv);
+    let main_sig = FunctionSig {
+        params: Vec::new(),
+        defaults: Vec::new(),
+        return_type: PhpType::Void,
+        declared_return: false,
+        ref_params: Vec::new(),
+        declared_params: Vec::new(),
+        variadic: None,
+    };
+    functions::collect_local_vars(program, &mut ctx, &main_sig);
     super::prescan::collect_main_try_slots(program, &mut ctx);
 
     let main_cleanup_label = allocate_main_hidden_slots(&mut ctx);

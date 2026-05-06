@@ -9,6 +9,7 @@ extern function atoi(string $s): int;
 extern function getenv(string $name): string;
 extern function getpid(): int;
 extern function strlen(string $s): int;
+extern function strcmp(string $left, string $right): int;
 extern function signal(int $sig, callable $handler): ptr;
 extern function raise(int $sig): int;
 extern global ptr $environ;
@@ -19,7 +20,7 @@ extern "System" {
 }
 
 // Call C's abs()
-echo "abs(-42) = " . abs(-42) . "\n";
+echo "abs(n: -42) = " . abs(n: -42) . "\n";
 
 // Parse string to integer with C's atoi()
 echo "atoi('999') = " . atoi("999") . "\n";
@@ -35,8 +36,12 @@ echo "PID = " . getpid() . "\n";
 // C strlen vs PHP strlen (same name, extern shadows builtin)
 echo "strlen('hello') = " . strlen("hello") . "\n";
 
+// Named arguments work for extern calls, including after a spread prefix.
+$cmp_args = ["a"];
+echo "strcmp(..., right: 'b') = " . (strcmp(...$cmp_args, right: "b") < 0 ? "lt" : "ge") . "\n";
+
 // Parse hex with strtol
-echo "0xFF = " . strtol("FF", ptr_null(), 16) . "\n";
+echo "0xFF = " . strtol(base: 16, s: "FF", endptr: ptr_null()) . "\n";
 
 // Parse octal
 echo "0o77 = " . strtol("77", ptr_null(), 8) . "\n";

@@ -128,10 +128,10 @@ pub fn emit_expr(
         ExprKind::Cast { target, expr } => emit_cast(target, expr, emitter, ctx, data),
         ExprKind::FunctionCall { name, args } => {
             if ctx.extern_functions.contains_key(name.as_str()) {
-                return super::ffi::emit_extern_call(name.as_str(), args, emitter, ctx, data);
+                return super::ffi::emit_extern_call(name.as_str(), args, expr.span, emitter, ctx, data);
             }
             if let Some(ty) =
-                super::builtins::emit_builtin_call(name.as_str(), args, emitter, ctx, data)
+                super::builtins::emit_builtin_call(name.as_str(), args, expr.span, emitter, ctx, data)
             {
                 return ty;
             }

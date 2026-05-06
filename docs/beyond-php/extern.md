@@ -40,6 +40,20 @@ extern "SDL2" {
 - **Calling C**: elephc creates temporary null-terminated copy, frees after call
 - **C returns string**: elephc scans for `\0`, copies to owned storage
 
+Extern calls support the declared parameter names:
+
+```php
+<?php
+extern function strcmp(string $left, string $right): int;
+
+$left = ["a"];
+echo strcmp(...$left, right: "b");
+```
+
+Argument expressions are evaluated in PHP source order, then elephc loads the
+resulting values into the target C ABI registers. This matters when positional,
+named, or spread arguments have side effects.
+
 ## Callbacks
 ```php
 <?php

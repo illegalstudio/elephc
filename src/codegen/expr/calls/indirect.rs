@@ -22,64 +22,17 @@ pub(super) fn emit_expr_call(
 
     let callee_sig = callee_sig_for_expr(callee, ctx);
 
-    let prepared = args::prepare_call_args(
-        callee_sig.as_ref(),
+    let emitted_args = args::emit_pushed_call_args(
         args_exprs,
-        args::regular_param_count(callee_sig.as_ref(), args_exprs.len()),
-    );
-    let mut arg_types = args::emit_pushed_non_variadic_args(
-        &prepared.all_args,
         callee_sig.as_ref(),
+        args::regular_param_count(callee_sig.as_ref(), args_exprs.len()),
         "indirect ref arg",
         true,
         emitter,
         ctx,
         data,
     );
-
-    if prepared.spread_into_named {
-        if let Some(spread_expr) = prepared.spread_arg.as_ref() {
-            args::emit_spread_into_named_params(
-                spread_expr,
-                callee_sig.as_ref(),
-                prepared.spread_at_index,
-                prepared.regular_param_count,
-                "indirect params",
-                emitter,
-                ctx,
-                data,
-                &mut arg_types,
-            );
-        }
-    }
-
-    if prepared.is_variadic {
-        if let Some(spread_expr) = prepared.spread_arg.as_ref() {
-            let ty = args::emit_spread_variadic_array_arg(
-                spread_expr,
-                "spread array as indirect variadic param",
-                emitter,
-                ctx,
-                data,
-            );
-            arg_types.push(ty);
-        } else if prepared.variadic_args.is_empty() {
-            arg_types.push(args::emit_empty_variadic_array_arg(
-                "empty indirect variadic array",
-                emitter,
-            ));
-        } else {
-            arg_types.push(args::emit_variadic_array_arg_from_exprs(
-                &prepared.variadic_args,
-                "build indirect variadic array",
-                true,
-                true,
-                emitter,
-                ctx,
-                data,
-            ));
-        }
-    }
+    let arg_types = emitted_args.arg_types;
 
     let _callee_ty = super::super::emit_expr(callee, emitter, ctx, data);
     let call_reg = crate::codegen::abi::nested_call_reg(emitter);
@@ -116,10 +69,12 @@ pub(super) fn emit_expr_call(
     crate::codegen::abi::emit_call_reg(emitter, call_reg);
     if save_concat_before_args {
         crate::codegen::abi::emit_release_temporary_stack(emitter, overflow_bytes);
+        crate::codegen::abi::emit_release_temporary_stack(emitter, emitted_args.source_temp_bytes);
         super::super::restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
     } else {
         super::super::restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
         crate::codegen::abi::emit_release_temporary_stack(emitter, overflow_bytes);
+        crate::codegen::abi::emit_release_temporary_stack(emitter, emitted_args.source_temp_bytes);
     }
 
     ret_ty
@@ -143,67 +98,20 @@ pub(super) fn emit_loaded_expr_call(
     let callee_sig = callee_sig_for_expr(callee, ctx);
     crate::codegen::abi::emit_push_reg(emitter, crate::codegen::abi::int_result_reg(emitter)); // save the already-evaluated callable below later arguments
 
-    let prepared = args::prepare_call_args(
-        callee_sig.as_ref(),
+    let emitted_args = args::emit_pushed_call_args(
         args_exprs,
-        args::regular_param_count(callee_sig.as_ref(), args_exprs.len()),
-    );
-    let mut arg_types = args::emit_pushed_non_variadic_args(
-        &prepared.all_args,
         callee_sig.as_ref(),
+        args::regular_param_count(callee_sig.as_ref(), args_exprs.len()),
         "indirect ref arg",
         true,
         emitter,
         ctx,
         data,
     );
-
-    if prepared.spread_into_named {
-        if let Some(spread_expr) = prepared.spread_arg.as_ref() {
-            args::emit_spread_into_named_params(
-                spread_expr,
-                callee_sig.as_ref(),
-                prepared.spread_at_index,
-                prepared.regular_param_count,
-                "indirect params",
-                emitter,
-                ctx,
-                data,
-                &mut arg_types,
-            );
-        }
-    }
-
-    if prepared.is_variadic {
-        if let Some(spread_expr) = prepared.spread_arg.as_ref() {
-            let ty = args::emit_spread_variadic_array_arg(
-                spread_expr,
-                "spread array as indirect variadic param",
-                emitter,
-                ctx,
-                data,
-            );
-            arg_types.push(ty);
-        } else if prepared.variadic_args.is_empty() {
-            arg_types.push(args::emit_empty_variadic_array_arg(
-                "empty indirect variadic array",
-                emitter,
-            ));
-        } else {
-            arg_types.push(args::emit_variadic_array_arg_from_exprs(
-                &prepared.variadic_args,
-                "build indirect variadic array",
-                true,
-                true,
-                emitter,
-                ctx,
-                data,
-            ));
-        }
-    }
+    let arg_types = emitted_args.arg_types;
 
     let call_reg = crate::codegen::abi::nested_call_reg(emitter);
-    let arg_temp_bytes = pushed_arg_temp_bytes(&arg_types);
+    let arg_temp_bytes = args::pushed_temp_bytes(&arg_types) + emitted_args.source_temp_bytes;
     crate::codegen::abi::emit_load_temporary_stack_slot(emitter, call_reg, arg_temp_bytes);
 
     let assignments =
@@ -227,6 +135,7 @@ pub(super) fn emit_loaded_expr_call(
     if save_concat_before_args {
         crate::codegen::abi::emit_call_reg(emitter, call_reg);
         crate::codegen::abi::emit_release_temporary_stack(emitter, overflow_bytes);
+        crate::codegen::abi::emit_release_temporary_stack(emitter, emitted_args.source_temp_bytes);
         crate::codegen::abi::emit_release_temporary_stack(emitter, 16);
         super::super::restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
     } else {
@@ -234,6 +143,7 @@ pub(super) fn emit_loaded_expr_call(
         crate::codegen::abi::emit_call_reg(emitter, call_reg);
         super::super::restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
         crate::codegen::abi::emit_release_temporary_stack(emitter, overflow_bytes);
+        crate::codegen::abi::emit_release_temporary_stack(emitter, emitted_args.source_temp_bytes);
         crate::codegen::abi::emit_release_temporary_stack(emitter, 16);
     }
 
@@ -256,11 +166,4 @@ fn callee_sig_for_expr(
         ExprKind::FirstClassCallable(target) => super::first_class_callable_sig(target, ctx),
         _ => None,
     }
-}
-
-fn pushed_arg_temp_bytes(arg_types: &[PhpType]) -> usize {
-    arg_types
-        .iter()
-        .map(|ty| if matches!(ty, PhpType::Void) { 0 } else { 16 })
-        .sum()
 }

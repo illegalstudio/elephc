@@ -160,60 +160,17 @@ pub(super) fn emit_new_object(
     if class_info.methods.contains_key("__construct") {
         let sig = class_info.methods.get("__construct").cloned();
         let regular_param_count = call_args::regular_param_count(sig.as_ref(), args.len());
-        let prepared = call_args::prepare_call_args(sig.as_ref(), args, regular_param_count);
-        let mut arg_types = call_args::emit_pushed_non_variadic_args(
-            &prepared.all_args,
+        let emitted_args = call_args::emit_pushed_call_args(
+            args,
             sig.as_ref(),
+            regular_param_count,
             "constructor ref arg",
             false,
             emitter,
             ctx,
             data,
         );
-
-        if prepared.spread_into_named {
-            if let Some(spread_expr) = prepared.spread_arg.as_ref() {
-                call_args::emit_spread_into_named_params(
-                    spread_expr,
-                    sig.as_ref(),
-                    prepared.spread_at_index,
-                    prepared.regular_param_count,
-                    "constructor params",
-                    emitter,
-                    ctx,
-                    data,
-                    &mut arg_types,
-                );
-            }
-        }
-
-        if prepared.is_variadic {
-            if let Some(spread_expr) = prepared.spread_arg.as_ref() {
-                let ty = call_args::emit_spread_variadic_array_arg(
-                    spread_expr,
-                    "spread array as constructor variadic param",
-                    emitter,
-                    ctx,
-                    data,
-                );
-                arg_types.push(ty);
-            } else if prepared.variadic_args.is_empty() {
-                arg_types.push(call_args::emit_empty_variadic_array_arg(
-                    "empty constructor variadic array",
-                    emitter,
-                ));
-            } else {
-                arg_types.push(call_args::emit_variadic_array_arg_from_exprs(
-                    &prepared.variadic_args,
-                    "build constructor variadic array",
-                    true,
-                    true,
-                    emitter,
-                    ctx,
-                    data,
-                ));
-            }
-        }
+        let arg_types = emitted_args.arg_types;
 
         let assignments = crate::codegen::abi::build_outgoing_arg_assignments_for_target(
             emitter.target,
@@ -223,7 +180,8 @@ pub(super) fn emit_new_object(
         let overflow_bytes =
             crate::codegen::abi::materialize_outgoing_args(emitter, &assignments);
 
-        if overflow_bytes == 0 {
+        let receiver_offset = overflow_bytes + emitted_args.source_temp_bytes;
+        if receiver_offset == 0 {
             match emitter.target.arch {
                 Arch::AArch64 => {
                     emitter.instruction("ldr x0, [sp]");                        // load $this directly from the top of the stack when all args stayed in registers on AArch64
@@ -235,10 +193,10 @@ pub(super) fn emit_new_object(
         } else {
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction(&format!("ldr x0, [sp, #{}]", overflow_bytes)); // skip spilled stack arguments to reload the saved object pointer as $this on AArch64
+                    emitter.instruction(&format!("ldr x0, [sp, #{}]", receiver_offset)); // skip argument temporaries to reload the saved object pointer as $this on AArch64
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", overflow_bytes)); // skip spilled stack arguments to reload the saved object pointer as $this in the first SysV integer argument register on x86_64
+                    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", receiver_offset)); // skip argument temporaries to reload the saved object pointer as $this in the first SysV integer argument register on x86_64
                 }
             }
         }
@@ -251,6 +209,7 @@ pub(super) fn emit_new_object(
         abi::emit_call_label(emitter, &method_symbol(constructor_impl, "__construct")); // call the resolved constructor implementation for the active target ABI
         restore_concat_offset_after_nested_call(emitter, ctx, &PhpType::Void);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);             // drop spilled constructor arguments after the nested call returns
+        abi::emit_release_temporary_stack(emitter, emitted_args.source_temp_bytes); // drop source-order named-argument temporaries after constructor dispatch
     }
 
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the allocated object pointer as the expression result for the active target ABI

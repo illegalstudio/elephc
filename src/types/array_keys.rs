@@ -38,7 +38,7 @@ pub(crate) fn array_key_type_from_value_type(raw_ty: PhpType) -> PhpType {
     }
 }
 
-fn is_php_integer_array_key(value: &str) -> bool {
+pub(crate) fn is_php_integer_array_key(value: &str) -> bool {
     if value == "0" {
         return true;
     }

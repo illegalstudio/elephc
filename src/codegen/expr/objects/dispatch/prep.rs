@@ -12,66 +12,17 @@ pub(super) fn eval_and_push_args(
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
-) -> Vec<PhpType> {
-    let prepared = super::super::super::calls::args::prepare_call_args(
-        sig,
+) -> super::super::super::calls::args::EmittedCallArgs {
+    super::super::super::calls::args::emit_pushed_call_args(
         args,
-        super::super::super::calls::args::regular_param_count(sig, args.len()),
-    );
-    let mut arg_types = super::super::super::calls::args::emit_pushed_non_variadic_args(
-        &prepared.all_args,
         sig,
+        super::super::super::calls::args::regular_param_count(sig, args.len()),
         "method ref arg",
         true,
         emitter,
         ctx,
         data,
-    );
-
-    if prepared.spread_into_named {
-        if let Some(spread_expr) = prepared.spread_arg.as_ref() {
-            super::super::super::calls::args::emit_spread_into_named_params(
-                spread_expr,
-                sig,
-                prepared.spread_at_index,
-                prepared.regular_param_count,
-                "method params",
-                emitter,
-                ctx,
-                data,
-                &mut arg_types,
-            );
-        }
-    }
-
-    if prepared.is_variadic {
-        if let Some(spread_expr) = prepared.spread_arg.as_ref() {
-            let ty = super::super::super::calls::args::emit_spread_variadic_array_arg(
-                spread_expr,
-                "spread array as variadic method param",
-                emitter,
-                ctx,
-                data,
-            );
-            arg_types.push(ty);
-        } else if prepared.variadic_args.is_empty() {
-            arg_types.push(super::super::super::calls::args::emit_empty_variadic_array_arg(
-                "empty variadic method array",
-                emitter,
-            ));
-        } else {
-            arg_types.push(super::super::super::calls::args::emit_variadic_array_arg_from_exprs(
-                &prepared.variadic_args,
-                "build variadic method array",
-                true,
-                true,
-                emitter,
-                ctx,
-                data,
-            ));
-        }
-    }
-    arg_types
+    )
 }
 
 pub(super) fn compute_register_assignments(

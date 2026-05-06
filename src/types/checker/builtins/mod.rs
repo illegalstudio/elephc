@@ -31,6 +31,19 @@ impl Checker {
         span: crate::span::Span,
         env: &TypeEnv,
     ) -> Result<Option<PhpType>, CompileError> {
+        let normalized_args;
+        let args = if let Some(sig) = crate::types::builtin_call_sig(name) {
+            normalized_args = self.normalize_builtin_call_args(
+                &sig,
+                args,
+                span,
+                &format!("Builtin '{}'", name),
+            )?;
+            normalized_args.as_slice()
+        } else {
+            args
+        };
+
         if let Some(result) = strings::check_builtin(self, name, args, span, env)? {
             return Ok(Some(result));
         }

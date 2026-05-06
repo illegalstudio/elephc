@@ -6,13 +6,15 @@ use crate::codegen::expr::emit_expr;
 use crate::codegen::platform::Arch;
 use crate::names::function_symbol;
 use crate::parser::ast::{Expr, ExprKind};
-use crate::types::PhpType;
+use crate::span::Span;
+use crate::types::{FunctionSig, PhpType};
 
 /// Emit an extern (FFI) function call using the C ABI.
 /// The C symbol is `_{name}` (macOS convention).
 pub fn emit_extern_call(
     name: &str,
     args: &[Expr],
+    call_span: Span,
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
@@ -22,6 +24,47 @@ pub fn emit_extern_call(
         .get(name)
         .cloned()
         .unwrap_or_else(|| panic!("codegen bug: extern function '{}' not found", name));
+    let call_sig = ctx
+        .functions
+        .get(name)
+        .cloned()
+        .unwrap_or_else(|| FunctionSig {
+            params: sig.params.clone(),
+            defaults: vec![None; sig.params.len()],
+            return_type: sig.return_type.clone(),
+            declared_return: true,
+            ref_params: vec![false; sig.params.len()],
+            declared_params: vec![true; sig.params.len()],
+            variadic: None,
+        });
+    let regular_param_count =
+        crate::codegen::expr::calls::args::regular_param_count(Some(&call_sig), args.len());
+    let normalized = if crate::codegen::expr::calls::args::has_named_args(args) {
+        crate::codegen::expr::calls::args::preevaluate_named_call_args_to_temps(
+            &call_sig,
+            args,
+            call_span,
+            regular_param_count,
+            false,
+            emitter,
+            ctx,
+            data,
+        )
+    } else {
+        crate::codegen::expr::calls::args::normalize_named_call_args_with_checks(
+            &call_sig,
+            args,
+            regular_param_count,
+        )
+    };
+    crate::codegen::expr::calls::args::emit_spread_length_checks(
+        &normalized.spread_length_checks,
+        emitter,
+        ctx,
+        data,
+    );
+    let normalized_args = normalized.args;
+    let args = normalized_args.as_slice();
 
     emitter.comment(&format!("extern call: {}()", name));
 
@@ -33,31 +76,27 @@ pub fn emit_extern_call(
         .count();
     let cleanup_bytes = string_arg_count * 16;
 
+    let source_temp_types = preevaluate_extern_args(args, &sig, emitter, ctx, data);
+    let source_temp_bytes = pushed_temp_bytes(&source_temp_types);
+
     if cleanup_bytes > 0 {
         abi::emit_reserve_temporary_stack(emitter, cleanup_bytes);              // reserve per-call cleanup slots for borrowed C-string temporaries
     }
 
-    // -- evaluate and push arguments onto the stack --
-    for (i, arg) in args.iter().enumerate().rev() {
+    // -- push already-evaluated arguments onto the C ABI stack in reverse order --
+    let mut final_pushed_bytes = 0usize;
+    for (i, _) in args.iter().enumerate().rev() {
         let param_ty = sig
             .params
             .get(i)
             .map(|(_, t)| t.clone())
             .unwrap_or(PhpType::Int);
-        let actual_ty = if param_ty == PhpType::Callable {
-            match &arg.kind {
-                ExprKind::StringLiteral(func_name) => {
-                    let label = function_symbol(func_name);
-                    abi::emit_symbol_address(emitter, abi::int_result_reg(emitter), &label); // materialize the callback target address in the integer result register
-                    PhpType::Callable
-                }
-                _ => panic!(
-                    "codegen bug: extern callable argument must be a function-name string literal"
-                ),
-            }
-        } else {
-            emit_expr(arg, emitter, ctx, data)
-        };
+        let actual_ty = load_extern_source_temp_to_result(
+            i,
+            &source_temp_types,
+            cleanup_bytes + final_pushed_bytes,
+            emitter,
+        );
 
         if param_ty == PhpType::Float && actual_ty != PhpType::Float {
             emit_widen_int_like_to_float(emitter);                              // widen integer-like value to C double in the native return register
@@ -74,6 +113,7 @@ pub fn emit_extern_call(
         } else {
             abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // push the integer or pointer argument onto the temporary arg stack
         }
+        final_pushed_bytes += 16;
     }
 
     // -- pop arguments into registers (C ABI: x0-x7, d0-d7) --
@@ -143,8 +183,96 @@ pub fn emit_extern_call(
         pop_ffi_return_value(emitter, &sig.return_type);
         abi::emit_release_temporary_stack(emitter, cleanup_bytes);              // release the borrowed C-string cleanup area after all temporaries are freed
     }
+    abi::emit_release_temporary_stack(emitter, source_temp_bytes);              // release source-order extern argument temporaries after the call
 
     sig.return_type
+}
+
+fn preevaluate_extern_args(
+    args: &[Expr],
+    sig: &crate::types::ExternFunctionSig,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Vec<PhpType> {
+    let mut source_temp_types = Vec::new();
+    for (i, arg) in args.iter().enumerate() {
+        let param_ty = sig
+            .params
+            .get(i)
+            .map(|(_, t)| t.clone())
+            .unwrap_or(PhpType::Int);
+        let actual_ty = if param_ty == PhpType::Callable {
+            match &arg.kind {
+                ExprKind::StringLiteral(func_name) => {
+                    let label = function_symbol(func_name);
+                    abi::emit_symbol_address(emitter, abi::int_result_reg(emitter), &label); // materialize the callback target address in the integer result register
+                    PhpType::Callable
+                }
+                _ => panic!(
+                    "codegen bug: extern callable argument must be a function-name string literal"
+                ),
+            }
+        } else {
+            emit_expr(arg, emitter, ctx, data)
+        };
+        if !matches!(actual_ty, PhpType::Void | PhpType::Never) {
+            abi::emit_push_result_value(emitter, &actual_ty);
+        }
+        source_temp_types.push(actual_ty);
+    }
+    source_temp_types
+}
+
+fn temp_slot_size(ty: &PhpType) -> usize {
+    if matches!(ty, PhpType::Void | PhpType::Never) {
+        0
+    } else {
+        16
+    }
+}
+
+fn pushed_temp_bytes(types: &[PhpType]) -> usize {
+    types.iter().map(temp_slot_size).sum()
+}
+
+fn temp_offsets(types: &[PhpType]) -> Vec<usize> {
+    let mut offsets = vec![0usize; types.len()];
+    let mut running = 0usize;
+    for idx in (0..types.len()).rev() {
+        offsets[idx] = running;
+        running += temp_slot_size(&types[idx]);
+    }
+    offsets
+}
+
+fn source_temp_offset(source_temp_types: &[PhpType], temp_idx: usize, extra_bytes: usize) -> usize {
+    extra_bytes + temp_offsets(source_temp_types)[temp_idx]
+}
+
+fn load_extern_source_temp_to_result(
+    temp_idx: usize,
+    source_temp_types: &[PhpType],
+    extra_bytes: usize,
+    emitter: &mut Emitter,
+) -> PhpType {
+    let ty = source_temp_types[temp_idx].clone();
+    let offset = source_temp_offset(source_temp_types, temp_idx, extra_bytes);
+    match ty.codegen_repr() {
+        PhpType::Float => {
+            abi::emit_load_temporary_stack_slot(emitter, abi::float_result_reg(emitter), offset);
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            abi::emit_load_temporary_stack_slot(emitter, ptr_reg, offset);
+            abi::emit_load_temporary_stack_slot(emitter, len_reg, offset + 8);
+        }
+        PhpType::Void | PhpType::Never => {}
+        _ => {
+            abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), offset);
+        }
+    }
+    ty
 }
 
 fn int_abi_arg_reg(emitter: &Emitter, idx: usize) -> &'static str {
@@ -256,7 +384,14 @@ mod tests {
             },
         );
 
-        let ret_ty = emit_extern_call("abs", &[Expr::int_lit(-42)], &mut emitter, &mut ctx, &mut data);
+        let ret_ty = emit_extern_call(
+            "abs",
+            &[Expr::int_lit(-42)],
+            Span::dummy(),
+            &mut emitter,
+            &mut ctx,
+            &mut data,
+        );
         let out = emitter.output();
 
         assert_eq!(ret_ty, PhpType::Int);
@@ -283,7 +418,14 @@ mod tests {
             },
         );
 
-        let ret_ty = emit_extern_call("strlen", &[Expr::string_lit("hello")], &mut emitter, &mut ctx, &mut data);
+        let ret_ty = emit_extern_call(
+            "strlen",
+            &[Expr::string_lit("hello")],
+            Span::dummy(),
+            &mut emitter,
+            &mut ctx,
+            &mut data,
+        );
         let out = emitter.output();
 
         assert_eq!(ret_ty, PhpType::Int);

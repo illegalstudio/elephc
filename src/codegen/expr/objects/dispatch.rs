@@ -170,6 +170,7 @@ pub(super) fn emit_method_call_with_pushed_args(
     class_name: &str,
     method: &str,
     arg_types: &[PhpType],
+    source_temp_bytes: usize,
     emitter: &mut Emitter,
     ctx: &mut Context,
 ) -> PhpType {
@@ -178,6 +179,7 @@ pub(super) fn emit_method_call_with_pushed_args(
     let overflow_bytes = pop_args_to_registers(emitter, &assignments);
     let ret_ty = emit_dispatch_instance_method(class_name, method, emitter, ctx);
     abi::emit_release_temporary_stack(emitter, overflow_bytes);                 // drop spilled stack arguments after the method call returns
+    abi::emit_release_temporary_stack(emitter, source_temp_bytes);              // drop source-order named-argument temporaries after dispatch
     ret_ty
 }
 
@@ -185,17 +187,25 @@ pub(super) fn emit_method_call_with_saved_receiver_below_args(
     class_name: &str,
     method: &str,
     arg_types: &[PhpType],
+    source_temp_bytes: usize,
     emitter: &mut Emitter,
     ctx: &mut Context,
 ) -> PhpType {
-    let arg_temp_bytes = pushed_arg_temp_bytes(arg_types);
+    let arg_temp_bytes = pushed_arg_temp_bytes(arg_types) + source_temp_bytes;
     abi::emit_load_temporary_stack_slot(
         emitter,
         abi::int_result_reg(emitter),
         arg_temp_bytes,
     );
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                 // duplicate the saved receiver above the evaluated arguments for normal method dispatch
-    let ret_ty = emit_method_call_with_pushed_args(class_name, method, arg_types, emitter, ctx);
+    let ret_ty = emit_method_call_with_pushed_args(
+        class_name,
+        method,
+        arg_types,
+        source_temp_bytes,
+        emitter,
+        ctx,
+    );
     abi::emit_release_temporary_stack(emitter, 16);                             // discard the original receiver slot saved below the argument temporaries
     ret_ty
 }
@@ -206,7 +216,7 @@ pub(super) fn emit_pushed_method_args(
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
-) -> Vec<PhpType> {
+) -> super::super::calls::args::EmittedCallArgs {
     eval_and_push_args(args, sig, emitter, ctx, data)
 }
 
@@ -265,9 +275,16 @@ pub(super) fn emit_method_call(
         .get(&class_name)
         .and_then(|class_info| class_info.methods.get(method))
         .cloned();
-    let arg_types = eval_and_push_args(args, sig.as_ref(), emitter, ctx, data);
+    let emitted_args = eval_and_push_args(args, sig.as_ref(), emitter, ctx, data);
 
-    emit_method_call_with_saved_receiver_below_args(&class_name, method, &arg_types, emitter, ctx)
+    emit_method_call_with_saved_receiver_below_args(
+        &class_name,
+        method,
+        &emitted_args.arg_types,
+        emitted_args.source_temp_bytes,
+        emitter,
+        ctx,
+    )
 }
 
 pub(super) fn emit_immediate_class_id(emitter: &mut Emitter, class_id: u64) {
@@ -353,7 +370,7 @@ pub(super) fn emit_static_method_call(
         None
     }
     .cloned();
-    let arg_types = eval_and_push_args(args, sig.as_ref(), emitter, ctx, data);
+    let emitted_args = eval_and_push_args(args, sig.as_ref(), emitter, ctx, data);
     let static_slot = class_info.static_vtable_slots.get(method).copied();
     let direct_static_private_label = if static_call {
         None
@@ -429,7 +446,7 @@ pub(super) fn emit_static_method_call(
 
     let first_int_reg =
         (if needs_called_class_id { 1 } else { 0 }) + (if needs_this { 1 } else { 0 });
-    let assignments = compute_register_assignments(emitter, &arg_types, first_int_reg);
+    let assignments = compute_register_assignments(emitter, &emitted_args.arg_types, first_int_reg);
     let hidden_called_class_reg = abi::int_arg_reg_name(emitter.target, 0);
     let hidden_this_reg =
         abi::int_arg_reg_name(emitter.target, if needs_called_class_id { 1 } else { 0 });
@@ -495,6 +512,7 @@ pub(super) fn emit_static_method_call(
     if overflow_bytes > 0 {
         abi::emit_release_temporary_stack(emitter, overflow_bytes);             // drop spilled stack arguments after the static call returns
     }
+    abi::emit_release_temporary_stack(emitter, emitted_args.source_temp_bytes);  // drop source-order named-argument temporaries after the static call
 
     ret_ty
 }

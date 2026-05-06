@@ -356,6 +356,22 @@ echo sum(...$args);
 }
 
 #[test]
+fn test_spread_in_variadic_function_fills_regular_params_first() {
+    let out = compile_and_run(
+        r#"<?php
+function show($head, ...$rest) {
+    echo "head=" . $head . ";";
+    foreach ($rest as $value) {
+        echo $value . ";";
+    }
+}
+show(...[1, 2, 3]);
+"#,
+    );
+    assert_eq!(out, "head=1;2;3;");
+}
+
+#[test]
 fn test_spread_in_array_literal() {
     let out = compile_and_run(
         r#"<?php

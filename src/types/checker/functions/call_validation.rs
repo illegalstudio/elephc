@@ -1,13 +1,75 @@
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
+use crate::types::call_args::{self, CallArgPlanError};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::Checker;
 
+fn call_arg_plan_error(
+    sig: &FunctionSig,
+    callee_desc: &str,
+    err: CallArgPlanError,
+) -> CompileError {
+    match err {
+        CallArgPlanError::UnknownNamed { span, name } => {
+            CompileError::new(span, &format!("{} has no parameter ${}", callee_desc, name))
+        }
+        CallArgPlanError::Duplicate {
+            span,
+            param_idx,
+            name,
+        } => {
+            let param_name = sig
+                .params
+                .get(param_idx)
+                .map(|(name, _)| name.as_str())
+                .unwrap_or(name.as_str());
+            CompileError::new(
+                span,
+                &format!(
+                    "{} parameter ${} is already assigned",
+                    callee_desc, param_name
+                ),
+            )
+        }
+        CallArgPlanError::PositionalAfterNamed { span } => CompileError::new(
+            span,
+            &format!(
+                "{} cannot use positional arguments after named arguments",
+                callee_desc
+            ),
+        ),
+        CallArgPlanError::PositionalAfterSpread { span } => CompileError::new(
+            span,
+            &format!(
+                "{} cannot use positional arguments after spread arguments",
+                callee_desc
+            ),
+        ),
+        CallArgPlanError::SpreadAfterNamed { span } => CompileError::new(
+            span,
+            &format!(
+                "{} cannot use argument unpacking after named arguments",
+                callee_desc
+            ),
+        ),
+        CallArgPlanError::MissingRequired { span, param_idx } => {
+            let param_name = sig
+                .params
+                .get(param_idx)
+                .map(|(name, _)| name.as_str())
+                .unwrap_or("arg");
+            CompileError::new(
+                span,
+                &format!("{} missing required parameter ${}", callee_desc, param_name),
+            )
+        }
+    }
+}
+
 impl Checker {
     pub(crate) fn has_named_args(args: &[Expr]) -> bool {
-        args.iter()
-            .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
+        call_args::has_named_args(args)
     }
 
     pub(crate) fn normalize_named_call_args(
@@ -17,96 +79,37 @@ impl Checker {
         span: crate::span::Span,
         callee_desc: &str,
     ) -> Result<Vec<Expr>, CompileError> {
-        if !Self::has_named_args(args) {
-            return Ok(args.to_vec());
-        }
+        self.normalize_call_args(sig, args, span, callee_desc, false, true)
+    }
 
-        if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
-            return Err(CompileError::new(
-                span,
-                &format!(
-                    "{} does not support mixing named arguments with spread arguments yet",
-                    callee_desc
-                ),
-            ));
-        }
+    pub(crate) fn normalize_builtin_call_args(
+        &self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        callee_desc: &str,
+    ) -> Result<Vec<Expr>, CompileError> {
+        self.normalize_call_args(sig, args, span, callee_desc, true, false)
+    }
 
-        let regular_param_count = if sig.variadic.is_some() {
-            sig.params.len().saturating_sub(1)
-        } else {
-            sig.params.len()
-        };
-        let mut resolved: Vec<Option<Expr>> = vec![None; regular_param_count];
-        let mut variadic_args = Vec::new();
-        let mut positional_idx = 0usize;
-        let mut seen_named = false;
-
-        for arg in args {
-            match &arg.kind {
-                ExprKind::NamedArg { name, value } => {
-                    seen_named = true;
-                    let Some(param_idx) = sig
-                        .params
-                        .iter()
-                        .take(regular_param_count)
-                        .position(|(param_name, _)| param_name == name)
-                    else {
-                        return Err(CompileError::new(
-                            arg.span,
-                            &format!("{} has no parameter ${}", callee_desc, name),
-                        ));
-                    };
-                    if resolved[param_idx].is_some() {
-                        return Err(CompileError::new(
-                            arg.span,
-                            &format!(
-                                "{} parameter ${} is already assigned",
-                                callee_desc, name
-                            ),
-                        ));
-                    }
-                    resolved[param_idx] = Some((**value).clone());
-                }
-                _ => {
-                    if seen_named {
-                        return Err(CompileError::new(
-                            arg.span,
-                            &format!(
-                                "{} cannot use positional arguments after named arguments",
-                                callee_desc
-                            ),
-                        ));
-                    }
-                    if positional_idx < regular_param_count {
-                        resolved[positional_idx] = Some(arg.clone());
-                    } else {
-                        variadic_args.push(arg.clone());
-                    }
-                    positional_idx += 1;
-                }
-            }
-        }
-
-        let mut normalized = Vec::new();
-        for (idx, slot) in resolved.into_iter().enumerate() {
-            if let Some(arg) = slot {
-                normalized.push(arg);
-            } else if let Some(Some(default_expr)) = sig.defaults.get(idx) {
-                normalized.push(default_expr.clone());
-            } else {
-                let param_name = sig
-                    .params
-                    .get(idx)
-                    .map(|(name, _)| name.as_str())
-                    .unwrap_or("arg");
-                return Err(CompileError::new(
-                    span,
-                    &format!("{} missing required parameter ${}", callee_desc, param_name),
-                ));
-            }
-        }
-        normalized.extend(variadic_args);
-        Ok(normalized)
+    fn normalize_call_args(
+        &self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        callee_desc: &str,
+        trim_trailing_defaults: bool,
+        allow_unknown_named_variadic: bool,
+    ) -> Result<Vec<Expr>, CompileError> {
+        let plan = call_args::plan_call_args(
+            sig,
+            args,
+            span,
+            trim_trailing_defaults,
+            allow_unknown_named_variadic,
+        )
+        .map_err(|err| call_arg_plan_error(sig, callee_desc, err))?;
+        Ok(plan.normalized_args())
     }
 
     pub(crate) fn types_compatible(expected: &PhpType, actual: &PhpType) -> bool {

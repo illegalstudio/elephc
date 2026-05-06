@@ -15,6 +15,15 @@ impl Checker {
         }
     }
 
+    fn has_unknown_named_variadic_arg(args: &[Expr], regular_params: &[String]) -> bool {
+        args.iter().any(|arg| {
+            matches!(
+                &arg.kind,
+                ExprKind::NamedArg { name, .. } if !regular_params.iter().any(|param| param == name)
+            )
+        })
+    }
+
     pub fn check_function_call(
         &mut self,
         name: &str,
@@ -336,14 +345,18 @@ impl Checker {
         }
 
         if let Some(ref vp) = decl.variadic {
-            let variadic_elem_ty = if args.len() > decl.params.len() {
-                self.infer_type(&args[decl.params.len()], caller_env)
-                    .unwrap_or(PhpType::Int)
+            if Self::has_unknown_named_variadic_arg(args, &decl.params) {
+                param_types.push((vp.clone(), PhpType::Iterable));
             } else {
-                PhpType::Int
-            };
-            let variadic_elem_ty = Self::variadic_container_elem_ty(variadic_elem_ty);
-            param_types.push((vp.clone(), PhpType::Array(Box::new(variadic_elem_ty))));
+                let variadic_elem_ty = if args.len() > decl.params.len() {
+                    self.infer_type(&args[decl.params.len()], caller_env)
+                        .unwrap_or(PhpType::Int)
+                } else {
+                    PhpType::Int
+                };
+                let variadic_elem_ty = Self::variadic_container_elem_ty(variadic_elem_ty);
+                param_types.push((vp.clone(), PhpType::Array(Box::new(variadic_elem_ty))));
+            }
         }
 
         self.resolve_function_signature(name, &decl, param_types)
@@ -360,11 +373,7 @@ impl Checker {
             .map(|arg| self.infer_type(arg, caller_env))
             .collect::<Result<Vec<_>, CompileError>>()?;
         if let Some(stored_sig) = self.functions.get_mut(name) {
-            let regular_param_count = if stored_sig.variadic.is_some() {
-                stored_sig.params.len().saturating_sub(1)
-            } else {
-                stored_sig.params.len()
-            };
+            let regular_param_count = crate::types::call_args::regular_param_count(stored_sig);
             let mut seen_idx = 0usize;
             for (arg, actual_ty) in args.iter().zip(actual_arg_types.iter()) {
                 if matches!(arg.kind, ExprKind::Spread(_)) {
@@ -384,13 +393,23 @@ impl Checker {
                 seen_idx += 1;
             }
             if stored_sig.variadic.is_some() && seen_idx > regular_param_count {
-                let mut elem_ty = actual_arg_types[regular_param_count].clone();
-                for actual_ty in actual_arg_types.iter().skip(regular_param_count + 1) {
-                    elem_ty = Self::wider_type(&elem_ty, actual_ty);
-                }
-                elem_ty = Self::variadic_container_elem_ty(elem_ty);
-                if let Some((_, PhpType::Array(existing_elem_ty))) = stored_sig.params.last_mut() {
-                    **existing_elem_ty = Self::wider_type(existing_elem_ty.as_ref(), &elem_ty);
+                let regular_names: Vec<String> = stored_sig.params[..regular_param_count]
+                    .iter()
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                if Self::has_unknown_named_variadic_arg(args, &regular_names) {
+                    if let Some((_, variadic_ty)) = stored_sig.params.last_mut() {
+                        *variadic_ty = PhpType::Iterable;
+                    }
+                } else {
+                    let mut elem_ty = actual_arg_types[regular_param_count].clone();
+                    for actual_ty in actual_arg_types.iter().skip(regular_param_count + 1) {
+                        elem_ty = Self::wider_type(&elem_ty, actual_ty);
+                    }
+                    elem_ty = Self::variadic_container_elem_ty(elem_ty);
+                    if let Some((_, PhpType::Array(existing_elem_ty))) = stored_sig.params.last_mut() {
+                        **existing_elem_ty = Self::wider_type(existing_elem_ty.as_ref(), &elem_ty);
+                    }
                 }
             }
         }

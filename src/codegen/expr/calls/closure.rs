@@ -215,60 +215,17 @@ pub(super) fn emit_closure_call(
         .as_ref()
         .map(|s| if s.variadic.is_some() { visible_param_count.saturating_sub(1) } else { visible_param_count })
         .unwrap_or(args_exprs.len());
-    let prepared = args::prepare_call_args(sig.as_ref(), args_exprs, regular_param_count);
-    let mut arg_types = args::emit_pushed_non_variadic_args(
-        &prepared.all_args,
+    let emitted_args = args::emit_pushed_call_args(
+        args_exprs,
         sig.as_ref(),
+        regular_param_count,
         "closure ref arg",
         true,
         emitter,
         ctx,
         data,
     );
-
-    if prepared.spread_into_named {
-        if let Some(spread_expr) = prepared.spread_arg.as_ref() {
-            args::emit_spread_into_named_params(
-                spread_expr,
-                sig.as_ref(),
-                prepared.spread_at_index,
-                prepared.regular_param_count,
-                "closure params",
-                emitter,
-                ctx,
-                data,
-                &mut arg_types,
-            );
-        }
-    }
-
-    if prepared.is_variadic {
-        if let Some(spread_expr) = prepared.spread_arg.as_ref() {
-            let ty = args::emit_spread_variadic_array_arg(
-                spread_expr,
-                "spread array as variadic closure param",
-                emitter,
-                ctx,
-                data,
-            );
-            arg_types.push(ty);
-        } else if prepared.variadic_args.is_empty() {
-            arg_types.push(args::emit_empty_variadic_array_arg(
-                "empty variadic closure array",
-                emitter,
-            ));
-        } else {
-            arg_types.push(args::emit_variadic_array_arg_from_exprs(
-                &prepared.variadic_args,
-                "build variadic closure array",
-                true,
-                true,
-                emitter,
-                ctx,
-                data,
-            ));
-        }
-    }
+    let mut arg_types = emitted_args.arg_types;
 
     if let Some(cached_sig) = ctx.closure_sigs.get(var).cloned() {
         for deferred in &mut ctx.deferred_closures {
@@ -325,6 +282,7 @@ pub(super) fn emit_closure_call(
             if save_concat_before_args {
                 super::super::restore_concat_offset_after_nested_call(emitter, ctx, &PhpType::Int);
             }
+            crate::codegen::abi::emit_release_temporary_stack(emitter, emitted_args.source_temp_bytes);
             return PhpType::Int;
         }
     };
@@ -351,10 +309,12 @@ pub(super) fn emit_closure_call(
     crate::codegen::abi::emit_call_reg(emitter, call_reg);
     if save_concat_before_args {
         crate::codegen::abi::emit_release_temporary_stack(emitter, overflow_bytes);
+        crate::codegen::abi::emit_release_temporary_stack(emitter, emitted_args.source_temp_bytes);
         super::super::restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
     } else {
         super::super::restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
         crate::codegen::abi::emit_release_temporary_stack(emitter, overflow_bytes);
+        crate::codegen::abi::emit_release_temporary_stack(emitter, emitted_args.source_temp_bytes);
     }
 
     ret_ty

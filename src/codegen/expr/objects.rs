@@ -393,18 +393,24 @@ pub(super) fn emit_method_call_with_pushed_args(
     emitter: &mut Emitter,
     ctx: &mut Context,
 ) -> PhpType {
-    dispatch::emit_method_call_with_pushed_args(class_name, method, arg_types, emitter, ctx)
+    dispatch::emit_method_call_with_pushed_args(class_name, method, arg_types, 0, emitter, ctx)
 }
 
 pub(super) fn emit_method_call_with_saved_receiver_below_args(
     class_name: &str,
     method: &str,
     arg_types: &[PhpType],
+    source_temp_bytes: usize,
     emitter: &mut Emitter,
     ctx: &mut Context,
 ) -> PhpType {
     dispatch::emit_method_call_with_saved_receiver_below_args(
-        class_name, method, arg_types, emitter, ctx,
+        class_name,
+        method,
+        arg_types,
+        source_temp_bytes,
+        emitter,
+        ctx,
     )
 }
 
@@ -414,7 +420,7 @@ pub(super) fn emit_pushed_method_args(
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
-) -> Vec<PhpType> {
+) -> super::calls::args::EmittedCallArgs {
     dispatch::emit_pushed_method_args(args, sig, emitter, ctx, data)
 }
 

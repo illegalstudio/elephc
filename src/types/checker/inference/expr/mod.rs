@@ -297,23 +297,6 @@ impl Checker {
             ExprKind::FunctionCall { name, args } => {
                 let name = name.as_str().to_string();
                 let args = args.clone();
-                if Self::has_named_args(&args) {
-                    if self.extern_functions.contains_key(name.as_str()) {
-                        return Err(CompileError::new(
-                            expr.span,
-                            &format!(
-                                "Extern function '{}' does not support named arguments yet",
-                                name
-                            ),
-                        ));
-                    }
-                    if crate::name_resolver::is_builtin_function(name.as_str()) {
-                        return Err(CompileError::new(
-                            expr.span,
-                            &format!("Builtin '{}' does not support named arguments yet", name),
-                        ));
-                    }
-                }
                 if self.extern_functions.contains_key(name.as_str()) {
                     return self.check_extern_function_call(name.as_str(), &args, expr.span, env);
                 }

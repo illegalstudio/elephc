@@ -266,8 +266,13 @@ fn collect_assignment_expr_vars(expr: &Expr, ctx: &mut Context, sig: &FunctionSi
             collect_assignment_expr_vars(then_expr, ctx, sig);
             collect_assignment_expr_vars(else_expr, ctx, sig);
         }
-        ExprKind::FunctionCall { args, .. }
-        | ExprKind::ClosureCall { args, .. }
+        ExprKind::FunctionCall { name, args } => {
+            collect_named_builtin_or_extern_call_temps(name.as_str(), expr.span, args, ctx, sig);
+            for arg in args {
+                collect_assignment_expr_vars(arg, ctx, sig);
+            }
+        }
+        ExprKind::ClosureCall { args, .. }
         | ExprKind::NewObject { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewScopedObject { args, .. } => {
@@ -347,6 +352,116 @@ fn infer_conditional_assignment_temp_type(
     match &value.kind {
         ExprKind::NullCoalesce { default, .. } => infer_local_type(default, sig, Some(ctx)),
         _ => infer_local_type(value, sig, Some(ctx)),
+    }
+}
+
+fn collect_named_builtin_or_extern_call_temps(
+    name: &str,
+    call_span: crate::span::Span,
+    args: &[Expr],
+    ctx: &mut Context,
+    current_sig: &FunctionSig,
+) {
+    let call_sig = if ctx.extern_functions.contains_key(name) {
+        ctx.functions.get(name).cloned()
+    } else {
+        crate::types::builtin_call_sig(name)
+    };
+    let Some(call_sig) = call_sig else {
+        return;
+    };
+    let Ok(plan) = crate::types::call_args::plan_call_args(
+        &call_sig,
+        args,
+        call_span,
+        false,
+        false,
+    ) else {
+        return;
+    };
+    if !plan.has_named_args() {
+        return;
+    }
+
+    if plan.has_spread_args() {
+        let first_named_pos = plan.first_named_pos.unwrap_or(plan.source_args.len());
+        let prefix_expr = plan
+            .positional_prefix_expr(call_span)
+            .unwrap_or_else(|| Expr::new(ExprKind::ArrayLiteral(Vec::new()), call_span));
+        let prefix_name =
+            crate::codegen::expr::calls::args::named_call_prefix_temp_name(call_span);
+        if !ctx.variables.contains_key(&prefix_name) {
+            let static_ty = infer_local_type(&prefix_expr, current_sig, Some(ctx));
+            ctx.alloc_var_with_static_type(&prefix_name, static_ty.codegen_repr(), static_ty);
+        }
+        for source in &plan.source_values {
+            if source.source_index() >= first_named_pos {
+                collect_planned_call_value_temp(
+                    &call_sig,
+                    call_span,
+                    source.source_index(),
+                    source.param_idx(),
+                    source.expr(),
+                    ctx,
+                    current_sig,
+                );
+            }
+        }
+    } else {
+        for source in &plan.source_values {
+            collect_planned_call_value_temp(
+                &call_sig,
+                call_span,
+                source.source_index(),
+                source.param_idx(),
+                source.expr(),
+                ctx,
+                current_sig,
+            );
+        }
+    }
+}
+
+fn collect_planned_call_value_temp(
+    call_sig: &FunctionSig,
+    call_span: crate::span::Span,
+    arg_idx: usize,
+    param_idx: Option<usize>,
+    value: &Expr,
+    ctx: &mut Context,
+    current_sig: &FunctionSig,
+) {
+    let is_ref = param_idx
+        .and_then(|param_idx| call_sig.ref_params.get(param_idx))
+        .copied()
+        .unwrap_or(false);
+    if !is_ref && !is_side_effect_free_literal(value) {
+        collect_call_arg_temp(call_span, arg_idx, value, ctx, current_sig);
+    }
+}
+
+fn is_side_effect_free_literal(expr: &Expr) -> bool {
+    matches!(
+        expr.kind,
+        ExprKind::StringLiteral(_)
+            | ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::Null
+    )
+}
+
+fn collect_call_arg_temp(
+    call_span: crate::span::Span,
+    arg_idx: usize,
+    value: &Expr,
+    ctx: &mut Context,
+    current_sig: &FunctionSig,
+) {
+    let temp_name = crate::codegen::expr::calls::args::named_call_arg_temp_name(call_span, arg_idx);
+    if !ctx.variables.contains_key(&temp_name) {
+        let static_ty = infer_local_type(value, current_sig, Some(ctx));
+        ctx.alloc_var_with_static_type(&temp_name, static_ty.codegen_repr(), static_ty);
     }
 }
 
