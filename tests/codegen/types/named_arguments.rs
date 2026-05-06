@@ -168,3 +168,45 @@ echo sum3(...$args, c: 30);
     );
     assert_eq!(out, "60");
 }
+
+#[test]
+fn test_named_arguments_after_spread_uses_default_for_unpacked_gap() {
+    let out = compile_and_run(
+        r#"<?php
+function sum3($a, $b = 2, $c = 3) {
+    return $a + $b + $c;
+}
+$args = [10];
+echo sum3(...$args, c: 30);
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_named_arguments_after_spread_rejects_short_spread() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+function sum3($a, $b, $c) {
+    return $a + $b + $c;
+}
+$args = [10];
+echo sum3(...$args, c: 30);
+"#,
+    );
+    assert!(err.contains("Fatal error: named argument spread length mismatch"));
+}
+
+#[test]
+fn test_named_arguments_after_spread_rejects_overwrite() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+function sum3($a, $b, $c) {
+    return $a + $b + $c;
+}
+$args = [10, 20, 99];
+echo sum3(...$args, c: 30);
+"#,
+    );
+    assert!(err.contains("Fatal error: named argument spread length mismatch"));
+}

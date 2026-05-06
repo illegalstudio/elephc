@@ -18,6 +18,12 @@ pub(super) fn eval_and_push_args(
         args,
         super::super::super::calls::args::regular_param_count(sig, args.len()),
     );
+    super::super::super::calls::args::emit_spread_length_checks(
+        &prepared.spread_length_checks,
+        emitter,
+        ctx,
+        data,
+    );
     let mut arg_types = super::super::super::calls::args::emit_pushed_non_variadic_args(
         &prepared.all_args,
         sig,

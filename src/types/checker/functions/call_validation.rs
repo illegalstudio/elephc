@@ -1,5 +1,6 @@
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, ExprKind};
+use crate::names::Name;
+use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
@@ -15,6 +16,39 @@ fn spread_element_expr(spread_expr: &Expr, element_idx: usize, span: Span) -> Ex
         ExprKind::ArrayAccess {
             array: Box::new(spread_expr.clone()),
             index: Box::new(Expr::new(ExprKind::IntLiteral(element_idx as i64), span)),
+        },
+        span,
+    )
+}
+
+fn spread_element_or_default_expr(
+    spread_expr: &Expr,
+    element_idx: usize,
+    default_expr: Expr,
+    span: Span,
+) -> Expr {
+    Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(spread_len_expr(spread_expr, span)),
+                    op: BinOp::Gt,
+                    right: Box::new(Expr::new(ExprKind::IntLiteral(element_idx as i64), span)),
+                },
+                span,
+            )),
+            then_expr: Box::new(spread_element_expr(spread_expr, element_idx, span)),
+            else_expr: Box::new(default_expr),
+        },
+        span,
+    )
+}
+
+fn spread_len_expr(spread_expr: &Expr, span: Span) -> Expr {
+    Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("count"),
+            args: vec![spread_expr.clone()],
         },
         span,
     )
@@ -178,8 +212,20 @@ impl Checker {
                         .find(|idx| named_values[*idx].is_some())
                         .unwrap_or(regular_param_count);
                     for element_idx in 0..next_named_idx.saturating_sub(positional_idx) {
-                        resolved[positional_idx] =
-                            Some(spread_element_expr(&inner, element_idx, spread_span));
+                        let default = sig
+                            .defaults
+                            .get(positional_idx)
+                            .and_then(|default| default.as_ref());
+                        resolved[positional_idx] = Some(if let Some(default) = default {
+                            spread_element_or_default_expr(
+                                &inner,
+                                element_idx,
+                                default.clone(),
+                                spread_span,
+                            )
+                        } else {
+                            spread_element_expr(&inner, element_idx, spread_span)
+                        });
                         positional_idx += 1;
                     }
                 }

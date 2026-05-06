@@ -216,6 +216,12 @@ pub(super) fn emit_closure_call(
         .map(|s| if s.variadic.is_some() { visible_param_count.saturating_sub(1) } else { visible_param_count })
         .unwrap_or(args_exprs.len());
     let prepared = args::prepare_call_args(sig.as_ref(), args_exprs, regular_param_count);
+    args::emit_spread_length_checks(
+        &prepared.spread_length_checks,
+        emitter,
+        ctx,
+        data,
+    );
     let mut arg_types = args::emit_pushed_non_variadic_args(
         &prepared.all_args,
         sig.as_ref(),

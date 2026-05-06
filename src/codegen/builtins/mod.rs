@@ -23,7 +23,16 @@ pub fn emit_builtin_call(
 ) -> Option<PhpType> {
     let normalized_args;
     let args = if let Some(sig) = crate::types::builtin_call_sig(name) {
-        normalized_args = crate::codegen::expr::calls::args::normalize_builtin_call_args(&sig, args);
+        let normalized = crate::codegen::expr::calls::args::normalize_builtin_call_args_with_checks(
+            &sig, args,
+        );
+        crate::codegen::expr::calls::args::emit_spread_length_checks(
+            &normalized.spread_length_checks,
+            emitter,
+            ctx,
+            data,
+        );
+        normalized_args = normalized.args;
         normalized_args.as_slice()
     } else {
         args

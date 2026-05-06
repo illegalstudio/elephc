@@ -27,6 +27,12 @@ pub(super) fn emit_expr_call(
         args_exprs,
         args::regular_param_count(callee_sig.as_ref(), args_exprs.len()),
     );
+    args::emit_spread_length_checks(
+        &prepared.spread_length_checks,
+        emitter,
+        ctx,
+        data,
+    );
     let mut arg_types = args::emit_pushed_non_variadic_args(
         &prepared.all_args,
         callee_sig.as_ref(),
@@ -147,6 +153,12 @@ pub(super) fn emit_loaded_expr_call(
         callee_sig.as_ref(),
         args_exprs,
         args::regular_param_count(callee_sig.as_ref(), args_exprs.len()),
+    );
+    args::emit_spread_length_checks(
+        &prepared.spread_length_checks,
+        emitter,
+        ctx,
+        data,
     );
     let mut arg_types = args::emit_pushed_non_variadic_args(
         &prepared.all_args,

@@ -35,11 +35,18 @@ pub fn emit_extern_call(
             declared_params: vec![true; sig.params.len()],
             variadic: None,
         });
-    let normalized_args = crate::codegen::expr::calls::args::normalize_named_call_args(
+    let normalized = crate::codegen::expr::calls::args::normalize_named_call_args_with_checks(
         &call_sig,
         args,
         crate::codegen::expr::calls::args::regular_param_count(Some(&call_sig), args.len()),
     );
+    crate::codegen::expr::calls::args::emit_spread_length_checks(
+        &normalized.spread_length_checks,
+        emitter,
+        ctx,
+        data,
+    );
+    let normalized_args = normalized.args;
     let args = normalized_args.as_slice();
 
     emitter.comment(&format!("extern call: {}()", name));

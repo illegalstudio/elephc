@@ -1,12 +1,24 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, context::Context, data_section::DataSection, functions};
-use crate::parser::ast::{Expr, ExprKind};
+use crate::names::Name;
+use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{FunctionSig, PhpType};
 
 enum PrefixArg {
     Positional(Expr),
     Spread(Expr, Span),
+}
+
+pub(crate) struct SpreadLengthCheck {
+    pub(crate) spread_expr: Expr,
+    pub(crate) min_len: usize,
+    pub(crate) max_len: usize,
+}
+
+pub(crate) struct NormalizedCallArgs {
+    pub(crate) args: Vec<Expr>,
+    pub(crate) spread_length_checks: Vec<SpreadLengthCheck>,
 }
 
 pub(crate) struct PreparedCallArgs {
@@ -17,6 +29,7 @@ pub(crate) struct PreparedCallArgs {
     pub(crate) regular_param_count: usize,
     pub(crate) is_variadic: bool,
     pub(crate) spread_into_named: bool,
+    pub(crate) spread_length_checks: Vec<SpreadLengthCheck>,
 }
 
 pub(crate) fn has_named_args(args: &[Expr]) -> bool {
@@ -35,15 +48,18 @@ pub(crate) fn regular_param_count(sig: Option<&FunctionSig>, fallback_arg_count:
     .unwrap_or(fallback_arg_count)
 }
 
-pub(crate) fn normalize_named_call_args(
+pub(crate) fn normalize_named_call_args_with_checks(
     sig: &FunctionSig,
     args: &[Expr],
     regular_param_count: usize,
-) -> Vec<Expr> {
+) -> NormalizedCallArgs {
     normalize_call_args(sig, args, regular_param_count, false)
 }
 
-pub(crate) fn normalize_builtin_call_args(sig: &FunctionSig, args: &[Expr]) -> Vec<Expr> {
+pub(crate) fn normalize_builtin_call_args_with_checks(
+    sig: &FunctionSig,
+    args: &[Expr],
+) -> NormalizedCallArgs {
     normalize_call_args(sig, args, regular_param_count(Some(sig), args.len()), true)
 }
 
@@ -52,15 +68,19 @@ fn normalize_call_args(
     args: &[Expr],
     regular_param_count: usize,
     trim_trailing_defaults: bool,
-) -> Vec<Expr> {
+) -> NormalizedCallArgs {
     if !has_named_args(args) {
-        return args.to_vec();
+        return NormalizedCallArgs {
+            args: args.to_vec(),
+            spread_length_checks: Vec::new(),
+        };
     }
 
     let mut named_values: Vec<Option<Expr>> = vec![None; regular_param_count];
     let mut prefix_args = Vec::new();
     let mut seen_named = false;
     let mut seen_spread = false;
+    let mut spread_length_checks = Vec::new();
 
     for arg in args {
         match &arg.kind {
@@ -107,9 +127,31 @@ fn normalize_call_args(
                 let next_named_idx = (positional_idx..regular_param_count)
                     .find(|idx| named_values[*idx].is_some())
                     .unwrap_or(regular_param_count);
-                for element_idx in 0..next_named_idx.saturating_sub(positional_idx) {
-                    resolved[positional_idx] =
-                        Some(spread_element_expr(&inner, element_idx, spread_span));
+                let max_len = next_named_idx.saturating_sub(positional_idx);
+                let min_len = (positional_idx..next_named_idx)
+                    .rfind(|idx| sig.defaults.get(*idx).and_then(|default| default.as_ref()).is_none())
+                    .map(|idx| idx - positional_idx + 1)
+                    .unwrap_or(0);
+                spread_length_checks.push(SpreadLengthCheck {
+                    spread_expr: inner.clone(),
+                    min_len,
+                    max_len,
+                });
+                for element_idx in 0..max_len {
+                    let default = sig
+                        .defaults
+                        .get(positional_idx)
+                        .and_then(|default| default.as_ref());
+                    resolved[positional_idx] = Some(if let Some(default) = default {
+                        spread_element_or_default_expr(
+                            &inner,
+                            element_idx,
+                            default.clone(),
+                            spread_span,
+                        )
+                    } else {
+                        spread_element_expr(&inner, element_idx, spread_span)
+                    });
                     positional_idx += 1;
                 }
             }
@@ -140,7 +182,10 @@ fn normalize_call_args(
         }
     }
     normalized.extend(variadic_args);
-    normalized
+    NormalizedCallArgs {
+        args: normalized,
+        spread_length_checks,
+    }
 }
 
 fn spread_element_expr(spread_expr: &Expr, element_idx: usize, span: Span) -> Expr {
@@ -153,15 +198,53 @@ fn spread_element_expr(spread_expr: &Expr, element_idx: usize, span: Span) -> Ex
     )
 }
 
+fn spread_element_or_default_expr(
+    spread_expr: &Expr,
+    element_idx: usize,
+    default_expr: Expr,
+    span: Span,
+) -> Expr {
+    Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(spread_len_expr(spread_expr, span)),
+                    op: BinOp::Gt,
+                    right: Box::new(Expr::new(ExprKind::IntLiteral(element_idx as i64), span)),
+                },
+                span,
+            )),
+            then_expr: Box::new(spread_element_expr(spread_expr, element_idx, span)),
+            else_expr: Box::new(default_expr),
+        },
+        span,
+    )
+}
+
+fn spread_len_expr(spread_expr: &Expr, span: Span) -> Expr {
+    Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("count"),
+            args: vec![spread_expr.clone()],
+        },
+        span,
+    )
+}
+
 pub(crate) fn prepare_call_args(
     sig: Option<&FunctionSig>,
     args_exprs: &[Expr],
     regular_param_count: usize,
 ) -> PreparedCallArgs {
     let is_variadic = sig.map(|s| s.variadic.is_some()).unwrap_or(false);
-    let normalized_args = sig
-        .map(|sig| normalize_named_call_args(sig, args_exprs, regular_param_count))
-        .unwrap_or_else(|| args_exprs.to_vec());
+    let normalized = sig
+        .map(|sig| normalize_named_call_args_with_checks(sig, args_exprs, regular_param_count))
+        .unwrap_or_else(|| NormalizedCallArgs {
+            args: args_exprs.to_vec(),
+            spread_length_checks: Vec::new(),
+        });
+    let spread_length_checks = normalized.spread_length_checks;
+    let normalized_args = normalized.args;
 
     let mut regular_args = Vec::new();
     let mut variadic_args = Vec::new();
@@ -199,6 +282,7 @@ pub(crate) fn prepare_call_args(
         regular_param_count,
         is_variadic,
         spread_into_named,
+        spread_length_checks,
     }
 }
 
@@ -306,6 +390,66 @@ pub(crate) fn push_expr_arg(
     }
     push_arg_value(emitter, &pushed_ty);
     pushed_ty
+}
+
+pub(crate) fn emit_spread_length_checks(
+    checks: &[SpreadLengthCheck],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    for check in checks {
+        let ok_label = ctx.next_label("named_spread_len_ok");
+        let fail_label = ctx.next_label("named_spread_len_fail");
+        emitter.comment("validate named-argument spread length");
+        let _ = super::super::emit_expr(&check.spread_expr, emitter, ctx, data);
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                emitter.instruction("ldr x9, [x0]");                            // load the logical spread-array length before using synthetic positional reads
+                abi::emit_load_int_immediate(emitter, "x10", check.min_len as i64);
+                emitter.instruction("cmp x9, x10");                             // ensure the spread covers every required parameter before the next named slot
+                emitter.instruction(&format!("b.lt {}", fail_label));           // report a missing required argument instead of reading past the spread payload
+                abi::emit_load_int_immediate(emitter, "x10", check.max_len as i64);
+                emitter.instruction("cmp x9, x10");                             // ensure the spread does not reach a parameter supplied by name
+                emitter.instruction(&format!("b.le {}", ok_label));             // continue when PHP would not report a named-argument overwrite
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                emitter.instruction("mov r10, QWORD PTR [rax]");                // load the logical spread-array length before using synthetic positional reads
+                abi::emit_load_int_immediate(emitter, "r11", check.min_len as i64);
+                emitter.instruction("cmp r10, r11");                            // ensure the spread covers every required parameter before the next named slot
+                emitter.instruction(&format!("jl {}", fail_label));             // report a missing required argument instead of reading past the spread payload
+                abi::emit_load_int_immediate(emitter, "r11", check.max_len as i64);
+                emitter.instruction("cmp r10, r11");                            // ensure the spread does not reach a parameter supplied by name
+                emitter.instruction(&format!("jle {}", ok_label));              // continue when PHP would not report a named-argument overwrite
+            }
+        }
+        emitter.label(&fail_label);
+        emit_named_spread_length_abort(emitter, data);
+        emitter.label(&ok_label);
+    }
+}
+
+fn emit_named_spread_length_abort(emitter: &mut Emitter, data: &mut DataSection) {
+    let (message_label, message_len) =
+        data.add_string(b"Fatal error: named argument spread length mismatch\n");
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            emitter.instruction("mov x0, #2");                                  // write the named-argument spread diagnostic to stderr
+            emitter.adrp("x1", &message_label);
+            emitter.add_lo12("x1", "x1", &message_label);
+            emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the diagnostic byte length to write()
+            emitter.syscall(4);
+            abi::emit_exit(emitter, 1);
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            emitter.instruction("mov edi, 2");                                  // write the named-argument spread diagnostic to stderr
+            abi::emit_symbol_address(emitter, "rsi", &message_label);
+            emitter.instruction(&format!("mov edx, {}", message_len));          // pass the diagnostic byte length to write()
+            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
+            emitter.instruction("syscall");                                     // emit the fatal named-argument spread diagnostic
+            abi::emit_exit(emitter, 1);
+        }
+    }
 }
 
 pub(crate) fn emit_pushed_non_variadic_args(

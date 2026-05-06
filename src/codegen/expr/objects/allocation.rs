@@ -161,6 +161,12 @@ pub(super) fn emit_new_object(
         let sig = class_info.methods.get("__construct").cloned();
         let regular_param_count = call_args::regular_param_count(sig.as_ref(), args.len());
         let prepared = call_args::prepare_call_args(sig.as_ref(), args, regular_param_count);
+        call_args::emit_spread_length_checks(
+            &prepared.spread_length_checks,
+            emitter,
+            ctx,
+            data,
+        );
         let mut arg_types = call_args::emit_pushed_non_variadic_args(
             &prepared.all_args,
             sig.as_ref(),
