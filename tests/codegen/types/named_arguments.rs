@@ -312,6 +312,32 @@ show(...[0 => 10, "b" => 20]);
 }
 
 #[test]
+fn test_assoc_spread_literal_reorders_numeric_after_string_key() {
+    let out = compile_and_run(
+        r#"<?php
+function show($a, $b) {
+    echo $a . ":" . $b;
+}
+show(...["a" => 1, 1 => 2]);
+"#,
+    );
+    assert_eq!(out, "1:2");
+}
+
+#[test]
+fn test_assoc_spread_literal_duplicate_string_key_uses_last_value() {
+    let out = compile_and_run(
+        r#"<?php
+function show($a) {
+    echo $a;
+}
+show(...["a" => 1, "a" => 2]);
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+#[test]
 fn test_assoc_spread_literal_for_builtin_call() {
     let out = compile_and_run(
         r#"<?php

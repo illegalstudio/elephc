@@ -270,19 +270,36 @@ fn expand_static_assoc_spread(expr: &Expr, spread_span: Span) -> Option<Vec<Expr
         return None;
     };
 
-    let mut args = Vec::with_capacity(pairs.len());
+    let mut positional_args = Vec::new();
+    let mut named_args: Vec<(String, Expr)> = Vec::new();
     for (key, value) in pairs {
         match static_assoc_spread_key(key)? {
-            StaticAssocSpreadKey::Positional => args.push(value.clone()),
-            StaticAssocSpreadKey::Named(name) => args.push(Expr::new(
-                ExprKind::NamedArg {
-                    name,
-                    value: Box::new(value.clone()),
-                },
+            StaticAssocSpreadKey::Positional => positional_args.push(Expr::new(
+                value.kind.clone(),
                 spread_span,
             )),
+            StaticAssocSpreadKey::Named(name) => {
+                if let Some((_, existing_value)) = named_args
+                    .iter_mut()
+                    .find(|(existing_name, _)| existing_name == &name)
+                {
+                    *existing_value = value.clone();
+                } else {
+                    named_args.push((name, value.clone()));
+                }
+            }
         }
     }
+    let mut args = positional_args;
+    args.extend(named_args.into_iter().map(|(name, value)| {
+        Expr::new(
+            ExprKind::NamedArg {
+                name,
+                value: Box::new(value),
+            },
+            spread_span,
+        )
+    }));
     Some(args)
 }
 
@@ -471,14 +488,21 @@ fn plan_named_call_args(
     for prefix_arg in prefix_args {
         match prefix_arg {
             PrefixSourceArg::Positional { source_index, expr } => {
-                if positional_idx < regular_param_count {
-                    if let Some(named_value) = &named_values[positional_idx] {
+                while positional_idx < regular_param_count {
+                    let Some(named_value) = &named_values[positional_idx] else {
+                        break;
+                    };
+                    if same_span(expr.span, named_value.span) {
+                        positional_idx += 1;
+                    } else {
                         return Err(CallArgPlanError::Duplicate {
                             span: named_value.span,
                             param_idx: positional_idx,
                             name: named_value.name.clone(),
                         });
                     }
+                }
+                if positional_idx < regular_param_count {
                     resolved[positional_idx] = Some(PlannedRegularArg::Source {
                         source_index,
                         expr: expr.clone(),
@@ -610,6 +634,10 @@ enum PrefixSourceArg {
         expr: Expr,
         span: Span,
     },
+}
+
+fn same_span(left: Span, right: Span) -> bool {
+    left.line == right.line && left.col == right.col
 }
 
 fn spread_element_expr(spread_expr: &Expr, element_idx: usize, span: Span) -> Expr {
