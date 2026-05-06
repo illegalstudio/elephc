@@ -36,8 +36,15 @@ function repeat(string $label, int $count): string {
 - Function, method, closure, and arrow-function return type hints are checked
 - Non-`void` declared return types must return a value on every reachable path; `throw`, `exit()`/`die()`, and infinite loops count as non-returning paths
 - Bare `return;` is valid only for `void` returns; use `return null;` for nullable return types
-- Named arguments supported for user-defined functions, methods, closures, built-ins, and extern functions (reordered at compile time)
-- Named arguments can follow spread arguments, as in `foo(...$args, suffix: "!")`; positional arguments cannot follow either named arguments or spread arguments
+- Named arguments are supported for known-signature calls: user-defined functions, methods, closures, built-ins, and extern functions
+- The checker validates named arguments against the declared parameter names, then codegen normalizes them into ABI parameter order
+- Named arguments can follow a spread argument, as in `foo(...$args, suffix: "!")`; positional arguments cannot follow either named arguments or spread arguments
+
+Current named-argument limitations:
+
+- Argument expressions in out-of-order named calls may be evaluated in normalized parameter order rather than PHP source order. Avoid visible side effects in reordered named arguments until call lowering preserves source-order evaluation.
+- Spread prefixes before named arguments are checked at runtime for too-short and overwrite cases, but the current lowering can evaluate the spread expression more than once and does not yet support multiple spread prefixes before a later named argument with full PHP parity.
+- User-defined variadic functions reject unknown named arguments instead of collecting them into the variadic parameter with string keys.
 
 ## Recursion
 

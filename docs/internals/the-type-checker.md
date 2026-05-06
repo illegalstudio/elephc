@@ -163,6 +163,8 @@ The type checker computes the type of every expression:
 
 Built-in functions have hardcoded type signatures (see below). User-defined functions, methods, constructors, closures, and arrow functions can carry declared parameter hints; functions, methods, closures, and arrow functions can carry declared return type hints. Declared non-`void` returns are validated both against returned values and against reachable fallthrough paths, while `throw`, `exit()`/`die()`, and provably infinite loops count as non-returning paths. Closure / arrow return annotations are represented in the AST and threaded into callable `FunctionSig` metadata; unannotated closures continue to infer their return type from the body or expression. Named arguments are normalized against the declared parameter list before the usual argument-count and type checks run, including built-ins, extern calls, and spread prefixes that fill earlier positional slots.
 
+That normalization is currently also the shape handed to codegen. It validates many invalid named/spread combinations early, but it does not yet preserve PHP's exact source-order evaluation for out-of-order named arguments, repeated side-effect-free evaluation of spread prefixes is not guaranteed, and unknown named arguments are still rejected for user-defined variadic functions instead of being collected into the variadic array.
+
 ## Built-in function signatures
 
 **Files:** `src/types/checker/builtins/`, plus `src/types/checker/mod.rs` and `src/types/checker/inference/` for special expression forms such as `ExprKind::PtrCast`, `ExprKind::InstanceOf`, and `ExprKind::Print`

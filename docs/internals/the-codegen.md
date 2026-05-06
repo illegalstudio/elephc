@@ -442,6 +442,8 @@ my_func($a, $b, $c)
 4. `bl _fn_my_func` — branch with link (saves return address)
 5. Result is in `x0`/`d0`/`x1`+`x2` depending on return type
 
+Named-argument calls reuse the same outgoing-argument path after `src/codegen/expr/calls/args.rs` normalizes arguments into parameter order and inserts defaults. That keeps the ABI layer shared by functions, closures, methods, constructors, built-ins, and extern calls. The current representation is still expression-based, so out-of-order named arguments can be evaluated in normalized parameter order, and spread-prefix handling before later named arguments uses runtime length checks plus synthetic indexed reads. Multiple spread prefixes before a named argument and exact single-evaluation/source-order parity remain known gaps in this lowering.
+
 ## Closure codegen
 
 ### Anonymous functions and arrow functions
