@@ -173,11 +173,28 @@ For `??=` expression form, elephc preserves the PHP short-circuit rule and the c
 
 ```php
 <?php
-[$a, $b, $c] = [10, 20, 30];
+[$a, , $c] = [10, 20, 30];
 echo $a;  // 10
+echo $c;  // 30
+
+list($left, $right) = [1, 2];
+echo $left . $right; // 12
 ```
 
-**Limitations:** All elements must be variables (no nested patterns or skipping). RHS must be an indexed array.
+Destructuring supports skipped entries, nested patterns, associative keys, short
+syntax (`[...]`), and `list(...)` syntax. Targets may be local variables or the
+same writable non-local forms ordinary assignment supports, such as array
+slots, append targets, object properties, and static properties.
+
+```php
+<?php
+[[$a, $b], [$c, $d]] = [[1, 2], [3, 4]];
+["id" => $id, "name" => $name] = ["name" => "Ada", "id" => 7];
+[$items[0], $items[]] = [5, 6];
+```
+
+As in PHP, keyed and unkeyed entries cannot be mixed in the same
+destructuring pattern.
 
 ## Null Coalescing
 
