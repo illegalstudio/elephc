@@ -129,6 +129,22 @@ fn test_error_named_arguments_reject_duplicate_assignment() {
 }
 
 #[test]
+fn test_error_named_arguments_reject_unknown_assoc_spread_literal_parameter() {
+    expect_error(
+        "<?php function greet($name) { echo $name; } greet(...[\"age\" => 30]);",
+        "Function 'greet' has no parameter $age",
+    );
+}
+
+#[test]
+fn test_error_named_arguments_reject_duplicate_assoc_spread_literal_assignment() {
+    expect_error(
+        "<?php function greet($name) { echo $name; } greet(...[\"name\" => \"Alice\"], name: \"Bob\");",
+        "Function 'greet' parameter $name is already assigned",
+    );
+}
+
+#[test]
 fn test_error_named_arguments_reject_unknown_builtin_parameter() {
     expect_error(
         "<?php strlen(value: \"hello\");",

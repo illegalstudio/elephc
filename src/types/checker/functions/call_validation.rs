@@ -84,6 +84,9 @@ impl Checker {
         trim_trailing_defaults: bool,
         allow_unknown_named_variadic: bool,
     ) -> Result<Vec<Expr>, CompileError> {
+        let expanded_args = call_args::expand_static_assoc_spread_args(args);
+        let args = expanded_args.as_slice();
+
         if !call_args::has_named_args(args) {
             let mut seen_spread = false;
             for arg in args {

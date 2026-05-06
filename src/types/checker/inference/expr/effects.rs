@@ -142,20 +142,23 @@ impl Checker {
             ExprKind::FunctionCall { args, .. }
             | ExprKind::NewObject { args, .. }
             | ExprKind::StaticMethodCall { args, .. } => {
-                for arg in args {
+                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 self.infer_type(expr, env)
             }
             ExprKind::ClosureCall { args, .. } => {
-                for arg in args {
+                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 self.infer_type(expr, env)
             }
             ExprKind::ExprCall { callee, args } => {
                 self.infer_type_with_assignment_effects(callee, env)?;
-                for arg in args {
+                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 self.infer_type(expr, env)
@@ -172,7 +175,8 @@ impl Checker {
             ExprKind::MethodCall { object, args, .. }
             | ExprKind::NullsafeMethodCall { object, args, .. } => {
                 self.infer_type_with_assignment_effects(object, env)?;
-                for arg in args {
+                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 self.infer_type(expr, env)
@@ -182,7 +186,8 @@ impl Checker {
                 self.infer_type(expr, env)
             }
             ExprKind::NewScopedObject { args, .. } => {
-                for arg in args {
+                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 self.infer_type(expr, env)

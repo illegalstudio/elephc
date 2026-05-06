@@ -260,6 +260,55 @@ show(10, ...[]);
 }
 
 #[test]
+fn test_assoc_spread_literal_maps_string_keys_to_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+function show($a, $b = 99) {
+    echo $a . ":" . $b;
+}
+show(...["a" => 10]);
+"#,
+    );
+    assert_eq!(out, "10:99");
+}
+
+#[test]
+fn test_assoc_spread_literal_preserves_key_order_for_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+function show($a, $b) {
+    echo $a . ":" . $b;
+}
+show(...["b" => 20, "a" => 10]);
+"#,
+    );
+    assert_eq!(out, "10:20");
+}
+
+#[test]
+fn test_assoc_spread_literal_mixes_numeric_and_string_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function show($a, $b) {
+    echo $a . ":" . $b;
+}
+show(...[0 => 10, "b" => 20]);
+"#,
+    );
+    assert_eq!(out, "10:20");
+}
+
+#[test]
+fn test_assoc_spread_literal_for_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+echo str_repeat(...["string" => "ha", "times" => 3]);
+"#,
+    );
+    assert_eq!(out, "hahaha");
+}
+
+#[test]
 fn test_named_arguments_after_spread_rejects_short_spread() {
     let err = compile_and_run_expect_failure(
         r#"<?php

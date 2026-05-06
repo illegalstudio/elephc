@@ -94,6 +94,17 @@ echo ":" . (strcmp(...args(), right: right_arg()) < 0 ? "lt" : "no");
 }
 
 #[test]
+fn test_ffi_extern_assoc_spread_literal_maps_to_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+extern function strcmp(string $left, string $right): int;
+echo strcmp(...["right" => "b", "left" => "a"]) < 0 ? "lt" : "no";
+"#,
+    );
+    assert_eq!(out, "lt");
+}
+
+#[test]
 fn test_ffi_extern_call_in_concat_restores_concat_cursor() {
     let out = compile_and_run(
         r#"<?php

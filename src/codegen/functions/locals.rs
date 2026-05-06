@@ -362,6 +362,9 @@ fn collect_named_builtin_or_extern_call_temps(
     ctx: &mut Context,
     current_sig: &FunctionSig,
 ) {
+    let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+    let args = expanded_args.as_slice();
+
     if !crate::codegen::expr::calls::args::has_named_args(args) {
         return;
     }

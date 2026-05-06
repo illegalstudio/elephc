@@ -101,6 +101,9 @@ pub(crate) fn preevaluate_named_call_args_to_temps(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> NormalizedCallArgs {
+    let expanded_args = call_args::expand_static_assoc_spread_args(args);
+    let args = expanded_args.as_slice();
+
     if !has_named_args(args) {
         return normalize_call_args(
             sig,
@@ -279,6 +282,9 @@ fn normalize_call_args(
     trim_trailing_defaults: bool,
     allow_unknown_named_variadic: bool,
 ) -> NormalizedCallArgs {
+    let expanded_args = call_args::expand_static_assoc_spread_args(args);
+    let args = expanded_args.as_slice();
+
     if !has_named_args(args) {
         return NormalizedCallArgs {
             args: args.to_vec(),
@@ -625,6 +631,9 @@ pub(crate) fn emit_pushed_call_args(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> EmittedCallArgs {
+    let expanded_args = call_args::expand_static_assoc_spread_args(args_exprs);
+    let args_exprs = expanded_args.as_slice();
+
     if let Some(sig) = sig {
         if has_named_args(args_exprs) {
             return emit_source_order_named_call_args(
