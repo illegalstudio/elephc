@@ -260,6 +260,19 @@ show(10, ...[]);
 }
 
 #[test]
+fn test_spread_only_rejects_missing_required_param() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+function show($a, $b) {
+    echo $a . ":" . $b;
+}
+show(...[10]);
+"#,
+    );
+    assert!(err.contains("Fatal error: too few arguments for spread call"));
+}
+
+#[test]
 fn test_assoc_spread_literal_maps_string_keys_to_named_args() {
     let out = compile_and_run(
         r#"<?php

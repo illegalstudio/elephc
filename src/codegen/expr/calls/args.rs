@@ -763,6 +763,18 @@ pub(crate) fn emit_spread_into_named_params(
         crate::codegen::platform::Arch::X86_64 => "r12",
     };
     emitter.instruction(&format!("mov {}, {}", array_base_reg, abi::int_result_reg(emitter))); // preserve the spread array pointer across boxing or incref helper calls
+    let min_required = (0..remaining)
+        .filter(|idx| {
+            sig.and_then(|sig| sig.defaults.get(spread_at_index + idx))
+                .and_then(|default| default.as_ref())
+                .is_none()
+        })
+        .map(|idx| idx + 1)
+        .max()
+        .unwrap_or(0);
+    if min_required > 0 {
+        emit_spread_required_length_check(array_base_reg, min_required, emitter, ctx, data);
+    }
     for idx in 0..remaining {
         let target_ty = declared_target_ty(sig, spread_at_index + idx);
         let default = sig
@@ -780,6 +792,58 @@ pub(crate) fn emit_spread_into_named_params(
             data,
         );
         arg_types.push(pushed_ty);
+    }
+}
+
+fn emit_spread_required_length_check(
+    array_base_reg: &str,
+    min_len: usize,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    let ok_label = ctx.next_label("spread_required_len_ok");
+    let fail_label = ctx.next_label("spread_required_len_fail");
+    emitter.comment("validate spread covers required parameters");
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x9, [{}]", array_base_reg));      // load spread length before reading required unpacked parameters
+            abi::emit_load_int_immediate(emitter, "x10", min_len as i64);
+            emitter.instruction("cmp x9, x10");                                 // ensure the spread provides every required positional parameter
+            emitter.instruction(&format!("b.ge {}", ok_label));                 // continue when all required spread slots are available
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("mov r10, QWORD PTR [{}]", array_base_reg)); // load spread length before reading required unpacked parameters
+            abi::emit_load_int_immediate(emitter, "r11", min_len as i64);
+            emitter.instruction("cmp r10, r11");                                // ensure the spread provides every required positional parameter
+            emitter.instruction(&format!("jge {}", ok_label));                  // continue when all required spread slots are available
+        }
+    }
+    emitter.label(&fail_label);
+    emit_spread_too_few_args_abort(emitter, data);
+    emitter.label(&ok_label);
+}
+
+fn emit_spread_too_few_args_abort(emitter: &mut Emitter, data: &mut DataSection) {
+    let (message_label, message_len) =
+        data.add_string(b"Fatal error: too few arguments for spread call\n");
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            emitter.instruction("mov x0, #2");                                  // write the spread arity diagnostic to stderr
+            emitter.adrp("x1", &message_label);
+            emitter.add_lo12("x1", "x1", &message_label);
+            emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the diagnostic byte length to write()
+            emitter.syscall(4);
+            abi::emit_exit(emitter, 1);
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            emitter.instruction("mov edi, 2");                                  // write the spread arity diagnostic to stderr
+            abi::emit_symbol_address(emitter, "rsi", &message_label);
+            emitter.instruction(&format!("mov edx, {}", message_len));          // pass the diagnostic byte length to write()
+            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
+            emitter.instruction("syscall");                                     // emit the fatal spread arity diagnostic
+            abi::emit_exit(emitter, 1);
+        }
     }
 }
 
