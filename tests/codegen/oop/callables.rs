@@ -27,6 +27,39 @@ echo $len("tool");
 }
 
 #[test]
+fn test_first_class_callable_builtin_intval() {
+    let out = compile_and_run(
+        r#"<?php
+$to_int = intval(...);
+echo $to_int("123") + 7;
+"#,
+    );
+    assert_eq!(out, "130");
+}
+
+#[test]
+fn test_first_class_callable_builtin_string_transform() {
+    let out = compile_and_run(
+        r#"<?php
+$lower = strtolower(...);
+echo $lower("TOOLS");
+"#,
+    );
+    assert_eq!(out, "tools");
+}
+
+#[test]
+fn test_first_class_callable_builtin_array_sum() {
+    let out = compile_and_run(
+        r#"<?php
+$sum = array_sum(...);
+echo $sum([2, 3, 5]);
+"#,
+    );
+    assert_eq!(out, "10");
+}
+
+#[test]
 fn test_first_class_callable_preserves_by_ref_params() {
     let out = compile_and_run(
         r#"<?php

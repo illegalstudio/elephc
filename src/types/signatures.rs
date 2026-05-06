@@ -289,8 +289,49 @@ pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig
             declared_params: vec![true],
             variadic: None,
         }),
+        _ => general_first_class_callable_builtin_sig(name),
+    }
+}
+
+fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
+    match name {
+        "intval" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Int,
+        )),
+        "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "strrev"
+        | "addslashes" | "stripslashes" | "nl2br" | "bin2hex" | "hex2bin"
+        | "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode"
+        | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode"
+        | "base64_decode" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Str,
+        )),
+        "array_sum" | "array_product" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Array(Box::new(PhpType::Int))],
+            PhpType::Int,
+        )),
         _ => None,
     }
+}
+
+fn typed_first_class_builtin_sig(
+    name: &str,
+    param_types: &[PhpType],
+    return_type: PhpType,
+) -> FunctionSig {
+    let mut sig = builtin_call_sig(name).expect("first-class builtin must have a catalog signature");
+    for (idx, param_ty) in param_types.iter().enumerate() {
+        if let Some((_, ty)) = sig.params.get_mut(idx) {
+            *ty = param_ty.clone();
+        }
+    }
+    sig.return_type = return_type;
+    sig.declared_return = true;
+    sig
 }
 
 fn fixed(params: &[&str]) -> FunctionSig {
