@@ -1124,22 +1124,12 @@ fn emit_prefix_array_length_check(
         crate::codegen::platform::Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(emitter, "x8", prefix_offset);
             emitter.instruction("ldr x9, [x8]");                                // load the evaluated positional-prefix array length
-            abi::emit_load_int_immediate(emitter, "x10", min_len as i64);
-            emitter.instruction("cmp x9, x10");                                 // ensure required parameters before the first named slot are filled
-            emitter.instruction(&format!("b.lt {}", fail_label));               // abort after all argument expressions have been evaluated
-            abi::emit_load_int_immediate(emitter, "x10", max_len as i64);
-            emitter.instruction("cmp x9, x10");                                 // ensure the prefix does not overwrite the first named parameter
-            emitter.instruction(&format!("b.le {}", ok_label));                 // continue when the evaluated prefix fits before named arguments
+            emit_array_length_bounds_check("x9", min_len, max_len, &fail_label, &ok_label, emitter);
         }
         crate::codegen::platform::Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(emitter, "r8", prefix_offset);
             emitter.instruction("mov r10, QWORD PTR [r8]");                     // load the evaluated positional-prefix array length
-            abi::emit_load_int_immediate(emitter, "r11", min_len as i64);
-            emitter.instruction("cmp r10, r11");                                // ensure required parameters before the first named slot are filled
-            emitter.instruction(&format!("jl {}", fail_label));                 // abort after all argument expressions have been evaluated
-            abi::emit_load_int_immediate(emitter, "r11", max_len as i64);
-            emitter.instruction("cmp r10, r11");                                // ensure the prefix does not overwrite the first named parameter
-            emitter.instruction(&format!("jle {}", ok_label));                  // continue when the evaluated prefix fits before named arguments
+            emit_array_length_bounds_check("r10", min_len, max_len, &fail_label, &ok_label, emitter);
         }
     }
     emitter.label(&fail_label);
@@ -1477,26 +1467,44 @@ pub(crate) fn emit_spread_length_checks(
         match emitter.target.arch {
             crate::codegen::platform::Arch::AArch64 => {
                 emitter.instruction("ldr x9, [x0]");                            // load the logical spread-array length before using synthetic positional reads
-                abi::emit_load_int_immediate(emitter, "x10", check.min_len as i64);
-                emitter.instruction("cmp x9, x10");                             // ensure the spread covers every required parameter before the next named slot
-                emitter.instruction(&format!("b.lt {}", fail_label));           // report a missing required argument instead of reading past the spread payload
-                abi::emit_load_int_immediate(emitter, "x10", check.max_len as i64);
-                emitter.instruction("cmp x9, x10");                             // ensure the spread does not reach a parameter supplied by name
-                emitter.instruction(&format!("b.le {}", ok_label));             // continue when PHP would not report a named-argument overwrite
+                emit_array_length_bounds_check("x9", check.min_len, check.max_len, &fail_label, &ok_label, emitter);
             }
             crate::codegen::platform::Arch::X86_64 => {
                 emitter.instruction("mov r10, QWORD PTR [rax]");                // load the logical spread-array length before using synthetic positional reads
-                abi::emit_load_int_immediate(emitter, "r11", check.min_len as i64);
-                emitter.instruction("cmp r10, r11");                            // ensure the spread covers every required parameter before the next named slot
-                emitter.instruction(&format!("jl {}", fail_label));             // report a missing required argument instead of reading past the spread payload
-                abi::emit_load_int_immediate(emitter, "r11", check.max_len as i64);
-                emitter.instruction("cmp r10, r11");                            // ensure the spread does not reach a parameter supplied by name
-                emitter.instruction(&format!("jle {}", ok_label));              // continue when PHP would not report a named-argument overwrite
+                emit_array_length_bounds_check("r10", check.min_len, check.max_len, &fail_label, &ok_label, emitter);
             }
         }
         emitter.label(&fail_label);
         emit_named_spread_length_abort(emitter, data);
         emitter.label(&ok_label);
+    }
+}
+
+fn emit_array_length_bounds_check(
+    length_reg: &str,
+    min_len: usize,
+    max_len: usize,
+    fail_label: &str,
+    ok_label: &str,
+    emitter: &mut Emitter,
+) {
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            abi::emit_load_int_immediate(emitter, "x10", min_len as i64);
+            emitter.instruction(&format!("cmp {}, x10", length_reg));           // ensure the array covers every required positional slot
+            emitter.instruction(&format!("b.lt {}", fail_label));               // report a missing required argument instead of reading past the payload
+            abi::emit_load_int_immediate(emitter, "x10", max_len as i64);
+            emitter.instruction(&format!("cmp {}, x10", length_reg));           // ensure the array does not overwrite the next named slot
+            emitter.instruction(&format!("b.le {}", ok_label));                 // continue when the array length is within the allowed bounds
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            abi::emit_load_int_immediate(emitter, "r11", min_len as i64);
+            emitter.instruction(&format!("cmp {}, r11", length_reg));           // ensure the array covers every required positional slot
+            emitter.instruction(&format!("jl {}", fail_label));                 // report a missing required argument instead of reading past the payload
+            abi::emit_load_int_immediate(emitter, "r11", max_len as i64);
+            emitter.instruction(&format!("cmp {}, r11", length_reg));           // ensure the array does not overwrite the next named slot
+            emitter.instruction(&format!("jle {}", ok_label));                  // continue when the array length is within the allowed bounds
+        }
     }
 }
 
