@@ -69,7 +69,7 @@ pub(crate) enum PlannedSourceValue {
 pub(crate) struct SpreadBoundsCheck {
     pub(crate) spread_expr: Expr,
     pub(crate) min_len: usize,
-    pub(crate) max_len: usize,
+    pub(crate) max_len: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -509,6 +509,12 @@ fn plan_named_call_args(
                     .find(|idx| named_values[*idx].is_some())
                     .unwrap_or(regular_param_count);
                 let max_len = next_named_idx.saturating_sub(positional_idx);
+                let has_regular_named_bound = next_named_idx < regular_param_count;
+                let upper_bound = if sig.variadic.is_some() && !has_regular_named_bound {
+                    None
+                } else {
+                    Some(max_len)
+                };
                 let min_len = (positional_idx..next_named_idx)
                     .rfind(|idx| sig.defaults.get(*idx).and_then(|default| default.as_ref()).is_none())
                     .map(|idx| idx - positional_idx + 1)
@@ -516,7 +522,7 @@ fn plan_named_call_args(
                 spread_bounds_checks.push(SpreadBoundsCheck {
                     spread_expr: expr.clone(),
                     min_len,
-                    max_len,
+                    max_len: upper_bound,
                 });
                 for element_idx in 0..max_len {
                     let prefix_element_idx = positional_idx;

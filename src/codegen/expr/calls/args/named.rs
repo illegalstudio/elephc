@@ -30,6 +30,12 @@ struct VariadicArgSource {
     source: FinalArgSource,
 }
 
+#[derive(Clone)]
+struct PrefixVariadicTail {
+    prefix_temp_idx: usize,
+    start_idx: usize,
+}
+
 pub(super) fn emit_source_order_named_call_args(
     args_exprs: &[Expr],
     sig: &FunctionSig,
@@ -154,6 +160,7 @@ fn emit_source_order_named_non_spread_call_args(
     push_final_call_args_from_sources(
         slot_sources,
         variadic_sources,
+        None,
         sig,
         regular_param_count,
         &source_temp_types,
@@ -217,7 +224,7 @@ fn emit_source_order_named_spread_call_args(
         }
     }
 
-    let max_prefix_len = plan
+    let fixed_max_prefix_len = plan
         .regular_args
         .iter()
         .filter_map(|planned| match planned {
@@ -229,6 +236,15 @@ fn emit_source_order_named_spread_call_args(
         })
         .max()
         .unwrap_or(0);
+    let has_later_named_regular = plan
+        .source_values
+        .iter()
+        .any(|source| source.source_index() >= first_named_pos && source.param_idx().is_some());
+    let max_prefix_len = if sig.variadic.is_some() && !has_later_named_regular {
+        None
+    } else {
+        Some(fixed_max_prefix_len)
+    };
     let min_prefix_len = plan
         .regular_args
         .iter()
@@ -251,6 +267,15 @@ fn emit_source_order_named_spread_call_args(
         ctx,
         data,
     );
+
+    let prefix_variadic_tail = if sig.variadic.is_some() && max_prefix_len.is_none() {
+        Some(PrefixVariadicTail {
+            prefix_temp_idx,
+            start_idx: regular_param_count,
+        })
+    } else {
+        None
+    };
 
     let mut slot_sources = Vec::new();
     for planned in &plan.regular_args {
@@ -280,6 +305,7 @@ fn emit_source_order_named_spread_call_args(
     push_final_call_args_from_sources(
         slot_sources,
         variadic_sources,
+        prefix_variadic_tail,
         sig,
         regular_param_count,
         &source_temp_types,
@@ -332,6 +358,7 @@ fn emit_source_temp_arg(
 fn push_final_call_args_from_sources(
     slot_sources: Vec<Option<FinalArgSource>>,
     variadic_sources: Vec<VariadicArgSource>,
+    prefix_variadic_tail: Option<PrefixVariadicTail>,
     sig: &FunctionSig,
     regular_param_count: usize,
     source_temp_types: &[PhpType],
@@ -379,11 +406,12 @@ fn push_final_call_args_from_sources(
     }
 
     if sig.variadic.is_some() {
-        let variadic_ty = if variadic_sources.is_empty() {
+        let variadic_ty = if variadic_sources.is_empty() && prefix_variadic_tail.is_none() {
             emit_empty_variadic_array_arg("empty variadic array", emitter)
         } else {
             emit_variadic_array_arg_from_sources(
                 &variadic_sources,
+                prefix_variadic_tail.as_ref(),
                 source_temp_types,
                 final_pushed_bytes,
                 emitter,
@@ -466,7 +494,7 @@ fn emit_prefix_array_length_check(
     prefix_temp_idx: usize,
     source_temp_types: &[PhpType],
     min_len: usize,
-    max_len: usize,
+    max_len: Option<usize>,
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
@@ -603,18 +631,21 @@ fn push_existing_prefix_array_element_arg(
 
 fn emit_variadic_array_arg_from_sources(
     variadic_sources: &[VariadicArgSource],
+    prefix_variadic_tail: Option<&PrefixVariadicTail>,
     source_temp_types: &[PhpType],
     final_pushed_bytes: usize,
     emitter: &mut Emitter,
-    _ctx: &mut Context,
+    ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
     if variadic_sources.iter().any(|source| source.key.is_some()) {
         return emit_variadic_assoc_arg_from_sources(
             variadic_sources,
+            prefix_variadic_tail,
             source_temp_types,
             final_pushed_bytes,
             emitter,
+            ctx,
             data,
         );
     }
@@ -684,20 +715,208 @@ fn emit_variadic_array_arg_from_sources(
     PhpType::Array(Box::new(container_elem_ty))
 }
 
-fn emit_variadic_assoc_arg_from_sources(
-    variadic_sources: &[VariadicArgSource],
+fn emit_prefix_tail_into_variadic_hash(
+    tail: &PrefixVariadicTail,
+    container_elem_ty: &PhpType,
     source_temp_types: &[PhpType],
     final_pushed_bytes: usize,
     emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    const SCRATCH_BYTES: usize = 48;
+    const HASH_SLOT_BYTES: usize = 16;
+
+    let source_elem_ty = spread_source_elem_ty(&source_temp_types[tail.prefix_temp_idx]);
+    let elem_stride = array_element_stride(&source_elem_ty);
+    let loop_start = ctx.next_label("named_variadic_tail_loop");
+    let loop_done = ctx.next_label("named_variadic_tail_done");
+    let tail_empty = ctx.next_label("named_variadic_tail_empty");
+    let tail_ready = ctx.next_label("named_variadic_tail_ready");
+    let result_reg = abi::int_result_reg(emitter);
+    let hash_reg = abi::int_arg_reg_name(emitter.target, 0);
+    let key_ptr_reg = abi::int_arg_reg_name(emitter.target, 1);
+    let key_len_reg = abi::int_arg_reg_name(emitter.target, 2);
+    let value_lo_reg = abi::int_arg_reg_name(emitter.target, 3);
+    let value_hi_reg = abi::int_arg_reg_name(emitter.target, 4);
+    let value_tag_reg = abi::int_arg_reg_name(emitter.target, 5);
+    let zero_reg = match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => "xzr",
+        crate::codegen::platform::Arch::X86_64 => "0",
+    };
+    let stack_reg = match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => "sp",
+        crate::codegen::platform::Arch::X86_64 => "rsp",
+    };
+
+    emitter.comment("copy spread tail into named variadic array");
+    abi::emit_reserve_temporary_stack(emitter, SCRATCH_BYTES);
+    let prefix_offset = source_temp_offset(
+        source_temp_types,
+        tail.prefix_temp_idx,
+        final_pushed_bytes + SCRATCH_BYTES + HASH_SLOT_BYTES,
+    );
+
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "x10", prefix_offset);
+            abi::emit_store_to_address(emitter, "x10", stack_reg, 32);
+            emitter.instruction("ldr x9, [x10]");                               // load the evaluated spread prefix length before slicing its variadic tail
+            abi::emit_load_int_immediate(emitter, "x11", tail.start_idx as i64);
+            emitter.instruction("cmp x9, x11");                                 // check whether the prefix has values beyond the regular parameters
+            emitter.instruction(&format!("b.le {}", tail_empty));               // no variadic tail exists when the prefix fits in regular parameters
+            emitter.instruction("sub x9, x9, x11");                             // compute variadic tail length as prefix length minus regular parameter count
+            emitter.instruction(&format!("b {}", tail_ready));                  // store the computed non-empty variadic tail length
+            emitter.label(&tail_empty);
+            emitter.instruction("mov x9, #0");                                  // use an empty variadic tail when the prefix has no remaining values
+            emitter.label(&tail_ready);
+            abi::emit_store_to_address(emitter, "x9", stack_reg, 16);
+            abi::emit_store_to_address(emitter, "xzr", stack_reg, 0);
+
+            emitter.label(&loop_start);
+            abi::emit_load_temporary_stack_slot(emitter, "x8", 0);
+            abi::emit_load_temporary_stack_slot(emitter, "x9", 16);
+            emitter.instruction("cmp x8, x9");                                  // stop after every spread-tail element has been copied into ...$rest
+            emitter.instruction(&format!("b.ge {}", loop_done));                // finish the dynamic variadic-tail copy loop
+            abi::emit_load_temporary_stack_slot(emitter, "x10", 32);
+            abi::emit_load_int_immediate(emitter, "x11", tail.start_idx as i64);
+            emitter.instruction("add x11, x11, x8");                            // convert tail index to source prefix element index
+            if elem_stride == 16 {
+                emitter.instruction("lsl x11, x11, #4");                        // scale source prefix element index by the string slot width
+            } else {
+                emitter.instruction("lsl x11, x11, #3");                        // scale source prefix element index by the scalar slot width
+            }
+            emitter.instruction("add x10, x10, #24");                           // address the spread prefix payload after its array header
+            emitter.instruction("add x10, x10, x11");                           // address the current spread-tail element payload slot
+            load_array_element_to_result(emitter, &source_elem_ty, "x10", 0);
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "r12", prefix_offset);
+            abi::emit_store_to_address(emitter, "r12", stack_reg, 32);
+            emitter.instruction("mov r11, QWORD PTR [r12]");                    // load the evaluated spread prefix length before slicing its variadic tail
+            abi::emit_load_int_immediate(emitter, "r10", tail.start_idx as i64);
+            emitter.instruction("cmp r11, r10");                                // check whether the prefix has values beyond the regular parameters
+            emitter.instruction(&format!("jle {}", tail_empty));                // no variadic tail exists when the prefix fits in regular parameters
+            emitter.instruction("sub r11, r10");                                // compute variadic tail length as prefix length minus regular parameter count
+            emitter.instruction(&format!("jmp {}", tail_ready));                // store the computed non-empty variadic tail length
+            emitter.label(&tail_empty);
+            emitter.instruction("mov r11, 0");                                  // use an empty variadic tail when the prefix has no remaining values
+            emitter.label(&tail_ready);
+            abi::emit_store_to_address(emitter, "r11", stack_reg, 16);
+            abi::emit_store_to_address(emitter, "0", stack_reg, 0);
+
+            emitter.label(&loop_start);
+            abi::emit_load_temporary_stack_slot(emitter, "r10", 0);
+            abi::emit_load_temporary_stack_slot(emitter, "r11", 16);
+            emitter.instruction("cmp r10, r11");                                // stop after every spread-tail element has been copied into ...$rest
+            emitter.instruction(&format!("jge {}", loop_done));                 // finish the dynamic variadic-tail copy loop
+            abi::emit_load_temporary_stack_slot(emitter, "r12", 32);
+            abi::emit_load_int_immediate(emitter, "r11", tail.start_idx as i64);
+            emitter.instruction("add r11, r10");                                // convert tail index to source prefix element index
+            emitter.instruction(&format!("imul r11, {}", elem_stride));         // scale source prefix element index by the payload slot width
+            emitter.instruction("add r12, 24");                                 // address the spread prefix payload after its array header
+            emitter.instruction("add r12, r11");                                // address the current spread-tail element payload slot
+            load_array_element_to_result(emitter, &source_elem_ty, "r12", 0);
+        }
+    }
+
+    let mut elem_ty = source_elem_ty.clone();
+    let boxed_for_container = if matches!(container_elem_ty, PhpType::Mixed)
+        && !matches!(elem_ty, PhpType::Mixed | PhpType::Union(_))
+    {
+        crate::codegen::emit_box_current_value_as_mixed(emitter, &elem_ty);
+        elem_ty = PhpType::Mixed;
+        true
+    } else {
+        false
+    };
+    if !boxed_for_container && matches!(elem_ty, PhpType::Str) {
+        abi::emit_call_label(emitter, "__rt_str_persist");                      // persist spread-tail strings before storing them in the variadic hash
+    } else if !boxed_for_container {
+        abi::emit_incref_if_refcounted(emitter, &elem_ty.codegen_repr());
+    }
+
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "x8", 0);
+            emitter.instruction(&format!("mov {}, x8", key_ptr_reg));           // use the zero-based tail index as the numeric variadic key
+            abi::emit_load_int_immediate(emitter, key_len_reg, -1);
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "r10", 0);
+            emitter.instruction(&format!("mov {}, r10", key_ptr_reg));          // use the zero-based tail index as the numeric variadic key
+            abi::emit_load_int_immediate(emitter, key_len_reg, -1);
+        }
+    }
+
+    let (val_lo, val_hi) = match elem_ty.codegen_repr() {
+        PhpType::Float => {
+            let bits_reg = abi::temp_int_reg(emitter.target);
+            match emitter.target.arch {
+                crate::codegen::platform::Arch::AArch64 => {
+                    emitter.instruction(&format!("fmov {}, {}", bits_reg, abi::float_result_reg(emitter))); // move variadic float bits into the hash value register
+                }
+                crate::codegen::platform::Arch::X86_64 => {
+                    emitter.instruction(&format!("movq {}, {}", bits_reg, abi::float_result_reg(emitter))); // move variadic float bits into the hash value register
+                }
+            }
+            (bits_reg, zero_reg)
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            (ptr_reg, len_reg)
+        }
+        _ => (result_reg, zero_reg),
+    };
+    emitter.instruction(&format!("mov {}, {}", value_lo_reg, val_lo));          // move the spread-tail value low word into the hash-set ABI register
+    emitter.instruction(&format!("mov {}, {}", value_hi_reg, val_hi));          // move the spread-tail value high word into the hash-set ABI register
+    abi::emit_load_int_immediate(
+        emitter,
+        value_tag_reg,
+        crate::codegen::runtime_value_tag(&elem_ty) as i64,
+    );
+    abi::emit_load_temporary_stack_slot(emitter, hash_reg, SCRATCH_BYTES);
+    abi::emit_call_label(emitter, "__rt_hash_set");
+    abi::emit_store_to_address(emitter, result_reg, stack_reg, SCRATCH_BYTES);
+
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "x8", 0);
+            emitter.instruction("add x8, x8, #1");                              // advance to the next spread-tail variadic element
+            abi::emit_store_to_address(emitter, "x8", stack_reg, 0);
+            emitter.instruction(&format!("b {}", loop_start));                  // continue copying spread-tail elements into ...$rest
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "r10", 0);
+            emitter.instruction("add r10, 1");                                  // advance to the next spread-tail variadic element
+            abi::emit_store_to_address(emitter, "r10", stack_reg, 0);
+            emitter.instruction(&format!("jmp {}", loop_start));                // continue copying spread-tail elements into ...$rest
+        }
+    }
+
+    emitter.label(&loop_done);
+    abi::emit_release_temporary_stack(emitter, SCRATCH_BYTES);
+}
+
+fn emit_variadic_assoc_arg_from_sources(
+    variadic_sources: &[VariadicArgSource],
+    prefix_variadic_tail: Option<&PrefixVariadicTail>,
+    source_temp_types: &[PhpType],
+    final_pushed_bytes: usize,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
     let elem_count = variadic_sources.len();
-    let first_elem_ty = match variadic_sources.first() {
+    let first_elem_ty = if let Some(tail) = prefix_variadic_tail {
+        spread_source_elem_ty(&source_temp_types[tail.prefix_temp_idx])
+    } else {
+        match variadic_sources.first() {
         Some(VariadicArgSource {
             source: FinalArgSource::SourceTemp(temp_idx),
             ..
         }) => source_temp_types[*temp_idx].clone(),
         _ => PhpType::Int,
+        }
     };
     let container_elem_ty = variadic_container_elem_ty(&first_elem_ty);
     let hash_capacity_reg = abi::int_arg_reg_name(emitter.target, 0);
@@ -733,6 +952,17 @@ fn emit_variadic_assoc_arg_from_sources(
         key: Box::new(PhpType::Mixed),
         value: Box::new(container_elem_ty.clone()),
     });
+
+    if let Some(tail) = prefix_variadic_tail {
+        emit_prefix_tail_into_variadic_hash(
+            tail,
+            &container_elem_ty,
+            source_temp_types,
+            final_pushed_bytes,
+            emitter,
+            ctx,
+        );
+    }
 
     for (idx, source) in variadic_sources.iter().enumerate() {
         match &source.key {
