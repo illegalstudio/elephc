@@ -75,6 +75,25 @@ echo ":" . (strcmp(right: right_arg(), left: left_arg()) < 0 ? "lt" : "no");
 }
 
 #[test]
+fn test_ffi_extern_positional_arguments_preserve_source_evaluation_order() {
+    let out = compile_and_run(
+        r#"<?php
+extern function strcmp(string $left, string $right): int;
+function left_arg() {
+    echo "L";
+    return "a";
+}
+function right_arg() {
+    echo "R";
+    return "b";
+}
+echo ":" . (strcmp(left_arg(), right_arg()) < 0 ? "lt" : "ge");
+"#,
+    );
+    assert_eq!(out, "LR:lt");
+}
+
+#[test]
 fn test_ffi_extern_named_arguments_after_spread_evaluate_spread_once() {
     let out = compile_and_run(
         r#"<?php
