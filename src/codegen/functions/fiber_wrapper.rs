@@ -30,9 +30,10 @@ pub(crate) fn emit_fiber_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberW
     emitter.instruction(&format!("ldr x20, [x19, #{}]", runtime::FIBER_CALLABLE_OFFSET)); // x20 = original closure function pointer stored on the Fiber
 
     spill_wrapper_args(emitter, wrapper, &arg_types);
-    load_spilled_args_for_closure_call(emitter, &arg_types);
+    let overflow_bytes = materialize_spilled_args_for_closure_call(emitter, &arg_types, frame_size);
 
     emitter.instruction("blr x20");                                             // call the original closure with ABI-correct arguments
+    abi::emit_release_temporary_stack(emitter, overflow_bytes);                 // drop stack-passed closure arguments after the Fiber callback returns
     box_wrapper_return(emitter, wrapper.sig.return_type.codegen_repr());
 
     emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_callee_offset)); // restore callee-saved wrapper registers
@@ -113,28 +114,38 @@ fn spill_user_arg(emitter: &mut Emitter, param_idx: usize, ty: &PhpType, slot_of
     }
 }
 
-fn load_spilled_args_for_closure_call(emitter: &mut Emitter, arg_types: &[PhpType]) {
+fn materialize_spilled_args_for_closure_call(
+    emitter: &mut Emitter,
+    arg_types: &[PhpType],
+    frame_size: usize,
+) -> usize {
+    push_spilled_args_as_call_temporaries(emitter, arg_types, frame_size);
     let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, arg_types, 0);
-    for (idx, assignment) in assignments.iter().enumerate() {
-        if !assignment.in_register() {
-            emitter.comment("WARNING: Fiber closure argument overflow is not materialized");
-            continue;
-        }
+    abi::materialize_outgoing_args(emitter, &assignments)
+}
+
+fn push_spilled_args_as_call_temporaries(
+    emitter: &mut Emitter,
+    arg_types: &[PhpType],
+    frame_size: usize,
+) {
+    for (idx, ty) in arg_types.iter().enumerate() {
         let slot_offset = idx * 16;
-        match assignment.ty.codegen_repr() {
+        let frame_slot_offset = frame_size - 16 - slot_offset;
+        match ty.codegen_repr() {
             PhpType::Float => {
-                let reg = abi::float_arg_reg_name(emitter.target, assignment.start_reg);
-                emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, slot_offset)); // load the prepared float argument into its ABI register
+                abi::load_at_offset(emitter, "d0", frame_slot_offset);
+                abi::emit_push_float_reg(emitter, "d0");                         // push the prepared float argument onto the standard temporary call stack
             }
             PhpType::Str => {
-                let ptr_reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
-                let len_reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg + 1);
-                emitter.instruction(&format!("ldp {}, {}, [sp, #{}]", ptr_reg, len_reg, slot_offset)); // load the prepared string argument pair into ABI registers
+                abi::load_at_offset(emitter, "x9", frame_slot_offset);
+                abi::load_at_offset(emitter, "x10", frame_slot_offset - 8);
+                abi::emit_push_reg_pair(emitter, "x9", "x10");                  // push the prepared string argument pair onto the standard temporary call stack
             }
             PhpType::Void | PhpType::Never => {}
             _ => {
-                let reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
-                emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, slot_offset)); // load the prepared scalar/pointer argument into its ABI register
+                abi::load_at_offset(emitter, "x9", frame_slot_offset);
+                abi::emit_push_reg(emitter, "x9");                              // push the prepared scalar/pointer argument onto the standard temporary call stack
             }
         }
     }

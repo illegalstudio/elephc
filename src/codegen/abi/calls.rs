@@ -3,7 +3,7 @@ use crate::types::PhpType;
 
 use super::frame::{emit_adjust_sp, emit_sp_address, load_from_caller_stack, store_at_offset};
 use super::registers::{
-    float_arg_reg_limit, float_arg_reg_name, float_result_reg, int_arg_reg_limit,
+    caller_stack_start_offset, float_arg_reg_limit, float_arg_reg_name, float_result_reg, int_arg_reg_limit,
     int_arg_reg_name, int_result_reg, secondary_scratch_reg, string_result_regs,
     tertiary_scratch_reg, IncomingArgCursor, OutgoingArgAssignment, STACK_ARG_SENTINEL,
 };
@@ -438,12 +438,18 @@ pub fn materialize_outgoing_args(
         .filter_map(|(idx, assignment)| (!assignment.in_register()).then_some(idx))
         .collect();
     let overflow_bytes: usize = overflow_indices.iter().map(|idx| slot_sizes[*idx]).sum();
+    let stack_arg_padding = if overflow_bytes > 0 {
+        caller_stack_start_offset(emitter.target).saturating_sub(16)
+    } else {
+        0
+    };
+    let outgoing_stack_bytes = overflow_bytes + stack_arg_padding;
 
-    if overflow_bytes > 0 {
-        emit_adjust_sp(emitter, overflow_bytes, true);
+    if outgoing_stack_bytes > 0 {
+        emit_adjust_sp(emitter, outgoing_stack_bytes, true);
     }
 
-    let base_shift = overflow_bytes;
+    let base_shift = outgoing_stack_bytes;
     for (i, assignment) in assignments.iter().enumerate() {
         if !assignment.in_register() {
             continue;
@@ -493,9 +499,9 @@ pub fn materialize_outgoing_args(
     }
 
     if overflow_bytes > 0 {
-        let mut dst_offset = total_temp_bytes;
+        let mut dst_offset = total_temp_bytes + stack_arg_padding;
         for idx in &overflow_indices {
-            let src_offset = overflow_bytes + temp_offsets[*idx];
+            let src_offset = outgoing_stack_bytes + temp_offsets[*idx];
             emit_copy_stack_arg_slot(emitter, &assignments[*idx].ty, src_offset, dst_offset);
             dst_offset += slot_sizes[*idx];
         }
@@ -505,5 +511,5 @@ pub fn materialize_outgoing_args(
         emit_adjust_sp(emitter, total_temp_bytes, false);
     }
 
-    overflow_bytes
+    outgoing_stack_bytes
 }

@@ -369,6 +369,19 @@ $f->start(41);
 }
 
 #[test]
+fn test_fiber_start_typed_string_arguments_use_stack_overflow() {
+    let out = compile_and_run(
+        r#"<?php
+$f = new Fiber(function(string $a, string $b, string $c, string $d, string $e): void {
+    echo $a . $b . $c . $d . $e;
+});
+$f->start("A", "B", "C", "D", "E");
+"#,
+    );
+    assert_eq!(out, "ABCDE");
+}
+
+#[test]
 fn test_fiber_start_seven_args() {
     // 7 = the maximum, equal to the AArch64 integer arg-reg count minus $this.
     let out = compile_and_run(
