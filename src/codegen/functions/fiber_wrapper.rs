@@ -31,8 +31,11 @@ pub(crate) fn emit_fiber_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberW
 
     spill_wrapper_args(emitter, wrapper, &arg_types);
     let overflow_bytes = materialize_spilled_args_for_closure_call(emitter, &arg_types, frame_size);
+    let call_stack_padding = if overflow_bytes > 0 { 16 } else { 0 };
+    abi::emit_reserve_temporary_stack(emitter, call_stack_padding);             // leave the first spilled callback argument where the callee expects it
 
     emitter.instruction("blr x20");                                             // call the original closure with ABI-correct arguments
+    abi::emit_release_temporary_stack(emitter, call_stack_padding);             // drop the wrapper-only caller-stack alignment pad
     abi::emit_release_temporary_stack(emitter, overflow_bytes);                 // drop stack-passed closure arguments after the Fiber callback returns
     box_wrapper_return(emitter, wrapper.sig.return_type.codegen_repr());
 

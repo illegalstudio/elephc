@@ -93,11 +93,11 @@ fn test_materialize_outgoing_args_keeps_overflow_on_stack() {
     let overflow_bytes = materialize_outgoing_args(&mut emitter, &assignments);
     let out = emitter.output();
 
-    assert_eq!(overflow_bytes, 32);
-    assert!(out.contains("    sub sp, sp, #32\n"));
-    assert!(out.contains("    ldr x0, [sp, #160]\n"));
-    assert!(out.contains("    ldr x7, [sp, #48]\n"));
-    assert!(out.contains("    str x10, [sp, #160]\n"));
+    assert_eq!(overflow_bytes, 16);
+    assert!(out.contains("    sub sp, sp, #16\n"));
+    assert!(out.contains("    ldr x0, [sp, #144]\n"));
+    assert!(out.contains("    ldr x7, [sp, #32]\n"));
+    assert!(out.contains("    str x10, [sp, #144]\n"));
     assert!(out.contains("    add sp, sp, #144\n"));
 }
 
