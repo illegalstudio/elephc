@@ -369,6 +369,19 @@ $f->start(41);
 }
 
 #[test]
+fn test_fiber_start_typed_float_argument_receives_value() {
+    let out = compile_and_run(
+        r#"<?php
+$f = new Fiber(function(float $x): void {
+    echo $x + 0.5;
+});
+$f->start(1.5);
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+#[test]
 fn test_fiber_start_typed_string_arguments_use_stack_overflow() {
     let out = compile_and_run(
         r#"<?php
@@ -379,6 +392,39 @@ $f->start("A", "B", "C", "D", "E");
 "#,
     );
     assert_eq!(out, "ABCDE");
+}
+
+#[test]
+fn test_fiber_start_typed_argument_with_string_capture() {
+    let out = compile_and_run(
+        r#"<?php
+$suffix = "!";
+$f = new Fiber(function(int $x) use ($suffix): void {
+    echo ($x + 1) . $suffix;
+});
+$f->start(41);
+"#,
+    );
+    assert_eq!(out, "42!");
+}
+
+#[test]
+fn test_fiber_first_class_function_callable_uses_entry_wrapper() {
+    let out = compile_and_run(
+        r#"<?php
+function fiber_job(int $x): int {
+    echo $x;
+    return $x + 1;
+}
+$f = new Fiber(fiber_job(...));
+$v = $f->start(41);
+echo "/";
+echo is_null($v) ? "null" : $v;
+echo "/";
+echo $f->getReturn();
+"#,
+    );
+    assert_eq!(out, "41/null/42");
 }
 
 #[test]
