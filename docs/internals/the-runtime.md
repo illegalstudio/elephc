@@ -459,6 +459,28 @@ These helpers support the compiler-specific `buffer<T>` hot-path data type.
 | `__rt_match_unhandled` | Abort with `Fatal error: unhandled match case` | — | does not return |
 | `__rt_enum_from_fail` | Abort with `Fatal error: enum case not found` when `Enum::from()` has no match | — | does not return |
 
+## Fiber routines
+
+**Source:** `src/codegen/runtime/fibers/` (5 files including `mod.rs`)
+
+These helpers implement PHP 8.1-style cooperative coroutines. They are emitted on AArch64 and in the Linux x86_64 runtime slice.
+
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_fiber_alloc_stack` | Allocate a per-fiber native stack with a protected guard page | requested usable stack size | stack base, initial top, mapped size |
+| `__rt_fiber_free_stack` | Return a mapped fiber stack to the OS | stack base, mapped size | — |
+| `__rt_fiber_switch` | Save the current callee-saved context and restore the target fiber/main context | target `Fiber*` or null for main | resumes when this context is switched back to |
+| `__rt_fiber_entry` | Trampoline run on first entry to a fiber stack; calls the generated wrapper, records return/escape state, and switches back | active `_fiber_current` | does not return normally inside the fiber |
+| `__rt_fiber_construct` | Allocate and initialize the runtime-managed Fiber object and its initial stack frame | callable pointer, `Fiber` class id, generated wrapper pointer | `Fiber*` |
+| `__rt_fiber_throw_state_error` | Allocate a `FiberError` and throw it through the normal exception runtime | message pointer and length | does not return |
+| `__rt_fiber_start` | Start a not-yet-started fiber and return its first yielded value or null on immediate termination | `Fiber*` | boxed `mixed` payload |
+| `__rt_fiber_resume` | Resume a suspended fiber with a boxed payload | `Fiber*`, boxed `mixed` value | boxed `mixed` payload |
+| `__rt_fiber_suspend` | Suspend the current fiber and yield a boxed payload to its caller | boxed `mixed` value | boxed `mixed` value supplied by the next resume |
+| `__rt_fiber_throw` | Resume a suspended fiber by throwing into its pending suspend point | `Fiber*`, throwable object | boxed `mixed` payload or rethrown exception |
+| `__rt_fiber_get_current` | Return the currently running fiber, or null when running on the main stack | — | boxed `mixed` payload |
+| `__rt_fiber_get_return` | Read the terminal return payload from a terminated fiber | `Fiber*` | boxed `mixed` payload |
+| `__rt_fiber_state_eq` | Shared predicate helper for `isStarted()`, `isSuspended()`, `isRunning()`, and `isTerminated()` | `Fiber*`, state id | bool |
+
 ## How routines are emitted
 
 **File:** `src/codegen/runtime/emitters.rs`
@@ -476,10 +498,11 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     // buffers: contiguous buffer allocation, bounds checking, UAF traps
     // io: c-string buffers, file I/O, stat/fs helpers, scandir/glob/tempnam, CSV
     // pointers: ptoa, null check, str_to_cstr, cstr_to_str
+    // fibers: guarded stack allocation, context switch, entry trampoline, Fiber API
 }
 ```
 
-Notable runtime-only helpers emitted here include `__rt_diag_push_suppression`, `__rt_diag_pop_suppression`, `__rt_diag_warning`, `__rt_exception_cleanup_frames`, `__rt_exception_matches`, `__rt_instanceof_lookup`, `__rt_instanceof_invalid_target`, `__rt_throw_current`, `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_mixed_instanceof`, `__rt_iterable_write_stdout`, `__rt_iterable_unsupported_kind`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, and `__rt_cstr_to_str` in addition to the more user-visible helpers.
+Notable runtime-only helpers emitted here include `__rt_diag_push_suppression`, `__rt_diag_pop_suppression`, `__rt_diag_warning`, `__rt_exception_cleanup_frames`, `__rt_exception_matches`, `__rt_instanceof_lookup`, `__rt_instanceof_invalid_target`, `__rt_throw_current`, `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_mixed_instanceof`, `__rt_iterable_write_stdout`, `__rt_iterable_unsupported_kind`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, `__rt_cstr_to_str`, `__rt_fiber_switch`, and `__rt_fiber_entry` in addition to the more user-visible helpers.
 
 Every routine in the selected target runtime slice is linked into the binary, even if unused by the current program. elephc already does AST-side control-flow pruning and dead-code elimination before codegen, but runtime-specific dead stripping is still future work.
 
@@ -495,6 +518,10 @@ The runtime data layer is split between `emit_runtime_data_fixed()` (shared buff
 .comm _exc_handler_top, 8    ; top of the active exception-handler stack
 .comm _exc_call_frame_top, 8 ; top of the activation-record cleanup stack
 .comm _exc_value, 8          ; currently propagating exception object
+.comm _fiber_current, 8      ; currently running Fiber object, or null on main
+.comm _fiber_main_saved_sp, 8 ; saved main-stack pointer while running a fiber
+.comm _fiber_main_saved_exc, 8 ; saved main exception-handler chain while running a fiber
+.comm _fiber_main_saved_call_frame, 8 ; saved main cleanup-frame chain while running a fiber
 .comm _rt_diag_suppression, 8 ; nested runtime warning-suppression depth for @
 .comm _heap_buf, 8388608     ; 8MB heap by default (--heap-size overrides)
 .comm _heap_off, 8           ; current heap offset
@@ -531,6 +558,8 @@ Additionally, the runtime emits static data tables:
 - `_heap_dbg_*` summary labels — fixed strings used by `__rt_heap_debug_report` for alloc/free/live/leak output
 - `_uncaught_exc_msg` — fatal exception string written by `__rt_throw_current` when no handler exists
 - `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — suppressible runtime warning text routed through `__rt_diag_warning`
+- `_fiber_msg_already_started`, `_fiber_msg_not_suspended`, `_fiber_msg_throw_not_suspended`, `_fiber_msg_not_terminated`, `_fiber_msg_suspend_outside`, `_fiber_msg_unsupported_callable` — messages used by `FiberError` runtime paths
+- `_fiber_class_id`, `_fiber_error_class_id` — per-program class ids used by Fiber object cleanup and `FiberError` construction
 - `_php_uname_mode_len_msg`, `_php_uname_mode_value_msg` — fatal `php_uname()` argument diagnostics for invalid mode strings
 - `_pcre_space`, `_pcre_digit`, `_pcre_word`, `_pcre_nspace`, `_pcre_ndigit`, `_pcre_nword` — PCRE shorthand replacement strings for regex translation
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings used by `__rt_json_encode_bool` and `__rt_json_encode_null`

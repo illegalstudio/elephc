@@ -369,8 +369,9 @@ Proper type system for PHP compatibility.
 - [x] Support for `never` return type
 - [x] `iterable` pseudo-type runtime parity — `foreach` over indexed-array, hash-backed, `Iterator`, and `IteratorAggregate` iterables; `echo`, `gettype()`, `var_dump()`, `===`, scalar casts (`(int)`, `(float)`, `(string)`, `(bool)`), and the `is_iterable()` builtin all dispatch through heap-kind, value-type, or interface metadata where needed
 
-## v0.20.x — Shared and static libraries (C ABI)
+## v0.20.x — Fibers and shared/static libraries (C ABI)
 
+- [x] Fibers MVP — `Fiber` and `FiberError` built-in classes, `start()` / `resume()` / `suspend()` / `throw()` / `getReturn()`, state predicates, `Fiber::getCurrent()`, closure captures, uncaught-exception propagation through the caller, guarded per-fiber `mmap` stacks, and context switching on ARM64 plus Linux x86_64
 - [ ] `--lib` flag, export PHP functions as C-callable symbols
 - [ ] `.dylib` / `.so` / `.a` output
 - [ ] Auto-generated C header file
@@ -437,7 +438,7 @@ Features that are feasible but complex. Not currently planned for any specific v
 | String-capable FFI callbacks | Medium | Allow C callback signatures that pass or return strings once ownership and temporary C-string lifetimes are modeled safely across callback boundaries. |
 | Generators / `yield` | High | Requires compile-time state machine transformation: every yield point becomes a switch case, all locals promoted to heap-allocated generator object. Edge cases with yield inside try/catch/finally are significant. |
 | `yield from` delegation | High | Depends on generators. Forwards iteration to an inner generator, propagating values and return. |
-| Fibers | MVP delivered (ARM64 + Linux x86_64) | `Fiber` and `FiberError` registered as built-in classes. ARM64 context switch (`x19-x28`, `x29-x30`, `d8-d15`) and x86_64 SysV context switch (`rbx`, `rbp`, `r12-r15`) implemented with exception-chain and cleanup-chain swapping. `start`/`resume`/`suspend`/`getReturn` round-trip `mixed` payloads, state predicates, `Fiber::getCurrent()`, closure captures, and `Fiber->throw()` work end-to-end. `start()` accepts up to seven Mixed arguments forwarded to the callback. Uncaught fiber exceptions propagate back to the caller's surrounding `try`/`catch` via a sentinel handler installed by the trampoline. Per-fiber stacks are allocated via `mmap` with a 16 KB `PROT_NONE` guard page at the bottom; overflow faults instead of corrupting the heap, and `munmap` returns the region when the Fiber object is freed. `FiberError` raised on invalid state transitions. See `docs/php/fibers.md`. Remaining: arithmetic auto-unboxing on Mixed payloads received from `suspend()`, true variadic `start(...$args)` beyond seven args, dynamic callback targets, by-reference callback start parameters, configurable stack sizing, and PHP-exact `FiberError` hierarchy. |
+| Fiber parity v2 | Medium | MVP delivered in v0.20.x for ARM64 and Linux x86_64. Remaining parity work: arithmetic auto-unboxing on `mixed` payloads received from `suspend()`, true variadic `start(...$args)` beyond seven args, dynamic callback targets, by-reference callback start parameters, configurable stack sizing, and PHP-exact `FiberError` hierarchy. See `docs/php/fibers.md`. |
 
 ---
 

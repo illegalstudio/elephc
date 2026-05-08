@@ -32,6 +32,7 @@ This page explains where every value lives in memory at runtime.
 │  (heap state, counters,      │  _heap_off, _heap_free_list,
 │   globals, static storage)   │  _heap_small_bins, _gc_allocs/_frees/_live/_peak,
 │                              │  _gc_collecting/_gc_release_suppressed,
+│                              │  _fiber_current, _fiber_main_saved_*,
 │                              │  _include_once_*, _fn_variant_active_*, ...
 ├─────────────────────────────┤
 │       Data section           │  String literals, float constants
@@ -109,6 +110,12 @@ See [ARM64 Instruction Reference](arm64-instructions.md#move-and-immediate) for 
 ### Pointer values
 
 Pointers are stored as raw 64-bit addresses. An opaque pointer and a typed `ptr<T>` value have the same runtime representation; the type tag only exists in the checker. Null pointers use address `0x0`, and dereference helpers explicitly trap on null via `__rt_ptr_check_nonnull`.
+
+### Fiber stacks and scheduler state
+
+`Fiber` objects own native stacks rather than borrowing the caller's stack. The runtime allocates each fiber stack through `mmap`, protects the bottom 16 KiB with `mprotect(PROT_NONE)` as a guard page, and stores both the mapping base and total mapped size in the Fiber object so `__rt_fiber_free_stack` can later return it with `munmap`.
+
+The currently running fiber is tracked in `_fiber_current`. When execution switches away from the main stack, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, and `_fiber_main_saved_call_frame` preserve the main stack pointer, exception-handler chain, and activation-record cleanup chain. A suspended Fiber stores the same state inside its object payload (`saved_sp`, `own_exc_head`, and `own_call_frame`), so `__rt_fiber_switch` can swap between main and fiber contexts without mixing exception or cleanup chains.
 
 ## The string buffer (scratch pad)
 
