@@ -7,12 +7,14 @@ sidebar:
 
 A `Fiber` is a cooperative coroutine: a callable that owns its own call stack and can suspend execution at arbitrary depth. Control alternates explicitly between the caller and the fiber — there is no preemption.
 
+elephc supports Fibers on the supported native target matrix: macOS ARM64, Linux ARM64, and Linux x86_64.
+
 ## Class summary
 
 | Method | Signature | Behavior |
 |---|---|---|
 | `__construct` | `__construct(callable $callback)` | Allocate a fiber and capture the callable. The callable runs the first time `start()` is called. |
-| `start` | `start(mixed $arg0 = null, ..., mixed $arg6 = null): mixed` | Switch into the fiber and run it until it suspends or returns. Up to seven arguments are forwarded to the closure. Returns the value yielded via `Fiber::suspend()`, or `null` if the fiber terminates before suspending. |
+| `start` | `start(mixed $arg0 = null, ..., mixed $arg6 = null): mixed` | Switch into the fiber and run it until it suspends or returns. Up to seven arguments are forwarded to the callback. Returns the value yielded via `Fiber::suspend()`, or `null` if the fiber terminates before suspending. |
 | `resume` | `resume(mixed $value = null): mixed` | Deliver a value to the fiber's pending `Fiber::suspend()` call and continue execution. Returns the next yielded value, or `null` if the fiber terminates. |
 | `throw` | `throw(Throwable $exception): mixed` | Re-raise an exception inside the fiber at its pending suspend point. The exception unwinds the fiber's local `try`/`catch` chain. |
 | `getReturn` | `getReturn(): mixed` | Read the value the fiber returned after termination. Raises `FiberError` if called before the fiber terminates. |
@@ -21,9 +23,9 @@ A `Fiber` is a cooperative coroutine: a callable that owns its own call stack an
 | `isRunning` | `isRunning(): bool` | True while the fiber is currently executing. |
 | `isTerminated` | `isTerminated(): bool` | True after the fiber's callable has returned. |
 | `Fiber::suspend` | `static suspend(mixed $value = null): mixed` | (Called from inside a fiber.) Yield the value to the resumer and pause; resumes with the value the next `resume()` delivers. |
-| `Fiber::getCurrent` | `static getCurrent(): ?Fiber` | The currently executing fiber, or null when called from the main thread. |
+| `Fiber::getCurrent` | `static getCurrent(): ?Fiber` | The currently executing fiber, or null when called from the main thread. Internally this is represented as a boxed `mixed` value. |
 
-`FiberError` is a regular `Exception` subclass — `catch (Exception $e)` and `catch (FiberError $e)` both apply.
+`FiberError` is currently modeled as an `Exception` subclass in elephc — `catch (Exception $e)` and `catch (FiberError $e)` both apply. PHP models `FiberError` under `Error`, so this hierarchy is a known compatibility difference.
 
 ## Lifecycle states
 
@@ -60,16 +62,43 @@ Output:
 one|resumed with alpha two|resumed with beta three
 ```
 
-## Implementation notes & known limitations
+## Argument and capture transport
 
-The current implementation targets ARM64 (macOS / Linux). The fiber stack is allocated from the standard heap, the context switch saves the AArch64 callee-saved registers (`x19-x28`, `x29-x30`, `d8-d15`), and the global exception handler chain head is swapped at every switch so a fiber's `try`/`catch` frames do not leak into the caller.
+Fiber calls cross a stack boundary. Before switching stacks, elephc copies the values needed by the callback into fixed fields on the `Fiber` object:
+
+- `start_args[0..6]` stores up to seven boxed `mixed` values passed to `$fiber->start(...)`
+- `float_args[0..6]` stores raw float captures
+- `user_arg_max` records how many leading `start_args` slots may be overwritten by `start()`
+
+This copy is sometimes called "spilling": the caller's argument registers or stack-passed overflow arguments are saved into stable Fiber-owned storage before `__rt_fiber_switch` adopts the Fiber's separate stack.
+
+Closures with `use (...)` captures are evaluated when the Fiber is constructed, not when it starts. Captured int-like values, objects, arrays, callables, and `mixed` values use one integer slot; captured strings use two integer slots (`ptr + len`); captured floats use one float slot. Heap-backed captures are retained when the Fiber is constructed and released when the Fiber object is freed.
+
+## Runtime model
+
+Each Fiber owns a native stack allocated with `mmap`. The bottom 16 KiB is protected with `mprotect(PROT_NONE)` as a guard page, and the usable stack defaults to 256 KiB. When the Fiber object is freed, the mapped stack is returned to the OS with `munmap`.
+
+The context switch is cooperative:
+
+- AArch64 saves `x19-x28`, `x29-x30`, and `d8-d15`
+- x86_64 SysV saves `rbx`, `rbp`, and `r12-r15`; the saved return address resumes through the normal `ret` path
+- `_fiber_current`, the exception-handler chain, and the cleanup call-frame chain are swapped with the target context
+
+The first switch into a Fiber returns into `__rt_fiber_entry`, a trampoline on the fresh stack. The trampoline installs a sentinel exception handler, calls a generated ABI wrapper for the callback, stores the terminal return value, marks the Fiber `Terminated`, and switches back to the caller.
+
+## Limitations
+
+These are current implementation limits, not PHP design rules:
 
 | Limitation | Notes |
 |---|---|
-| Mixed payloads round-trip but elephc's auto-unboxing for arithmetic is incomplete | `start()`, `resume()`, `Fiber::suspend()`, `getReturn()` all transmit Mixed cells, so `int`, `string`, and other scalars cross the suspend boundary cleanly when they are echoed or compared as Mixed. Arithmetic such as `$a + 10` on a Mixed value received from `Fiber::suspend()` does not auto-unbox today and yields the underlying cell pointer arithmetic — cast through a plain `int($a)` first if you need to compute on the value. |
-| `start()` is fixed-arity (≤ 7 args), not truly variadic | The signature is seven optional Mixed parameters with `null` defaults — that exhausts the AArch64 integer arg-reg budget after `$this`. Calls with more than seven arguments are a type-check error. A generated Fiber entry wrapper adapts those Mixed cells to the closure ABI, so untyped, `mixed`, and ordinary declared scalar/object parameters receive PHP-visible values instead of raw cell pointers. |
-| ~~Closures with `use(...)` captures~~ | Supported for all scalar and reference types. When the user writes `new Fiber(function(...) use ($a, $b) { ... })`, the codegen evaluates each captured variable in the surrounding scope at construction time and stashes the value into the Fiber's slot files. A `user_arg_max` field on the Fiber tells `start()` to leave the captured int slots untouched. Each int-class capture is incref'd at construction and decref'd when the Fiber is freed, so heap-backed captures (objects, arrays, persisted strings) survive the original variable being reassigned or going out of scope. Int-class captures (int, bool, object pointer, callable, mixed) ride in `start_args` (one slot each); string captures consume two consecutive `start_args` slots (pointer + length); float captures ride in a parallel `float_args` file that the trampoline loads into `d0..d6`. The closure ABI numbers integer and float parameters independently, so the int-slot budget is 7 and the float-slot budget is also 7. Excess captures of either kind are rejected by the type checker. |
-| ~~`Fiber->throw()` does not propagate uncaught exceptions~~ | Fixed. The trampoline installs a sentinel exception handler at the bottom of every fiber's chain. When an exception unwinds past every user `catch`, it is parked on the fiber, the fiber is marked Terminated, and control returns to the caller; the caller-side `start`/`resume`/`throw` helper then re-raises it on the caller's stack so a surrounding `try`/`catch` catches it. |
-| ~~No `FiberError` raised on invalid state transitions~~ | Fixed. `start()` on a non-NotStarted fiber, `resume()`/`throw()` on a non-Suspended fiber, `getReturn()` before termination, and `Fiber::suspend()` outside a fiber now all raise `FiberError` with a PHP-equivalent message. |
-| ~~No guard page on the fiber stack~~ | Fixed. Each fiber stack is allocated via `mmap` with `MAP_PRIVATE \| MAP_ANON`; the bottom 16 KB is `mprotect(PROT_NONE)` so a stack overflow faults via SIGSEGV/SIGBUS instead of silently corrupting the heap. The full mmap region is returned to the OS via `munmap` when the Fiber object's refcount drops to zero. |
-| x86_64 not yet implemented | The fiber runtime is ARM64-only; the x86_64 build emits stub routines. |
+| `start()` is fixed-arity | `Fiber::start()` has seven optional `mixed` parameters. Calls with more than seven values are rejected, and a callback with more than seven visible start parameters is rejected. This is not true PHP variadic forwarding. |
+| Capture storage is fixed-size | Captures share a fixed slot budget with the callback ABI: seven integer slots and seven float slots. Strings consume two integer slots. Capture overflow is a compile-time error. |
+| Callback arguments cannot be by-reference | Fiber callbacks such as `function (&$value): void {}` are rejected because start arguments are boxed and stored before the stack switch. |
+| Callback targets must be statically known | `new Fiber(...)` accepts closures, variables holding known closures/callables, and known first-class callables. Arbitrary runtime callable values, such as unknown strings or dynamically computed callbacks, are rejected. |
+| Mixed arithmetic still needs explicit casts | Values transferred by `start()`, `resume()`, `Fiber::suspend()`, and `getReturn()` are boxed `mixed` cells. Echo, comparison, `gettype()`, `instanceof`, and typed callback parameters handle them, but arithmetic on an untyped value received from `Fiber::suspend()` may not auto-unbox. Cast explicitly before computing, for example `(int)$value + 10`. |
+| `Fiber::getCurrent()` has imprecise internal typing | PHP exposes `?Fiber`; elephc currently represents the result as boxed `mixed` internally. Runtime checks such as `instanceof Fiber` work, but type inference is less precise than PHP's signature. |
+| `FiberError` hierarchy differs from PHP | elephc currently models `FiberError` as an `Exception` subclass. PHP models it under `Error`. |
+| Stack size is fixed | Each Fiber gets a 256 KiB usable stack plus a 16 KiB guard page. There is no user-facing stack-size configuration. Stack overflow faults through the guard page rather than raising a catchable PHP exception. |
+| Stack allocation failure is not recoverable | If the OS cannot allocate the mapped stack, the runtime does not currently raise a catchable `FiberError` from the constructor. |
+| Cooperative only | Fibers do not provide parallel execution, preemption, timers, or an event loop. Scheduling is entirely explicit through `start()`, `resume()`, `suspend()`, and `throw()`. |
