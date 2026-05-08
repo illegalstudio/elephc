@@ -925,6 +925,9 @@ pub(crate) fn emit_spread_tail_variadic_array_arg(
     let spread_ty = super::super::emit_expr(spread_expr, emitter, ctx, data);
     let source_elem_ty = spread_source_elem_ty(&spread_ty);
     let container_elem_ty = variadic_container_elem_ty(&source_elem_ty);
+    if emitter.target.arch == crate::codegen::platform::Arch::X86_64 {
+        emitter.instruction("mov rdi, rax");                                    // pass the spread source array pointer to the x86_64 slice helper
+    }
     let offset_reg = abi::int_arg_reg_name(emitter.target, 1);
     let length_reg = abi::int_arg_reg_name(emitter.target, 2);
     abi::emit_load_int_immediate(emitter, offset_reg, tail_start as i64);
