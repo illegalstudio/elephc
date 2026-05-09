@@ -367,7 +367,8 @@ src/
 ├── lexer/               # Source text → token stream
 │   ├── token.rs         # Token enum
 │   ├── scan.rs          # Main scanning loop, operators
-│   ├── literals.rs      # String, number, variable, keyword scanning
+│   ├── literals.rs      # Literal scanning entry point
+│   ├── literals/        # Identifier, number, and string scanners
 │   └── cursor.rs        # Byte-level source reader
 │
 ├── parser/              # Tokens → AST (Pratt parser)
@@ -377,8 +378,15 @@ src/
 │   └── control.rs       # if, while, for, foreach, do-while, switch, try/catch/finally
 │
 ├── types/               # Static type checking
-│   ├── mod.rs           # PhpType, TypeEnv, check(), CheckResult
+│   ├── mod.rs           # check() entry point and type exports
+│   ├── model.rs         # PhpType and TypeEnv
+│   ├── result.rs        # CheckResult and semantic metadata
+│   ├── signatures.rs    # Built-in and callable signatures
+│   ├── call_args.rs     # Shared named/spread call planner
+│   ├── schema.rs        # Class/interface/enum metadata
+│   ├── fibers.rs        # Fiber callback validation
 │   ├── traits.rs        # Trait flattening and conflict resolution
+│   ├── traits/          # Trait expansion, merge, and validation helpers
 │   ├── warnings/        # Non-fatal diagnostics (unused vars, unreachable code)
 │   └── checker/
 │       ├── mod.rs       # Type-checker orchestration
@@ -396,9 +404,13 @@ src/
 │   ├── stmt.rs          # Statement codegen dispatcher
 │   ├── stmt/            # Focused statement helpers (arrays, control_flow, io, storage, ...)
 │   ├── abi/             # Target-aware calling-convention, frame, and value helpers
-│   ├── functions/       # User function emission and epilogue cleanup
+│   ├── functions/       # User function emission, wrappers, and epilogue cleanup
+│   ├── main_emission.rs # Top-level program emission
+│   ├── class_methods.rs # Class/static method emission orchestration
+│   ├── function_variants.rs # Include-loaded function dispatchers
+│   ├── interface_wrappers.rs # Interface dispatch return-shape adapters
 │   ├── ffi.rs           # Extern function/global/class codegen
-│   ├── context.rs       # Variables, labels, loop stack
+│   ├── context.rs       # Variables, labels, loop/finally stacks, ownership lattice
 │   ├── data_section.rs  # String/float literal .data section
 │   ├── emit.rs          # Assembly text buffer
 │   ├── platform/        # Target parsing, syscall remapping, Linux transforms
@@ -420,7 +432,8 @@ src/
 │       ├── exceptions/  # setjmp/longjmp-based exception helpers
 │       ├── io/          # fopen, fclose, fread, fwrite, file_ops, ...
 │       ├── pointers/    # ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str
-│       └── system/      # build_argv, time, getenv, shell_exec
+│       ├── system/      # build_argv, time, getenv, shell_exec
+│       └── fibers/      # Fiber stacks, context switch, entry trampoline, Fiber API
 │
 └── errors/              # Error formatting with line:col
 ```

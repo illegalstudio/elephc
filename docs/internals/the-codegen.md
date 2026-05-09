@@ -5,7 +5,7 @@ sidebar:
   order: 7
 ---
 
-**Source:** `src/codegen/` — `mod.rs`, `driver_support.rs`, `prescan.rs`, `program_usage.rs`, `expr.rs`, `expr/`, `stmt.rs`, `stmt/`, `functions/`, `ffi.rs`, `abi/`, `platform/`, `context.rs`, `data_section.rs`, `emit.rs`
+**Source:** `src/codegen/` — `mod.rs`, `driver_support.rs`, `main_emission.rs`, `class_methods.rs`, `function_variants.rs`, `interface_wrappers.rs`, `prescan.rs`, `program_usage.rs`, `program_usage/`, `expr.rs`, `expr/`, `stmt.rs`, `stmt/`, `functions/`, `builtins/`, `runtime/`, `ffi.rs`, `abi/`, `platform/`, `context.rs`, `data_section.rs`, `emit.rs`
 
 The code generator (codegen) is the heart of the compiler. It takes the checked AST after the optimizer's local simplification passes and produces native assembly text for the selected target — the actual instructions the CPU will execute.
 

@@ -5,7 +5,7 @@ sidebar:
   order: 8
 ---
 
-**Source:** `src/codegen/runtime/` — `mod.rs`, `emitters.rs`, `data.rs`, `x86_minimal.rs`, `strings/`, `arrays/`, `buffers/`, `exceptions.rs`, `exceptions/`, `io/`, `system/`, `pointers/`
+**Source:** `src/codegen/runtime/` — `mod.rs`, `emitters.rs`, `data.rs`, `x86_minimal.rs`, `strings/`, `arrays/`, `buffers/`, `exceptions.rs`, `exceptions/`, `io/`, `system/`, `pointers/`, `fibers/`
 
 The runtime is a collection of **hand-written assembly routines** that handle operations too complex for inline code generation. When the [code generator](the-codegen.md) needs to convert an integer to a string or concatenate two strings, it emits a `bl __rt_itoa` or `bl __rt_concat` — a call to a runtime routine.
 
