@@ -6,7 +6,7 @@ mod branches_and_loops;
 mod functions;
 #[path = "control_flow/booleans.rs"]
 mod booleans;
-#[path = "control_flow/assignments.rs"]
+#[path = "control_flow/assignments/mod.rs"]
 mod assignments;
 #[path = "control_flow/nulls.rs"]
 mod nulls;
