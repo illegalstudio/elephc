@@ -7,11 +7,11 @@ mod return_inference;
 mod enums;
 #[path = "types/type_annotations.rs"]
 mod type_annotations;
-#[path = "types/named_arguments.rs"]
+#[path = "types/named_arguments/mod.rs"]
 mod named_arguments;
 #[path = "types/examples.rs"]
 mod examples;
 #[path = "types/never.rs"]
 mod never;
-#[path = "types/iterable.rs"]
+#[path = "types/iterable/mod.rs"]
 mod iterable;
