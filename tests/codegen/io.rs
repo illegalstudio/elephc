@@ -12,7 +12,7 @@ mod filesystem;
 mod misc;
 #[path = "io/stat_ext.rs"]
 mod stat_ext;
-#[path = "io/paths.rs"]
+#[path = "io/paths/mod.rs"]
 mod paths;
 #[path = "io/modify.rs"]
 mod modify;
