@@ -1,8 +1,8 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_filter: filter elements of an integer array using a callback, returning a new array.
-/// Input: x0 = callback function address, x1 = source array pointer
+/// array_filter: filter scalar elements using a callback, returning a new array.
+/// Input: x0 = callback function address, x1 = source array pointer, x2 = optional callback environment pointer
 /// Output: x0 = pointer to new array with only elements where callback returned truthy
 pub fn emit_array_filter(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {

@@ -209,7 +209,7 @@ Common copy-producing array/hash routines now also have dedicated `_refcounted` 
 | `__rt_array_diff_refcounted` / `__rt_array_intersect_refcounted` | Set-style comparisons that keep nested heap-backed values alive |
 | `__rt_array_combine_refcounted` | Combine key/value arrays into a hash while retaining heap-backed values |
 | `__rt_array_chunk_refcounted` | Split an array into retained heap-backed chunks |
-| `__rt_array_filter_refcounted` | Filter an array of heap-backed elements without dropping borrowed payloads |
+| `__rt_array_filter_refcounted` | Filter an array of heap-backed elements without dropping borrowed payloads; an optional third argument carries a captured-closure environment |
 | `__rt_array_merge_into_refcounted` | Append one indexed array into another in-place while retaining nested heap-backed elements |
 
 ### Hash table (for associative arrays)
@@ -267,9 +267,9 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_asort` / `__rt_arsort` | Sort by value while preserving keys, ascending or descending |
 | `__rt_ksort` / `__rt_krsort` | Sort by key, ascending or descending |
 | `__rt_natsort` / `__rt_natcasesort` | Natural-order sort, case-sensitive or case-insensitive |
-| `__rt_array_map` | Apply callback to each int element, return new array |
-| `__rt_array_map_str` | Apply callback to each string element, return new array |
-| `__rt_array_filter` | Filter elements where callback returns truthy |
+| `__rt_array_map` | Apply callback to each scalar element, return new array; an optional third argument carries a captured-closure environment for generated callback wrappers |
+| `__rt_array_map_str` | Apply callback to each scalar or string element and return a string array; an optional third argument carries a captured-closure environment |
+| `__rt_array_filter` | Filter scalar elements where callback returns truthy; an optional third argument carries a captured-closure environment |
 | `__rt_array_reduce` | Reduce array to single value via callback |
 | `__rt_array_walk` | Call callback on each element (side-effects) |
 | `__rt_usort` | Sort array using user comparison callback |

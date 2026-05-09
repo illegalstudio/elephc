@@ -2,7 +2,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
 /// array_filter_refcounted: filter a refcounted array using a callback, returning a new array.
-/// Input: x0 = callback function address, x1 = source array pointer
+/// Input: x0 = callback function address, x1 = source array pointer, x2 = optional callback environment pointer
 /// Output: x0 = pointer to new filtered array
 pub fn emit_array_filter_refcounted(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {

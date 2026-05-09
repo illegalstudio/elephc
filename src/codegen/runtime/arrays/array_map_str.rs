@@ -3,7 +3,7 @@ use crate::codegen::platform::Arch;
 
 /// array_map_str: apply a callback to each element of an array, returning a new string array.
 /// Handles both int and string source arrays (detects elem_size from header).
-/// Input: x0 = callback function address, x1 = source array pointer
+/// Input: x0 = callback function address, x1 = source array pointer, x2 = optional callback environment pointer
 /// Output: x0 = pointer to new array with string elements (elem_size=16)
 pub fn emit_array_map_str(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {

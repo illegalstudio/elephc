@@ -159,19 +159,19 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `natcasesort()` | `natcasesort($arr): void` | Case-insensitive natural sort |
 | `shuffle()` | `shuffle($arr): void` | Randomly shuffle (in-place) |
 | `array_rand()` | `array_rand($arr): int` | Pick one random key |
-| `array_map()` | `array_map("callback", $arr): array` | Apply callback to each element |
-| `array_filter()` | `array_filter($arr, "callback"): array` | Filter where callback is truthy |
-| `array_reduce()` | `array_reduce($arr, "callback", $init): int` | Reduce to single value |
-| `array_walk()` | `array_walk($arr, "callback"): void` | Call callback on each element |
-| `usort()` | `usort($arr, "callback"): void` | Sort with user comparison |
-| `uksort()` | `uksort($arr, "callback"): void` | Sort by key with user comparison |
-| `uasort()` | `uasort($arr, "callback"): void` | Sort with user comparison, maintain keys |
-| `call_user_func()` | `call_user_func("name", ...): mixed` | Call function by name |
-| `call_user_func_array()` | `call_user_func_array("name", $args): mixed` | Call with args from array |
+| `array_map()` | `array_map($callback, $arr): array` | Apply callback to each element |
+| `array_filter()` | `array_filter($arr, $callback): array` | Filter where callback is truthy |
+| `array_reduce()` | `array_reduce($arr, $callback, $init): int` | Reduce to single value |
+| `array_walk()` | `array_walk($arr, $callback): void` | Call callback on each element |
+| `usort()` | `usort($arr, $callback): void` | Sort with user comparison |
+| `uksort()` | `uksort($arr, $callback): void` | Sort by key with user comparison |
+| `uasort()` | `uasort($arr, $callback): void` | Sort with user comparison, maintain keys |
+| `call_user_func()` | `call_user_func($callback, ...): mixed` | Call a callback value |
+| `call_user_func_array()` | `call_user_func_array($callback, $args): mixed` | Call with args from array |
 | `function_exists()` | `function_exists("name"): bool` | Check if function is defined |
 | `isset()` | `isset($var): int` | Check if variable is defined |
 
-> Callback arguments can be string literals, anonymous functions, or arrow functions.
+> Callback arguments can be string literals, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures.
 
 **Not supported by design:** `compact()`, `extract()` require runtime variable-name tables and are listed in the roadmap's "Will not implement" section.
 

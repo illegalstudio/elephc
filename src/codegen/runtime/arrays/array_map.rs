@@ -1,8 +1,8 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_map: apply a callback to each element of an integer array, returning a new array.
-/// Input: x0 = callback function address, x1 = source array pointer
+/// array_map: apply a callback to each scalar/string source element, returning a scalar array.
+/// Input: x0 = callback function address, x1 = source array pointer, x2 = optional callback environment pointer
 /// Output: x0 = pointer to new array with transformed elements
 pub fn emit_array_map(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
