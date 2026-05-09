@@ -2,7 +2,7 @@ use crate::support::*;
 
 #[path = "type_builtins/strict_comparison.rs"]
 mod strict_comparison;
-#[path = "type_builtins/includes.rs"]
+#[path = "type_builtins/includes/mod.rs"]
 mod includes;
 #[path = "type_builtins/division.rs"]
 mod division;
