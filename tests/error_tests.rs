@@ -165,7 +165,7 @@ mod extensions;
 mod math_builtins;
 #[path = "error_tests/string_builtins.rs"]
 mod string_builtins;
-#[path = "error_tests/io_builtins.rs"]
+#[path = "error_tests/io_builtins/mod.rs"]
 mod io_builtins;
 #[path = "error_tests/array_builtins.rs"]
 mod array_builtins;
