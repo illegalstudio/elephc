@@ -492,7 +492,7 @@ When a closure variable is called (`$fn(1, 2)`), the codegen:
 
 Built-in functions like `array_map`, `array_filter`, `array_reduce`, `array_walk`, and `usort` accept callback values. The callback function pointer is passed in a register (like any other `Callable` argument) and the runtime routine calls it via `blr`.
 
-Closures that depend on hidden `use (...)` capture arguments still only work for direct `$fn(...)` calls today. Callback-style built-ins do not forward those hidden capture values, so captured closures are not yet valid drop-in callbacks there.
+For captured closures passed through `array_map` / `array_filter`, codegen builds a temporary callback environment containing the original closure pointer plus its hidden `use (...)` values. The runtime passes that environment to a generated callback wrapper, and the wrapper re-materializes the original visible arguments plus hidden captures before calling the closure. `call_user_func()` does not need a runtime loop, so it appends the hidden capture arguments directly at the indirect call site.
 
 ## Fiber codegen
 

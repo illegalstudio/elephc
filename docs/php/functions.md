@@ -93,7 +93,16 @@ $multiply = function(int $x) use ($factor): int {
 echo $multiply(5); // 15
 ```
 
-**Limitation:** Closures with `use` captures cannot be passed to `array_map`, `array_filter`, etc.
+Captured closures can also be used as callback values:
+
+```php
+<?php
+$factor = 3;
+$values = array_map(function(int $x) use ($factor): int {
+    return $x * $factor;
+}, [1, 2, 3]);
+echo $values[2]; // 9
+```
 
 ## Static closures
 
