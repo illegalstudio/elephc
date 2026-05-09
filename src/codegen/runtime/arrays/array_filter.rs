@@ -20,7 +20,7 @@ pub fn emit_array_filter(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #64");                                    // set up new frame pointer
     emitter.instruction("stp x19, x20, [sp, #48]");                             // save callee-saved x19, x20
     emitter.instruction("str x21, [sp, #40]");                                  // save callee-saved x21
-    emitter.instruction("str x0, [sp, #0]");                                    // save callback address to stack
+    emitter.instruction("str x2, [sp, #0]");                                    // save optional callback environment pointer to stack
     emitter.instruction("str x1, [sp, #8]");                                    // save source array pointer to stack
     emitter.instruction("mov x19, x0");                                         // x19 = callback address (callee-saved)
 
@@ -49,8 +49,12 @@ pub fn emit_array_filter(emitter: &mut Emitter) {
 
     // -- save current element for potential copy --
     emitter.instruction("str x0, [sp, #32]");                                   // save element value to stack
+    emitter.instruction("ldr x9, [sp, #0]");                                    // load optional callback environment pointer
+    emitter.instruction("cbz x9, __rt_array_filter_call");                      // keep legacy one-argument callback ABI when no environment is present
+    emitter.instruction("mov x1, x9");                                          // pass capture environment as the wrapper's second argument
 
     // -- call callback with element as argument --
+    emitter.label("__rt_array_filter_call");
     emitter.instruction("blr x19");                                             // call callback(element) → result in x0
 
     // -- check if callback returned truthy --
@@ -91,9 +95,10 @@ fn emit_array_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r12");                                            // preserve the callback address register because the filter loop calls through it repeatedly
     emitter.instruction("push r13");                                            // preserve the source-index register because the loop keeps it live across callback invocations
     emitter.instruction("push r14");                                            // preserve the destination-length register because kept-element count survives callback invocations
-    emitter.instruction("sub rsp, 32");                                         // reserve local slots for the source array pointer, source length, destination array pointer, and candidate element
+    emitter.instruction("sub rsp, 40");                                         // reserve local slots for filter bookkeeping and optional callback environment
     emitter.instruction("mov r12, rdi");                                        // keep the callback address in a callee-saved register across the filtering loop
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the source array pointer so the loop can reload it after callback calls
+    emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // save optional callback environment pointer for captured-closure wrappers
     emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the source array length from the first field of the array header
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the source array length across the destination-array allocation call
     emitter.instruction("mov rdi, r10");                                        // pass the source array length as the maximum destination capacity to __rt_array_new
@@ -109,6 +114,10 @@ fn emit_array_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the source array pointer after the previous callback invocation
     emitter.instruction("mov rdi, QWORD PTR [r10 + r13 * 8 + 24]");             // load the current source element into the first SysV integer argument register
     emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                       // preserve the candidate source element across the callback so truthy matches can copy it
+    emitter.instruction("cmp QWORD PTR [rbp - 64], 0");                         // check whether this runtime call carries a callback capture environment
+    emitter.instruction("je __rt_array_filter_call");                           // keep legacy one-argument callback ABI when no environment is present
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // pass capture environment as the wrapper's second argument
+    emitter.label("__rt_array_filter_call");
     emitter.instruction("call r12");                                            // invoke the user callback with the current source element and read the truthy result from rax
     emitter.instruction("test rax, rax");                                       // check whether the callback reported a truthy keep/skip decision
     emitter.instruction("jz __rt_array_filter_skip");                           // skip copying the element when the callback returned zero / false
@@ -124,7 +133,7 @@ fn emit_array_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_filter_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the destination array pointer for final length publication and return
     emitter.instruction("mov QWORD PTR [rax], r14");                            // publish the number of kept elements as the destination array logical length
-    emitter.instruction("add rsp, 32");                                         // release the filter local bookkeeping slots before restoring callee-saved registers
+    emitter.instruction("add rsp, 40");                                         // release the filter local bookkeeping slots before restoring callee-saved registers
     emitter.instruction("pop r14");                                             // restore the caller destination-length callee-saved register
     emitter.instruction("pop r13");                                             // restore the caller source-index callee-saved register
     emitter.instruction("pop r12");                                             // restore the caller callback callee-saved register

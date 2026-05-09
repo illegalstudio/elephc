@@ -37,6 +37,7 @@ mod buffer_free;
 mod buffer_len;
 mod call_user_func;
 mod call_user_func_array;
+mod callback_env;
 mod count;
 mod ensure_unique_arg;
 mod function_exists;

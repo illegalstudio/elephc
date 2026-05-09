@@ -7,6 +7,7 @@ use crate::codegen::abi;
 use crate::names::function_symbol;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
+use super::callback_env;
 
 pub fn emit(
     _name: &str,
@@ -33,11 +34,13 @@ pub fn emit(
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_)
     );
     let mut sig: Option<FunctionSig> = None;
+    let mut captures: Vec<(String, PhpType)> = Vec::new();
     if is_callable_expr {
         emit_expr(&args[0], emitter, ctx, data);
         emitter.instruction(&format!("mov {}, {}", call_reg, result_reg));      // move the synthesized callback address into the nested-call scratch register
         if let Some(deferred) = ctx.deferred_closures.last() {
             sig = Some(deferred.sig.clone());
+            captures = deferred.captures.clone();
         }
     } else if let ExprKind::Variable(var_name) = &args[0].kind {
         let var = ctx.variables.get(var_name).expect("undefined callback variable");
@@ -46,6 +49,7 @@ pub fn emit(
         if let Some(closure_sig) = ctx.closure_sigs.get(var_name) {
             sig = Some(closure_sig.clone());
         }
+        captures = ctx.closure_captures.get(var_name).cloned().unwrap_or_default();
     } else {
         let func_name = match &args[0].kind {
             ExprKind::StringLiteral(name) => name.clone(),
@@ -87,10 +91,11 @@ pub fn emit(
     }
 
     if let Some(sig) = &sig {
+        let visible_param_count = sig.params.len().saturating_sub(captures.len());
         let regular_param_count = if sig.variadic.is_some() {
-            sig.params.len().saturating_sub(1)
+            visible_param_count.saturating_sub(1)
         } else {
-            sig.params.len()
+            visible_param_count
         };
         for i in arg_types.len()..regular_param_count {
             if let Some(Some(default_expr)) = sig.defaults.get(i) {
@@ -100,6 +105,7 @@ pub fn emit(
             }
         }
     }
+    callback_env::push_captures_as_hidden_args(&captures, emitter, ctx, &mut arg_types);
 
     let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, &arg_types, 0);
     let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);

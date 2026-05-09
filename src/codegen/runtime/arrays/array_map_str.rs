@@ -16,13 +16,15 @@ pub fn emit_array_map_str(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_map_str");
 
     // -- set up stack frame, save callee-saved registers --
-    emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #48");                                    // set up new frame pointer
-    emitter.instruction("stp x19, x20, [sp, #32]");                             // save callee-saved x19, x20
+    emitter.instruction("sub sp, sp, #80");                                     // allocate 80 bytes on the stack
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #64");                                    // set up new frame pointer
+    emitter.instruction("stp x19, x20, [sp, #48]");                             // save callee-saved x19, x20
+    emitter.instruction("str x21, [sp, #40]");                                  // save callee-saved x21 for the optional callback environment
     emitter.instruction("str x0, [sp, #0]");                                    // save callback address to stack
     emitter.instruction("str x1, [sp, #8]");                                    // save source array pointer to stack
     emitter.instruction("mov x19, x0");                                         // x19 = callback address (callee-saved)
+    emitter.instruction("mov x21, x2");                                         // x21 = optional callback environment pointer
 
     // -- read source array metadata --
     emitter.instruction("ldr x9, [x1]");                                        // x9 = source array length
@@ -59,12 +61,16 @@ pub fn emit_array_map_str(emitter: &mut Emitter) {
 
     // -- int source: pass element in x0 (first int param) --
     emitter.instruction("ldr x0, [x11]");                                       // x0 = int element
+    emitter.instruction("cbz x21, __rt_array_map_str_call");                    // keep legacy one-argument callback ABI when no environment is present
+    emitter.instruction("mov x1, x21");                                         // pass capture environment as the scalar wrapper's second argument
     emitter.instruction("b __rt_array_map_str_call");                           // proceed to call
 
     // -- string source: pass element in x0/x1 (first string param = 2 int regs) --
     emitter.label("__rt_array_map_str_load_str");
     emitter.instruction("ldr x0, [x11]");                                       // x0 = string pointer (first half)
     emitter.instruction("ldr x1, [x11, #8]");                                   // x1 = string length (second half)
+    emitter.instruction("cbz x21, __rt_array_map_str_call");                    // keep legacy string callback ABI when no environment is present
+    emitter.instruction("mov x2, x21");                                         // pass capture environment after the string pointer/length pair
 
     // -- call callback --
     emitter.label("__rt_array_map_str_call");
@@ -94,9 +100,10 @@ pub fn emit_array_map_str(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x0]");                                        // set new array length
 
     // -- tear down stack frame and return --
-    emitter.instruction("ldp x19, x20, [sp, #32]");                             // restore callee-saved x19, x20
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
+    emitter.instruction("ldr x21, [sp, #40]");                                  // restore callee-saved x21
+    emitter.instruction("ldp x19, x20, [sp, #48]");                             // restore callee-saved x19, x20
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = new mapped string array
 }
 
@@ -109,9 +116,10 @@ fn emit_array_map_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the callback, source array metadata, and destination array pointer
     emitter.instruction("push r12");                                            // preserve the callback address register because the mapping loop calls through it repeatedly
     emitter.instruction("push r13");                                            // preserve the loop-index register because the mapping loop keeps it live across callback invocations
-    emitter.instruction("sub rsp, 32");                                         // reserve local slots for the source array pointer, source length, source elem_size, and destination array pointer
+    emitter.instruction("sub rsp, 48");                                         // reserve local slots for source metadata, destination array pointer, and optional callback environment
     emitter.instruction("mov r12, rdi");                                        // keep the callback address in a callee-saved register across the string-mapping loop
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the source array pointer so the loop can reload it after callback and persist helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // save optional callback environment pointer for captured-closure wrappers
     emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the source array length from the first field of the indexed-array header
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the source array length across the destination-array allocation call
     emitter.instruction("mov r11, QWORD PTR [rsi + 16]");                       // load the source element stride so the loop can distinguish scalar and string inputs
@@ -133,11 +141,17 @@ fn emit_array_map_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, 16");                                         // does the source array already contain string ptr/len pairs?
     emitter.instruction("je __rt_array_map_str_load_str");                      // branch to the string-input path when the current source slot is a 16-byte string pair
     emitter.instruction("mov rdi, QWORD PTR [rcx]");                            // load the scalar source element into the first SysV integer argument register for the callback
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // check whether this runtime call carries a callback capture environment
+    emitter.instruction("je __rt_array_map_str_call");                          // keep legacy one-argument callback ABI when no environment is present
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // pass capture environment as the scalar wrapper's second argument
     emitter.instruction("jmp __rt_array_map_str_call");                         // continue into the shared callback invocation path
 
     emitter.label("__rt_array_map_str_load_str");
     emitter.instruction("mov rdi, QWORD PTR [rcx]");                            // load the source string pointer into the first SysV integer argument register for the callback
     emitter.instruction("mov rsi, QWORD PTR [rcx + 8]");                        // load the source string length into the second SysV integer argument register for the callback
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // check whether this runtime call carries a callback capture environment
+    emitter.instruction("je __rt_array_map_str_call");                          // keep legacy string callback ABI when no environment is present
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // pass capture environment after the string pointer/length pair
 
     emitter.label("__rt_array_map_str_call");
     emitter.instruction("call r12");                                            // invoke the user callback and read the produced string result from rax=ptr, rdx=len
@@ -150,7 +164,7 @@ fn emit_array_map_str_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_map_str_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the destination array pointer for final length publication and return
-    emitter.instruction("add rsp, 32");                                         // release the string-map local bookkeeping slots before restoring callee-saved registers
+    emitter.instruction("add rsp, 48");                                         // release the string-map local bookkeeping slots before restoring callee-saved registers
     emitter.instruction("pop r13");                                             // restore the caller loop-index callee-saved register
     emitter.instruction("pop r12");                                             // restore the caller callback callee-saved register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the mapped string array pointer

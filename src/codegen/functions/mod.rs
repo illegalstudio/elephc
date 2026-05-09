@@ -1,4 +1,5 @@
 mod cleanup;
+mod callback_wrapper;
 mod control_flow;
 mod fiber_wrapper;
 mod locals;
@@ -25,6 +26,7 @@ use self::cleanup::{
 use self::control_flow::{collect_try_slots, mark_control_flow_epilogue_unsafe};
 pub use self::locals::collect_local_vars;
 pub(crate) use self::types::{codegen_declared_type, codegen_static_type};
+pub(crate) use self::callback_wrapper::emit_callback_wrapper;
 pub(crate) use self::fiber_wrapper::emit_fiber_wrapper;
 pub use self::types::{infer_contextual_type, infer_local_type_pub, infer_local_type_with_ctx};
 pub(crate) use self::types::singular_object_class;
@@ -349,7 +351,10 @@ fn emit_function_with_label_and_class(
     let classes = class_context
         .map(|(classes, _)| classes)
         .unwrap_or(&empty_classes);
-    while !ctx.deferred_closures.is_empty() || !ctx.deferred_fiber_wrappers.is_empty() {
+    while !ctx.deferred_closures.is_empty()
+        || !ctx.deferred_fiber_wrappers.is_empty()
+        || !ctx.deferred_callback_wrappers.is_empty()
+    {
         let closures: Vec<_> = ctx.deferred_closures.drain(..).collect();
         for closure in closures {
             emit_closure(
@@ -372,6 +377,10 @@ fn emit_function_with_label_and_class(
         let wrappers: Vec<_> = ctx.deferred_fiber_wrappers.drain(..).collect();
         for wrapper in wrappers {
             emit_fiber_wrapper(emitter, &wrapper);
+        }
+        let callback_wrappers: Vec<_> = ctx.deferred_callback_wrappers.drain(..).collect();
+        for wrapper in callback_wrappers {
+            emit_callback_wrapper(emitter, &wrapper);
         }
     }
 }

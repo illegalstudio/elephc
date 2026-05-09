@@ -177,7 +177,10 @@ pub(super) fn emit_deferred_closures(
     data: &mut DataSection,
     ctx: &mut Context,
 ) {
-    while !ctx.deferred_closures.is_empty() || !ctx.deferred_fiber_wrappers.is_empty() {
+    while !ctx.deferred_closures.is_empty()
+        || !ctx.deferred_fiber_wrappers.is_empty()
+        || !ctx.deferred_callback_wrappers.is_empty()
+    {
         let closures: Vec<_> = ctx.deferred_closures.drain(..).collect();
         for closure in closures {
             functions::emit_closure(
@@ -200,6 +203,10 @@ pub(super) fn emit_deferred_closures(
         let wrappers: Vec<_> = ctx.deferred_fiber_wrappers.drain(..).collect();
         for wrapper in wrappers {
             functions::emit_fiber_wrapper(emitter, &wrapper);
+        }
+        let callback_wrappers: Vec<_> = ctx.deferred_callback_wrappers.drain(..).collect();
+        for wrapper in callback_wrappers {
+            functions::emit_callback_wrapper(emitter, &wrapper);
         }
     }
 }

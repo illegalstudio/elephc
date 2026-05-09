@@ -19,7 +19,7 @@ pub fn emit_array_map(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // set up new frame pointer
     emitter.instruction("stp x19, x20, [sp, #32]");                             // save callee-saved x19, x20
-    emitter.instruction("str x0, [sp, #0]");                                    // save callback address to stack
+    emitter.instruction("str x2, [sp, #0]");                                    // save optional callback environment pointer to stack
     emitter.instruction("str x1, [sp, #8]");                                    // save source array pointer to stack
     emitter.instruction("mov x19, x0");                                         // x19 = callback address (callee-saved)
 
@@ -44,8 +44,12 @@ pub fn emit_array_map(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload source array pointer
     emitter.instruction("add x1, x1, #24");                                     // skip header to data region
     emitter.instruction("ldr x0, [x1, x20, lsl #3]");                           // x0 = source[i]
+    emitter.instruction("ldr x9, [sp, #0]");                                    // load optional callback environment pointer
+    emitter.instruction("cbz x9, __rt_array_map_call");                         // keep legacy one-argument callback ABI when no environment is present
+    emitter.instruction("mov x1, x9");                                          // pass capture environment as the wrapper's second argument
 
     // -- call callback with element as argument --
+    emitter.label("__rt_array_map_call");
     emitter.instruction("blr x19");                                             // call callback(element) → result in x0
 
     // -- store result in new array --
@@ -79,9 +83,10 @@ fn emit_array_map_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the callback, source array, and destination array slots
     emitter.instruction("push r12");                                            // preserve the callback scratch register because the runtime uses it across every callback invocation
     emitter.instruction("push r13");                                            // preserve the loop-index scratch register because the runtime keeps it live across callback calls
-    emitter.instruction("sub rsp, 24");                                         // reserve local slots for the source array pointer, source length, and destination array pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve local slots for source metadata, destination array pointer, and optional callback environment
     emitter.instruction("mov r12, rdi");                                        // keep the callback address in a callee-saved register across the mapping loop
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the source array pointer so the loop can reload it after callback calls
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save optional callback environment pointer for captured-closure wrappers
     emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the source array length from the first field of the array header
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the source array length across the destination-array allocation call
     emitter.instruction("mov rdi, r10");                                        // pass the source array length as the destination capacity to __rt_array_new
@@ -95,6 +100,10 @@ fn emit_array_map_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_array_map_done");                             // exit the mapping loop when every source element has been transformed
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the source array pointer after the previous callback invocation
     emitter.instruction("mov rdi, QWORD PTR [r10 + r13 * 8 + 24]");             // load the current source element into the first SysV integer argument register
+    emitter.instruction("cmp QWORD PTR [rbp - 48], 0");                         // check whether this runtime call carries a callback capture environment
+    emitter.instruction("je __rt_array_map_call");                              // keep legacy one-argument callback ABI when no environment is present
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // pass capture environment as the wrapper's second argument
+    emitter.label("__rt_array_map_call");
     emitter.instruction("call r12");                                            // invoke the user callback with the current element and read the transformed value from rax
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the destination array pointer after the callback clobbered caller-saved registers
     emitter.instruction("mov QWORD PTR [r10 + r13 * 8 + 24], rax");             // store the transformed value into the matching destination-array element slot
@@ -105,7 +114,7 @@ fn emit_array_map_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the destination array pointer for final length publication and return
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the saved source length so the destination logical length matches the mapped input size
     emitter.instruction("mov QWORD PTR [rax], r10");                            // publish the mapped destination length in the destination array header
-    emitter.instruction("add rsp, 24");                                         // release the local source/destination bookkeeping slots before restoring callee-saved registers
+    emitter.instruction("add rsp, 32");                                         // release the local source/destination bookkeeping slots before restoring callee-saved registers
     emitter.instruction("pop r13");                                             // restore the caller's loop-index callee-saved register
     emitter.instruction("pop r12");                                             // restore the caller's callback scratch callee-saved register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the mapped array pointer
