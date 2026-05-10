@@ -43,6 +43,7 @@ mod rawurlencode;
 mod base64_encode;
 mod base64_decode;
 mod sprintf;
+mod sprintf_x86_64;
 mod md5;
 mod sha1;
 mod hash;

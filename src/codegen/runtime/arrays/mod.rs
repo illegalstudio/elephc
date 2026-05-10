@@ -62,6 +62,7 @@ mod decref_hash;
 mod decref_mixed;
 mod decref_object;
 mod gc_collect_cycles;
+mod gc_collect_cycles_x86_64;
 mod gc_mark_reachable;
 mod gc_note_child_ref;
 mod hash_count;

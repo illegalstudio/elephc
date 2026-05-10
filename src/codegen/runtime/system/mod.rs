@@ -4,6 +4,7 @@ mod date_data;
 mod enum_from_fail;
 mod getenv;
 mod json_decode;
+mod json_decode_x86_64;
 mod json_data;
 mod json_encode_array_dynamic;
 mod json_encode_array_int;
