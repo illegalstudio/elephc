@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - These scans must be side-effect free and follow AST recursion whenever new nodes are added.
+
 mod required_classes;
 mod variables;
 

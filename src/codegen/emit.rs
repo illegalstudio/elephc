@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Instruction comments are emitted by callers; this module preserves target syntax and output ordering.
+
 use std::fmt::Write;
 
 use super::platform::{Arch, Platform, Target};

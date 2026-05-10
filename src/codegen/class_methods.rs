@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Generated signatures must line up with object dispatch, vtables, and inherited method metadata.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::data_section::DataSection;

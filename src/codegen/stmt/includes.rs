@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Include state controls function variant activation and must preserve PHP load-order semantics.
+
 use super::super::abi;
 use super::super::context::Context;
 use super::super::data_section::DataSection;

@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - All early exits must route through the same cleanup-aware labels to keep ownership balanced.
+
 use std::collections::HashMap;
 
 use crate::codegen::context::{Context, HeapOwnership, TRY_HANDLER_SLOT_SIZE};

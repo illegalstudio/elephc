@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Only the selected branch may run, and branch result types must be coerced into a common register shape.
+
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;

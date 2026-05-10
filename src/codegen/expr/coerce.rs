@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Coercions may allocate, retain, or box values, so ownership state must be updated with the result.
+
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;

@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Late-bound receivers and visibility checks must match PHP inheritance semantics before storage is updated.
+
 use super::late_bound;
 use super::resolve;
 use crate::codegen::abi;

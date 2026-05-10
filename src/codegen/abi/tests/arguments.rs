@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Assertions pin register, stack, relocation, and platform-specific instruction choices.
+
 use super::*;
 
 #[test]

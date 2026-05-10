@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Property writes must respect declared types, visibility checks, and runtime object layout.
+
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;

@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Side effects occur in source order, while final argument materialization follows parameter and ABI order.
+
 use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, context::Context, data_section::DataSection};
 use crate::parser::ast::{Expr, ExprKind};

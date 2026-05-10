@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Runtime calls and target instructions must preserve left/right evaluation order and scratch register assumptions.
+
 use super::super::super::context::Context;
 use super::super::super::data_section::DataSection;
 use super::super::super::emit::Emitter;

@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Expression traversal may invoke isolated resolution for nested bodies while preserving include state.
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use crate::errors::CompileError;

@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Source-order side effects and ABI-order materialization are deliberately separated across this module tree.
+
 mod array_elements;
 mod common;
 mod emit;

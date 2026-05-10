@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Wrapper ABI order must match both interface slots and concrete method codegen signatures.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::emit::Emitter;

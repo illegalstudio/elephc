@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Finally blocks must run for returns, branches, throws, and normal fallthrough without losing pending results.
+
 mod catches;
 mod finally;
 mod handlers;

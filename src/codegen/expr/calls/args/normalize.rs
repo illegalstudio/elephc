@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Argument checks must happen at PHP-observable points without skipping later side effects.
+
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;

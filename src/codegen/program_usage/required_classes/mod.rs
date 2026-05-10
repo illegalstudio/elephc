@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Scans must recurse through new AST nodes so runtime class tables remain complete.
+
 mod collect;
 mod dynamic_instanceof;
 

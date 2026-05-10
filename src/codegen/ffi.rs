@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Extern lowering follows platform ABI rules and must not use PHP call normalization for C-only details.
+
 use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;

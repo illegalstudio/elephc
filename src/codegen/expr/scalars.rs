@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Literal storage must match data-section labels and the result conventions expected by coercion helpers.
+
 use crate::codegen::platform::Arch;
 
 use super::super::abi;

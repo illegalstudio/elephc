@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Late-bound receivers and visibility checks must match PHP inheritance semantics before storage is updated.
+
 use super::super::late_bound::{self, StaticPropertyBranch};
 use crate::codegen::abi;
 use crate::codegen::context::Context;

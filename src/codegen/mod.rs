@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Keeps frontend type metadata, runtime cache assumptions, and target-specific emission ordered before linking.
+
 mod abi;
 mod builtins;
 mod class_methods;

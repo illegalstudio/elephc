@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - String temporaries must stay alive through the write and be released only when this path owns them.
+
 use super::super::abi;
 use super::super::context::Context;
 use super::super::data_section::DataSection;

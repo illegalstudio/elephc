@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Object results are refcounted handles whose metadata must match class tables and vtable layout.
+
 mod access;
 mod allocation;
 pub(crate) mod dispatch;

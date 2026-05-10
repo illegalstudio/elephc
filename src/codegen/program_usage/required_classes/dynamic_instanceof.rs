@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Dynamic targets require conservative metadata retention because the concrete class is not known statically.
+
 use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Program, Stmt, StmtKind};
 
 pub(in crate::codegen) fn program_has_dynamic_instanceof(program: &Program) -> bool {

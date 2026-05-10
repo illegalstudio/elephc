@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Static property access must respect visibility, inheritance, and symbol naming conventions.
+
 mod arrays;
 mod assign;
 mod late_bound;

@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Property writes must respect declared types, visibility checks, and runtime object layout.
+
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::types::PhpType;

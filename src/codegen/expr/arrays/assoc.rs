@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Literal emission must evaluate elements in source order and retain heap elements inserted into arrays.
+
 use super::super::super::context::Context;
 use super::super::super::data_section::DataSection;
 use super::super::super::emit::Emitter;

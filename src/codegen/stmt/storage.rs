@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Storage helpers must match ABI value layout and static symbol ownership conventions.
+
 mod extern_globals;
 mod locals;
 

@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Property writes must honor visibility, nullable receivers, magic methods, and declared property types.
+
 mod arrays;
 mod assign;
 mod magic_set;

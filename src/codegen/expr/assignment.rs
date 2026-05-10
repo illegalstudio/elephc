@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Writes must happen once and the assigned value must remain available in the expected result registers.
+
 use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;

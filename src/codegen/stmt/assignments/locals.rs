@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Local writes must release replaced heap values only when the frame owns the previous value.
+
 use super::super::super::abi;
 use super::super::super::context::Context;
 use super::super::super::data_section::DataSection;

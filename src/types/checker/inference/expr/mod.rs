@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Inference must preserve PHP evaluation errors and avoid treating effectful expressions as pure type facts.
+
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{

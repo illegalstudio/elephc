@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - The caller is responsible for ABI setup; these helpers only transfer control to a label or register.
+
 use crate::codegen::{emit::Emitter, platform::Arch};
 
 pub fn emit_call_label(emitter: &mut Emitter, label: &str) {

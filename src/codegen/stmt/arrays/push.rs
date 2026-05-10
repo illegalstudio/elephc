@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Mutation paths must preserve source-order side effects and update heap ownership consistently.
+
 use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;

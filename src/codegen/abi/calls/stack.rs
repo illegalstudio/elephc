@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Temporary stack adjustments must remain balanced across nested calls and target alignment rules.
+
 use crate::codegen::{emit::Emitter, platform::Arch};
 use crate::types::PhpType;
 

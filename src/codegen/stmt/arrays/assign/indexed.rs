@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Index normalization and capacity extension must happen before storing the coerced element value.
+
 mod extend;
 mod normalize;
 mod prepare;

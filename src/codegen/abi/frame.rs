@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Frame offsets and stack alignment are shared contracts with local collection and call materialization.
+
 use crate::codegen::{emit::Emitter, platform::Arch};
 use crate::types::PhpType;
 

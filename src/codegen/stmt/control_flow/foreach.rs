@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Iterable temporaries must remain live for the loop and be released after all exit paths.
+
 mod assoc;
 mod indexed;
 mod iterator;

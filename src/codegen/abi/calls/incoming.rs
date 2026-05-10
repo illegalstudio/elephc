@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Incoming cursor state must match outgoing assignment rules or calls will corrupt frame slots.
+
 use crate::codegen::{
     emit::Emitter,
     platform::Arch,

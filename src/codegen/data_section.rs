@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Labels must stay stable within one compilation because code emission references them before final serialization.
+
 use std::collections::HashMap;
 
 pub struct DataSection {

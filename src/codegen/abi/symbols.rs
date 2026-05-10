@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Symbol relocations differ by platform and refcounted stores must preserve ownership cleanup.
+
 use crate::codegen::{emit::Emitter, platform::Arch};
 use crate::types::PhpType;
 

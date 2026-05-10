@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Branch bodies share surrounding loop, switch, and finally context for cleanup-sensitive exits.
+
 use crate::codegen::context::{Context, LoopLabels};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;

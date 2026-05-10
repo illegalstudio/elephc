@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - The scan must mirror AST constructs that can allocate storage without evaluating program side effects.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Platform;

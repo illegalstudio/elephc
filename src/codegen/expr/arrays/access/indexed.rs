@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Element layout and boxed Mixed handling must stay aligned with array runtime helpers.
+
 use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;

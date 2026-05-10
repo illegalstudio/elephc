@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Wrapper frames must preserve captured values and follow the same cleanup rules as user functions.
+
 use crate::codegen::context::DeferredFiberWrapper;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;

@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Property writes must respect declared types, visibility checks, and runtime object layout.
+
 use super::{magic_set, references, storage, target};
 use crate::codegen::abi;
 use crate::codegen::context::Context;

@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Wrapper signatures must satisfy both the external ABI and the internal PHP function lowering contract.
+
 use crate::codegen::context::DeferredCallbackWrapper;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;

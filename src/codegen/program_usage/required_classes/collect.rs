@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Missing a recursive AST case can omit class tables and break later object dispatch.
+
 use std::collections::HashSet;
 
 use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Program, Stmt, StmtKind};

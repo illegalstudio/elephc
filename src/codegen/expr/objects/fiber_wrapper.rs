@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Object handles, property storage, and class ids must stay consistent with emitted class tables.
+
 use crate::codegen::context::{Context, DeferredFiberWrapper};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::fibers;

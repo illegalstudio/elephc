@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - The traversal must include nested expressions, control-flow bodies, and instanceof targets.
+
 use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Program, Stmt, StmtKind};
 
 pub(in crate::codegen) fn program_uses_variable(program: &Program, needle: &str) -> bool {

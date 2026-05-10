@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Operator precedence is resolved by the parser; this layer preserves PHP value semantics and result registers.
+
 use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;

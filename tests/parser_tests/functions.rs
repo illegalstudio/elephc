@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Inline PHP snippets cover successful AST shapes plus malformed syntax that must fail during parsing.
+
 use super::*;
 
 #[test]

@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Helpers must document and preserve the result registers and scratch registers they clobber.
+
 use super::super::context::{Context, HeapOwnership};
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;

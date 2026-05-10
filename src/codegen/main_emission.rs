@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Frame sizing must account for locals, hidden temporaries, try handlers, and process argument globals before emission.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::context::{Context, HeapOwnership};

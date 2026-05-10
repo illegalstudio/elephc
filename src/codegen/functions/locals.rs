@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Any lowering path that introduces storage must be represented here before stack offsets are assigned.
+
 use crate::codegen::context::Context;
 use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, StmtKind};
 use crate::types::{FunctionSig, PhpType};

@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Object handles, property storage, and class ids must stay consistent with emitted class tables.
+
 use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::emit::Emitter;

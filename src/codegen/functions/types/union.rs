@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Results must agree with `crate::types` so local slots and runtime value shapes are selected correctly.
+
 use crate::types::PhpType;
 
 pub(super) fn merge_union_members(members: Vec<PhpType>) -> PhpType {

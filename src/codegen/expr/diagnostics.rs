@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Diagnostic state must be set before helper calls that can unwind or terminate execution.
+
 use super::super::abi;
 use super::super::context::Context;
 use super::super::data_section::DataSection;

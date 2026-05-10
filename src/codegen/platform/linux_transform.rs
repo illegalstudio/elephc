@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Transforms must preserve labels and comments while changing only platform-sensitive syntax.
+
 /// macOS syscall number → Linux aarch64 syscall number.
 #[allow(dead_code)]
 pub(super) fn map_syscall(macos_num: u32) -> u32 {

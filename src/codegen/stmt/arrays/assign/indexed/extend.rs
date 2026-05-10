@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Each phase depends on the prepared state and must preserve registers needed by later phases.
+
 use crate::codegen::context::Context;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
