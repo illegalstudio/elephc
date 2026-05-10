@@ -71,6 +71,7 @@ Report features that have no example coverage.
 
 Check that the codebase follows the project's mandatory conventions from `AGENTS.md`:
 
+- **Rust module preambles**: every repo-owned `*.rs` file must start with a module-level `//!` preamble before any `use`, `mod`, item, or test helper code. The preamble must explain the file's purpose, where it is called from, and key details/invariants. Exclude generated/build output such as `target/`. Report every missing or incomplete preamble.
 - **Assembly comment policy**: every `emitter.instruction(...)` call in `src/codegen/` MUST have an inline `//` comment. Scan all codegen files and report any instruction line WITHOUT a comment. Use this check:
   ```
   grep -rn 'emitter.instruction(' src/codegen/ | grep -v '//' | head -20
@@ -118,6 +119,7 @@ Missing coverage: (list if any)
 
 ### 6. Code Style
 Status: PASS / FAIL
+Missing Rust preambles: (count/list if any)
 Uncommented instructions: (count)
 Misaligned comments: (count)
 Multi-function files: (list if any)

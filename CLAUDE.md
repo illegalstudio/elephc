@@ -261,6 +261,40 @@ So the policy is:
 
 In short: prefer **cohesion over mechanical line-count compliance**. A 650-line mono-feature leaf is acceptable; a 350-line multi-purpose orchestrator is already a refactor candidate.
 
+### Rust module preamble policy
+
+Every repo-owned Rust source file (`*.rs`) must start with a module-level Rustdoc preamble before any `use`, `mod`, item, or test helper code. Use `//!` comments so the explanation is attached to the module in rustdoc.
+
+The preamble is mandatory for all new Rust files and must be added or preserved when touching existing Rust files. Release verification should report any Rust file that is missing it.
+
+Standard format:
+
+```rust
+//! Purpose:
+//! Explain what this file owns in 2-4 lines.
+//!
+//! Called from:
+//! - `crate::path::caller()` or the relevant test/module entry point.
+//!
+//! Key details:
+//! - Important invariants, ordering constraints, ownership/ABI/runtime rules, or coupling.
+```
+
+For test files, use the same structure but describe the test surface instead of production callers:
+
+```rust
+//! Purpose:
+//! Integration or regression tests for the relevant feature area.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Fixture layout, platform assumptions, ignored-test requirements, or why edge cases exist.
+```
+
+Keep preambles concise and factual. Do not include refactor history, stale line numbers, or broad architecture prose that belongs in `docs/internals/`.
+
 ### Codegen conventions (target-aware)
 
 - Prefer helpers from `src/codegen/abi/` for registers, stack slots, frame layout, argument materialization, symbol addresses, and calls.
