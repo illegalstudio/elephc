@@ -1,3 +1,13 @@
+//! Purpose:
+//! Validates class schema interfaces rules.
+//! Owns one slice of class metadata construction used by object inference and method checking.
+//!
+//! Called from:
+//! - `crate::types::checker::schema::classes`
+//!
+//! Key details:
+//! - Class metadata is shared globally after construction, so validation must reject inconsistent inheritance early.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;

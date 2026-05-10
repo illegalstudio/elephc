@@ -1,3 +1,13 @@
+//! Purpose:
+//! Collects and validates declaration schemas before body type checking.
+//! Builds function, class, interface, enum, trait, and FFI metadata consumed by later checker phases.
+//!
+//! Called from:
+//! - `crate::types::checker::driver::init`
+//!
+//! Key details:
+//! - Schema checks run before expression inference so all declarations are available for recursive references.
+
 mod validation;
 mod interfaces;
 mod classes;

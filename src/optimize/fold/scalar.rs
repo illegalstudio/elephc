@@ -1,3 +1,13 @@
+//! Purpose:
+//! Implements constant-folding support for scalar expressions.
+//! Evaluates compile-time scalar cases that are safe to replace with literal AST nodes.
+//!
+//! Called from:
+//! - `crate::optimize::fold`
+//!
+//! Key details:
+//! - Folding must respect PHP coercions, truthiness, numeric edge cases, and runtime error boundaries.
+
 use super::super::*;
 
 pub(in crate::optimize) fn int_literal(expr: &Expr) -> Option<i64> {

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides the public type-system entry point used by the compile pipeline.
+//! Re-exports type models, signatures, schemas, call-argument planning, warnings, and checker results.
+//!
+//! Called from:
+//! - `crate::pipeline::compile()`
+//!
+//! Key details:
+//! - `check()` runs after name resolution and before optimization/codegen so later passes receive canonical type metadata.
+
 pub mod checker;
 pub mod traits;
 mod array_keys;

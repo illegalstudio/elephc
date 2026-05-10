@@ -1,3 +1,13 @@
+//! Purpose:
+//! Groups optimizer control-flow normalization, pruning, CFG, and DCE helpers.
+//! Provides shared utilities for paths, switches, if-chains, and terminal-flow reasoning.
+//!
+//! Called from:
+//! - `crate::optimize`
+//!
+//! Key details:
+//! - Control rewrites must preserve PHP evaluation order, fallthrough, break/continue depth, and finally semantics.
+
 use super::*;
 
 mod common;

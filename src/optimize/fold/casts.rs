@@ -1,3 +1,13 @@
+//! Purpose:
+//! Implements constant-folding support for casts expressions.
+//! Evaluates compile-time scalar cases that are safe to replace with literal AST nodes.
+//!
+//! Called from:
+//! - `crate::optimize::fold`
+//!
+//! Key details:
+//! - Folding must respect PHP coercions, truthiness, numeric edge cases, and runtime error boundaries.
+
 use super::super::*;
 use super::scalar::{scalar_value, ScalarValue};
 

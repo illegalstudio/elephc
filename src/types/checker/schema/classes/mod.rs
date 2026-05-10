@@ -1,3 +1,13 @@
+//! Purpose:
+//! Builds flattened class schema metadata from parsed declarations and inherited members.
+//! Coordinates property, method, interface, and state validation for class declarations.
+//!
+//! Called from:
+//! - `crate::types::checker::schema`
+//!
+//! Key details:
+//! - Flattening must preserve visibility, overrides, readonly/final constraints, and interface obligations.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;

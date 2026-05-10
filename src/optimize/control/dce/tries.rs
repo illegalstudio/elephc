@@ -1,3 +1,13 @@
+//! Purpose:
+//! Handles DCE tries cases.
+//! Preserves observable effects while removing unreachable tails, redundant branches, or dead writes.
+//!
+//! Called from:
+//! - `crate::optimize::control::dce`
+//!
+//! Key details:
+//! - The pass must remain conservative around throws, finally blocks, switch fallthrough, method calls, and variable writes.
+
 use super::*;
 use super::guards::clear_guards_for_name;
 use super::state::GuardState;

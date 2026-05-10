@@ -1,3 +1,13 @@
+//! Purpose:
+//! Resolves function call targets and callable signatures for the checker.
+//! Combines declared functions, builtin signatures, specialization, and callable metadata into one lookup path.
+//!
+//! Called from:
+//! - `crate::types::checker::functions`
+//!
+//! Key details:
+//! - Resolution must match name-resolver canonicalization and PHP builtin fallback rules.
+
 mod signature;
 mod specialization;
 

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Defines the normalized call-argument plan shared by checker and codegen.
+//! Records source values, regular slots, variadic entries, spread bounds checks, and planner errors.
+//!
+//! Called from:
+//! - `crate::types::call_args::planner`
+//!
+//! Key details:
+//! - Plan data must retain enough span and source-index information to produce PHP-compatible diagnostics and evaluation order.
+
 use crate::names::Name;
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::span::Span;

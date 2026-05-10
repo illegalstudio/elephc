@@ -1,3 +1,14 @@
+//! Purpose:
+//! Type-checks statements and updates block-local type environments.
+//! Handles control flow, assignments, declarations, loops, branches, and statement-level diagnostics.
+//!
+//! Called from:
+//! - `crate::types::checker::driver::top_level`
+//! - `crate::types::checker::driver::functions`
+//!
+//! Key details:
+//! - Statement environments must merge conservatively across branches, loops, throws, returns, and unreachable paths.
+
 mod assignments;
 mod control_flow;
 

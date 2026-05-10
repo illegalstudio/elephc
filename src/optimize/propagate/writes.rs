@@ -1,3 +1,13 @@
+//! Purpose:
+//! Implements constant propagation writes support.
+//! Tracks scalar facts through expressions, writes, simulations, and statement rewriting.
+//!
+//! Called from:
+//! - `crate::optimize::propagate`
+//!
+//! Key details:
+//! - Only immutable scalar facts are propagated; arrays, objects, references, and unknown calls force conservative invalidation.
+
 use super::*;
 
 pub(crate) fn safe_loop_env(

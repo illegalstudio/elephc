@@ -1,3 +1,13 @@
+//! Purpose:
+//! Implements optimizer control-flow common logic.
+//! Supports normalization, reachability, path analysis, and structural rewrites used by pruning and DCE.
+//!
+//! Called from:
+//! - `crate::optimize::control`
+//!
+//! Key details:
+//! - Control-flow helpers must treat terminal effects, switch fallthrough, and exception paths conservatively.
+
 use super::*;
 
 pub(crate) fn expr_to_effect_stmt(expr: Expr) -> Vec<Stmt> {

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Validates function returns semantics for the checker.
+//! Keeps call diagnostics and return-flow analysis consistent with signatures and inferred expression types.
+//!
+//! Called from:
+//! - `crate::types::checker::functions`
+//!
+//! Key details:
+//! - Diagnostics should map shared planner errors back to source spans without duplicating call semantics.
+
 use crate::errors::CompileError;
 use crate::parser::ast::{Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};

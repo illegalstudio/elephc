@@ -1,3 +1,13 @@
+//! Purpose:
+//! Runs method-body validation once class and interface schemas are available.
+//! Checks instance/static context, declared returns, visibility-sensitive access, and inherited method contracts.
+//!
+//! Called from:
+//! - `crate::types::checker::driver::functions`
+//!
+//! Key details:
+//! - Method checking depends on flattened class metadata and must preserve `self`, `parent`, and `$this` context.
+
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::ClassMethod;

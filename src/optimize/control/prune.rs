@@ -1,3 +1,13 @@
+//! Purpose:
+//! Prunes constant control-flow structures before broader normalization and DCE.
+//! Dispatches expression and statement pruning for ifs, loops, switches, and empty effect-only shells.
+//!
+//! Called from:
+//! - `crate::optimize::prune_constant_control_flow()`
+//!
+//! Key details:
+//! - Pruning must retain condition/subject evaluation when expressions can have PHP-visible effects.
+
 mod expr;
 mod loop_exit;
 mod statements;

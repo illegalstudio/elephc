@@ -1,18 +1,24 @@
+//! Purpose:
+//! Dispatches expression inference for assignments, class references, closures, and side-effecting forms.
+//! Feeds statement checking, function call validation, and optimizer-visible type metadata.
+//!
+//! Called from:
+//! - `crate::types::checker::Checker::infer_type()`
+//!
+//! Key details:
+//! - Inference must preserve PHP evaluation errors and avoid treating effectful expressions as pure type facts.
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{
     merge_array_key_types, normalized_array_key_type, packed_type_size, PhpType, TypeEnv,
 };
-
 mod assignments;
 mod class_refs;
 mod effects;
 mod static_closure;
-
 use super::super::Checker;
 use super::syntactic::wider_type_syntactic;
 use static_closure::body_must_not_use_this;
-
 impl Checker {
     pub fn infer_type(&mut self, expr: &Expr, env: &TypeEnv) -> Result<PhpType, CompileError> {
         match &expr.kind {

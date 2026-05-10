@@ -1,3 +1,13 @@
+//! Purpose:
+//! Tracks named-parameter matching against visible function signatures.
+//! Detects duplicate assignments and distinguishes regular parameters, variadics, and unknown names.
+//!
+//! Called from:
+//! - `crate::types::call_args::planner`
+//!
+//! Key details:
+//! - Matching uses caller-visible regular parameters so hidden implementation parameters do not leak into PHP semantics.
+
 use crate::types::FunctionSig;
 
 pub(super) enum NamedParamMatch {

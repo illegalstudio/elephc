@@ -1,3 +1,13 @@
+//! Purpose:
+//! Implements trait expand logic for flattened class metadata.
+//! Applies PHP trait composition rules before object inference and method checks consume class schemas.
+//!
+//! Called from:
+//! - `crate::types::traits`
+//!
+//! Key details:
+//! - Merge and validation rules must report conflicts early because downstream class metadata is treated as canonical.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;

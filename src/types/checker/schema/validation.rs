@@ -1,3 +1,13 @@
+//! Purpose:
+//! Validates schema validation declarations for the checker.
+//! Turns parsed declarations into canonical metadata and rejects invalid contracts before code generation.
+//!
+//! Called from:
+//! - `crate::types::checker::schema`
+//!
+//! Key details:
+//! - Declaration metadata must align with name resolution, inheritance flattening, and runtime/codegen expectations.
+
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, Expr, ExprKind, StmtKind, Visibility};

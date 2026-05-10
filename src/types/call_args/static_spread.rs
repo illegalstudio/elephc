@@ -1,3 +1,13 @@
+//! Purpose:
+//! Expands static associative spread arguments into named argument forms.
+//! Recognizes PHP array-unpack keys that can be resolved at compile time before planning.
+//!
+//! Called from:
+//! - `crate::types::call_args::planner`
+//!
+//! Key details:
+//! - String keys become named arguments, numeric keys remain positional, and duplicate static keys follow PHP last-wins behavior.
+
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 

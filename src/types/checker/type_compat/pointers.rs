@@ -1,3 +1,13 @@
+//! Purpose:
+//! Checks type compatibility for pointers cases.
+//! Supports the central assignability predicate used by declarations, calls, returns, and assignments.
+//!
+//! Called from:
+//! - `crate::types::checker::type_compat`
+//!
+//! Key details:
+//! - Rules here define accepted programs, so PHP covariance, inheritance, and extension-specific constraints must stay explicit.
+
 use crate::errors::CompileError;
 use crate::types::{packed_type_size, PhpType};
 

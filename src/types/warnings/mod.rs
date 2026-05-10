@@ -1,3 +1,13 @@
+//! Purpose:
+//! Runs non-fatal type-system warning analyses after core validation.
+//! Aggregates unreachable-code, unused-symbol, expression-read, and OOP warning passes.
+//!
+//! Called from:
+//! - `crate::types::check()`
+//!
+//! Key details:
+//! - Warnings must not mutate checker semantics; they annotate already-validated programs conservatively.
+
 mod expr_reads;
 mod oop;
 mod scope_usage;

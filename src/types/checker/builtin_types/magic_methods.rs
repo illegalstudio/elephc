@@ -1,3 +1,14 @@
+//! Purpose:
+//! Builds and patches checker metadata for PHP builtin magic methods types.
+//! Supplies synthetic declarations or contract validation for classes and interfaces that user code may reference.
+//!
+//! Called from:
+//! - `crate::types::checker::builtin_types`
+//! - `crate::types::checker::driver::init`
+//!
+//! Key details:
+//! - Dummy AST members carry type contracts only; runtime behavior is implemented elsewhere.
+
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::Visibility;

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Orchestrates the type-checker pipeline after parsing and name resolution.
+//! Sequences initialization, declaration collection, top-level checking, externs, and function bodies.
+//!
+//! Called from:
+//! - `crate::types::check()`
+//!
+//! Key details:
+//! - Ordering is semantic: schemas and builtin metadata must exist before bodies and call sites are validated.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Platform;

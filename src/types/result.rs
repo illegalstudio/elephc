@@ -1,3 +1,14 @@
+//! Purpose:
+//! Defines the aggregate result returned by type checking to the pipeline.
+//! Carries type environments, declarations, class metadata, warnings, FFI data, and required libraries forward.
+//!
+//! Called from:
+//! - `crate::types::check()`
+//! - `crate::pipeline::compile()`
+//!
+//! Key details:
+//! - Fields are consumed by optimizer, codegen, and linker setup; keep additions explicit and phase-owned.
+
 use std::collections::HashMap;
 
 use crate::codegen::platform::{Platform, Target};

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Injects PHP iterator interfaces and helper methods into checker metadata.
+//! Provides builtin iterable contracts for classes before trait and interface validation run.
+//!
+//! Called from:
+//! - `crate::types::checker::schema`
+//!
+//! Key details:
+//! - Injected names must obey PHP case-insensitive collision rules and share flattened class metadata.
+
 use std::collections::HashMap;
 
 use crate::errors::CompileError;

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Propagates constants through statement env cases.
+//! Maintains scalar environments while preserving declarations and control-flow side effects.
+//!
+//! Called from:
+//! - `crate::optimize::propagate::stmt`
+//!
+//! Key details:
+//! - Statement propagation must invalidate aliases and writes before substituting values across observable boundaries.
+
 use super::*;
 
 pub(super) fn env_after_scalar_assign(mut env: ConstantEnv, name: &str, value: &Expr) -> ConstantEnv {

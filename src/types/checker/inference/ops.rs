@@ -1,3 +1,13 @@
+//! Purpose:
+//! Infers ops type-system behavior.
+//! Converts AST forms into `PhpType` facts used by validation, warnings, and codegen metadata.
+//!
+//! Called from:
+//! - `crate::types::checker::inference`
+//!
+//! Key details:
+//! - PHP compatibility matters for coercions, operator results, object access, and nullable/union handling.
+
 use crate::errors::CompileError;
 use crate::names::Name;
 use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, TypeExpr};

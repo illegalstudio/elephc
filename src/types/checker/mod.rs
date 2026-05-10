@@ -1,3 +1,13 @@
+//! Purpose:
+//! Defines the checker state and public type-checking surface for the compiler pipeline.
+//! Owns cross-phase metadata including environments, declarations, warnings, FFI, classes, and required libraries.
+//!
+//! Called from:
+//! - `crate::types::check()`
+//!
+//! Key details:
+//! - Checker state is populated in ordered phases; later passes assume schemas, builtins, and signatures are complete.
+
 pub(crate) mod builtins;
 mod builtin_iterators;
 mod builtin_types;

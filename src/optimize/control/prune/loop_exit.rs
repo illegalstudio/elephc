@@ -1,3 +1,13 @@
+//! Purpose:
+//! Prunes constant control-flow loop exit cases.
+//! Rewrites statements or expressions whose compile-time condition is known while preserving required effects.
+//!
+//! Called from:
+//! - `crate::optimize::control::prune`
+//!
+//! Key details:
+//! - Loop exits, empty bodies, and effectful conditions must be handled before removing structural statements.
+
 use super::super::*;
 
 pub(super) fn block_contains_loop_exit(body: &[Stmt]) -> bool {

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Handles DCE tail cases.
+//! Preserves observable effects while removing unreachable tails, redundant branches, or dead writes.
+//!
+//! Called from:
+//! - `crate::optimize::control::dce`
+//!
+//! Key details:
+//! - The pass must remain conservative around throws, finally blocks, switch fallthrough, method calls, and variable writes.
+
 use super::*;
 use super::ifs::dce_if_stmt;
 use super::state::{GuardState, TailSinkTarget};

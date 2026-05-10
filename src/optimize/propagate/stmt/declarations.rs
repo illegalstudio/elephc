@@ -1,3 +1,13 @@
+//! Purpose:
+//! Propagates constants through statement declarations cases.
+//! Maintains scalar environments while preserving declarations and control-flow side effects.
+//!
+//! Called from:
+//! - `crate::optimize::propagate::stmt`
+//!
+//! Key details:
+//! - Statement propagation must invalidate aliases and writes before substituting values across observable boundaries.
+
 use super::*;
 
 pub(crate) fn propagate_params(

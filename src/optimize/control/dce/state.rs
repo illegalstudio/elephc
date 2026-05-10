@@ -1,3 +1,13 @@
+//! Purpose:
+//! Handles DCE state cases.
+//! Preserves observable effects while removing unreachable tails, redundant branches, or dead writes.
+//!
+//! Called from:
+//! - `crate::optimize::control::dce`
+//!
+//! Key details:
+//! - The pass must remain conservative around throws, finally blocks, switch fallthrough, method calls, and variable writes.
+
 use crate::parser::ast::Expr;
 
 #[derive(Clone, Copy)]

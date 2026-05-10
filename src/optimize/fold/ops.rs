@@ -1,3 +1,13 @@
+//! Purpose:
+//! Implements constant-folding support for ops expressions.
+//! Evaluates compile-time scalar cases that are safe to replace with literal AST nodes.
+//!
+//! Called from:
+//! - `crate::optimize::fold`
+//!
+//! Key details:
+//! - Folding must respect PHP coercions, truthiness, numeric edge cases, and runtime error boundaries.
+
 use super::super::*;
 use super::scalar::{
     compare_numeric, int_literal, loose_eq, numeric_literal, scalar_value, spaceship_numeric,

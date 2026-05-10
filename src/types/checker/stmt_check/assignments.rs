@@ -1,3 +1,13 @@
+//! Purpose:
+//! Validates statement assignments behavior.
+//! Keeps control-flow and assignment effects synchronized with expression inference and return analysis.
+//!
+//! Called from:
+//! - `crate::types::checker::stmt_check`
+//!
+//! Key details:
+//! - Branch and loop handling must preserve PHP execution order and conservative type environments.
+
 mod arrays;
 mod locals;
 mod properties;

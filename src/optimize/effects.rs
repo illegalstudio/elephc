@@ -1,3 +1,14 @@
+//! Purpose:
+//! Models expression and statement side effects for optimizer safety decisions.
+//! Classifies reads, writes, calls, throws, output, and runtime-state interactions used by DCE and pruning.
+//!
+//! Called from:
+//! - `crate::optimize::prune_constant_control_flow()`
+//! - `crate::optimize::eliminate_dead_code()`
+//!
+//! Key details:
+//! - Effects are deliberately conservative; purity must not be claimed for code that can observe or mutate PHP/runtime state.
+
 use super::*;
 
 mod aliases;

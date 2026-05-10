@@ -1,3 +1,13 @@
+//! Purpose:
+//! Implements constant-folding support for expr expressions.
+//! Evaluates compile-time scalar cases that are safe to replace with literal AST nodes.
+//!
+//! Called from:
+//! - `crate::optimize::fold`
+//!
+//! Key details:
+//! - Folding must respect PHP coercions, truthiness, numeric edge cases, and runtime error boundaries.
+
 use super::super::{fold_block, try_prune_match_expr};
 use super::super::*;
 use super::casts::try_fold_cast;

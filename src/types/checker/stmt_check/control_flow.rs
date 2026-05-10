@@ -1,3 +1,13 @@
+//! Purpose:
+//! Validates statement control flow behavior.
+//! Keeps control-flow and assignment effects synchronized with expression inference and return analysis.
+//!
+//! Called from:
+//! - `crate::types::checker::stmt_check`
+//!
+//! Key details:
+//! - Branch and loop handling must preserve PHP execution order and conservative type environments.
+
 use crate::errors::CompileError;
 use crate::parser::ast::{Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};

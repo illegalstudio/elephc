@@ -1,3 +1,13 @@
+//! Purpose:
+//! Infers syntactic type-system behavior.
+//! Converts AST forms into `PhpType` facts used by validation, warnings, and codegen metadata.
+//!
+//! Called from:
+//! - `crate::types::checker::inference`
+//!
+//! Key details:
+//! - PHP compatibility matters for coercions, operator results, object access, and nullable/union handling.
+
 use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{merge_array_key_types, normalized_array_key_type, PhpType};
 

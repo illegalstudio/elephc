@@ -1,3 +1,13 @@
+//! Purpose:
+//! Validates schema enums declarations for the checker.
+//! Turns parsed declarations into canonical metadata and rejects invalid contracts before code generation.
+//!
+//! Called from:
+//! - `crate::types::checker::schema`
+//!
+//! Key details:
+//! - Declaration metadata must align with name resolution, inheritance flattening, and runtime/codegen expectations.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;

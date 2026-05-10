@@ -1,3 +1,14 @@
+//! Purpose:
+//! Defines function signature metadata for user functions, builtins, closures, and callable aliases.
+//! Stores parameter names, defaults, variadics, by-reference behavior, and return contracts used by call planning.
+//!
+//! Called from:
+//! - `crate::types::checker::functions`
+//! - `crate::types::call_args`
+//!
+//! Key details:
+//! - Builtin signatures must match PHP so named arguments, first-class callables, and mutation semantics stay coherent.
+
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 

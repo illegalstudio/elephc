@@ -1,3 +1,13 @@
+//! Purpose:
+//! Infers expression static closure forms for the checker.
+//! Handles type facts and diagnostics for expression shapes that need more than scalar/operator inference.
+//!
+//! Called from:
+//! - `crate::types::checker::inference::expr`
+//!
+//! Key details:
+//! - Expression inference shares environments with statement checking, so variable and effect updates must stay synchronized.
+
 use crate::errors::CompileError;
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::span::Span;

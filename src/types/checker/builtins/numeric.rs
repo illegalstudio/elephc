@@ -1,3 +1,13 @@
+//! Purpose:
+//! Type-checks the numeric PHP builtin family.
+//! Validates arity, argument types, warning-producing cases, and inferred return types for direct calls.
+//!
+//! Called from:
+//! - `crate::types::checker::builtins::check_builtin()`
+//!
+//! Key details:
+//! - Signatures, callable aliases, optimizer effects, and codegen builtin dispatch must remain in lockstep.
+
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Type-checks PHP IO builtin common helpers and signatures.
+//! Validates arity, argument categories, resource handling, and return types before codegen sees calls.
+//!
+//! Called from:
+//! - `crate::types::checker::builtins::io::check_builtin()`
+//!
+//! Key details:
+//! - Return types and diagnostics must stay aligned with `crate::types::signatures` and builtin codegen emitters.
+
 use crate::errors::CompileError;
 use crate::parser::ast::Expr;
 use crate::types::{PhpType, TypeEnv};

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Handles DCE guards cases.
+//! Preserves observable effects while removing unreachable tails, redundant branches, or dead writes.
+//!
+//! Called from:
+//! - `crate::optimize::control::dce`
+//!
+//! Key details:
+//! - The pass must remain conservative around throws, finally blocks, switch fallthrough, method calls, and variable writes.
+
 mod eval;
 mod record;
 

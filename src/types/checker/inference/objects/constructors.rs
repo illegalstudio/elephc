@@ -1,3 +1,13 @@
+//! Purpose:
+//! Infers object constructors expression types.
+//! Validates class, method, constructor, property, and magic-access contracts against schema metadata.
+//!
+//! Called from:
+//! - `crate::types::checker::inference::objects`
+//!
+//! Key details:
+//! - Object inference depends on flattened class metadata, visibility, inheritance, and declared property types.
+
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{fibers, PhpType, TypeEnv};

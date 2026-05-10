@@ -1,3 +1,13 @@
+//! Purpose:
+//! Type-checks assignment static properties forms.
+//! Updates type environments and validates storage-specific rules for locals, arrays, and properties.
+//!
+//! Called from:
+//! - `crate::types::checker::stmt_check::assignments`
+//!
+//! Key details:
+//! - Assignment checking must distinguish value writes, by-reference mutation, nullable access, and declared property contracts.
+
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, StaticReceiver};
 use crate::span::Span;

@@ -1,3 +1,14 @@
+//! Purpose:
+//! Normalizes PHP array key types from literal expressions and inferred value types.
+//! Captures PHP integer-string key coercion for list and associative array typing.
+//!
+//! Called from:
+//! - `crate::types::checker::inference`
+//! - `crate::types::checker::builtins`
+//!
+//! Key details:
+//! - Key normalization must match PHP because it affects array shape merging and mixed associative-array values.
+
 use crate::parser::ast::{Expr, ExprKind};
 
 use super::PhpType;

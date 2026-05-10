@@ -1,3 +1,14 @@
+//! Purpose:
+//! Type-checks callable closures behavior.
+//! Infers callable signatures and validates invocation details that affect later lowering and optimizer effects.
+//!
+//! Called from:
+//! - `crate::types::checker::callables`
+//! - `crate::types::checker::inference`
+//!
+//! Key details:
+//! - Closure captures, first-class callable syntax, and extern calls must agree with shared call argument planning.
+
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, Stmt, TypeExpr};
 use crate::span::Span;

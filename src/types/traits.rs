@@ -1,3 +1,13 @@
+//! Purpose:
+//! Defines flattened trait and class member models used by type checking.
+//! Coordinates trait expansion, merge rules, and validation before class schemas become final.
+//!
+//! Called from:
+//! - `crate::types::checker::schema::classes`
+//!
+//! Key details:
+//! - Trait composition must preserve PHP conflict, aliasing, visibility, and abstract-method requirements.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;

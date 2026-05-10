@@ -1,3 +1,13 @@
+//! Purpose:
+//! Implements the checker driver externs phase.
+//! Owns one ordered step in building checker state and validating the program before optimization/codegen.
+//!
+//! Called from:
+//! - `crate::types::checker::driver::run()`
+//!
+//! Key details:
+//! - Phase order controls diagnostics, available declarations, required libraries, and function-local environments.
+
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Program, StmtKind};

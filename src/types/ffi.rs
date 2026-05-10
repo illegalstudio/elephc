@@ -1,3 +1,14 @@
+//! Purpose:
+//! Defines FFI type and declaration metadata used by checking and native call lowering.
+//! Maps compiler extension types into ABI-visible shapes for extern declarations.
+//!
+//! Called from:
+//! - `crate::types::checker::extern_decl`
+//! - `crate::codegen`
+//!
+//! Key details:
+//! - FFI metadata must preserve target-independent type contracts while leaving register/stack layout to ABI helpers.
+
 use std::collections::HashMap;
 
 use crate::parser::ast::CType;

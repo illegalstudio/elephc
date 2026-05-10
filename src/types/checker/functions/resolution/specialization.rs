@@ -1,3 +1,13 @@
+//! Purpose:
+//! Handles function resolution specialization details for call checking.
+//! Materializes signatures or specialized metadata used by argument validation and return inference.
+//!
+//! Called from:
+//! - `crate::types::checker::functions::resolution`
+//!
+//! Key details:
+//! - Specialized and builtin signatures must expose the caller-visible parameter contract expected by call-argument planning.
+
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Implements optimizer control-flow path logic.
+//! Supports normalization, reachability, path analysis, and structural rewrites used by pruning and DCE.
+//!
+//! Called from:
+//! - `crate::optimize::control`
+//!
+//! Key details:
+//! - Control-flow helpers must treat terminal effects, switch fallthrough, and exception paths conservatively.
+
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

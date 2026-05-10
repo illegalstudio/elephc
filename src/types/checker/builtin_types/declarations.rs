@@ -1,3 +1,14 @@
+//! Purpose:
+//! Builds and patches checker metadata for PHP builtin declarations types.
+//! Supplies synthetic declarations or contract validation for classes and interfaces that user code may reference.
+//!
+//! Called from:
+//! - `crate::types::checker::builtin_types`
+//! - `crate::types::checker::driver::init`
+//!
+//! Key details:
+//! - Dummy AST members carry type contracts only; runtime behavior is implemented elsewhere.
+
 use std::collections::HashMap;
 
 use crate::errors::CompileError;

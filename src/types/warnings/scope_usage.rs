@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits checker warnings for scope usage cases.
+//! Scans typed AST and checker metadata for suspicious but non-fatal program patterns.
+//!
+//! Called from:
+//! - `crate::types::warnings`
+//!
+//! Key details:
+//! - Warning analysis should preserve source spans and avoid rejecting programs that type checking accepted.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileWarning;

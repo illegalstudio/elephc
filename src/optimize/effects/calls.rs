@@ -1,3 +1,13 @@
+//! Purpose:
+//! Models optimizer side effects for calls behavior.
+//! Feeds purity, callable alias, builtin, and call-effect decisions into pruning and dead-code elimination.
+//!
+//! Called from:
+//! - `crate::optimize::effects`
+//!
+//! Key details:
+//! - Effect summaries must account for globals, heap/runtime state, output, throws, and by-reference mutation.
+
 use super::*;
 use super::builtins::is_pure_non_throwing_builtin;
 

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Validates extern function declarations and their type contracts.
+//! Builds FFI metadata that later codegen uses to materialize C ABI calls.
+//!
+//! Called from:
+//! - `crate::types::checker::driver::externs`
+//!
+//! Key details:
+//! - Extern signatures must reject unsupported PHP types and preserve ABI-visible parameter/return shapes.
+
 use crate::errors::CompileError;
 use crate::parser::ast::CType;
 use crate::types::PhpType;

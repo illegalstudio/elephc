@@ -1,3 +1,13 @@
+//! Purpose:
+//! Prunes constant control-flow expr cases.
+//! Rewrites statements or expressions whose compile-time condition is known while preserving required effects.
+//!
+//! Called from:
+//! - `crate::optimize::control::prune`
+//!
+//! Key details:
+//! - Loop exits, empty bodies, and effectful conditions must be handled before removing structural statements.
+
 use super::super::*;
 use super::statements::{prune_block, prune_stmt};
 

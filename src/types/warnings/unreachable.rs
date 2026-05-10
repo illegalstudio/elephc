@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits checker warnings for unreachable cases.
+//! Scans typed AST and checker metadata for suspicious but non-fatal program patterns.
+//!
+//! Called from:
+//! - `crate::types::warnings`
+//!
+//! Key details:
+//! - Warning analysis should preserve source spans and avoid rejecting programs that type checking accepted.
+
 use crate::errors::CompileWarning;
 use crate::parser::ast::{Stmt, StmtKind};
 use crate::termination::stmt_guarantees_termination as shared_stmt_guarantees_termination;

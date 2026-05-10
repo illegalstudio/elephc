@@ -1,3 +1,13 @@
+//! Purpose:
+//! Validates class schema methods rules.
+//! Owns one slice of class metadata construction used by object inference and method checking.
+//!
+//! Called from:
+//! - `crate::types::checker::schema::classes`
+//!
+//! Key details:
+//! - Class metadata is shared globally after construction, so validation must reject inconsistent inheritance early.
+
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, Visibility};

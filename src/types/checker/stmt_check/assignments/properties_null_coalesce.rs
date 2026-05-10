@@ -1,3 +1,13 @@
+//! Purpose:
+//! Type-checks assignment properties null coalesce forms.
+//! Updates type environments and validates storage-specific rules for locals, arrays, and properties.
+//!
+//! Called from:
+//! - `crate::types::checker::stmt_check::assignments`
+//!
+//! Key details:
+//! - Assignment checking must distinguish value writes, by-reference mutation, nullable access, and declared property contracts.
+
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 

@@ -1,3 +1,14 @@
+//! Purpose:
+//! Defines the canonical set of PHP builtin functions known to the type system.
+//! Provides case-insensitive lookup used by name resolution, redeclaration checks, and function_exists semantics.
+//!
+//! Called from:
+//! - `crate::types::checker::builtins`
+//! - `crate::name_resolver`
+//!
+//! Key details:
+//! - This catalog is the source of truth for PHP-visible builtin names; avoid parallel tables.
+
 fn is_supported_builtin_function_exact(name: &str) -> bool {
     matches!(
         name,

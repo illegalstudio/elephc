@@ -1,3 +1,14 @@
+//! Purpose:
+//! Type-checks callable extern calls behavior.
+//! Infers callable signatures and validates invocation details that affect later lowering and optimizer effects.
+//!
+//! Called from:
+//! - `crate::types::checker::callables`
+//! - `crate::types::checker::inference`
+//!
+//! Key details:
+//! - Closure captures, first-class callable syntax, and extern calls must agree with shared call argument planning.
+
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType, TypeEnv};

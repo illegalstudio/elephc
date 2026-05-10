@@ -1,3 +1,14 @@
+//! Purpose:
+//! Defines the core `PhpType` model used throughout checking and code generation.
+//! Captures PHP scalar, compound, object, callable, FFI, pointer, and internal runtime shapes.
+//!
+//! Called from:
+//! - `crate::types::checker`
+//! - `crate::codegen`
+//!
+//! Key details:
+//! - Internal types such as Mixed and runtime resources encode codegen/runtime contracts, not just PHP syntax.
+
 use std::collections::HashMap;
 use std::fmt;
 

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Evaluates and records DCE guard record facts.
+//! Tracks branch conditions that justify pruning impossible or already-covered control-flow regions.
+//!
+//! Called from:
+//! - `crate::optimize::control::dce::guards`
+//!
+//! Key details:
+//! - Guard facts are path-sensitive and must be forgotten at merges where later writes can change truthiness.
+
 use super::eval::{
     guard_literal_truthy,
     guard_variable_name,

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Validates class schema properties rules.
+//! Owns one slice of class metadata construction used by object inference and method checking.
+//!
+//! Called from:
+//! - `crate::types::checker::schema::classes`
+//!
+//! Key details:
+//! - Class metadata is shared globally after construction, so validation must reject inconsistent inheritance early.
+
 use crate::errors::CompileError;
 use crate::parser::ast::{ClassProperty, Visibility};
 use crate::types::traits::FlattenedClass;

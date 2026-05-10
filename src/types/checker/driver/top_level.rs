@@ -1,3 +1,13 @@
+//! Purpose:
+//! Implements the checker driver top level phase.
+//! Owns one ordered step in building checker state and validating the program before optimization/codegen.
+//!
+//! Called from:
+//! - `crate::types::checker::driver::run()`
+//!
+//! Key details:
+//! - Phase order controls diagnostics, available declarations, required libraries, and function-local environments.
+
 use std::collections::HashMap;
 
 use crate::errors::CompileError;

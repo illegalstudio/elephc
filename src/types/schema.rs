@@ -1,3 +1,14 @@
+//! Purpose:
+//! Defines declaration schema records shared across checker phases.
+//! Models functions, classes, interfaces, enums, constants, and class members after parser/name resolution.
+//!
+//! Called from:
+//! - `crate::types::checker::schema`
+//! - `crate::types::checker::Checker`
+//!
+//! Key details:
+//! - Schema data is the canonical contract for inheritance, calls, property access, and method validation.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::parser::ast::{ClassMethod, Expr, Visibility};

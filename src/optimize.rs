@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides the optimizer entry points used by the compile pipeline.
+//! Coordinates constant folding, propagation, control normalization, pruning, effect modeling, and DCE.
+//!
+//! Called from:
+//! - `crate::pipeline::compile()`
+//!
+//! Key details:
+//! - Passes must preserve PHP-visible side effects and run after magic constants and type checking have produced canonical AST metadata.
+
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
     BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,

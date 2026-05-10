@@ -1,3 +1,14 @@
+//! Purpose:
+//! Defines type-system metadata for compiler-supported PHP Fiber behavior.
+//! Tracks Fiber class relationships and result typing used by builtin type injection and checks.
+//!
+//! Called from:
+//! - `crate::types::checker::builtin_types`
+//! - `crate::types::checker`
+//!
+//! Key details:
+//! - Fiber typing is modeled at compile time; runtime scheduling behavior remains outside this module.
+
 use crate::errors::CompileError;
 use crate::parser::ast::{Stmt, StmtKind};
 use crate::span::Span;

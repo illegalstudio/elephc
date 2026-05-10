@@ -1,3 +1,13 @@
+//! Purpose:
+//! Eliminates unreachable or redundant statements after effect and control-flow analysis.
+//! Coordinates write tracking, branch guards, switch/try handling, method effects, and tail sinking.
+//!
+//! Called from:
+//! - `crate::optimize::eliminate_dead_code()`
+//!
+//! Key details:
+//! - DCE may drop code only when effects, writes, terminal control flow, and guard exclusions prove it unobservable.
+
 use super::*;
 
 mod guards;

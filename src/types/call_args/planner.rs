@@ -1,3 +1,14 @@
+//! Purpose:
+//! Plans PHP call arguments from source order into regular and variadic parameter slots.
+//! Validates named/positional ordering, duplicate parameters, spreads, defaults, and unknown variadic names.
+//!
+//! Called from:
+//! - `crate::types::call_args::plan_call_args()`
+//! - `crate::types::call_args::plan_call_args_with_regular_param_count()`
+//!
+//! Key details:
+//! - Source evaluation order is preserved separately from ABI/materialization order for codegen.
+
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::FunctionSig;
