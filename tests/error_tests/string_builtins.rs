@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for diagnostic coverage of string builtins, including substr wrong args, strpos wrong args, and strpos false return rejects integer return type.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Invalid PHP snippets are checked through shared diagnostic helpers for messages, spans, and recovery behavior.
+
 use super::*;
 
 expect_builtin_arity_error!(

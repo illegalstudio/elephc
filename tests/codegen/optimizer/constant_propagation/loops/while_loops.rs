@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for optimizer-sensitive codegen coverage of optimizer, constant propagation loops, including constant propagation preserves scalar across while false body writes, constant propagation tracks do while false assignment, and constant propagation tracks while true break assignment.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures are compiled and run so folding, propagation, or pruning stays behavior-preserving.
+
 use super::*;
 
 #[test]

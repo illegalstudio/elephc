@@ -1,3 +1,12 @@
+//! Purpose:
+//! Compiler fixture helpers for turning inline PHP snippets into assembly or expected compile failures.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Centralizes compile options, define handling, runtime harness injection, and diagnostic capture.
+
 use super::*;
 
 pub(crate) fn compile_source_to_asm_with_options(

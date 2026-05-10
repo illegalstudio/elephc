@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of fibers arguments, including fiber start passes arguments to closure, fiber start untyped argument receives value, and fiber from closure variable uses entry wrapper.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
+
 use super::*;
 
 #[test]

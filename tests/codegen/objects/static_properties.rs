@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of object static properties, including class static method string param, class static and instance, and static property read write.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures compile to native binaries while malformed or fatal cases assert captured failures.
+
 use super::*;
 
 #[test]

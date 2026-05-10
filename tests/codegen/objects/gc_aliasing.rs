@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of object object GC aliasing, including GC array alias survives unset, GC returned array alias survives caller unset, and GC returned object alias survives caller unset.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
+
 use super::*;
 
 #[test]

@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of object magic methods, including magic tostring supports echo concat and cast, magic tostring missing method is runtime fatal, and magic get handles missing property reads.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures compile to native binaries while malformed or fatal cases assert captured failures.
+
 use super::*;
 
 #[test]

@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of I/O, paths realpath and pathinfo builtins, including realpath existing file, realpath strips redundant segments, and realpath missing returns false.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures compile to native binaries while malformed or fatal cases assert captured failures.
+
 use super::*;
 
 #[test]

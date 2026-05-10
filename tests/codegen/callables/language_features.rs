@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of callables language features, including default param string, default param override, and default param integer.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
+
 use crate::support::*;
 
 // ===== Feature 1: Default parameter values =====

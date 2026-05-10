@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for diagnostic coverage of array builtins, including array mixed type checks, array union requires same container kind, and indexed array union requires compatible element types.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Invalid PHP snippets are checked through shared diagnostic helpers for messages, spans, and recovery behavior.
+
 use super::*;
 
 #[test]

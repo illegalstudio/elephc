@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for parser AST coverage of exceptions, including try catch finally, multi catch, and catch without variable.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP snippets are parsed and assertions inspect AST shape, precedence, or expected parse failures.
+
 use super::*;
 
 #[test]

@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for parser AST coverage of class methods, including method call, first class callable instance method, and static method call.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP snippets are parsed and assertions inspect AST shape, precedence, or expected parse failures.
+
 use super::*;
 
 #[test]

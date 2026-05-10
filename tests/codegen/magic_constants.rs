@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of magic constants, including file is absolute path ending in test php, dir is absolute path with no trailing slash, and dir concat produces single folded string.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Multi-file fixtures exercise include/require resolution, temporary project layout, and native binary output.
+
 use crate::support::*;
 
 // `__FILE__` and `__DIR__` are substituted to the canonical path of the

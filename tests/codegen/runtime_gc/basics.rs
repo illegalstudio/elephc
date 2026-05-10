@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of runtime GC basics, including GC scope cleanup basic, GC return array survives, and GC return array loop.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
+
 use crate::support::*;
 
 #[test]

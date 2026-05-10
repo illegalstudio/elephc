@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for parser AST coverage of includes, including word logical typed assignment rhs requires parentheses, include parses, and require parses.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP snippets cover successful AST shapes plus malformed syntax that must fail during parsing.
+
 use super::*;
 
 #[test]

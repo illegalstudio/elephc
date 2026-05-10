@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for lexer tokenization coverage of keywords, including control token, exception keywords tokens, and ifdef keyword token.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP source is tokenized and assertions check exact token kinds, literals, and source structure.
+
 use super::*;
 
 #[test]

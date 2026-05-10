@@ -1,3 +1,12 @@
+//! Purpose:
+//! Groups the class syntax integration test submodules into the parent suite.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Submodules group focused fixtures for declarations, traits, access, static members, modifiers.
+
 use super::*;
 
 #[path = "classes/declarations.rs"]

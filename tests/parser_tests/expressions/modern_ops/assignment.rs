@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for parser AST coverage of expression modern PHP operators assignment, including parenthesized word logical assignment rhs, assignment expression binds tighter than word and, and assignment expression is right associative.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP snippets are parsed and assertions inspect AST shape, precedence, or expected parse failures.
+
 use super::*;
 
 #[test]

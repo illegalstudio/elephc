@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of runtime GC copy-on-write and cycle handling, including GC local alias survives original unset, copy-on-write indexed array alias write does not mutate source, and copy-on-write assoc array alias write does not mutate source.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
+
 use crate::support::*;
 
 #[test]

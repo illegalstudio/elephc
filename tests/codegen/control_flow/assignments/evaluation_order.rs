@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of control flow, assignments evaluation order, including assignment expression effectful index evaluates once, assignment expression uses rhs mutated variable index, and compound assignment expression uses rhs mutated variable index.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
+
 use super::*;
 
 #[test]

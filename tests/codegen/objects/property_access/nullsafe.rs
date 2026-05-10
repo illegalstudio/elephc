@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of object property nullsafe property and method access, including class chained property access, nullsafe property access returns property or null, and nullsafe method call skips arguments when receiver is null.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
+
 use super::*;
 
 #[test]

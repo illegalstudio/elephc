@@ -1,3 +1,12 @@
+//! Purpose:
+//! Groups the types integration test submodules into the parent suite.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Submodules group focused fixtures for return type inference, enums, type annotations, named arguments, examples, and related suites.
+
 use crate::support::*;
 
 #[path = "types/return_inference.rs"]

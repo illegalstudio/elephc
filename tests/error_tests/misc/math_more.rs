@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for diagnostic coverage of misc additional math diagnostics, including compound assignment missing rhs, compound assignment rejects append target, and instanceof missing class name.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Invalid PHP snippets are checked through shared diagnostic helpers for messages, spans, and recovery behavior.
+
 use super::*;
 
 #[test]

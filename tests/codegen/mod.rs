@@ -1,3 +1,12 @@
+//! Purpose:
+//! Groups the top-level end-to-end codegen test modules into the integration suite.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Submodules group focused fixtures for exceptions, fibers, buffers, preprocessor, namespaces, and related suites.
+
 mod exceptions;
 mod fibers;
 mod buffers;

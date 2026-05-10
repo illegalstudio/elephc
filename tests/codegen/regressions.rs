@@ -1,3 +1,12 @@
+//! Purpose:
+//! Groups the regressions integration test submodules into the parent suite.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Submodules group focused fixtures for scalars and regex, arrays, syntax edges, closures and refs, string memory, and related suites.
+
 use crate::support::*;
 
 #[path = "regressions/scalars_and_regex.rs"]

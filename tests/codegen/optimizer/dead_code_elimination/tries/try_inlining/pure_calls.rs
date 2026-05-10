@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for optimizer-sensitive codegen coverage of optimizer, dead-code elimination, tries, try inlining pure calls, including dead code elimination inlines non throwing try catch, dead code elimination inlines try with pure builtin call, and dead code elimination inlines try with pure user function call.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures are compiled and run so folding, propagation, or pruning stays behavior-preserving.
+
 use super::*;
 
 #[test]

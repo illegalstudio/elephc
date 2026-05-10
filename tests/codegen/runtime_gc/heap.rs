@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of runtime GC heap, including GC heap free coalesces adjacent blocks, GC heap free trims free tail chain, and GC heap alloc splits oversized free block.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures compile to native binaries while malformed or fatal cases assert captured failures.
+
 use crate::support::*;
 
 #[test]

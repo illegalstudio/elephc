@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of object-oriented PHP misc, including inherited constructor specializes base string property type, literal allows sibling objects with common parent, and match without default is fatal.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Uses checked-in example PHP fixtures through include_str! in addition to inline native-output assertions.
+
 use super::*;
 
 #[test]

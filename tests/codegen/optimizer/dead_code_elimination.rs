@@ -1,3 +1,12 @@
+//! Purpose:
+//! Groups the optimizer dead-code elimination integration test submodules into the parent suite.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Submodules group focused fixtures for basics, tries, switches, guards, tail sinking, and related suites.
+
 use super::*;
 
 #[path = "dead_code_elimination/basics.rs"]

@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for diagnostic coverage of I/O builtin filesystem, including file get contents wrong args, file get contents false return rejects string return type, and file put contents wrong args.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Invalid PHP snippets are checked through shared diagnostic helpers for messages, spans, and recovery behavior.
+
 use super::*;
 
 #[test]

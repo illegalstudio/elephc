@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of types, named arguments spread, including named arguments after spread for user function, named arguments after spread uses default for unpacked gap, and spread only uses default for unpacked optional param.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures compile to native binaries while malformed or fatal cases assert captured failures.
+
 use super::*;
 
 #[test]

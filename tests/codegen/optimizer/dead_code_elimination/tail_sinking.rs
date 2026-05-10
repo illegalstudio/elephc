@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for optimizer-sensitive codegen coverage of optimizer, dead-code elimination tail sinking, including dead code elimination preserves effectful empty if condition, dead code elimination reduces empty if chain to needed condition checks, and dead code elimination sinks tail into if fallthrough branch.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures are compiled and run so folding, propagation, or pruning stays behavior-preserving.
+
 use super::*;
 
 #[test]

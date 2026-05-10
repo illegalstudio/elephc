@@ -1,3 +1,12 @@
+//! Purpose:
+//! Project fixture helpers for CLI and multi-file codegen tests.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Creates isolated temporary projects, invokes the elephc binary, and supports include/require fixtures.
+
 use super::*;
 
 pub(crate) fn make_cli_test_dir(prefix: &str) -> std::path::PathBuf {

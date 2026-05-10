@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of types never, including never return type throws and is caught, never instance method throws and is caught, and never static method throws and is caught.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Uses checked-in example PHP fixtures through include_str! in addition to inline native-output assertions.
+
 use super::*;
 
 #[test]

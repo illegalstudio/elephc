@@ -1,3 +1,12 @@
+//! Purpose:
+//! Platform fixture helpers for selecting assembler, linker, SDK, and target settings in codegen tests.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Includes a focused target-selection test plus host and cross-target command assumptions.
+
 use super::*;
 
 pub(crate) fn target() -> Target {

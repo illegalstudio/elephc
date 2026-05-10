@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for parser AST coverage of statements, including echo string literal, echo integer, and variable assignment.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP snippets cover successful AST shapes plus malformed syntax that must fail during parsing.
+
 use super::*;
 
 #[test]

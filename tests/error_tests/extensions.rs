@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for diagnostic coverage of extensions, including packed class rejects non pod field, buffer new rejects non pod element type, and buffer new rejects union element type.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Invalid PHP snippets are checked through shared diagnostic helpers for messages, spans, and recovery behavior.
+
 use super::*;
 
 #[test]

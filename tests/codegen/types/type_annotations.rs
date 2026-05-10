@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of types type annotations, including example union types compiles and runs, typed array parameter, and typed callable parameter.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Uses checked-in example PHP fixtures through include_str! in addition to inline native-output assertions.
+
 use super::*;
 
 #[test]

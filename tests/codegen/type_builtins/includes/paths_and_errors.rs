@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of type-related builtins, includes include paths and errors, including include nested, include subdirectory, and include variables shared scope.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Multi-file fixtures exercise include/require resolution, temporary project layout, and native binary output.
+
 use super::*;
 
 #[test]

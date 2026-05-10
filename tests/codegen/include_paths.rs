@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of include paths, including include with dunder dir concat, include with const ref, and include with define ref.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Multi-file fixtures exercise include/require resolution, temporary project layout, and native binary output.
+
 use crate::support::*;
 
 // `require __DIR__ . '/...';` is the most common idiomatic include pattern

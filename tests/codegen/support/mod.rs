@@ -1,3 +1,12 @@
+//! Purpose:
+//! Wires shared codegen test support helpers and cached target/runtime state.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Exports platform, compiler, runner, and project helpers used by end-to-end codegen fixtures.
+
 #![allow(dead_code)]
 
 use std::collections::HashSet;

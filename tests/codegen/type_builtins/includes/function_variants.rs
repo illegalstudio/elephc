@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of type-related builtins, includes include-loaded function variants, including conditional include function variants dispatch false branch, conditional include function variants dispatch true branch, and conditional include single function variant marks loaded branch.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Multi-file fixtures exercise include/require resolution, temporary project layout, and native binary output.
+
 use super::*;
 
 #[test]

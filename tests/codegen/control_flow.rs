@@ -1,3 +1,12 @@
+//! Purpose:
+//! Groups the control flow integration test submodules into the parent suite.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Submodules group focused fixtures for branches and loops, functions, booleans, assignments, nulls, and related suites.
+
 use crate::support::*;
 
 #[path = "control_flow/branches_and_loops.rs"]

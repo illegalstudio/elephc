@@ -1,3 +1,12 @@
+//! Purpose:
+//! Native binary runner helpers for assembling runtimes, linking objects, and executing codegen fixtures.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Handles platform-specific linker flags, qemu ARM64 execution, and runtime object caching.
+
 use super::*;
 
 pub(crate) fn get_runtime_obj() -> &'static Path {

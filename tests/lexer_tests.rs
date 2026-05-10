@@ -1,3 +1,12 @@
+//! Purpose:
+//! Lexer test root wiring and shared token helper coverage for PHP tokenization suites.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Helpers tokenize inline PHP snippets while submodules assert source structure, keywords, literals, and operators.
+
 use elephc::lexer::{tokenize, Token};
 
 /// Helper: extract just the tokens (discard spans) for easy comparison.

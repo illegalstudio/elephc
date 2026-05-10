@@ -1,3 +1,12 @@
+//! Purpose:
+//! Groups the optimizer, dead-code elimination tries integration test submodules into the parent suite.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Submodules group focused fixtures for try pruning, catch pruning, finally paths, try inlining, tail paths.
+
 use super::*;
 
 #[path = "tries/try_pruning.rs"]

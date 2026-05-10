@@ -1,3 +1,12 @@
+//! Purpose:
+//! Groups the expression parsing integration test submodules into the parent suite.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Submodules group focused fixtures for basics, operators, modern PHP operators, assignments, arrays, string offsets, and match expressions.
+
 use super::*;
 
 #[path = "expressions/basics.rs"]

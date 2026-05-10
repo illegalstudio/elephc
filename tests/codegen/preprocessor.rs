@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of preprocessor, including ifdef selects then branch when symbol is defined, ifdef selects else branch when symbol is missing, and ifdef without else can erase statement.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Multi-file fixtures exercise include/require resolution, temporary project layout, and native binary output.
+
 use crate::support::*;
 #[test]
 fn test_ifdef_selects_then_branch_when_symbol_is_defined() {

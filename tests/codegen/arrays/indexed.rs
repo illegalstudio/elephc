@@ -1,3 +1,12 @@
+//! Purpose:
+//! Groups the indexed array builtins integration test submodules into the parent suite.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Submodules group focused fixtures for aggregates, array search, merge, and union builtins, array slicing, stack, and range builtins, array set-operation builtins, array shape-transform builtins, and related suites.
+
 use crate::support::*;
 
 #[path = "indexed/aggregates.rs"]

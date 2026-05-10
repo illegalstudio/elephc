@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for optimizer-sensitive codegen coverage of optimizer, dead-code elimination, switches guarded switch cases, including dead code elimination prunes nested if region from switch boolean guard case, dead code elimination drops impossible switch cases from outer guards, and dead code elimination drops exhaustive switch true default from cumulative guards.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures are compiled and run so folding, propagation, or pruning stays behavior-preserving.
+
 use super::*;
 
 #[test]

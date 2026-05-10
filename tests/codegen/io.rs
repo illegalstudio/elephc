@@ -1,3 +1,12 @@
+//! Purpose:
+//! Groups the I/O integration test submodules into the parent suite.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Submodules group focused fixtures for printing, files, streams, filesystem, misc, and related suites.
+
 use crate::support::*;
 
 #[path = "io/printing.rs"]

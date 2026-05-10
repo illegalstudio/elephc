@@ -1,3 +1,12 @@
+//! Purpose:
+//! Groups the runtime GC integration test submodules into the parent suite.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, and related suites.
+
 #[path = "runtime_gc/basics.rs"]
 mod basics;
 #[path = "runtime_gc/regressions.rs"]

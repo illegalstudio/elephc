@@ -1,3 +1,12 @@
+//! Purpose:
+//! Groups the misc integration test submodules into the parent suite.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Submodules group focused fixtures for miscellaneous syntax diagnostics, classes, system builtin diagnostics, pointers, functions, and related suites.
+
 use super::*;
 
 #[path = "misc/syntax_misc.rs"]

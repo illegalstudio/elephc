@@ -1,3 +1,12 @@
+//! Purpose:
+//! Groups the class access integration test submodules into the parent suite.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Submodules group focused fixtures for properties, methods, static properties, nullsafe property and method access, chains.
+
 use super::*;
 
 #[path = "access/properties.rs"]

@@ -1,3 +1,12 @@
+//! Purpose:
+//! Groups the strings integration test submodules into the parent suite.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Submodules group focused fixtures for search, transform, encoding, formatting, interpolation and hashes, and related suites.
+
 use crate::support::*;
 
 #[path = "strings/search.rs"]

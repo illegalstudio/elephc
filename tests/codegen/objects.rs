@@ -1,3 +1,12 @@
+//! Purpose:
+//! Groups the object suites integration test submodules into the parent suite.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Submodules group focused fixtures for classes, object GC aliasing, magic methods, property access, constructor property promotion, and related suites.
+
 use crate::support::*;
 
 #[path = "objects/classes.rs"]

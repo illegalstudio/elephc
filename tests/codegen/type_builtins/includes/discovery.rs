@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of type-related builtins, includes discovery, including include declaration discovery inside function, include graph declaration discovery inside function, and discovered function body resolves nested include.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Multi-file fixtures exercise include/require resolution, temporary project layout, and native binary output.
+
 use super::*;
 
 #[test]

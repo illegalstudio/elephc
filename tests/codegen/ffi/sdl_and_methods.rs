@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of FFI, including FFI SDL init and ticks, variadic instance method, and variadic static method.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Includes ignored SDL/platform fixtures that require external SDL2 libraries and target linker support.
+
 use super::*;
 
 #[test]

@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of types, named arguments variadics, including named arguments unknown variadic named args keep string keys, named arguments variadic mixes positional and named extra args, and named arguments variadic after long spread keeps tail and named args.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
+
 use super::*;
 
 #[test]

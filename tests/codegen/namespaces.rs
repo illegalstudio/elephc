@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of namespaces, including namespace use function and global builtin resolution, namespace class can call global extern function, and namespace class can call pointer builtins without global prefix.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Multi-file fixtures exercise include/require resolution, temporary project layout, and native binary output.
+
 use crate::support::*;
 
 #[test]

@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for end-to-end codegen coverage of runtime GC growth, including example copy-on-write compiles and runs, literal spread grows past initial capacity, and literal spread refcounted grows past initial capacity.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Uses checked-in example PHP fixtures through include_str! in addition to inline native-output assertions.
+
 use crate::support::*;
 
 #[test]

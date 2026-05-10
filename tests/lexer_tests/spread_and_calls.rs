@@ -1,3 +1,12 @@
+//! Purpose:
+//! Integration or regression tests for lexer tokenization coverage of spread syntax and calls, including ellipsis token, ellipsis in function params, and ellipsis in function call.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Inline PHP source is tokenized and assertions check exact token kinds, literals, and source structure.
+
 use super::*;
 
 #[test]
