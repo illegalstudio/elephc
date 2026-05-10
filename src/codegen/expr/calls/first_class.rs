@@ -14,34 +14,11 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::names::Name;
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
-use crate::types::{first_class_callable_builtin_sig, FunctionSig, PhpType};
+use crate::types::{callable_wrapper_sig, first_class_callable_builtin_sig, FunctionSig, PhpType};
 
 const FCC_CALLED_CLASS_ID_PARAM: &str = "__elephc_fcc_called_class_id";
 const FCC_THIS_PARAM: &str = "__elephc_fcc_this";
 const FCC_RECEIVER_PARAM: &str = "__elephc_fcc_receiver";
-
-fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
-    let Some(variadic_name) = sig.variadic.as_ref() else {
-        return sig.clone();
-    };
-    if sig
-        .params
-        .last()
-        .is_some_and(|(name, ty)| name == variadic_name && matches!(ty, PhpType::Array(_)))
-    {
-        return sig.clone();
-    }
-
-    let mut wrapper_sig = sig.clone();
-    wrapper_sig.params.push((
-        variadic_name.clone(),
-        PhpType::Array(Box::new(PhpType::Mixed)),
-    ));
-    wrapper_sig.defaults.push(None);
-    wrapper_sig.ref_params.push(false);
-    wrapper_sig.declared_params.push(false);
-    wrapper_sig
-}
 
 fn resolved_static_callable_target(receiver: &StaticReceiver, ctx: &Context) -> Option<StaticReceiver> {
     match receiver {

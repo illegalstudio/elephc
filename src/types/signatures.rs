@@ -25,6 +25,31 @@ pub struct FunctionSig {
     pub variadic: Option<String>,
 }
 
+pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
+    let Some(variadic_name) = sig.variadic.as_ref() else {
+        return sig.clone();
+    };
+
+    let mut wrapper_sig = sig.clone();
+    if let Some((name, ty)) = wrapper_sig.params.last_mut() {
+        if name == variadic_name {
+            if !matches!(ty, PhpType::Array(_)) {
+                *ty = PhpType::Array(Box::new(PhpType::Mixed));
+            }
+            return wrapper_sig;
+        }
+    }
+
+    wrapper_sig.params.push((
+        variadic_name.clone(),
+        PhpType::Array(Box::new(PhpType::Mixed)),
+    ));
+    wrapper_sig.defaults.push(None);
+    wrapper_sig.ref_params.push(false);
+    wrapper_sig.declared_params.push(false);
+    wrapper_sig
+}
+
 pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
     match name {
         "time" | "phpversion" | "json_last_error" | "pi" | "ptr_null" | "getcwd"
@@ -402,4 +427,62 @@ fn bool_lit(value: bool) -> Expr {
 
 fn null_lit() -> Expr {
     Expr::new(ExprKind::Null, Span::dummy())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn variadic_sig(params: Vec<(String, PhpType)>) -> FunctionSig {
+        FunctionSig {
+            defaults: vec![None; params.len()],
+            return_type: PhpType::Mixed,
+            declared_return: false,
+            ref_params: vec![false; params.len()],
+            declared_params: vec![false; params.len()],
+            params,
+            variadic: Some("values".to_string()),
+        }
+    }
+
+    #[test]
+    fn callable_wrapper_sig_retypes_existing_non_array_variadic_param() {
+        let sig = variadic_sig(vec![
+            ("format".to_string(), PhpType::Str),
+            ("values".to_string(), PhpType::Mixed),
+        ]);
+
+        let wrapper_sig = callable_wrapper_sig(&sig);
+
+        assert_eq!(wrapper_sig.params.len(), 2);
+        assert_eq!(
+            wrapper_sig.params[1],
+            (
+                "values".to_string(),
+                PhpType::Array(Box::new(PhpType::Mixed)),
+            )
+        );
+        assert_eq!(wrapper_sig.defaults.len(), 2);
+        assert_eq!(wrapper_sig.ref_params.len(), 2);
+        assert_eq!(wrapper_sig.declared_params.len(), 2);
+    }
+
+    #[test]
+    fn callable_wrapper_sig_appends_missing_variadic_param() {
+        let sig = variadic_sig(vec![("format".to_string(), PhpType::Str)]);
+
+        let wrapper_sig = callable_wrapper_sig(&sig);
+
+        assert_eq!(wrapper_sig.params.len(), 2);
+        assert_eq!(
+            wrapper_sig.params[1],
+            (
+                "values".to_string(),
+                PhpType::Array(Box::new(PhpType::Mixed)),
+            )
+        );
+        assert_eq!(wrapper_sig.defaults.len(), 2);
+        assert_eq!(wrapper_sig.ref_params.len(), 2);
+        assert_eq!(wrapper_sig.declared_params.len(), 2);
+    }
 }

@@ -31,7 +31,9 @@ pub use schema::{
     ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo, ExternClassInfo, ExternFieldInfo,
     ExternFunctionSig, InterfaceInfo, PackedClassInfo, PackedFieldInfo,
 };
-pub(crate) use signatures::{builtin_call_sig, first_class_callable_builtin_sig};
+pub(crate) use signatures::{
+    builtin_call_sig, callable_wrapper_sig, first_class_callable_builtin_sig,
+};
 pub use signatures::FunctionSig;
 
 #[allow(dead_code)]
