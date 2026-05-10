@@ -1,0 +1,264 @@
+use crate::names::Name;
+use crate::span::Span;
+
+use super::{
+    CType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExternField, ExternParam,
+    PackedField, StaticReceiver, TraitUse, TypeExpr,
+};
+
+// --- Statements ---
+
+#[derive(Debug, Clone)]
+pub struct Stmt {
+    pub kind: StmtKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CatchClause {
+    pub exception_types: Vec<Name>,
+    pub variable: Option<String>,
+    pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UseKind {
+    Class,
+    Function,
+    Const,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UseItem {
+    pub kind: UseKind,
+    pub name: Name,
+    pub alias: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StmtKind {
+    Echo(Expr),
+    Assign {
+        name: String,
+        value: Expr,
+    },
+    If {
+        condition: Expr,
+        then_body: Vec<Stmt>,
+        elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+        else_body: Option<Vec<Stmt>>,
+    },
+    IfDef {
+        symbol: String,
+        then_body: Vec<Stmt>,
+        else_body: Option<Vec<Stmt>>,
+    },
+    While {
+        condition: Expr,
+        body: Vec<Stmt>,
+    },
+    DoWhile {
+        body: Vec<Stmt>,
+        condition: Expr,
+    },
+    For {
+        init: Option<Box<Stmt>>,
+        condition: Option<Expr>,
+        update: Option<Box<Stmt>>,
+        body: Vec<Stmt>,
+    },
+    ArrayAssign {
+        array: String,
+        index: Expr,
+        value: Expr,
+    },
+    ArrayPush {
+        array: String,
+        value: Expr,
+    },
+    TypedAssign {
+        type_expr: TypeExpr,
+        name: String,
+        value: Expr,
+    },
+    Foreach {
+        array: Expr,
+        key_var: Option<String>,
+        value_var: String,
+        body: Vec<Stmt>,
+    },
+    Switch {
+        subject: Expr,
+        cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+        default: Option<Vec<Stmt>>,
+    },
+    Include {
+        path: Expr,
+        once: bool,
+        required: bool,
+    },
+    IncludeOnceMark {
+        label: String,
+    },
+    IncludeOnceGuard {
+        label: String,
+        body: Vec<Stmt>,
+    },
+    Throw(Expr),
+    Synthetic(Vec<Stmt>),
+    Try {
+        try_body: Vec<Stmt>,
+        catches: Vec<CatchClause>,
+        finally_body: Option<Vec<Stmt>>,
+    },
+    Break(usize),
+    Continue(usize),
+    ExprStmt(Expr),
+    NamespaceDecl {
+        name: Option<Name>,
+    },
+    NamespaceBlock {
+        name: Option<Name>,
+        body: Vec<Stmt>,
+    },
+    UseDecl {
+        imports: Vec<UseItem>,
+    },
+    FunctionDecl {
+        name: String,
+        params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
+        variadic: Option<String>,
+        return_type: Option<TypeExpr>,
+        body: Vec<Stmt>,
+    },
+    FunctionVariantGroup {
+        name: String,
+        variants: Vec<String>,
+    },
+    FunctionVariantMark {
+        name: String,
+        variant: String,
+    },
+    Return(Option<Expr>),
+    ConstDecl {
+        name: String,
+        value: Expr,
+    },
+    ListUnpack {
+        vars: Vec<String>,
+        value: Expr,
+    },
+    Global {
+        vars: Vec<String>,
+    },
+    StaticVar {
+        name: String,
+        init: Expr,
+    },
+    ClassDecl {
+        name: String,
+        extends: Option<Name>,
+        implements: Vec<Name>,
+        is_abstract: bool,
+        is_final: bool,
+        is_readonly_class: bool,
+        trait_uses: Vec<TraitUse>,
+        properties: Vec<ClassProperty>,
+        methods: Vec<ClassMethod>,
+    },
+    EnumDecl {
+        name: String,
+        backing_type: Option<TypeExpr>,
+        cases: Vec<EnumCaseDecl>,
+    },
+    PackedClassDecl {
+        name: String,
+        fields: Vec<PackedField>,
+    },
+    InterfaceDecl {
+        name: String,
+        extends: Vec<Name>,
+        methods: Vec<ClassMethod>,
+    },
+    TraitDecl {
+        name: String,
+        trait_uses: Vec<TraitUse>,
+        properties: Vec<ClassProperty>,
+        methods: Vec<ClassMethod>,
+    },
+    PropertyAssign {
+        object: Box<Expr>,
+        property: String,
+        value: Expr,
+    },
+    StaticPropertyAssign {
+        receiver: StaticReceiver,
+        property: String,
+        value: Expr,
+    },
+    StaticPropertyArrayPush {
+        receiver: StaticReceiver,
+        property: String,
+        value: Expr,
+    },
+    StaticPropertyArrayAssign {
+        receiver: StaticReceiver,
+        property: String,
+        index: Expr,
+        value: Expr,
+    },
+    PropertyArrayPush {
+        object: Box<Expr>,
+        property: String,
+        value: Expr,
+    },
+    PropertyArrayAssign {
+        object: Box<Expr>,
+        property: String,
+        index: Expr,
+        value: Expr,
+    },
+    ExternFunctionDecl {
+        name: String,
+        params: Vec<ExternParam>,
+        return_type: CType,
+        library: Option<String>,
+    },
+    ExternClassDecl {
+        name: String,
+        fields: Vec<ExternField>,
+    },
+    ExternGlobalDecl {
+        name: String,
+        c_type: CType,
+    },
+}
+
+impl PartialEq for Stmt {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+    }
+}
+
+#[allow(dead_code)] // Constructors used by test crate
+impl Stmt {
+    pub fn new(kind: StmtKind, span: Span) -> Self {
+        Self { kind, span }
+    }
+
+    pub fn echo(expr: Expr) -> Self {
+        Self::new(StmtKind::Echo(expr), Span::dummy())
+    }
+
+    pub fn assign(name: impl Into<String>, value: Expr) -> Self {
+        Self::new(
+            StmtKind::Assign {
+                name: name.into(),
+                value,
+            },
+            Span::dummy(),
+        )
+    }
+}
+
+pub type Program = Vec<Stmt>;

@@ -1,0 +1,30 @@
+// --- Operators ---
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Concat,
+    Eq,
+    NotEq,
+    StrictEq,
+    StrictNotEq,
+    Lt,
+    Gt,
+    LtEq,
+    GtEq,
+    Pow,
+    And,
+    Or,
+    Xor,
+    BitAnd,
+    BitOr,
+    BitXor,
+    ShiftLeft,
+    ShiftRight,
+    Spaceship,
+    NullCoalesce,
+}
