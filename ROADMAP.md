@@ -394,24 +394,21 @@ product mode. This is also the series that delivered the Fibers MVP.
 - [x] Full first-class callable targets — support `static::method(...)` and `$object->method(...)` in addition to function, `ClassName::`, `self::`, and `parent::` targets
 - [x] Captured closures as callback values — forward hidden `use (...)` environments through callback-style built-ins such as `array_map`, `array_filter`, and `call_user_func`
 
-### PHP 8.0 attributes parsing + observance
-
-- [x] PHP 8.0 attribute syntax — `#[Name]`, `#[Name(args)]`, stacked groups (`#[A] #[B]`), comma-separated within a group (`#[A, B(1)]`), qualified names (`#[\Ns\Name]`). Lexer adds `Token::AttrOpen` for `#[` ; bare `#` becomes a PHP-style line comment (no longer ambiguous). Parser invokes `parse_attribute_lists` at every site PHP allows: top-level statements, class/trait/interface members, enum cases, function/method parameters, closures, arrow functions. Attributes preserved in the AST via `attributes: Vec<AttributeGroup>` on `Stmt`, `ClassProperty`, `ClassMethod`, `EnumCaseDecl`, plus per-`ClassConst` storage on the new `ClassConst` AST type. Class-like declarations gain `constants: Vec<ClassConst>`.
-- [x] `#[\Override]` enforcement — methods marked `#[\Override]` must override a parent-chain method; otherwise the type checker emits the PHP-faithful error `"<Class>::<method>() has #[\Override] attribute, but no matching parent method was found"`.
-- [x] `#[\Deprecated]` warning — calls to functions/methods marked deprecated emit `"Call to deprecated function: <name>()"` warnings, optionally appending the user-supplied reason. Reason extraction lives in `types::checker::schema::validation::extract_deprecation` and threads through `FunctionSig::deprecation`.
-- [x] User-defined `#[Attribute]` declarations — classes marked `#[Attribute]` parse without error and accept argument lists at usage sites (`#[MyAttribute("test")] class C {}`).
-
 ## v0.21.x — PHP array and type-model parity
 
 Tighten the PHP value model where the current static representation is still
 more restrictive than PHP.
 
 - [x] Heterogeneous indexed arrays — allow mixed payloads in indexed arrays instead of requiring homogeneous indexed values
+- [x] PHP 8.0 attribute syntax — `#[Name]`, `#[Name(args)]`, stacked groups (`#[A] #[B]`), comma-separated within a group (`#[A, B(1)]`), qualified names (`#[\Ns\Name]`). Lexer adds `Token::AttrOpen` for `#[` ; bare `#` becomes a PHP-style line comment (no longer ambiguous). Parser invokes `parse_attribute_lists` at every site PHP allows: top-level statements, class/trait/interface members, enum cases, function/method parameters, closures, arrow functions. Attributes preserved in the AST via `attributes: Vec<AttributeGroup>` on `Stmt`, `ClassProperty`, `ClassMethod`, `EnumCaseDecl`, plus per-`ClassConst` storage on the new `ClassConst` AST type. Class-like declarations gain `constants: Vec<ClassConst>`.
+- [x] `#[\Override]` enforcement — methods marked `#[\Override]` must override a parent-chain method; otherwise the type checker emits the PHP-faithful error `"<Class>::<method>() has #[\Override] attribute, but no matching parent method was found"`.
+- [x] `#[\Deprecated]` warning — calls to functions/methods marked deprecated emit `"Call to deprecated function: <name>()"` warnings, optionally appending the user-supplied reason. Reason extraction lives in `types::checker::schema::validation::extract_deprecation` and threads through `FunctionSig::deprecation`.
+- [x] User-defined `#[Attribute]` declarations — classes marked `#[Attribute]` parse without error and accept argument lists at usage sites (`#[MyAttribute("test")] class C {}`).
+- [ ] PHP attributes runtime introspection — implement `ReflectionClass::getAttributes()`, `ReflectionMethod::getAttributes()`, `ReflectionProperty::getAttributes()`, plus the `ReflectionAttribute` shape exposing `getName()`, `getArguments()`, `newInstance()`. Currently the parser preserves attribute groups in the AST and the checker enforces `#[\Override]` + `#[\Deprecated]`, but Reflection lookups (`new ReflectionClass(...)->getAttributes()`) return `Undefined class: ReflectionClass`.
 - [ ] Mixed indexed/associative array union — model `array + array` across indexed/hash representations while preserving PHP's shared int/string key space and left-key precedence
 - [ ] Callable parity follow-up — support captured method/static first-class callables in the remaining callback runtimes (`array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()`), direct callable expression calls such as `($obj->method(...))()`, non-local method receivers such as `(new Foo())->method(...)`, nullsafe first-class callables, broader builtin first-class callable wrappers, and the remaining `call_user_func_array()` by-reference callback gaps
 - [ ] Runtime-value compatibility polishing v2 — continue with PHP's uninitialized typed-property state, integer overflow promotion, broader loose-comparison semantics, and future warning/notice sites as they are added
 - [ ] Broader date, regex, and JSON PHP parity — expand `strtotime()` relative formats, PCRE-compatible regex features/captures/backreferences, and `json_decode()` structured array/object decoding
-- [ ] PHP attributes runtime introspection — implement `ReflectionClass::getAttributes()`, `ReflectionMethod::getAttributes()`, `ReflectionProperty::getAttributes()`, plus the `ReflectionAttribute` shape exposing `getName()`, `getArguments()`, `newInstance()`. Currently the parser preserves attribute groups in the AST and the checker enforces `#[\Override]` + `#[\Deprecated]`, but Reflection lookups (`new ReflectionClass(...)->getAttributes()`) return `Undefined class: ReflectionClass`.
 
 ## v0.22.x — PHP OOP parity finish
 
