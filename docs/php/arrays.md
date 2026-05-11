@@ -24,6 +24,18 @@ foreach ($names as $name) {
 }
 ```
 
+## Heterogeneous indexed arrays
+Indexed arrays can contain different value types. When element types differ, elephc stores the payloads as boxed `mixed` values internally.
+
+```php
+<?php
+$items = [1, "two", true];
+$items[] = 3.5;
+
+echo $items[0]; // 1
+echo $items[1]; // two
+```
+
 ## Associative arrays
 ```php
 <?php
@@ -176,5 +188,4 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 **Not supported by design:** `compact()`, `extract()` require runtime variable-name tables and are listed in the roadmap's "Will not implement" section.
 
 ## Limitations
-- Indexed arrays are homogeneous (except object elements may widen to shared parent class)
-- Array union is supported for indexed+indexed and associative+associative operands; mixed indexed/associative union and heterogeneous indexed-array union are tracked in `ROADMAP.md`
+- Array union is supported for indexed+indexed and associative+associative operands; mixed indexed/associative union is tracked in `ROADMAP.md`

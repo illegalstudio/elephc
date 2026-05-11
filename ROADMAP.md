@@ -399,7 +399,7 @@ product mode. This is also the series that delivered the Fibers MVP.
 Tighten the PHP value model where the current static representation is still
 more restrictive than PHP.
 
-- [ ] Heterogeneous indexed arrays — allow mixed payloads in indexed arrays instead of requiring homogeneous indexed values
+- [x] Heterogeneous indexed arrays — allow mixed payloads in indexed arrays instead of requiring homogeneous indexed values
 - [ ] Mixed indexed/associative array union — model `array + array` across indexed/hash representations while preserving PHP's shared int/string key space and left-key precedence
 - [ ] Callable parity follow-up — support captured method/static first-class callables in the remaining callback runtimes (`array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()`), direct callable expression calls such as `($obj->method(...))()`, non-local method receivers such as `(new Foo())->method(...)`, nullsafe first-class callables, broader builtin first-class callable wrappers, and the remaining `call_user_func_array()` by-reference callback gaps
 - [ ] Runtime-value compatibility polishing v2 — continue with PHP's uninitialized typed-property state, integer overflow promotion, broader loose-comparison semantics, and future warning/notice sites as they are added
