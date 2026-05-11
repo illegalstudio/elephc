@@ -86,7 +86,7 @@ fn parse_callback_name(raw_name: &str) -> Name {
     }
     if raw_name.contains('\\') {
         return Name::from_parts(
-            NameKind::Qualified,
+            NameKind::FullyQualified,
             raw_name.split('\\').map(str::to_string).collect(),
         );
     }

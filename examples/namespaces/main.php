@@ -15,5 +15,5 @@ $user = new User("nahime", "admin");
 echo "env=" . APP_ENV . "\n";
 echo $controller->index($user) . "\n";
 echo formatUser($user) . "\n";
-echo function_exists("formatUser") . "\n";
-echo call_user_func("formatUser", $user) . "\n";
+echo function_exists("\\Demo\\Support\\format_user") . "\n";
+echo call_user_func("\\Demo\\Support\\format_user", $user) . "\n";
