@@ -34,6 +34,7 @@ pub(crate) enum PlannedRegularArg {
         element_idx: usize,
         prefix_element_idx: usize,
         default: Option<Expr>,
+        guaranteed_present: bool,
     },
     Default(Expr),
 }
@@ -116,15 +117,20 @@ impl CallArgPlan {
                     spread_span,
                     element_idx,
                     default,
+                    guaranteed_present,
                     ..
                 } => {
                     if let Some(default) = default {
-                        spread_element_or_default_expr(
-                            spread_expr,
-                            *element_idx,
-                            default.clone(),
-                            *spread_span,
-                        )
+                        if *guaranteed_present {
+                            spread_element_expr(spread_expr, *element_idx, *spread_span)
+                        } else {
+                            spread_element_or_default_expr(
+                                spread_expr,
+                                *element_idx,
+                                default.clone(),
+                                *spread_span,
+                            )
+                        }
                     } else {
                         spread_element_expr(spread_expr, *element_idx, *spread_span)
                     }
@@ -236,4 +242,76 @@ fn spread_len_expr(spread_expr: &Expr, span: Span) -> Expr {
         },
         span,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{FunctionSig, PhpType};
+
+    fn sig_with_defaults(defaults: Vec<Option<Expr>>) -> FunctionSig {
+        let params = ["a", "b", "c"]
+            .iter()
+            .map(|name| ((*name).to_string(), PhpType::Int))
+            .collect();
+        FunctionSig {
+            params,
+            defaults,
+            return_type: PhpType::Int,
+            declared_return: true,
+            ref_params: vec![false; 3],
+            declared_params: vec![true; 3],
+            variadic: None,
+        }
+    }
+
+    fn spread_then_named_c() -> Vec<Expr> {
+        vec![
+            Expr::new(ExprKind::Spread(Box::new(Expr::var("args"))), Span::dummy()),
+            Expr::new(
+                ExprKind::NamedArg {
+                    name: "c".to_string(),
+                    value: Box::new(Expr::int_lit(30)),
+                },
+                Span::dummy(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn normalized_args_skip_default_guard_when_spread_check_guarantees_slot() {
+        let sig = sig_with_defaults(vec![Some(Expr::int_lit(1)), None, None]);
+        let plan = super::super::planner::plan_call_args(
+            &sig,
+            &spread_then_named_c(),
+            Span::dummy(),
+            false,
+            true,
+        )
+        .expect("planner should accept spread before named argument");
+
+        assert_eq!(plan.spread_bounds_checks[0].min_len, 2);
+        let normalized = plan.normalized_args();
+        assert!(matches!(
+            &normalized[0].kind,
+            ExprKind::ArrayAccess { .. }
+        ));
+    }
+
+    #[test]
+    fn normalized_args_keep_default_guard_when_spread_may_skip_optional_slot() {
+        let sig = sig_with_defaults(vec![None, Some(Expr::int_lit(2)), None]);
+        let plan = super::super::planner::plan_call_args(
+            &sig,
+            &spread_then_named_c(),
+            Span::dummy(),
+            false,
+            true,
+        )
+        .expect("planner should accept spread before named argument");
+
+        assert_eq!(plan.spread_bounds_checks[0].min_len, 1);
+        let normalized = plan.normalized_args();
+        assert!(matches!(&normalized[1].kind, ExprKind::Ternary { .. }));
+    }
 }

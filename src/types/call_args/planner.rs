@@ -253,12 +253,14 @@ fn plan_named_call_args(
                         .defaults
                         .get(positional_idx)
                         .and_then(|default| default.clone());
+                    let guaranteed_present = element_idx < min_len;
                     resolved[positional_idx] = Some(PlannedRegularArg::SpreadElement {
                         spread_expr: expr.clone(),
                         spread_span: span,
                         element_idx,
                         prefix_element_idx,
                         default,
+                        guaranteed_present,
                     });
                     positional_idx += 1;
                 }
