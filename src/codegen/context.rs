@@ -77,6 +77,7 @@ pub struct DeferredClosure {
     pub body: Vec<Stmt>,
     pub sig: FunctionSig,
     pub captures: Vec<(String, PhpType)>,
+    pub hidden_params: Vec<(String, PhpType)>,
     pub current_class: Option<String>,
 }
 
@@ -85,6 +86,7 @@ pub struct DeferredFiberWrapper {
     pub label: String,
     pub sig: FunctionSig,
     pub visible_param_count: usize,
+    pub hidden_arg_types: Vec<PhpType>,
 }
 
 /// A callback wrapper that adapts callback builtins to closures with hidden captures.
@@ -295,6 +297,84 @@ impl Context {
             var.static_ty = static_ty;
             var.ownership = ownership;
         }
+    }
+
+    pub fn common_object_type(&self, left: &str, right: &str) -> Option<PhpType> {
+        if left == right {
+            return Some(PhpType::Object(left.to_string()));
+        }
+        if self.is_subclass_of(left, right)
+            || self.class_implements_interface(left, right)
+            || self.interface_extends_interface(left, right)
+        {
+            return Some(PhpType::Object(right.to_string()));
+        }
+        if self.is_subclass_of(right, left)
+            || self.class_implements_interface(right, left)
+            || self.interface_extends_interface(right, left)
+        {
+            return Some(PhpType::Object(left.to_string()));
+        }
+
+        let mut left_ancestors = HashSet::new();
+        let mut current = Some(left.to_string());
+        while let Some(class_name) = current {
+            left_ancestors.insert(class_name.clone());
+            current = self
+                .classes
+                .get(&class_name)
+                .and_then(|class_info| class_info.parent.clone());
+        }
+
+        let mut current = Some(right.to_string());
+        while let Some(class_name) = current {
+            if left_ancestors.contains(&class_name) {
+                return Some(PhpType::Object(class_name));
+            }
+            current = self
+                .classes
+                .get(&class_name)
+                .and_then(|class_info| class_info.parent.clone());
+        }
+
+        None
+    }
+
+    fn is_subclass_of(&self, class_name: &str, ancestor_name: &str) -> bool {
+        let mut current = self
+            .classes
+            .get(class_name)
+            .and_then(|class_info| class_info.parent.as_deref());
+        while let Some(parent) = current {
+            if parent == ancestor_name {
+                return true;
+            }
+            current = self
+                .classes
+                .get(parent)
+                .and_then(|class_info| class_info.parent.as_deref());
+        }
+        false
+    }
+
+    fn class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
+        self.classes.get(class_name).is_some_and(|class_info| {
+            class_info.interfaces.iter().any(|implemented| {
+                implemented == interface_name
+                    || self.interface_extends_interface(implemented, interface_name)
+            })
+        })
+    }
+
+    fn interface_extends_interface(&self, child_name: &str, ancestor_name: &str) -> bool {
+        if child_name == ancestor_name {
+            return true;
+        }
+        self.interfaces.get(child_name).is_some_and(|interface_info| {
+            interface_info.parents.iter().any(|parent| {
+                parent == ancestor_name || self.interface_extends_interface(parent, ancestor_name)
+            })
+        })
     }
 
     pub fn next_label(&mut self, prefix: &str) -> String {

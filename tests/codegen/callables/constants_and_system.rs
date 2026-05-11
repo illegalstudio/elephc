@@ -268,6 +268,19 @@ fn test_call_user_func_array_variadic_callback() {
     assert_eq!(out, "7:2");
 }
 
+#[test]
+fn test_call_user_func_array_variadic_float_tail_count() {
+    let out = compile_and_run(
+        "<?php
+        function count_parts(...$parts) {
+            echo count($parts);
+        }
+        call_user_func_array(count_parts(...), [1.5, 2.5]);
+        ",
+    );
+    assert_eq!(out, "2");
+}
+
 // -- v0.8 constants --
 
 #[test]

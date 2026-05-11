@@ -118,7 +118,7 @@ impl Checker {
             }
             ExprKind::ArrayLiteral(elems) => {
                 if elems.is_empty() {
-                    return Ok(PhpType::Array(Box::new(PhpType::Int)));
+                    return Ok(PhpType::Array(Box::new(PhpType::Never)));
                 }
                 let mut elem_ty = self.infer_type(&elems[0], env)?;
                 for elem in &elems[1..] {
@@ -128,13 +128,7 @@ impl Checker {
                             elem_ty = merged_ty;
                             continue;
                         }
-                        return Err(CompileError::new(
-                            elem.span,
-                            &format!(
-                                "Array element type mismatch: expected {:?}, got {:?}",
-                                elem_ty, ty
-                            ),
-                        ));
+                        elem_ty = PhpType::Mixed;
                     }
                 }
                 Ok(PhpType::Array(Box::new(elem_ty)))

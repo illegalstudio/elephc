@@ -38,7 +38,7 @@ pub use self::locals::collect_local_vars;
 pub(crate) use self::types::{codegen_declared_type, codegen_static_type};
 pub(crate) use self::callback_wrapper::emit_callback_wrapper;
 pub(crate) use self::fiber_wrapper::emit_fiber_wrapper;
-pub use self::types::{infer_contextual_type, infer_local_type_pub, infer_local_type_with_ctx};
+pub use self::types::{infer_contextual_type, infer_local_type_with_ctx};
 pub(crate) use self::types::singular_object_class;
 
 #[allow(clippy::too_many_arguments)]
@@ -88,6 +88,7 @@ pub fn emit_closure(
     data: &mut DataSection,
     label: &str,
     sig: &FunctionSig,
+    hidden_params: &[(String, PhpType)],
     body: &[crate::parser::ast::Stmt],
     current_class: Option<&str>,
     all_functions: &HashMap<String, FunctionSig>,
@@ -110,6 +111,7 @@ pub fn emit_closure(
         label,
         &epilogue_label,
         sig,
+        hidden_params,
         body,
         all_functions,
         function_variant_groups,
@@ -152,6 +154,7 @@ pub fn emit_method(
         label,
         epilogue_label,
         sig,
+        &[],
         body,
         all_functions,
         function_variant_groups,
@@ -194,6 +197,7 @@ fn emit_function_with_label(
         label,
         epilogue_label,
         sig,
+        &[],
         body,
         all_functions,
         function_variant_groups,
@@ -209,6 +213,30 @@ fn emit_function_with_label(
     );
 }
 
+fn allocate_incoming_param(ctx: &mut Context, pname: &str, pty: &PhpType, is_ref: bool) {
+    if is_ref {
+        ctx.ref_params.insert(pname.to_string());
+        ctx.alloc_var_with_static_type(pname, PhpType::Int, pty.clone());
+        ctx.update_var_type_static_and_ownership(
+            pname,
+            pty.codegen_repr(),
+            pty.clone(),
+            HeapOwnership::borrowed_alias_for_type(pty),
+        );
+    } else if pname == "this" || pname.starts_with("__elephc_fcc_") {
+        ctx.alloc_var_with_static_type(pname, pty.codegen_repr(), pty.clone());
+        ctx.set_var_ownership(pname, HeapOwnership::borrowed_alias_for_type(pty));
+        ctx.disable_epilogue_cleanup(pname);
+    } else {
+        ctx.alloc_var_with_static_type(pname, pty.codegen_repr(), pty.clone());
+        if matches!(pty.codegen_repr(), PhpType::Str) {
+            ctx.set_var_ownership(pname, HeapOwnership::borrowed_alias_for_type(pty));
+        } else {
+            ctx.set_var_ownership(pname, HeapOwnership::local_owner_for_type(pty));
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit_function_with_label_and_class(
     emitter: &mut Emitter,
@@ -216,6 +244,7 @@ fn emit_function_with_label_and_class(
     label: &str,
     epilogue_label: &str,
     sig: &FunctionSig,
+    hidden_params: &[(String, PhpType)],
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
@@ -249,27 +278,10 @@ fn emit_function_with_label_and_class(
 
     for (i, (pname, pty)) in sig.params.iter().enumerate() {
         let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
-        if is_ref {
-            ctx.ref_params.insert(pname.clone());
-            ctx.alloc_var_with_static_type(pname, PhpType::Int, pty.clone());
-            ctx.update_var_type_static_and_ownership(
-                pname,
-                pty.codegen_repr(),
-                pty.clone(),
-                HeapOwnership::borrowed_alias_for_type(pty),
-            );
-        } else if pname == "this" || pname.starts_with("__elephc_fcc_") {
-            ctx.alloc_var_with_static_type(pname, pty.codegen_repr(), pty.clone());
-            ctx.set_var_ownership(pname, HeapOwnership::borrowed_alias_for_type(pty));
-            ctx.disable_epilogue_cleanup(pname);
-        } else {
-            ctx.alloc_var_with_static_type(pname, pty.codegen_repr(), pty.clone());
-            if matches!(pty.codegen_repr(), PhpType::Str) {
-                ctx.set_var_ownership(pname, HeapOwnership::borrowed_alias_for_type(pty));
-            } else {
-                ctx.set_var_ownership(pname, HeapOwnership::local_owner_for_type(pty));
-            }
-        }
+        allocate_incoming_param(&mut ctx, pname, pty, is_ref);
+    }
+    for (pname, pty) in hidden_params {
+        allocate_incoming_param(&mut ctx, pname, pty, false);
     }
 
     collect_local_vars(body, &mut ctx, sig);
@@ -308,8 +320,28 @@ fn emit_function_with_label_and_class(
             &mut incoming_args,
         );
     }
+    for (pname, pty) in hidden_params {
+        let var = ctx
+            .variables
+            .get(pname)
+            .expect("codegen bug: hidden param was just allocated but not found in variables map");
+        let offset = var.stack_offset;
+        super::abi::emit_store_incoming_param(
+            emitter,
+            pname,
+            pty,
+            offset,
+            false,
+            &mut incoming_args,
+        );
+    }
 
-    let param_names: HashSet<String> = sig.params.iter().map(|(n, _)| n.clone()).collect();
+    let param_names: HashSet<String> = sig
+        .params
+        .iter()
+        .chain(hidden_params.iter())
+        .map(|(n, _)| n.clone())
+        .collect();
     for (name, var) in &ctx.variables {
         if param_names.contains(name) {
             continue;
@@ -374,6 +406,7 @@ fn emit_function_with_label_and_class(
                 data,
                 &closure.label,
                 &closure.sig,
+                &closure.hidden_params,
                 &closure.body,
                 closure.current_class.as_deref(),
                 all_functions,

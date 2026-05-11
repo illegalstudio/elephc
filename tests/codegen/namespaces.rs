@@ -343,6 +343,34 @@ echo call_user_func("triple", 4);
 }
 
 #[test]
+fn test_namespace_fully_qualified_callback_strings_are_absolute() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\Support;
+
+class User {
+    public function badge() {
+        return "ok";
+    }
+}
+
+function format_user(User $user) {
+    return "[" . $user->badge() . "]";
+}
+
+namespace Demo\App;
+
+use Demo\Support\User;
+
+echo function_exists("Demo\\Support\\format_user");
+echo call_user_func("Demo\\Support\\format_user", new User());
+echo call_user_func_array("Demo\\Support\\format_user", [new User()]);
+"#,
+    );
+    assert_eq!(out, "1[ok][ok]");
+}
+
+#[test]
 fn test_namespace_group_use_resolves_class_function_and_const() {
     let out = compile_and_run(
         r#"<?php

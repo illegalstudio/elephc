@@ -20,12 +20,7 @@ pub(crate) fn emit_fiber_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberW
         return;
     }
 
-    let arg_types: Vec<PhpType> = wrapper
-        .sig
-        .params
-        .iter()
-        .map(|(_, ty)| ty.codegen_repr())
-        .collect();
+    let arg_types = wrapper_arg_types(wrapper);
     let slot_count = arg_types.len().max(1);
     let frame_size = align16(slot_count * 16 + 32);
     let saved_callee_offset = frame_size - 32;
@@ -100,6 +95,16 @@ fn spill_wrapper_args(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper, arg
             }
         }
     }
+}
+
+fn wrapper_arg_types(wrapper: &DeferredFiberWrapper) -> Vec<PhpType> {
+    wrapper
+        .sig
+        .params
+        .iter()
+        .map(|(_, ty)| ty.codegen_repr())
+        .chain(wrapper.hidden_arg_types.iter().map(PhpType::codegen_repr))
+        .collect()
 }
 
 fn spill_user_arg(emitter: &mut Emitter, param_idx: usize, ty: &PhpType, slot_offset: usize) {
@@ -191,12 +196,7 @@ fn box_wrapper_return(emitter: &mut Emitter, return_ty: PhpType) {
 }
 
 fn emit_x86_64_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper) {
-    let arg_types: Vec<PhpType> = wrapper
-        .sig
-        .params
-        .iter()
-        .map(|(_, ty)| ty.codegen_repr())
-        .collect();
+    let arg_types = wrapper_arg_types(wrapper);
     let slot_count = arg_types.len().max(1);
     let frame_size = align16(slot_count * 16 + 48);
     let saved_fiber_offset = slot_count * 16 + 16;

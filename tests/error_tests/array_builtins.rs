@@ -394,10 +394,10 @@ fn test_error_static_property_array_push_requires_array() {
 }
 
 #[test]
-fn test_error_array_literal_rejects_unrelated_object_types() {
-    expect_error(
-        "<?php class Dog {} class Car {} $items = [new Dog(), new Car()];",
-        "Array element type mismatch",
+fn test_indexed_array_unrelated_object_values_widen_to_mixed() {
+    assert!(
+        check_source("<?php class Dog {} class Car {} $items = [new Dog(), new Car()];").is_ok(),
+        "heterogeneous indexed-array values should widen to mixed",
     );
 }
 

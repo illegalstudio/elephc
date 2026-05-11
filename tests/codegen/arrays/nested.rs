@@ -99,6 +99,52 @@ echo count($names);
 }
 
 #[test]
+fn test_array_column_mixed_row_values() {
+    let out = compile_and_run(
+        r#"<?php
+$users = [
+    ["name" => "Ada", "score" => 10],
+    ["name" => "Linus", "score" => 12],
+    ["name" => "Grace", "score" => 8],
+];
+$names = array_column($users, "name");
+$scores = array_column($users, "score");
+foreach ($names as $name) {
+    echo $name . " ";
+}
+echo "|";
+foreach ($scores as $score) {
+    echo $score . " ";
+}
+"#,
+    );
+    assert_eq!(out, "Ada Linus Grace |10 12 8 ");
+}
+
+#[test]
+fn test_array_column_mixed_row_values_balances_gc_stats() {
+    let baseline = compile_and_run_with_gc_stats("<?php");
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$users = [
+    ["name" => "Ada", "score" => 10],
+    ["name" => "Linus", "score" => 12],
+    ["name" => "Grace", "score" => 8],
+];
+$names = array_column($users, "name");
+$scores = array_column($users, "score");
+unset($names);
+unset($scores);
+unset($users);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs - baseline_allocs, frees - baseline_frees);
+}
+
+#[test]
 fn test_gc_array_column_borrowed_array_survives_source_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -115,4 +161,3 @@ echo $first[1] . "|" . $second[0];
     );
     assert_eq!(out, "5|6");
 }
-

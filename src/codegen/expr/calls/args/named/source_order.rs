@@ -273,12 +273,17 @@ fn emit_source_order_named_spread_call_args(
             call_args::PlannedRegularArg::SpreadElement {
                 prefix_element_idx,
                 default,
+                guaranteed_present,
                 ..
             } => {
                 slot_sources.push(Some(FinalArgSource::PrefixElement {
                     prefix_temp_idx,
                     element_idx: *prefix_element_idx,
-                    default: default.clone(),
+                    default: if *guaranteed_present {
+                        None
+                    } else {
+                        default.clone()
+                    },
                 }));
             }
             call_args::PlannedRegularArg::Default(default) => {

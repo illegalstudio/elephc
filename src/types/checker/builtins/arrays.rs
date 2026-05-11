@@ -120,10 +120,8 @@ pub(super) fn check_builtin(
             }
             let arr_ty = checker.infer_type(&args[0], env)?;
             let val_ty = checker.infer_type(&args[1], env)?;
-            if let PhpType::Array(elem_ty) = arr_ty {
-                if *elem_ty != val_ty {
-                    return Err(CompileError::new(span, "array_push() type mismatch"));
-                }
+            if let PhpType::Array(_) = arr_ty {
+                let _ = val_ty;
             } else {
                 return Err(CompileError::new(
                     span,

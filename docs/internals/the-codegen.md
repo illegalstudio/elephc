@@ -760,7 +760,7 @@ foreach ($arr as $v) { body }
 For indexed arrays:
 
 1. Save array pointer, length, and index counter on the stack (3 × 16-byte slots)
-2. Loop: load element at current index, store to `$v`, and classify heap-backed loop variables as borrowed aliases of the iterated container
+2. Loop: load element at current index, unbox through the runtime `value_type` tag when the static element type is `Mixed`, store to `$v`, and classify heap-backed loop variables as borrowed aliases of the iterated container
 3. Branch back to condition check
 4. Cleanup: deallocate the 48 bytes
 

@@ -111,6 +111,12 @@ pub(crate) fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
     if a == b {
         return a.clone();
     }
+    if *a == PhpType::Never {
+        return b.clone();
+    }
+    if *b == PhpType::Never {
+        return a.clone();
+    }
     if *a == PhpType::Str || *b == PhpType::Str {
         return PhpType::Str;
     }
@@ -261,7 +267,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             let mut elem_ty = elems
                 .first()
                 .map(infer_expr_type_syntactic)
-                .unwrap_or(PhpType::Mixed);
+                .unwrap_or(PhpType::Never);
             for elem in elems.iter().skip(1) {
                 elem_ty = wider_type_syntactic(&elem_ty, &infer_expr_type_syntactic(elem));
             }

@@ -270,22 +270,16 @@ pub(crate) fn prepare_call_args(
     args_exprs: &[Expr],
     regular_param_count: usize,
 ) -> PreparedCallArgs {
+    debug_assert!(sig.is_none() || !has_named_args(args_exprs));
+
     let is_variadic = sig.map(|s| s.variadic.is_some()).unwrap_or(false);
-    let normalized = sig
-        .map(|sig| normalize_named_call_args_with_checks(sig, args_exprs, regular_param_count))
-        .unwrap_or_else(|| NormalizedCallArgs {
-            args: args_exprs.to_vec(),
-            spread_length_checks: Vec::new(),
-        });
-    let spread_length_checks = normalized.spread_length_checks;
-    let normalized_args = normalized.args;
 
     let mut regular_args = Vec::new();
     let mut variadic_args = Vec::new();
     let mut spread_arg = None;
     let mut spread_at_index = 0usize;
 
-    for (idx, arg) in normalized_args.iter().enumerate() {
+    for (idx, arg) in args_exprs.iter().enumerate() {
         if let ExprKind::Spread(inner) = &arg.kind {
             spread_arg = Some((**inner).clone());
             spread_at_index = regular_args.len();
@@ -316,6 +310,5 @@ pub(crate) fn prepare_call_args(
         regular_param_count,
         is_variadic,
         spread_into_named,
-        spread_length_checks,
     }
 }

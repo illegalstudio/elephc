@@ -54,7 +54,6 @@ pub(crate) struct PreparedCallArgs {
     pub(crate) regular_param_count: usize,
     pub(crate) is_variadic: bool,
     pub(crate) spread_into_named: bool,
-    pub(crate) spread_length_checks: Vec<SpreadBoundsCheck>,
 }
 
 pub(crate) struct EmittedCallArgs {

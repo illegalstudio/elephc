@@ -314,10 +314,10 @@ The static type system tracks these runtime shapes at compile time:
 - **Void / null** — null sentinel value, coerces to 0/""
 - **Never** — non-returning function/method/closure return type
 - **Iterable** — type-erased array / `Traversable` pseudo-type
-- **Array** — indexed arrays with inferred element type
+- **Array** — indexed arrays with inferred element type; heterogeneous payloads widen to boxed `Mixed`
 - **AssocArray** — associative arrays with key/value types
 - **Buffer** — fixed-size contiguous `buffer<T>` storage for hot-path values
-- **Mixed** — boxed runtime-tagged payload used for heterogeneous assoc-array values and user-facing `mixed` hints
+- **Mixed** — boxed runtime-tagged payload used for heterogeneous array values, union storage, and user-facing `mixed` hints
 - **Callable** — closures and callable function references
 - **Object** — heap-allocated class instances
 - **Packed** — nominal packed-record metadata used with pointers and buffers

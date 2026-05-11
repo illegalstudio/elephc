@@ -39,7 +39,7 @@ pub(super) fn check_array_assign(
         if **elem_ty != val_ty {
             let merged_ty = checker
                 .merge_array_element_type(elem_ty, &val_ty)
-                .unwrap_or(val_ty);
+                .unwrap_or(PhpType::Mixed);
             env.insert(array.to_string(), PhpType::Array(Box::new(merged_ty)));
         }
     } else if let PhpType::AssocArray {
@@ -105,7 +105,7 @@ pub(super) fn check_array_push(
         if **elem_ty != val_ty {
             let merged_ty = checker
                 .merge_array_element_type(elem_ty, &val_ty)
-                .unwrap_or(val_ty);
+                .unwrap_or(PhpType::Mixed);
             env.insert(array.to_string(), PhpType::Array(Box::new(merged_ty)));
         }
     } else if matches!(arr_ty, PhpType::Buffer(_)) {

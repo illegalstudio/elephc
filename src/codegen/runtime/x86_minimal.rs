@@ -113,6 +113,7 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_array_push_int(emitter);
     arrays::emit_array_push_refcounted(emitter);
     arrays::emit_array_push_str(emitter);
+    arrays::emit_array_to_mixed(emitter);
     arrays::emit_array_union(emitter);
     arrays::emit_array_merge_into(emitter);
     arrays::emit_array_merge_into_refcounted(emitter);
@@ -170,6 +171,7 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_array_key_exists(emitter);
     arrays::emit_array_search(emitter);
     arrays::emit_array_column(emitter);
+    arrays::emit_array_column_mixed(emitter);
     arrays::emit_array_column_ref(emitter);
     arrays::emit_array_column_str(emitter);
     arrays::emit_mixed_is_empty(emitter);
@@ -374,6 +376,7 @@ mod tests {
         assert!(asm.contains("__rt_array_fill_keys:\n"));
         assert!(asm.contains("__rt_array_fill_keys_refcounted:\n"));
         assert!(asm.contains("__rt_array_column:\n"));
+        assert!(asm.contains("__rt_array_column_mixed:\n"));
         assert!(asm.contains("__rt_array_column_ref:\n"));
         assert!(asm.contains("__rt_array_column_str:\n"));
         assert!(asm.contains("__rt_mixed_is_empty:\n"));

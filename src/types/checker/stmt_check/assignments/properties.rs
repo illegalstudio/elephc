@@ -370,7 +370,7 @@ fn updated_array_property_push_type(
             } else {
                 let merged_ty = checker
                     .merge_array_element_type(elem_ty, val_ty)
-                    .unwrap_or_else(|| val_ty.clone());
+                    .unwrap_or(PhpType::Mixed);
                 Ok(PhpType::Array(Box::new(merged_ty)))
             }
         }
@@ -412,7 +412,7 @@ fn updated_array_property_assign_type(
             } else {
                 let merged_ty = checker
                     .merge_array_element_type(elem_ty, val_ty)
-                    .unwrap_or_else(|| val_ty.clone());
+                    .unwrap_or(PhpType::Mixed);
                 Ok(PhpType::Array(Box::new(merged_ty)))
             }
         }

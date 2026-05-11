@@ -24,6 +24,7 @@ pub(super) struct IndexedAssignState {
     pub(super) val_ty: PhpType,
     pub(super) effective_store_ty: PhpType,
     pub(super) stores_refcounted_pointer: bool,
+    pub(super) converted_to_mixed: bool,
 }
 
 pub(super) fn prepare_indexed_array_assign(
@@ -57,7 +58,18 @@ pub(super) fn prepare_indexed_array_assign(
     let mut val_ty = emit_expr(value, emitter, ctx, data);
     let boxed_iterable =
         crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut val_ty);
-    if matches!(val_ty, PhpType::Str) {
+    let effective_store_ty =
+        effective_indexed_store_type(&target.elem_ty, &val_ty, ctx, target.is_ref);
+    let converted_to_mixed =
+        matches!(effective_store_ty, PhpType::Mixed) && !matches!(target.elem_ty, PhpType::Mixed);
+    if matches!(effective_store_ty, PhpType::Mixed)
+        && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
+    {
+        crate::codegen::emit_box_current_expr_value_as_mixed_for_container(
+            emitter, value, &val_ty,
+        );
+        val_ty = PhpType::Mixed;
+    } else if matches!(val_ty, PhpType::Str) {
         abi::emit_call_label(emitter, "__rt_str_persist");                      // persist transient string results before storing them in indexed-array slots
     } else if !boxed_iterable {
         helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
@@ -74,13 +86,6 @@ pub(super) fn prepare_indexed_array_assign(
             emitter.instruction("str x0, [sp, #-16]!");                         // preserve scalar or heap pointer value across growth helpers
         }
     }
-    let effective_store_ty = if matches!(target.elem_ty, PhpType::Mixed) {
-        PhpType::Mixed
-    } else if target.elem_ty != val_ty {
-        val_ty.clone()
-    } else {
-        target.elem_ty.clone()
-    };
     if effective_store_ty != target.elem_ty {
         let updated_ty = PhpType::Array(Box::new(effective_store_ty.clone()));
         ctx.update_var_type_and_ownership(
@@ -117,6 +122,25 @@ pub(super) fn prepare_indexed_array_assign(
     } else {
         abi::store_at_offset_scratch(emitter, "x10", target.offset, "x14");          // save possibly-grown array pointer (x14 scratch avoids clobbering x9)
     }
+    if converted_to_mixed {
+        emitter.instruction("str x9, [sp, #-16]!");                             // preserve the target index across mixed-array conversion
+        emitter.instruction("mov x0, x10");                                     // pass the unique indexed-array pointer to the mixed conversion helper
+        abi::emit_load_int_immediate(
+            emitter,
+            "x1",
+            helpers::indexed_array_runtime_value_tag(&target.elem_ty),
+        );
+        abi::emit_call_label(emitter, "__rt_array_to_mixed");                   // box existing typed slots before storing a heterogeneous value
+        emitter.instruction("mov x10, x0");                                     // keep the converted indexed-array pointer in the assignment array register
+        emitter.instruction("ldr x9, [sp], #16");                               // restore the target index after conversion
+        emitter.instruction("ldr x11, [x10]");                                  // reload logical length after conversion clobbered caller-saved registers
+        if target.is_ref {
+            abi::load_at_offset_scratch(emitter, "x13", target.offset, "x14");       // reload the by-reference slot for the converted array pointer
+            emitter.instruction("str x10, [x13]");                              // store the converted array pointer through the ref
+        } else {
+            abi::store_at_offset_scratch(emitter, "x10", target.offset, "x14");      // save the converted array pointer in the local slot
+        }
+    }
     match &val_ty {
         PhpType::Str => {
             emitter.instruction("ldp x1, x2, [sp], #16");                       // restore string pointer/length after growth helpers
@@ -134,6 +158,7 @@ pub(super) fn prepare_indexed_array_assign(
         val_ty,
         effective_store_ty,
         stores_refcounted_pointer,
+        converted_to_mixed,
     }
 }
 
@@ -165,7 +190,18 @@ fn prepare_indexed_array_assign_linux_x86_64(
     let mut val_ty = emit_expr(value, emitter, ctx, data);
     let boxed_iterable =
         crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut val_ty);
-    if matches!(val_ty, PhpType::Str) {
+    let effective_store_ty =
+        effective_indexed_store_type(&target.elem_ty, &val_ty, ctx, target.is_ref);
+    let converted_to_mixed =
+        matches!(effective_store_ty, PhpType::Mixed) && !matches!(target.elem_ty, PhpType::Mixed);
+    if matches!(effective_store_ty, PhpType::Mixed)
+        && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
+    {
+        crate::codegen::emit_box_current_expr_value_as_mixed_for_container(
+            emitter, value, &val_ty,
+        );
+        val_ty = PhpType::Mixed;
+    } else if matches!(val_ty, PhpType::Str) {
         abi::emit_call_label(emitter, "__rt_str_persist");                      // persist transient string results before storing them in indexed-array slots
     } else if !boxed_iterable {
         helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
@@ -181,13 +217,6 @@ fn prepare_indexed_array_assign_linux_x86_64(
             abi::emit_push_reg(emitter, "rax");                                   // preserve the scalar or heap-pointer payload across indexed-array growth helpers
         }
     }
-    let effective_store_ty = if matches!(target.elem_ty, PhpType::Mixed) {
-        PhpType::Mixed
-    } else if target.elem_ty != val_ty {
-        val_ty.clone()
-    } else {
-        target.elem_ty.clone()
-    };
     if effective_store_ty != target.elem_ty {
         let updated_ty = PhpType::Array(Box::new(effective_store_ty.clone()));
         ctx.update_var_type_and_ownership(
@@ -222,6 +251,25 @@ fn prepare_indexed_array_assign_linux_x86_64(
         abi::store_at_offset(emitter, "r10", target.offset);                       // save the possibly-grown indexed-array pointer back into the local slot
     }
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // reload the indexed-array logical length after growth so later phases can detect overwrites and extensions
+    if converted_to_mixed {
+        abi::emit_push_reg(emitter, "r9");                                      // preserve the target index across mixed-array conversion
+        emitter.instruction("mov rdi, r10");                                    // pass the unique indexed-array pointer to the mixed conversion helper
+        abi::emit_load_int_immediate(
+            emitter,
+            "rsi",
+            helpers::indexed_array_runtime_value_tag(&target.elem_ty),
+        );
+        abi::emit_call_label(emitter, "__rt_array_to_mixed");                   // box existing typed slots before storing a heterogeneous value
+        emitter.instruction("mov r10, rax");                                    // keep the converted indexed-array pointer in the assignment array register
+        abi::emit_pop_reg(emitter, "r9");                                       // restore the target index after conversion
+        if target.is_ref {
+            abi::load_at_offset(emitter, "r11", target.offset);                     // reload the by-reference slot for the converted array pointer
+            abi::emit_store_to_address(emitter, "r10", "r11", 0);                 // store the converted array pointer through the ref
+        } else {
+            abi::store_at_offset(emitter, "r10", target.offset);                   // save the converted array pointer in the local slot
+        }
+        emitter.instruction("mov r11, QWORD PTR [r10]");                        // reload logical length after conversion clobbered caller-saved registers
+    }
     match &val_ty {
         PhpType::Str => {
             abi::emit_pop_reg_pair(emitter, "rax", "rdx");                       // restore the assigned string payload after the growth helpers complete
@@ -238,5 +286,42 @@ fn prepare_indexed_array_assign_linux_x86_64(
         val_ty,
         effective_store_ty,
         stores_refcounted_pointer,
+        converted_to_mixed,
+    }
+}
+
+fn effective_indexed_store_type(
+    existing: &PhpType,
+    value: &PhpType,
+    ctx: &Context,
+    generic_mixed_passthrough: bool,
+) -> PhpType {
+    if generic_mixed_passthrough
+        && matches!(existing, PhpType::Mixed)
+        && matches!(
+            value,
+            PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable
+        )
+    {
+        return value.clone();
+    }
+    if matches!(existing, PhpType::Never) {
+        return if matches!(value, PhpType::Union(_)) {
+            PhpType::Mixed
+        } else {
+            value.clone()
+        };
+    }
+    if matches!(value, PhpType::Never) {
+        return existing.clone();
+    }
+    if matches!(existing, PhpType::Mixed) || matches!(value, PhpType::Mixed | PhpType::Union(_)) {
+        PhpType::Mixed
+    } else if existing == value {
+        existing.clone()
+    } else if let (PhpType::Object(left), PhpType::Object(right)) = (existing, value) {
+        ctx.common_object_type(left, right).unwrap_or(PhpType::Mixed)
+    } else {
+        PhpType::Mixed
     }
 }

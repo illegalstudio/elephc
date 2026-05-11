@@ -23,10 +23,6 @@ pub(crate) fn visible_param_count(param_count: usize, variadic: bool) -> usize {
     param_count + usize::from(variadic)
 }
 
-pub(crate) fn visible_param_count_from_sig(sig: &FunctionSig, capture_count: usize) -> usize {
-    sig.params.len().saturating_sub(capture_count)
-}
-
 pub(crate) fn adapt_entry_sig(
     sig: &mut FunctionSig,
     visible_param_count: usize,

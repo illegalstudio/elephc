@@ -114,6 +114,15 @@ $picked = [0];
 [$picked[0], $picked[]] = [7, 8];
 echo "Targets: " . $picked[0] . ", " . $picked[1] . "\n";
 
+// Heterogeneous indexed arrays widen to mixed payloads
+$mixed = [1, "two"];
+$mixed[] = true;
+echo "Mixed indexed: ";
+foreach ($mixed as $value) {
+    echo $value . " ";
+}
+echo "\n";
+
 // array_column on associative rows
 $users = [
     ["name" => "Ada", "score" => 10],

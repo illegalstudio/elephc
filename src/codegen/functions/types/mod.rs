@@ -31,10 +31,6 @@ pub(crate) use objects::singular_object_class;
 pub(crate) use type_expr::{codegen_declared_type, codegen_static_type};
 use type_expr::resolve_buffer_element_type;
 
-pub fn infer_local_type_pub(expr: &Expr, sig: &FunctionSig) -> PhpType {
-    infer_local_type(expr, sig, None)
-}
-
 pub fn infer_local_type_with_ctx(expr: &Expr, sig: &FunctionSig, ctx: &Context) -> PhpType {
     infer_local_type(expr, sig, Some(ctx))
 }
@@ -78,11 +74,15 @@ pub(super) fn infer_local_type(
             PhpType::Int
         }
         ExprKind::ArrayLiteral(elems) => {
-            let elem_ty = if elems.is_empty() {
-                PhpType::Int
-            } else {
-                mixed_container_value_type(infer_local_type(&elems[0], sig, ctx))
-            };
+            let mut elem_ty = PhpType::Never;
+            for (i, elem) in elems.iter().enumerate() {
+                let next_ty = indexed_literal_element_type(elem, sig, ctx);
+                if i == 0 {
+                    elem_ty = next_ty;
+                } else {
+                    elem_ty = merge_indexed_literal_element_type(&elem_ty, &next_ty, ctx);
+                }
+            }
             PhpType::Array(Box::new(elem_ty))
         }
         ExprKind::ArrayLiteralAssoc(pairs) => {
@@ -317,4 +317,45 @@ pub(super) fn infer_local_type(
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),
         _ => PhpType::Int,
     }
+}
+
+fn indexed_literal_element_type(
+    elem: &Expr,
+    sig: &FunctionSig,
+    ctx: Option<&Context>,
+) -> PhpType {
+    match &elem.kind {
+        ExprKind::Spread(inner) => match infer_local_type(inner, sig, ctx) {
+            PhpType::Array(inner_ty) => mixed_container_value_type(*inner_ty),
+            _ => PhpType::Mixed,
+        },
+        _ => mixed_container_value_type(infer_local_type(elem, sig, ctx)),
+    }
+}
+
+fn merge_indexed_literal_element_type(
+    existing: &PhpType,
+    next: &PhpType,
+    ctx: Option<&Context>,
+) -> PhpType {
+    if existing == next {
+        return existing.clone();
+    }
+    if matches!(existing, PhpType::Never) {
+        return next.clone();
+    }
+    if matches!(next, PhpType::Never) {
+        return existing.clone();
+    }
+    if matches!(existing, PhpType::Mixed | PhpType::Union(_))
+        || matches!(next, PhpType::Mixed | PhpType::Union(_))
+    {
+        return PhpType::Mixed;
+    }
+    if let (Some(ctx), PhpType::Object(left), PhpType::Object(right)) = (ctx, existing, next) {
+        return ctx
+            .common_object_type(left, right)
+            .unwrap_or(PhpType::Mixed);
+    }
+    PhpType::Mixed
 }
