@@ -199,7 +199,9 @@ fn emit_mixed_array_literal(
         let boxed_iterable =
             crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut ty);
         if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-            crate::codegen::emit_box_current_value_as_mixed(emitter, &ty);
+            crate::codegen::emit_box_current_expr_value_as_mixed_for_container(
+                emitter, elem, &ty,
+            );
             ty = PhpType::Mixed;
         } else if !boxed_iterable {
             retain_borrowed_heap_arg(emitter, elem, &ty);
@@ -233,7 +235,9 @@ fn emit_mixed_array_literal_linux_x86_64(
         let boxed_iterable =
             crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut ty);
         if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-            crate::codegen::emit_box_current_value_as_mixed(emitter, &ty);
+            crate::codegen::emit_box_current_expr_value_as_mixed_for_container(
+                emitter, elem, &ty,
+            );
             ty = PhpType::Mixed;
         } else if !boxed_iterable {
             retain_borrowed_heap_arg(emitter, elem, &ty);

@@ -82,3 +82,50 @@ echo $items[0] . "|" . $items[1];
     );
     assert_eq!(out, "1|two");
 }
+
+#[test]
+fn test_heterogeneous_indexed_array_push_balances_gc_stats() {
+    let baseline = compile_and_run_with_gc_stats("<?php");
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$items = [1];
+$items[] = "two";
+unset($items);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs - baseline_allocs, frees - baseline_frees);
+}
+
+#[test]
+fn test_heterogeneous_indexed_array_push_builtin_balances_gc_stats() {
+    let baseline = compile_and_run_with_gc_stats("<?php");
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$items = [1];
+array_push($items, "two");
+unset($items);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs - baseline_allocs, frees - baseline_frees);
+}
+
+#[test]
+fn test_heterogeneous_indexed_array_nested_literal_balances_gc_stats() {
+    let baseline = compile_and_run_with_gc_stats("<?php");
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$items = [1, [2]];
+unset($items);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs - baseline_allocs, frees - baseline_frees);
+}

@@ -65,7 +65,9 @@ pub(super) fn prepare_indexed_array_assign(
     if matches!(effective_store_ty, PhpType::Mixed)
         && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
     {
-        crate::codegen::emit_box_current_value_as_mixed(emitter, &val_ty);
+        crate::codegen::emit_box_current_expr_value_as_mixed_for_container(
+            emitter, value, &val_ty,
+        );
         val_ty = PhpType::Mixed;
     } else if matches!(val_ty, PhpType::Str) {
         abi::emit_call_label(emitter, "__rt_str_persist");                      // persist transient string results before storing them in indexed-array slots
@@ -195,7 +197,9 @@ fn prepare_indexed_array_assign_linux_x86_64(
     if matches!(effective_store_ty, PhpType::Mixed)
         && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
     {
-        crate::codegen::emit_box_current_value_as_mixed(emitter, &val_ty);
+        crate::codegen::emit_box_current_expr_value_as_mixed_for_container(
+            emitter, value, &val_ty,
+        );
         val_ty = PhpType::Mixed;
     } else if matches!(val_ty, PhpType::Str) {
         abi::emit_call_label(emitter, "__rt_str_persist");                      // persist transient string results before storing them in indexed-array slots

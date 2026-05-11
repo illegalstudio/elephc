@@ -10,10 +10,10 @@
 
 use super::store_mutating_arg::emit_store_mutating_arg;
 use crate::codegen::abi;
-use crate::codegen::context::Context;
+use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
+use crate::codegen::expr::{emit_expr, expr_result_heap_ownership};
 use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
@@ -35,20 +35,36 @@ pub fn emit(
     // -- save array pointer, evaluate value to push --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
     let elem_ty = indexed_array_elem_type(&arr_ty);
+    let source_owned = expr_result_heap_ownership(&args[1]) == HeapOwnership::Owned;
     let mut val_ty = emit_expr(&args[1], emitter, ctx, data);
-    let _boxed_iterable =
+    let boxed_iterable =
         crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut val_ty);
     let effective_elem_ty = effective_indexed_push_type(&elem_ty, &val_ty, ctx);
     let converted_to_mixed =
         matches!(effective_elem_ty, PhpType::Mixed) && !matches!(elem_ty, PhpType::Mixed);
+    let mut boxed_value_for_mixed = false;
     if matches!(effective_elem_ty, PhpType::Mixed)
         && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
     {
-        crate::codegen::emit_box_current_value_as_mixed(emitter, &val_ty);
+        crate::codegen::emit_box_current_expr_value_as_mixed_for_container(
+            emitter, &args[1], &val_ty,
+        );
         val_ty = PhpType::Mixed;
+        boxed_value_for_mixed = true;
     } else if matches!(effective_elem_ty, PhpType::Mixed) && matches!(val_ty, PhpType::Union(_)) {
         val_ty = PhpType::Mixed;
     }
+    let release_after_refcounted_push = boxed_value_for_mixed
+        || boxed_iterable
+        || (source_owned
+            && matches!(
+                val_ty,
+                PhpType::Mixed
+                    | PhpType::Union(_)
+                    | PhpType::Array(_)
+                    | PhpType::AssocArray { .. }
+                    | PhpType::Object(_)
+            ));
     emitter.instruction("ldr x9, [sp], #16");                                   // pop saved array pointer into x9
     if elem_ty != effective_elem_ty {
         update_array_push_arg_type(&args[0], &effective_elem_ty, ctx);
@@ -85,9 +101,15 @@ pub fn emit(
         }
         PhpType::Mixed | PhpType::Union(_) | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
             // -- push nested refcounted pointer onto array --
+            if release_after_refcounted_push {
+                abi::emit_push_reg(emitter, "x0");
+            }
             emitter.instruction("mov x1, x0");                                  // move pointer value to x1
             emitter.instruction("mov x0, x9");                                  // move outer array pointer to x0
             emitter.instruction("bl __rt_array_push_refcounted");               // append retained pointer and stamp array metadata
+            if release_after_refcounted_push {
+                crate::codegen::emit_release_pushed_refcounted_temp_after_array_push(emitter, &val_ty);
+            }
         }
         PhpType::Callable => {
             // -- push callable pointer onto array as a plain 8-byte scalar --
@@ -113,22 +135,36 @@ fn emit_array_push_linux_x86_64(
 ) {
     abi::emit_push_reg(emitter, "rax");                                          // preserve the indexed-array pointer while evaluating the appended value
     let elem_ty = indexed_array_elem_type(arr_ty);
+    let source_owned = expr_result_heap_ownership(&args[1]) == HeapOwnership::Owned;
     let mut val_ty = emit_expr(&args[1], emitter, ctx, data);
     let boxed_iterable =
         crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut val_ty);
     let effective_elem_ty = effective_indexed_push_type(&elem_ty, &val_ty, ctx);
     let converted_to_mixed =
         matches!(effective_elem_ty, PhpType::Mixed) && !matches!(elem_ty, PhpType::Mixed);
+    let mut boxed_value_for_mixed = false;
     if matches!(effective_elem_ty, PhpType::Mixed)
         && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
     {
-        crate::codegen::emit_box_current_value_as_mixed(emitter, &val_ty);
+        crate::codegen::emit_box_current_expr_value_as_mixed_for_container(
+            emitter, &args[1], &val_ty,
+        );
         val_ty = PhpType::Mixed;
+        boxed_value_for_mixed = true;
     } else if matches!(effective_elem_ty, PhpType::Mixed) && matches!(val_ty, PhpType::Union(_)) {
         val_ty = PhpType::Mixed;
-    } else if !boxed_iterable {
-        let _ = boxed_iterable;
     }
+    let release_after_refcounted_push = boxed_value_for_mixed
+        || boxed_iterable
+        || (source_owned
+            && matches!(
+                val_ty,
+                PhpType::Mixed
+                    | PhpType::Union(_)
+                    | PhpType::Array(_)
+                    | PhpType::AssocArray { .. }
+                    | PhpType::Object(_)
+            ));
     abi::emit_pop_reg(emitter, "r11");                                           // restore the indexed-array pointer after evaluating the appended value
     if elem_ty != effective_elem_ty {
         update_array_push_arg_type(&args[0], &effective_elem_ty, ctx);
@@ -167,9 +203,15 @@ fn emit_array_push_linux_x86_64(
             abi::emit_call_label(emitter, "__rt_array_push_int");                // append the callable pointer bits as a plain scalar slot
         }
         PhpType::Mixed | PhpType::Union(_) | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            if release_after_refcounted_push {
+                abi::emit_push_reg(emitter, "rax");
+            }
             emitter.instruction("mov rsi, rax");                                // place the retained refcounted payload pointer in the x86_64 runtime child register
             emitter.instruction("mov rdi, r11");                                // place the indexed-array pointer in the x86_64 runtime receiver register
             abi::emit_call_label(emitter, "__rt_array_push_refcounted");         // append the retained heap payload and stamp the indexed-array value_type metadata
+            if release_after_refcounted_push {
+                crate::codegen::emit_release_pushed_refcounted_temp_after_array_push(emitter, &val_ty);
+            }
         }
         _ => {}
     }
