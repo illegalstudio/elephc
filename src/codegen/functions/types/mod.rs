@@ -31,10 +31,6 @@ pub(crate) use objects::singular_object_class;
 pub(crate) use type_expr::{codegen_declared_type, codegen_static_type};
 use type_expr::resolve_buffer_element_type;
 
-pub fn infer_local_type_pub(expr: &Expr, sig: &FunctionSig) -> PhpType {
-    infer_local_type(expr, sig, None)
-}
-
 pub fn infer_local_type_with_ctx(expr: &Expr, sig: &FunctionSig, ctx: &Context) -> PhpType {
     infer_local_type(expr, sig, Some(ctx))
 }

@@ -77,6 +77,7 @@ pub struct DeferredClosure {
     pub body: Vec<Stmt>,
     pub sig: FunctionSig,
     pub captures: Vec<(String, PhpType)>,
+    pub hidden_params: Vec<(String, PhpType)>,
     pub current_class: Option<String>,
 }
 
@@ -85,6 +86,7 @@ pub struct DeferredFiberWrapper {
     pub label: String,
     pub sig: FunctionSig,
     pub visible_param_count: usize,
+    pub hidden_arg_types: Vec<PhpType>,
 }
 
 /// A callback wrapper that adapts callback builtins to closures with hidden captures.

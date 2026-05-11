@@ -101,7 +101,7 @@ pub fn emit(
     }
 
     if let Some(sig) = &sig {
-        let visible_param_count = sig.params.len().saturating_sub(captures.len());
+        let visible_param_count = sig.params.len();
         let regular_param_count = if sig.variadic.is_some() {
             visible_param_count.saturating_sub(1)
         } else {

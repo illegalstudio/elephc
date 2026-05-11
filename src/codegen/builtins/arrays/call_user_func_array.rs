@@ -134,7 +134,7 @@ pub fn emit(
 
     // -- extract elements from array and push them as regular call arguments --
     let mut arg_types = Vec::new();
-    let visible_param_count = sig.params.len().saturating_sub(captures.len());
+    let visible_param_count = sig.params.len();
     let regular_param_count = if sig.variadic.is_some() {
         visible_param_count.saturating_sub(1)
     } else {

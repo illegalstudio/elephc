@@ -198,6 +198,7 @@ pub(super) fn emit_deferred_closures(
                 data,
                 &closure.label,
                 &closure.sig,
+                &closure.hidden_params,
                 &closure.body,
                 closure.current_class.as_deref(),
                 &ctx.functions,

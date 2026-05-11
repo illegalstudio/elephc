@@ -74,20 +74,6 @@ pub(super) fn first_class_callable_sig(target: &CallableTarget, ctx: &Context) -
     Some(callable_wrapper_sig(&sig))
 }
 
-fn append_hidden_params_to_sig(
-    sig: &FunctionSig,
-    hidden_params: &[(String, PhpType)],
-) -> FunctionSig {
-    let mut captured_sig = sig.clone();
-    for (name, ty) in hidden_params {
-        captured_sig.params.push((name.clone(), ty.clone()));
-        captured_sig.defaults.push(None);
-        captured_sig.ref_params.push(false);
-        captured_sig.declared_params.push(true);
-    }
-    captured_sig
-}
-
 fn unique_hidden_param(base: &str, sig: &FunctionSig) -> String {
     if !sig.params.iter().any(|(name, _)| name == base) {
         return base.to_string();
@@ -270,14 +256,14 @@ pub(super) fn emit_first_class_callable(
     let wrapper_label = ctx.next_label("fcc");
     let param_names: Vec<String> = sig.params.iter().map(|(name, _)| name.clone()).collect();
     let body = wrapper_body(&normalized_target, &sig);
-    let deferred_sig = append_hidden_params_to_sig(&sig, &hidden_params);
 
     ctx.deferred_closures.push(DeferredClosure {
         label: wrapper_label.clone(),
         params: param_names,
         body,
-        sig: deferred_sig,
+        sig,
         captures,
+        hidden_params,
         current_class: ctx.current_class.clone(),
     });
 
