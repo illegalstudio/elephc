@@ -228,7 +228,12 @@ impl Checker {
                 }
                 let normalized_args =
                     self.normalize_named_call_args(&base_sig, args, span, "first-class callable")?;
-                self.check_function_call(name.as_str(), &normalized_args, span, env)?;
+                self.check_function_call_pre_normalized(
+                    name.as_str(),
+                    &normalized_args,
+                    span,
+                    env,
+                )?;
                 self.specialize_untyped_function_params(name.as_str(), &normalized_args, env)?;
             }
             CallableTarget::StaticMethod { receiver, method } => {
