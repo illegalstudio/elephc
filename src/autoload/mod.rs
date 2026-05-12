@@ -14,6 +14,7 @@ mod index;
 mod interpret;
 mod registry;
 mod rule;
+mod spl_data;
 mod walk;
 
 use std::collections::HashSet;

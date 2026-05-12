@@ -41,7 +41,11 @@ impl Registry {
         let (program, rules, warnings) = collect_register_calls(program);
         // Synthesise alias subclasses after closure collection so the
         // alias decls don't get confused with autoloader sources.
-        let program = super::alias::collect_aliases(program);
+        let mut program = super::alias::collect_aliases(program);
+        // Inject SPL data-structure classes so user code can `new SplStack()`
+        // etc. without explicit declarations. These go through the regular
+        // pipeline (resolver, name resolver, type checker, codegen).
+        program.extend(super::spl_data::synthesised_class_decls());
         let registry = Registry {
             psr4,
             rules,

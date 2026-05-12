@@ -10,6 +10,8 @@
 
 #[path = "spl/autoload.rs"]
 mod autoload;
+#[path = "spl/data_structures.rs"]
+mod data_structures;
 #[path = "spl/interfaces.rs"]
 mod interfaces;
 #[path = "spl/redirects.rs"]
