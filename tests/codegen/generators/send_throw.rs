@@ -33,6 +33,44 @@ echo $g->current();
 }
 
 #[test]
+fn test_generator_bare_yield_assignment_consumes_send_value() {
+    let out = compile_and_run(
+        r#"<?php
+function gen() {
+    $x = yield;
+    yield $x;
+}
+$g = gen();
+$g->rewind();
+$g->send(7);
+echo $g->current();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_generator_send_value_is_cleared_after_plain_resume() {
+    let out = compile_and_run(
+        r#"<?php
+function gen() {
+    yield 1;
+    yield 2;
+    $x = yield 3;
+    yield $x;
+}
+$g = gen();
+$g->rewind();
+$g->send(99);
+$g->next();
+$g->next();
+echo $g->current();
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
+#[test]
 fn test_generator_throw_propagates_to_caller_catch() {
     // `Generator::throw($exc)` sets TERMINATED, publishes the exception
     // in the global slot, and tail-calls the unwinder; the catch in the

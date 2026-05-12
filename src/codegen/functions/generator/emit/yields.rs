@@ -28,6 +28,7 @@ use super::values::{
 use super::{slot_offset, ResumeCtx};
 use super::super::model::*;
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 use crate::codegen::runtime::generators::frame as gen_frame;
 
 pub(super) fn emit_yield(
@@ -35,6 +36,7 @@ pub(super) fn emit_yield(
     entry: &YieldEntry,
     state_idx: u32,
     ctx: &mut ResumeCtx,
+    clear_sent_on_resume: bool,
 ) {
     // Each yield overwrites both Mixed-pointer slots in the frame; we
     // refcount-drop the previous occupant so we don't leak a cell per
@@ -47,10 +49,37 @@ pub(super) fn emit_yield(
         emit_box_mixed_source(em, &entry.value);
     });
 
-    emitter.instruction(&format!("mov w10, #{}", state_idx));                   // bump state to this yield's resume index
-    emitter.instruction(&format!("str w10, [x19, #{}]", gen_frame::OFF_STATE_IDX)); // store updated state_idx
-    emitter.instruction(&format!("b {}", ctx.end_label));                       // jump to common epilogue
-    emitter.label(&format!("{}_resume_{}", ctx.label, state_idx));          // resume label for this yield
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov w10, #{}", state_idx));           // bump state to this yield's resume index
+            emitter.instruction(&format!("str w10, [x19, #{}]", gen_frame::OFF_STATE_IDX)); // store updated state_idx
+            emitter.instruction(&format!("b {}", ctx.end_label));               // jump to common epilogue
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov r10d, {}", state_idx));           // bump state to this yield's resume index
+            emitter.instruction(&format!("mov DWORD PTR [r12 + {}], r10d", gen_frame::OFF_STATE_IDX)); // store updated state_idx
+            emitter.instruction(&format!("jmp {}", ctx.end_label));             // jump to common epilogue
+        }
+    }
+    emitter.label(&format!("{}_resume_{}", ctx.label, state_idx));              // resume label for this yield
+    if clear_sent_on_resume {
+        emit_clear_sent_value(emitter);
+    }
+}
+
+fn emit_clear_sent_value(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x0, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // load ignored sent_value pointer
+            emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // clear sent_value before the next resume
+            emitter.instruction("bl __rt_decref_mixed");                        // release the ignored sent_value box (NULL is safe)
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", gen_frame::OFF_SENT_VALUE)); // load ignored sent_value pointer
+            emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_SENT_VALUE)); // clear sent_value before the next resume
+            emitter.instruction("call __rt_decref_mixed");                      // release the ignored sent_value box (NULL is safe)
+        }
+    }
 }
 
 /// Emit the runtime-delegation loop for `yield from <gen_func>(args)`.
@@ -68,6 +97,11 @@ pub(super) fn emit_yield_from_generator(
     state_idx: u32,
     ctx: &mut ResumeCtx,
 ) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_yield_from_generator_x86_64(emitter, source, state_idx, ctx);
+        return;
+    }
+
     let loop_lbl = ctx.fresh_label("yield_from_loop");
     let end_lbl = ctx.fresh_label("yield_from_end");
 
@@ -118,6 +152,7 @@ pub(super) fn emit_yield_from_generator(
     emitter.instruction(&format!("str w10, [x19, #{}]", gen_frame::OFF_STATE_IDX)); // store updated state_idx
     emitter.instruction(&format!("b {}", ctx.end_label));                       // return to the outer caller via the resume epilogue
     emitter.label(&format!("{}_resume_{}", ctx.label, state_idx));          // resume label hit on each subsequent next()
+    emit_clear_sent_value(emitter);
     emitter.instruction(&format!("ldr x0, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); // x0 = inner gen ptr
     emitter.instruction("bl __rt_gen_next");                                    // advance inner one step
     emitter.instruction(&format!("b {}", loop_lbl));                            // loop back to re-check valid()
@@ -125,6 +160,60 @@ pub(super) fn emit_yield_from_generator(
     emitter.label(&end_lbl);
     emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); // clear delegated_iter so future yields don't re-enter the loop
     // Fall through to the caller's continuation of the outer body.
+}
+
+fn emit_yield_from_generator_x86_64(
+    emitter: &mut Emitter,
+    source: &YieldFromSource,
+    state_idx: u32,
+    ctx: &mut ResumeCtx,
+) {
+    let loop_lbl = ctx.fresh_label("yield_from_loop");
+    let end_lbl = ctx.fresh_label("yield_from_end");
+
+    match source {
+        YieldFromSource::Call { fn_name, args } => {
+            emit_int_function_call(emitter, fn_name, args);                     // rax = inner generator pointer
+        }
+        YieldFromSource::IntSlot(idx) => {
+            emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", slot_offset(*idx))); // rax = raw Generator pointer
+        }
+        YieldFromSource::MixedSlot(idx) => {
+            emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", slot_offset(*idx))); // rax = boxed Mixed pointer
+            emitter.instruction("call __rt_mixed_unbox");                       // rdi = unboxed object pointer
+            emitter.instruction("mov rax, rdi");                                // rax = inner generator pointer
+        }
+    }
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], rax", gen_frame::OFF_DELEGATED_ITER)); // store the inner generator handle in the frame
+    emitter.instruction("mov rdi, rax");                                        // pass inner generator to rewind()
+    emitter.instruction("call __rt_gen_rewind");                                // run inner up to its first yield
+
+    emitter.label(&loop_lbl);
+    emitter.instruction(&format!("mov rdi, QWORD PTR [r12 + {}]", gen_frame::OFF_DELEGATED_ITER)); // reload inner pointer for valid()
+    emitter.instruction("call __rt_gen_valid");                                 // rax = 1 if inner has more values, 0 otherwise
+    emitter.instruction("test rax, rax");                                       // check whether the inner generator is exhausted
+    emitter.instruction(&format!("jz {}", end_lbl));                            // inner exhausted -> leave the delegation loop
+
+    emit_replace_mixed_slot(emitter, gen_frame::OFF_LAST_VALUE, |em| {
+        em.instruction(&format!("mov rdi, QWORD PTR [r12 + {}]", gen_frame::OFF_DELEGATED_ITER)); // rdi = inner gen ptr
+        em.instruction("call __rt_gen_current");                                // rax = owned boxed Mixed pointer for the inner's current value
+    });
+    emit_replace_mixed_slot(emitter, gen_frame::OFF_LAST_KEY, |em| {
+        em.instruction(&format!("mov rdi, QWORD PTR [r12 + {}]", gen_frame::OFF_DELEGATED_ITER)); // rdi = inner gen ptr
+        em.instruction("call __rt_gen_key");                                    // rax = owned boxed Mixed pointer for the inner's current key
+    });
+
+    emitter.instruction(&format!("mov r10d, {}", state_idx));                   // mark this yield-from's resume index
+    emitter.instruction(&format!("mov DWORD PTR [r12 + {}], r10d", gen_frame::OFF_STATE_IDX)); // store updated state_idx
+    emitter.instruction(&format!("jmp {}", ctx.end_label));                     // return to the outer caller via the resume epilogue
+    emitter.label(&format!("{}_resume_{}", ctx.label, state_idx));              // resume label hit on each subsequent next()
+    emit_clear_sent_value(emitter);
+    emitter.instruction(&format!("mov rdi, QWORD PTR [r12 + {}]", gen_frame::OFF_DELEGATED_ITER)); // rdi = inner gen ptr
+    emitter.instruction("call __rt_gen_next");                                  // advance inner one step
+    emitter.instruction(&format!("jmp {}", loop_lbl));                          // loop back to re-check valid()
+
+    emitter.label(&end_lbl);
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_DELEGATED_ITER)); // clear delegated_iter so future yields do not re-enter
 }
 
 /// After the resume label of a `YieldAssign` whose LHS is an Int slot,
@@ -135,9 +224,15 @@ pub(super) fn emit_yield_assign_unbox_int(
     local_idx: usize,
     ctx: &mut ResumeCtx,
 ) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_yield_assign_unbox_int_x86_64(emitter, local_idx, ctx);
+        return;
+    }
+
     let null_lbl = ctx.fresh_label("send_null");
     let done_lbl = ctx.fresh_label("send_done");
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // load the boxed sent_value pointer
+    emitter.instruction(&format!("ldr x20, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // load the boxed sent_value pointer
+    emitter.instruction("mov x0, x20");                                         // pass sent_value to the mixed unbox helper
     emitter.instruction(&format!("cbz x0, {}", null_lbl));                      // jump to null path when no send was performed
     emitter.instruction("bl __rt_mixed_unbox");                                 // x1 = unboxed low payload
     emitter.instruction("mov x9, x1");                                          // save the unboxed int across the next branch
@@ -147,6 +242,31 @@ pub(super) fn emit_yield_assign_unbox_int(
     emitter.label(&done_lbl);
     emitter.instruction(&format!("str x9, [x19, #{}]", slot_offset(local_idx))); // store the int into the assignment LHS local
     emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // clear sent_value for the next round
+    emitter.instruction("mov x0, x20");                                         // reload the consumed sent_value box for release
+    emitter.instruction("bl __rt_decref_mixed");                                // release the consumed sent_value box (NULL is safe)
+}
+
+fn emit_yield_assign_unbox_int_x86_64(
+    emitter: &mut Emitter,
+    local_idx: usize,
+    ctx: &mut ResumeCtx,
+) {
+    let null_lbl = ctx.fresh_label("send_null");
+    let done_lbl = ctx.fresh_label("send_done");
+    emitter.instruction(&format!("mov r13, QWORD PTR [r12 + {}]", gen_frame::OFF_SENT_VALUE)); // r13 = boxed sent_value pointer
+    emitter.instruction("mov rax, r13");                                        // pass sent_value to the mixed unbox helper
+    emitter.instruction("test rax, rax");                                       // check whether send() provided a value
+    emitter.instruction(&format!("jz {}", null_lbl));                           // jump to null path when no send was performed
+    emitter.instruction("call __rt_mixed_unbox");                               // rdi = unboxed low payload
+    emitter.instruction("mov r10, rdi");                                        // save the unboxed int across the next branch
+    emitter.instruction(&format!("jmp {}", done_lbl));                          // skip the null default path
+    emitter.label(&null_lbl);
+    emitter.instruction("xor r10, r10");                                        // no sent_value -> assignment receives 0
+    emitter.label(&done_lbl);
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", slot_offset(local_idx))); // store the int into the assignment LHS local
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_SENT_VALUE)); // clear sent_value for the next round
+    emitter.instruction("mov rax, r13");                                        // reload the consumed sent_value box for release
+    emitter.instruction("call __rt_decref_mixed");                              // release the consumed sent_value box (NULL is safe)
 }
 
 /// After the resume label of a `YieldAssign` whose LHS is a Mixed slot,
@@ -160,6 +280,11 @@ pub(super) fn emit_yield_assign_store_mixed(
     local_idx: usize,
     ctx: &mut ResumeCtx,
 ) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_yield_assign_store_mixed_x86_64(emitter, local_idx, ctx);
+        return;
+    }
+
     let off = slot_offset(local_idx);
     let skip = ctx.fresh_label("send_mixed_skip");
     let done = ctx.fresh_label("send_mixed_done");
@@ -173,5 +298,26 @@ pub(super) fn emit_yield_assign_store_mixed(
     emitter.instruction(&format!("b {}", done));
     emitter.label(&skip);
     emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // clear sent_value defensively
+    emitter.label(&done);
+}
+
+fn emit_yield_assign_store_mixed_x86_64(
+    emitter: &mut Emitter,
+    local_idx: usize,
+    ctx: &mut ResumeCtx,
+) {
+    let off = slot_offset(local_idx);
+    let skip = ctx.fresh_label("send_mixed_skip");
+    let done = ctx.fresh_label("send_mixed_done");
+    emitter.instruction(&format!("mov r13, QWORD PTR [r12 + {}]", gen_frame::OFF_SENT_VALUE)); // r13 = boxed sent_value pointer
+    emitter.instruction("test r13, r13");                                       // check whether send() provided a value
+    emitter.instruction(&format!("jz {}", skip));                               // no send_value -> keep slot unchanged
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_SENT_VALUE)); // clear sent_value (slot now owns the refcount)
+    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", off));        // rax = previous slot occupant (or NULL)
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r13", off));        // overwrite slot with the sent pointer
+    emitter.instruction("call __rt_decref_mixed");                              // decref the previous occupant (NULL is safe)
+    emitter.instruction(&format!("jmp {}", done));                              // skip the no-send cleanup path
+    emitter.label(&skip);
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_SENT_VALUE)); // clear sent_value defensively
     emitter.label(&done);
 }

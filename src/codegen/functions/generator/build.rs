@@ -79,6 +79,9 @@ pub(super) fn classify_mixed_expr(
     types: &[SlotType],
     data: &mut DataSection,
 ) -> Option<MixedSource> {
+    if matches!(expr, ExprKind::Null) {
+        return Some(MixedSource::Null);
+    }
     if let ExprKind::StringLiteral(s) = expr {
         let (label, len) = data.add_string(s.as_bytes());
         return Some(MixedSource::Str { label, len });
@@ -265,9 +268,12 @@ fn build_node(
             // `$local = yield <expr>;` — translate as YieldAssign. v1
             // unboxes the int sent_value into the slot, so the slot must
             // be Int-typed.
-            if let ExprKind::Yield { key, value: Some(v) } = &value.kind {
+            if let ExprKind::Yield { key, value } = &value.kind {
                 let local_ty = types.get(idx).copied()?;
-                let yield_value = classify_mixed_expr(&v.kind, slots, types, data)?;
+                let yield_value = match value.as_deref() {
+                    Some(v) => classify_mixed_expr(&v.kind, slots, types, data)?,
+                    None => MixedSource::Null,
+                };
                 let yield_key = match key.as_deref() {
                     None => None,
                     Some(Expr { kind: k, .. }) => Some(classify_mixed_expr(k, slots, types, data)?),
@@ -342,8 +348,11 @@ fn build_node(
                 }
                 None
             }
-            ExprKind::Yield { key, value: Some(v) } => {
-                let value = classify_mixed_expr(&v.kind, slots, types, data)?;
+            ExprKind::Yield { key, value } => {
+                let value = match value.as_deref() {
+                    Some(v) => classify_mixed_expr(&v.kind, slots, types, data)?,
+                    None => MixedSource::Null,
+                };
                 let key = match key.as_deref() {
                     None => None,
                     Some(Expr { kind: k, .. }) => Some(classify_mixed_expr(k, slots, types, data)?),

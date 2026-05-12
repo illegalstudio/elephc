@@ -99,6 +99,23 @@ impl Checker {
         span: Span,
         env: &TypeEnv,
     ) -> Result<(PhpType, bool), CompileError> {
+        if super::super::yield_validation::body_contains_yield(body) {
+            let generator_ty = PhpType::Object("Generator".to_string());
+            if let Some(type_ann) = return_type {
+                let declared_ret =
+                    self.resolve_declared_return_type_hint(type_ann, span, "Closure")?;
+                self.require_compatible_return_type(
+                    &declared_ret,
+                    &generator_ty,
+                    true,
+                    span,
+                    "Closure return type",
+                )?;
+                return Ok((generator_ty, true));
+            }
+            return Ok((generator_ty, false));
+        }
+
         let mut all_return_infos = Vec::new();
         for stmt in body {
             self.collect_return_infos(stmt, env, &mut all_return_infos);

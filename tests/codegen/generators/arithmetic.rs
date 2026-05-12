@@ -147,6 +147,41 @@ foreach (gen() as $v) { echo $v; echo " "; }
 }
 
 #[test]
+fn test_generator_calls_user_function_with_stack_passed_arg() {
+    let out = compile_and_run(
+        r#"<?php
+function sum7(int $a, int $b, int $c, int $d, int $e, int $f, int $g): int {
+    return $a + $b + $c + $d + $e + $f + $g;
+}
+function gen() {
+    yield sum7(1, 2, 3, 4, 5, 6, 7);
+}
+foreach (gen() as $v) {
+    echo $v;
+}
+"#,
+    );
+    assert_eq!(out, "28");
+}
+
+#[test]
+fn test_generator_stack_passed_parameter_survives_in_frame() {
+    let out = compile_and_run(
+        r#"<?php
+function gen(int $a, int $b, int $c, int $d, int $e, int $f, int $g) {
+    yield $g;
+    yield $a + $g;
+}
+foreach (gen(1, 2, 3, 4, 5, 6, 7) as $v) {
+    echo $v;
+    echo " ";
+}
+"#,
+    );
+    assert_eq!(out, "7 8 ");
+}
+
+#[test]
 fn test_generator_calls_user_function_in_arithmetic() {
     let out = compile_and_run(
         r#"<?php

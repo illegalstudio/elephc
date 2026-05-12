@@ -1,5 +1,5 @@
 //! Purpose:
-//! ARM64 assembly emission for generator wrappers and resume functions.
+//! Target-aware assembly emission for generator wrappers and resume functions.
 //! Top-level orchestrator that owns shared frame-slot helpers and the resume
 //! function's mutable context, and re-exports the entry points consumed by
 //! the rest of the generator pipeline.
@@ -22,6 +22,7 @@
 //!    paths must agree with that contract.
 
 use crate::codegen::runtime::generators::frame as gen_frame;
+use crate::codegen::{emit::Emitter, platform::Arch};
 
 mod dispatcher;
 mod stmts;
@@ -33,6 +34,14 @@ pub(in crate::codegen::functions::generator) use dispatcher::emit_resume;
 pub(in crate::codegen::functions::generator) use wrapper::emit_wrapper;
 
 const OFF_PARAMS_BASE: usize = gen_frame::FIXED_HEADER_BYTES;
+const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
+
+pub(super) fn preserved_scratch_reg(emitter: &Emitter) -> &'static str {
+    match emitter.target.arch {
+        Arch::AArch64 => "x20",
+        Arch::X86_64 => "r13",
+    }
+}
 
 pub(super) fn slot_offset(idx: usize) -> usize {
     OFF_PARAMS_BASE + idx * 8

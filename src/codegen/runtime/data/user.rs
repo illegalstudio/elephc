@@ -85,6 +85,10 @@ pub(crate) fn emit_runtime_data_user(
 
     let mut sorted_interfaces: Vec<(&String, &InterfaceInfo)> = interfaces.iter().collect();
     sorted_interfaces.sort_by_key(|(_, interface_info)| interface_info.interface_id);
+    let all_class_id_by_name: HashMap<String, u64> = classes
+        .iter()
+        .map(|(name, class_info)| (name.clone(), class_info.class_id))
+        .collect();
     let mut sorted_classes: Vec<(&String, &ClassInfo)> = classes.iter().collect();
     if let Some(allowed_class_names) = allowed_class_names {
         sorted_classes.retain(|(class_name, _)| allowed_class_names.contains(*class_name));
@@ -109,19 +113,26 @@ pub(crate) fn emit_runtime_data_user(
     // that a Fiber being garbage-collected releases its 256 KB stack instead
     // of leaking it. Defaults to u64::MAX when Fiber is not in scope (which
     // never happens in practice — Fiber is always injected as a built-in).
-    let fiber_class_id = class_id_by_name
+    let fiber_class_id = all_class_id_by_name
         .get("Fiber")
         .copied()
         .unwrap_or(u64::MAX);
     out.push_str(".globl _fiber_class_id\n_fiber_class_id:\n");
     out.push_str(&format!("    .quad {}\n", fiber_class_id));
 
-    let fiber_error_class_id = class_id_by_name
+    let fiber_error_class_id = all_class_id_by_name
         .get("FiberError")
         .copied()
         .unwrap_or(u64::MAX);
     out.push_str(".globl _fiber_error_class_id\n_fiber_error_class_id:\n");
     out.push_str(&format!("    .quad {}\n", fiber_error_class_id));
+
+    let generator_class_id = all_class_id_by_name
+        .get("Generator")
+        .copied()
+        .unwrap_or(u64::MAX);
+    out.push_str(".globl _generator_class_id\n_generator_class_id:\n");
+    out.push_str(&format!("    .quad {}\n", generator_class_id));
 
     out.push_str(".globl _interface_count\n_interface_count:\n");
     out.push_str(&format!("    .quad {}\n", sorted_interfaces.len()));

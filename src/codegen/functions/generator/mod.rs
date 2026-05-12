@@ -45,27 +45,56 @@ pub(crate) fn emit_generator_function(
     body: &[Stmt],
     classes: Option<&HashMap<String, ClassInfo>>,
 ) {
-    if emitter.target.arch != Arch::AArch64 {
-        return;
-    }
-
     let wrapper_label = function_symbol(name);
-    let resume_label = format!("{}__resume", wrapper_label);
+    emit_generator_with_label(emitter, data, &wrapper_label, sig, &[], body, classes);
+}
 
+pub(crate) fn emit_generator_closure(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    label: &str,
+    sig: &FunctionSig,
+    hidden_params: &[(String, PhpType)],
+    body: &[Stmt],
+    classes: Option<&HashMap<String, ClassInfo>>,
+) {
+    emit_generator_with_label(emitter, data, label, sig, hidden_params, body, classes);
+}
+
+fn emit_generator_with_label(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    wrapper_label: &str,
+    sig: &FunctionSig,
+    hidden_params: &[(String, PhpType)],
+    body: &[Stmt],
+    classes: Option<&HashMap<String, ClassInfo>>,
+) {
+    let resume_label = format!("{}__resume", wrapper_label);
     let generator_class_id = classes
         .and_then(|c| c.get("Generator"))
         .map(|info| info.class_id)
         .unwrap_or(0);
 
-    // v1 only carries integer parameters into the generator frame.
-    let int_param_count = sig
-        .params
+    let mut frame_params = sig.params.clone();
+    frame_params.extend_from_slice(hidden_params);
+
+    // v1 only carries one-register scalar/object parameters into the generator frame.
+    let int_param_limit = match emitter.target.arch {
+        Arch::AArch64 => 8,
+        Arch::X86_64 => usize::MAX,
+    };
+    let int_param_count = frame_params
         .iter()
-        .take(8)
-        .take_while(|(_, ty)| matches!(ty, PhpType::Int | PhpType::Bool))
+        .take(int_param_limit)
+        .take_while(|(_, ty)| {
+            matches!(
+                ty.codegen_repr(),
+                PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Object(_)
+            )
+        })
         .count();
-    let int_param_names: Vec<String> = sig
-        .params
+    let int_param_names: Vec<String> = frame_params
         .iter()
         .take(int_param_count)
         .map(|(n, _)| n.clone())

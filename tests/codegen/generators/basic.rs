@@ -84,6 +84,59 @@ echo "done";
 }
 
 #[test]
+fn test_generator_closure_returns_generator_instance() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function() {
+    yield 1;
+    yield 2;
+};
+$g = $f();
+$g->rewind();
+echo $g->current();
+$g->next();
+echo $g->current();
+"#,
+    );
+    assert_eq!(out, "12");
+}
+
+#[test]
+fn test_generator_closure_captures_int_local() {
+    let out = compile_and_run(
+        r#"<?php
+$start = 7;
+$f = function() use ($start) {
+    yield $start;
+    yield $start + 1;
+};
+foreach ($f() as $v) {
+    echo $v;
+    echo " ";
+}
+"#,
+    );
+    assert_eq!(out, "7 8 ");
+}
+
+#[test]
+fn test_generator_frame_cleanup_uses_custom_layout() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function gen() {
+    yield "held";
+}
+$g = gen();
+$g->rewind();
+echo $g->current();
+unset($g);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "held");
+}
+
+#[test]
 fn test_generator_yields_three_values() {
     let out = compile_and_run(
         r#"<?php

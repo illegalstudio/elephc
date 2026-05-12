@@ -111,6 +111,19 @@ pub fn emit_closure(
     extern_classes: &HashMap<String, ExternClassInfo>,
     extern_globals: &HashMap<String, PhpType>,
 ) {
+    if crate::types::checker::yield_validation::body_contains_yield(body) {
+        generator::emit_generator_closure(
+            emitter,
+            data,
+            label,
+            sig,
+            hidden_params,
+            body,
+            Some(classes),
+        );
+        return;
+    }
+
     let epilogue_label = format!("{}_epilogue", label);
     let empty_globals = HashSet::new();
     let empty_statics = HashMap::new();

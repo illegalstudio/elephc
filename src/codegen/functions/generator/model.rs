@@ -134,6 +134,7 @@ pub(super) struct YieldEntry {
 /// pointer to share the cell with the slot.
 #[derive(Clone)]
 pub(super) enum MixedSource {
+    Null,
     Int(IntSource),
     Str { label: String, len: usize },
     /// Homogeneous int-array literal `[1, 2, 3]`. Allocated on the heap

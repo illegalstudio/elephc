@@ -23,6 +23,10 @@ fn infer_closure_return_type(
     sig: &FunctionSig,
     capture_types: &[(String, PhpType)],
 ) -> PhpType {
+    if crate::types::checker::yield_validation::body_contains_yield(body) {
+        return PhpType::Object("Generator".to_string());
+    }
+
     fn collect_return_types(
         stmt: &Stmt,
         sig: &FunctionSig,

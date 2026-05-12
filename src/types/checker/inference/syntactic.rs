@@ -15,6 +15,10 @@ use crate::types::{merge_array_key_types, normalized_array_key_type, PhpType};
 /// This is a syntactic/heuristic check — no full type inference.
 /// Used for functions that are never called directly (only used as callbacks).
 pub fn infer_return_type_syntactic(body: &[Stmt]) -> PhpType {
+    if crate::types::checker::yield_validation::body_contains_yield(body) {
+        return PhpType::Object("Generator".to_string());
+    }
+
     let mut types = Vec::new();
     for stmt in body {
         collect_return_types_syntactic(stmt, &mut types);

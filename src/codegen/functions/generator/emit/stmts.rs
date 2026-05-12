@@ -27,13 +27,22 @@ use super::yields::{
 use super::{slot_offset, LoopLabels, ResumeCtx};
 use super::super::model::*;
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 use crate::codegen::runtime::generators::frame as gen_frame;
 
 pub(super) fn emit_body_stmt(emitter: &mut Emitter, stmt: &BodyStmt) {
     match stmt {
         BodyStmt::AssignInt(idx, src) => {
-            emit_load_int_source(emitter, "x1", src);
-            emitter.instruction(&format!("str x1, [x19, #{}]", slot_offset(*idx))); // store the computed int into the local's slot
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emit_load_int_source(emitter, "x1", src);
+                    emitter.instruction(&format!("str x1, [x19, #{}]", slot_offset(*idx))); // store the computed int into the local's slot
+                }
+                Arch::X86_64 => {
+                    emit_load_int_source(emitter, "r10", src);
+                    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", slot_offset(*idx))); // store the computed int into the local's slot
+                }
+            }
         }
         BodyStmt::AssignMixed(idx, src) => {
             // Mixed slots use the standard refcount-replace pattern: park
@@ -43,14 +52,54 @@ pub(super) fn emit_body_stmt(emitter: &mut Emitter, stmt: &BodyStmt) {
             emit_replace_mixed_slot(emitter, off, |em| emit_box_mixed_source(em, src));
         }
         BodyStmt::PostIncrement(idx) => {
-            emitter.instruction(&format!("ldr x1, [x19, #{}]", slot_offset(*idx))); // load the local's current value
-            emitter.instruction("add x1, x1, #1");                              // increment the value by 1
-            emitter.instruction(&format!("str x1, [x19, #{}]", slot_offset(*idx))); // write the incremented value back to the slot
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction(&format!("ldr x1, [x19, #{}]", slot_offset(*idx))); // load the local's current value
+                    emitter.instruction("add x1, x1, #1");                      // increment the value by 1
+                    emitter.instruction(&format!("str x1, [x19, #{}]", slot_offset(*idx))); // write the incremented value back to the slot
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", slot_offset(*idx))); // load the local's current value
+                    emitter.instruction("add r10, 1");                          // increment the value by 1
+                    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", slot_offset(*idx))); // write the incremented value back to the slot
+                }
+            }
         }
         BodyStmt::PostDecrement(idx) => {
-            emitter.instruction(&format!("ldr x1, [x19, #{}]", slot_offset(*idx))); // load the local's current value
-            emitter.instruction("sub x1, x1, #1");                              // decrement the value by 1
-            emitter.instruction(&format!("str x1, [x19, #{}]", slot_offset(*idx))); // write the decremented value back to the slot
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction(&format!("ldr x1, [x19, #{}]", slot_offset(*idx))); // load the local's current value
+                    emitter.instruction("sub x1, x1, #1");                      // decrement the value by 1
+                    emitter.instruction(&format!("str x1, [x19, #{}]", slot_offset(*idx))); // write the decremented value back to the slot
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", slot_offset(*idx))); // load the local's current value
+                    emitter.instruction("sub r10, 1");                          // decrement the value by 1
+                    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", slot_offset(*idx))); // write the decremented value back to the slot
+                }
+            }
+        }
+    }
+}
+
+fn emit_jump(emitter: &mut Emitter, label: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("b {}", label));                       // jump to the requested generator label
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("jmp {}", label));                     // jump to the requested generator label
+        }
+    }
+}
+
+fn emit_jump_eq(emitter: &mut Emitter, label: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("b.eq {}", label));                    // jump when the preceding comparison matched
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("je {}", label));                      // jump when the preceding comparison matched
         }
     }
 }
@@ -64,9 +113,9 @@ pub(super) fn emit_nodes(emitter: &mut Emitter, nodes: &[ResumeNode], ctx: &mut 
 fn emit_node(emitter: &mut Emitter, node: &ResumeNode, ctx: &mut ResumeCtx) {
     match node {
         ResumeNode::Stmt(s) => emit_body_stmt(emitter, s),
-        ResumeNode::Yield(entry, state_idx) => emit_yield(emitter, entry, *state_idx, ctx),
+        ResumeNode::Yield(entry, state_idx) => emit_yield(emitter, entry, *state_idx, ctx, true),
         ResumeNode::YieldAssign { local_idx, local_ty, yield_entry, state_idx } => {
-            emit_yield(emitter, yield_entry, *state_idx, ctx);
+            emit_yield(emitter, yield_entry, *state_idx, ctx, false);
             match local_ty {
                 SlotType::Int => emit_yield_assign_unbox_int(emitter, *local_idx, ctx),
                 SlotType::Mixed => emit_yield_assign_store_mixed(emitter, *local_idx, ctx),
@@ -77,7 +126,7 @@ fn emit_node(emitter: &mut Emitter, node: &ResumeNode, ctx: &mut ResumeCtx) {
             let end_lbl = ctx.fresh_label("if_end");
             emit_branch_if_false(emitter, cond, &else_lbl);
             emit_nodes(emitter, then_body, ctx);
-            emitter.instruction(&format!("b {}", end_lbl));
+            emit_jump(emitter, &end_lbl);
             emitter.label(&else_lbl);
             emit_nodes(emitter, else_body, ctx);
             emitter.label(&end_lbl);
@@ -94,7 +143,7 @@ fn emit_node(emitter: &mut Emitter, node: &ResumeNode, ctx: &mut ResumeCtx) {
             ctx.loop_stack.pop();
             emitter.label(&cont_lbl);
             emit_nodes(emitter, update, ctx);
-            emitter.instruction(&format!("b {}", test_lbl));
+            emit_jump(emitter, &test_lbl);
             emitter.label(&end_lbl);
         }
         ResumeNode::While { cond, body } => {
@@ -105,7 +154,7 @@ fn emit_node(emitter: &mut Emitter, node: &ResumeNode, ctx: &mut ResumeCtx) {
             ctx.loop_stack.push(LoopLabels { end: end_lbl.clone(), cont: top_lbl.clone() });
             emit_nodes(emitter, body, ctx);
             ctx.loop_stack.pop();
-            emitter.instruction(&format!("b {}", top_lbl));
+            emit_jump(emitter, &top_lbl);
             emitter.label(&end_lbl);
         }
         ResumeNode::DoWhile { cond, body } => {
@@ -118,7 +167,7 @@ fn emit_node(emitter: &mut Emitter, node: &ResumeNode, ctx: &mut ResumeCtx) {
             ctx.loop_stack.pop();
             emitter.label(&cond_lbl);
             emit_branch_if_false(emitter, cond, &end_lbl);
-            emitter.instruction(&format!("b {}", top_lbl));
+            emit_jump(emitter, &top_lbl);
             emitter.label(&end_lbl);
         }
         ResumeNode::Break => emit_loop_jump(emitter, ctx, /* break_jump */ true),
@@ -139,12 +188,12 @@ fn emit_node(emitter: &mut Emitter, node: &ResumeNode, ctx: &mut ResumeCtx) {
                 });
             }
             let term = ctx.term_label.clone();
-            emitter.instruction(&format!("b {}", term));
+            emit_jump(emitter, &term);
         }
         ResumeNode::Block { stmts } => emit_nodes(emitter, stmts, ctx),
         ResumeNode::Bail => {
             let term = ctx.term_label.clone();
-            emitter.instruction(&format!("b {}", term));
+            emit_jump(emitter, &term);
         }
     }
 }
@@ -156,7 +205,7 @@ fn emit_loop_jump(emitter: &mut Emitter, ctx: &mut ResumeCtx, break_jump: bool) 
         if break_jump { labels.end.clone() } else { labels.cont.clone() }
     });
     let lbl = target.unwrap_or_else(|| ctx.term_label.clone());
-    emitter.instruction(&format!("b {}", lbl));
+    emit_jump(emitter, &lbl);
 }
 
 fn emit_switch(
@@ -172,15 +221,27 @@ fn emit_switch(
         .map(|_| ctx.fresh_label("switch_case"))
         .collect();
     // Evaluate subject once into x1, then dispatch to the matching case.
-    emit_load_int_source(emitter, "x1", subject);
+    let subject_reg = match emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "r10",
+    };
+    emit_load_int_source(emitter, subject_reg, subject);
     for (i, (values, _)) in cases.iter().enumerate() {
         for v in values {
-            emitter.instruction(&format!("mov x2, #{}", v));                    // load this case literal into the comparison register
-            emitter.instruction("cmp x1, x2");                                  // compare subject against the case literal
-            emitter.instruction(&format!("b.eq {}", case_labels[i]));           // jump to the case body when matching
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction(&format!("mov x2, #{}", v));            // load this case literal into the comparison register
+                    emitter.instruction("cmp x1, x2");                          // compare subject against the case literal
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("mov r11, {}", v));            // load this case literal into the comparison register
+                    emitter.instruction("cmp r10, r11");                        // compare subject against the case literal
+                }
+            }
+            emit_jump_eq(emitter, &case_labels[i]);
         }
     }
-    emitter.instruction(&format!("b {}", default_lbl));                         // no case matched — fall through to the default branch
+    emit_jump(emitter, &default_lbl);
     // Cases fall through unless their body breaks.
     ctx.loop_stack.push(LoopLabels {
         end: end_lbl.clone(),

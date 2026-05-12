@@ -13,6 +13,7 @@ use super::buffers;
 use super::diagnostics;
 use super::exceptions;
 use super::fibers;
+use super::generators;
 use super::io;
 use super::pointers;
 use super::strings;
@@ -240,6 +241,7 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     exceptions::emit_exception_matches(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);
+    generators::emit_generator_runtime(emitter);
     fibers::emit_fiber_alloc_stack(emitter);
     fibers::emit_fiber_free_stack(emitter);
     fibers::emit_fiber_switch(emitter);
@@ -305,6 +307,8 @@ mod tests {
         assert!(asm.contains("__rt_exception_matches:\n"));
         assert!(asm.contains("__rt_throw_current:\n"));
         assert!(asm.contains("__rt_rethrow_current:\n"));
+        assert!(asm.contains("__rt_gen_current:\n"));
+        assert!(asm.contains("__rt_gen_send:\n"));
         assert!(asm.contains("__rt_fiber_alloc_stack:\n"));
         assert!(asm.contains("__rt_fiber_free_stack:\n"));
         assert!(asm.contains("__rt_fiber_switch:\n"));
