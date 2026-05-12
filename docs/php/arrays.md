@@ -46,7 +46,7 @@ $map["age"] = "30";      // add new key
 
 Associative arrays use a hash table runtime. If later values do not match the first value type, the checker widens to internal `mixed` runtime shape.
 
-Keys follow PHP's array-key normalization for integer and string keys. Integer keys remain integers, numeric strings such as `"1"` normalize to the integer key `1`, and strings with leading zeroes such as `"01"` remain string keys. This applies to literals, reads and writes, `foreach`, `array_keys()`, `array_search()`, `array_key_exists()`, `array_flip()`, JSON object keys, and associative array union.
+Keys follow PHP's array-key normalization for integer and string keys. Integer keys remain integers, numeric strings such as `"1"` normalize to the integer key `1`, and strings with leading zeroes such as `"01"` remain string keys. This applies to literals, reads and writes, `foreach`, `array_keys()`, `array_search()`, `array_key_exists()`, `array_flip()`, JSON object keys, and array union.
 
 ```php
 <?php
@@ -79,6 +79,19 @@ $result = [10, 20] + [99, 88, 77];
 echo $result[0]; // 10
 echo $result[1]; // 20
 echo $result[2]; // 77
+```
+
+Union also works across indexed and associative representations. Indexed positions become integer keys in the shared PHP key space, so an associative key `"0"` blocks right index `0`, while `"01"` remains a distinct string key.
+
+```php
+<?php
+$left = ["0" => "left zero", "01" => "leading"];
+$right = ["right zero", "right one"];
+$result = $left + $right;
+
+echo $result[0];    // left zero
+echo $result[1];    // right one
+echo $result["01"]; // leading
 ```
 
 ## Copy-on-write semantics
@@ -186,6 +199,3 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 > Callback arguments can be string literals, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures.
 
 **Not supported by design:** `compact()`, `extract()` require runtime variable-name tables and are listed in the roadmap's "Will not implement" section.
-
-## Limitations
-- Array union is supported for indexed+indexed and associative+associative operands; mixed indexed/associative union is tracked in `ROADMAP.md`

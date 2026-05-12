@@ -345,7 +345,7 @@ For floats, `fcmp` replaces `cmp`, but the same `cset`/`csinv` pattern applies.
 
 ### Array union
 
-When both operands of `+` are arrays, codegen routes the expression to PHP array-union lowering instead of numeric addition. Indexed arrays call `__rt_array_union`, which clones the left operand and appends only the right-side numeric suffix whose keys are missing from the left. Associative arrays call `__rt_hash_union`, which clones the left hash, walks the right hash in insertion order, and inserts only keys that are absent from the clone. Mixed indexed/associative operands are rejected by the checker until that compatibility case is modeled.
+When both operands of `+` are arrays, codegen routes the expression to PHP array-union lowering instead of numeric addition. Indexed arrays call `__rt_array_union`, which clones the left operand and appends only the right-side numeric suffix whose keys are missing from the left. Associative arrays call `__rt_hash_union`, which clones the left hash, walks the right hash in insertion order, and inserts only keys that are absent from the clone. Mixed indexed/associative operands return a hash result: `__rt_array_hash_union` maps left indexed positions into integer hash keys before merging the right hash, while `__rt_hash_array_union` clones the left hash and probes right indexed positions as integer keys.
 
 ### Null coalescing operator
 
