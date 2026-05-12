@@ -39,6 +39,7 @@ mod usleep;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::names::php_symbol_key;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -79,4 +80,12 @@ pub fn emit(
         "preg_split" => preg_split::emit(name, args, emitter, ctx, data),
         _ => None,
     }
+}
+
+fn resolve_class_name<'a>(ctx: &'a Context, class_name: &str) -> Option<&'a str> {
+    let class_key = php_symbol_key(class_name);
+    ctx.classes
+        .keys()
+        .find(|existing| php_symbol_key(existing) == class_key)
+        .map(String::as_str)
 }

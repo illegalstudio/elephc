@@ -33,7 +33,10 @@ pub fn emit(
         _ => return Some(PhpType::Array(Box::new(PhpType::Object("ReflectionAttribute".to_string())))),
     };
 
-    let class_info = match ctx.classes.get(class_name.as_str()).cloned() {
+    let class_info = match super::resolve_class_name(ctx, &class_name)
+        .and_then(|resolved| ctx.classes.get(resolved))
+        .cloned()
+    {
         Some(info) => info,
         None => {
             return Some(PhpType::Array(Box::new(PhpType::Object(

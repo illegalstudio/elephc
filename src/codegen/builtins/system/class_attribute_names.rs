@@ -30,7 +30,7 @@ pub fn emit(
     };
     let names: Vec<String> = ctx
         .classes
-        .get(class_name.as_str())
+        .get(super::resolve_class_name(ctx, &class_name)?)
         .map(|info| info.attribute_names.clone())
         .unwrap_or_default();
 

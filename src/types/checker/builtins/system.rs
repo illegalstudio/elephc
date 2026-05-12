@@ -9,6 +9,7 @@
 //! - Signatures, callable aliases, optimizer effects, and codegen builtin dispatch must remain in lockstep.
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
@@ -109,7 +110,7 @@ pub(super) fn check_builtin(
                     "class_attribute_names() requires a string literal class name (dynamic lookup is not yet supported)",
                 ));
             };
-            if !checker.classes.contains_key(class_name.as_str()) {
+            if resolve_class_name(checker, class_name).is_none() {
                 return Err(CompileError::new(
                     span,
                     &format!(
@@ -153,7 +154,7 @@ pub(super) fn check_builtin(
                     "class_attribute_args() requires a string literal attribute name (dynamic lookup is not yet supported)",
                 ));
             }
-            if !checker.classes.contains_key(class_name.as_str()) {
+            if resolve_class_name(checker, class_name).is_none() {
                 return Err(CompileError::new(
                     span,
                     &format!(
@@ -184,7 +185,7 @@ pub(super) fn check_builtin(
                     "class_get_attributes() requires a string literal class name (dynamic lookup is not yet supported)",
                 ));
             };
-            if !checker.classes.contains_key(class_name.as_str()) {
+            if resolve_class_name(checker, class_name).is_none() {
                 return Err(CompileError::new(
                     span,
                     &format!(
@@ -317,4 +318,13 @@ pub(super) fn check_builtin(
         }
         _ => Ok(None),
     }
+}
+
+fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a str> {
+    let class_key = php_symbol_key(class_name);
+    checker
+        .classes
+        .keys()
+        .find(|existing| php_symbol_key(existing) == class_key)
+        .map(String::as_str)
 }

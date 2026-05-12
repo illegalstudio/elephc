@@ -412,6 +412,19 @@ echo $ys[1];
     assert_eq!(out, "1/2/Foo,Bar,Baz");
 }
 
+#[test]
+fn test_class_attribute_names_class_lookup_is_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+#[Foo]
+class Greeter {}
+$names = class_attribute_names('greeter');
+echo $names[0];
+"#,
+    );
+    assert_eq!(out, "Foo");
+}
+
 // --- class_attribute_args() reflection-style builtin ---
 
 #[test]
@@ -514,6 +527,19 @@ echo $args[1];
     assert_eq!(out, "-1/-42");
 }
 
+#[test]
+fn test_class_attribute_args_class_lookup_is_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+#[Route("/x")]
+class Controller {}
+$args = class_attribute_args('controller', 'Route');
+echo $args[0];
+"#,
+    );
+    assert_eq!(out, "/x");
+}
+
 // --- ReflectionAttribute synthetic class + class_get_attributes() ---
 
 #[test]
@@ -580,6 +606,21 @@ echo count($attr->getArguments());
 "#,
     );
     assert_eq!(out, "Marker/0");
+}
+
+#[test]
+fn test_class_get_attributes_class_lookup_is_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+#[Foo("bar")]
+class Greeter {}
+$attrs = class_get_attributes('greeter');
+echo $attrs[0]->getName();
+echo "/";
+echo $attrs[0]->getArguments()[0];
+"#,
+    );
+    assert_eq!(out, "Foo/bar");
 }
 
 #[test]

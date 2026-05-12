@@ -37,7 +37,7 @@ pub fn emit(
     let attr_key = php_symbol_key(attr_name.trim_start_matches('\\'));
     let attr_args: Vec<AttrArgValue> = ctx
         .classes
-        .get(class_name.as_str())
+        .get(super::resolve_class_name(ctx, &class_name)?)
         .and_then(|info| {
             info.attribute_names.iter().enumerate().find_map(|(idx, name)| {
                 let candidate_key = php_symbol_key(name.trim_start_matches('\\'));
