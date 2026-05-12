@@ -288,3 +288,32 @@ echo ":" . Registry::$value;
     assert_eq!(out, "6:6");
 }
 
+#[test]
+fn test_chained_three_level_local_assignment() {
+    let out = compile_and_run("<?php $a = $b = $c = 5; echo $a + $b + $c;");
+    assert_eq!(out, "15");
+}
+
+#[test]
+fn test_chained_string_local_assignment() {
+    let out = compile_and_run(r#"<?php $a = $b = "hi"; echo $a . $b;"#);
+    assert_eq!(out, "hihi");
+}
+
+#[test]
+fn test_chained_static_property_and_local_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public static int $x = 0;
+    public static function init(): int {
+        self::$x = $local = 42;
+        return self::$x + $local;
+    }
+}
+echo C::init();
+"#,
+    );
+    assert_eq!(out, "84");
+}
+

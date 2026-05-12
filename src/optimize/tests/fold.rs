@@ -281,3 +281,40 @@ fn test_keep_ambiguous_string_casts_unfolded() {
 
     assert_eq!(folded, vec![Stmt::echo(expr)]);
 }
+
+#[test]
+fn test_fold_drops_assignment_result_target_when_equal_to_target() {
+    // `$items[0] = 5` parses with `result_target = Some(target.clone())`
+    // because the LHS is a non-local lvalue. Both fields end up structurally
+    // identical after folding, so the optimizer drops the duplicate.
+    let target = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(Expr::var("items")),
+            index: Box::new(Expr::int_lit(0)),
+        },
+        Span::dummy(),
+    );
+    let assignment = Expr::new(
+        ExprKind::Assignment {
+            target: Box::new(target.clone()),
+            value: Box::new(Expr::int_lit(5)),
+            result_target: Some(Box::new(target.clone())),
+            prelude: Vec::new(),
+            conditional_value_temp: None,
+        },
+        Span::dummy(),
+    );
+
+    let folded = fold_constants(vec![Stmt::echo(assignment)]);
+
+    let folded_kind = match &folded[0].kind {
+        StmtKind::Echo(expr) => &expr.kind,
+        other => panic!("expected Echo, got {:?}", other),
+    };
+    match folded_kind {
+        ExprKind::Assignment { result_target, .. } => {
+            assert!(result_target.is_none(), "expected result_target to be elided");
+        }
+        other => panic!("expected Assignment, got {:?}", other),
+    }
+}

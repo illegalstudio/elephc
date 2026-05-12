@@ -46,9 +46,15 @@ pub(super) fn emit_assignment_expr(
 
     super::super::stmt::emit_assign_stmt(name, value, emitter, ctx, data);
     match result_target {
-        Some(target) => super::emit_expr(target, emitter, ctx, data),
-        None => super::variables::emit_variable(name, emitter, ctx),
+        Some(other) if !is_same_local(other, name) => {
+            super::emit_expr(other, emitter, ctx, data)
+        }
+        _ => super::variables::emit_variable(name, emitter, ctx),
     }
+}
+
+fn is_same_local(expr: &Expr, name: &str) -> bool {
+    matches!(&expr.kind, ExprKind::Variable(other) if other == name)
 }
 
 pub(super) fn emit_non_local_assignment_expr(
@@ -86,17 +92,16 @@ fn emit_conditional_non_local_null_coalesce_assignment(
     }
 
     let current_ty = super::emit_expr(current, emitter, ctx, data);
-    if current_ty != PhpType::Void {
-        let keep_label = ctx.next_label("nca_expr_keep");
-        super::super::stmt::emit_branch_if_result_non_null(&current_ty, &keep_label, emitter);
-        super::super::stmt::emit_assign_stmt(temp_name, default, emitter, ctx, data);
-        let temp_value = Expr::new(ExprKind::Variable(temp_name.to_string()), default.span);
-        emit_non_local_assignment_write(target, &temp_value, emitter, ctx, data);
-        emitter.label(&keep_label);
-    } else {
-        super::super::stmt::emit_assign_stmt(temp_name, default, emitter, ctx, data);
-        let temp_value = Expr::new(ExprKind::Variable(temp_name.to_string()), default.span);
-        emit_non_local_assignment_write(target, &temp_value, emitter, ctx, data);
+    let keep_label = (current_ty != PhpType::Void)
+        .then(|| ctx.next_label("nca_expr_keep"));
+    if let Some(label) = &keep_label {
+        super::super::stmt::emit_branch_if_result_non_null(&current_ty, label, emitter);
+    }
+    super::super::stmt::emit_assign_stmt(temp_name, default, emitter, ctx, data);
+    let temp_value = Expr::new(ExprKind::Variable(temp_name.to_string()), default.span);
+    emit_non_local_assignment_write(target, &temp_value, emitter, ctx, data);
+    if let Some(label) = &keep_label {
+        emitter.label(label);
     }
 
     Some(super::emit_expr(result_target.unwrap_or(target), emitter, ctx, data))

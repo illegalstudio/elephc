@@ -58,6 +58,9 @@ impl AssignmentExpressionLowerer {
     }
 
     pub(super) fn bind_value(&mut self, value: Expr) -> Expr {
+        if can_replay_assignment_target(&value) {
+            return value;
+        }
         self.bind_temp(value)
     }
 

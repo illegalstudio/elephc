@@ -248,7 +248,10 @@ pub(super) fn parse_expr_bp(
                 } else {
                     lowerer.bind_value(rhs)
                 };
-                let value = assignment_value(target.clone(), op, rhs, span);
+                let value = match op {
+                    AssignmentOperator::Assign => rhs,
+                    op => assignment_value(target.clone(), op, rhs, span),
+                };
                 let prelude = lowerer.finish();
                 lhs = Expr::new(
                     ExprKind::Assignment {
@@ -261,7 +264,10 @@ pub(super) fn parse_expr_bp(
                     span,
                 );
             } else {
-                let value = assignment_value(lhs.clone(), op, rhs, span);
+                let value = match op {
+                    AssignmentOperator::Assign => rhs,
+                    op => assignment_value(lhs.clone(), op, rhs, span),
+                };
                 lhs = Expr::new(
                     ExprKind::Assignment {
                         target: Box::new(lhs),

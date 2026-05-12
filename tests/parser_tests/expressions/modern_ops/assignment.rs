@@ -67,8 +67,10 @@ fn test_non_local_assignment_expression_parses_array_target() {
     match &stmts[0].kind {
         StmtKind::Echo(expr) => match &expr.kind {
             ExprKind::Assignment { target, value, prelude, .. } => {
-                assert_eq!(prelude.len(), 1);
-                assert!(matches!(value.kind, ExprKind::Variable(_)));
+                // Literal RHS is replayable, so no prelude bind is emitted
+                // and the value field keeps the literal directly.
+                assert!(prelude.is_empty());
+                assert!(matches!(value.kind, ExprKind::IntLiteral(2)));
                 match &target.kind {
                     ExprKind::ArrayAccess { array, index } => {
                         assert!(matches!(array.kind, ExprKind::Variable(ref name) if name == "items"));
