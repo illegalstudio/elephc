@@ -92,8 +92,27 @@ foreach (outer() as $v) { echo $v . " "; }
 The runtime stores the inner generator pointer in the outer frame's
 `delegated_iter` slot and reuses one resume state index for every step
 of the delegation. v1 only delegates to function calls returning
-`Generator`; arbitrary `Iterator` expressions in `yield from` are not
-yet supported.
+`Generator` and locals that hold a `Generator`; arbitrary `Iterator`
+expressions in `yield from` are not yet supported. Invalid non-generator
+delegates are rejected at type-check time.
+
+## Generator closures
+
+Anonymous functions that contain `yield` also return `Generator`
+objects. Captured scalar locals are copied into the generator frame just
+like ordinary closure captures:
+
+```php
+<?php
+$start = 7;
+$gen = function() use ($start) {
+    yield $start;
+    yield $start + 1;
+};
+
+foreach ($gen() as $v) { echo $v . " "; }
+// Prints: 7 8
+```
 
 ## return value and Generator::getReturn()
 
@@ -330,7 +349,7 @@ The full list of remaining work for generators lives in `ROADMAP.md`.
 
 ## How it works at runtime
 
-Each generator function `f` produces two ARM64 symbols:
+Each generator function `f` produces two target-specific symbols:
 
 - `_fn_<f>` — the wrapper that allocates a `GeneratorFrame` on the
   heap (fixed 80-byte header followed by N×8-byte slots for parameters
