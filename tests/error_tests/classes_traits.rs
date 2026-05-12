@@ -342,6 +342,30 @@ fn test_error_class_attribute_args_non_string_attr() {
     );
 }
 
+#[test]
+fn test_error_class_attribute_named_args_are_not_silently_dropped() {
+    expect_error(
+        "<?php #[Foo(name: \"Ada\")] class C {}",
+        "Named attribute arguments are not supported",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_expression_args_are_not_silently_dropped() {
+    expect_error(
+        "<?php #[Foo(1 + 2)] class C {}",
+        "Unsupported attribute argument",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_float_args_are_not_silently_dropped() {
+    expect_error(
+        "<?php #[Foo(3.14)] class C {}",
+        "Unsupported attribute argument",
+    );
+}
+
 // --- class_get_attributes() argument validation ---
 
 #[test]

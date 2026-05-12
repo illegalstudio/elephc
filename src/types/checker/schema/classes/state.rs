@@ -10,6 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::errors::CompileError;
 use crate::parser::ast::{Expr, Visibility};
 use crate::types::traits::FlattenedClass;
 use crate::types::{ClassInfo, FunctionSig, PhpType};
@@ -68,8 +69,9 @@ impl ClassBuildState {
         class_id: u64,
         class: &FlattenedClass,
         constructor_param_to_prop: Vec<Option<String>>,
-    ) -> ClassInfo {
-        ClassInfo {
+    ) -> Result<ClassInfo, CompileError> {
+        let attribute_args = collect_attribute_args(&class.attributes)?;
+        Ok(ClassInfo {
             class_id,
             parent: class.extends.clone(),
             is_abstract: class.is_abstract,
@@ -83,7 +85,7 @@ impl ClassBuildState {
                 .map(|c| (c.name.clone(), c.value.clone()))
                 .collect(),
             attribute_names: collect_attribute_names(&class.attributes),
-            attribute_args: collect_attribute_args(&class.attributes),
+            attribute_args,
             properties: self.prop_types,
             property_offsets: self.property_offsets,
             property_declaring_classes: self.property_declaring_classes,
@@ -116,14 +118,15 @@ impl ClassBuildState {
             static_vtable_slots: self.static_vtable_slots,
             interfaces: self.interfaces,
             constructor_param_to_prop,
-        }
+        })
     }
 
 }
 
-/// Collect attribute names from a class's attribute groups, preserving
-/// source order and the leading backslash on fully-qualified names. Used to
-/// emit the per-class `_class_attributes_*` metadata table.
+/// Collect attribute names from a class's attribute groups, preserving source
+/// order. Name resolution has already canonicalised fully-qualified names by
+/// the time this runs, so names are emitted in ReflectionAttribute::getName()
+/// shape without a synthetic leading backslash.
 pub(super) fn collect_attribute_names(
     groups: &[crate::parser::ast::AttributeGroup],
 ) -> Vec<String> {
@@ -144,12 +147,11 @@ pub(super) fn collect_attribute_names(
 /// Collect the positional literal arguments of every attribute, in the
 /// same order as `collect_attribute_names`. Captures strings, ints, bools,
 /// and null directly. Negation (`-N`) of an int literal is folded so PHP's
-/// `#[Status(-1)]` survives parsing. Anything else (expressions, named
-/// args) is silently dropped until elephc grows full constant-expression
-/// evaluation for attribute arguments.
+/// `#[Status(-1)]` survives parsing. Anything else is rejected instead of
+/// emitting incomplete runtime reflection metadata.
 pub(super) fn collect_attribute_args(
     groups: &[crate::parser::ast::AttributeGroup],
-) -> Vec<Vec<crate::types::AttrArgValue>> {
+) -> Result<Vec<Vec<crate::types::AttrArgValue>>, CompileError> {
     use crate::parser::ast::ExprKind;
     use crate::types::AttrArgValue;
 
@@ -168,15 +170,30 @@ pub(super) fn collect_attribute_args(
                     ExprKind::Negate(inner) => {
                         if let ExprKind::IntLiteral(n) = &inner.kind {
                             args.push(AttrArgValue::Int(n.wrapping_neg()));
+                        } else {
+                            return Err(unsupported_attribute_arg(arg_expr));
                         }
                     }
-                    _ => {} // unsupported literal kind, drop silently
+                    ExprKind::NamedArg { .. } => {
+                        return Err(CompileError::new(
+                            arg_expr.span,
+                            "Named attribute arguments are not supported by runtime reflection metadata yet",
+                        ));
+                    }
+                    _ => return Err(unsupported_attribute_arg(arg_expr)),
                 }
             }
             out.push(args);
         }
     }
-    out
+    Ok(out)
+}
+
+fn unsupported_attribute_arg(arg_expr: &Expr) -> CompileError {
+    CompileError::new(
+        arg_expr.span,
+        "Unsupported attribute argument for runtime reflection metadata; only positional string, int, bool, null, and negative int literals are supported",
+    )
 }
 
 /// Returns `true` if the class declaration carries the PHP 8.2

@@ -17,9 +17,9 @@ use super::{FunctionSig, PhpType};
 
 /// Compile-time attribute argument literal. Captures the subset of PHP
 /// attribute argument expressions that we can evaluate at compile time:
-/// strings, ints, bools, and null. Anything else is dropped at schema
-/// collection time until elephc grows full constant-expression evaluation
-/// for attribute arguments.
+/// strings, ints, bools, null, and negative int literals. Anything else is
+/// rejected at schema collection time so runtime reflection metadata cannot
+/// silently diverge from source.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AttrArgValue {
     Null,
@@ -63,9 +63,9 @@ pub struct ClassInfo {
     pub attribute_names: Vec<String>,
     /// Literal arguments captured for each attribute, in source order and
     /// aligned with `attribute_names`. Each inner `Vec<AttrArgValue>` holds
-    /// the positional literal args (string, int, bool, null). Non-literal
-    /// args (expressions, named args) are dropped until elephc grows
-    /// compile-time evaluation of attribute argument expressions.
+    /// the positional literal args (string, int, bool, null, negative int).
+    /// Non-literal args and named args are rejected until elephc grows
+    /// compile-time evaluation and named-argument metadata for attributes.
     pub attribute_args: Vec<Vec<AttrArgValue>>,
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
