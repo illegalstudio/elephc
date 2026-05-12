@@ -115,6 +115,8 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_array_push_str(emitter);
     arrays::emit_array_to_mixed(emitter);
     arrays::emit_array_union(emitter);
+    arrays::emit_array_hash_union(emitter);
+    arrays::emit_hash_array_union(emitter);
     arrays::emit_array_merge_into(emitter);
     arrays::emit_array_merge_into_refcounted(emitter);
     arrays::emit_range(emitter);
@@ -343,6 +345,8 @@ mod tests {
         assert!(asm.contains("__rt_array_push_refcounted:\n"));
         assert!(asm.contains("__rt_array_push_str:\n"));
         assert!(asm.contains("__rt_array_union:\n"));
+        assert!(asm.contains("__rt_array_hash_union:\n"));
+        assert!(asm.contains("__rt_hash_array_union:\n"));
         assert!(asm.contains("__rt_array_merge_into:\n"));
         assert!(asm.contains("__rt_array_merge_into_refcounted:\n"));
         assert!(asm.contains("__rt_range:\n"));

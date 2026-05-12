@@ -138,6 +138,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_array_push_refcounted(emitter);
     arrays::emit_array_push_str(emitter);
     arrays::emit_array_union(emitter);
+    arrays::emit_array_hash_union(emitter);
+    arrays::emit_hash_array_union(emitter);
     arrays::emit_random_u32(emitter);
     arrays::emit_random_uniform(emitter);
     arrays::emit_sort_int(emitter, false);

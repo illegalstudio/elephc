@@ -212,9 +212,27 @@ impl Checker {
                     value: Box::new(value),
                 })
             }
+            (PhpType::Array(left_elem), PhpType::AssocArray { key, value }) => {
+                let value = self
+                    .merge_array_element_type(left_elem, value)
+                    .unwrap_or(PhpType::Mixed);
+                Ok(PhpType::AssocArray {
+                    key: Box::new(merge_array_key_types(PhpType::Int, *key.clone())),
+                    value: Box::new(value),
+                })
+            }
+            (PhpType::AssocArray { key, value }, PhpType::Array(right_elem)) => {
+                let value = self
+                    .merge_array_element_type(value, right_elem)
+                    .unwrap_or(PhpType::Mixed);
+                Ok(PhpType::AssocArray {
+                    key: Box::new(merge_array_key_types(*key.clone(), PhpType::Int)),
+                    value: Box::new(value),
+                })
+            }
             _ => Err(CompileError::new(
                 expr.span,
-                "Array union requires both operands to be arrays of the same kind",
+                "Array union requires both operands to be arrays",
             )),
         }
     }
