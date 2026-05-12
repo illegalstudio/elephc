@@ -82,6 +82,8 @@ impl ClassBuildState {
                 .iter()
                 .map(|c| (c.name.clone(), c.value.clone()))
                 .collect(),
+            attribute_names: collect_attribute_names(&class.attributes),
+            attribute_args: collect_attribute_args(&class.attributes),
             properties: self.prop_types,
             property_offsets: self.property_offsets,
             property_declaring_classes: self.property_declaring_classes,
@@ -117,6 +119,64 @@ impl ClassBuildState {
         }
     }
 
+}
+
+/// Collect attribute names from a class's attribute groups, preserving
+/// source order and the leading backslash on fully-qualified names. Used to
+/// emit the per-class `_class_attributes_*` metadata table.
+pub(super) fn collect_attribute_names(
+    groups: &[crate::parser::ast::AttributeGroup],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for group in groups {
+        for attr in &group.attributes {
+            // Name resolution normalises attribute references to the canonical
+            // class-like text (no leading backslash), so emit it as-is and let
+            // `class_attribute_names()` callers see PHP's `ReflectionAttribute::
+            // getName()` shape — namespace-qualified or bare identifier, never a
+            // synthetic leading `\`.
+            out.push(attr.name.as_str().to_string());
+        }
+    }
+    out
+}
+
+/// Collect the positional literal arguments of every attribute, in the
+/// same order as `collect_attribute_names`. Captures strings, ints, bools,
+/// and null directly. Negation (`-N`) of an int literal is folded so PHP's
+/// `#[Status(-1)]` survives parsing. Anything else (expressions, named
+/// args) is silently dropped until elephc grows full constant-expression
+/// evaluation for attribute arguments.
+pub(super) fn collect_attribute_args(
+    groups: &[crate::parser::ast::AttributeGroup],
+) -> Vec<Vec<crate::types::AttrArgValue>> {
+    use crate::parser::ast::ExprKind;
+    use crate::types::AttrArgValue;
+
+    let mut out = Vec::new();
+    for group in groups {
+        for attr in &group.attributes {
+            let mut args = Vec::new();
+            for arg_expr in &attr.args {
+                match &arg_expr.kind {
+                    ExprKind::StringLiteral(value) => {
+                        args.push(AttrArgValue::Str(value.clone()))
+                    }
+                    ExprKind::IntLiteral(value) => args.push(AttrArgValue::Int(*value)),
+                    ExprKind::BoolLiteral(value) => args.push(AttrArgValue::Bool(*value)),
+                    ExprKind::Null => args.push(AttrArgValue::Null),
+                    ExprKind::Negate(inner) => {
+                        if let ExprKind::IntLiteral(n) = &inner.kind {
+                            args.push(AttrArgValue::Int(n.wrapping_neg()));
+                        }
+                    }
+                    _ => {} // unsupported literal kind, drop silently
+                }
+            }
+            out.push(args);
+        }
+    }
+    out
 }
 
 /// Returns `true` if the class declaration carries the PHP 8.2

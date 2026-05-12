@@ -85,6 +85,118 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Str))
         }
+        "class_attribute_names" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "class_attribute_names() takes exactly 1 argument",
+                ));
+            }
+            // Resolve at compile time: only string-literal class names are
+            // supported in this iteration. Dynamic class names would require
+            // a runtime name→class_id lookup table that elephc does not yet
+            // expose.
+            let arg_ty = checker.infer_type(&args[0], env)?;
+            if !matches!(arg_ty, PhpType::Str) {
+                return Err(CompileError::new(
+                    span,
+                    "class_attribute_names() argument must be a string class name",
+                ));
+            }
+            let ExprKind::StringLiteral(class_name) = &args[0].kind else {
+                return Err(CompileError::new(
+                    span,
+                    "class_attribute_names() requires a string literal class name (dynamic lookup is not yet supported)",
+                ));
+            };
+            if !checker.classes.contains_key(class_name.as_str()) {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "class_attribute_names(): undefined class '{}'",
+                        class_name
+                    ),
+                ));
+            }
+            Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
+        }
+        "class_attribute_args" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    "class_attribute_args() takes exactly 2 arguments",
+                ));
+            }
+            let class_arg_ty = checker.infer_type(&args[0], env)?;
+            if !matches!(class_arg_ty, PhpType::Str) {
+                return Err(CompileError::new(
+                    span,
+                    "class_attribute_args() first argument must be a string class name",
+                ));
+            }
+            let attr_arg_ty = checker.infer_type(&args[1], env)?;
+            if !matches!(attr_arg_ty, PhpType::Str) {
+                return Err(CompileError::new(
+                    span,
+                    "class_attribute_args() second argument must be a string attribute name",
+                ));
+            }
+            let ExprKind::StringLiteral(class_name) = &args[0].kind else {
+                return Err(CompileError::new(
+                    span,
+                    "class_attribute_args() requires a string literal class name (dynamic lookup is not yet supported)",
+                ));
+            };
+            if !matches!(args[1].kind, ExprKind::StringLiteral(_)) {
+                return Err(CompileError::new(
+                    span,
+                    "class_attribute_args() requires a string literal attribute name (dynamic lookup is not yet supported)",
+                ));
+            }
+            if !checker.classes.contains_key(class_name.as_str()) {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "class_attribute_args(): undefined class '{}'",
+                        class_name
+                    ),
+                ));
+            }
+            Ok(Some(PhpType::Array(Box::new(PhpType::Mixed))))
+        }
+        "class_get_attributes" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "class_get_attributes() takes exactly 1 argument",
+                ));
+            }
+            let arg_ty = checker.infer_type(&args[0], env)?;
+            if !matches!(arg_ty, PhpType::Str) {
+                return Err(CompileError::new(
+                    span,
+                    "class_get_attributes() argument must be a string class name",
+                ));
+            }
+            let ExprKind::StringLiteral(class_name) = &args[0].kind else {
+                return Err(CompileError::new(
+                    span,
+                    "class_get_attributes() requires a string literal class name (dynamic lookup is not yet supported)",
+                ));
+            };
+            if !checker.classes.contains_key(class_name.as_str()) {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "class_get_attributes(): undefined class '{}'",
+                        class_name
+                    ),
+                ));
+            }
+            Ok(Some(PhpType::Array(Box::new(PhpType::Object(
+                "ReflectionAttribute".to_string(),
+            )))))
+        }
         "exec" | "shell_exec" | "system" => {
             if args.len() != 1 {
                 return Err(CompileError::new(

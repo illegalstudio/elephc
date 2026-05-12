@@ -63,3 +63,13 @@ echo $bag->host;
 echo ":";
 echo $bag->port;
 echo "\n";
+
+// Reflection-style introspection: read the attribute names attached to a
+// class declaration. The class name must be a string literal (no dynamic
+// lookup yet), and only names — not argument lists — are exposed.
+echo "Greeter attrs:";
+foreach (class_attribute_names('Greeter') as $name) {
+    echo " ";
+    echo $name;
+}
+echo "\n";

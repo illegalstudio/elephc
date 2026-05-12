@@ -203,6 +203,11 @@ pub(super) fn infer_function_call_type(
             }
         }
         "ptr_get" | "ptr_read8" | "ptr_read32" | "ptr_sizeof" => PhpType::Int,
+        "class_attribute_names" => PhpType::Array(Box::new(PhpType::Str)),
+        "class_attribute_args" => PhpType::Array(Box::new(PhpType::Mixed)),
+        "class_get_attributes" => PhpType::Array(Box::new(PhpType::Object(
+            "ReflectionAttribute".to_string(),
+        ))),
         _ => {
             if let Some(c) = ctx {
                 if let Some(fn_sig) = c.functions.get(name) {

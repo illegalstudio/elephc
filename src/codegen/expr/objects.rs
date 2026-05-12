@@ -25,7 +25,7 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::{Expr, InstanceOfTarget, StaticReceiver};
 use crate::types::PhpType;
 
-pub(super) fn emit_new_object(
+pub(crate) fn emit_new_object(
     class_name: &str,
     args: &[Expr],
     emitter: &mut Emitter,

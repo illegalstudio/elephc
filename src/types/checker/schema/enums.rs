@@ -267,6 +267,8 @@ pub(crate) fn build_enum_info(
             is_readonly_class: true,
             allow_dynamic_properties: false,
             constants: HashMap::new(),
+            attribute_names: Vec::new(),
+            attribute_args: Vec::new(),
             properties,
             property_offsets,
             property_declaring_classes,

@@ -257,3 +257,129 @@ fn test_allow_dynamic_properties_namespaced_unqualified_lookalike_is_not_builtin
         "Undefined property: N\\Bag::x",
     );
 }
+
+// --- class_attribute_names() argument validation ---
+
+#[test]
+fn test_error_class_attribute_names_undefined_class() {
+    expect_error(
+        "<?php $x = class_attribute_names('DoesNotExist');",
+        "undefined class 'DoesNotExist'",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_names_dynamic_argument() {
+    expect_error(
+        "<?php $name = 'Foo'; class_attribute_names($name);",
+        "requires a string literal class name",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_names_no_argument() {
+    expect_error(
+        "<?php class_attribute_names();",
+        "exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_names_non_string_argument() {
+    expect_error(
+        "<?php class_attribute_names(42);",
+        "must be a string class name",
+    );
+}
+
+// --- class_attribute_args() argument validation ---
+
+#[test]
+fn test_error_class_attribute_args_undefined_class() {
+    expect_error(
+        "<?php $x = class_attribute_args('DoesNotExist', 'Foo');",
+        "undefined class 'DoesNotExist'",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_args_dynamic_class_argument() {
+    expect_error(
+        "<?php $name = 'Foo'; class_attribute_args($name, 'Bar');",
+        "requires a string literal class name",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_args_dynamic_attr_argument() {
+    expect_error(
+        "<?php #[Foo] class C {} $name = 'Foo'; class_attribute_args('C', $name);",
+        "requires a string literal attribute name",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_args_wrong_arity() {
+    expect_error(
+        "<?php class_attribute_args('Foo');",
+        "exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_args_non_string_class() {
+    expect_error(
+        "<?php class_attribute_args(1, 'Foo');",
+        "first argument must be a string class name",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_args_non_string_attr() {
+    expect_error(
+        "<?php #[Foo] class C {} class_attribute_args('C', 1);",
+        "second argument must be a string attribute name",
+    );
+}
+
+// --- class_get_attributes() argument validation ---
+
+#[test]
+fn test_error_class_get_attributes_undefined_class() {
+    expect_error(
+        "<?php $x = class_get_attributes('DoesNotExist');",
+        "undefined class 'DoesNotExist'",
+    );
+}
+
+#[test]
+fn test_error_class_get_attributes_dynamic_argument() {
+    expect_error(
+        "<?php $name = 'Foo'; class_get_attributes($name);",
+        "requires a string literal class name",
+    );
+}
+
+#[test]
+fn test_error_class_get_attributes_no_argument() {
+    expect_error(
+        "<?php class_get_attributes();",
+        "exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_class_get_attributes_non_string_argument() {
+    expect_error(
+        "<?php class_get_attributes(42);",
+        "must be a string class name",
+    );
+}
+
+#[test]
+fn test_error_reflection_attribute_redeclaration() {
+    expect_error(
+        "<?php class ReflectionAttribute {}",
+        "Cannot redeclare built-in reflection type: ReflectionAttribute",
+    );
+}

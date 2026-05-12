@@ -8,6 +8,9 @@
 //! Key details:
 //! - Dispatcher names must stay aligned with the builtin catalog and signature normalization layer.
 
+mod class_attribute_args;
+mod class_attribute_names;
+mod class_get_attributes;
 mod date;
 mod define;
 mod exec_fn;
@@ -57,6 +60,9 @@ pub fn emit(
         "putenv" => putenv::emit(name, args, emitter, ctx, data),
         "php_uname" => php_uname::emit(name, args, emitter, ctx, data),
         "phpversion" => phpversion::emit(name, args, emitter, ctx, data),
+        "class_attribute_args" => class_attribute_args::emit(name, args, emitter, ctx, data),
+        "class_attribute_names" => class_attribute_names::emit(name, args, emitter, ctx, data),
+        "class_get_attributes" => class_get_attributes::emit(name, args, emitter, ctx, data),
         "exec" => exec_fn::emit(name, args, emitter, ctx, data),
         "shell_exec" => shell_exec::emit(name, args, emitter, ctx, data),
         "system" => system_fn::emit(name, args, emitter, ctx, data),

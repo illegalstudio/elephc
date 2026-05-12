@@ -15,6 +15,19 @@ use crate::parser::ast::{ClassMethod, Expr, Visibility};
 
 use super::{FunctionSig, PhpType};
 
+/// Compile-time attribute argument literal. Captures the subset of PHP
+/// attribute argument expressions that we can evaluate at compile time:
+/// strings, ints, bools, and null. Anything else is dropped at schema
+/// collection time until elephc grows full constant-expression evaluation
+/// for attribute arguments.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AttrArgValue {
+    Null,
+    Int(i64),
+    Bool(bool),
+    Str(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct InterfaceInfo {
     pub interface_id: u64,
@@ -42,6 +55,18 @@ pub struct ClassInfo {
     /// User-declared class constants (PHP 7.1+). Maps the constant name to
     /// its value expression — codegen inlines the literal at access time.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
+    /// Names of PHP 8 attributes attached to this class declaration, in
+    /// source order, with the leading backslash on fully-qualified names
+    /// preserved (e.g. "\Override", "Author"). Future ReflectionClass
+    /// support will read this list from the per-class metadata table
+    /// emitted at codegen time.
+    pub attribute_names: Vec<String>,
+    /// Literal arguments captured for each attribute, in source order and
+    /// aligned with `attribute_names`. Each inner `Vec<AttrArgValue>` holds
+    /// the positional literal args (string, int, bool, null). Non-literal
+    /// args (expressions, named args) are dropped until elephc grows
+    /// compile-time evaluation of attribute argument expressions.
+    pub attribute_args: Vec<Vec<AttrArgValue>>,
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,

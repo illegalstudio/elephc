@@ -17,8 +17,9 @@ use crate::parser::ast::{Program, StmtKind};
 use crate::types::{traits::flatten_classes, TypeEnv};
 
 use super::builtin_types::{
-    inject_builtin_throwables, patch_builtin_exception_signatures,
-    patch_builtin_fiber_signatures, patch_magic_method_signatures, InterfaceDeclInfo,
+    inject_builtin_reflection, inject_builtin_throwables, patch_builtin_exception_signatures,
+    patch_builtin_fiber_signatures, patch_builtin_reflection_signatures,
+    patch_magic_method_signatures, InterfaceDeclInfo,
 };
 use super::builtin_iterators::inject_builtin_iterators;
 use super::schema::{
@@ -100,6 +101,9 @@ pub(super) fn check_types_impl(
     if let Err(error) = inject_builtin_iterators(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }
+    if let Err(error) = inject_builtin_reflection(&mut class_map) {
+        errors.extend(error.flatten());
+    }
     checker.declared_interfaces = interface_map.keys().cloned().collect();
 
     let mut next_interface_id = 0u64;
@@ -153,6 +157,7 @@ pub(super) fn check_types_impl(
     }
     patch_builtin_exception_signatures(&mut checker);
     patch_builtin_fiber_signatures(&mut checker);
+    patch_builtin_reflection_signatures(&mut checker);
     patch_magic_method_signatures(&mut checker);
 
     checker.prescan_extern_decls(program, &mut errors);

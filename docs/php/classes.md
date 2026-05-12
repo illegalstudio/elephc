@@ -378,7 +378,62 @@ echo $b->name;            // "elephc"
 echo $b->missing;         // empty (Mixed null)
 ```
 
-User-defined attributes (e.g. `#[Author]`, `#[Pure]`, `#[Memoized]`) parse and persist in the AST but have no compile-time semantics — `ReflectionAttribute` and runtime introspection are not yet available.
+User-defined attributes (e.g. `#[Author]`, `#[Pure]`, `#[Memoized]`) parse and persist in the AST. They have no compile-time semantics, but their **names** and positional **literal arguments** are reachable at runtime through the `class_attribute_names()` and `class_attribute_args()` builtins:
+
+```php
+<?php
+#[Author("Ada"), Version(1)]
+class Greeter {}
+
+#[\Override]
+class Solo {}
+
+#[Route("/api/users", "GET", true)]
+class UserController {}
+
+foreach (class_attribute_names('Greeter') as $name) {
+    echo $name, "\n";
+}
+// Author
+// Version
+
+echo class_attribute_names('Solo')[0]; // "\Override" (FQN preserved)
+
+foreach (class_attribute_args('UserController', 'Route') as $arg) {
+    echo $arg, "\n";
+}
+// /api/users
+// GET
+// 1     ← `true` echoes as 1 in PHP
+```
+
+`class_attribute_args()` returns an `array<mixed>` whose elements preserve their original PHP type — strings stay strings, ints stay ints, booleans stay booleans, and `null` is `null`. The args are interned at compile time and boxed into mixed cells on demand at the call site.
+
+For a more PHP-idiomatic API, `class_get_attributes()` returns the same data wrapped as `ReflectionAttribute` instances:
+
+```php
+<?php
+#[Author("Ada", 1815), Version("1.0", true)]
+class Greeter {}
+
+foreach (class_get_attributes('Greeter') as $attr) {
+    echo $attr->getName(), ": ";
+    foreach ($attr->getArguments() as $arg) {
+        echo "[", $arg, "]";
+    }
+    echo "\n";
+}
+// Author: [Ada][1815]
+// Version: [1.0][1]
+```
+
+`ReflectionAttribute` is a synthetic built-in class with `getName(): string` and `getArguments(): array` methods. It can also be constructed manually (`new ReflectionAttribute()`) — its `$__name` and `$__args` properties are public so code can populate them directly when needed.
+
+Limitations today:
+- All arguments to `class_attribute_names()`, `class_attribute_args()`, and `class_get_attributes()` must be **string literals** at the call site — dynamic class or attribute names (variables) require a runtime name→id lookup table that is not yet implemented.
+- Only **literal** arguments are captured (string, int, bool, null, plus `-N` for negative ints). Float literals, expressions, and named args are dropped at compile time until elephc grows compile-time evaluation of attribute argument expressions.
+- When several attributes share a name on the same class, `class_attribute_args()` returns the args of the first match; `class_get_attributes()` does expose every occurrence as a separate `ReflectionAttribute` in source order.
+- The full `ReflectionClass` API (`getProperties()`, `getMethods()`, `newInstance()`, …) is not yet available.
 
 ### Class constants
 
