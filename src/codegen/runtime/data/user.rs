@@ -257,8 +257,9 @@ pub(crate) fn emit_runtime_data_user(
     //   tag 3 = bool  (lo = 0 or 1,            hi = 0)
     //   tag 8 = null  (lo = 0,                 hi = 0)
     //
-    // Non-literal args (expressions, named args) are dropped at
-    // schema-collection time in `collect_attribute_args`. Float and other
+    // Unsupported args are represented as absent metadata by
+    // `collect_attribute_args`; reflection helpers reject queries that would
+    // need those payloads before codegen reaches this table. Float and other
     // mixed-cell payloads are reserved for future iterations.
     if let Some(max_class_id) = max_class_id {
         let mut name_id = 0u64;

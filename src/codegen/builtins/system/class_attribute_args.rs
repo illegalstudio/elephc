@@ -21,8 +21,8 @@ use crate::types::{AttrArgValue, PhpType};
 /// `class_attribute_args($class, $attr_name)`: return the positional
 /// literal arguments of the named attribute attached to `$class` as an
 /// indexed `array<mixed>`. Strings, ints, booleans, and null literals are
-/// preserved with their original PHP types; unsupported args are rejected
-/// at schema-collection time so runtime metadata remains complete.
+/// preserved with their original PHP types; the checker rejects calls that
+/// would require unsupported metadata before codegen reaches this emitter.
 ///
 /// Both arguments must be compile-time string literals — at codegen time
 /// we look up `ClassInfo.attribute_args` and emit a sequence of

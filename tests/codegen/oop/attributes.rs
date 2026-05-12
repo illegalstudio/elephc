@@ -525,8 +525,8 @@ echo count($args);
 #[test]
 fn test_class_attribute_args_preserves_int_and_string_literals() {
     // Strings, ints, booleans, and null literals are all preserved as
-    // boxed mixed cells. Non-literal args (expressions, named args) are
-    // still dropped at schema-collection time.
+    // boxed mixed cells; unsupported argument shapes are rejected only when
+    // a reflection helper needs to materialize them.
     let out = compile_and_run(
         r#"<?php
 #[Mixed("kept", 42, "also-kept")]

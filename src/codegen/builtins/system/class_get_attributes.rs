@@ -91,9 +91,9 @@ pub fn emit(
         abi::emit_push_reg(emitter, result_reg);
 
         // -- allocate a fresh ReflectionAttribute via the normal new path --
-        // emit_new_object walks the registered class (no constructor on
-        // ReflectionAttribute, so this lands directly on the default-init
-        // path and leaves the new object pointer in the integer result reg).
+        // emit_new_object walks the registered class and runs its private
+        // synthetic zero-arg constructor; this internal emitter is the only
+        // code path that can populate ReflectionAttribute metadata slots.
         emit_new_object(
             "ReflectionAttribute",
             &[],

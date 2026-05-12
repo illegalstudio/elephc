@@ -54,10 +54,10 @@ pub struct ClassInfo {
     /// its value expression — codegen inlines the literal at access time.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
     /// Names of PHP 8 attributes attached to this class declaration, in
-    /// source order, with the leading backslash on fully-qualified names
-    /// preserved (e.g. "\Override", "Author"). Future ReflectionClass
-    /// support will read this list from the per-class metadata table
-    /// emitted at codegen time.
+    /// source order. Name resolution stores canonical class-like text without
+    /// a synthetic leading backslash, matching `ReflectionAttribute::getName()`.
+    /// Future ReflectionClass support will read this list from per-class
+    /// metadata emitted at codegen time.
     pub attribute_names: Vec<String>,
     /// Literal arguments captured for each attribute, in source order and
     /// aligned with `attribute_names`. `None` means the source uses legal PHP
