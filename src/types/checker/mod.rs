@@ -9,7 +9,8 @@
 //! - Checker state is populated in ordered phases; later passes assume schemas, builtins, and signatures are complete.
 
 pub(crate) mod builtins;
-mod builtin_iterators;
+mod builtin_interfaces;
+mod builtin_spl_exceptions;
 mod builtin_types;
 mod callables;
 mod driver;

@@ -442,6 +442,43 @@ and release-candidate validation rather than by speculative pass work.
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [ ] Installation / packaging documentation for the supported host platforms
 
+## Standard PHP Library (SPL)
+
+PHP-compatible Standard PHP Library coverage, rolled out in phases.
+
+- [x] Phase 1 — built-in interfaces: `Traversable`, `Iterator` (extends `Traversable`), `IteratorAggregate` (extends `Traversable`), `OuterIterator`, `RecursiveIterator`, `SeekableIterator`, `Countable`, `ArrayAccess`, `SplObserver`, `SplSubject`, `Stringable`, `JsonSerializable`
+- [x] Phase 2 — `count($obj)` redirects to `Countable::count()`
+- [x] Phase 3 — SPL exception hierarchy: `LogicException`, `BadFunctionCallException`, `BadMethodCallException`, `DomainException`, `InvalidArgumentException`, `LengthException`, `OutOfRangeException`, `RuntimeException`, `OutOfBoundsException`, `OverflowException`, `RangeException`, `UnderflowException`, `UnexpectedValueException`
+- [ ] `$obj[$k]` subscript syntax for `ArrayAccess` implementers (read, write, `isset`, `unset` paths) — defers `Mixed`-boxing work
+- [x] Static autoload — composer.json `autoload.psr-4` driven, includes `vendor/<vendor>/<package>/composer.json`. Replaces runtime autoload by inlining every reachable PSR-4 class at compile time
+- [x] `spl_autoload_*` stubs — `register`/`unregister` return `true`, `functions` returns `[]`, `extensions` returns `".inc,.php"`, `call` and `spl_autoload` are no-ops. Defensive code that calls these at boot compiles unchanged
+- [x] Closure-aware `spl_autoload_register` — the closure body is evaluated symbolically at compile time. Supports `__DIR__ . '/' . str_replace('\\', '/', $name) . '.php'` style autoloaders, intermediate variable assignments, and `if (file_exists(...))` guards. `spl_autoload_unregister` removes matching rules; `spl_autoload_call("App\\Foo")` with a literal name forces compile-time autoload of that class
+- [x] Runtime r/w for `spl_autoload_extensions` — backed by mutable globals (`_spl_autoload_exts_ptr` / `_spl_autoload_exts_len`) initialized to `".inc,.php"`. Read returns the current value; write swaps in the new and returns the previous, matching PHP semantics
+- [x] `spl_autoload_functions()` returns an indexed array sized to the number of registered closure rules — `count()` and `foreach` see one entry per rule
+- [x] Read `autoload.classmap`, `autoload.files`, `autoload.psr-0`, and `autoload-dev.*` sections from composer.json. Longest-prefix wins for PSR-4. PSR-0 supports both namespaced and underscore-class conventions
+- [x] `class_exists` / `interface_exists` / `trait_exists` / `enum_exists` with literal class name and `autoload = true` (default) trigger compile-time autoload of the literal
+- [x] Variable-stored closures and function-name string callables are accepted by `spl_autoload_register`. The closure assignment / function declaration is stripped from the program after the rule is extracted
+- [x] Top-level `if (...)` whose condition folds to a literal bool flattens before rule collection — guard your register call with `if (true)`, `if (false)/else`, or chained `elseif` and the chosen branch is inlined at compile time
+- [x] `sprintf`, `dirname`, `basename` are supported by the symbolic interpreter — common autoloader patterns like `require_once sprintf("%s/%s.php", __DIR__, $name)` and `dirname(__DIR__) . '/lib/' . $name . '.php'` fold at compile time
+- [x] `get_declared_classes` / `get_declared_interfaces` / `get_declared_traits` return AOT introspection snapshots of the compiled symbol set
+- [x] `class_alias($orig, $alias)` synthesises a subclass at compile time so `new $alias()` and `instanceof $alias` work as the user expects
+- [x] `autoload.exclude-from-classmap` skips matching paths during classmap scanning. Supports glob patterns (`*`, `**`, `?`) plus the trailing-slash directory shorthand
+- [x] PSR-4 empty namespace prefix `""` (root namespace) verified working
+- [x] `realpath` and `pathinfo` (with `PATHINFO_*` flags) added to the symbolic interpreter
+- [x] PSR-0 underscore-class convention (`Twig_Loader_Filesystem` → `lib/Twig/Loader/Filesystem.php`) verified
+- [x] `spl_object_id`, `spl_object_hash`, `spl_classes` runtime helpers; pointer-based identity, stable per process
+- [x] `get_class` / `get_parent_class` resolve via the argument's static type at compile time
+- [x] `is_a` / `is_subclass_of` with literal class arg fold at compile time, walking parent chain and implemented interfaces
+- [x] Compile-time warning when a `spl_autoload_register` closure is rejected (use captures, multi-param, variadic) — explains why the autoloader silently became a no-op
+- [ ] Phase 4 — `IntrinsicCall` foundation + `SplDoublyLinkedList`, `SplStack`, `SplQueue`, `SplFixedArray`
+- [ ] Phase 5 — iterator decorators (`ArrayIterator`, `ArrayObject`, `IteratorIterator`, `LimitIterator`, `NoRewindIterator`, `InfiniteIterator`, `EmptyIterator`, `AppendIterator`, `MultipleIterator`, `CallbackFilterIterator`, `FilterIterator`, `CachingIterator`, `RecursiveArrayIterator`, `RecursiveCallbackFilterIterator`, `RecursiveFilterIterator`, `RecursiveIteratorIterator`, `RecursiveTreeIterator`, `ParentIterator`); functions `iterator_to_array`, `iterator_count`, `iterator_apply`, `class_implements`, `class_parents`, `class_uses`
+- [ ] Phase 6 — `SplHeap`, `SplMaxHeap`, `SplMinHeap`, `SplPriorityQueue`, `SplObjectStorage`; `spl_object_id`, `spl_object_hash`, `spl_classes`; `spl_autoload_*` decision and per-instance handle finalization
+- [ ] Phase 7 — `RegexIterator`, `RecursiveRegexIterator`
+- [ ] Phase 8 — file/directory iterators: `SplFileInfo`, `SplFileObject`, `SplTempFileObject`, `DirectoryIterator`, `FilesystemIterator`, `GlobIterator`, `RecursiveDirectoryIterator`, `RecursiveCachingIterator`
+- [ ] `Throwable`-via-interface `getMessage()` dispatch fix (pre-existing): catching by `Throwable` and calling `getMessage()` on the typed binding returns garbage instead of the message string
+
+`Serializable` is intentionally not implemented — it has been deprecated since PHP 8.1.
+
 ## v1.0.x — Stabilization and release gate
 
 - [x] `--emit-asm`, `--check` flags

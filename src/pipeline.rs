@@ -16,8 +16,8 @@ use std::time::Instant;
 use crate::cli::CliConfig;
 use crate::timings::CompileTimings;
 use crate::{
-    codegen, conditional, errors, lexer, linker, magic_constants, name_resolver, optimize, parser,
-    resolver, runtime_cache, source_map, types,
+    autoload, codegen, conditional, errors, lexer, linker, magic_constants, name_resolver,
+    optimize, parser, resolver, runtime_cache, source_map, types,
 };
 
 struct OutputPaths {
@@ -86,6 +86,14 @@ pub(crate) fn compile(config: CliConfig) {
     let parsed = conditional::apply(parsed, &defines);
 
     let phase_started = Instant::now();
+    let (autoload_registry, parsed) = autoload::Registry::build(parent, parsed);
+    codegen::set_autoload_rule_count(autoload_registry.rule_count());
+    for warning in autoload_registry.warnings() {
+        errors::report_warning(warning);
+    }
+    timings.record_since("autoload-build", phase_started);
+
+    let phase_started = Instant::now();
     let ast = match resolver::resolve(parsed, parent) {
         Ok(resolved) => resolved,
         Err(e) => {
@@ -104,6 +112,16 @@ pub(crate) fn compile(config: CliConfig) {
         }
     };
     timings.record_since("name-resolve", phase_started);
+
+    let phase_started = Instant::now();
+    let ast = match autoload::run(ast, parent, &autoload_registry) {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("autoload-run", phase_started);
 
     let phase_started = Instant::now();
     let ast = optimize::fold_constants(ast);

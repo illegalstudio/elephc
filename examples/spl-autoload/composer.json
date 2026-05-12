@@ -1,0 +1,9 @@
+{
+    "name": "elephc/spl-autoload-example",
+    "description": "Demonstrates static composer.json PSR-4 autoload at compile time.",
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    }
+}

@@ -1,0 +1,8 @@
+{
+    "name": "acme/widgets",
+    "autoload": {
+        "psr-4": {
+            "Acme\\Widgets\\": "src/"
+        }
+    }
+}

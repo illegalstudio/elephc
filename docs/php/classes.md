@@ -47,6 +47,36 @@ class Product implements Named {
 - signature-only methods, no bodies, no properties
 - interface inheritance flattened transitively with cycle detection
 
+### Built-in interfaces
+
+The compiler injects the following interfaces, available without any
+`implements` declaration on the user side:
+
+| Interface | Methods |
+|---|---|
+| `Traversable` | (marker) |
+| `Iterator` extends `Traversable` | `current(): mixed`, `key(): mixed`, `next(): void`, `valid(): bool`, `rewind(): void` |
+| `IteratorAggregate` extends `Traversable` | `getIterator(): Iterator` |
+| `OuterIterator` extends `Iterator` | `getInnerIterator(): ?Iterator` |
+| `RecursiveIterator` extends `Iterator` | `getChildren(): ?RecursiveIterator`, `hasChildren(): bool` |
+| `SeekableIterator` extends `Iterator` | `seek(int $offset): void` |
+| `Countable` | `count(): int` |
+| `ArrayAccess` | `offsetExists(mixed $offset): bool`, `offsetGet(mixed $offset): mixed`, `offsetSet(mixed $offset, mixed $value): void`, `offsetUnset(mixed $offset): void` |
+| `SplObserver` | `update(SplSubject $subject): void` |
+| `SplSubject` | `attach(SplObserver $observer): void`, `detach(SplObserver $observer): void`, `notify(): void` |
+| `Stringable` | `__toString(): string` |
+| `JsonSerializable` | `jsonSerialize(): mixed` |
+| `Throwable` | `getMessage(): string` |
+
+`count($obj)` automatically dispatches to `Countable::count()` when
+`$obj` is an instance of a class implementing `Countable`. The
+`$obj[$key]` subscript syntax for `ArrayAccess` implementers is not yet
+implemented; call the methods directly (`$obj->offsetGet($key)`).
+
+`Serializable` is intentionally not provided: it is deprecated since
+PHP 8.1. Use `__serialize` / `__unserialize` magic methods instead
+(when those land).
+
 ## Type checks with instanceof
 ```php
 <?php

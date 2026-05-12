@@ -328,6 +328,75 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Int))
         }
+        "class_alias" => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(CompileError::new(
+                    span,
+                    "class_alias() takes 2 or 3 arguments",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "get_class" => {
+            if args.len() > 1 {
+                return Err(CompileError::new(
+                    span,
+                    "get_class() takes at most 1 argument",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Str))
+        }
+        "get_parent_class" => {
+            if args.len() > 1 {
+                return Err(CompileError::new(
+                    span,
+                    "get_parent_class() takes at most 1 argument",
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Str))
+        }
+        "is_a" | "is_subclass_of" => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes 2 or 3 arguments", name),
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "class_exists" | "interface_exists" | "trait_exists" | "enum_exists" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes 1 or 2 arguments", name),
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
+            if !args.is_empty() {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes no arguments", name),
+                ));
+            }
+            Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
+        }
         "function_exists" => {
             if args.len() != 1 {
                 return Err(CompileError::new(

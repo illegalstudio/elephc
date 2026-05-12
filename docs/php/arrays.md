@@ -132,7 +132,7 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 
 | Function | Signature | Description |
 |---|---|---|
-| `count()` | `count($arr): int` | Number of elements |
+| `count()` | `count($arr_or_countable): int` | Number of elements; on objects implementing `Countable`, dispatches to `count()` |
 | `array_push()` | `array_push($arr, $val): void` | Add element to end |
 | `array_pop()` | `array_pop($arr): mixed` | Remove and return last element |
 | `in_array()` | `in_array($needle, $arr): int` | Search for value (0/1) |

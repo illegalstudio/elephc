@@ -27,7 +27,25 @@ mod program_usage;
 mod runtime;
 mod stmt;
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+
+thread_local! {
+    /// Number of `spl_autoload_register` closure rules the autoload pass
+    /// extracted at compile time. Set via [`set_autoload_rule_count`]
+    /// before `generate` is called; read by `spl_autoload_functions()`
+    /// codegen to size the introspection array. Thread-local so
+    /// parallel test runs don't interfere.
+    static AUTOLOAD_RULE_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+pub fn set_autoload_rule_count(n: usize) {
+    AUTOLOAD_RULE_COUNT.with(|c| c.set(n));
+}
+
+pub fn autoload_rule_count() -> usize {
+    AUTOLOAD_RULE_COUNT.with(|c| c.get())
+}
 
 use crate::parser::ast::{Program, StmtKind};
 use crate::types::{
