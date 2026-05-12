@@ -419,26 +419,81 @@ language contract.
 
 - [ ] OOP property parity v2 — cover abstract properties, `readonly static` properties, instance property redeclaration rules, and the remaining by-reference constructor-promotion gaps (`readonly` and default values)
 
-## v0.23.x — Optimization and release performance pass
+## v0.23.x — Optimization and release performance pass (superseded)
+
+This section was reorganized when the EIR plan landed. The items that
+required an intermediate representation were absorbed into v0.24.x (EIR
+introduction + register allocation) and v0.25.x (EIR optimization passes).
+The remaining release-track and AST-level optimizer items moved to v0.26.x.
+See `docs/internals/the-ir.md` and the plan series in `~/Downloads/elephc-plans/`
+for the rationale.
+
+The v0.23.x label is preserved here so that any external references stay
+resolvable. No new work is planned under this label.
+
+## v0.24.x — EIR introduction and register allocation
+
+Introduce a domain-specific intermediate representation (EIR) between the
+AST-level optimizer and the assembly emitter, then add a real register
+allocator.
+
+EIR is a custom, PHP-shaped IR — not Cranelift or LLVM. It preserves the
+hand-written-and-commented assembly philosophy while removing the
+structural ceiling on optimization that the direct AST → ASM emitter
+imposed. See `docs/internals/the-ir.md`.
+
+- [ ] EIR design specification (`docs/internals/the-ir.md`) — types, instructions, terminators, effects, ownership, textual format
+- [ ] `src/ir/` module — types, instructions, builder, validator, printer
+- [ ] AST → EIR lowering pass — every `ExprKind`/`StmtKind` variant
+- [ ] `--emit-ir` CLI flag for diagnostics and snapshot testing
+- [ ] EIR → ASM backend producing semantically equivalent output to the legacy backend (no optimizations yet)
+- [ ] `--ir-backend` CLI flag (opt-in stable)
+- [ ] Two-week soak period to collect external feedback
+- [ ] Default backend switch from AST to EIR
+- [ ] Deprecation warning on `--ast-backend`
+- [ ] Linear-scan register allocator (Poletto-Sarkar) with separate int / float pools and callee-saved preservation across calls
+- [ ] Register-pressure mitigations: caller-saved reuse for non-call-crossing intervals; better spill heuristic
+
+Expected outcome: feature parity at end of v0.24.0; ≥15% performance
+improvement on compute benchmarks at end of v0.24.x.
+
+## v0.25.x — EIR optimization passes
+
+Build the IR-level passes that the AST optimizer could not reach.
+
+- [ ] Identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, etc.)
+- [ ] Peephole patterns: redundant load/store, box/unbox cancellation, string-literal concat folding, paired acquire/release cancellation
+- [ ] Dead instruction elimination over the IR CFG (absorbs former v0.23 "Dead code elimination v3")
+- [ ] Dead store elimination over PHP local slots
+- [ ] Branch simplification (constant-condition `CondBr`, empty-block jump threading, unreachable block removal)
+- [ ] Common subexpression elimination — per-block, then dominance-aware cross-block (absorbs former v0.23 "Constant propagation v4")
+- [ ] Loop detection and natural-loop construction (back edges, headers, preheaders)
+- [ ] Loop-invariant code motion for pure operations
+- [ ] Small-function inliner (size threshold 24 instructions, non-recursive, no try/catch, no generators/fibers) (absorbs former v0.23 "Inline small functions")
+- [ ] Pipeline integration in fixed-point order
+
+Expected outcome: additional 10–20% performance gain on loop-heavy and
+call-heavy benchmarks; cumulative ≥30% improvement vs end-of-v0.23
+baseline.
+
+## v0.26.x — Performance closure, legacy cleanup, and release stabilization
 
 Optimization work should now be driven by benchmarks, generated assembly size,
 and release-candidate validation rather than by speculative pass work.
 
+- [ ] Remove legacy AST → ASM backend (`src/codegen/expr/`, `stmt/`, `class_methods.rs`, `functions/`, related modules)
+- [ ] Rename `src/codegen_ir/` to `src/codegen/`
+- [ ] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
 - [ ] Source maps v2 — richer mappings for functions / expressions / labels and a more stable machine-readable schema for external tooling
-- [ ] Peephole optimization (redundant load/store elimination)
-- [ ] Dead code elimination v3 — fuller fixed-point/basic-block pass beyond the current path-aware AST pruning
-- [ ] Constant propagation v4 — full fixed-point / basic-block propagation across arbitrary loops and general path merges once there are measured cases that justify the extra pass complexity
 - [ ] Memory-model-aware propagation for heap-backed locals and targeted runtime invalidations beyond `unset($var)` and the currently modeled local writes
-- [ ] Purity / may-throw v2 for dynamic instance dispatch, richer property/array reads, and less pessimistic builtin modeling
+- [ ] Purity / may-throw v2 for dynamic instance dispatch, richer property/array reads, and less pessimistic builtin modeling (feeds the EIR effects table)
 - [ ] Guard reasoning v2 for dead-code elimination — broader range reasoning and multi-variable facts beyond current strict-scalar, boolean, loose-comparison, and safe relational-complement guards
 - [ ] Exception-aware DCE v2 — exact thrown-type / handler reachability, nested try rethrow modeling, and less conservative finally-path invalidation
 - [ ] Control-flow normalization v2 — broader canonicalization of nested block/control shells before CFG-aware optimization passes
 - [ ] Composite conditional include function variants — extend include-graph exclusivity from one direct `if` / `elseif` / `else` chain to nested/composed conditional paths where declarations are pairwise exclusive only after combining multiple branch decisions
 - [ ] Switch-aware conditional include function variants — extend include-graph exclusivity beyond `if` / `elseif` / `else` to `switch` cases once fall-through, `break`, and terminating case bodies are modeled precisely; revisit `match` only if include-like statement lowering ever appears inside match arms
 - [ ] Runtime routine dead stripping — include or link only runtime helpers reachable from the generated program instead of carrying the whole target runtime slice
-- [ ] Register allocation (reduce stack spills)
-- [ ] Inline small functions
-- [ ] Tail-call optimization
+- [ ] Tail-call optimization — direct tail self- and mutual-recursion lowering on top of EIR (`Br` to function entry with parameter rebinding)
 - [ ] Performance within 2x of C -O0 on compute benchmarks
 - [ ] Real-world CLI tools compiled as validation
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
