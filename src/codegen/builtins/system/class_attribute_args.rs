@@ -1,3 +1,14 @@
+//! Purpose:
+//! Lowers `class_attribute_args()` calls into an indexed `array<mixed>` of
+//! literal class-attribute arguments captured during schema construction.
+//!
+//! Called from:
+//! - `crate::codegen::builtins::system::emit()`.
+//!
+//! Key details:
+//! - Attribute matching is case-insensitive, and each captured scalar is boxed
+//!   into a mixed cell before being appended to the result array.
+
 use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
@@ -10,8 +21,8 @@ use crate::types::{AttrArgValue, PhpType};
 /// `class_attribute_args($class, $attr_name)`: return the positional
 /// literal arguments of the named attribute attached to `$class` as an
 /// indexed `array<mixed>`. Strings, ints, booleans, and null literals are
-/// preserved with their original PHP types; non-literal args (expressions,
-/// named args) are dropped at schema-collection time.
+/// preserved with their original PHP types; unsupported args are rejected
+/// at schema-collection time so runtime metadata remains complete.
 ///
 /// Both arguments must be compile-time string literals — at codegen time
 /// we look up `ClassInfo.attribute_args` and emit a sequence of

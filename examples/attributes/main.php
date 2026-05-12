@@ -64,12 +64,26 @@ echo ":";
 echo $bag->port;
 echo "\n";
 
-// Reflection-style introspection: read the attribute names attached to a
-// class declaration. The class name must be a string literal (no dynamic
-// lookup yet), and only names — not argument lists — are exposed.
+// Reflection-style introspection: read class attribute names and supported
+// literal arguments. Class and attribute names must be string literals (no
+// dynamic lookup yet).
 echo "Greeter attrs:";
 foreach (class_attribute_names('Greeter') as $name) {
     echo " ";
     echo $name;
+}
+echo "\n";
+
+echo "Author args:";
+foreach (class_attribute_args('Greeter', 'Author') as $arg) {
+    echo " ";
+    echo $arg;
+}
+echo "\n";
+
+echo "Reflection attrs:";
+foreach (class_get_attributes('Greeter') as $attr) {
+    echo " ";
+    echo $attr->getName();
 }
 echo "\n";

@@ -1,3 +1,14 @@
+//! Purpose:
+//! Lowers `class_get_attributes()` into an indexed array of populated
+//! synthetic `ReflectionAttribute` objects for class-level attributes.
+//!
+//! Called from:
+//! - `crate::codegen::builtins::system::emit()`.
+//!
+//! Key details:
+//! - The objects are internally populated by writing private metadata slots,
+//!   while user code only sees `getName()` and `getArguments()`.
+
 use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;

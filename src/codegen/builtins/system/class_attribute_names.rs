@@ -1,3 +1,14 @@
+//! Purpose:
+//! Lowers `class_attribute_names()` calls into an indexed array of class-level
+//! PHP attribute names captured during schema construction.
+//!
+//! Called from:
+//! - `crate::codegen::builtins::system::emit()`.
+//!
+//! Key details:
+//! - Class lookup is case-insensitive and resolved at compile time from a
+//!   string literal so the emitted code can unroll one push per attribute.
+
 use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;

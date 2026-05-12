@@ -8,7 +8,7 @@
 //!
 //! Key details:
 //! - Property and method bodies are dummies; the runtime semantics are implemented by the
-//!   `class_get_attributes` builtin and direct property accesses.
+//!   `class_get_attributes` builtin and private metadata slots.
 
 use std::collections::HashMap;
 

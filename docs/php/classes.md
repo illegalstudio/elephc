@@ -317,7 +317,7 @@ Pure and backed enums. `->value`, `::from()`, `::tryFrom()`, `::cases()`. Only `
 
 ## Attributes
 
-PHP 8.0 attributes (`#[Name]`) decorate declarations. elephc parses attributes at every site PHP allows: classes, interfaces, traits, enums, enum cases, top-level functions, methods, properties, function/method/closure parameters (incl. promoted constructor params), closures, and arrow functions. Declaration-level attributes are captured in the AST; parameter and closure attributes are currently validated for syntax and discarded because runtime reflection is not available yet.
+PHP 8.0 attributes (`#[Name]`) decorate declarations. elephc parses attributes at every site PHP allows: classes, interfaces, traits, enums, enum cases, top-level functions, methods, properties, function/method/closure parameters (incl. promoted constructor params), closures, and arrow functions. Class-level attributes have limited runtime reflection through the helpers below; attributes on other declaration sites are currently validated for syntax and kept only in the AST.
 
 ```php
 <?php
@@ -397,7 +397,7 @@ foreach (class_attribute_names('Greeter') as $name) {
 // Author
 // Version
 
-echo class_attribute_names('Solo')[0]; // "\Override" (FQN preserved)
+echo class_attribute_names('Solo')[0]; // "Override" (resolved name)
 
 foreach (class_attribute_args('UserController', 'Route') as $arg) {
     echo $arg, "\n";
@@ -427,11 +427,11 @@ foreach (class_get_attributes('Greeter') as $attr) {
 // Version: [1.0][1]
 ```
 
-`ReflectionAttribute` is a synthetic built-in class with `getName(): string` and `getArguments(): array` methods. It can also be constructed manually (`new ReflectionAttribute()`) — its `$__name` and `$__args` properties are public so code can populate them directly when needed.
+`ReflectionAttribute` is a final synthetic built-in class with `getName(): string` and `getArguments(): array` methods. It is populated internally by `class_get_attributes()` and cannot be constructed or populated directly from user code; its metadata slots are private.
 
 Limitations today:
 - All arguments to `class_attribute_names()`, `class_attribute_args()`, and `class_get_attributes()` must be **string literals** at the call site — dynamic class or attribute names (variables) require a runtime name→id lookup table that is not yet implemented.
-- Only **literal** arguments are captured (string, int, bool, null, plus `-N` for negative ints). Float literals, expressions, and named args are dropped at compile time until elephc grows compile-time evaluation of attribute argument expressions.
+- Only **literal** positional arguments are captured (string, int, bool, null, plus `-N` for negative ints). Float literals, expressions, and named args are rejected until elephc grows compile-time evaluation of attribute argument expressions and named-argument metadata.
 - When several attributes share a name on the same class, `class_attribute_args()` returns the args of the first match; `class_get_attributes()` does expose every occurrence as a separate `ReflectionAttribute` in source order.
 - The full `ReflectionClass` API (`getProperties()`, `getMethods()`, `newInstance()`, …) is not yet available.
 
@@ -463,4 +463,4 @@ Class constants (PHP 7.1+ visibility, PHP 8.1+ `final`) live on classes, interfa
 - No instance property redeclaration across inheritance chain
 - Class constants must be literal-or-foldable expressions; `self::OTHER + 1` style recursive references are not supported.
 - Anonymous classes (`new class { ... }`) are not yet supported.
-- Attribute metadata is captured in the AST but not exposed at runtime (`ReflectionAttribute` unavailable). `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to parameters (refactor of param representation and stack-trace infrastructure pending).
+- Class attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, and `class_get_attributes()`; method/property/parameter reflection and `ReflectionClass` are not yet available. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to parameters (refactor of param representation and stack-trace infrastructure pending).
