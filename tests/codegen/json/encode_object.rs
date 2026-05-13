@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides JSON object encoding tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - Object encoders must include public properties and skip non-public storage.
+
 use super::*;
 
 #[test]

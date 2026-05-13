@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits AArch64 structural `json_decode()` Mixed decoder helpers.
+//! Provides the runtime assembly used by JSON builtins on the selected target.
+//!
+//! Called from:
+//! - `crate::codegen::runtime::system` during runtime emission.
+//!
+//! Key details:
+//! - AArch64 decoder state machine must stay ABI-compatible with shared JSON parser state.
+
 use crate::codegen::emit::Emitter;
 
 /// ARM64 implementation of `__rt_json_decode_mixed`. Emits the structural

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides JSON encode non-finite-float tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - INF/NAN handling must coordinate false returns, partial output, and JsonException.
+
 use super::*;
 
 // __rt_json_encode_float intercepts Inf/NaN before __rt_ftoa, sets

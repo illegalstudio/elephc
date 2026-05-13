@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides JSON encode flag behavior tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - Every supported flag must affect output and error state exactly where PHP observes it.
+
 use super::*;
 
 // --- JSON_UNESCAPED_SLASHES ---

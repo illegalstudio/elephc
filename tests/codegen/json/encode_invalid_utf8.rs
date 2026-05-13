@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides JSON encode malformed UTF-8 tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - Invalid UTF-8 flags must select error, ignore, substitute, or throw behavior.
+
 use super::*;
 
 // __rt_json_encode_str validates every multibyte UTF-8 byte before emitting

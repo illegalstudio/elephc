@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits JSON error recording and throw-on-error runtime helper.
+//! Provides the runtime assembly used by JSON builtins on the selected target.
+//!
+//! Called from:
+//! - `crate::codegen::runtime::system` during runtime emission.
+//!
+//! Key details:
+//! - The helper must set `_json_last_error` before optionally constructing JsonException.
+
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 

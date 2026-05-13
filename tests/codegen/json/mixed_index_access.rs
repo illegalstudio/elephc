@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides Mixed JSON access tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - Decoded arrays and objects must support direct index/property access on Mixed cells.
+
 use crate::support::*;
 
 // String-keyed access on a Mixed assoc receiver (the common

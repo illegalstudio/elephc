@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides JSON decode error-path tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - Syntax, depth, UTF-16, and throw-on-error paths must update runtime JSON error state.
+
 use crate::support::*;
 
 // Malformed JSON: top-level garbage returns Mixed(null) and sets

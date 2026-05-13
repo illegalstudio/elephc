@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits x86_64 RFC 8259 JSON validator runtime helper.
+//! Provides the runtime assembly used by JSON builtins on the selected target.
+//!
+//! Called from:
+//! - `crate::codegen::runtime::system` during runtime emission.
+//!
+//! Key details:
+//! - The SysV validator path must mirror AArch64 diagnostics and depth behavior.
+
 use crate::codegen::emit::Emitter;
 
 pub(super) fn emit(emitter: &mut Emitter) {

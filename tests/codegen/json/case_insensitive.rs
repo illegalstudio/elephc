@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides JSON builtin namespace and case-insensitivity codegen tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - PHP-visible builtin lookup must work through mixed case and namespace fallback.
+
 use super::*;
 
 // PHP-visible builtins must be reachable through case-insensitive and

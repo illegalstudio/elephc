@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits JSON_PRETTY_PRINT post-processing runtime helper.
+//! Provides the runtime assembly used by JSON builtins on the selected target.
+//!
+//! Called from:
+//! - `crate::codegen::runtime::system` during runtime emission.
+//!
+//! Key details:
+//! - The formatter rewrites valid compact JSON output while preserving string literal contents.
+
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 

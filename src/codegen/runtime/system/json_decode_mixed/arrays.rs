@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits shared JSON array decoding helpers for boxed Mixed values.
+//! Provides the runtime assembly used by JSON builtins on the selected target.
+//!
+//! Called from:
+//! - `crate::codegen::runtime::system` during runtime emission.
+//!
+//! Key details:
+//! - Array decoding must preserve element order, depth checks, and boxed Mixed payload ownership.
+
 use crate::codegen::emit::Emitter;
 
 /// __rt_json_decode_mixed_array_real (ARM64): recursive-descent parser for

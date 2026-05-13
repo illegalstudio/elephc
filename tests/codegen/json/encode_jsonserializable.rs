@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides JsonSerializable encode dispatch tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - Implementing classes must call jsonSerialize() before recursive encoding.
+
 use super::*;
 
 #[test]

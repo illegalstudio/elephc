@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits target dispatch and shared helpers for structural JSON decoding into Mixed values.
+//! Provides the runtime assembly used by JSON builtins on the selected target.
+//!
+//! Called from:
+//! - `crate::codegen::runtime::system` during runtime emission.
+//!
+//! Key details:
+//! - The module coordinates target-specific entry points and recursive object/array decoding helpers.
+
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 

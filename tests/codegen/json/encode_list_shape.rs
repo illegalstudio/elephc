@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides JSON associative-array list-shape tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - Sequential integer-keyed hashes should encode as arrays unless forced to objects.
+
 use super::*;
 
 // PHP's json_encode emits the JSON array form `[...]` whenever the

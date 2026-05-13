@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits codegen for `json_last_error_msg()`.
+//! Bridges the PHP builtin to the runtime lookup table that materializes the current JSON error string.
+//!
+//! Called from:
+//! - `crate::codegen::builtins::system::emit()` when lowering builtin calls.
+//!
+//! Key details:
+//! - The runtime owns message selection; this emitter only performs the call and reports a string result.
+
 use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;

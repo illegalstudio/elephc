@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides json_last_error_msg tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - Messages must map from the current JSON error code to PHP-compatible strings.
+
 use super::*;
 
 #[test]

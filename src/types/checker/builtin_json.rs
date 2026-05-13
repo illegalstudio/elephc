@@ -1,3 +1,13 @@
+//! Purpose:
+//! Injects JSON-related builtin types into the checker schema.
+//! Defines the `JsonSerializable` interface and keeps its method signature available to class validation and JSON codegen metadata.
+//!
+//! Called from:
+//! - `crate::types::checker::driver` during builtin type/schema initialization.
+//!
+//! Key details:
+//! - The interface must be registered before user classes are flattened so `implements JsonSerializable` validates like PHP.
+
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
@@ -14,9 +24,9 @@ use super::Checker;
 /// declare `implements JsonSerializable` and the type checker recognizes the
 /// abstract `jsonSerialize(): mixed` method.
 ///
-/// The encoder dispatch (calling `$obj->jsonSerialize()` from
-/// `__rt_json_encode_mixed`) lands in a follow-up phase; this declaration
-/// alone unblocks user-side typing today.
+/// JSON encoder metadata also consults this interface so classes implementing
+/// it dispatch through `$obj->jsonSerialize()` instead of public-property
+/// walking during `json_encode()`.
 pub(crate) fn inject_builtin_json_interfaces(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides json_validate syntax and depth tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - The validator must accept RFC 8259 input and reject malformed syntax without decoding.
+
 use super::*;
 
 #[test]
@@ -10,8 +20,6 @@ fn test_json_validate_returns_bool_type() {
 
 #[test]
 fn test_json_validate_true_for_object() {
-    // Phase 2 stub: returns true for any input that the existing decoder
-    // accepts. Phase 6 will tighten this with real syntax checking.
     let out = compile_and_run(
         "<?php echo (json_validate(\"{\\\"a\\\":1}\") ? \"yes\" : \"no\");",
     );

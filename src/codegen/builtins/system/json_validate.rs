@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits codegen for `json_validate()`.
+//! Evaluates JSON source, depth, and flags in PHP source order before configuring runtime validation state.
+//!
+//! Called from:
+//! - `crate::codegen::builtins::system::emit()` when lowering builtin calls.
+//!
+//! Key details:
+//! - The JSON string is persisted before optional arguments run so side effects cannot invalidate the input slice.
+
 use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;

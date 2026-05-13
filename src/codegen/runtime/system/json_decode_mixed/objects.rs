@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits shared JSON object decoding helpers for assoc arrays and stdClass results.
+//! Provides the runtime assembly used by JSON builtins on the selected target.
+//!
+//! Called from:
+//! - `crate::codegen::runtime::system` during runtime emission.
+//!
+//! Key details:
+//! - Object decoding must honor the caller associative flag and keep property values boxed as Mixed.
+
 use crate::codegen::emit::Emitter;
 
 /// __rt_json_decode_mixed_object_real (ARM64): recursive-descent parser for

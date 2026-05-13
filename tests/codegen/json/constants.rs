@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides JSON constant codegen tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - Constant values must match PHP JSON_ERROR_* and JSON flag bitmasks.
+
 use super::*;
 
 // Verify every JSON_* int constant exposed by the runtime resolves to the

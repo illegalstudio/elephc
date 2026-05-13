@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides JSON codegen test module wiring.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - Submodules are grouped by JSON surface area so focused filters can run one feature slice.
+
 use crate::support::*;
 
 #[path = "json/constants.rs"]

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides structural JSON decode tests for Mixed payloads.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - Every JSON value kind should round-trip through the boxed Mixed representation.
+
 use super::*;
 
 // json_decode now returns a structural Mixed cell. The test echoes the

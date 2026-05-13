@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits AArch64 RFC 8259 JSON validator runtime helper.
+//! Provides the runtime assembly used by JSON builtins on the selected target.
+//!
+//! Called from:
+//! - `crate::codegen::runtime::system` during runtime emission.
+//!
+//! Key details:
+//! - Validation owns syntax, UTF-16 surrogate, and depth diagnostics without producing a decoded value.
+
 use crate::codegen::emit::Emitter;
 
 pub(super) fn emit(emitter: &mut Emitter) {

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits target dispatch for JSON string escaping runtime helpers.
+//! Provides the runtime assembly used by JSON builtins on the selected target.
+//!
+//! Called from:
+//! - `crate::codegen::runtime::system` during runtime emission.
+//!
+//! Key details:
+//! - The exported helper name must stay stable for all JSON encoder call sites.
+
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 

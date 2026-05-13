@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits JSON depth enter/exit runtime helpers.
+//! Provides the runtime assembly used by JSON builtins on the selected target.
+//!
+//! Called from:
+//! - `crate::codegen::runtime::system` during runtime emission.
+//!
+//! Key details:
+//! - Encode and decode/validate paths intentionally use different caller-side limits to match PHP depth semantics.
+
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 

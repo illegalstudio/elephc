@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides JSON_BIGINT_AS_STRING decode tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - Overflow detection must preserve integer token spelling when requested.
+
 use super::*;
 
 // JSON_BIGINT_AS_STRING decode-flag tests.

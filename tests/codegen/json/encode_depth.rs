@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides JSON encode depth-limit tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - Container encoders must enter and exit depth state consistently across siblings.
+
 use super::*;
 
 // __rt_json_depth_enter / __rt_json_depth_exit: each container encoder

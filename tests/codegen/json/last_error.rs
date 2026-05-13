@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides json_last_error tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - Runtime error state must start clear, update after failures, and reset on success.
+
 use super::*;
 
 #[test]

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits AArch64 JSON string escaping runtime helper.
+//! Provides the runtime assembly used by JSON builtins on the selected target.
+//!
+//! Called from:
+//! - `crate::codegen::runtime::system` during runtime emission.
+//!
+//! Key details:
+//! - Escaping, UTF-8 validation, numeric-check, and flag handling are PHP-visible byte-for-byte behavior.
+
 use crate::codegen::emit::Emitter;
 
 /// ARM64 implementation of `__rt_json_encode_str`.

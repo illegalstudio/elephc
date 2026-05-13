@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides json_decode stdClass behavior tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - Default object decoding must expose dynamic properties and assoc=true must keep arrays.
+
 use crate::support::*;
 
 #[test]

@@ -1,3 +1,13 @@
+//! Purpose:
+//! Wires object-specific runtime helpers for stdClass, Mixed property access, and Mixed array/object indexing.
+//! Keeps object helper emitters re-exported for the top-level runtime emitter.
+//!
+//! Called from:
+//! - `crate::codegen::runtime::emitters` and the Linux x86_64 minimal runtime emitter.
+//!
+//! Key details:
+//! - Helper names are consumed directly by codegen paths for `stdClass` and JSON-decoded `Mixed` values.
+
 mod mixed_array_get;
 mod stdclass;
 

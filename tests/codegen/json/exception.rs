@@ -1,3 +1,13 @@
+//! Purpose:
+//! Provides JsonException hierarchy and code tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - Thrown JSON exceptions must be catchable through the PHP exception hierarchy.
+
 use super::*;
 
 #[test]

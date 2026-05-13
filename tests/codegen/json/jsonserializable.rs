@@ -1,10 +1,19 @@
+//! Purpose:
+//! Provides JsonSerializable builtin interface tests.
+//! Exercises the JSON implementation through end-to-end PHP compilation and execution.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//!
+//! Key details:
+//! - The injected interface must type-check declarations and instanceof checks.
+
 use super::*;
 
 // JsonSerializable is exposed as a builtin interface so user-defined classes
 // can declare `implements JsonSerializable` and the type checker accepts the
-// abstract `jsonSerialize(): mixed` contract. The encoder does not yet
-// dispatch to `jsonSerialize()` — that wiring lands with the structural
-// encoder rewrite.
+// abstract `jsonSerialize(): mixed` contract. The encoder dispatches through
+// jsonSerialize() when classes implement the interface.
 
 #[test]
 fn test_jsonserializable_class_declaration_compiles() {

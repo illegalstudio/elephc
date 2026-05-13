@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits JSON object encoder runtime helper.
+//! Provides the runtime assembly used by JSON builtins on the selected target.
+//!
+//! Called from:
+//! - `crate::codegen::runtime::system` during runtime emission.
+//!
+//! Key details:
+//! - Public-property walking and JsonSerializable dispatch depend on emitted per-class JSON descriptors.
+
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 

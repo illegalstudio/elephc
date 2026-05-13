@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits codegen for `is_callable()`.
+//! Handles compile-time callable shapes and known literal function names while preserving side effects for dynamic values.
+//!
+//! Called from:
+//! - `crate::codegen::builtins::types::emit()` when lowering type/introspection builtins.
+//!
+//! Key details:
+//! - Runtime callable lookup is intentionally conservative; unsupported dynamic callable shapes evaluate then return false.
+
 use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;

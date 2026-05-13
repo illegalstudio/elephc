@@ -1,3 +1,13 @@
+//! Purpose:
+//! Emits x86_64 structural `json_decode()` Mixed decoder helpers.
+//! Provides the runtime assembly used by JSON builtins on the selected target.
+//!
+//! Called from:
+//! - `crate::codegen::runtime::system` during runtime emission.
+//!
+//! Key details:
+//! - The SysV decoder path must mirror the AArch64 parser contract and shared JSON state slots.
+
 use crate::codegen::emit::Emitter;
 
 /// x86_64 implementation of `__rt_json_decode_mixed`. Mirrors the ARM64

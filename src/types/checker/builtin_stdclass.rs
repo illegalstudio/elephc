@@ -1,3 +1,13 @@
+//! Purpose:
+//! Injects the PHP `stdClass` builtin into the checker schema.
+//! Gives `new stdClass()` and default `json_decode()` object results a nominal class entry with dynamic-property behavior.
+//!
+//! Called from:
+//! - `crate::types::checker::driver` during builtin type/schema initialization.
+//!
+//! Key details:
+//! - `stdClass` has no declared properties; property reads and writes are typed as `mixed` and handled by runtime hash helpers.
+
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
