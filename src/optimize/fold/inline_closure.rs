@@ -49,6 +49,10 @@ pub(super) fn try_inline_closure_pipe(value: &Expr, callable: &Expr) -> Option<E
         _ => return None,
     };
 
+    if expr_contains_call(body_expr) {
+        return None;
+    }
+
     let uses = count_uses(body_expr, param_name);
     if uses == 0 {
         // Parameter is unused → just return the body expression unchanged.
@@ -115,6 +119,41 @@ fn count_uses(expr: &Expr, name: &str) -> usize {
         ExprKind::Pipe { value, callable } => count_uses(value, name) + count_uses(callable, name),
         ExprKind::FunctionCall { args, .. } => args.iter().map(|a| count_uses(a, name)).sum(),
         _ => 0,
+    }
+}
+
+fn expr_contains_call(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::FunctionCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::StaticMethodCall { .. }
+        | ExprKind::NewObject { .. }
+        | ExprKind::NewScopedObject { .. } => true,
+        ExprKind::BinaryOp { left, right, .. } => {
+            expr_contains_call(left) || expr_contains_call(right)
+        }
+        ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Cast { expr: inner, .. } => expr_contains_call(inner),
+        ExprKind::NullCoalesce { value, default }
+        | ExprKind::ShortTernary { value, default } => {
+            expr_contains_call(value) || expr_contains_call(default)
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            expr_contains_call(condition)
+                || expr_contains_call(then_expr)
+                || expr_contains_call(else_expr)
+        }
+        ExprKind::Pipe { .. } => true,
+        _ => false,
     }
 }
 

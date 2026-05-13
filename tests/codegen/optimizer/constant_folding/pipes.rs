@@ -268,3 +268,18 @@ echo 5 |> $cb;
     );
     assert_eq!(out, "12");
 }
+
+#[test]
+fn test_inline_pipe_skipped_for_closure_body_call_by_ref_aliasing() {
+    let out = compile_and_run(
+        r#"<?php
+function setv(&$x): int { $x = 9; return $x; }
+$x = 1;
+$r = $x |> (fn($v) => setv($v));
+echo $x;
+echo "|";
+echo $r;
+"#,
+    );
+    assert_eq!(out, "1|9");
+}
