@@ -30,7 +30,7 @@ pub(super) fn infer_function_call_type(
         | "stripslashes" | "htmlspecialchars" | "html_entity_decode" | "htmlentities"
         | "urlencode" | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode"
         | "base64_decode" | "bin2hex" | "hex2bin" | "md5" | "sha1" | "hash" | "gettype"
-        | "strstr" | "readline" | "date" | "json_encode"
+        | "strstr" | "readline" | "date"
         | "json_last_error_msg" | "php_uname" | "phpversion"
         | "tempnam" | "getcwd" | "shell_exec" => PhpType::Str,
         "json_decode" => PhpType::Mixed,
@@ -163,7 +163,7 @@ pub(super) fn infer_function_call_type(
         }
         "define" => PhpType::Bool,
         "umask" => PhpType::Int,
-        "strpos" | "strrpos" | "array_search" | "file_get_contents" | "fileatime"
+        "strpos" | "strrpos" | "array_search" | "file_get_contents" | "json_encode" | "fileatime"
         | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
         | "filetype" | "stat" | "lstat" | "fstat" => PhpType::Mixed,
         "fopen" => merge_union_members(vec![PhpType::stream_resource(), PhpType::Bool]),

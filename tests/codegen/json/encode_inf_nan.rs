@@ -2,8 +2,8 @@ use super::*;
 
 // __rt_json_encode_float intercepts Inf/NaN before __rt_ftoa, sets
 // JSON_ERROR_INF_OR_NAN, throws when JSON_THROW_ON_ERROR is set, and
-// otherwise substitutes 0 so surrounding container encoders keep producing
-// well-formed JSON.
+// otherwise lets the wrapper return false unless JSON_PARTIAL_OUTPUT_ON_ERROR
+// asks for the substituted partial JSON.
 
 #[test]
 fn test_json_encode_finite_float_unchanged() {
@@ -12,9 +12,15 @@ fn test_json_encode_finite_float_unchanged() {
 }
 
 #[test]
-fn test_json_encode_inf_without_flag_emits_zero() {
+fn test_json_encode_inf_without_flag_echoes_false_as_empty() {
     let out = compile_and_run("<?php echo json_encode(INF);");
-    assert_eq!(out, "0");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_json_encode_inf_without_flag_is_strict_false() {
+    let out = compile_and_run("<?php echo json_encode(INF) === false ? 'false' : 'json';");
+    assert_eq!(out, "false");
 }
 
 #[test]
@@ -34,9 +40,15 @@ fn test_json_encode_inf_without_flag_sets_error_msg() {
 }
 
 #[test]
-fn test_json_encode_nan_without_flag_emits_zero() {
+fn test_json_encode_nan_without_flag_echoes_false_as_empty() {
     let out = compile_and_run("<?php echo json_encode(NAN);");
-    assert_eq!(out, "0");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_json_encode_nan_without_flag_is_strict_false() {
+    let out = compile_and_run("<?php echo json_encode(NAN) === false ? 'false' : 'json';");
+    assert_eq!(out, "false");
 }
 
 #[test]
@@ -107,7 +119,27 @@ catch (RuntimeException $e) { echo $e->getMessage(); }
 #[test]
 fn test_json_encode_negative_inf_also_detected() {
     let out = compile_and_run("<?php echo json_encode(-INF);");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_json_encode_partial_output_flag_keeps_substituted_float_json() {
+    let out = compile_and_run("<?php echo json_encode(INF, JSON_PARTIAL_OUTPUT_ON_ERROR);");
     assert_eq!(out, "0");
+}
+
+#[test]
+fn test_json_encode_array_with_inf_without_partial_flag_is_false() {
+    let out = compile_and_run("<?php echo json_encode([1.5, INF, 2.5]) === false ? 'false' : 'json';");
+    assert_eq!(out, "false");
+}
+
+#[test]
+fn test_json_encode_array_with_inf_partial_output_keeps_json() {
+    let out = compile_and_run(
+        "<?php echo json_encode([1.5, INF, 2.5], JSON_PARTIAL_OUTPUT_ON_ERROR);",
+    );
+    assert_eq!(out, "[1.5,0,2.5]");
 }
 
 #[test]

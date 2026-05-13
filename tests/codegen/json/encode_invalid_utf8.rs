@@ -8,11 +8,11 @@ use super::*;
 // chr() since elephc's lexer does not parse \xHH escapes.
 
 #[test]
-fn test_json_encode_lone_continuation_default_drops_byte() {
+fn test_json_encode_lone_continuation_default_returns_false() {
     let out = compile_and_run(
-        r#"<?php echo json_encode("a" . chr(0x80) . "b");"#,
+        r#"<?php echo json_encode("a" . chr(0x80) . "b") === false ? "false" : "json";"#,
     );
-    assert_eq!(out, r#""ab""#);
+    assert_eq!(out, "false");
 }
 
 #[test]
@@ -67,14 +67,14 @@ echo $encoded . "/" . json_last_error();
 }
 
 #[test]
-fn test_json_encode_truncated_two_byte_default_drops_byte() {
+fn test_json_encode_truncated_two_byte_default_returns_false() {
     // chr(0xC3) is a valid 2-byte lead but no continuation byte follows
     // before the end of input. The bounds check inside utf8_2 routes this
-    // to the malformed handler, which drops the lead byte.
+    // to the malformed handler, causing the wrapper to return false.
     let out = compile_and_run(
-        r#"<?php echo json_encode("a" . chr(0xC3));"#,
+        r#"<?php echo json_encode("a" . chr(0xC3)) === false ? "false" : "json";"#,
     );
-    assert_eq!(out, r#""a""#);
+    assert_eq!(out, "false");
 }
 
 #[test]
@@ -89,14 +89,14 @@ echo $encoded;
 }
 
 #[test]
-fn test_json_encode_invalid_lead_byte_default_drops_byte() {
+fn test_json_encode_invalid_lead_byte_default_returns_false() {
     // chr(0xFF) is in the 0xF5..0xFF range that RFC 3629 forbids - the
     // dispatcher's lead-byte gate routes it straight to the malformed
     // handler.
     let out = compile_and_run(
-        r#"<?php echo json_encode("x" . chr(0xFF) . "y");"#,
+        r#"<?php echo json_encode("x" . chr(0xFF) . "y") === false ? "false" : "json";"#,
     );
-    assert_eq!(out, r#""xy""#);
+    assert_eq!(out, "false");
 }
 
 #[test]
@@ -111,15 +111,15 @@ echo $encoded;
 }
 
 #[test]
-fn test_json_encode_invalid_continuation_default_drops_byte() {
+fn test_json_encode_invalid_continuation_default_returns_false() {
     // chr(0xC3) chr('A') - valid 2-byte lead followed by a non-continuation
     // byte. The continuation validation in utf8_2 catches this and skips
-    // exactly one byte (the lead), so 'A' is encoded as a normal ASCII
-    // byte by the next loop iteration.
+    // exactly one byte internally, then the wrapper returns false because
+    // the call reported JSON_ERROR_UTF8 without a sanitization flag.
     let out = compile_and_run(
-        r#"<?php echo json_encode("z" . chr(0xC3) . "A");"#,
+        r#"<?php echo json_encode("z" . chr(0xC3) . "A") === false ? "false" : "json";"#,
     );
-    assert_eq!(out, r#""zA""#);
+    assert_eq!(out, "false");
 }
 
 #[test]

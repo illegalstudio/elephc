@@ -5,10 +5,10 @@ use crate::codegen::platform::Arch;
 ///
 /// PHP's `json_encode` reports `JSON_ERROR_INF_OR_NAN` (and throws
 /// `JsonException` when `JSON_THROW_ON_ERROR` is set) for non-finite
-/// floats. Without the throw flag, PHP returns `false`; elephc encodes
-/// `0` instead so the surrounding container encoders can keep producing
-/// valid JSON. Finite floats tail-call into the existing `__rt_ftoa`
-/// formatter unchanged.
+/// floats. Without the throw flag, this helper substitutes `0` so surrounding
+/// container encoders can keep producing partial JSON; the json_encode wrapper
+/// later returns `false` unless JSON_PARTIAL_OUTPUT_ON_ERROR is active. Finite
+/// floats tail-call into the existing `__rt_ftoa` formatter unchanged.
 ///
 /// Input:  ARM64 d0 / x86_64 xmm0 = float value
 /// Output: x1, x2 / rax, rdx = result ptr, len (in concat_buf)
@@ -42,7 +42,7 @@ pub(crate) fn emit_json_encode_float(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish a stable frame pointer for the helper sequence
     emitter.instruction("mov x0, #7");                                          // JSON_ERROR_INF_OR_NAN = 7
     emitter.instruction("bl __rt_json_throw_error");                            // record the error and throw when JSON_THROW_ON_ERROR is set
-    emitter.instruction("fmov d0, xzr");                                        // PHP-compatible fallback: encode non-finite floats as 0 when not throwing
+    emitter.instruction("fmov d0, xzr");                                        // substitute 0 for the wrapper's partial-output path
     emitter.instruction("bl __rt_ftoa");                                        // format the substituted zero value
     // fall through to the post-formatter polish so PRESERVE_ZERO_FRACTION
     // also applies to the substituted zero result.
@@ -111,7 +111,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the helper sequence
     emitter.instruction("mov rax, 7");                                          // JSON_ERROR_INF_OR_NAN = 7
     emitter.instruction("call __rt_json_throw_error");                          // record the error and throw when JSON_THROW_ON_ERROR is set
-    emitter.instruction("xorpd xmm0, xmm0");                                    // PHP-compatible fallback: encode non-finite floats as 0 when not throwing
+    emitter.instruction("xorpd xmm0, xmm0");                                    // substitute 0 for the wrapper's partial-output path
     emitter.instruction("call __rt_ftoa");                                      // format the substituted zero value
     // fall through to the post-formatter polish so PRESERVE_ZERO_FRACTION
     // also applies to the substituted zero result.

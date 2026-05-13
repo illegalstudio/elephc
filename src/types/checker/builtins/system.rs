@@ -60,7 +60,10 @@ pub(super) fn check_builtin(
                 return Err(CompileError::new(span, "getenv() takes exactly 1 argument"));
             }
             checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Str))
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Str,
+                PhpType::Bool,
+            ])))
         }
         "putenv" => {
             if args.len() != 1 {

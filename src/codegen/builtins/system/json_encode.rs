@@ -13,6 +13,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -147,8 +148,9 @@ pub fn emit(
     // helper is a no-op when the flag bit is clear, so this stays cheap for
     // the common compact encoding path.
     abi::emit_call_label(emitter, "__rt_json_pretty_apply");
+    box_json_encode_result(emitter, ctx);
 
-    Some(PhpType::Str)
+    Some(PhpType::Mixed)
 }
 
 fn persist_string_result_if_needed(ty: &PhpType, emitter: &mut Emitter) {
@@ -169,6 +171,47 @@ fn restore_result_value(emitter: &mut Emitter, ty: &PhpType) {
         PhpType::Void | PhpType::Never => {}
         _ => {
             abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
+        }
+    }
+}
+
+fn box_json_encode_result(emitter: &mut Emitter, ctx: &mut Context) {
+    let string_label = ctx.next_label("json_encode_string_result");
+    let done_label = ctx.next_label("json_encode_boxed_result");
+
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg_pair(emitter, "x1", "x2");                      // preserve the encoded JSON string while checking failure state
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_json_last_error", 0);
+            emitter.instruction(&format!("cbz x9, {}", string_label));          // no JSON error means the string result is valid
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_json_active_flags", 0);
+            emitter.instruction("tst x9, #512");                                // JSON_PARTIAL_OUTPUT_ON_ERROR keeps the partial string result
+            emitter.instruction(&format!("b.ne {}", string_label));             // partial-output flag means return the encoded string
+            abi::emit_pop_reg_pair(emitter, "x10", "x11");                     // discard the partial string result before returning false
+            emitter.instruction("mov x0, #0");                                  // false payload for json_encode failure
+            crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Bool);
+            emitter.instruction(&format!("b {}", done_label));                  // skip the string boxing path after returning false
+            emitter.label(&string_label);
+            abi::emit_pop_reg_pair(emitter, "x1", "x2");                       // restore the successful JSON string result
+            crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Str);
+            emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(emitter, "rax", "rdx");                    // preserve the encoded JSON string while checking failure state
+            emitter.instruction("mov r10, QWORD PTR [rip + _json_last_error]"); // load the current JSON error code
+            emitter.instruction("test r10, r10");                               // check whether the encoder reported an error
+            emitter.instruction(&format!("jz {}", string_label));               // no JSON error means the string result is valid
+            emitter.instruction("mov r10, QWORD PTR [rip + _json_active_flags]"); // load the active JSON flag bitmask
+            emitter.instruction("test r10, 512");                               // JSON_PARTIAL_OUTPUT_ON_ERROR keeps the partial string result
+            emitter.instruction(&format!("jnz {}", string_label));              // partial-output flag means return the encoded string
+            abi::emit_pop_reg_pair(emitter, "r10", "r11");                     // discard the partial string result before returning false
+            emitter.instruction("xor eax, eax");                                // false payload for json_encode failure
+            crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Bool);
+            emitter.instruction(&format!("jmp {}", done_label));                // skip the string boxing path after returning false
+            emitter.label(&string_label);
+            abi::emit_pop_reg_pair(emitter, "rax", "rdx");                     // restore the successful JSON string result
+            crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Str);
+            emitter.label(&done_label);
         }
     }
 }

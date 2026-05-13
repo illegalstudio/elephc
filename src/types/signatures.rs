@@ -376,7 +376,7 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         "json_encode" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Mixed, PhpType::Int, PhpType::Int],
-            PhpType::Str,
+            PhpType::Union(vec![PhpType::Str, PhpType::Bool]),
         )),
         "json_decode" => Some(typed_first_class_builtin_sig(
             name,
