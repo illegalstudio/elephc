@@ -44,6 +44,13 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x12");                                         // buffer pointer for read
     emitter.instruction("ldr x2, [sp, #8]");                                    // number of bytes to read
     emitter.syscall(3);
+    if emitter.platform.needs_cmp_before_error_branch() {
+        emitter.instruction("cmp x0, #0");                                      // Linux: negative read result means failure
+    }
+    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fread_read_ok")); // continue only when the read syscall succeeded
+    emitter.instruction("str xzr, [sp, #24]");                                  // failed reads return an empty result
+    emitter.instruction("b __rt_fread_mark_eof");                               // mark the stream as exhausted after a read failure
+    emitter.label("__rt_fread_read_ok");
 
     // -- update concat_off by actual bytes read --
     emitter.instruction("str x0, [sp, #24]");                                   // save actual bytes read
@@ -55,6 +62,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
     // -- set eof flag if read returned 0 --
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload bytes read
     emitter.instruction("cbnz x0, __rt_fread_done");                            // if bytes > 0, skip eof flag
+    emitter.label("__rt_fread_mark_eof");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
     crate::codegen::abi::emit_symbol_address(emitter, "x9", "_eof_flags");
     emitter.instruction("mov w10, #1");                                         // eof marker value

@@ -6,7 +6,7 @@
 //! - `crate::codegen::builtins::io::emit()`.
 //!
 //! Key details:
-//! - Returns the total number of bytes copied to stdout (0 on failure).
+//! - Returns the total number of bytes copied to stdout, or -1 on read failure.
 
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;

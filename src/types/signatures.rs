@@ -57,7 +57,7 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
 pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
     match name {
         "time" | "phpversion" | "json_last_error" | "json_last_error_msg" | "pi"
-        | "ptr_null" | "getcwd" | "sys_get_temp_dir" => Some(fixed(&[])),
+        | "ptr_null" | "getcwd" | "sys_get_temp_dir" | "tmpfile" => Some(fixed(&[])),
 
         "strlen" | "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "strrev"
         | "addslashes" | "stripslashes" | "nl2br" | "bin2hex" | "hex2bin"
@@ -279,7 +279,11 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "fopen" => Some(fixed(&["filename", "mode"])),
         "fclose" | "fgets" | "fgetc" | "fpassthru" | "feof" | "ftell" | "rewind"
         | "fstat" | "fsync" | "fflush" | "fdatasync" => Some(fixed(&["stream"])),
-        "flock" => Some(fixed(&["stream", "operation"])),
+        "flock" => {
+            let mut sig = optional(&["stream", "operation", "would_block"], 2, vec![null_lit()]);
+            sig.ref_params[2] = true;
+            Some(sig)
+        }
         "readfile" => Some(fixed(&["filename"])),
         "symlink" | "link" => Some(fixed(&["target", "link"])),
         "readlink" | "linkinfo" => Some(fixed(&["path"])),

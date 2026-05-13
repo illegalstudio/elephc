@@ -1,6 +1,6 @@
 //! Purpose:
-//! Expands static associative spread arguments into named argument forms.
-//! Recognizes PHP array-unpack keys that can be resolved at compile time before planning.
+//! Expands static spread-array arguments into positional / named argument forms.
+//! Recognizes PHP array-unpack entries that can be resolved at compile time before planning.
 //!
 //! Called from:
 //! - `crate::types::call_args::planner`
@@ -25,7 +25,7 @@ pub(crate) fn expand_static_assoc_spread_args(args: &[Expr]) -> Vec<Expr> {
 
     for arg in args {
         if let ExprKind::Spread(inner) = &arg.kind {
-            if let Some(mut spread_args) = expand_static_assoc_spread(inner, arg.span) {
+            if let Some(mut spread_args) = expand_static_spread(inner, arg.span) {
                 changed = true;
                 expanded.append(&mut spread_args);
                 continue;
@@ -46,11 +46,14 @@ fn static_assoc_spread_has_named_args(expr: &Expr) -> bool {
     })
 }
 
-fn expand_static_assoc_spread(expr: &Expr, spread_span: Span) -> Option<Vec<Expr>> {
-    let ExprKind::ArrayLiteralAssoc(pairs) = &expr.kind else {
-        return None;
-    };
+fn expand_static_spread(expr: &Expr, spread_span: Span) -> Option<Vec<Expr>> {
+    match &expr.kind {
+        ExprKind::ArrayLiteralAssoc(pairs) => expand_static_assoc_spread(pairs, spread_span),
+        _ => None,
+    }
+}
 
+fn expand_static_assoc_spread(pairs: &[(Expr, Expr)], spread_span: Span) -> Option<Vec<Expr>> {
     let mut positional_args = Vec::new();
     let mut named_args: Vec<(String, Expr)> = Vec::new();
     for (key, value) in pairs {

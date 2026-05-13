@@ -229,10 +229,10 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "str_word_count" | "chunk_split" => PhpType::Str,
             "strpos" | "strrpos" | "array_search" | "fileatime" | "filectime" | "fileperms"
             | "fileowner" | "filegroup" | "fileinode" | "filetype" | "stat" | "lstat"
-            | "fstat" => PhpType::Mixed,
-            "fopen" => PhpType::Union(vec![PhpType::stream_resource(), PhpType::Bool]),
+            | "fstat" | "fgetc" | "readfile" | "readlink" => PhpType::Mixed,
+            "fopen" | "tmpfile" => PhpType::Union(vec![PhpType::stream_resource(), PhpType::Bool]),
             "strlen" | "ord" | "count" | "intval" | "abs" | "intdiv"
-            | "rand" | "time" => PhpType::Int,
+            | "rand" | "time" | "fpassthru" | "linkinfo" => PhpType::Int,
             "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" | "fmod" | "sin" | "cos"
             | "tan" | "asin" | "acos" | "atan" | "atan2" | "sinh" | "cosh" | "tanh" | "log"
             | "log2" | "log10" | "exp" | "hypot" | "pi" | "deg2rad" | "rad2deg" => PhpType::Float,
@@ -247,7 +247,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     PhpType::Pointer(None)
                 }
             }
-            "ptr_is_null" | "define" | "json_validate" => PhpType::Bool,
+            "ptr_is_null" | "define" | "json_validate" | "flock" | "symlink" | "link" => {
+                PhpType::Bool
+            }
             "ptr_sizeof" | "ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
             _ => PhpType::Int,
         },

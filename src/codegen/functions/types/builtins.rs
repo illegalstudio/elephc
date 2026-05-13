@@ -158,15 +158,15 @@ pub(super) fn infer_function_call_type(
         | "str_ends_with" | "ctype_alpha" | "ctype_digit" | "ctype_alnum"
         | "ctype_space" | "function_exists" | "chmod" | "chown" | "chgrp"
         | "touch" | "ftruncate" | "fflush" | "fsync" | "fdatasync" | "ptr_is_null"
-        | "json_validate" => {
+        | "json_validate" | "flock" | "symlink" | "link" => {
             PhpType::Bool
         }
         "define" => PhpType::Bool,
-        "umask" => PhpType::Int,
+        "umask" | "fpassthru" | "linkinfo" => PhpType::Int,
         "strpos" | "strrpos" | "array_search" | "file_get_contents" | "json_encode" | "fileatime"
         | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
-        | "filetype" | "stat" | "lstat" | "fstat" => PhpType::Mixed,
-        "fopen" => merge_union_members(vec![PhpType::stream_resource(), PhpType::Bool]),
+        | "filetype" | "stat" | "lstat" | "fstat" | "fgetc" | "readfile" | "readlink" => PhpType::Mixed,
+        "fopen" | "tmpfile" => merge_union_members(vec![PhpType::stream_resource(), PhpType::Bool]),
         "pathinfo" => infer_pathinfo_type(args),
         "abs" => {
             if !args.is_empty() {

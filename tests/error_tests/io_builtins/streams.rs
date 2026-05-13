@@ -71,6 +71,74 @@ fn test_error_fgets_requires_resource_handle() {
 }
 
 #[test]
+fn test_error_fgetc_wrong_args() {
+    expect_error("<?php fgetc();", "fgetc() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_fgetc_requires_resource_handle() {
+    expect_error("<?php fgetc(1);", "fgetc() expects resource, got int");
+}
+
+#[test]
+fn test_error_fpassthru_wrong_args() {
+    expect_error("<?php fpassthru();", "fpassthru() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_fpassthru_requires_resource_handle() {
+    expect_error("<?php fpassthru(1);", "fpassthru() expects resource, got int");
+}
+
+#[test]
+fn test_error_flock_wrong_args() {
+    expect_error("<?php flock(STDIN);", "flock() takes 2 or 3 arguments");
+}
+
+#[test]
+fn test_error_flock_requires_resource_handle() {
+    expect_error("<?php flock(1, LOCK_EX);", "flock() expects resource, got int");
+}
+
+#[test]
+fn test_error_flock_rejects_non_int_operation() {
+    expect_error(
+        r#"<?php flock(STDIN, "exclusive");"#,
+        "flock() operation must be int",
+    );
+}
+
+#[test]
+fn test_error_flock_would_block_requires_variable() {
+    expect_error(
+        r#"<?php flock(STDIN, LOCK_EX, 0);"#,
+        "flock() parameter $would_block must be passed a variable",
+    );
+}
+
+#[test]
+fn test_error_tmpfile_wrong_args() {
+    expect_error("<?php tmpfile(1);", "tmpfile() takes no arguments");
+}
+
+#[test]
+fn test_error_tmpfile_rejects_nonempty_static_spread() {
+    expect_error("<?php tmpfile(...[1]);", "tmpfile() takes no arguments");
+}
+
+#[test]
+fn test_error_fgetc_false_return_rejects_string_return_type() {
+    expect_error(
+        r#"<?php
+function read_char(): string {
+    return fgetc(STDIN);
+}
+"#,
+        "Function 'read_char' return type expects Str, got Union([Str, Bool])",
+    );
+}
+
+#[test]
 fn test_error_feof_wrong_args() {
     expect_error("<?php feof();", "feof() takes exactly 1 argument");
 }
@@ -103,4 +171,3 @@ fn test_error_stream_modify_builtins_require_resource_handle() {
         expect_error(source, message);
     }
 }
-

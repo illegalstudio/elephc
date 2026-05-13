@@ -11,8 +11,7 @@
 //! - `__rt_readlink` returns an owned-heap string (pointer/length in
 //!   `x1/x2` or `rax/rdx`); the codegen wrapper boxes it as `Mixed`
 //!   (`string|false`).
-//! - `__rt_linkinfo` returns the `st_dev` field (0 on failure) — PHP returns
-//!   the device id on success and `0` (not `false`) when stat fails.
+//! - `__rt_linkinfo` returns the `st_dev` field or PHP's `-1` failure value.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
@@ -127,11 +126,10 @@ pub fn emit_symlink(emitter: &mut Emitter) {
     // ================================================================
     // __rt_linkinfo: libc lstat(path), return st_dev.
     // Input:  x1/x2 = path
-    // Output: x0 = device id (low 32 bits), or 0 on failure
+    // Output: x0 = device id, or -1 on failure
     //
-    // st_dev sits at offset 0 in both Darwin (int32_t) and Linux
-    // (__dev_t) stat layouts, so a 32-bit zero-extended load works on
-    // both targets.
+    // st_dev sits at offset 0 in both Darwin (int32_t) and Linux (__dev_t),
+    // but the field width differs by platform.
     // ================================================================
     let plat = emitter.platform;
     let stat_buf = plat.stat_buf_size();
@@ -150,17 +148,17 @@ pub fn emit_symlink(emitter: &mut Emitter) {
     emitter.instruction("add x1, sp, #0");                                      // stat buffer
     emitter.bl_c("lstat");                                                      // libc lstat(path, buf)
     emitter.instruction("cmp x0, #0");                                          // success?
-    emitter.instruction("b.ne __rt_linkinfo_fail");                             // failure → 0
-    emitter.instruction("ldr w0, [sp, #0]");                                    // load 32-bit st_dev (lives at offset 0 on both Darwin and Linux)
+    emitter.instruction("b.ne __rt_linkinfo_fail");                             // failure → PHP -1
+    emitter.instruction(&plat.stat_dev_load_instr("x0", "sp", 0));              // load st_dev using the platform field width
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate frame
     emitter.instruction("ret");                                                 // return device id
 
     emitter.label("__rt_linkinfo_fail");
-    emitter.instruction("mov x0, #0");                                          // failure: return 0
+    emitter.instruction("mov x0, #-1");                                         // failure: return PHP's linkinfo() sentinel
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate frame
-    emitter.instruction("ret");                                                 // return zero
+    emitter.instruction("ret");                                                 // return failure sentinel
 }
 
 fn emit_symlink_linux_x86_64(emitter: &mut Emitter) {
@@ -255,8 +253,7 @@ fn emit_symlink_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return empty string
 
     // -- linkinfo --
-    let plat = emitter.platform;
-    let stat_buf = plat.stat_buf_size();
+    let stat_buf = 144usize;
     let frame = ((stat_buf + 16) + 15) & !15;
     emitter.blank();
     emitter.comment("--- runtime: linkinfo ---");
@@ -269,14 +266,14 @@ fn emit_symlink_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rsi, [rsp]");                                      // stat buffer
     emitter.instruction("call lstat");                                          // libc lstat()
     emitter.instruction("cmp rax, 0");                                          // success?
-    emitter.instruction("jne __rt_linkinfo_fail_x86");                          // failure → 0
-    emitter.instruction("mov eax, DWORD PTR [rsp]");                            // load 32-bit st_dev (lives at offset 0)
+    emitter.instruction("jne __rt_linkinfo_fail_x86");                          // failure → PHP -1
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // load 64-bit Linux st_dev from offset 0
     emitter.instruction(&format!("add rsp, {}", frame));                        // release frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return device id
     emitter.label("__rt_linkinfo_fail_x86");
-    emitter.instruction("xor eax, eax");                                        // failure → 0
+    emitter.instruction("mov rax, -1");                                         // failure → PHP's linkinfo() sentinel
     emitter.instruction(&format!("add rsp, {}", frame));                        // release frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    emitter.instruction("ret");                                                 // return zero
+    emitter.instruction("ret");                                                 // return failure sentinel
 }

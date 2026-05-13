@@ -26,18 +26,34 @@ fclose($h);
 }
 
 #[test]
-fn test_fgetc_returns_empty_at_eof() {
+fn test_fgetc_returns_false_at_eof() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
 file_put_contents("eof.txt", "x");
 $h = fopen("eof.txt", "r");
 fgetc($h);
 $tail = fgetc($h);
-echo strlen($tail);
+echo $tail === false ? "false" : "not false";
 fclose($h);
 "#,
     );
-    assert_eq!(out, "0");
+    assert_eq!(out, "false");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_fgetc_returns_false_on_read_error() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("as-dir");
+$h = fopen("as-dir", "r");
+$c = fgetc($h);
+echo $c === false ? "false" : "not-false:" . strlen($c);
+fclose($h);
+rmdir("as-dir");
+"#,
+    );
+    assert_eq!(out, "false");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -55,14 +71,41 @@ echo "|" . $bytes;
 }
 
 #[test]
-fn test_readfile_missing_returns_zero() {
+fn test_readfile_read_error_returns_minus_one() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("as-dir");
+$bytes = readfile("as-dir");
+echo "|" . $bytes;
+rmdir("as-dir");
+"#,
+    );
+    assert_eq!(out, "|-1");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_readfile_missing_returns_false() {
     let out = compile_and_run(
         r#"<?php
 $bytes = readfile("/nonexistent/path/xyz.txt");
-echo $bytes;
+echo $bytes === false ? "false" : "not false";
 "#,
     );
-    assert_eq!(out, "0");
+    assert_eq!(out, "false");
+}
+
+#[test]
+fn test_readfile_empty_file_returns_zero() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("empty.txt", "");
+$bytes = readfile("empty.txt");
+echo "|" . $bytes;
+"#,
+    );
+    assert_eq!(out, "|0");
+    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -93,6 +136,53 @@ fclose($h);
 "#,
     );
     assert_eq!(out, "efghij|6");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_fpassthru_sets_eof_after_success() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("pt-eof.txt", "abc");
+$h = fopen("pt-eof.txt", "r");
+$bytes = fpassthru($h);
+echo "|" . $bytes . "|" . (feof($h) ? "eof" : "not-eof");
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "abc|3|eof");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_fpassthru_read_error_returns_minus_one() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("as-dir");
+$h = fopen("as-dir", "r");
+$bytes = fpassthru($h);
+echo "|" . $bytes;
+fclose($h);
+rmdir("as-dir");
+"#,
+    );
+    assert_eq!(out, "|-1");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_fpassthru_sets_eof_after_read_error() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("as-dir");
+$h = fopen("as-dir", "r");
+$bytes = fpassthru($h);
+echo "|" . $bytes . "|" . (feof($h) ? "eof" : "not-eof");
+fclose($h);
+rmdir("as-dir");
+"#,
+    );
+    assert_eq!(out, "|-1|eof");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -128,6 +218,43 @@ fclose($h);
 }
 
 #[test]
+fn test_flock_sets_would_block_output() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("block.txt", "x");
+$first = fopen("block.txt", "r+");
+$second = fopen("block.txt", "r+");
+flock($first, LOCK_EX);
+$would = 0;
+$ok = flock($second, LOCK_EX | LOCK_NB, $would);
+echo ($ok ? "locked" : "blocked") . "|" . gettype($would) . ":" . $would;
+flock($first, LOCK_UN);
+fclose($second);
+fclose($first);
+"#,
+    );
+    assert_eq!(out, "blocked|integer:1");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_flock_named_would_block_output_success() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("named-lock.txt", "x");
+$h = fopen("named-lock.txt", "r+");
+$would = 99;
+$ok = flock(stream: $h, operation: LOCK_EX, would_block: $would);
+echo ($ok ? "locked" : "blocked") . "|" . gettype($would) . ":" . $would;
+flock($h, LOCK_UN);
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "locked|integer:0");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_tmpfile_returns_writable_resource() {
     let out = compile_and_run(
         r#"<?php
@@ -153,6 +280,37 @@ fclose($h);
 "#,
     );
     assert_eq!(out, "resource|resource");
+}
+
+#[test]
+fn test_tmpfile_clears_stale_eof_for_reused_descriptor() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("seed.txt", "x");
+$f = fopen("seed.txt", "r");
+fread($f, 1);
+fread($f, 1);
+fclose($f);
+$h = tmpfile();
+echo feof($h) ? "eof" : "not-eof";
+fclose($h);
+unlink("seed.txt");
+"#,
+    );
+    assert_eq!(out, "not-eof");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_tmpfile_accepts_empty_spread() {
+    let out = compile_and_run(
+r#"<?php
+$h = tmpfile(...[]);
+echo gettype($h);
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "resource");
 }
 
 #[test]

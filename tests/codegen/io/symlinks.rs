@@ -88,13 +88,13 @@ unlink("orig.txt");
 }
 
 #[test]
-fn test_linkinfo_returns_zero_for_missing() {
+fn test_linkinfo_returns_minus_one_for_missing() {
     let out = compile_and_run(
         r#"<?php
 echo linkinfo("/nonexistent/missing-path");
 "#,
     );
-    assert_eq!(out, "0");
+    assert_eq!(out, "-1");
 }
 
 #[test]

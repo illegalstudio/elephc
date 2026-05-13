@@ -1,13 +1,13 @@
 //! Purpose:
 //! Emits PHP `linkinfo` builtin calls.
-//! Returns the `st_dev` field of the link (or 0 on failure — PHP quirk: not `false`).
+//! Returns the `st_dev` field of the link (or -1 on failure).
 //!
 //! Called from:
 //! - `crate::codegen::builtins::io::emit()`.
 //!
 //! Key details:
-//! - The runtime helper invokes libc `lstat()` and returns the 32-bit `st_dev`
-//!   field on success, or 0 on failure.
+//! - The runtime helper invokes libc `lstat()` and returns the platform `st_dev`
+//!   field on success, or PHP's `-1` failure sentinel.
 
 use crate::codegen::abi;
 use crate::codegen::context::Context;

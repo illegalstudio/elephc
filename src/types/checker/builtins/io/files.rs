@@ -157,7 +157,10 @@ pub(super) fn check_builtin(
                 ));
             }
             checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Int))
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Int,
+                PhpType::Bool,
+            ])))
         }
         "symlink" | "link" => {
             if args.len() != 2 {
