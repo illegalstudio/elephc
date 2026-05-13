@@ -18,6 +18,7 @@ mod exceptions;
 mod fibers;
 pub(crate) mod generators;
 mod io;
+mod objects;
 mod pointers;
 mod strings;
 mod system;

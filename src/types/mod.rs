@@ -14,6 +14,7 @@ mod array_keys;
 pub(crate) mod call_args;
 pub(crate) mod fibers;
 mod ffi;
+pub(crate) mod json_constants;
 mod model;
 mod result;
 mod schema;

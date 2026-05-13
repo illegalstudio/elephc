@@ -194,6 +194,7 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `call_user_func()` | `call_user_func($callback, ...): mixed` | Call a callback value |
 | `call_user_func_array()` | `call_user_func_array($callback, $args): mixed` | Call with args from array |
 | `function_exists()` | `function_exists("name"): bool` | Check if function is defined |
+| `is_callable()` | `is_callable($value): bool` | True for closures, first-class callables, and string literals naming a known builtin / user function. Non-literal strings, `[$obj, "method"]` arrays, and `__invoke` objects are tracked as follow-ups. |
 | `isset()` | `isset($var): int` | Check if variable is defined |
 
 > Callback arguments can be string literals, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures.

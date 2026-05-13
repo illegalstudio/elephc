@@ -125,8 +125,10 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "array_diff_key"
             | "array_intersect_key"
             | "range"
-            | "json_encode"
-            | "json_decode"
-            | "json_last_error"
     )
+    // Note: json_encode / json_decode / json_validate / json_last_error /
+    // json_last_error_msg are intentionally NOT listed here — they read
+    // and write the shared `_json_last_error` runtime symbol, so the
+    // optimizer must treat them as side-effecting to avoid DCE-ing an
+    // encode/decode call right before a json_last_error() observation.
 }

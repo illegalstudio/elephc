@@ -11,6 +11,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Platform;
+use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::PhpType;
 
 use super::super::Checker;
@@ -31,6 +32,9 @@ impl Checker {
         constants.insert("STDIN".to_string(), PhpType::stream_resource());
         constants.insert("STDOUT".to_string(), PhpType::stream_resource());
         constants.insert("STDERR".to_string(), PhpType::stream_resource());
+        for (name, _value) in JSON_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
 
         Self {
             target_platform,

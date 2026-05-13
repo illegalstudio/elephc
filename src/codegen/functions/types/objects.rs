@@ -49,8 +49,19 @@ pub(super) fn infer_property_access_type(
     sig: &FunctionSig,
     ctx: Option<&Context>,
 ) -> PhpType {
+    let _ = property;
     if let Some(c) = ctx {
         if let Some((cn, nullable)) = nullsafe_context_class(object, sig, c) {
+            // stdClass property access is dynamic; surface Mixed up-front so
+            // chained accesses (`$obj->nested->x`) flow through the dynamic
+            // dispatch instead of falling back to the integer default.
+            if crate::types::checker::builtin_stdclass::is_stdclass(&cn) {
+                return if nullable {
+                    merge_union_members(vec![PhpType::Mixed, PhpType::Void])
+                } else {
+                    PhpType::Mixed
+                };
+            }
             if let Some(ci) = c.classes.get(&cn) {
                 if let Some((_, ty)) = ci.properties.iter().find(|(n, _)| n == property) {
                     return if nullable {
@@ -80,6 +91,13 @@ pub(super) fn infer_property_access_type(
                     return field.php_type.clone();
                 }
             }
+        }
+        // Property access on a Mixed receiver evaluates to Mixed at runtime
+        // (the helper unboxes and dispatches through the stdClass hash). Match
+        // that here so chained property accesses keep flowing through the
+        // dynamic dispatch path instead of degrading to PhpType::Int.
+        if matches!(obj_ty, PhpType::Mixed) {
+            return PhpType::Mixed;
         }
     }
     PhpType::Int

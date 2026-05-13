@@ -30,6 +30,7 @@ mod io;
 mod arrays;
 mod callables;
 mod system;
+mod json;
 mod regressions;
 mod objects;
 mod runtime_gc;

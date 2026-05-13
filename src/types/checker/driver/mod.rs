@@ -22,6 +22,8 @@ use super::builtin_types::{
     patch_magic_method_signatures, InterfaceDeclInfo,
 };
 use super::builtin_iterators::{inject_builtin_iterators, patch_builtin_generator_signatures};
+use super::builtin_json::{inject_builtin_json_interfaces, patch_builtin_json_signatures};
+use super::builtin_stdclass::inject_builtin_stdclass;
 use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
 };
@@ -111,11 +113,18 @@ pub(super) fn check_types_impl(
     if let Err(error) = inject_builtin_iterators(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }
+    if let Err(error) = inject_builtin_json_interfaces(&mut interface_map, &mut class_map) {
+        errors.extend(error.flatten());
+    }
+    if let Err(error) = inject_builtin_stdclass(&mut class_map) {
+        errors.extend(error.flatten());
+    }
     if let Err(error) =
         inject_builtin_reflection(&interface_map, &mut class_map, &declared_traits)
     {
         errors.extend(error.flatten());
     }
+    checker.declared_classes = class_map.keys().cloned().collect();
     checker.declared_interfaces = interface_map.keys().cloned().collect();
 
     let mut next_interface_id = 0u64;
@@ -169,6 +178,7 @@ pub(super) fn check_types_impl(
     }
     patch_builtin_exception_signatures(&mut checker);
     patch_builtin_fiber_signatures(&mut checker);
+    patch_builtin_json_signatures(&mut checker);
     patch_builtin_reflection_signatures(&mut checker);
     patch_builtin_generator_signatures(&mut checker);
     patch_magic_method_signatures(&mut checker);

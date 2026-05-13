@@ -225,7 +225,8 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "sha1" | "hash" | "substr_replace" | "addslashes" | "stripslashes"
             | "htmlspecialchars" | "html_entity_decode" | "urlencode" | "urldecode"
             | "base64_encode" | "base64_decode" | "bin2hex" | "hex2bin" | "number_format"
-            | "date" | "json_encode" | "gettype" | "str_word_count" | "chunk_split" => PhpType::Str,
+            | "date" | "json_encode" | "json_decode" | "json_last_error_msg" | "gettype"
+            | "str_word_count" | "chunk_split" => PhpType::Str,
             "strpos" | "strrpos" | "array_search" | "fileatime" | "filectime" | "fileperms"
             | "fileowner" | "filegroup" | "fileinode" | "filetype" | "stat" | "lstat"
             | "fstat" => PhpType::Mixed,
@@ -246,7 +247,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     PhpType::Pointer(None)
                 }
             }
-            "ptr_is_null" | "define" => PhpType::Bool,
+            "ptr_is_null" | "define" | "json_validate" => PhpType::Bool,
             "ptr_sizeof" | "ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
             _ => PhpType::Int,
         },

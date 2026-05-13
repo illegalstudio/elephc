@@ -1,0 +1,249 @@
+//! Runtime helper for `$mixed[$key]` access.
+//!
+//! Reading an index/key on a Mixed receiver is the prevalent
+//! `json_decode($json, true)["k"]` (or `[0]`) idiom. This helper unboxes
+//! the cell and routes to the right container access path:
+//!
+//! - tag 4 (indexed array) — integer key only; out-of-bounds → Mixed(null)
+//! - tag 5 (associative array) — int or string key via `__rt_hash_get`
+//! - tag 6 (object) — only stdClass; string key dispatches to
+//!   `__rt_stdclass_get`. Other classes return Mixed(null).
+//! - any other payload (scalar, null, …) returns Mixed(null), matching
+//!   PHP's quiet "Trying to access array offset on …" warning behavior.
+//!
+//! # ABI
+//!
+//! ARM64: `x0 = mixed_ptr, x1 = key_lo, x2 = key_hi (-1 for int keys,
+//! string length otherwise).` Result lives in x0.
+//!
+//! x86_64 (SysV): `rdi = mixed_ptr, rsi = key_lo, rdx = key_hi.` Result
+//! lives in rax.
+//!
+//! The (key_lo, key_hi) tuple matches the convention emitted by
+//! `emit_normalized_hash_key`, so callers can pipe its output straight in.
+
+use crate::codegen::abi;
+use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
+
+pub fn emit_mixed_array_get(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_mixed_array_get_x86_64(emitter);
+        return;
+    }
+    emit_mixed_array_get_aarch64(emitter);
+}
+
+fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: mixed_array_get ---");
+    emitter.label_global("__rt_mixed_array_get");
+
+    // Stack:
+    //   [sp, #0]  = mixed_ptr
+    //   [sp, #8]  = key_lo
+    //   [sp, #16] = key_hi
+    //   [sp, #24] = saved x29
+    //   [sp, #32] = saved x30
+    emitter.instruction("sub sp, sp, #48");                                     // reserve frame: 3 inputs + saved fp/lr (16-byte aligned)
+    emitter.instruction("stp x29, x30, [sp, #24]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #24");                                    // set new frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save mixed_ptr
+    emitter.instruction("str x1, [sp, #8]");                                    // save key_lo
+    emitter.instruction("str x2, [sp, #16]");                                   // save key_hi
+
+    emitter.instruction("cbz x0, __rt_mixed_array_get_null");                   // null Mixed → Mixed(null)
+    emitter.instruction("ldr x9, [x0]");                                        // load tag from mixed[0]
+    emitter.instruction("cmp x9, #4");                                          // tag = 4 (indexed array)?
+    emitter.instruction("b.eq __rt_mixed_array_get_indexed");                   // branch on the current JSON decoder condition
+    emitter.instruction("cmp x9, #5");                                          // tag = 5 (associative array)?
+    emitter.instruction("b.eq __rt_mixed_array_get_assoc");                     // branch on the current JSON decoder condition
+    emitter.instruction("cmp x9, #6");                                          // tag = 6 (object)?
+    emitter.instruction("b.eq __rt_mixed_array_get_object");                    // branch on the current JSON decoder condition
+    emitter.instruction("b __rt_mixed_array_get_null");                         // any other payload → null
+
+    // Indexed array: integer key only. key_hi == -1 marks int keys.
+    emitter.label("__rt_mixed_array_get_indexed");
+    emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = array pointer
+    emitter.instruction("cbz x10, __rt_mixed_array_get_null");                  // defensive null guard
+    emitter.instruction("ldr x11, [sp, #16]");                                  // load key_hi
+    emitter.instruction("cmn x11, #1");                                         // compare with -1 (int-key sentinel)
+    emitter.instruction("b.ne __rt_mixed_array_get_null");                      // string keys on indexed arrays → null
+    emitter.instruction("ldr x12, [sp, #8]");                                   // x12 = key_lo (int index)
+    emitter.instruction("ldr x9, [x10]");                                       // x9 = array length (header offset 0)
+    emitter.instruction("cmp x12, #0");                                         // negative index → null
+    emitter.instruction("b.lt __rt_mixed_array_get_null");                      // branch on the current JSON decoder condition
+    emitter.instruction("cmp x12, x9");                                         // index >= length → null
+    emitter.instruction("b.ge __rt_mixed_array_get_null");                      // branch on the current JSON decoder condition
+    // Indexed arrays of mixed contents store boxed Mixed pointers as
+    // 8-byte slots starting at offset 24 (24-byte header). The decode
+    // runtime creates these arrays with elem_size=8 and tag=mixed for
+    // entries.
+    emitter.instruction("add x10, x10, #24");                                   // skip the 24-byte array header to reach the contiguous payload
+    emitter.instruction("ldr x0, [x10, x12, lsl #3]");                          // load slot at base + index*8 (Mixed* per slot)
+    emitter.instruction("cbz x0, __rt_mixed_array_get_null");                   // empty slot → null Mixed
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
+
+    // Associative array: hash_get with normalized key.
+    emitter.label("__rt_mixed_array_get_assoc");
+    emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = hash pointer
+    emitter.instruction("cbz x10, __rt_mixed_array_get_null");                  // defensive null guard
+    emitter.instruction("mov x0, x10");                                         // x0 = hash pointer for hash_get
+    emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = key_lo
+    emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = key_hi
+    emitter.instruction("bl __rt_hash_get");                                    // x0=found, x1=value_lo, x2=value_hi, x3=value_tag
+    emitter.instruction("cbz x0, __rt_mixed_array_get_null");                   // miss → null
+    // For value_tag == 7 the entry already holds a boxed Mixed pointer
+    // (json_decode and stdClass populate hashes this way). Anything else
+    // (typed string/int/array entries from non-Mixed assoc arrays passing
+    // through a Mixed receiver) needs to be re-boxed via mixed_from_value
+    // so callers always see a uniform Mixed cell.
+    emitter.instruction("cmp x3, #7");                                          // is the hash entry already a boxed Mixed?
+    emitter.instruction("b.ne __rt_mixed_array_get_assoc_box");                 // no → box (lo, hi, tag) into a fresh Mixed cell
+    emitter.instruction("mov x0, x1");                                          // yes → return the borrowed Mixed* directly
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
+    emitter.label("__rt_mixed_array_get_assoc_box");
+    // mixed_from_value(tag, lo, hi). Move (x1, x2, x3) into (x1, x2, x0).
+    emitter.instruction("mov x0, x3");                                          // x0 = value_tag (mixed_from_value first arg)
+    // x1 already holds value_lo; x2 already holds value_hi.
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the typed entry into a Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
+
+    // Object: only stdClass with string key.
+    emitter.label("__rt_mixed_array_get_object");
+    emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = obj pointer
+    emitter.instruction("cbz x10, __rt_mixed_array_get_null");                  // defensive null guard
+    emitter.instruction("ldr x11, [x10]");                                      // x11 = class_id
+    abi::emit_symbol_address(emitter, "x12", "_stdclass_class_id");
+    emitter.instruction("ldr x12, [x12]");                                      // x12 = compile-time stdClass class_id
+    emitter.instruction("cmp x11, x12");                                        // is the receiver a stdClass instance?
+    emitter.instruction("b.ne __rt_mixed_array_get_null");                      // unrelated class → null
+    emitter.instruction("ldr x11, [sp, #16]");                                  // load key_hi
+    emitter.instruction("cmn x11, #1");                                         // compare with -1 (int-key sentinel)
+    emitter.instruction("b.eq __rt_mixed_array_get_null");                      // int keys on objects → null
+    emitter.instruction("mov x0, x10");                                         // x0 = stdClass pointer
+    emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = key_lo (str ptr)
+    emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = key_hi (str len)
+    emitter.instruction("bl __rt_stdclass_get");                                // delegate to the dynamic-property reader
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
+
+    emitter.label("__rt_mixed_array_get_null");
+    emitter.instruction("mov x0, #8");                                          // tag = 8 (null)
+    emitter.instruction("mov x1, #0");                                          // value_lo = 0
+    emitter.instruction("mov x2, #0");                                          // value_hi = 0
+    emitter.instruction("bl __rt_mixed_from_value");                            // box null into a fresh Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
+}
+
+fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: mixed_array_get ---");
+    emitter.label_global("__rt_mixed_array_get");
+
+    // Inputs (SysV): rdi = mixed_ptr, rsi = key_lo, rdx = key_hi.
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
+    emitter.instruction("sub rsp, 32");                                         // reserve slots for the 3 saved inputs (16-byte aligned)
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save mixed_ptr
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save key_lo
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save key_hi
+
+    emitter.instruction("test rdi, rdi");                                       // null Mixed → null
+    emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load tag from mixed[0]
+    emitter.instruction("cmp r10, 4");                                          // tag = 4 (indexed array)?
+    emitter.instruction("je __rt_mixed_array_get_indexed");                     // branch on the current JSON decoder condition
+    emitter.instruction("cmp r10, 5");                                          // tag = 5 (associative array)?
+    emitter.instruction("je __rt_mixed_array_get_assoc");                       // branch on the current JSON decoder condition
+    emitter.instruction("cmp r10, 6");                                          // tag = 6 (object)?
+    emitter.instruction("je __rt_mixed_array_get_object");                      // branch on the current JSON decoder condition
+    emitter.instruction("jmp __rt_mixed_array_get_null");                       // any other payload → null
+
+    emitter.label("__rt_mixed_array_get_indexed");
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = array pointer
+    emitter.instruction("test r10, r10");                                       // defensive null guard
+    emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // load key_hi
+    emitter.instruction("cmp r11, -1");                                         // int-key sentinel?
+    emitter.instruction("jne __rt_mixed_array_get_null");                       // string key on indexed array → null
+    emitter.instruction("mov r12, QWORD PTR [rbp - 16]");                       // r12 = key_lo (int index)
+    emitter.instruction("mov r9, QWORD PTR [r10]");                             // r9 = array length
+    emitter.instruction("cmp r12, 0");                                          // negative index → null
+    emitter.instruction("jl __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    emitter.instruction("cmp r12, r9");                                         // index >= length → null
+    emitter.instruction("jge __rt_mixed_array_get_null");                       // branch on the current JSON decoder condition
+    emitter.instruction("lea r10, [r10 + 24]");                                 // skip the 24-byte array header to reach the contiguous payload
+    emitter.instruction("mov rax, QWORD PTR [r10 + r12 * 8]");                  // load slot at base + index*8 (Mixed* per slot)
+    emitter.instruction("test rax, rax");                                       // empty slot → null
+    emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return Mixed* in rax
+
+    emitter.label("__rt_mixed_array_get_assoc");
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = hash pointer
+    emitter.instruction("test r10, r10");                                       // defensive null guard
+    emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    emitter.instruction("mov rdi, r10");                                        // rdi = hash pointer for hash_get
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // rsi = key_lo
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // rdx = key_hi
+    emitter.instruction("call __rt_hash_get");                                  // rax=found, rdi=value_lo, rsi=value_hi, rcx=value_tag
+    emitter.instruction("test rax, rax");                                       // miss → null
+    emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    // For value_tag == 7 the entry is already a boxed Mixed pointer; for
+    // any other tag (typed string/int/array entries from non-Mixed assoc
+    // arrays passing through a Mixed receiver) re-box (lo, hi, tag) so
+    // callers always see a uniform Mixed cell.
+    emitter.instruction("cmp rcx, 7");                                          // is the hash entry already a boxed Mixed?
+    emitter.instruction("jne __rt_mixed_array_get_assoc_box");                  // no → box (lo, hi, tag) into a fresh Mixed cell
+    emitter.instruction("mov rax, rdi");                                        // yes → return the borrowed Mixed* directly
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return Mixed* in rax
+    emitter.label("__rt_mixed_array_get_assoc_box");
+    // mixed_from_value(tag, lo, hi). Helper expects rax=tag, rdi=lo, rsi=hi.
+    emitter.instruction("mov rax, rcx");                                        // rax = value_tag
+    // rdi and rsi already hold value_lo and value_hi.
+    emitter.instruction("call __rt_mixed_from_value");                          // box the typed entry into a Mixed cell
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return Mixed* in rax
+
+    emitter.label("__rt_mixed_array_get_object");
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = obj pointer
+    emitter.instruction("test r10, r10");                                       // defensive null guard
+    emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // r11 = class_id
+    emitter.instruction("mov r12, QWORD PTR [rip + _stdclass_class_id]");       // r12 = compile-time stdClass class_id
+    emitter.instruction("cmp r11, r12");                                        // is the receiver a stdClass instance?
+    emitter.instruction("jne __rt_mixed_array_get_null");                       // unrelated class → null
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // load key_hi
+    emitter.instruction("cmp r11, -1");                                         // int-key sentinel?
+    emitter.instruction("je __rt_mixed_array_get_null");                        // int key on object → null
+    emitter.instruction("mov rdi, r10");                                        // rdi = stdClass pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // rsi = key_lo (str ptr)
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // rdx = key_hi (str len)
+    emitter.instruction("call __rt_stdclass_get");                              // delegate to the dynamic-property reader
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return Mixed* in rax
+
+    emitter.label("__rt_mixed_array_get_null");
+    emitter.instruction("mov rax, 8");                                          // tag = 8 (null) for mixed_from_value
+    emitter.instruction("mov rdi, 0");                                          // value_lo = 0
+    emitter.instruction("mov rsi, 0");                                          // value_hi = 0
+    emitter.instruction("call __rt_mixed_from_value");                          // box null into a fresh Mixed cell
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return Mixed* in rax
+}

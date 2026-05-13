@@ -11,9 +11,10 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::names::{
-    enum_case_symbol, interface_method_wrapper_symbol, mangle_fqn, method_symbol,
+    enum_case_symbol, interface_method_wrapper_symbol, mangle_fqn, method_symbol, php_symbol_key,
     static_method_symbol, static_property_symbol,
 };
+use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, EnumInfo, InterfaceInfo, PhpType};
 
 use super::instanceof::escaped_ascii;
@@ -157,6 +158,31 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Per-class JSON descriptor pointer table — used by __rt_json_encode_object
+    // to walk public properties and dispatch JsonSerializable when present.
+    out.push_str(".globl _class_json_desc_ptrs\n_class_json_desc_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_json_desc_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_json_desc_missing\n");
+            }
+        }
+    }
+
+    // JsonException's class_id is consulted by __rt_json_throw_error when
+    // JSON_THROW_ON_ERROR is set — it allocates an instance of this class
+    // and routes it through the normal exception machinery.
+    let json_exception_class_id = classes
+        .get("JsonException")
+        .map(|info| info.class_id as i64)
+        .unwrap_or(-1);
+    out.push_str(&format!(
+        ".globl _json_exception_class_id\n_json_exception_class_id:\n    .quad {}\n",
+        json_exception_class_id,
+    ));
+
     out.push_str(".globl _class_parent_ids\n_class_parent_ids:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
@@ -212,6 +238,12 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str("    .quad 0\n");
     out.push_str(".globl _class_gc_desc_missing\n_class_gc_desc_missing:\n");
     out.push_str("    .byte 0\n");
+    // _class_json_desc_missing: zero flags, zero properties, no jsonSerialize.
+    out.push_str("    .p2align 3\n");
+    out.push_str(".globl _class_json_desc_missing\n_class_json_desc_missing:\n");
+    out.push_str("    .quad 0\n"); // flags
+    out.push_str("    .quad 0\n"); // jsonSerialize target
+    out.push_str("    .quad 0\n"); // public property count
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_vtable_missing\n_class_vtable_missing:\n");
     out.push_str("    .quad 0\n");
@@ -404,6 +436,83 @@ pub(crate) fn emit_runtime_data_user(
             }
         }
 
+        // Per-property name strings used by the JSON descriptor below. We
+        // emit them as labels before the descriptor so the descriptor
+        // table holds plain (ptr, len) pairs.
+        let public_props: Vec<(usize, &(String, PhpType))> = class_info
+            .properties
+            .iter()
+            .enumerate()
+            .filter(|(_, (name, _))| {
+                class_info
+                    .property_visibilities
+                    .get(name)
+                    .map_or(true, |v| matches!(v, Visibility::Public))
+            })
+            .collect();
+        for (prop_index, (prop_name, _)) in &public_props {
+            out.push_str(&format!(
+                ".globl _class_json_pname_{}_{}\n_class_json_pname_{}_{}:\n    .ascii {:?}\n",
+                class_info.class_id, prop_index, class_info.class_id, prop_index, prop_name,
+            ));
+        }
+        out.push_str("    .p2align 3\n");
+        out.push_str(&format!(
+            ".globl _class_json_desc_{}\n_class_json_desc_{}:\n",
+            class_info.class_id, class_info.class_id,
+        ));
+        let implements_jsonserializable = class_info
+            .interfaces
+            .iter()
+            .any(|i| i == "JsonSerializable");
+        let flags: u64 = if implements_jsonserializable { 1 } else { 0 };
+        out.push_str(&format!("    .quad {}\n", flags));
+        if implements_jsonserializable {
+            let key = php_symbol_key("jsonSerialize");
+            if let Some(impl_class) = class_info.method_impl_classes.get(&key) {
+                out.push_str(&format!(
+                    "    .quad {}\n",
+                    method_symbol(impl_class, &key),
+                ));
+            } else {
+                out.push_str("    .quad 0\n");
+            }
+        } else {
+            out.push_str("    .quad 0\n");
+        }
+        out.push_str(&format!("    .quad {}\n", public_props.len()));
+        for (prop_index, (prop_name, prop_ty)) in &public_props {
+            let tag = if class_info.reference_properties.contains(prop_name) {
+                0
+            } else {
+                match prop_ty {
+                    PhpType::Int => 0,
+                    PhpType::Str => 1,
+                    PhpType::Float => 2,
+                    PhpType::Bool => 3,
+                    PhpType::Array(_) => 4,
+                    PhpType::AssocArray { .. } => 5,
+                    PhpType::Object(_) => 6,
+                    PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => 7,
+                    PhpType::Resource(_) => 9,
+                    PhpType::Callable
+                    | PhpType::Pointer(_)
+                    | PhpType::Buffer(_)
+                    | PhpType::Packed(_)
+                    | PhpType::Never
+                    | PhpType::Void => 0,
+                }
+            };
+            out.push_str(&format!(
+                "    .quad _class_json_pname_{}_{}\n",
+                class_info.class_id, prop_index,
+            ));
+            out.push_str(&format!("    .quad {}\n", prop_name.len()));
+            out.push_str(&format!("    .quad {}\n", prop_index));
+            out.push_str(&format!("    .quad {}\n", tag));
+        }
+
+        out.push_str("    .p2align 3\n");
         out.push_str(&format!(".globl _class_gc_desc_{}\n_class_gc_desc_{}:\n", class_info.class_id, class_info.class_id));
         if class_info.properties.is_empty() {
             out.push_str("    .byte 0\n");
@@ -470,6 +579,14 @@ pub(crate) fn emit_runtime_data_user(
             }
         }
     }
+
+    let stdclass_id = classes
+        .get("stdClass")
+        .map(|class_info| class_info.class_id as i64)
+        .unwrap_or(-1);
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _stdclass_class_id\n_stdclass_class_id:\n");
+    out.push_str(&format!("    .quad {}\n", stdclass_id));
 
     out
 }

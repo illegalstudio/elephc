@@ -29,7 +29,10 @@ pub(super) fn check_builtin(
                 return Err(CompileError::new(span, "count() takes exactly 1 argument"));
             }
             let ty = checker.infer_type(&args[0], env)?;
-            if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            if !matches!(
+                ty,
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+            ) {
                 return Err(CompileError::new(span, "count() argument must be array"));
             }
             Ok(Some(PhpType::Int))

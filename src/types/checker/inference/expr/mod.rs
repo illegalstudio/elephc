@@ -230,6 +230,14 @@ impl Checker {
                             _ => Ok(*elem_ty.clone()),
                         }
                     }
+                    // Mixed receivers fall through to runtime dispatch. The
+                    // boxed payload may carry an indexed array, an assoc
+                    // hash, or a stdClass; codegen unboxes and routes to
+                    // the right runtime helper. Missing keys decode to
+                    // `Mixed(null)` at runtime, mirroring PHP's silent
+                    // "undefined index" warning behavior for this very
+                    // common idiom (e.g. `json_decode($json, true)["k"]`).
+                    PhpType::Mixed => Ok(PhpType::Mixed),
                     _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
                 }
             }

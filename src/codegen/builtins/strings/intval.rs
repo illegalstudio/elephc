@@ -25,9 +25,16 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("intval()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
-    if ty == PhpType::Str {
-        // -- convert string to integer --
-        abi::emit_call_label(emitter, "__rt_atoi");                             // parse the current string result through the target-aware atoi runtime helper
+    match ty {
+        PhpType::Str => {
+            // -- convert string to integer --
+            abi::emit_call_label(emitter, "__rt_atoi");                         // parse the current string result through the target-aware atoi runtime helper
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            // -- coerce a boxed Mixed cell to int per PHP's casting rules --
+            abi::emit_call_label(emitter, "__rt_mixed_cast_int");                // dispatch on the runtime cell tag and return the integer payload (or coerced equivalent)
+        }
+        _ => {}
     }
     Some(PhpType::Int)
 }
