@@ -11,7 +11,7 @@
 use crate::errors::CompileError;
 use crate::names::Name;
 use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, TypeExpr};
-use crate::types::{merge_array_key_types, PhpType, TypeEnv};
+use crate::types::{merge_array_key_types, FunctionSig, PhpType, TypeEnv};
 
 use super::super::Checker;
 use super::syntactic::infer_return_type_syntactic;
@@ -532,13 +532,7 @@ impl Checker {
                             expr.span,
                             env,
                         )?;
-                        if specialized_sig.ref_params.iter().any(|is_ref| *is_ref) {
-                            return Err(CompileError::new(
-                                expr.span,
-                                "Pipe operator does not support by-reference parameters",
-                            ));
-                        }
-                        return self.check_known_callable_call(
+                        return self.check_pipe_known_callable_call(
                             &specialized_sig,
                             &synth_args,
                             expr.span,
@@ -546,13 +540,7 @@ impl Checker {
                             &format!("pipe target ${}", var_name),
                         );
                     }
-                    if sig.ref_params.iter().any(|is_ref| *is_ref) {
-                        return Err(CompileError::new(
-                            expr.span,
-                            "Pipe operator does not support by-reference parameters",
-                        ));
-                    }
-                    return self.check_known_callable_call(
+                    return self.check_pipe_known_callable_call(
                         &sig,
                         &synth_args,
                         expr.span,
@@ -568,19 +556,24 @@ impl Checker {
                     expr.span,
                     env,
                 )?;
-                if sig.ref_params.iter().any(|is_ref| *is_ref) {
-                    return Err(CompileError::new(
-                        expr.span,
-                        "Pipe operator does not support by-reference parameters",
-                    ));
-                }
-                return self.check_known_callable_call(
+                return self.check_pipe_known_callable_call(
                     &sig,
                     &synth_args,
                     expr.span,
                     env,
                     "pipe target",
                 );
+            }
+            ExprKind::Closure { .. } => {
+                if let Some(sig) = self.resolve_expr_callable_sig(callable, env)? {
+                    return self.check_pipe_known_callable_call(
+                        &sig,
+                        &synth_args,
+                        expr.span,
+                        env,
+                        "pipe target",
+                    );
+                }
             }
             _ => {}
         }
@@ -599,6 +592,23 @@ impl Checker {
             _ => {}
         }
         Ok(PhpType::Int)
+    }
+
+    fn check_pipe_known_callable_call(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<PhpType, CompileError> {
+        if sig.ref_params.iter().any(|is_ref| *is_ref) {
+            return Err(CompileError::new(
+                span,
+                "Pipe operator does not support by-reference parameters",
+            ));
+        }
+        self.check_known_callable_call(sig, args, span, env, callee_desc)
     }
 
     fn is_nullable_callable_from_nullsafe_chain(callee: &Expr, callee_ty: &PhpType) -> bool {
