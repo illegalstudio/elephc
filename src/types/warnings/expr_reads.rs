@@ -42,6 +42,10 @@ pub(super) fn collect_expr_reads(
             collect_expr_reads(value, scope, warnings);
             collect_expr_reads(default, scope, warnings);
         }
+        ExprKind::Pipe { value, callable } => {
+            collect_expr_reads(value, scope, warnings);
+            collect_expr_reads(callable, scope, warnings);
+        }
         ExprKind::Assignment {
             target,
             value,

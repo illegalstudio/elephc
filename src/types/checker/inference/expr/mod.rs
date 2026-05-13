@@ -350,6 +350,9 @@ impl Checker {
                     Ok(wider_type_syntactic(&vt, &dt))
                 }
             }
+            ExprKind::Pipe { value, callable } => {
+                self.infer_pipe_type(value, callable, expr, env)
+            }
             ExprKind::Assignment {
                 target,
                 value,

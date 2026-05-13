@@ -113,6 +113,16 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 default: Box::new(default),
             })
         }
+        ExprKind::Pipe { value, callable } => {
+            let value = fold_expr(*value);
+            let callable = fold_expr(*callable);
+            super::pipes::try_fold_pure_pipe(&value, &callable)
+                .or_else(|| super::inline_closure::try_inline_closure_pipe(&value, &callable))
+                .unwrap_or_else(|| ExprKind::Pipe {
+                    value: Box::new(value),
+                    callable: Box::new(callable),
+                })
+        }
         ExprKind::Assignment {
             target,
             value,

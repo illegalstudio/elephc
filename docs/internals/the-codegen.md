@@ -373,6 +373,21 @@ $x ??= "default";
 
 The generated code loads `$x`, branches past the assignment when it is non-null, and evaluates/stores the right-hand side only on the null path. This preserves PHP's `??=` short-circuit behavior and avoids rewriting an already-owned heap value back into the same local slot.
 
+### Pipe operator
+
+PHP 8.5 `value |> callable` lowers through `src/codegen/expr/calls/pipe.rs`.
+`emit_expr()` first stores the left-hand value into a hidden local slot so the
+left side is observably evaluated before the callable target. It then builds a
+synthetic one-argument call using that hidden local as the single positional
+argument.
+
+The pipe lowering delegates to the existing call paths whenever possible:
+first-class function targets become `FunctionCall`, first-class static method
+targets become `StaticMethodCall`, first-class instance method targets become
+`MethodCall`, local callable variables become `ClosureCall`, and other callable
+expressions become `ExprCall`. Argument planning, ABI materialization,
+ownership, and diagnostics therefore stay aligned with ordinary calls.
+
 ### Error-control operator
 
 The `@` operator lowers to a scoped runtime diagnostic-suppression pair:

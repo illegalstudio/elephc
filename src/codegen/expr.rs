@@ -105,6 +105,9 @@ pub fn emit_expr(
         ExprKind::NullCoalesce { value, default } => {
             compare::emit_null_coalesce(value, default, emitter, ctx, data)
         }
+        ExprKind::Pipe { value, callable } => {
+            calls::emit_pipe(value, callable, expr.span, emitter, ctx, data)
+        }
         ExprKind::Assignment {
             target,
             value,

@@ -187,6 +187,9 @@ pub enum Token {
     QuestionQuestion,       // ??
     QuestionQuestionAssign, // ??=
 
+    // PHP 8.5 pipe operator
+    PipeArrow,      // |>
+
     // Variadic / spread
     Ellipsis,         // ...
 

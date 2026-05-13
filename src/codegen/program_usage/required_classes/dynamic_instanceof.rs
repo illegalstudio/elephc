@@ -151,6 +151,9 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         | ExprKind::ShortTernary { value, default } => {
             expr_has_dynamic_instanceof(value) || expr_has_dynamic_instanceof(default)
         }
+        ExprKind::Pipe { value, callable } => {
+            expr_has_dynamic_instanceof(value) || expr_has_dynamic_instanceof(callable)
+        }
         ExprKind::Assignment {
             target,
             value,

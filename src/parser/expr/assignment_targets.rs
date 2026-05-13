@@ -242,6 +242,10 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
             collect_assignment_target_dependencies(value, dependencies);
             collect_assignment_target_dependencies(default, dependencies);
         }
+        ExprKind::Pipe { value, callable } => {
+            collect_assignment_target_dependencies(value, dependencies);
+            collect_assignment_target_dependencies(callable, dependencies);
+        }
         ExprKind::Ternary {
             condition,
             then_expr,
@@ -362,6 +366,10 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         | ExprKind::ShortTernary { value, default } => {
             expr_may_write_dependency(value, dependencies)
                 || expr_may_write_dependency(default, dependencies)
+        }
+        ExprKind::Pipe { value, callable } => {
+            expr_may_write_dependency(value, dependencies)
+                || expr_may_write_dependency(callable, dependencies)
         }
         ExprKind::Ternary {
             condition,

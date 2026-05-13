@@ -281,6 +281,10 @@ fn visit_expr(expr: &Expr, st: &mut State) {
             visit_expr(value, st);
             visit_expr(default, st);
         }
+        ExprKind::Pipe { value, callable } => {
+            visit_expr(value, st);
+            visit_expr(callable, st);
+        }
         ExprKind::FunctionCall { args, .. }
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::NewObject { args, .. }

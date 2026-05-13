@@ -34,6 +34,7 @@ function repeat(string $label, int $count): string {
 - Typed parameters can use default values
 - Function, method, constructor, closure, and arrow-function parameter hints are checked
 - Function, method, closure, and arrow-function return type hints are checked
+- Variadic parameters are supported only without a parameter type hint for now; `function f(int ...$xs)`, typed variadic methods, typed variadic closures, and typed variadic arrow functions are rejected.
 - Non-`void` declared return types must return a value on every reachable path; `throw`, `exit()`/`die()`, and infinite loops count as non-returning paths
 - Bare `return;` is valid only for `void` returns; use `return null;` for nullable return types
 - Named arguments are supported for known-signature calls: user-defined functions, methods, closures, built-ins, and extern functions
@@ -221,6 +222,10 @@ function sum(...$nums) {
 }
 echo sum(1, 2, 3); // 6
 ```
+
+Variadic parameters can appear on functions, methods, closures, and arrow
+functions, but the variadic parameter itself cannot carry a type hint yet. Use
+`function sum(...$nums)` instead of `function sum(int ...$nums)`.
 
 ## Spread operator
 

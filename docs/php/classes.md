@@ -429,6 +429,12 @@ foreach (class_get_attributes('Greeter') as $attr) {
 
 `ReflectionAttribute` is a final synthetic built-in class with `getName(): string` and `getArguments(): array` methods. It is populated internally by `class_get_attributes()` and cannot be constructed or populated directly from user code; its metadata slots are private.
 
+| Function | Signature | Description |
+|---|---|---|
+| `class_attribute_names()` | `class_attribute_names($class_name): array` | Return the resolved attribute names decorating the class |
+| `class_attribute_args()` | `class_attribute_args($class_name, $attribute_name): array` | Return the supported literal positional arguments for the first matching class attribute |
+| `class_get_attributes()` | `class_get_attributes($class_name): array` | Return `ReflectionAttribute` objects for the class attributes |
+
 Limitations today:
 - All arguments to `class_attribute_names()`, `class_attribute_args()`, and `class_get_attributes()` must be **string literals** at the call site — dynamic class or attribute names (variables) require a runtime name→id lookup table that is not yet implemented.
 - Only **literal** positional arguments are materialized by reflection helpers today (string, int, bool, null, plus `-N` for negative ints). Other legal PHP attribute arguments can still be parsed and compiled, and `class_attribute_names()` can still list the attribute name, but `class_attribute_args()` / `class_get_attributes()` report an error if they would need unsupported argument metadata.
@@ -460,7 +466,7 @@ Class constants (PHP 7.1+ visibility, PHP 8.1+ `final`) live on classes, interfa
 - No abstract properties
 - No `readonly static` properties
 - No `readonly` or default-valued by-reference promoted properties
-- No instance property redeclaration across inheritance chain
+- No instance property redeclaration across an inheritance chain; static property redeclarations are supported, but inherited instance-property redeclarations are still rejected.
 - Class constants must be literal-or-foldable expressions; `self::OTHER + 1` style recursive references are not supported.
 - Anonymous classes (`new class { ... }`) are not yet supported.
 - Class attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, and `class_get_attributes()`; method/property/parameter reflection and `ReflectionClass` are not yet available. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to parameters (refactor of param representation and stack-trace infrastructure pending).

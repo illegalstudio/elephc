@@ -296,6 +296,36 @@ pub(super) fn parse_expr_bp(
             continue;
         }
 
+        // PHP 8.5 pipe operator `|>`: left-associative, BP (24, 25) — sits between
+        // comparisons (23, 24) and shifts (25, 26), matching php-src/RFC precedence
+        // (lower than `.`, shifts, `+`/`-`, higher than comparisons, `??`, ternary,
+        // logical, and assignment). Built as a dedicated `ExprKind::Pipe` node, not a
+        // `BinOp`, so that LHS-first evaluation order and pipe-specific diagnostics are
+        // preserved through later passes.
+        if matches!(tokens[*pos].0, Token::PipeArrow) {
+            let (l_bp, r_bp) = (24u8, 25u8);
+            if l_bp < min_bp {
+                break;
+            }
+            let span = tokens[*pos].1;
+            *pos += 1;
+            if starts_unparenthesized_arrow_function(tokens, *pos) {
+                return Err(CompileError::new(
+                    tokens[*pos].1,
+                    "Arrow functions used as pipe targets must be parenthesized",
+                ));
+            }
+            let rhs = parse_expr_bp(tokens, pos, r_bp)?;
+            lhs = Expr::new(
+                ExprKind::Pipe {
+                    value: Box::new(lhs),
+                    callable: Box::new(rhs),
+                },
+                span,
+            );
+            continue;
+        }
+
         let (op, l_bp, r_bp) = match infix_bp(&tokens[*pos].0) {
             Some(binding) => binding,
             None => break,
@@ -329,6 +359,12 @@ pub(super) fn parse_expr_bp(
     }
 
     Ok(lhs)
+}
+
+fn starts_unparenthesized_arrow_function(tokens: &[(Token, Span)], pos: usize) -> bool {
+    matches!(tokens.get(pos).map(|(token, _)| token), Some(Token::Fn))
+        || (matches!(tokens.get(pos).map(|(token, _)| token), Some(Token::Static))
+            && matches!(tokens.get(pos + 1).map(|(token, _)| token), Some(Token::Fn)))
 }
 
 #[derive(Debug, Clone, PartialEq)]

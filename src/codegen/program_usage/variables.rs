@@ -190,6 +190,9 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         ExprKind::NullCoalesce { value, default } => {
             expr_uses_variable(value, needle) || expr_uses_variable(default, needle)
         }
+        ExprKind::Pipe { value, callable } => {
+            expr_uses_variable(value, needle) || expr_uses_variable(callable, needle)
+        }
         ExprKind::Assignment {
             target,
             value,
