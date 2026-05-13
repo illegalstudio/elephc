@@ -151,6 +151,9 @@ fn expr_contains_yield(expr: &Expr) -> bool {
         ExprKind::NullCoalesce { value, default } => {
             expr_contains_yield(value) || expr_contains_yield(default)
         }
+        ExprKind::Pipe { value, callable } => {
+            expr_contains_yield(value) || expr_contains_yield(callable)
+        }
         ExprKind::FunctionCall { args, .. }
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::NewObject { args, .. }
@@ -198,5 +201,56 @@ fn expr_contains_yield(expr: &Expr) -> bool {
         ExprKind::NamedArg { value, .. } => expr_contains_yield(value),
         ExprKind::BufferNew { len, .. } => expr_contains_yield(len),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ast::{CallableTarget, Expr, ExprKind, Stmt, StmtKind};
+    use crate::span::Span;
+
+    fn yield_expr(value: i64) -> Expr {
+        Expr::new(
+            ExprKind::Yield {
+                key: None,
+                value: Some(Box::new(Expr::int_lit(value))),
+            },
+            Span::dummy(),
+        )
+    }
+
+    fn pipe_expr(value: Expr, callable: Expr) -> Stmt {
+        Stmt::new(
+            StmtKind::ExprStmt(Expr::new(
+                ExprKind::Pipe {
+                    value: Box::new(value),
+                    callable: Box::new(callable),
+                },
+                Span::dummy(),
+            )),
+            Span::dummy(),
+        )
+    }
+
+    fn callable_expr() -> Expr {
+        Expr::new(
+            ExprKind::FirstClassCallable(CallableTarget::Function("id".into())),
+            Span::dummy(),
+        )
+    }
+
+    #[test]
+    fn detects_yield_in_pipe_value() {
+        let stmt = pipe_expr(yield_expr(1), callable_expr());
+
+        assert!(body_contains_yield(&[stmt]));
+    }
+
+    #[test]
+    fn detects_yield_in_pipe_callable() {
+        let stmt = pipe_expr(Expr::int_lit(1), yield_expr(2));
+
+        assert!(body_contains_yield(&[stmt]));
     }
 }

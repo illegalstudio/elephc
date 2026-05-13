@@ -260,6 +260,22 @@ fn test_error_yield_outside_function() {
 }
 
 #[test]
+fn test_error_yield_outside_function_in_pipe_value() {
+    expect_error(
+        "<?php function id($v) { return $v; } $x = (yield 1) |> id(...);",
+        "yield can only be used inside a function or method body",
+    );
+}
+
+#[test]
+fn test_error_yield_outside_function_in_pipe_callable() {
+    expect_error(
+        "<?php $x = 1 |> (yield 2);",
+        "yield can only be used inside a function or method body",
+    );
+}
+
+#[test]
 fn test_error_yield_in_try_block() {
     expect_error(
         "<?php function gen() { try { yield 1; } catch (\\Throwable $e) {} }",
