@@ -20,7 +20,7 @@ PHP source (.php)
      ▼
 ┌─────────┐
 │  Parser  │  src/parser/
-│          │  expr/, stmt/, control.rs, ast.rs
+│          │  expr/, stmt/, control.rs, ast/
 │          │  Tokens → Program (Vec<Stmt>)
 └────┬─────┘
      │
@@ -33,7 +33,7 @@ PHP source (.php)
      │
      ▼
 ┌─────────────┐
-│ Conditional │  src/conditional.rs
+│ Conditional │  src/conditional/
 │             │  Applies CLI `--define` symbols to `ifdef` branches.
 │             │  Removes inactive AST branches before include resolution.
 └────┬────────┘
@@ -138,7 +138,7 @@ src/
 ├── span.rs                    Source position (line, col)
 ├── magic_constants.rs         Per-file lowering for PHP magic constants
 ├── magic_constants/           File/scope/trait magic-constant walkers
-├── conditional.rs             Build-time `ifdef` pass
+├── conditional/               Build-time `ifdef` pass
 ├── resolver/                  Include/require resolution, declaration discovery, once guards
 ├── optimize.rs                Public optimizer entry points and effect context
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination
@@ -158,7 +158,7 @@ src/
 │
 ├── parser/
 │   ├── mod.rs                 parse() → Program
-│   ├── ast.rs                 ExprKind, StmtKind, BinOp, CastType
+│   ├── ast/                   ExprKind, StmtKind, BinOp, CastType
 │   ├── expr/                  Pratt parser passes and expression helpers
 │   ├── stmt/                  Statement parsing, assignment, functions, OOP, namespaces, FFI
 │   └── control.rs             if, while, for, do-while, foreach, try/catch/finally
@@ -169,7 +169,7 @@ src/
 │   ├── result.rs              CheckResult and semantic metadata returned by the checker
 │   ├── schema.rs              Class/interface/enum/trait metadata models
 │   ├── signatures.rs          Built-in call signatures and first-class callable wrappers
-│   ├── call_args.rs           Shared named/spread call-argument planner
+│   ├── call_args/             Shared named/spread call-argument planner
 │   ├── array_keys.rs          PHP array-key normalization helpers
 │   ├── ffi.rs                 C-facing extern type models
 │   ├── fibers.rs              Fiber callback validation helpers
@@ -214,14 +214,14 @@ src/
 │   │   ├── assignment.rs      Assignment expression lowering
 │   │   ├── binops/            `arithmetic.rs`, `array_union.rs`, `comparison.rs`, `target.rs`, `mod.rs`
 │   │   ├── calls.rs           Call-expression dispatch
-│   │   ├── calls/             `function.rs`, `closure.rs`, `first_class.rs`, `indirect.rs`, `args.rs`
+│   │   ├── calls/             `function.rs`, `closure.rs`, `first_class.rs`, `indirect.rs`, `args/`
 │   │   ├── chains.rs          Mixed nullsafe/member postfix-chain lowering
 │   │   ├── coerce.rs          Truthiness / string / null coercions
-│   │   ├── compare.rs         Comparison and widening helpers
+│   │   ├── compare/           Comparison and widening helpers
 │   │   ├── diagnostics.rs     Error-control / runtime-diagnostic expression helpers
 │   │   ├── helpers.rs         Shared expression-codegen utilities
 │   │   ├── objects.rs         Object-expression dispatch
-│   │   ├── objects/           `allocation.rs`, `access.rs`, `instanceof.rs`, `nullsafe.rs`, `static_properties.rs`, `dispatch.rs`, `dispatch/`
+│   │   ├── objects/           `allocation.rs`, `access.rs`, `instanceof.rs`, `nullsafe.rs`, `static_properties.rs`, `dispatch/`
 │   │   ├── ownership.rs       Result ownership classification
 │   │   ├── scalars.rs         Literal / negate / bit-not / logical-not lowering
 │   │   ├── ternary.rs         Full and short ternary lowering
@@ -275,7 +275,7 @@ src/
 │   │   ├── types/             is_*, gettype, empty, unset, settype, ... (17 files)
 │   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (65 files)
 │   │   ├── pointers/          ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ... (12 files)
-│   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, ... (25 files)
+│   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, attribute reflection, ... (28 files)
 │   │
 │   └── runtime/               Runtime routines and target-specific emission helpers
 │       ├── mod.rs             Emits all runtime functions into assembly

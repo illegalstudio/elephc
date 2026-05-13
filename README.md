@@ -266,7 +266,7 @@ The full list of supported constructs, operators, and control structures is in t
 
 **I/O:** `fopen`, `fclose`, `fread`, `fwrite`, `fgets`, `feof`, `readline`, `fseek`, `ftell`, `rewind`, `file_get_contents`, `file_put_contents`, `file`, `fgetcsv`, `fputcsv`, `file_exists`, `is_file`, `is_dir`, `is_readable`, `is_writable`, `is_writeable`, `is_executable`, `is_link`, `filesize`, `filemtime`, `fileatime`, `filectime`, `fileperms`, `fileowner`, `filegroup`, `fileinode`, `filetype`, `stat`, `lstat`, `fstat`, `clearstatcache`, `basename`, `dirname`, `pathinfo`, `realpath`, `fnmatch`, `touch`, `chmod`, `chown`, `chgrp`, `umask`, `ftruncate`, `fflush`, `fsync`, `fdatasync`, `copy`, `rename`, `unlink`, `mkdir`, `rmdir`, `scandir`, `glob`, `getcwd`, `chdir`, `tempnam`, `sys_get_temp_dir`, `var_dump`, `print_r`
 
-**System:** `exit`, `die`, `time`, `microtime`, `date`, `mktime`, `strtotime`, `sleep`, `usleep`, `getenv`, `putenv`, `php_uname`, `phpversion`, `exec`, `shell_exec`, `system`, `passthru`, `json_encode`, `json_decode`, `json_last_error`, `preg_match`, `preg_match_all`, `preg_replace`, `preg_split`, `define`
+**System:** `exit`, `die`, `time`, `microtime`, `date`, `mktime`, `strtotime`, `sleep`, `usleep`, `getenv`, `putenv`, `php_uname`, `phpversion`, `exec`, `shell_exec`, `system`, `passthru`, `json_encode`, `json_decode`, `json_last_error`, `preg_match`, `preg_match_all`, `preg_replace`, `preg_split`, `define`, `class_attribute_names`, `class_attribute_args`, `class_get_attributes`
 
 **Pointers/Buffers:** `ptr`, `ptr_null`, `ptr_is_null`, `ptr_get`, `ptr_set`, `ptr_read8`, `ptr_read32`, `ptr_write8`, `ptr_write32`, `ptr_offset`, `ptr_cast<T>`, `ptr_sizeof`, `buffer_new<T>`, `buffer_len`, `buffer_free`
 
@@ -353,7 +353,7 @@ src/
 ├── linker.rs            # Assembler + linker invocation
 ├── timings.rs           # Phase timing collection/reporting
 ├── span.rs              # Source position tracking (line, col)
-├── conditional.rs       # Build-time `ifdef` pass driven by --define
+├── conditional/         # Build-time `ifdef` pass driven by --define
 ├── magic_constants.rs   # Per-file PHP magic constant lowering
 ├── magic_constants/     # File/scope/trait magic-constant walkers
 ├── resolver/            # Include/require resolution, declaration discovery, once guards
@@ -373,7 +373,7 @@ src/
 │   └── cursor.rs        # Byte-level source reader
 │
 ├── parser/              # Tokens → AST (Pratt parser)
-│   ├── ast.rs           # ExprKind, StmtKind, BinOp, CastType
+│   ├── ast/             # ExprKind, StmtKind, BinOp, CastType
 │   ├── expr/            # Expression parsing helpers and Pratt parser passes
 │   ├── stmt/            # Statement parsing, OOP, namespaces, FFI
 │   └── control.rs       # if, while, for, foreach, do-while, switch, try/catch/finally
@@ -383,7 +383,7 @@ src/
 │   ├── model.rs         # PhpType and TypeEnv
 │   ├── result.rs        # CheckResult and semantic metadata
 │   ├── signatures.rs    # Built-in and callable signatures
-│   ├── call_args.rs     # Shared named/spread call planner
+│   ├── call_args/       # Shared named/spread call planner
 │   ├── schema.rs        # Class/interface/enum metadata
 │   ├── fibers.rs        # Fiber callback validation
 │   ├── traits.rs        # Trait flattening and conflict resolution

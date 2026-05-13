@@ -193,7 +193,7 @@ Floats are stored as their raw 64-bit IEEE 754 bit patterns (`.quad` directive).
 
 **Files:** `src/codegen/expr.rs`, `src/codegen/expr/`
 
-`emit_expr()` takes an expression node and emits code that leaves the result in the standard registers. The top-level `expr.rs` file now mainly dispatches into focused helpers under `expr/` such as `scalars.rs`, `variables.rs`, `binops.rs`, `arrays.rs`, `compare.rs`, `calls/`, and `objects/`.
+`emit_expr()` takes an expression node and emits code that leaves the result in the standard registers. The top-level `expr.rs` file now mainly dispatches into focused helpers under `expr/` such as `scalars.rs`, `variables.rs`, `binops.rs`, `arrays.rs`, `compare/`, `calls/`, and `objects/`.
 
 | Type | Result location |
 |---|---|
@@ -511,7 +511,7 @@ The generated `Generator` object has a custom payload layout rather than ordinar
 
 ## Fiber codegen
 
-**Files:** `src/codegen/expr/objects/allocation.rs`, `src/codegen/expr/objects/dispatch.rs`, `src/codegen/expr/objects/fiber_wrapper.rs`, `src/codegen/functions/fiber_wrapper.rs`, `src/codegen/runtime/fibers/`
+**Files:** `src/codegen/expr/objects/allocation.rs`, `src/codegen/expr/objects/dispatch/`, `src/codegen/expr/objects/fiber_wrapper.rs`, `src/codegen/functions/fiber_wrapper.rs`, `src/codegen/runtime/fibers/`
 
 `Fiber` is a built-in class, but codegen does not lower it through the ordinary object constructor and method-dispatch path. `new Fiber($callable)` is intercepted and delegated to `__rt_fiber_construct`, which allocates the larger runtime-managed Fiber object, creates its guarded native stack, stores the original callable pointer, and records the generated wrapper label that adapts Fiber start values to the callback ABI.
 
