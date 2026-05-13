@@ -183,3 +183,259 @@ fn test_error_new_static_validates_child_constructor() {
         "Constructor 'Child::__construct' expects 1 arguments, got 0",
     );
 }
+
+// --- #[\Override] enforcement (PHP 8.3) ---
+
+#[test]
+fn test_error_override_attribute_with_no_parent_method() {
+    expect_error(
+        "<?php class Base {} class Child extends Base { #[\\Override] public function nope(): void {} }",
+        "no matching parent method",
+    );
+}
+
+#[test]
+fn test_error_override_attribute_on_root_class() {
+    expect_error(
+        "<?php class Solo { #[\\Override] public function alone(): void {} }",
+        "no matching parent method",
+    );
+}
+
+#[test]
+fn test_error_override_attribute_on_misspelled_method() {
+    expect_error(
+        "<?php class Base { public function fetchAll(): void {} } class Child extends Base { #[\\Override] public function fetchAl(): void {} }",
+        "no matching parent method",
+    );
+}
+
+#[test]
+fn test_error_override_attribute_unqualified_form_is_recognized() {
+    expect_error(
+        "<?php class Base {} class Child extends Base { #[Override] public function nope(): void {} }",
+        "no matching parent method",
+    );
+}
+
+#[test]
+fn test_error_override_attribute_import_alias_is_recognized() {
+    expect_error(
+        "<?php use Override as MustOverride; class Base {} class Child extends Base { #[MustOverride] public function nope(): void {} }",
+        "no matching parent method",
+    );
+}
+
+#[test]
+fn test_override_attribute_qualified_lookalike_is_not_builtin() {
+    check_source(
+        "<?php class Solo { #[Foo\\Override] public function alone(): void {} }",
+    )
+    .expect("qualified user attribute should not enforce #[\\Override]");
+}
+
+#[test]
+fn test_override_attribute_namespaced_unqualified_lookalike_is_not_builtin() {
+    check_source(
+        "<?php namespace N; class Solo { #[Override] public function alone(): void {} }",
+    )
+    .expect("namespaced user attribute should not enforce #[\\Override]");
+}
+
+#[test]
+fn test_error_override_attribute_on_static_with_no_parent() {
+    expect_error(
+        "<?php class Base {} class Child extends Base { #[\\Override] public static function gone(): void {} }",
+        "no matching parent method",
+    );
+}
+
+#[test]
+fn test_allow_dynamic_properties_namespaced_unqualified_lookalike_is_not_builtin() {
+    expect_error(
+        "<?php namespace N; #[AllowDynamicProperties] class Bag {} $b = new Bag(); $b->x = 1;",
+        "Undefined property: N\\Bag::x",
+    );
+}
+
+// --- class_attribute_names() argument validation ---
+
+#[test]
+fn test_error_class_attribute_names_undefined_class() {
+    expect_error(
+        "<?php $x = class_attribute_names('DoesNotExist');",
+        "undefined class 'DoesNotExist'",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_names_dynamic_argument() {
+    expect_error(
+        "<?php $name = 'Foo'; class_attribute_names($name);",
+        "requires a string literal class name",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_names_no_argument() {
+    expect_error(
+        "<?php class_attribute_names();",
+        "exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_names_non_string_argument() {
+    expect_error(
+        "<?php class_attribute_names(42);",
+        "must be a string class name",
+    );
+}
+
+// --- class_attribute_args() argument validation ---
+
+#[test]
+fn test_error_class_attribute_args_undefined_class() {
+    expect_error(
+        "<?php $x = class_attribute_args('DoesNotExist', 'Foo');",
+        "undefined class 'DoesNotExist'",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_args_dynamic_class_argument() {
+    expect_error(
+        "<?php $name = 'Foo'; class_attribute_args($name, 'Bar');",
+        "requires a string literal class name",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_args_dynamic_attr_argument() {
+    expect_error(
+        "<?php #[Foo] class C {} $name = 'Foo'; class_attribute_args('C', $name);",
+        "requires a string literal attribute name",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_args_wrong_arity() {
+    expect_error(
+        "<?php class_attribute_args('Foo');",
+        "exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_args_non_string_class() {
+    expect_error(
+        "<?php class_attribute_args(1, 'Foo');",
+        "first argument must be a string class name",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_args_non_string_attr() {
+    expect_error(
+        "<?php #[Foo] class C {} class_attribute_args('C', 1);",
+        "second argument must be a string attribute name",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_named_args_are_not_silently_dropped() {
+    expect_error(
+        "<?php #[Foo(name: \"Ada\")] class C {} class_attribute_args('C', 'Foo');",
+        "requested attribute uses argument metadata that is not supported yet",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_expression_args_are_not_silently_dropped() {
+    expect_error(
+        "<?php #[Foo(1 + 2)] class C {} class_attribute_args('C', 'Foo');",
+        "requested attribute uses argument metadata that is not supported yet",
+    );
+}
+
+#[test]
+fn test_error_class_attribute_float_args_are_not_silently_dropped() {
+    expect_error(
+        "<?php #[Foo(3.14)] class C {} class_get_attributes('C');",
+        "class has attribute argument metadata that is not supported yet",
+    );
+}
+
+// --- class_get_attributes() argument validation ---
+
+#[test]
+fn test_error_class_get_attributes_undefined_class() {
+    expect_error(
+        "<?php $x = class_get_attributes('DoesNotExist');",
+        "undefined class 'DoesNotExist'",
+    );
+}
+
+#[test]
+fn test_error_class_get_attributes_dynamic_argument() {
+    expect_error(
+        "<?php $name = 'Foo'; class_get_attributes($name);",
+        "requires a string literal class name",
+    );
+}
+
+#[test]
+fn test_error_class_get_attributes_no_argument() {
+    expect_error(
+        "<?php class_get_attributes();",
+        "exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_class_get_attributes_non_string_argument() {
+    expect_error(
+        "<?php class_get_attributes(42);",
+        "must be a string class name",
+    );
+}
+
+#[test]
+fn test_error_reflection_attribute_redeclaration() {
+    expect_error(
+        "<?php class ReflectionAttribute {}",
+        "Cannot redeclare built-in reflection type: ReflectionAttribute",
+    );
+}
+
+#[test]
+fn test_error_reflection_attribute_interface_redeclaration() {
+    expect_error(
+        "<?php interface ReflectionAttribute {}",
+        "Cannot redeclare built-in reflection type: ReflectionAttribute",
+    );
+}
+
+#[test]
+fn test_error_reflection_attribute_trait_redeclaration() {
+    expect_error(
+        "<?php trait ReflectionAttribute {}",
+        "Cannot redeclare built-in reflection type: ReflectionAttribute",
+    );
+}
+
+#[test]
+fn test_error_reflection_attribute_constructor_is_private() {
+    expect_error(
+        "<?php $r = new ReflectionAttribute();",
+        "Cannot access private constructor: ReflectionAttribute::__construct",
+    );
+}
+
+#[test]
+fn test_error_reflection_attribute_internal_properties_are_private() {
+    expect_error(
+        "<?php #[A] class C {} $attrs = class_get_attributes('C'); echo $attrs[0]->__name;",
+        "Cannot access private property: ReflectionAttribute::__name",
+    );
+}

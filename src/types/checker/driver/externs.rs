@@ -110,6 +110,7 @@ impl Checker {
             ref_params: params.iter().map(|_| false).collect(),
             declared_params: vec![true; php_params.len()],
             variadic: None,
+            deprecation: None,
         };
         self.functions.insert(name.to_string(), sig);
         self.extern_functions.insert(

@@ -213,11 +213,13 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::PreDecrement(_)
         | ExprKind::PostDecrement(_)
         | ExprKind::ConstRef(_)
-        | ExprKind::EnumCase { .. }
         | ExprKind::StaticPropertyAccess { .. }
         | ExprKind::FirstClassCallable(_)
         | ExprKind::This
         | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::Yield { .. }
+        | ExprKind::YieldFrom(_)
         | ExprKind::MagicConstant(_) => false,
     }
 }

@@ -30,8 +30,10 @@ pub(super) fn infer_function_call_type(
         | "stripslashes" | "htmlspecialchars" | "html_entity_decode" | "htmlentities"
         | "urlencode" | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode"
         | "base64_decode" | "bin2hex" | "hex2bin" | "md5" | "sha1" | "hash" | "gettype"
-        | "strstr" | "readline" | "date" | "json_encode" | "php_uname" | "phpversion"
+        | "strstr" | "readline" | "date"
+        | "json_last_error_msg" | "php_uname" | "phpversion"
         | "tempnam" | "getcwd" | "shell_exec" => PhpType::Str,
+        "json_decode" => PhpType::Mixed,
         "array_keys" => {
             let arr_ty = args
                 .first()
@@ -149,18 +151,19 @@ pub(super) fn infer_function_call_type(
         | "microtime" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "atan2"
         | "sinh" | "cosh" | "tanh" | "log" | "log2" | "log10" | "exp" | "hypot" | "pi"
         | "deg2rad" | "rad2deg" => PhpType::Float,
-        "is_int" | "is_float" | "is_string" | "is_bool" | "is_null" | "is_numeric"
+        "is_callable" | "is_int" | "is_float" | "is_string" | "is_bool" | "is_null" | "is_numeric"
         | "is_nan" | "is_finite" | "is_infinite" | "is_array" | "empty" | "isset"
         | "is_file" | "is_dir" | "is_readable" | "is_writable" | "file_exists"
         | "in_array" | "array_key_exists" | "str_contains" | "str_starts_with"
         | "str_ends_with" | "ctype_alpha" | "ctype_digit" | "ctype_alnum"
         | "ctype_space" | "function_exists" | "chmod" | "chown" | "chgrp"
-        | "touch" | "ftruncate" | "fflush" | "fsync" | "fdatasync" | "ptr_is_null" => {
+        | "touch" | "ftruncate" | "fflush" | "fsync" | "fdatasync" | "ptr_is_null"
+        | "json_validate" => {
             PhpType::Bool
         }
         "define" => PhpType::Bool,
         "umask" => PhpType::Int,
-        "strpos" | "strrpos" | "array_search" | "file_get_contents" | "fileatime"
+        "strpos" | "strrpos" | "array_search" | "file_get_contents" | "json_encode" | "fileatime"
         | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
         | "filetype" | "stat" | "lstat" | "fstat" => PhpType::Mixed,
         "fopen" => merge_union_members(vec![PhpType::stream_resource(), PhpType::Bool]),
@@ -203,6 +206,11 @@ pub(super) fn infer_function_call_type(
             }
         }
         "ptr_get" | "ptr_read8" | "ptr_read32" | "ptr_sizeof" => PhpType::Int,
+        "class_attribute_names" => PhpType::Array(Box::new(PhpType::Str)),
+        "class_attribute_args" => PhpType::Array(Box::new(PhpType::Mixed)),
+        "class_get_attributes" => PhpType::Array(Box::new(PhpType::Object(
+            "ReflectionAttribute".to_string(),
+        ))),
         _ => {
             if let Some(c) = ctx {
                 if let Some(fn_sig) = c.functions.get(name) {

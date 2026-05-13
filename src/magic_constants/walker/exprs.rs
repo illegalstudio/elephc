@@ -31,7 +31,6 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         | ExprKind::PreDecrement(_)
         | ExprKind::PostDecrement(_)
         | ExprKind::ConstRef(_)
-        | ExprKind::EnumCase { .. }
         | ExprKind::This
         | ExprKind::StaticPropertyAccess { .. }
         | ExprKind::FirstClassCallable(_)) => kind,
@@ -210,10 +209,18 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             len: Box::new(walk_expr(*len, pass)),
         },
         ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant { receiver },
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            ExprKind::ScopedConstantAccess { receiver, name }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
+        ExprKind::Yield { key, value } => ExprKind::Yield {
+            key: key.map(|k| Box::new(walk_expr(*k, pass))),
+            value: value.map(|v| Box::new(walk_expr(*v, pass))),
+        },
+        ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(walk_expr(*inner, pass))),
     };
     Expr { kind, span }
 }

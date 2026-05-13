@@ -44,8 +44,8 @@ fn emit_array_value_type_stamp(emitter: &mut Emitter, array_reg: &str, elem_ty: 
         }
         crate::codegen::platform::Arch::X86_64 => {
             emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg)); // load the packed array kind word from the heap header
-            emitter.instruction("mov r11, 0x80ff");                             // preserve the indexed-array kind and persistent COW flag
-            emitter.instruction("and r10, r11");                                // keep only the persistent indexed-array metadata bits
+            emitter.instruction("mov rdx, 0xffffffff000080ff");                 // materialize the x86_64 indexed-array metadata preservation mask
+            emitter.instruction("and r10, rdx");                                // preserve heap marker, indexed-array kind, and persistent COW bits
             emitter.instruction(&format!("mov rcx, {}", value_type_tag));       // materialize the runtime array value_type tag
             emitter.instruction("shl rcx, 8");                                  // move the value_type tag into the packed kind-word byte lane
             emitter.instruction("or r10, rcx");                                 // combine the heap kind with the array value_type tag

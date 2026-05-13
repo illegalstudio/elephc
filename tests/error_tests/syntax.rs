@@ -57,6 +57,80 @@ fn test_error_list_destructuring_requires_writable_target() {
     expect_error("<?php [1 + 2] = [3];", "Invalid list destructuring target");
 }
 
+// --- Attribute syntax errors ---
+
+#[test]
+fn test_error_unterminated_attribute_group() {
+    expect_error(
+        "<?php #[Foo class C {}",
+        "Expected ',' or ']' between attributes",
+    );
+}
+
+#[test]
+fn test_error_empty_attribute_group() {
+    expect_error("<?php #[] class C {}", "Empty attribute group");
+}
+
+#[test]
+fn test_error_attribute_missing_identifier() {
+    expect_error(
+        "<?php #[123] class C {}",
+        "Expected attribute name (identifier)",
+    );
+}
+
+#[test]
+fn test_error_attribute_starts_with_comma() {
+    expect_error(
+        "<?php #[, A] class C {}",
+        "Expected attribute name (identifier)",
+    );
+}
+
+#[test]
+fn test_error_attribute_qualifier_dangling_backslash() {
+    expect_error(
+        "<?php #[\\] class C {}",
+        "Expected attribute name (identifier)",
+    );
+}
+
+#[test]
+fn test_error_attribute_unterminated_arguments() {
+    // An attribute argument list opened with `(` but never closed must fail.
+    expect_error(
+        "<?php #[Foo(1, 2 class C {}",
+        "Expected ',' between arguments",
+    );
+}
+
+#[test]
+fn test_error_attribute_on_echo_statement_is_rejected() {
+    // PHP only allows attributes on declarations; an `echo` statement must
+    // be rejected when preceded by `#[Foo]`.
+    expect_error(
+        "<?php #[Foo] echo 1;",
+        "Attributes are only allowed before declarations",
+    );
+}
+
+#[test]
+fn test_error_attribute_on_assignment_is_rejected() {
+    expect_error(
+        "<?php #[Foo] $x = 1;",
+        "Attributes are only allowed before declarations",
+    );
+}
+
+#[test]
+fn test_error_attribute_on_if_is_rejected() {
+    expect_error(
+        "<?php #[Foo] if (true) { echo 1; }",
+        "Attributes are only allowed before declarations",
+    );
+}
+
 // --- Numeric literal errors ---
 
 #[test]

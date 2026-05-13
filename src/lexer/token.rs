@@ -112,6 +112,8 @@ pub enum Token {
     This,           // $this
     Extern,         // extern
     Packed,         // packed
+    Yield,          // yield (also: `yield from`; `from` parsed contextually)
+    AttrOpen,       // #[ (start of attribute group)
 
     // Operators
     Assign,         // =

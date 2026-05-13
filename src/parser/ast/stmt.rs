@@ -12,8 +12,8 @@ use crate::names::Name;
 use crate::span::Span;
 
 use super::{
-    CType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExternField, ExternParam,
-    PackedField, StaticReceiver, TraitUse, TypeExpr,
+    AttributeGroup, CType, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr,
+    ExternField, ExternParam, PackedField, StaticReceiver, TraitUse, TypeExpr,
 };
 
 // --- Statements ---
@@ -22,6 +22,24 @@ use super::{
 pub struct Stmt {
     pub kind: StmtKind,
     pub span: Span,
+    /// PHP attributes attached to this statement. Only populated for
+    /// declaration kinds (`ClassDecl`, `FunctionDecl`, etc.); the parser
+    /// rejects attributes on non-declaration statements.
+    pub attributes: Vec<AttributeGroup>,
+}
+
+impl Stmt {
+    pub fn new(kind: StmtKind, span: Span) -> Self {
+        Stmt { kind, span, attributes: Vec::new() }
+    }
+
+    pub fn with_attributes(
+        kind: StmtKind,
+        span: Span,
+        attributes: Vec<AttributeGroup>,
+    ) -> Self {
+        Stmt { kind, span, attributes }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -175,6 +193,7 @@ pub enum StmtKind {
         trait_uses: Vec<TraitUse>,
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,
+        constants: Vec<ClassConst>,
     },
     EnumDecl {
         name: String,
@@ -189,12 +208,14 @@ pub enum StmtKind {
         name: String,
         extends: Vec<Name>,
         methods: Vec<ClassMethod>,
+        constants: Vec<ClassConst>,
     },
     TraitDecl {
         name: String,
         trait_uses: Vec<TraitUse>,
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,
+        constants: Vec<ClassConst>,
     },
     PropertyAssign {
         object: Box<Expr>,
@@ -252,10 +273,6 @@ impl PartialEq for Stmt {
 
 #[allow(dead_code)] // Constructors used by test crate
 impl Stmt {
-    pub fn new(kind: StmtKind, span: Span) -> Self {
-        Self { kind, span }
-    }
-
     pub fn echo(expr: Expr) -> Self {
         Self::new(StmtKind::Echo(expr), Span::dummy())
     }

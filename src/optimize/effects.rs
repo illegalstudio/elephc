@@ -182,7 +182,6 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
         | ExprKind::ConstRef(_)
-        | ExprKind::EnumCase { .. }
         | ExprKind::This => Effect::PURE,
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
@@ -278,8 +277,21 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::StaticPropertyAccess { .. } => Effect::PURE,
         ExprKind::FirstClassCallable(target) => callable_target_effect(target),
         ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),
-        ExprKind::ClassConstant { .. } => Effect::PURE,
+        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => Effect::PURE,
         ExprKind::NewScopedObject { args, .. } => combine_effects(args.iter().map(expr_effect))
+            .with_side_effects()
+            .with_may_throw(),
+        ExprKind::Yield { key, value } => {
+            let mut e = Effect::PURE.with_side_effects().with_may_throw();
+            if let Some(k) = key {
+                e = e.combine(expr_effect(k));
+            }
+            if let Some(v) = value {
+                e = e.combine(expr_effect(v));
+            }
+            e
+        }
+        ExprKind::YieldFrom(inner) => expr_effect(inner)
             .with_side_effects()
             .with_may_throw(),
         ExprKind::MagicConstant(_) => {

@@ -71,6 +71,26 @@ pub(super) fn parse_expr_bp(
                         *pos += 1;
                         "throw".to_string()
                     }
+                    Some(Token::Yield) => {
+                        *pos += 1;
+                        "yield".to_string()
+                    }
+                    Some(Token::Match) => {
+                        *pos += 1;
+                        "match".to_string()
+                    }
+                    Some(Token::Print) => {
+                        *pos += 1;
+                        "print".to_string()
+                    }
+                    Some(Token::Echo) => {
+                        *pos += 1;
+                        "echo".to_string()
+                    }
+                    Some(Token::Return) => {
+                        *pos += 1;
+                        "return".to_string()
+                    }
                     _ => {
                         return Err(CompileError::new(
                             arrow_span,

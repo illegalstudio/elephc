@@ -36,6 +36,7 @@ pub(crate) use null_coalesce_assign::{
 pub(crate) use arrays::emit_array_assign_stmt;
 pub(crate) use assignments::{
     emit_assign_stmt,
+    emit_dynamic_property_get,
     emit_property_array_assign_stmt,
     emit_property_assign_stmt,
     emit_static_property_array_assign_stmt,
@@ -283,7 +284,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             // Should have been resolved before codegen
             panic!("Unresolved include statement in codegen");
         }
-        // OOP stubs — not yet implemented, skip
+        // Declarations are emitted or recorded during pre-scan, so runtime statement lowering skips them.
         StmtKind::ClassDecl { .. }
         | StmtKind::InterfaceDecl { .. }
         | StmtKind::TraitDecl { .. } => {} // already emitted in pre-scan

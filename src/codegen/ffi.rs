@@ -46,6 +46,7 @@ pub fn emit_extern_call(
             ref_params: vec![false; sig.params.len()],
             declared_params: vec![true; sig.params.len()],
             variadic: None,
+            deprecation: None,
         });
     let regular_param_count =
         crate::codegen::expr::calls::args::regular_param_count(Some(&call_sig), args.len());

@@ -35,7 +35,9 @@ pub fn emit(
                 // Look up class and compute total property size
                 if let Some(class_info) = ctx.classes.get(class_name) {
                     // Object layout: [class_id:8] + [prop:16] * num_properties
-                    8 + class_info.properties.len() * 16
+                    // + optional [dyn_props_ptr:8] for #[\AllowDynamicProperties]
+                    let dyn_slot = if class_info.allow_dynamic_properties { 8 } else { 0 };
+                    8 + class_info.properties.len() * 16 + dyn_slot
                 } else if let Some(class_info) = ctx.extern_classes.get(class_name) {
                     class_info.total_size
                 } else {

@@ -40,7 +40,7 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 ## What you can expect
 
-You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, `instanceof`, nullsafe access (`?->`), abstract classes, final classes, methods and typed/static properties, PHP-style static property redeclarations, constructor property promotion, traits, constructors, instance/static methods, case-insensitive PHP symbol lookup for functions/classes/methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, named arguments, first-class callables, typed function and method parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order and integer/numeric-string key normalization, array union with `+`, closures, namespaces, includes, and PHP 8.1-style `Fiber` coroutines on macOS ARM64, Linux ARM64, and Linux x86_64.
+You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, `instanceof`, nullsafe access (`?->`), abstract classes, final classes, methods and typed/static properties, PHP-style static property redeclarations, constructor property promotion, traits, constructors, instance/static methods, case-insensitive PHP symbol lookup for functions/classes/methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, PHP 8 attributes on declarations, named arguments, first-class callables, typed function and method parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order and integer/numeric-string key normalization, array union with `+`, closures, generator functions and generator closures with `yield` / `yield from`, namespaces, includes, and PHP 8.1-style `Fiber` coroutines on macOS ARM64, Linux ARM64, and Linux x86_64.
 
 For performance-oriented code, elephc exposes compiler extensions beyond standard PHP — see the Why section above.
 
@@ -242,8 +242,9 @@ if ($x === 3) {
 
 The full list of supported constructs, operators, and control structures is in the [docs](docs/). Highlights:
 
-- **OOP**: classes, abstract/final classes, typed/final/static properties and methods, PHP-style static property redeclarations, direct static array property writes, constructor property promotion, interfaces, `instanceof`, traits, enums, `readonly`, static/instance methods, case-insensitive class/interface/trait and method lookup, `self::`/`parent::`/`static::`, `::class` reflection, `new self()` / `new static()` / `new parent()`, magic methods (`__toString`, `__get`, `__set`)
+- **OOP**: classes, abstract/final classes, typed/final/static properties and methods, PHP-style static property redeclarations, direct static array property writes, constructor property promotion, interfaces, `instanceof`, traits, enums, PHP 8 declaration attributes, `readonly`, static/instance methods, case-insensitive class/interface/trait and method lookup, `self::`/`parent::`/`static::`, `::class` reflection, `new self()` / `new static()` / `new parent()`, magic methods (`__toString`, `__get`, `__set`)
 - **Functions**: case-insensitive user and built-in function calls, default parameters, variadic/spread, pass by reference, named arguments, global variables, static locals, first-class callables, closures, arrow functions, static closures (`static function () { }`, `static fn () => ...`)
+- **Generators**: generator functions and closures, `yield`, key/value yields, `yield from`, `Generator::send()`, `throw()`, `getReturn()`, and `foreach` over `Iterator` / `IteratorAggregate`
 - **Fibers**: `Fiber`, `FiberError`, `Fiber::suspend()`, `Fiber::getCurrent()`, `start()`, `resume()`, `throw()`, `getReturn()`, state predicates, closure captures, guarded native stacks, and ARM64 / Linux x86_64 context switching
 - **Control flow**: if/elseif/else, while, do-while, for, foreach, switch, match, break/continue including multi-level depths, try/catch/finally/throw
 - **Statements and literals**: `const` / `define()` constants, `global` declarations, `static` locals, `print` expressions, list unpacking, PHP numeric literal forms, heredoc / nowdoc strings
@@ -261,11 +262,11 @@ The full list of supported constructs, operators, and control structures is in t
 
 **Math:** `abs`, `floor`, `ceil`, `round`, `sqrt`, `pow`, `min`, `max`, `intdiv`, `fmod`, `fdiv`, `rand`, `mt_rand`, `random_int`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `log`, `log2`, `log10`, `exp`, `hypot`, `deg2rad`, `rad2deg`, `pi`
 
-**Types:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `is_iterable`, `boolval`, `floatval`, `intval`
+**Types:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `is_iterable`, `is_callable`, `boolval`, `floatval`, `intval`
 
 **I/O:** `fopen`, `fclose`, `fread`, `fwrite`, `fgets`, `feof`, `readline`, `fseek`, `ftell`, `rewind`, `file_get_contents`, `file_put_contents`, `file`, `fgetcsv`, `fputcsv`, `file_exists`, `is_file`, `is_dir`, `is_readable`, `is_writable`, `is_writeable`, `is_executable`, `is_link`, `filesize`, `filemtime`, `fileatime`, `filectime`, `fileperms`, `fileowner`, `filegroup`, `fileinode`, `filetype`, `stat`, `lstat`, `fstat`, `clearstatcache`, `basename`, `dirname`, `pathinfo`, `realpath`, `fnmatch`, `touch`, `chmod`, `chown`, `chgrp`, `umask`, `ftruncate`, `fflush`, `fsync`, `fdatasync`, `copy`, `rename`, `unlink`, `mkdir`, `rmdir`, `scandir`, `glob`, `getcwd`, `chdir`, `tempnam`, `sys_get_temp_dir`, `var_dump`, `print_r`
 
-**System:** `exit`, `die`, `time`, `microtime`, `date`, `mktime`, `strtotime`, `sleep`, `usleep`, `getenv`, `putenv`, `php_uname`, `phpversion`, `exec`, `shell_exec`, `system`, `passthru`, `json_encode`, `json_decode`, `json_last_error`, `preg_match`, `preg_match_all`, `preg_replace`, `preg_split`, `define`
+**System:** `exit`, `die`, `time`, `microtime`, `date`, `mktime`, `strtotime`, `sleep`, `usleep`, `getenv`, `putenv`, `php_uname`, `phpversion`, `exec`, `shell_exec`, `system`, `passthru`, `json_encode`, `json_decode`, `json_last_error`, `json_last_error_msg`, `json_validate`, `preg_match`, `preg_match_all`, `preg_replace`, `preg_split`, `define`, `class_attribute_names`, `class_attribute_args`, `class_get_attributes`
 
 **Pointers/Buffers:** `ptr`, `ptr_null`, `ptr_is_null`, `ptr_get`, `ptr_set`, `ptr_read8`, `ptr_read32`, `ptr_write8`, `ptr_write32`, `ptr_offset`, `ptr_cast<T>`, `ptr_sizeof`, `buffer_new<T>`, `buffer_len`, `buffer_free`
 
@@ -314,10 +315,10 @@ The static type system tracks these runtime shapes at compile time:
 - **Void / null** — null sentinel value, coerces to 0/""
 - **Never** — non-returning function/method/closure return type
 - **Iterable** — type-erased array / `Traversable` pseudo-type
-- **Array** — indexed arrays with inferred element type
+- **Array** — indexed arrays with inferred element type; heterogeneous payloads widen to boxed `Mixed`
 - **AssocArray** — associative arrays with key/value types
 - **Buffer** — fixed-size contiguous `buffer<T>` storage for hot-path values
-- **Mixed** — boxed runtime-tagged payload used for heterogeneous assoc-array values and user-facing `mixed` hints
+- **Mixed** — boxed runtime-tagged payload used for heterogeneous array values, union storage, and user-facing `mixed` hints
 - **Callable** — closures and callable function references
 - **Object** — heap-allocated class instances
 - **Packed** — nominal packed-record metadata used with pointers and buffers
@@ -352,7 +353,7 @@ src/
 ├── linker.rs            # Assembler + linker invocation
 ├── timings.rs           # Phase timing collection/reporting
 ├── span.rs              # Source position tracking (line, col)
-├── conditional.rs       # Build-time `ifdef` pass driven by --define
+├── conditional/         # Build-time `ifdef` pass driven by --define
 ├── magic_constants.rs   # Per-file PHP magic constant lowering
 ├── magic_constants/     # File/scope/trait magic-constant walkers
 ├── resolver/            # Include/require resolution, declaration discovery, once guards
@@ -372,7 +373,7 @@ src/
 │   └── cursor.rs        # Byte-level source reader
 │
 ├── parser/              # Tokens → AST (Pratt parser)
-│   ├── ast.rs           # ExprKind, StmtKind, BinOp, CastType
+│   ├── ast/             # ExprKind, StmtKind, BinOp, CastType
 │   ├── expr/            # Expression parsing helpers and Pratt parser passes
 │   ├── stmt/            # Statement parsing, OOP, namespaces, FFI
 │   └── control.rs       # if, while, for, foreach, do-while, switch, try/catch/finally
@@ -382,7 +383,7 @@ src/
 │   ├── model.rs         # PhpType and TypeEnv
 │   ├── result.rs        # CheckResult and semantic metadata
 │   ├── signatures.rs    # Built-in and callable signatures
-│   ├── call_args.rs     # Shared named/spread call planner
+│   ├── call_args/       # Shared named/spread call planner
 │   ├── schema.rs        # Class/interface/enum metadata
 │   ├── fibers.rs        # Fiber callback validation
 │   ├── traits.rs        # Trait flattening and conflict resolution
@@ -428,12 +429,14 @@ src/
 │       ├── strings/     # itoa, concat, ftoa, strpos, str_replace, ...
 │       ├── arrays/      # heap_alloc, array_new, array_push, sort, ...
 │       ├── buffers/     # buffer_new, buffer_len, bounds and lifetime checks
+│       ├── data/        # fixed and user-program runtime data/metadata
 │       ├── exceptions.rs # exception runtime orchestration / re-exports
 │       ├── exceptions/  # setjmp/longjmp-based exception helpers
 │       ├── io/          # fopen, fclose, fread, fwrite, file_ops, ...
 │       ├── pointers/    # ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str
 │       ├── system/      # build_argv, time, getenv, shell_exec
-│       └── fibers/      # Fiber stacks, context switch, entry trampoline, Fiber API
+│       ├── fibers/      # Fiber stacks, context switch, entry trampoline, Fiber API
+│       └── generators/  # Generator frame layout and __rt_gen_* helpers
 │
 └── errors/              # Error formatting with line:col
 ```

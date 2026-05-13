@@ -23,6 +23,10 @@ fn infer_closure_return_type(
     sig: &FunctionSig,
     capture_types: &[(String, PhpType)],
 ) -> PhpType {
+    if crate::types::checker::yield_validation::body_contains_yield(body) {
+        return PhpType::Object("Generator".to_string());
+    }
+
     fn collect_return_types(
         stmt: &Stmt,
         sig: &FunctionSig,
@@ -182,6 +186,7 @@ pub(super) fn emit_closure(
         ref_params: ref_params.clone(),
         declared_params: declared_params.clone(),
         variadic: variadic.clone(),
+        deprecation: None,
     };
     let resolved_return_type = return_type
         .as_ref()
@@ -195,6 +200,7 @@ pub(super) fn emit_closure(
         ref_params,
         declared_params,
         variadic: variadic.clone(),
+        deprecation: None,
     };
 
     let param_names: Vec<String> = params.iter().map(|(n, _, _, _)| n.clone()).collect();

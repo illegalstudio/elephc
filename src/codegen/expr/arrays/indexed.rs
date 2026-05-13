@@ -20,17 +20,24 @@ pub(crate) fn emit_array_literal(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
+    let literal_elem_ty = infer_indexed_literal_element_type(elems, ctx);
+    if matches!(literal_elem_ty, PhpType::Mixed)
+        && !elems.iter().any(|e| matches!(e.kind, ExprKind::Spread(_)))
+    {
+        return emit_mixed_array_literal(elems, emitter, ctx, data);
+    }
+
     if emitter.target.arch == Arch::X86_64
         && !elems.iter().any(|e| matches!(e.kind, ExprKind::Spread(_)))
     {
-        return emit_array_literal_linux_x86_64(elems, emitter, ctx, data);
+        return emit_array_literal_linux_x86_64(elems, &literal_elem_ty, emitter, ctx, data);
     }
 
     if elems.is_empty() {
         emitter.instruction("mov x0, #4");                                      // initial capacity: 4 (grows dynamically)
         emitter.instruction("mov x1, #16");                                     // element size: 16 bytes (supports int and string)
         emitter.instruction("bl __rt_array_new");                               // call runtime to heap-allocate array struct
-        return PhpType::Array(Box::new(PhpType::Int));
+        return PhpType::Array(Box::new(PhpType::Never));
     }
 
     let has_spread = elems.iter().any(|e| matches!(e.kind, ExprKind::Spread(_)));
@@ -38,14 +45,7 @@ pub(crate) fn emit_array_literal(
         return emit_array_literal_with_spread(elems, emitter, ctx, data);
     }
 
-    let first_ty = match &elems[0].kind {
-        ExprKind::StringLiteral(_) => PhpType::Str,
-        ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) => {
-            PhpType::Array(Box::new(PhpType::Int))
-        }
-        _ => PhpType::Int,
-    };
-    let es: usize = match &first_ty {
+    let es: usize = match &literal_elem_ty {
         PhpType::Str => 16,
         _ => 8,
     };
@@ -56,12 +56,12 @@ pub(crate) fn emit_array_literal(
     emitter.instruction("bl __rt_array_new");                                   // call runtime to heap-allocate array struct
     emitter.instruction("str x0, [sp, #-16]!");                                 // save array pointer on stack while filling
 
-    let mut actual_elem_ty = PhpType::Int;
+    let mut actual_elem_ty = literal_elem_ty.clone();
     for (i, elem) in elems.iter().enumerate() {
         let mut ty = emit_expr(elem, emitter, ctx, data);
         let boxed_iterable =
             crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut ty);
-        if i == 0 {
+        if i == 0 && actual_elem_ty == PhpType::Int {
             actual_elem_ty = ty.clone();
         }
         if !boxed_iterable {
@@ -97,18 +97,19 @@ pub(crate) fn emit_array_literal(
 
 fn emit_array_literal_linux_x86_64(
     elems: &[Expr],
+    literal_elem_ty: &PhpType,
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
-    let first_ty = match elems.first().map(|expr| &expr.kind) {
-        Some(ExprKind::StringLiteral(_)) => PhpType::Str,
-        Some(ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) => {
-            PhpType::Array(Box::new(PhpType::Int))
-        }
-        _ => PhpType::Int,
-    };
-    let elem_size = match &first_ty {
+    if elems.is_empty() {
+        abi::emit_load_int_immediate(emitter, "rdi", 4);                        // initial capacity: four slots for a still-unspecialized empty array
+        abi::emit_load_int_immediate(emitter, "rsi", 8);                        // default empty-array slots use pointer-sized cells until a write specializes them
+        abi::emit_call_label(emitter, "__rt_array_new");                        // allocate the empty indexed array through the shared runtime helper
+        return PhpType::Array(Box::new(PhpType::Never));
+    }
+
+    let elem_size = match literal_elem_ty {
         PhpType::Str => 16,
         _ => 8,
     };
@@ -120,12 +121,12 @@ fn emit_array_literal_linux_x86_64(
     abi::emit_call_label(emitter, "__rt_array_new");                            // allocate a real elephc indexed array so heap headers and runtime metadata stay valid on x86_64
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // save array pointer on stack while filling literal elements
 
-    let mut actual_elem_ty = first_ty;
+    let mut actual_elem_ty = literal_elem_ty.clone();
     for (i, elem) in elems.iter().enumerate() {
         let mut ty = emit_expr(elem, emitter, ctx, data);
         let boxed_iterable =
             crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut ty);
-        if i == 0 {
+        if i == 0 && actual_elem_ty == PhpType::Int {
             actual_elem_ty = ty.clone();
         }
         if !boxed_iterable {
@@ -173,6 +174,80 @@ fn emit_array_literal_linux_x86_64(
 
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // return array pointer in the target integer result register
     PhpType::Array(Box::new(actual_elem_ty))
+}
+
+fn emit_mixed_array_literal(
+    elems: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    if emitter.target.arch == Arch::X86_64 {
+        return emit_mixed_array_literal_linux_x86_64(elems, emitter, ctx, data);
+    }
+
+    emitter.comment("mixed array literal");
+    emitter.instruction(&format!("mov x0, #{}", elems.len()));                  // capacity: exact element count for the mixed indexed literal
+    emitter.instruction("mov x1, #8");                                          // boxed Mixed slots store one pointer each
+    emitter.instruction("bl __rt_array_new");                                   // allocate the indexed array backing storage
+    emitter.instruction("str x0, [sp, #-16]!");                                 // save array pointer on stack while filling mixed slots
+    emitter.instruction("ldr x9, [sp]");                                        // reload the array pointer for value_type stamping
+    emit_array_value_type_stamp(emitter, "x9", &PhpType::Mixed);
+
+    for (i, elem) in elems.iter().enumerate() {
+        let mut ty = emit_expr(elem, emitter, ctx, data);
+        let boxed_iterable =
+            crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut ty);
+        if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+            crate::codegen::emit_box_current_expr_value_as_mixed_for_container(
+                emitter, elem, &ty,
+            );
+        } else if !boxed_iterable {
+            retain_borrowed_heap_arg(emitter, elem, &ty);
+        }
+        emitter.instruction("ldr x9, [sp]");                                    // peek array pointer from stack before storing this Mixed slot
+        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8));         // store the boxed Mixed pointer at the indexed slot
+        emitter.instruction(&format!("mov x10, #{}", i + 1));                   // new length after adding this mixed element
+        emitter.instruction("str x10, [x9]");                                   // write updated length to array header
+    }
+
+    emitter.instruction("ldr x0, [sp], #16");                                   // pop array pointer into the expression result register
+    PhpType::Array(Box::new(PhpType::Mixed))
+}
+
+fn emit_mixed_array_literal_linux_x86_64(
+    elems: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment("mixed array literal");
+    abi::emit_load_int_immediate(emitter, "rdi", elems.len() as i64);           // choose exact capacity for the mixed indexed literal
+    abi::emit_load_int_immediate(emitter, "rsi", 8);                            // boxed Mixed slots store one pointer each
+    abi::emit_call_label(emitter, "__rt_array_new");                            // allocate the indexed array backing storage
+    abi::emit_push_reg(emitter, "rax");                                         // save array pointer on stack while filling mixed slots
+    emitter.instruction("mov r11, QWORD PTR [rsp]");                            // reload the array pointer for value_type stamping
+    emit_array_value_type_stamp(emitter, "r11", &PhpType::Mixed);
+
+    for (i, elem) in elems.iter().enumerate() {
+        let mut ty = emit_expr(elem, emitter, ctx, data);
+        let boxed_iterable =
+            crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut ty);
+        if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+            crate::codegen::emit_box_current_expr_value_as_mixed_for_container(
+                emitter, elem, &ty,
+            );
+        } else if !boxed_iterable {
+            retain_borrowed_heap_arg(emitter, elem, &ty);
+        }
+        emitter.instruction("mov r11, QWORD PTR [rsp]");                        // reload the array pointer before storing this Mixed slot
+        abi::emit_store_to_address(emitter, "rax", "r11", 24 + i * 8);
+        abi::emit_load_int_immediate(emitter, "r10", (i + 1) as i64);           // materialize the logical length after inserting this mixed element
+        abi::emit_store_to_address(emitter, "r10", "r11", 0);                  // publish the updated indexed-array length
+    }
+
+    abi::emit_pop_reg(emitter, "rax");                                          // return array pointer in the x86_64 expression result register
+    PhpType::Array(Box::new(PhpType::Mixed))
 }
 
 pub(crate) fn emit_array_literal_with_spread(
@@ -374,4 +449,55 @@ pub(crate) fn emit_array_value_type_stamp(
             abi::emit_pop_reg(emitter, "r12");                                  // restore the x86_64 nested-call scratch register after the array value-type stamp is complete
         }
     }
+}
+
+fn infer_indexed_literal_element_type(elems: &[Expr], ctx: &Context) -> PhpType {
+    let mut elem_ty = PhpType::Never;
+    for (i, elem) in elems.iter().enumerate() {
+        let next_ty = match &elem.kind {
+            ExprKind::Spread(inner) => match crate::codegen::functions::infer_contextual_type(inner, ctx) {
+                PhpType::Array(inner_ty) => *inner_ty,
+                _ => PhpType::Mixed,
+            },
+            _ => crate::codegen::functions::infer_contextual_type(elem, ctx),
+        };
+        let next_ty = if matches!(next_ty, PhpType::Iterable) {
+            PhpType::Mixed
+        } else {
+            next_ty
+        };
+        if i == 0 {
+            elem_ty = next_ty;
+        } else {
+            elem_ty = merge_indexed_literal_element_type(&elem_ty, &next_ty, ctx);
+        }
+    }
+    elem_ty
+}
+
+fn merge_indexed_literal_element_type(
+    existing: &PhpType,
+    next: &PhpType,
+    ctx: &Context,
+) -> PhpType {
+    if existing == next {
+        return existing.clone();
+    }
+    if matches!(existing, PhpType::Never) {
+        return next.clone();
+    }
+    if matches!(next, PhpType::Never) {
+        return existing.clone();
+    }
+    if matches!(existing, PhpType::Mixed | PhpType::Union(_))
+        || matches!(next, PhpType::Mixed | PhpType::Union(_))
+    {
+        return PhpType::Mixed;
+    }
+    if let (PhpType::Object(left), PhpType::Object(right)) = (existing, next) {
+        return ctx
+            .common_object_type(left, right)
+            .unwrap_or(PhpType::Mixed);
+    }
+    PhpType::Mixed
 }

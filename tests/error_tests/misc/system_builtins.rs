@@ -141,7 +141,7 @@ fn test_error_strtotime_no_args() {
 fn test_error_json_encode_no_args() {
     expect_error(
         "<?php json_encode();",
-        "json_encode() takes exactly 1 argument",
+        "json_encode() takes 1 to 3 arguments",
     );
 }
 
@@ -149,7 +149,15 @@ fn test_error_json_encode_no_args() {
 fn test_error_json_decode_no_args() {
     expect_error(
         "<?php json_decode();",
-        "json_decode() takes exactly 1 argument",
+        "json_decode() takes 1 to 4 arguments",
+    );
+}
+
+#[test]
+fn test_error_json_validate_no_args() {
+    expect_error(
+        "<?php json_validate();",
+        "json_validate() takes 1 to 3 arguments",
     );
 }
 
@@ -158,6 +166,14 @@ fn test_error_json_last_error_with_args() {
     expect_error(
         "<?php json_last_error(1);",
         "json_last_error() takes no arguments",
+    );
+}
+
+#[test]
+fn test_error_json_last_error_msg_with_args() {
+    expect_error(
+        "<?php json_last_error_msg(1);",
+        "json_last_error_msg() takes no arguments",
     );
 }
 

@@ -168,13 +168,6 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             }
         }
         ExprKind::ConstRef(name) => ExprKind::ConstRef(name),
-        ExprKind::EnumCase {
-            enum_name,
-            case_name,
-        } => ExprKind::EnumCase {
-            enum_name,
-            case_name,
-        },
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
             class_name,
             args: propagate_args(args, None),
@@ -245,10 +238,18 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             len: Box::new(propagate_expr(*len, env)),
         },
         ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant { receiver },
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            ExprKind::ScopedConstantAccess { receiver, name }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
             args: propagate_args(args, None),
         },
+        ExprKind::Yield { key, value } => ExprKind::Yield {
+            key: key.map(|k| Box::new(propagate_expr(*k, env))),
+            value: value.map(|v| Box::new(propagate_expr(*v, env))),
+        },
+        ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(propagate_expr(*inner, env))),
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before optimizer passes")
         }
@@ -354,6 +355,7 @@ pub(crate) fn build_if_stmt(
                             else_body: None,
                         },
                         span,
+                        attributes: Vec::new(),
                     };
                 }
             }
@@ -368,5 +370,6 @@ pub(crate) fn build_if_stmt(
             else_body,
         },
         span,
+        attributes: Vec::new(),
     }
 }

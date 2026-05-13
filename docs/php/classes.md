@@ -315,8 +315,152 @@ Pure and backed enums. `->value`, `::from()`, `::tryFrom()`, `::cases()`. Only `
 - `__get($name)` — reading undefined property
 - `__set($name, $value)` — writing undefined property
 
+## Attributes
+
+PHP 8.0 attributes (`#[Name]`) decorate declarations. elephc parses attributes at every site PHP allows: classes, interfaces, traits, enums, enum cases, top-level functions, methods, properties, function/method/closure parameters (incl. promoted constructor params), closures, and arrow functions. Class-level attributes have limited runtime reflection through the helpers below; attributes on other declaration sites are currently validated for syntax and kept only in the AST.
+
+```php
+<?php
+#[Author("Ada"), Version(1)]
+class Greeter {
+    #[Slot]
+    public string $who;
+
+    public function __construct(#[Required] string $who) {
+        $this->who = $who;
+    }
+
+    #[Pure]
+    public function greet(): void { echo "Hello"; }
+}
+
+class LoudGreeter extends Greeter {
+    #[\Override]
+    public function greet(): void { echo "HELLO"; }
+}
+
+$pure = #[Pure] fn (int $x) => $x + 1;
+
+#[Memoized]
+function double(int $x): int { return $x * 2; }
+```
+
+Supported syntax:
+- single attribute: `#[Foo]`
+- attribute with arguments: `#[Bar(1, "two")]`
+- multiple attributes per group: `#[A, B(1)]`
+- stacked groups: `#[A] #[B]`
+- fully-qualified names: `#[\Symfony\Contracts\Service\Attribute\Required]`
+
+`#` outside an attribute group introduces a PHP-style line comment, identical to `//`. Attributes before non-declaration statements (`echo`, `if`, assignments) are rejected — PHP's strict rule.
+
+### Compile-time enforced attributes
+
+- **`#[\Override]`** (PHP 8.3) — the type checker verifies that the marked method actually overrides a method declared in a parent class or implemented interface (transitively). A typo in the method name or a missing parent method becomes a compile-time error: `<class>::<method>() has #[\Override] attribute, but no matching parent method was found`. Both the unqualified `#[Override]` and fully-qualified `#[\Override]` forms are recognized.
+- **`#[\Deprecated]`** / **`#[\Deprecated("reason")]`** (PHP 8.4) — calls to the marked function, method, or static method emit a compile warning: `Call to deprecated function: name() — reason`. The reason argument (if a string literal) is appended to the message.
+- **`#[\AllowDynamicProperties]`** (PHP 8.2) — instances of the marked class accept assignment of undeclared properties at runtime. Each instance carries a per-object hashtable side-table allocated by the constructor (~296 bytes); the type checker accepts undeclared reads as `mixed`. The hashtable is freed automatically with the object.
+
+Built-in attributes follow PHP class-name resolution. In a namespace, `#[Deprecated]` means `#[CurrentNamespace\Deprecated]`; use `#[\Deprecated]` or an import alias such as `use Deprecated as Old; #[Old]` to target the global built-in attribute.
+
+```php
+<?php
+#[\AllowDynamicProperties]
+class Bag {
+    public int $declared = 1;
+}
+
+$b = new Bag();
+$b->extra = 42;          // accepted, stored in side-table
+$b->name = "elephc";     // heterogeneous values supported
+echo $b->declared;        // 1
+echo $b->extra;           // 42
+echo $b->name;            // "elephc"
+echo $b->missing;         // empty (Mixed null)
+```
+
+User-defined attributes (e.g. `#[Author]`, `#[Pure]`, `#[Memoized]`) parse and persist in the AST. They have no compile-time semantics, but their **names** and positional **literal arguments** are reachable at runtime through the `class_attribute_names()` and `class_attribute_args()` builtins:
+
+```php
+<?php
+#[Author("Ada"), Version(1)]
+class Greeter {}
+
+#[\Override]
+class Solo {}
+
+#[Route("/api/users", "GET", true)]
+class UserController {}
+
+foreach (class_attribute_names('Greeter') as $name) {
+    echo $name, "\n";
+}
+// Author
+// Version
+
+echo class_attribute_names('Solo')[0]; // "Override" (resolved name)
+
+foreach (class_attribute_args('UserController', 'Route') as $arg) {
+    echo $arg, "\n";
+}
+// /api/users
+// GET
+// 1     ← `true` echoes as 1 in PHP
+```
+
+`class_attribute_args()` returns an `array<mixed>` whose elements preserve their original PHP type — strings stay strings, ints stay ints, booleans stay booleans, and `null` is `null`. The args are interned at compile time and boxed into mixed cells on demand at the call site.
+
+For a more PHP-idiomatic API, `class_get_attributes()` returns the same data wrapped as `ReflectionAttribute` instances:
+
+```php
+<?php
+#[Author("Ada", 1815), Version("1.0", true)]
+class Greeter {}
+
+foreach (class_get_attributes('Greeter') as $attr) {
+    echo $attr->getName(), ": ";
+    foreach ($attr->getArguments() as $arg) {
+        echo "[", $arg, "]";
+    }
+    echo "\n";
+}
+// Author: [Ada][1815]
+// Version: [1.0][1]
+```
+
+`ReflectionAttribute` is a final synthetic built-in class with `getName(): string` and `getArguments(): array` methods. It is populated internally by `class_get_attributes()` and cannot be constructed or populated directly from user code; its metadata slots are private.
+
+Limitations today:
+- All arguments to `class_attribute_names()`, `class_attribute_args()`, and `class_get_attributes()` must be **string literals** at the call site — dynamic class or attribute names (variables) require a runtime name→id lookup table that is not yet implemented.
+- Only **literal** positional arguments are materialized by reflection helpers today (string, int, bool, null, plus `-N` for negative ints). Other legal PHP attribute arguments can still be parsed and compiled, and `class_attribute_names()` can still list the attribute name, but `class_attribute_args()` / `class_get_attributes()` report an error if they would need unsupported argument metadata.
+- When several attributes share a name on the same class, `class_attribute_args()` returns the args of the first match; `class_get_attributes()` does expose every occurrence as a separate `ReflectionAttribute` in source order.
+- The full `ReflectionClass` API (`getProperties()`, `getMethods()`, `newInstance()`, …) is not yet available.
+
+### Class constants
+
+```php
+<?php
+class Math {
+    const PI = 314;
+    public const E = 271;
+}
+echo Math::PI;        // 314
+echo self::PI;        // inside Math methods
+
+interface Limits {
+    const MAX = 100;
+}
+class Bound implements Limits {
+    public function get(): int { return Limits::MAX; }
+}
+```
+
+Class constants (PHP 7.1+ visibility, PHP 8.1+ `final`) live on classes, interfaces, and traits. They are inherited from parents and implemented interfaces (transitively). At codegen time elephc inlines the constant's literal value at every access site — there is no runtime lookup, and recursive constant references (`const FOO = self::BAR + 1`) are not yet supported. Attributes on class constants are accepted and stored in the AST.
+
 ## Limitations
 - No abstract properties
 - No `readonly static` properties
 - No `readonly` or default-valued by-reference promoted properties
 - No instance property redeclaration across inheritance chain
+- Class constants must be literal-or-foldable expressions; `self::OTHER + 1` style recursive references are not supported.
+- Anonymous classes (`new class { ... }`) are not yet supported.
+- Class attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, and `class_get_attributes()`; method/property/parameter reflection and `ReflectionClass` are not yet available. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to parameters (refactor of param representation and stack-trace infrastructure pending).

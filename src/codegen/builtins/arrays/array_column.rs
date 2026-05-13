@@ -54,6 +54,8 @@ pub fn emit(
     }
     if val_ty == PhpType::Str {
         abi::emit_call_label(emitter, "__rt_array_column_str");                 // extract string column values into a new indexed array whose slots own persisted strings
+    } else if matches!(val_ty, PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(emitter, "__rt_array_column_mixed");               // extract runtime-tagged hash values into boxed Mixed result slots
     } else if val_ty.is_refcounted() {
         abi::emit_call_label(emitter, "__rt_array_column_ref");                 // extract retained heap/object/array column values into a new indexed array
     } else {

@@ -29,7 +29,10 @@ pub(super) fn check_builtin(
                 return Err(CompileError::new(span, "count() takes exactly 1 argument"));
             }
             let ty = checker.infer_type(&args[0], env)?;
-            if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            if !matches!(
+                ty,
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+            ) {
                 return Err(CompileError::new(span, "count() argument must be array"));
             }
             Ok(Some(PhpType::Int))
@@ -120,10 +123,8 @@ pub(super) fn check_builtin(
             }
             let arr_ty = checker.infer_type(&args[0], env)?;
             let val_ty = checker.infer_type(&args[1], env)?;
-            if let PhpType::Array(elem_ty) = arr_ty {
-                if *elem_ty != val_ty {
-                    return Err(CompileError::new(span, "array_push() type mismatch"));
-                }
+            if let PhpType::Array(_) = arr_ty {
+                let _ = val_ty;
             } else {
                 return Err(CompileError::new(
                     span,

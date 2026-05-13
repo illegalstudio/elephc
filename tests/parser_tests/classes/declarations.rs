@@ -89,6 +89,7 @@ fn test_parse_interface_decl() {
             name,
             extends,
             methods,
+            ..
         } => {
             assert_eq!(name, "Named");
             assert_eq!(

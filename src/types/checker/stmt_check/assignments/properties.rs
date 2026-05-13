@@ -167,9 +167,18 @@ fn check_object_property_write(
     val_ty: &PhpType,
     span: Span,
 ) -> Result<(), CompileError> {
+    if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+        return Ok(());
+    }
     if let Some(class_info) = checker.classes.get(class_name) {
         if !class_info.properties.iter().any(|(n, _)| n == property) {
             if class_info.methods.contains_key("__set") {
+                return Ok(());
+            }
+            if class_info.allow_dynamic_properties {
+                // PHP 8.2 #[\AllowDynamicProperties]: writes to undeclared
+                // properties are routed at codegen time to a per-object
+                // hashtable side-table. The value is stored as `Mixed`.
                 return Ok(());
             }
             return Err(CompileError::new(
@@ -364,7 +373,7 @@ fn updated_array_property_push_type(
             } else {
                 let merged_ty = checker
                     .merge_array_element_type(elem_ty, val_ty)
-                    .unwrap_or_else(|| val_ty.clone());
+                    .unwrap_or(PhpType::Mixed);
                 Ok(PhpType::Array(Box::new(merged_ty)))
             }
         }
@@ -406,7 +415,7 @@ fn updated_array_property_assign_type(
             } else {
                 let merged_ty = checker
                     .merge_array_element_type(elem_ty, val_ty)
-                    .unwrap_or_else(|| val_ty.clone());
+                    .unwrap_or(PhpType::Mixed);
                 Ok(PhpType::Array(Box::new(merged_ty)))
             }
         }

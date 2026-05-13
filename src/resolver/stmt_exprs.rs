@@ -28,6 +28,7 @@ pub(super) fn resolve_stmt_exprs(
     function_variants: &FunctionVariantRegistry,
 ) -> Result<Stmt, CompileError> {
     let span = stmt.span;
+    let attributes = stmt.attributes.clone();
     let kind = match stmt.kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(resolve_isolated(
             stmts,
@@ -361,6 +362,7 @@ pub(super) fn resolve_stmt_exprs(
             trait_uses,
             properties,
             methods,
+        constants,
         } => StmtKind::ClassDecl {
             name,
             extends,
@@ -385,11 +387,13 @@ pub(super) fn resolve_stmt_exprs(
                 state,
                 function_variants,
             )?,
+        constants,
         },
         StmtKind::InterfaceDecl {
             name,
             extends,
             methods,
+        constants,
         } => StmtKind::InterfaceDecl {
             name,
             extends,
@@ -401,12 +405,14 @@ pub(super) fn resolve_stmt_exprs(
                 state,
                 function_variants,
             )?,
+        constants,
         },
         StmtKind::TraitDecl {
             name,
             trait_uses,
             properties,
             methods,
+        constants,
         } => StmtKind::TraitDecl {
             name,
             trait_uses,
@@ -426,6 +432,7 @@ pub(super) fn resolve_stmt_exprs(
                 state,
                 function_variants,
             )?,
+        constants,
         },
         StmtKind::EnumDecl {
             name,
@@ -475,5 +482,5 @@ pub(super) fn resolve_stmt_exprs(
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. }) => other,
     };
-    Ok(Stmt::new(kind, span))
+    Ok(Stmt::with_attributes(kind, span, attributes))
 }

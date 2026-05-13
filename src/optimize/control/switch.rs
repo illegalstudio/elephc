@@ -39,6 +39,7 @@ pub(crate) fn prune_switch_stmt(
                 default,
             },
             span,
+            attributes: Vec::new(),
         }];
     }
 
@@ -68,6 +69,7 @@ pub(crate) fn prune_switch_stmt(
                 default,
             },
             span,
+            attributes: Vec::new(),
         }];
     };
 
@@ -84,6 +86,7 @@ pub(crate) fn prune_switch_stmt(
                         default,
                     },
                     span,
+                    attributes: Vec::new(),
                 }];
             }
             CaseMatch::NoMatch => {}

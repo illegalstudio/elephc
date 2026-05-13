@@ -168,6 +168,32 @@ pub(crate) fn emit_array_access_with_loaded_base(
         return PhpType::Str;
     }
 
+    if matches!(arr_ty, PhpType::Mixed) {
+        // Mixed receiver: dispatch through the unified runtime helper. It
+        // unboxes the cell, branches on the runtime tag (indexed array,
+        // assoc, stdClass), and returns a Mixed cell — including
+        // Mixed(null) for misses, non-container payloads, or unrelated
+        // class types. The helper expects (mixed_ptr, key_lo, key_hi)
+        // matching the convention of `emit_normalized_hash_key`.
+        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));              // preserve the boxed Mixed receiver across key evaluation
+        crate::codegen::emit_normalized_hash_key(index, emitter, ctx, data);
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_pop_reg(emitter, "x0");                               // restore the Mixed receiver into the helper's first argument
+                emitter.instruction("bl __rt_mixed_array_get");                 // dispatch to the unified array/hash/stdclass reader
+            }
+            Arch::X86_64 => {
+                // emit_normalized_hash_key leaves key_lo in rax/rdx and
+                // key_hi in rdx/-1; SysV expects (rdi, rsi, rdx) for
+                // (mixed_ptr, key_lo, key_hi).
+                emitter.instruction("mov rsi, rax");                            // shift key_lo from the hash-helper return register into the SysV second-arg slot
+                abi::emit_pop_reg(emitter, "rdi");                              // restore the Mixed receiver into the SysV first-arg register
+                emitter.instruction("call __rt_mixed_array_get");               // dispatch to the unified array/hash/stdclass reader
+            }
+        }
+        return PhpType::Mixed;
+    }
+
     let assoc_value_ty = match arr_ty {
         PhpType::AssocArray { value, .. } => Some(*value.clone()),
         PhpType::Union(members) => members.iter().find_map(|member| {
@@ -177,7 +203,6 @@ pub(crate) fn emit_array_access_with_loaded_base(
                 None
             }
         }),
-        PhpType::Mixed => Some(PhpType::Mixed),
         _ => None,
     };
 
@@ -424,7 +449,7 @@ pub(crate) fn emit_array_access_with_loaded_base(
     }
 
     emitter.label(&null_label);
-    if boxed_indexed_base {
+    if boxed_indexed_base || matches!(elem_ty, PhpType::Mixed | PhpType::Union(_)) {
         objects_boxed_null_for_array_access(emitter);
     } else {
         abi::emit_load_int_immediate(emitter, result_reg, 0x7fff_ffff_ffff_fffe); // materialize the runtime null sentinel for out-of-bounds access

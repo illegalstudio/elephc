@@ -12,6 +12,7 @@ mod cleanup;
 mod callback_wrapper;
 mod control_flow;
 mod fiber_wrapper;
+mod generator;
 mod locals;
 mod types;
 
@@ -60,6 +61,15 @@ pub fn emit_function(
     extern_classes: &HashMap<String, ExternClassInfo>,
     extern_globals: &HashMap<String, PhpType>,
 ) {
+    // A function whose body contains `yield` is a generator. The wrapper
+    // allocates a `GeneratorFrame`, stamps it as a Generator object, and
+    // returns it; a separate `<f>__resume` symbol holds the state machine
+    // that drives the body across `yield` points.
+    if crate::types::checker::yield_validation::body_contains_yield(body) {
+        generator::emit_generator_function(emitter, data, name, sig, body, classes);
+        return;
+    }
+
     let label = function_symbol(name);
     let epilogue_label = function_epilogue_symbol(name);
     emit_function_with_label(
@@ -101,6 +111,19 @@ pub fn emit_closure(
     extern_classes: &HashMap<String, ExternClassInfo>,
     extern_globals: &HashMap<String, PhpType>,
 ) {
+    if crate::types::checker::yield_validation::body_contains_yield(body) {
+        generator::emit_generator_closure(
+            emitter,
+            data,
+            label,
+            sig,
+            hidden_params,
+            body,
+            Some(classes),
+        );
+        return;
+    }
+
     let epilogue_label = format!("{}_epilogue", label);
     let empty_globals = HashSet::new();
     let empty_statics = HashMap::new();

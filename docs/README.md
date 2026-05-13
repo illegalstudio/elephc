@@ -29,6 +29,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [System & I/O](php/system-and-io.md) — file I/O, date/time, JSON, regex, exec, debugging
 - [Magic Constants](php/magic-constants.md) — `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__`
 - [Fibers](php/fibers.md) — cooperative coroutines (PHP 8.1+ Fiber): start, suspend, resume, FiberError
+- [Generators](php/generators.md) — `yield`, `yield from`, `Generator::send` / `throw` / `getReturn`, state-machine codegen
 
 ## Beyond PHP
 

@@ -229,8 +229,7 @@ pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
         | ExprKind::ConstRef(_)
-        | ExprKind::ClassConstant { .. }
-        | ExprKind::EnumCase { .. }
+        | ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => true,
         _ => false,
     }

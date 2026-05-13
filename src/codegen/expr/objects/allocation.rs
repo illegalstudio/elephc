@@ -42,8 +42,27 @@ pub(super) fn emit_new_object(
             return PhpType::Int;
         }
     };
+    if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+        emitter.comment("new stdClass()");
+        // stdClass instances do not have static property slots; the
+        // dedicated runtime helper allocates the 16-byte payload, stamps
+        // the class_id, and seeds the dynamic-property hash. User-supplied
+        // arguments (none allowed by PHP for stdClass) are ignored here.
+        let _ = args;
+        abi::emit_call_label(emitter, "__rt_stdclass_new");                     // allocate a fresh stdClass instance with an empty property hash
+        return PhpType::Object(class_name.to_string());
+    }
     let num_props = class_info.properties.len();
-    let obj_size = 8 + num_props * 16; // 8 for class_id + 16 per property
+    // PHP 8.2 #[\AllowDynamicProperties] adds a single 8-byte slot after the
+    // declared properties to hold a lazily-allocated hashtable pointer for
+    // undeclared property storage. The slot is initialised to 0 (null) and
+    // only allocated on the first dynamic property write.
+    let dyn_props_slot = if class_info.allow_dynamic_properties {
+        8
+    } else {
+        0
+    };
+    let obj_size = 8 + num_props * 16 + dyn_props_slot; // 8 for class_id + 16 per property + optional dyn_props ptr
 
     emitter.comment(&format!("new {}()", class_name));
 
@@ -82,6 +101,28 @@ pub(super) fn emit_new_object(
                 emitter.instruction("mov r11, QWORD PTR [rsp]");                // peek the allocated object pointer from the temporary stack slot
                 emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", offset)); // zero-initialize the low word of the property storage slot
                 emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", offset + 8)); // zero-initialize the high word / runtime metadata slot
+            }
+        }
+    }
+
+    // -- allocate the dyn_props hashtable if the class declares
+    // #[\AllowDynamicProperties], and store the pointer in the slot --
+    if dyn_props_slot != 0 {
+        let offset = 8 + num_props * 16;
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("mov x0, #4");                              // initial hashtable capacity for dyn_props
+                emitter.instruction("mov x1, #7");                              // value type tag = mixed (heterogeneous)
+                emitter.instruction("bl __rt_hash_new");                        // allocate empty hashtable -> x0 = hashtable pointer
+                emitter.instruction("ldr x9, [sp]");                            // peek object pointer for dyn_props slot store
+                emitter.instruction(&format!("str x0, [x9, #{}]", offset));     // store the hashtable pointer in the dyn_props slot
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rdi, 4");                              // initial hashtable capacity for dyn_props
+                emitter.instruction("mov rsi, 7");                              // value type tag = mixed
+                emitter.instruction("call __rt_hash_new");                      // allocate empty hashtable -> rax = hashtable pointer
+                emitter.instruction("mov r11, QWORD PTR [rsp]");                // peek object pointer for dyn_props slot store
+                emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", offset)); // store the hashtable pointer in the dyn_props slot
             }
         }
     }

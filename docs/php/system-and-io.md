@@ -52,11 +52,70 @@ sidebar:
 
 | Function | Signature | Description |
 |---|---|---|
-| `json_encode()` | `json_encode($value): string` | Encode as JSON. Supports int, float, string, bool, null, arrays, and mixed payloads. |
-| `json_decode()` | `json_decode($json): string` | Decode to the current string representation: trims outer JSON whitespace, unescapes quoted JSON strings, and returns other JSON literals/arrays/objects as trimmed strings. |
-| `json_last_error()` | `json_last_error(): int` | Always returns 0 |
+| `json_encode()` | `json_encode($value, $flags = 0, $depth = 512): string\|false` | Encode as JSON. Supports int, float, string, bool, null, arrays, mixed payloads, and objects (public properties + `JsonSerializable::jsonSerialize()` dispatch). Multibyte UTF-8 characters are escaped to `\uXXXX` by default (and to surrogate pairs for codepoints ≥ U+10000). `$flags` observes `JSON_UNESCAPED_SLASHES`, `JSON_UNESCAPED_UNICODE`, `JSON_PRETTY_PRINT`, `JSON_FORCE_OBJECT`, `JSON_NUMERIC_CHECK`, `JSON_PRESERVE_ZERO_FRACTION`, `JSON_HEX_TAG`, `JSON_HEX_AMP`, `JSON_HEX_APOS`, `JSON_HEX_QUOT`, `JSON_PARTIAL_OUTPUT_ON_ERROR`, and `JSON_THROW_ON_ERROR` (Inf/NaN trigger `JSON_ERROR_INF_OR_NAN`, and `$depth` overrun triggers `JSON_ERROR_DEPTH`; the throw flag promotes both to `JsonException`, while partial-output keeps the substituted JSON string). `$depth` defaults to 512 and is enforced for every container encoder (assoc arrays, indexed arrays, objects). The remaining `JSON_INVALID_UTF8_*` flags are accepted and observed for malformed UTF-8 strings. |
+| `json_decode()` | `json_decode($json, $associative = null, $depth = 512, $flags = 0): mixed` | Full structural decoder. Returns a boxed `Mixed` cell whose runtime tag matches the decoded JSON value (null/bool/int/float/string/array/object). For JSON objects, `$associative` selects the shape: the PHP default (`null`/`false`) returns a `stdClass` instance whose properties are accessible with `$obj->name`; `true` returns an associative array indexable with `$obj["name"]`. Property access on the decoded `Mixed` is supported directly — codegen unboxes the cell, checks the stdClass class_id, and routes through the dynamic-property hash. `$depth` is enforced (`JSON_ERROR_DEPTH` on overflow). `$flags` observes `JSON_THROW_ON_ERROR` (raises `JsonException` on syntax/depth failure) and `JSON_BIGINT_AS_STRING` (integer tokens overflowing PHP_INT return as preserved-digit strings instead of wrapping through `__rt_atoi`). |
+| `json_last_error()` | `json_last_error(): int` | Returns the runtime's last JSON error code (`JSON_ERROR_*`). |
+| `json_last_error_msg()` | `json_last_error_msg(): string` | Returns the PHP-compatible message for `json_last_error()` (e.g. `"No error"`, `"Syntax error"`). |
+| `json_validate()` | `json_validate($json, $depth = 512, $flags = 0): bool` | RFC 8259 validator. Returns whether `$json` is syntactically valid, sets `json_last_error()` on failure, and accepts only `0` or `JSON_INVALID_UTF8_IGNORE` for `$flags` (matching PHP 8.3). |
 
-> `json_decode()` returns a string representation. It does not parse objects to arrays. Standard one-byte escapes (`\"`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`) are decoded inside quoted JSON strings, and `\uXXXX` escapes are decoded to UTF-8, including surrogate pairs.
+### Constants
+
+The full PHP `JSON_*` family is exposed and can be combined with the bitwise OR operator to build flag arguments.
+
+| Encoding flags | Value | Decoding flags | Value |
+|---|---|---|---|
+| `JSON_HEX_TAG` | 1 | `JSON_OBJECT_AS_ARRAY` | 1 |
+| `JSON_HEX_AMP` | 2 | `JSON_BIGINT_AS_STRING` | 2 |
+| `JSON_HEX_APOS` | 4 | | |
+| `JSON_HEX_QUOT` | 8 | | |
+| `JSON_FORCE_OBJECT` | 16 | | |
+| `JSON_NUMERIC_CHECK` | 32 | | |
+| `JSON_UNESCAPED_SLASHES` | 64 | | |
+| `JSON_PRETTY_PRINT` | 128 | | |
+| `JSON_UNESCAPED_UNICODE` | 256 | | |
+| `JSON_PARTIAL_OUTPUT_ON_ERROR` | 512 | | |
+| `JSON_PRESERVE_ZERO_FRACTION` | 1024 | | |
+| `JSON_INVALID_UTF8_IGNORE` | 1048576 | | |
+| `JSON_INVALID_UTF8_SUBSTITUTE` | 2097152 | | |
+| `JSON_THROW_ON_ERROR` | 4194304 | | |
+
+| Error code | Value | Error code | Value |
+|---|---|---|---|
+| `JSON_ERROR_NONE` | 0 | `JSON_ERROR_RECURSION` | 6 |
+| `JSON_ERROR_DEPTH` | 1 | `JSON_ERROR_INF_OR_NAN` | 7 |
+| `JSON_ERROR_STATE_MISMATCH` | 2 | `JSON_ERROR_UNSUPPORTED_TYPE` | 8 |
+| `JSON_ERROR_CTRL_CHAR` | 3 | `JSON_ERROR_INVALID_PROPERTY_NAME` | 9 |
+| `JSON_ERROR_SYNTAX` | 4 | `JSON_ERROR_UTF16` | 10 |
+| `JSON_ERROR_UTF8` | 5 | | |
+
+### Classes and interfaces
+
+| Symbol | Kind | Description |
+|---|---|---|
+| `JsonSerializable` | Interface | Implementing classes can override `jsonSerialize(): mixed`; `json_encode()` dispatches to it instead of walking public properties. |
+| `Exception` | Class | Base PHP exception with `message: string`, `code: int`, `__construct(string $message = "", int $code = 0)`, `getMessage(): string`, and `getCode(): int`. |
+| `RuntimeException` | Class | `extends Exception`. Standard PHP "runtime errors" base class. |
+| `JsonException` | Class | `extends RuntimeException`. Carries the originating `JSON_ERROR_*` code; `getCode()` returns it (e.g. 4 = SYNTAX, 1 = DEPTH, 10 = UTF16, 7 = INF_OR_NAN). |
+| `stdClass` | Class | Dynamic-property container. `$obj = new stdClass(); $obj->name = "x";` works for any property name; storage is a backing hash on the instance. `json_decode($json)` returns stdClass by default (PHP semantics); pass `assoc: true` to get an associative array. |
+
+Encoding rules for objects:
+
+- Classes that **implement `JsonSerializable`** dispatch to `$this->jsonSerialize()` and the returned value is encoded recursively.
+- Classes that **do not** implement `JsonSerializable` are encoded as a JSON object whose keys are the **public** properties (private and protected properties are skipped), in declaration order, including inherited public properties.
+
+### Current limitations
+
+- `json_decode()` is a full structural decoder: every JSON value type round-trips through a real recursive-descent parser into a boxed `Mixed` cell. `null` → `Mixed(null)`, `true`/`false` → `Mixed(bool)`, integers → `Mixed(int)`, floats → `Mixed(float)`, strings → `Mixed(str)` with full escape decoding (`\"`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`, `\uXXXX` including surrogate pairs), arrays → `Mixed(array<Mixed>)` with each element recursively decoded, and objects → either a `stdClass` instance (PHP default, `assoc=false`/`null`) or `Mixed(assoc)` (`assoc=true`). The associativity flag is threaded through `_json_decode_assoc` so nested objects share the caller's choice. Container parsing uses a depth-and-string-aware boundary scanner so commas and brackets inside string values never confuse the element/pair detection. Property access (`$obj->name`), `[]` indexing (`$arr["k"]`, `$arr[0]`), and `count()` all work directly on Mixed-typed `json_decode` results: codegen routes through `__rt_mixed_property_get` / `__rt_mixed_array_get` / `__rt_mixed_count` which unbox the cell, dispatch by runtime tag (indexed array / assoc / stdClass), and re-box typed payloads back into a Mixed cell. Missing keys, out-of-bounds indices, and unknown properties all return `Mixed(null)` instead of erroring, mirroring PHP's quiet "undefined index" / "property on non-object" warnings. Use `intval()`/`floatval()`/`strval()` (or `(int)`/`(float)`/`(string)` casts) to lift a `Mixed` payload back to a typed value before arithmetic since elephc's type system requires numeric operands for `+` and Mixed alone does not satisfy the contract.
+- `json_encode()` observes `JSON_UNESCAPED_SLASHES` (default escapes `/` as `\/`), `JSON_UNESCAPED_UNICODE` (default escapes multibyte UTF-8 to `\uXXXX`, surrogate pairs for codepoints ≥ U+10000), `JSON_PRETTY_PRINT` (4-space indentation, newlines between elements, single space after `:`), `JSON_FORCE_OBJECT` (indexed arrays encode as `{"0":val,"1":val,...}`), `JSON_NUMERIC_CHECK` (numeric-looking strings encode as raw JSON numbers per RFC 8259 grammar), `JSON_PRESERVE_ZERO_FRACTION` (integer-valued floats stay `1.0` instead of collapsing to `1`), the full `JSON_HEX_TAG/AMP/APOS/QUOT` family (replaces `<`/`>`, `&`, `'`, `"` with their `\uXXXX` form), Inf/NaN detection (sets `JSON_ERROR_INF_OR_NAN`; under `JSON_THROW_ON_ERROR` raises `JsonException`, otherwise returns `false` unless `JSON_PARTIAL_OUTPUT_ON_ERROR` is set), and **malformed UTF-8 detection**: every multibyte byte is validated (lead-byte range, continuation bytes, truncated sequences). Without sanitization flags this sets `JSON_ERROR_UTF8` and returns `false`; `JSON_INVALID_UTF8_IGNORE` drops malformed bytes silently without raising the error code; `JSON_INVALID_UTF8_SUBSTITUTE` replaces malformed bytes with `�` (or the U+FFFD UTF-8 bytes when `JSON_UNESCAPED_UNICODE` is also set). `JSON_PARTIAL_OUTPUT_ON_ERROR` keeps the partial output for errors that can be substituted.
+
+- `JSON_THROW_ON_ERROR` is observed by `json_encode()` for non-finite floats (Inf/NaN trigger `JSON_ERROR_INF_OR_NAN`), for malformed UTF-8 input (`JSON_ERROR_UTF8`), and by `json_decode()` (`JSON_ERROR_SYNTAX`, `JSON_ERROR_DEPTH`, `JSON_ERROR_UTF16`). PHP does not allow this flag for `json_validate()`; elephc rejects it at compile time when the flag expression is static. The throw helper records the error code in `_json_last_error` so `json_last_error()` / `json_last_error_msg()` keep working when the flag is clear.
+- `JSON_ERROR_UTF16` is set by `json_decode()` and `json_validate()` whenever a `\uXXXX` escape in the high-surrogate range (`0xD800..0xDBFF`) is not immediately followed by a low-surrogate `\uYYYY` (`0xDC00..0xDFFF`), or when a low surrogate appears without a preceding high surrogate. The detector walks the surrogate-pair handshake byte by byte, so any malformed second escape (truncated `\u`, non-hex digit, or out-of-range codepoint) routes to UTF16 instead of SYNTAX, matching PHP's exact behavior.
+- The `$depth` argument is observed by all three JSON entry points but with the PHP-faithful split: `json_encode()` allows up to `$depth` levels of nesting (`active <= limit`), while `json_decode()` and `json_validate()` reject when the active nesting depth reaches `$depth` (`active >= limit`). For example, `json_decode("[1]", false, 1)` sets `JSON_ERROR_DEPTH` even though the input only nests one level deep, matching PHP. For `json_encode()` and `json_decode()`, `JSON_THROW_ON_ERROR` promotes the error to `JsonException`.
+- `JSON_BIGINT_AS_STRING` is observed by `json_decode()`. When set, integer-grammar JSON tokens (no `.`, no `e`/`E`) whose magnitude exceeds `PHP_INT_MAX` (`9223372036854775807`) are returned as a `Mixed(string)` preserving the original digits; in-range integers and any token containing `.`/`e`/`E` are unaffected. Detection is a length-then-lex compare against the threshold strings `9223372036854775807` (positive) / `-9223372036854775808` (negative), which is safe because the validator pre-pass rejects RFC 8259 leading zeros — equal-length leading-zero-free decimal strings compare lexicographically the same as numerically. The flag threads through nested arrays and objects via the global `_json_active_flags` slot, so a bigint inside a decoded array is also returned as a string.
+- `json_validate()` is a recursive-descent RFC 8259 validator: it matches the literals `null`/`true`/`false`, validates the full number grammar (`-?(0|[1-9][0-9]*)(.[0-9]+)?([eE][+-]?[0-9]+)?`), checks every string escape (`\"`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`, `\uHHHH` with four hex digits), verifies bracket pairing in arrays/objects, requires colons between keys and values, and rejects trailing content after the value. Recursion depth is enforced against the `$depth` argument (default 512); on overflow it records `JSON_ERROR_DEPTH`. Every other malformed token records `JSON_ERROR_SYNTAX`.
+- Calling `$e->getMessage()` on an exception caught with the interface-typed catch `catch (Throwable $e)` does not yet propagate the patched return type — use `catch (Exception $e)` (or any concrete subclass) for the standard shape.
+- Associative arrays whose keys form a sequential `0..count-1` sequence in insertion order encode as JSON arrays (`[...]`) — matching PHP's runtime detection. The detector is invoked at the start of `__rt_json_encode_assoc`, walks the hash's insertion-order chain checking `key_len == -1 && key_ptr == expected`, and toggles the encoder between `[`/`]` and `{`/`}` plus key-prefix emission. `JSON_FORCE_OBJECT` skips the detection so that flag still wins. Empty associative arrays also encode as `[]` (PHP's `json_encode([])` semantics).
+- The Linux x86_64 target uses its own minimal runtime emitter, but it now registers the same JSON helper families as the ARM64 runtime: structural decode into `Mixed`, stdClass dynamic-property helpers, JsonSerializable-aware object encoding, validation, pretty-printing, depth tracking, and JSON error-message lookup.
 
 ## Regex
 

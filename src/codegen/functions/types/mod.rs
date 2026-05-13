@@ -44,6 +44,7 @@ pub fn infer_contextual_type(expr: &Expr, ctx: &Context) -> PhpType {
         ref_params: Vec::new(),
         declared_params: Vec::new(),
         variadic: None,
+        deprecation: None,
     };
     infer_local_type(expr, &empty_sig, Some(ctx))
 }
@@ -73,11 +74,15 @@ pub(super) fn infer_local_type(
             PhpType::Int
         }
         ExprKind::ArrayLiteral(elems) => {
-            let elem_ty = if elems.is_empty() {
-                PhpType::Int
-            } else {
-                mixed_container_value_type(infer_local_type(&elems[0], sig, ctx))
-            };
+            let mut elem_ty = PhpType::Never;
+            for (i, elem) in elems.iter().enumerate() {
+                let next_ty = indexed_literal_element_type(elem, sig, ctx);
+                if i == 0 {
+                    elem_ty = next_ty;
+                } else {
+                    elem_ty = merge_indexed_literal_element_type(&elem_ty, &next_ty, ctx);
+                }
+            }
             PhpType::Array(Box::new(elem_ty))
         }
         ExprKind::ArrayLiteralAssoc(pairs) => {
@@ -277,7 +282,6 @@ pub(super) fn infer_local_type(
         ExprKind::ConstRef(name) => ctx
             .and_then(|c| c.constants.get(name.as_str()).map(|(_, ty)| ty.clone()))
             .unwrap_or(PhpType::Int),
-        ExprKind::EnumCase { enum_name, .. } => PhpType::Object(enum_name.as_str().to_string()),
         ExprKind::Spread(inner) => infer_local_type(inner, sig, ctx),
         ExprKind::NamedArg { value, .. } => infer_local_type(value, sig, ctx),
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
@@ -313,4 +317,45 @@ pub(super) fn infer_local_type(
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),
         _ => PhpType::Int,
     }
+}
+
+fn indexed_literal_element_type(
+    elem: &Expr,
+    sig: &FunctionSig,
+    ctx: Option<&Context>,
+) -> PhpType {
+    match &elem.kind {
+        ExprKind::Spread(inner) => match infer_local_type(inner, sig, ctx) {
+            PhpType::Array(inner_ty) => mixed_container_value_type(*inner_ty),
+            _ => PhpType::Mixed,
+        },
+        _ => mixed_container_value_type(infer_local_type(elem, sig, ctx)),
+    }
+}
+
+fn merge_indexed_literal_element_type(
+    existing: &PhpType,
+    next: &PhpType,
+    ctx: Option<&Context>,
+) -> PhpType {
+    if existing == next {
+        return existing.clone();
+    }
+    if matches!(existing, PhpType::Never) {
+        return next.clone();
+    }
+    if matches!(next, PhpType::Never) {
+        return existing.clone();
+    }
+    if matches!(existing, PhpType::Mixed | PhpType::Union(_))
+        || matches!(next, PhpType::Mixed | PhpType::Union(_))
+    {
+        return PhpType::Mixed;
+    }
+    if let (Some(ctx), PhpType::Object(left), PhpType::Object(right)) = (ctx, existing, next) {
+        return ctx
+            .common_object_type(left, right)
+            .unwrap_or(PhpType::Mixed);
+    }
+    PhpType::Mixed
 }

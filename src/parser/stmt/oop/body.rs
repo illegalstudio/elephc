@@ -11,7 +11,7 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::parser::ast::{
-    ClassMethod, ClassProperty, Stmt, StmtKind, TraitUse, TypeExpr, Visibility,
+    ClassConst, ClassMethod, ClassProperty, Stmt, StmtKind, TraitUse, TypeExpr, Visibility,
 };
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
@@ -60,7 +60,7 @@ pub(in crate::parser::stmt) fn parse_interface_decl(
         &Token::LBrace,
         "Expected '{' after interface name",
     )?;
-    let methods = parse_interface_body(tokens, pos)?;
+    let (methods, constants) = parse_interface_body(tokens, pos)?;
     expect_token(
         tokens,
         pos,
@@ -73,6 +73,7 @@ pub(in crate::parser::stmt) fn parse_interface_decl(
             name,
             extends,
             methods,
+            constants,
         },
         span,
     ))
@@ -96,7 +97,8 @@ pub(in crate::parser::stmt) fn parse_trait_decl(
     };
 
     expect_token(tokens, pos, &Token::LBrace, "Expected '{' after trait name")?;
-    let (trait_uses, properties, methods) = parse_class_like_body(tokens, pos, "trait")?;
+    let (trait_uses, properties, methods, constants) =
+        parse_class_like_body(tokens, pos, "trait")?;
     expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of trait")?;
 
     Ok(Stmt::new(
@@ -105,6 +107,7 @@ pub(in crate::parser::stmt) fn parse_trait_decl(
             trait_uses,
             properties,
             methods,
+            constants,
         },
         span,
     ))
@@ -114,14 +117,35 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     owner_kind: &str,
-) -> Result<(Vec<TraitUse>, Vec<ClassProperty>, Vec<ClassMethod>), CompileError> {
+) -> Result<
+    (
+        Vec<TraitUse>,
+        Vec<ClassProperty>,
+        Vec<ClassMethod>,
+        Vec<ClassConst>,
+    ),
+    CompileError,
+> {
     let mut trait_uses = Vec::new();
     let mut properties = Vec::new();
     let mut methods = Vec::new();
+    let mut constants = Vec::new();
 
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+        // Capture any `#[...]` attribute groups attached to the next member —
+        // they're attached to the resulting property or method below.
+        let member_attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
+        if *pos >= tokens.len() || matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+            break;
+        }
         let member_span = tokens[*pos].1;
         if tokens[*pos].0 == Token::Use {
+            if !member_attributes.is_empty() {
+                return Err(CompileError::new(
+                    member_span,
+                    "Attributes are not supported on `use` trait declarations",
+                ));
+            }
             trait_uses.push(parse_trait_use(tokens, pos, member_span)?);
             continue;
         }
@@ -135,6 +159,58 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
             ));
         }
 
+        if tokens[*pos].0 == Token::Const {
+            if modifiers.is_static {
+                return Err(CompileError::new(
+                    member_span,
+                    "Class constants cannot be declared static",
+                ));
+            }
+            if modifiers.is_readonly || modifiers.is_abstract {
+                return Err(CompileError::new(
+                    member_span,
+                    "Class constants cannot be declared readonly or abstract",
+                ));
+            }
+            *pos += 1; // consume `const`
+            let const_name = match tokens.get(*pos).map(|(t, _)| t) {
+                Some(Token::Identifier(n)) => {
+                    let n = n.clone();
+                    *pos += 1;
+                    n
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        member_span,
+                        "Expected class constant name after 'const'",
+                    ))
+                }
+            };
+            if constants.iter().any(|c: &ClassConst| c.name == const_name) {
+                return Err(CompileError::new(
+                    member_span,
+                    &format!("Cannot redeclare class constant {}", const_name),
+                ));
+            }
+            expect_token(
+                tokens,
+                pos,
+                &Token::Assign,
+                "Expected '=' after class constant name",
+            )?;
+            let value = parse_expr(tokens, pos)?;
+            expect_semicolon(tokens, pos)?;
+            constants.push(ClassConst {
+                name: const_name,
+                visibility: modifiers.visibility,
+                is_final: modifiers.is_final,
+                value,
+                span: member_span,
+                attributes: member_attributes,
+            });
+            continue;
+        }
+
         if tokens[*pos].0 == Token::Function {
             if modifiers.is_readonly {
                 return Err(CompileError::new(
@@ -142,7 +218,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                     "Readonly methods are not supported",
                 ));
             }
-            let (method, promoted_properties) = parse_class_like_method(
+            let (mut method, promoted_properties) = parse_class_like_method(
                 tokens,
                 pos,
                 member_span,
@@ -151,6 +227,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 modifiers.is_abstract,
                 modifiers.is_final,
             )?;
+            method.attributes = member_attributes;
             append_promoted_properties(&mut properties, promoted_properties)?;
             methods.push(method);
             continue;
@@ -196,6 +273,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 by_ref: false,
                 default,
                 span: member_span,
+                attributes: member_attributes,
             });
             continue;
         }
@@ -209,7 +287,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
         ));
     }
 
-    Ok((trait_uses, properties, methods))
+    Ok((trait_uses, properties, methods, constants))
 }
 
 fn append_promoted_properties(
@@ -375,25 +453,77 @@ fn parse_class_like_method(
         return_type,
         body,
         span,
+        attributes: Vec::new(),
     }, promoted_properties))
 }
 
 fn parse_interface_body(
     tokens: &[(Token, Span)],
     pos: &mut usize,
-) -> Result<Vec<ClassMethod>, CompileError> {
+) -> Result<(Vec<ClassMethod>, Vec<ClassConst>), CompileError> {
     let mut methods = Vec::new();
+    let mut constants = Vec::new();
 
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+        // Attributes may decorate interface methods (e.g. `#[Deprecated]`).
+        let member_attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
+        if *pos >= tokens.len() || matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+            break;
+        }
         let member_span = tokens[*pos].1;
         let modifiers = parse_member_modifiers(tokens, pos);
-        if *pos >= tokens.len() || tokens[*pos].0 != Token::Function {
+        if *pos >= tokens.len() {
             return Err(CompileError::new(
                 member_span,
-                "Interfaces may only contain method declarations",
+                "Unexpected end of interface body",
             ));
         }
-        let (method, promoted_properties) = parse_class_like_method(
+        if tokens[*pos].0 == Token::Const {
+            *pos += 1; // consume `const`
+            let const_name = match tokens.get(*pos).map(|(t, _)| t) {
+                Some(Token::Identifier(n)) => {
+                    let n = n.clone();
+                    *pos += 1;
+                    n
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        member_span,
+                        "Expected class constant name after 'const'",
+                    ))
+                }
+            };
+            if constants.iter().any(|c: &ClassConst| c.name == const_name) {
+                return Err(CompileError::new(
+                    member_span,
+                    &format!("Cannot redeclare interface constant {}", const_name),
+                ));
+            }
+            expect_token(
+                tokens,
+                pos,
+                &Token::Assign,
+                "Expected '=' after interface constant name",
+            )?;
+            let value = parse_expr(tokens, pos)?;
+            expect_semicolon(tokens, pos)?;
+            constants.push(ClassConst {
+                name: const_name,
+                visibility: modifiers.visibility,
+                is_final: modifiers.is_final,
+                value,
+                span: member_span,
+                attributes: member_attributes,
+            });
+            continue;
+        }
+        if tokens[*pos].0 != Token::Function {
+            return Err(CompileError::new(
+                member_span,
+                "Interfaces may only contain method or constant declarations",
+            ));
+        }
+        let (mut method, promoted_properties) = parse_class_like_method(
             tokens,
             pos,
             member_span,
@@ -408,8 +538,9 @@ fn parse_interface_body(
                 "Cannot declare promoted property in an interface",
             ));
         }
+        method.attributes = member_attributes;
         methods.push(method);
     }
 
-    Ok(methods)
+    Ok((methods, constants))
 }

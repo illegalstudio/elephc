@@ -49,6 +49,7 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
         return_type: None,
         body: fiber_method_dummy_body_return_false(),
         span,
+        attributes: Vec::new(),
     };
 
     vec![
@@ -65,6 +66,7 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
             return_type: None,
             body: Vec::new(),
             span,
+            attributes: Vec::new(),
         },
         // start(): mixed — bodies are dummy because codegen intercepts the call.
         // The checker patches this to seven optional Mixed parameters below;
@@ -82,6 +84,7 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
             return_type: None,
             body: fiber_method_dummy_body_return_null(),
             span,
+            attributes: Vec::new(),
         },
         // resume(?$value = null): mixed
         ClassMethod {
@@ -96,6 +99,7 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
             return_type: None,
             body: fiber_method_dummy_body_return_null(),
             span,
+            attributes: Vec::new(),
         },
         // throw(Throwable $exception): mixed
         ClassMethod {
@@ -110,6 +114,7 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
             return_type: None,
             body: fiber_method_dummy_body_return_null(),
             span,
+            attributes: Vec::new(),
         },
         // getReturn(): mixed
         ClassMethod {
@@ -124,6 +129,7 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
             return_type: None,
             body: fiber_method_dummy_body_return_null(),
             span,
+            attributes: Vec::new(),
         },
         // isStarted/isSuspended/isRunning/isTerminated(): bool
         is_state_predicate("isStarted"),
@@ -143,6 +149,7 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
             return_type: None,
             body: fiber_method_dummy_body_return_null(),
             span,
+            attributes: Vec::new(),
         },
         // static getCurrent(): ?Fiber
         ClassMethod {
@@ -157,6 +164,7 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
             return_type: None,
             body: fiber_method_dummy_body_return_null(),
             span,
+            attributes: Vec::new(),
         },
     ]
 }

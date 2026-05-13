@@ -37,7 +37,8 @@ pub(super) fn store_indexed_array_value(
         emitter.instruction("str x10, [sp, #-16]!");                            // preserve array pointer across decref call
         emitter.instruction("add x12, x10, #24");                               // compute base of array data region
         emitter.instruction("ldr x0, [x12, x9, lsl #3]");                       // load previous nested pointer from slot
-        abi::emit_decref_if_refcounted(emitter, &target.elem_ty);
+        let previous_slot_ty = previous_indexed_slot_type(target, state);
+        abi::emit_decref_if_refcounted(emitter, &previous_slot_ty);
         emitter.instruction("ldr x10, [sp], #16");                              // restore array pointer after decref
         emitter.instruction("ldp x0, x9, [sp], #16");                           // restore new nested pointer and index after decref
         emitter.label(&skip_release);
@@ -100,7 +101,8 @@ fn store_indexed_array_value_linux_x86_64(
         abi::emit_push_reg(emitter, "r9");                                        // preserve the target index across the decref helper call
         abi::emit_push_reg(emitter, "r10");                                       // preserve the indexed-array pointer across the decref helper call
         emitter.instruction("mov rax, QWORD PTR [r10 + 24 + r9 * 8]");          // load the previous nested pointer from the overwritten indexed-array slot
-        abi::emit_decref_if_refcounted(emitter, &target.elem_ty);
+        let previous_slot_ty = previous_indexed_slot_type(target, state);
+        abi::emit_decref_if_refcounted(emitter, &previous_slot_ty);
         abi::emit_pop_reg(emitter, "r10");                                        // restore the indexed-array pointer after releasing the previous nested payload
         abi::emit_pop_reg(emitter, "r9");                                         // restore the target index after releasing the previous nested payload
         abi::emit_pop_reg(emitter, "rax");                                        // restore the new nested pointer after releasing the previous nested payload
@@ -124,6 +126,17 @@ fn store_indexed_array_value_linux_x86_64(
             store_string_indexed_value_linux_x86_64(emitter, ctx, &state.val_ty);
         }
         _ => {}
+    }
+}
+
+fn previous_indexed_slot_type(
+    target: &ArrayAssignTarget<'_>,
+    state: &IndexedAssignState,
+) -> PhpType {
+    if state.converted_to_mixed {
+        PhpType::Mixed
+    } else {
+        target.elem_ty.clone()
     }
 }
 

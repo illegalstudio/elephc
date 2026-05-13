@@ -16,7 +16,8 @@ use crate::span::Span;
 
 use super::calls::{parse_scoped_static_call, peek_cast};
 use super::prefix_complex::{
-    parse_arrow_closure, parse_closure, parse_match_expr, parse_named_expr, parse_new_object,
+    parse_arrow_closure, parse_attributed_closure, parse_closure, parse_match_expr,
+    parse_named_expr, parse_new_object,
 };
 use super::pratt::parse_expr_bp;
 use super::{parse_args, parse_expr};
@@ -200,6 +201,7 @@ pub(super) fn parse_prefix(
         Token::Match => parse_match_expr(tokens, pos, span),
         Token::Function => parse_closure(tokens, pos, span, false),
         Token::Fn => parse_arrow_closure(tokens, pos, span, false),
+        Token::AttrOpen => parse_attributed_closure(tokens, pos, span),
         Token::Identifier(_) | Token::Backslash => parse_named_expr(tokens, pos, span),
         Token::Self_ => {
             *pos += 1;
@@ -229,11 +231,76 @@ pub(super) fn parse_prefix(
         }
         Token::New => parse_new_object(tokens, pos, span),
         Token::This => parse_simple(tokens, pos, span, ExprKind::This),
+        Token::Yield => parse_yield(tokens, pos, span),
         other => Err(CompileError::new(
             span,
             &format!("Unexpected token: {:?}", other),
         )),
     }
+}
+
+fn parse_yield(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    *pos += 1;
+
+    if *pos >= tokens.len() {
+        return Ok(Expr::new(
+            ExprKind::Yield {
+                key: None,
+                value: None,
+            },
+            span,
+        ));
+    }
+
+    if let Token::Identifier(name) = &tokens[*pos].0 {
+        if name.eq_ignore_ascii_case("from") {
+            *pos += 1;
+            let inner = parse_expr_bp(tokens, pos, 0)?;
+            return Ok(Expr::new(ExprKind::YieldFrom(Box::new(inner)), span));
+        }
+    }
+
+    match &tokens[*pos].0 {
+        Token::Semicolon
+        | Token::RParen
+        | Token::RBracket
+        | Token::RBrace
+        | Token::Comma
+        | Token::Eof => {
+            return Ok(Expr::new(
+                ExprKind::Yield {
+                    key: None,
+                    value: None,
+                },
+                span,
+            ));
+        }
+        _ => {}
+    }
+
+    let first = parse_expr_bp(tokens, pos, 0)?;
+    if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
+        *pos += 1;
+        let value = parse_expr_bp(tokens, pos, 0)?;
+        return Ok(Expr::new(
+            ExprKind::Yield {
+                key: Some(Box::new(first)),
+                value: Some(Box::new(value)),
+            },
+            span,
+        ));
+    }
+    Ok(Expr::new(
+        ExprKind::Yield {
+            key: None,
+            value: Some(Box::new(first)),
+        },
+        span,
+    ))
 }
 
 fn parse_simple(

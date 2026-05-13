@@ -380,8 +380,10 @@ unset($b);
     let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
     assert_eq!(acyclic.stdout, "");
     assert_eq!(cyclic.stdout, "");
-    assert_eq!(cyclic_allocs, acyclic_allocs + 1);
-    assert_eq!(cyclic_frees, acyclic_frees + 1);
+    // The second array-to-array assignment forms a cycle and now converts the
+    // second indexed int array to boxed Mixed slots before storing the peer.
+    assert_eq!(cyclic_allocs, acyclic_allocs + 3);
+    assert_eq!(cyclic_frees, acyclic_frees + 3);
 }
 
 #[test]

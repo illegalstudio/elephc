@@ -269,6 +269,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             trait_uses,
             properties,
             methods,
+        constants,
         } => (
             Stmt::new(
                 StmtKind::ClassDecl {
@@ -281,6 +282,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
                     trait_uses,
                     properties: properties.into_iter().map(propagate_property).collect(),
                     methods: methods.into_iter().map(propagate_method).collect(),
+                constants,
                 },
                 span,
             ),
@@ -308,12 +310,14 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             name,
             extends,
             methods,
+        constants,
         } => (
             Stmt::new(
                 StmtKind::InterfaceDecl {
                     name,
                     extends,
                     methods: methods.into_iter().map(propagate_method).collect(),
+                constants,
                 },
                 span,
             ),
@@ -324,6 +328,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             trait_uses,
             properties,
             methods,
+        constants,
         } => (
             Stmt::new(
                 StmtKind::TraitDecl {
@@ -331,6 +336,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
                     trait_uses,
                     properties: properties.into_iter().map(propagate_property).collect(),
                     methods: methods.into_iter().map(propagate_method).collect(),
+                constants,
                 },
                 span,
             ),

@@ -38,6 +38,7 @@ pub(in crate::optimize) fn fold_property(property: ClassProperty) -> ClassProper
         by_ref: property.by_ref,
         default: property.default.map(fold_expr),
         span: property.span,
+        attributes: property.attributes,
     }
 }
 
@@ -54,6 +55,7 @@ pub(in crate::optimize) fn fold_method(method: ClassMethod) -> ClassMethod {
         return_type: method.return_type,
         body: fold_block(method.body),
         span: method.span,
+        attributes: method.attributes,
     }
 }
 
@@ -62,6 +64,7 @@ pub(in crate::optimize) fn fold_enum_case(case: EnumCaseDecl) -> EnumCaseDecl {
         name: case.name,
         value: case.value.map(fold_expr),
         span: case.span,
+        attributes: case.attributes,
     }
 }
 
@@ -228,13 +231,6 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             args: args.into_iter().map(fold_expr).collect(),
         },
         ExprKind::ConstRef(name) => ExprKind::ConstRef(name),
-        ExprKind::EnumCase {
-            enum_name,
-            case_name,
-        } => ExprKind::EnumCase {
-            enum_name,
-            case_name,
-        },
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
             class_name,
             args: args.into_iter().map(fold_expr).collect(),
@@ -292,10 +288,18 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             len: Box::new(fold_expr(*len)),
         },
         ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant { receiver },
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            ExprKind::ScopedConstantAccess { receiver, name }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
             args: args.into_iter().map(fold_expr).collect(),
         },
+        ExprKind::Yield { key, value } => ExprKind::Yield {
+            key: key.map(|k| Box::new(fold_expr(*k))),
+            value: value.map(|v| Box::new(fold_expr(*v))),
+        },
+        ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(fold_expr(*inner))),
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before optimizer passes")
         }

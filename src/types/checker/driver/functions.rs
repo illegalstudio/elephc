@@ -89,6 +89,7 @@ impl Checker {
                         return_type: return_type.clone(),
                         span: stmt.span,
                         body: body.clone(),
+                        attributes: stmt.attributes.clone(),
                     },
                 );
             }
@@ -239,6 +240,7 @@ impl Checker {
                 .chain(decl.variadic.iter().map(|_| false))
                 .collect(),
             variadic: decl.variadic,
+            deprecation: None,
         }))
     }
 }

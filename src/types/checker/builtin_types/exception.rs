@@ -31,6 +31,7 @@ pub(super) fn builtin_exception_message_property() -> ClassProperty {
             crate::span::Span::dummy(),
         )),
         span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
     }
 }
 
@@ -42,29 +43,98 @@ pub(super) fn builtin_exception_constructor_method() -> ClassMethod {
         is_abstract: false,
         is_final: false,
         has_body: true,
-        params: vec![(
-            "message".to_string(),
-            None,
-            Some(Expr::new(
-                ExprKind::StringLiteral(String::new()),
+        params: vec![
+            (
+                "message".to_string(),
+                None,
+                Some(Expr::new(
+                    ExprKind::StringLiteral(String::new()),
+                    crate::span::Span::dummy(),
+                )),
+                false,
+            ),
+            (
+                "code".to_string(),
+                None,
+                Some(Expr::new(
+                    ExprKind::IntLiteral(0),
+                    crate::span::Span::dummy(),
+                )),
+                false,
+            ),
+        ],
+        variadic: None,
+        return_type: None,
+        body: vec![
+            Stmt::new(
+                StmtKind::PropertyAssign {
+                    object: Box::new(Expr::new(ExprKind::This, crate::span::Span::dummy())),
+                    property: "message".to_string(),
+                    value: Expr::new(
+                        ExprKind::Variable("message".to_string()),
+                        crate::span::Span::dummy(),
+                    ),
+                },
                 crate::span::Span::dummy(),
-            )),
-            false,
-        )],
+            ),
+            Stmt::new(
+                StmtKind::PropertyAssign {
+                    object: Box::new(Expr::new(ExprKind::This, crate::span::Span::dummy())),
+                    property: "code".to_string(),
+                    value: Expr::new(
+                        ExprKind::Variable("code".to_string()),
+                        crate::span::Span::dummy(),
+                    ),
+                },
+                crate::span::Span::dummy(),
+            ),
+        ],
+        span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+pub(super) fn builtin_exception_code_property() -> ClassProperty {
+    ClassProperty {
+        name: "code".to_string(),
+        visibility: Visibility::Protected,
+        type_expr: Some(TypeExpr::Int),
+        readonly: false,
+        is_final: false,
+        is_static: false,
+        by_ref: false,
+        default: Some(Expr::new(
+            ExprKind::IntLiteral(0),
+            crate::span::Span::dummy(),
+        )),
+        span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+pub(super) fn builtin_exception_get_code_method() -> ClassMethod {
+    ClassMethod {
+        name: "getCode".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
         variadic: None,
         return_type: None,
         body: vec![Stmt::new(
-            StmtKind::PropertyAssign {
-                object: Box::new(Expr::new(ExprKind::This, crate::span::Span::dummy())),
-                property: "message".to_string(),
-                value: Expr::new(
-                    ExprKind::Variable("message".to_string()),
-                    crate::span::Span::dummy(),
-                ),
-            },
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(Expr::new(ExprKind::This, crate::span::Span::dummy())),
+                    property: "code".to_string(),
+                },
+                crate::span::Span::dummy(),
+            ))),
             crate::span::Span::dummy(),
         )],
         span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
     }
 }
 
@@ -90,6 +160,7 @@ pub(super) fn builtin_exception_get_message_method() -> ClassMethod {
             crate::span::Span::dummy(),
         )],
         span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
     }
 }
 
@@ -106,6 +177,7 @@ pub(super) fn builtin_throwable_get_message_method() -> ClassMethod {
         return_type: None,
         body: Vec::new(),
         span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
     }
 }
 
@@ -115,15 +187,23 @@ pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
             sig.return_type = PhpType::Str;
         }
     }
-    if let Some(class_info) = checker.classes.get_mut("Exception") {
-        if let Some(sig) = class_info.methods.get_mut("__construct") {
-            if let Some(param) = sig.params.get_mut(0) {
-                param.1 = PhpType::Str;
+    for class_name in ["Exception", "RuntimeException", "JsonException"] {
+        if let Some(class_info) = checker.classes.get_mut(class_name) {
+            if let Some(sig) = class_info.methods.get_mut("__construct") {
+                if let Some(param) = sig.params.get_mut(0) {
+                    param.1 = PhpType::Str;
+                }
+                if let Some(param) = sig.params.get_mut(1) {
+                    param.1 = PhpType::Int;
+                }
+                sig.return_type = PhpType::Void;
             }
-            sig.return_type = PhpType::Void;
-        }
-        if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getMessage")) {
-            sig.return_type = PhpType::Str;
+            if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getMessage")) {
+                sig.return_type = PhpType::Str;
+            }
+            if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getCode")) {
+                sig.return_type = PhpType::Int;
+            }
         }
     }
 }

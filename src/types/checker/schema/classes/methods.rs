@@ -14,7 +14,10 @@ use crate::parser::ast::{ClassMethod, Visibility};
 use crate::types::traits::FlattenedClass;
 
 use super::super::super::Checker;
-use super::super::validation::{build_method_sig, validate_override_signature, visibility_rank};
+use super::super::validation::{
+    build_method_sig, matches_global_builtin_attribute, validate_override_signature,
+    visibility_rank,
+};
 use super::state::ClassBuildState;
 
 pub(super) fn apply_methods(
@@ -120,6 +123,10 @@ fn apply_static_method(
     }
     if let Some(parent_sig) = state.static_sigs.get(&method_key) {
         validate_override_signature(checker, &class.name, method, parent_sig, true)?;
+    } else if has_override_attribute(method)
+        && !interface_declares_method(checker, class, &method_key)
+    {
+        return Err(missing_override_target(class, method));
     }
     if method.is_abstract && state.static_method_impl_classes.contains_key(&method_key) {
         return Err(CompileError::new(
@@ -203,6 +210,10 @@ fn apply_instance_method(
     }
     if let Some(parent_sig) = state.method_sigs.get(&method_key) {
         validate_override_signature(checker, &class.name, method, parent_sig, false)?;
+    } else if has_override_attribute(method)
+        && !interface_declares_method(checker, class, &method_key)
+    {
+        return Err(missing_override_target(class, method));
     }
     if method.is_abstract && state.method_impl_classes.contains_key(&method_key) {
         return Err(CompileError::new(
@@ -255,6 +266,54 @@ fn method_kind_error(class: &FlattenedClass, method: &ClassMethod) -> CompileErr
         method.span,
         &format!(
             "Cannot change method kind when overriding {}::{}",
+            class.name, method.name
+        ),
+    )
+}
+
+/// Returns `true` if the method carries the PHP 8.3 `#[\Override]` marker
+/// attribute (in any group, in either qualified form). Match is case-insensitive
+/// to mirror PHP's class-name lookup rules.
+fn has_override_attribute(method: &ClassMethod) -> bool {
+    method.attributes.iter().any(|group| {
+        group
+            .attributes
+            .iter()
+            .any(|attr| matches_global_builtin_attribute(attr, "Override"))
+    })
+}
+
+/// Returns `true` if any interface implemented by the class (directly or
+/// transitively via parent interfaces) declares the method. Uses
+/// `class.implements` because `apply_methods` runs before `collect_interfaces`
+/// has populated `state.interfaces`.
+fn interface_declares_method(
+    checker: &Checker,
+    class: &FlattenedClass,
+    method_key: &str,
+) -> bool {
+    let mut visited = std::collections::HashSet::new();
+    let mut queue: Vec<String> = class.implements.clone();
+    while let Some(name) = queue.pop() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        let Some(info) = checker.interfaces.get(&name) else {
+            continue;
+        };
+        if info.methods.contains_key(method_key) {
+            return true;
+        }
+        queue.extend(info.parents.iter().cloned());
+    }
+    false
+}
+
+fn missing_override_target(class: &FlattenedClass, method: &ClassMethod) -> CompileError {
+    CompileError::new(
+        method.span,
+        &format!(
+            "{}::{}() has #[\\Override] attribute, but no matching parent method was found",
             class.name, method.name
         ),
     )

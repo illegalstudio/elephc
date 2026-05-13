@@ -10,7 +10,10 @@
 
 use crate::errors::CompileError;
 use crate::names::{canonical_name_for_decl, php_symbol_key};
-use crate::parser::ast::{ClassProperty, Stmt, StmtKind, TraitAdaptation, TraitUse};
+use crate::parser::ast::{
+    Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, Stmt, StmtKind,
+    TraitAdaptation, TraitUse,
+};
 
 use super::expressions::resolve_expr;
 use super::names::{resolve_type_expr, resolved_class_name};
@@ -23,6 +26,7 @@ pub(super) fn resolve_decl_stmt(
     imports: &Imports,
     symbols: &Symbols,
 ) -> Result<Option<Stmt>, CompileError> {
+    let stmt_attributes = resolve_attribute_groups(&stmt.attributes, namespace, imports, symbols);
     match &stmt.kind {
         StmtKind::FunctionDecl {
             name,
@@ -32,7 +36,7 @@ pub(super) fn resolve_decl_stmt(
             body,
         } => {
             let body = resolve_stmt_list(body, namespace, imports, symbols)?;
-            Ok(Some(Stmt::new(
+            Ok(Some(Stmt::with_attributes(
                 StmtKind::FunctionDecl {
                     name: canonical_name_for_decl(namespace, name),
                     params: resolve_params(params, namespace, imports, symbols),
@@ -43,6 +47,7 @@ pub(super) fn resolve_decl_stmt(
                     body,
                 },
                 stmt.span,
+                stmt_attributes,
             )))
         }
         StmtKind::ClassDecl {
@@ -55,35 +60,24 @@ pub(super) fn resolve_decl_stmt(
             trait_uses,
             properties,
             methods,
+            constants,
         } => {
-            let resolved_methods = methods
-                .iter()
-                .map(|method| {
-                    let body = resolve_stmt_list(&method.body, namespace, imports, symbols)?;
-                    Ok(crate::parser::ast::ClassMethod {
-                        params: resolve_params(&method.params, namespace, imports, symbols),
-                        return_type: method
-                            .return_type
-                            .as_ref()
-                            .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
-                        body,
-                        ..method.clone()
-                    })
-                })
-                .collect::<Result<Vec<_>, CompileError>>()?;
+            let resolved_methods = resolve_methods(methods, namespace, imports, symbols)?;
             let trait_uses = trait_uses
                 .iter()
                 .map(|trait_use| resolve_trait_use(trait_use, namespace, imports, symbols))
                 .collect::<Result<Vec<_>, CompileError>>()?;
-            Ok(Some(Stmt::new(
+            Ok(Some(Stmt::with_attributes(
                 StmtKind::ClassDecl {
                     name: canonical_name_for_decl(namespace, name),
-                    extends: extends
-                        .as_ref()
-                        .map(|name| resolved_name(resolved_class_name(name, namespace, imports, symbols))),
+                    extends: extends.as_ref().map(|name| {
+                        resolved_name(resolved_class_name(name, namespace, imports, symbols))
+                    }),
                     implements: implements
                         .iter()
-                        .map(|name| resolved_name(resolved_class_name(name, namespace, imports, symbols)))
+                        .map(|name| {
+                            resolved_name(resolved_class_name(name, namespace, imports, symbols))
+                        })
                         .collect(),
                     is_abstract: *is_abstract,
                     is_final: *is_final,
@@ -91,8 +85,10 @@ pub(super) fn resolve_decl_stmt(
                     trait_uses,
                     properties: resolve_properties(properties, namespace, imports, symbols),
                     methods: resolved_methods,
+                    constants: resolve_class_consts(constants, namespace, imports, symbols),
                 },
                 stmt.span,
+                stmt_attributes,
             )))
         }
         StmtKind::EnumDecl {
@@ -109,15 +105,22 @@ pub(super) fn resolve_decl_stmt(
                         .as_ref()
                         .map(|expr| resolve_expr(expr, namespace, imports, symbols)),
                     span: case.span,
+                    attributes: resolve_attribute_groups(
+                        &case.attributes,
+                        namespace,
+                        imports,
+                        symbols,
+                    ),
                 })
                 .collect();
-            Ok(Some(Stmt::new(
+            Ok(Some(Stmt::with_attributes(
                 StmtKind::EnumDecl {
                     name: canonical_name_for_decl(namespace, name),
                     backing_type: backing_type.clone(),
                     cases: resolved_cases,
                 },
                 stmt.span,
+                stmt_attributes,
             )))
         }
         StmtKind::PackedClassDecl { name, fields } => {
@@ -129,40 +132,36 @@ pub(super) fn resolve_decl_stmt(
                     span: field.span,
                 })
                 .collect();
-            Ok(Some(Stmt::new(
+            Ok(Some(Stmt::with_attributes(
                 StmtKind::PackedClassDecl {
                     name: canonical_name_for_decl(namespace, name),
                     fields: resolved_fields,
                 },
                 stmt.span,
+                stmt_attributes,
             )))
         }
-        StmtKind::InterfaceDecl { name, extends, methods } => {
-            let resolved_methods = methods
-                .iter()
-                .map(|method| {
-                    let body = resolve_stmt_list(&method.body, namespace, imports, symbols)?;
-                    Ok(crate::parser::ast::ClassMethod {
-                        params: resolve_params(&method.params, namespace, imports, symbols),
-                        return_type: method
-                            .return_type
-                            .as_ref()
-                            .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
-                        body,
-                        ..method.clone()
-                    })
-                })
-                .collect::<Result<Vec<_>, CompileError>>()?;
-            Ok(Some(Stmt::new(
+        StmtKind::InterfaceDecl {
+            name,
+            extends,
+            methods,
+            constants,
+        } => {
+            let resolved_methods = resolve_methods(methods, namespace, imports, symbols)?;
+            Ok(Some(Stmt::with_attributes(
                 StmtKind::InterfaceDecl {
                     name: canonical_name_for_decl(namespace, name),
                     extends: extends
                         .iter()
-                        .map(|name| resolved_name(resolved_class_name(name, namespace, imports, symbols)))
+                        .map(|name| {
+                            resolved_name(resolved_class_name(name, namespace, imports, symbols))
+                        })
                         .collect(),
                     methods: resolved_methods,
+                    constants: resolve_class_consts(constants, namespace, imports, symbols),
                 },
                 stmt.span,
+                stmt_attributes,
             )))
         }
         StmtKind::TraitDecl {
@@ -170,34 +169,23 @@ pub(super) fn resolve_decl_stmt(
             trait_uses,
             properties,
             methods,
+            constants,
         } => {
-            let resolved_methods = methods
-                .iter()
-                .map(|method| {
-                    let body = resolve_stmt_list(&method.body, namespace, imports, symbols)?;
-                    Ok(crate::parser::ast::ClassMethod {
-                        params: resolve_params(&method.params, namespace, imports, symbols),
-                        return_type: method
-                            .return_type
-                            .as_ref()
-                            .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
-                        body,
-                        ..method.clone()
-                    })
-                })
-                .collect::<Result<Vec<_>, CompileError>>()?;
+            let resolved_methods = resolve_methods(methods, namespace, imports, symbols)?;
             let trait_uses = trait_uses
                 .iter()
                 .map(|trait_use| resolve_trait_use(trait_use, namespace, imports, symbols))
                 .collect::<Result<Vec<_>, CompileError>>()?;
-            Ok(Some(Stmt::new(
+            Ok(Some(Stmt::with_attributes(
                 StmtKind::TraitDecl {
                     name: canonical_name_for_decl(namespace, name),
                     trait_uses,
                     properties: resolve_properties(properties, namespace, imports, symbols),
                     methods: resolved_methods,
+                    constants: resolve_class_consts(constants, namespace, imports, symbols),
                 },
                 stmt.span,
+                stmt_attributes,
             )))
         }
         StmtKind::ExternFunctionDecl {
@@ -205,7 +193,7 @@ pub(super) fn resolve_decl_stmt(
             params,
             return_type,
             library,
-        } => Ok(Some(Stmt::new(
+        } => Ok(Some(Stmt::with_attributes(
             StmtKind::ExternFunctionDecl {
                 name: canonical_name_for_decl(namespace, name),
                 params: params.clone(),
@@ -213,30 +201,116 @@ pub(super) fn resolve_decl_stmt(
                 library: library.clone(),
             },
             stmt.span,
+            stmt_attributes,
         ))),
-        StmtKind::FunctionVariantGroup { name, variants } => Ok(Some(Stmt::new(
+        StmtKind::FunctionVariantGroup { name, variants } => Ok(Some(Stmt::with_attributes(
             StmtKind::FunctionVariantGroup {
                 name: name.clone(),
                 variants: variants.clone(),
             },
             stmt.span,
+            stmt_attributes,
         ))),
-        StmtKind::ExternClassDecl { name, fields } => Ok(Some(Stmt::new(
+        StmtKind::ExternClassDecl { name, fields } => Ok(Some(Stmt::with_attributes(
             StmtKind::ExternClassDecl {
                 name: canonical_name_for_decl(namespace, name),
                 fields: fields.clone(),
             },
             stmt.span,
+            stmt_attributes,
         ))),
-        StmtKind::ConstDecl { name, value } => Ok(Some(Stmt::new(
+        StmtKind::ConstDecl { name, value } => Ok(Some(Stmt::with_attributes(
             StmtKind::ConstDecl {
                 name: canonical_name_for_decl(namespace, name),
                 value: resolve_expr(value, namespace, imports, symbols),
             },
             stmt.span,
+            stmt_attributes,
         ))),
         _ => Ok(None),
     }
+}
+
+fn resolve_attribute_groups(
+    groups: &[AttributeGroup],
+    namespace: Option<&str>,
+    imports: &Imports,
+    symbols: &Symbols,
+) -> Vec<AttributeGroup> {
+    groups
+        .iter()
+        .map(|group| AttributeGroup {
+            attributes: group
+                .attributes
+                .iter()
+                .map(|attr| Attribute {
+                    name: resolved_name(resolved_class_name(
+                        &attr.name,
+                        namespace,
+                        imports,
+                        symbols,
+                    )),
+                    args: attr
+                        .args
+                        .iter()
+                        .map(|arg| resolve_expr(arg, namespace, imports, symbols))
+                        .collect(),
+                    span: attr.span,
+                })
+                .collect(),
+            span: group.span,
+        })
+        .collect()
+}
+
+fn resolve_methods(
+    methods: &[ClassMethod],
+    namespace: Option<&str>,
+    imports: &Imports,
+    symbols: &Symbols,
+) -> Result<Vec<ClassMethod>, CompileError> {
+    methods
+        .iter()
+        .map(|method| {
+            let body = resolve_stmt_list(&method.body, namespace, imports, symbols)?;
+            Ok(ClassMethod {
+                params: resolve_params(&method.params, namespace, imports, symbols),
+                return_type: method
+                    .return_type
+                    .as_ref()
+                    .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
+                body,
+                attributes: resolve_attribute_groups(
+                    &method.attributes,
+                    namespace,
+                    imports,
+                    symbols,
+                ),
+                ..method.clone()
+            })
+        })
+        .collect()
+}
+
+fn resolve_class_consts(
+    constants: &[ClassConst],
+    namespace: Option<&str>,
+    imports: &Imports,
+    symbols: &Symbols,
+) -> Vec<ClassConst> {
+    constants
+        .iter()
+        .map(|constant| ClassConst {
+            value: resolve_expr(&constant.value, namespace, imports, symbols),
+            attributes: resolve_attribute_groups(
+                &constant.attributes,
+                namespace,
+                imports,
+                symbols,
+            ),
+            ..constant.clone()
+        })
+        .collect()
 }
 
 fn resolve_properties(
@@ -256,6 +330,12 @@ fn resolve_properties(
                 .default
                 .as_ref()
                 .map(|expr| resolve_expr(expr, namespace, imports, symbols)),
+            attributes: resolve_attribute_groups(
+                &property.attributes,
+                namespace,
+                imports,
+                symbols,
+            ),
             ..property.clone()
         })
         .collect()

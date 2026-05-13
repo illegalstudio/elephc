@@ -62,6 +62,18 @@ impl Checker {
                 ));
             }
         }
+        // Mixed receivers fall through to runtime dispatch. The decoded
+        // value may be a stdClass (e.g. from `json_decode($json)`), an
+        // associative array, or a scalar — codegen unboxes the Mixed cell,
+        // checks the tag, and routes object payloads through
+        // `__rt_stdclass_get`. Non-object payloads return Mixed(null) at
+        // runtime, mirroring PHP's "attempt to read property on non-object"
+        // diagnostic for the most common idiom (`$obj->name` after
+        // json_decode).
+        let _ = property;
+        if matches!(obj_ty, PhpType::Mixed) {
+            return Ok(PhpType::Mixed);
+        }
         Err(CompileError::new(
             expr.span,
             "Property access requires an object or typed pointer",
@@ -95,6 +107,9 @@ impl Checker {
         property: &str,
         expr: &Expr,
     ) -> Result<PhpType, CompileError> {
+        if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+            return Ok(PhpType::Mixed);
+        }
         if let Some(class_info) = self.classes.get(class_name) {
             if let Some(visibility) = class_info.property_visibilities.get(property) {
                 let declaring_class = class_info
@@ -119,6 +134,12 @@ impl Checker {
             }
             if let Some(sig) = class_info.methods.get("__get") {
                 return Ok(sig.return_type.clone());
+            }
+            if class_info.allow_dynamic_properties {
+                // PHP 8.2 #[\AllowDynamicProperties]: undeclared property
+                // reads are dispatched to the side-table hashtable; the
+                // value is statically `Mixed` because we cannot infer it.
+                return Ok(PhpType::Mixed);
             }
             return Err(CompileError::new(
                 expr.span,

@@ -77,18 +77,19 @@ fn test_parse_backed_enum_decl() {
 
 #[test]
 fn test_parse_enum_case_expr() {
+    // The parser now emits `ScopedConstantAccess` for `Foo::BAR`; the type
+    // checker disambiguates between enum cases and class constants. Either
+    // form is acceptable here — we just verify the receiver and member.
     let stmts = parse_source("<?php echo Color::Red;");
     assert_eq!(stmts.len(), 1);
     match &stmts[0].kind {
-        StmtKind::Echo(expr) => {
-            assert_eq!(
-                expr.kind,
-                ExprKind::EnumCase {
-                    enum_name: Name::from("Color"),
-                    case_name: "Red".to_string(),
-                }
-            );
-        }
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::ScopedConstantAccess { receiver, name } => {
+                assert!(matches!(receiver, StaticReceiver::Named(n) if n.as_str() == "Color"));
+                assert_eq!(name, "Red");
+            }
+            other => panic!("Expected ScopedConstantAccess, got {:?}", other),
+        },
         other => panic!("Expected Echo, got {:?}", other),
     }
 }

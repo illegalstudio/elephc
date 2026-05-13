@@ -11,6 +11,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Platform;
+use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::PhpType;
 
 use super::super::Checker;
@@ -35,6 +36,9 @@ impl Checker {
         constants.insert("LOCK_EX".to_string(), PhpType::Int);
         constants.insert("LOCK_UN".to_string(), PhpType::Int);
         constants.insert("LOCK_NB".to_string(), PhpType::Int);
+        for (name, _value) in JSON_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
 
         Self {
             target_platform,
@@ -65,6 +69,7 @@ impl Checker {
             active_statics: HashSet::new(),
             break_continue_depth: 0,
             finally_break_continue_bases: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 }

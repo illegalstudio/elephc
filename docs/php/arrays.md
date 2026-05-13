@@ -24,6 +24,18 @@ foreach ($names as $name) {
 }
 ```
 
+## Heterogeneous indexed arrays
+Indexed arrays can contain different value types. When element types differ, elephc stores the payloads as boxed `mixed` values internally.
+
+```php
+<?php
+$items = [1, "two", true];
+$items[] = 3.5;
+
+echo $items[0]; // 1
+echo $items[1]; // two
+```
+
 ## Associative arrays
 ```php
 <?php
@@ -34,7 +46,7 @@ $map["age"] = "30";      // add new key
 
 Associative arrays use a hash table runtime. If later values do not match the first value type, the checker widens to internal `mixed` runtime shape.
 
-Keys follow PHP's array-key normalization for integer and string keys. Integer keys remain integers, numeric strings such as `"1"` normalize to the integer key `1`, and strings with leading zeroes such as `"01"` remain string keys. This applies to literals, reads and writes, `foreach`, `array_keys()`, `array_search()`, `array_key_exists()`, `array_flip()`, JSON object keys, and associative array union.
+Keys follow PHP's array-key normalization for integer and string keys. Integer keys remain integers, numeric strings such as `"1"` normalize to the integer key `1`, and strings with leading zeroes such as `"01"` remain string keys. This applies to literals, reads and writes, `foreach`, `array_keys()`, `array_search()`, `array_key_exists()`, `array_flip()`, JSON object keys, and array union.
 
 ```php
 <?php
@@ -67,6 +79,19 @@ $result = [10, 20] + [99, 88, 77];
 echo $result[0]; // 10
 echo $result[1]; // 20
 echo $result[2]; // 77
+```
+
+Union also works across indexed and associative representations. Indexed positions become integer keys in the shared PHP key space, so an associative key `"0"` blocks right index `0`, while `"01"` remains a distinct string key.
+
+```php
+<?php
+$left = ["0" => "left zero", "01" => "leading"];
+$right = ["right zero", "right one"];
+$result = $left + $right;
+
+echo $result[0];    // left zero
+echo $result[1];    // right one
+echo $result["01"]; // leading
 ```
 
 ## Copy-on-write semantics
@@ -169,12 +194,9 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `call_user_func()` | `call_user_func($callback, ...): mixed` | Call a callback value |
 | `call_user_func_array()` | `call_user_func_array($callback, $args): mixed` | Call with args from array |
 | `function_exists()` | `function_exists("name"): bool` | Check if function is defined |
+| `is_callable()` | `is_callable($value): bool` | True for closures, first-class callables, and string literals naming a known builtin / user function. Non-literal strings, `[$obj, "method"]` arrays, and `__invoke` objects are tracked as follow-ups. |
 | `isset()` | `isset($var): int` | Check if variable is defined |
 
 > Callback arguments can be string literals, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures.
 
 **Not supported by design:** `compact()`, `extract()` require runtime variable-name tables and are listed in the roadmap's "Will not implement" section.
-
-## Limitations
-- Indexed arrays are homogeneous (except object elements may widen to shared parent class)
-- Array union is supported for indexed+indexed and associative+associative operands; mixed indexed/associative union and heterogeneous indexed-array union are tracked in `ROADMAP.md`

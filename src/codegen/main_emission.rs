@@ -76,6 +76,7 @@ pub(super) fn emit_main_and_finalize(
         ref_params: Vec::new(),
         declared_params: Vec::new(),
         variadic: None,
+        deprecation: None,
     };
     functions::collect_local_vars(program, &mut ctx, &main_sig);
     super::prescan::collect_main_try_slots(program, &mut ctx);

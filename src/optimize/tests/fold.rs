@@ -93,6 +93,7 @@ fn test_fold_string_concat_and_property_default() {
             Span::dummy(),
         )),
         span: Span::dummy(),
+        attributes: Vec::new(),
     };
 
     let folded = fold_constants(vec![Stmt::new(
@@ -106,6 +107,7 @@ fn test_fold_string_concat_and_property_default() {
             trait_uses: Vec::new(),
             properties: vec![property],
             methods: Vec::new(),
+        constants: Vec::new(),
         },
         Span::dummy(),
     )]);

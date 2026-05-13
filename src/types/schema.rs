@@ -15,6 +15,17 @@ use crate::parser::ast::{ClassMethod, Expr, Visibility};
 
 use super::{FunctionSig, PhpType};
 
+/// Compile-time attribute argument literal. Captures the subset of PHP
+/// attribute argument expressions that reflection helpers can currently
+/// materialize: strings, ints, bools, null, and negative int literals.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AttrArgValue {
+    Null,
+    Int(i64),
+    Bool(bool),
+    Str(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct InterfaceInfo {
     pub interface_id: u64,
@@ -23,6 +34,8 @@ pub struct InterfaceInfo {
     pub method_declaring_interfaces: HashMap<String, String>,
     pub method_order: Vec<String>,
     pub method_slots: HashMap<String, usize>,
+    /// Interface constants (PHP 5.0+). Inherited from parent interfaces.
+    pub constants: HashMap<String, crate::parser::ast::Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,6 +45,25 @@ pub struct ClassInfo {
     pub is_abstract: bool,
     pub is_final: bool,
     pub is_readonly_class: bool,
+    /// `true` if the class declaration carries the PHP 8.2
+    /// `#[\AllowDynamicProperties]` attribute or inherits it from a parent.
+    /// Codegen routes undeclared property storage through a per-object
+    /// side-table when this flag is set.
+    pub allow_dynamic_properties: bool,
+    /// User-declared class constants (PHP 7.1+). Maps the constant name to
+    /// its value expression — codegen inlines the literal at access time.
+    pub constants: HashMap<String, crate::parser::ast::Expr>,
+    /// Names of PHP 8 attributes attached to this class declaration, in
+    /// source order. Name resolution stores canonical class-like text without
+    /// a synthetic leading backslash, matching `ReflectionAttribute::getName()`.
+    /// Future ReflectionClass support will read this list from per-class
+    /// metadata emitted at codegen time.
+    pub attribute_names: Vec<String>,
+    /// Literal arguments captured for each attribute, in source order and
+    /// aligned with `attribute_names`. `None` means the source uses legal PHP
+    /// attribute arguments that this reflection metadata model cannot
+    /// materialize yet; callers that need arguments report that at query time.
+    pub attribute_args: Vec<Option<Vec<AttrArgValue>>>,
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,

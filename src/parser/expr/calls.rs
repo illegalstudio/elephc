@@ -54,10 +54,15 @@ pub(super) fn parse_scoped_static_call(
             ))
         }
     };
+    // If a `(` follows, this is a static method call; otherwise it's a
+    // user-declared class-constant access (`MyClass::FOO`).
     if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
-        return Err(CompileError::new(
+        return Ok(Expr::new(
+            ExprKind::ScopedConstantAccess {
+                receiver,
+                name: method,
+            },
             span,
-            &format!("Expected '(' after {} method name", receiver_name),
         ));
     }
     *pos += 1;

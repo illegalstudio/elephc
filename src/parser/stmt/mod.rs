@@ -18,7 +18,7 @@ mod simple;
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::names::{Name, NameKind};
-use crate::parser::ast::{ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{AttributeGroup, ExprKind, Stmt, StmtKind};
 use crate::parser::control;
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
@@ -28,8 +28,58 @@ pub(crate) use params::{looks_like_typed_param, parse_type_expr};
 pub(crate) use assign::can_replay_assignment_target;
 
 pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, CompileError> {
+    // PHP attribute groups (`#[...]`) may decorate any statement-level
+    // declaration. We capture them here and attach the result to the parsed
+    // statement; non-declaration kinds reject non-empty attribute lists below.
+    let attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
+
+    if *pos >= tokens.len() {
+        let span = tokens.last().map(|(_, s)| *s).unwrap_or(Span::dummy());
+        return Err(CompileError::new(span, "Unexpected end of input after attributes"));
+    }
     let span = tokens[*pos].1;
 
+    let stmt = parse_stmt_dispatch(tokens, pos, span)?;
+    attach_attributes_to_stmt(stmt, attributes, span)
+}
+
+fn attach_attributes_to_stmt(
+    mut stmt: Stmt,
+    attributes: Vec<AttributeGroup>,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    if attributes.is_empty() {
+        return Ok(stmt);
+    }
+    if stmt_kind_supports_attributes(&stmt.kind) {
+        stmt.attributes = attributes;
+        Ok(stmt)
+    } else {
+        Err(CompileError::new(
+            span,
+            "Attributes are only allowed before declarations \
+             (class, interface, trait, enum, function)",
+        ))
+    }
+}
+
+fn stmt_kind_supports_attributes(kind: &StmtKind) -> bool {
+    matches!(
+        kind,
+        StmtKind::ClassDecl { .. }
+            | StmtKind::InterfaceDecl { .. }
+            | StmtKind::TraitDecl { .. }
+            | StmtKind::EnumDecl { .. }
+            | StmtKind::FunctionDecl { .. }
+            | StmtKind::PackedClassDecl { .. }
+    )
+}
+
+fn parse_stmt_dispatch(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
     match &tokens[*pos].0 {
         Token::Echo => simple::parse_echo(tokens, pos, span),
         Token::Print => simple::parse_expr_stmt(tokens, pos, span),
@@ -49,6 +99,11 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::Use => namespace_use::parse_use_stmt(tokens, pos, span),
         Token::Return => simple::parse_return(tokens, pos, span),
         Token::Throw => simple::parse_throw(tokens, pos, span),
+        Token::Yield => {
+            let expr = parse_expr(tokens, pos)?;
+            expect_semicolon(tokens, pos)?;
+            Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
+        }
         Token::Include => simple::parse_include(tokens, pos, span, false, false),
         Token::IncludeOnce => simple::parse_include(tokens, pos, span, true, false),
         Token::Require => simple::parse_include(tokens, pos, span, false, true),

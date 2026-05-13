@@ -12,10 +12,10 @@ use crate::parser::ast::Expr;
 use crate::types::{ClassInfo, EnumInfo, PhpType};
 
 use super::abi;
-use super::context::Context;
+use super::context::{Context, HeapOwnership};
 use super::data_section::DataSection;
 use super::emit::Emitter;
-use super::expr::{coerce_result_to_type, emit_expr};
+use super::expr::{coerce_result_to_type, emit_expr, expr_result_heap_ownership};
 use super::functions;
 use super::platform::{Arch, Target};
 use super::runtime;
@@ -389,6 +389,102 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
                     emitter.instruction("call __rt_mixed_from_value");          // box the raw pointer bits into a mixed cell
                 }
             }
+        }
+    }
+}
+
+pub(crate) fn emit_box_current_expr_value_as_mixed_for_container(
+    emitter: &mut Emitter,
+    expr: &Expr,
+    ty: &PhpType,
+) {
+    if !matches!(
+        ty,
+        PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+    ) || expr_result_heap_ownership(expr) != HeapOwnership::Owned
+    {
+        emit_box_current_value_as_mixed(emitter, ty);
+        return;
+    }
+
+    match ty {
+        PhpType::Str => emit_box_current_owned_string_as_mixed_for_container(emitter, ty),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            emit_box_current_owned_refcounted_as_mixed_for_container(emitter, ty);
+        }
+        _ => emit_box_current_value_as_mixed(emitter, ty),
+    }
+}
+
+pub(crate) fn emit_release_pushed_refcounted_temp_after_array_push(
+    emitter: &mut Emitter,
+    ty: &PhpType,
+) {
+    if !ty.is_refcounted() {
+        return;
+    }
+
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("str x0, [sp, #-16]!");                         // preserve the updated array pointer while releasing the pushed temporary
+            emitter.instruction("ldr x0, [sp, #16]");                           // reload the pushed temporary pointer saved below the array result
+            abi::emit_decref_if_refcounted(emitter, ty);
+            emitter.instruction("ldr x0, [sp], #16");                           // restore the updated array pointer after releasing the pushed temporary
+            emitter.instruction("add sp, sp, #16");                             // discard the saved pushed temporary pointer
+        }
+        Arch::X86_64 => {
+            emitter.instruction("sub rsp, 16");                                 // reserve a temporary slot for the updated array pointer
+            emitter.instruction("mov QWORD PTR [rsp], rax");                    // preserve the updated array pointer while releasing the pushed temporary
+            emitter.instruction("mov rax, QWORD PTR [rsp + 16]");               // reload the pushed temporary pointer saved below the array result
+            abi::emit_decref_if_refcounted(emitter, ty);
+            emitter.instruction("mov rax, QWORD PTR [rsp]");                    // restore the updated array pointer after releasing the pushed temporary
+            emitter.instruction("add rsp, 32");                                 // discard the array-result slot and the pushed temporary slot
+        }
+    }
+}
+
+fn emit_box_current_owned_string_as_mixed_for_container(emitter: &mut Emitter, ty: &PhpType) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the owned source string while boxing an owned copy into Mixed
+            emit_box_current_value_as_mixed(emitter, ty);
+            emitter.instruction("str x0, [sp, #-16]!");                         // preserve the boxed Mixed result while releasing the original string
+            emitter.instruction("ldr x0, [sp, #16]");                           // reload the original string pointer for safe heap release
+            abi::emit_call_label(emitter, "__rt_heap_free_safe");               // release the original owned string after Mixed copied it
+            emitter.instruction("ldr x0, [sp], #16");                           // restore the boxed Mixed result
+            emitter.instruction("add sp, sp, #16");                             // discard the saved original string pointer and length
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(emitter, "rax", "rdx");
+            emit_box_current_value_as_mixed(emitter, ty);
+            abi::emit_push_reg(emitter, "rax");
+            emitter.instruction("mov rax, QWORD PTR [rsp + 16]");               // reload the original string pointer for safe heap release
+            abi::emit_call_label(emitter, "__rt_heap_free_safe");               // release the original owned string after Mixed copied it
+            abi::emit_pop_reg(emitter, "rax");
+            emitter.instruction("add rsp, 16");                                 // discard the saved original string pointer and length
+        }
+    }
+}
+
+fn emit_box_current_owned_refcounted_as_mixed_for_container(emitter: &mut Emitter, ty: &PhpType) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("str x0, [sp, #-16]!");                         // preserve the owned source heap value while boxing it into Mixed
+            emit_box_current_value_as_mixed(emitter, ty);
+            emitter.instruction("str x0, [sp, #-16]!");                         // preserve the boxed Mixed result while releasing the original owner
+            emitter.instruction("ldr x0, [sp, #16]");                           // reload the original heap value retained by the Mixed box
+            abi::emit_decref_if_refcounted(emitter, ty);
+            emitter.instruction("ldr x0, [sp], #16");                           // restore the boxed Mixed result
+            emitter.instruction("add sp, sp, #16");                             // discard the saved original heap value pointer
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(emitter, "rax");
+            emit_box_current_value_as_mixed(emitter, ty);
+            abi::emit_push_reg(emitter, "rax");
+            emitter.instruction("mov rax, QWORD PTR [rsp + 16]");               // reload the original heap value retained by the Mixed box
+            abi::emit_decref_if_refcounted(emitter, ty);
+            abi::emit_pop_reg(emitter, "rax");
+            emitter.instruction("add rsp, 16");                                 // discard the saved original heap value pointer
         }
     }
 }

@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-**Source:** `src/parser/` — `expr/`, `stmt/`, `control.rs`, `ast.rs`, `mod.rs`
+**Source:** `src/parser/` — `expr/`, `stmt/`, `control.rs`, `attributes.rs`, `ast/`, `mod.rs`
 
 The parser takes the token stream from the [lexer](the-lexer.md) and builds an **Abstract Syntax Tree** (AST) — a tree structure that represents the program's meaning, not just its text.
 
@@ -32,7 +32,7 @@ The tree encodes that `2 * 3` happens before `+ 1` — **operator precedence** i
 
 ## The AST types
 
-**File:** `src/parser/ast.rs`
+**File:** `src/parser/ast/`
 
 The AST has two main node types:
 
@@ -62,6 +62,8 @@ Things that have a value:
 | `PreDecrement(String)` | `--$i` | |
 | `PostDecrement(String)` | `$i--` | |
 | `FunctionCall { name, args }` | `strlen($s)`, `Tools\fmt($s)`, `\strlen($s)` | Parsed as a structured name so later phases can resolve namespace aliases and fully-qualified names |
+| `Yield { key, value }` | `yield`, `yield $v`, `yield $k => $v` | Yield expression inside a generator body. The parser keeps optional key/value expressions; later checker/codegen turns the enclosing function or closure into a `Generator` state machine. |
+| `YieldFrom(Expr)` | `yield from inner()` | Contextual `yield from` delegation. The lexer leaves `from` as an identifier and the parser recognizes it only immediately after `yield`. |
 | `ArrayLiteral(Vec<Expr>)` | `[1, 2, 3]`, `[...$arr, 4]` | Indexed array; elements may include `Spread` expressions |
 | `ArrayLiteralAssoc(Vec<(Expr, Expr)>)` | `["a" => 1]` | Associative array |
 | `Match { subject, arms, default }` | `match($x) { 1, 2 => "low", 3 => "high" }` | Match expression (returns a value). `arms` is `Vec<(Vec<Expr>, Expr)>`, so each arm can have multiple comma-separated patterns before `=>`, and `default` is optional (`Option<Box<Expr>>`) |
@@ -91,10 +93,13 @@ Things that have a value:
 | `BufferNew { element_type, len }` | `buffer_new<int>(256)` | Compiler extension for contiguous hot-path buffers |
 | `MagicConstant(MagicConstant)` | `__DIR__`, `__CLASS__` | Parsed from case-insensitive magic-constant tokens. `__LINE__` is lowered immediately to `IntLiteral`; the remaining magic constants are lowered by `src/magic_constants.rs` before type checking. |
 | `ClassConstant { receiver }` | `MyClass::class`, `\App\C::class`, `self::class`, `parent::class`, `static::class` | The PHP `::class` reflection literal. Codegen lowers it to a string literal carrying the fully-qualified class name. `static::class` follows late static binding. |
+| `ScopedConstantAccess { receiver, name }` | `MyClass::LIMIT`, `self::DEFAULT_SIZE` | User-declared class constant access through `::`; later phases resolve the receiver and constant metadata. |
 
 ### Statements (`Stmt`)
 
 Things that do something:
+
+Each `Stmt` also carries a source `span` and an `attributes` list. The list is populated only for declaration statements that can legally be decorated with PHP attributes; attributes before non-declaration statements are rejected during parsing.
 
 | Variant | Example |
 |---|---|
@@ -129,11 +134,11 @@ Things that do something:
 | `ListUnpack { vars, value }` | `[$a, $b] = [1, 2];` for simple local positional destructuring; skipped, keyed, nested, and non-local destructuring patterns lower to `Synthetic` assignment statements |
 | `Global { vars }` | `global $x, $y;` — declares variables as referencing global storage |
 | `StaticVar { name, init }` | `static $count = 0;` — declares a variable that persists across function calls |
-| `ClassDecl { name, extends, implements, is_abstract, is_final, is_readonly_class, trait_uses, properties, methods }` | `final readonly class Point extends Shape implements Named { use NamedTrait; ... }` |
+| `ClassDecl { name, extends, implements, is_abstract, is_final, is_readonly_class, trait_uses, properties, constants, methods }` | `final readonly class Point extends Shape implements Named { use NamedTrait; ... }` |
 | `EnumDecl { name, backing_type, cases }` | `enum Status: int { case Ok = 1; case Err = 2; }` |
 | `PackedClassDecl { name, fields }` | `packed class Vec2 { public float $x; public float $y; }` |
-| `InterfaceDecl { name, extends, methods }` | `interface Named extends Jsonable { public function name(); }` |
-| `TraitDecl { name, trait_uses, properties, methods }` | `trait Named { ... }` |
+| `InterfaceDecl { name, extends, constants, methods }` | `interface Named extends Jsonable { public const KIND = "name"; public function name(); }` |
+| `TraitDecl { name, trait_uses, properties, constants, methods }` | `trait Named { public const KIND = "name"; ... }` |
 | `PropertyAssign { object, property, value }` | `$p->x = 10;` |
 | `StaticPropertyAssign { receiver, property, value }` | `Counter::$count = 10;`, `self::$count = 10;` |
 | `StaticPropertyArrayPush { receiver, property, value }` | `Counter::$items[] = 10;`, `self::$items[] = 10;` |
@@ -218,8 +223,12 @@ forms such as `?T|U` and normalize accepted declarations.
 | Type | Fields | Description |
 |---|---|---|
 | `Visibility` | `Public`, `Protected`, `Private` | Enum for property/method visibility |
-| `ClassProperty` | `name`, `visibility`, `type_expr`, `readonly`, `is_final`, `is_static`, `by_ref`, `default`, `span` | A property declaration inside a class or trait, optionally carrying a parsed property type declaration, static-property marker, or by-reference promotion marker |
-| `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `is_final`, `has_body`, `params`, `variadic`, `return_type`, `body`, `span` | A method declaration inside a class, trait, or interface |
+| `Attribute` | `name`, `args`, `span` | A PHP 8 attribute entry from a `#[...]` group. The parser validates names and optional argument expressions. Class-level names and supported literal args feed `class_attribute_names()`, `class_attribute_args()`, and `class_get_attributes()`; method/property/parameter reflection is not implemented yet. |
+| `AttributeGroup` | `attributes`, `span` | One bracketed attribute group. Declaration sites can carry one or more groups. |
+| `EnumCaseDecl` | `name`, `value`, `span`, `attributes` | A backed or unit enum case declaration, with declaration-level attributes preserved in the AST. |
+| `ClassConst` | `name`, `visibility`, `is_final`, `value`, `span`, `attributes` | A class, interface, or trait constant declaration. |
+| `ClassProperty` | `name`, `visibility`, `type_expr`, `readonly`, `is_final`, `is_static`, `by_ref`, `default`, `span`, `attributes` | A property declaration inside a class or trait, optionally carrying a parsed property type declaration, static-property marker, by-reference promotion marker, or declaration-level attributes |
+| `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `is_final`, `has_body`, `params`, `variadic`, `return_type`, `body`, `span`, `attributes` | A method declaration inside a class, trait, or interface |
 | `CatchClause` | `exception_types`, `variable`, `body` | A catch arm. `exception_types` supports both single-type and PHP-style multi-catch (`TypeA | TypeB`), and `variable` is optional for PHP 8-style `catch (Exception)` |
 | `StaticReceiver` | `Named(Name)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |
 | `TraitUse` | `trait_names`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body |
@@ -352,6 +361,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `Variable` | Return `Variable` node (with postfix `++`/`--` check) |
 | `throw` | Parse the following expression at the lowest precedence and wrap it in `ExprKind::Throw` |
 | `print` | Parse the operand at ternary-level precedence (bp=7, above word logical operators) and wrap it in `ExprKind::Print` |
+| `yield` | Parse `yield`, `yield expr`, `yield key => value`, or contextual `yield from expr` |
 | `-` (minus) | Parse inner expr at unary precedence (bp=35), return `Negate` |
 | `!` (not) | Parse inner expr at unary precedence (bp=35), return `Not` |
 | `~` (bitwise not) | Parse inner expr at unary precedence (bp=35), return `BitNot` |

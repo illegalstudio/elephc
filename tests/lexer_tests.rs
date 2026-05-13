@@ -34,3 +34,5 @@ mod oop;
 mod spread_and_calls;
 #[path = "lexer_tests/syntax.rs"]
 mod syntax;
+#[path = "lexer_tests/attributes.rs"]
+mod attributes;

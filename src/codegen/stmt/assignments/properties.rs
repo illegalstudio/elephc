@@ -10,10 +10,13 @@
 
 mod arrays;
 mod assign;
+mod dynamic_props;
 mod magic_set;
 mod references;
 mod storage;
 mod target;
+
+pub(crate) use dynamic_props::emit_dynamic_property_get;
 
 pub(crate) use arrays::{
     emit_property_array_assign_stmt,

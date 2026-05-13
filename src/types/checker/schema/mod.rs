@@ -8,7 +8,7 @@
 //! Key details:
 //! - Schema checks run before expression inference so all declarations are available for recursive references.
 
-mod validation;
+pub(crate) mod validation;
 mod interfaces;
 mod classes;
 mod enums;

@@ -40,6 +40,9 @@ pub(super) fn parse_method_params(
                 "Expected ',' between parameters",
             )?;
         }
+        // PHP 8.0 parameter attributes — also covers attributes preceding a
+        // promoted-property modifier such as `#[Inject] public Foo $f`.
+        crate::parser::consume_attribute_lists(tokens, pos)?;
         if variadic.is_some() {
             return Err(CompileError::new(
                 span,
@@ -123,6 +126,7 @@ pub(super) fn parse_method_params(
                         by_ref: is_ref,
                         default: None,
                         span: property_span,
+                        attributes: Vec::new(),
                     });
                     promoted_assignments.push(promoted_property_assignment(&n, param_span));
                 }

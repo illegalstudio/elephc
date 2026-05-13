@@ -52,6 +52,23 @@ impl Checker {
                 ));
             }
             if let Some(sig) = class_info.methods.get("__construct") {
+                if let Some(visibility) = class_info.method_visibilities.get("__construct") {
+                    let declaring_class = class_info
+                        .method_declaring_classes
+                        .get("__construct")
+                        .map(String::as_str)
+                        .unwrap_or(class_name.as_str());
+                    if !self.can_access_member(declaring_class, visibility) {
+                        return Err(CompileError::new(
+                            expr.span,
+                            &format!(
+                                "Cannot access {} constructor: {}::__construct",
+                                Self::visibility_label(visibility),
+                                class_name
+                            ),
+                        ));
+                    }
+                }
                 let declared_flags =
                     Self::declared_method_param_flags(class_info, "__construct", false);
                 let effective_sig = Self::callable_sig_for_declared_params(sig, &declared_flags);

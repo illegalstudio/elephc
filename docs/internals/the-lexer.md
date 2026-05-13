@@ -120,7 +120,7 @@ Include  IncludeOnce  Require  RequireOnce  Stdin  Stdout  Stderr  Fn
 Use  Namespace  Const  Global  Static  Self_  Trait  Parent
 InsteadOf  InstanceOf  PhpEol  PhpOs  DirectorySeparator  DunderDir  DunderFile  DunderLine  DunderFunction
 DunderClass  DunderMethod  DunderNamespace  DunderTrait  Class  Enum  New  Public
-Protected  Private  ReadOnly  This  Extern  Packed  Assign  DoubleArrow
+Protected  Private  ReadOnly  This  Extern  Packed  Yield  AttrOpen  Assign  DoubleArrow
 Plus  Minus  Star  StarStar  Slash  Percent  Dot  Comma
 Backslash  LBracket  RBracket  Question  Colon  PlusAssign  MinusAssign  StarAssign
 StarStarAssign  SlashAssign  DotAssign  PercentAssign  AmpAssign  PipeAssign  CaretAssign  LessLessAssign
@@ -157,7 +157,7 @@ Arrow  QuestionArrow  DoubleColon  QuestionQuestion  QuestionQuestionAssign  Ell
 echo  if  else  elseif  while  do  for  foreach  as
 break  continue  function  return  include  require
 include_once  require_once  true  false  null  print
-switch  case  default  match  try  catch  finally  throw  fn  use  namespace  ifdef  extern  const
+switch  case  default  match  try  catch  finally  throw  yield  fn  use  namespace  ifdef  extern  const
 global  static  self  class  abstract  final  interface  trait  extends  implements  new
 public  protected  private  readonly  parent  insteadof  instanceof  enum  packed
 ```
@@ -209,6 +209,7 @@ instanceof
 | Token | Meaning |
 |---|---|
 | `OpenTag` | `<?php` — required at the start of every file |
+| `AttrOpen` | `#[` — starts a PHP 8 attribute group; bare `#` is a line comment |
 | `Eof` | End of file — signals the parser to stop |
 
 ## String interpolation

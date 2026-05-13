@@ -23,6 +23,13 @@ pub(super) struct PropertyAssignTarget {
 pub(super) enum PropertyAssignResolution {
     Resolved(PropertyAssignTarget),
     UseMagicSet(String),
+    /// Class declares `#[\AllowDynamicProperties]`: route the write through
+    /// the per-object hashtable side-table at the given byte offset.
+    UseDynamicProperty {
+        #[allow(dead_code)] // reserved for future diagnostics
+        class_name: String,
+        dyn_slot_offset: usize,
+    },
     Abort,
 }
 
@@ -73,6 +80,13 @@ fn resolve_object_property_target(
         None => {
             if let Some(magic_class_name) = magic_set_class {
                 return PropertyAssignResolution::UseMagicSet(magic_class_name.to_string());
+            }
+            if class_info.allow_dynamic_properties {
+                let dyn_slot_offset = 8 + class_info.properties.len() * 16;
+                return PropertyAssignResolution::UseDynamicProperty {
+                    class_name: class_name.to_string(),
+                    dyn_slot_offset,
+                };
             }
             emitter.comment(&format!("WARNING: undefined property {}", property));
             return PropertyAssignResolution::Abort;

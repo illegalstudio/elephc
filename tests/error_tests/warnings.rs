@@ -122,3 +122,85 @@ fn test_warning_final_private_constructor_is_allowed() {
         "Private methods cannot be final",
     );
 }
+
+// --- #[\Deprecated] warnings (PHP 8.4) ---
+
+#[test]
+fn test_warning_deprecated_function_call() {
+    expect_warning(
+        "<?php #[\\Deprecated] function legacy(): int { return 1; } echo legacy();",
+        "Call to deprecated function: legacy()",
+    );
+}
+
+#[test]
+fn test_warning_deprecated_function_includes_reason() {
+    expect_warning(
+        "<?php #[\\Deprecated(\"use newApi()\")] function oldApi(): int { return 1; } echo oldApi();",
+        "Call to deprecated function: oldApi() — use newApi()",
+    );
+}
+
+#[test]
+fn test_warning_deprecated_method_call() {
+    expect_warning(
+        "<?php class Svc { #[\\Deprecated] public function fetch(): int { return 1; } } $s = new Svc(); echo $s->fetch();",
+        "Call to deprecated method: Svc::fetch()",
+    );
+}
+
+#[test]
+fn test_warning_deprecated_static_method_call() {
+    expect_warning(
+        "<?php class Reg { #[\\Deprecated(\"removed in v3\")] public static function lookup(): int { return 1; } } echo Reg::lookup();",
+        "Call to deprecated static method: Reg::lookup() — removed in v3",
+    );
+}
+
+#[test]
+fn test_warning_deprecated_unqualified_form_is_recognized() {
+    expect_warning(
+        "<?php #[Deprecated] function legacy(): int { return 1; } echo legacy();",
+        "Call to deprecated function: legacy()",
+    );
+}
+
+#[test]
+fn test_warning_deprecated_import_alias_is_recognized() {
+    expect_warning(
+        "<?php use Deprecated as Old; #[Old] function legacy(): int { return 1; } echo legacy();",
+        "Call to deprecated function: legacy()",
+    );
+}
+
+#[test]
+fn test_warning_no_deprecation_for_qualified_lookalike() {
+    expect_no_warning(
+        "<?php #[Foo\\Deprecated] function legacy(): int { return 1; } echo legacy();",
+        "deprecated function",
+    );
+}
+
+#[test]
+fn test_warning_no_deprecation_for_namespaced_unqualified_lookalike() {
+    expect_no_warning(
+        "<?php namespace N; #[Deprecated] function legacy(): int { return 1; } echo legacy();",
+        "deprecated function",
+    );
+}
+
+#[test]
+fn test_warning_no_deprecation_when_not_called() {
+    expect_no_warning(
+        "<?php #[\\Deprecated] function legacy(): int { return 1; } echo 1;",
+        "deprecated function",
+    );
+}
+
+#[test]
+fn test_warning_no_deprecation_for_undeprecated_function() {
+    expect_no_warning(
+        "<?php function fresh(): int { return 1; } echo fresh();",
+        "deprecated",
+    );
+}

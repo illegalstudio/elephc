@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    ClassMethod, ClassProperty, Program, StmtKind, TraitUse,
+    ClassConst, ClassMethod, ClassProperty, Program, StmtKind, TraitUse,
 };
 use crate::span::Span;
 
@@ -31,6 +31,8 @@ pub struct FlattenedClass {
     pub is_readonly_class: bool,
     pub properties: Vec<ClassProperty>,
     pub methods: Vec<ClassMethod>,
+    pub attributes: Vec<crate::parser::ast::AttributeGroup>,
+    pub constants: Vec<ClassConst>,
 }
 
 #[derive(Clone)]
@@ -66,6 +68,7 @@ pub fn flatten_classes(program: &Program) -> (Vec<FlattenedClass>, Vec<CompileEr
                 trait_uses,
                 properties,
                 methods,
+                constants: _,
             } => {
                 let trait_key = php_symbol_key(name);
                 if class_like_keys.contains(&trait_key) || !trait_keys.insert(trait_key) {
@@ -116,6 +119,7 @@ pub fn flatten_classes(program: &Program) -> (Vec<FlattenedClass>, Vec<CompileEr
             trait_uses,
             properties,
             methods,
+            constants,
         } = &stmt.kind
         {
             if let Err(error) = validation::validate_direct_members(properties, methods, stmt.span, name) {
@@ -176,6 +180,8 @@ pub fn flatten_classes(program: &Program) -> (Vec<FlattenedClass>, Vec<CompileEr
                 is_readonly_class: *is_readonly_class,
                 properties: merged_props,
                 methods: merged_methods,
+                attributes: stmt.attributes.clone(),
+                constants: constants.clone(),
             });
         }
     }

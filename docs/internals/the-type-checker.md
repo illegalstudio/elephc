@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-**Source:** `src/types/` — `mod.rs`, `model.rs`, `traits.rs`, `checker/mod.rs`, `checker/driver/`, `checker/builtin_types.rs`, `checker/builtins/`, `checker/functions.rs`, `checker/functions/`, `checker/inference/`, `checker/stmt_check.rs`, `checker/stmt_check/`, `checker/type_compat.rs`, `checker/type_compat/`, `checker/schema/`, `warnings/`
+**Source:** `src/types/` — `mod.rs`, `model.rs`, `traits.rs`, `checker/mod.rs`, `checker/driver/`, `checker/builtin_types/`, `checker/builtin_iterators.rs`, `checker/builtins/`, `checker/functions.rs`, `checker/functions/`, `checker/inference/`, `checker/stmt_check.rs`, `checker/stmt_check/`, `checker/type_compat.rs`, `checker/type_compat/`, `checker/schema/`, `checker/yield_validation/`, `warnings/`
 
 PHP is dynamically typed — variables can change type at runtime. But elephc compiles to native code where every value must have a known size and location. The type checker bridges this gap by **inferring types at compile time**.
 
@@ -21,7 +21,7 @@ If the code generator doesn't know whether `$x` is an integer or a string, it do
 
 ## The type system
 
-**File:** `src/types/mod.rs`
+**File:** `src/types/model.rs`
 
 elephc has a small type system:
 
@@ -34,7 +34,7 @@ pub enum PhpType {
     Void,                          // null
     Never,                         // marks a function/method that never returns (always throws / exits / loops)
     Iterable,                      // PHP `iterable` pseudo-type (array | Traversable), type-erased
-    Mixed,                         // runtime-boxed heterogeneous assoc-array value
+    Mixed,                         // runtime-boxed heterogeneous array / user mixed value
     Array(Box<PhpType>),           // e.g., Array(Int) = int[]
     AssocArray {                    // e.g., AssocArray { key: Str, value: Int }
         key: Box<PhpType>,
@@ -50,7 +50,7 @@ pub enum PhpType {
 }
 ```
 
-This is still much smaller than full PHP's runtime type system, but it now includes user-written union and nullable annotations where the language subset supports them. `Union(...)` values are lowered to the same boxed runtime representation used by `Mixed`. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`).
+This is still much smaller than full PHP's runtime type system, but it now includes user-written union and nullable annotations where the language subset supports them. `Union(...)` values are lowered to the same boxed runtime representation used by `Mixed`. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`), and heterogeneous payloads in either representation widen to boxed `Mixed` elements.
 
 `Never` is a return-position-only marker: a function annotated `: never` must always diverge (throw, call `exit()`/`die()`, or loop forever). The type checker rejects any reachable `return value;` from such a function, and the runtime size is zero because the value is never materialized. `: never` is rejected as a parameter or local-variable type — same restriction as `: void`.
 
@@ -90,6 +90,7 @@ The first assignment determines a variable's type. After that, reassignment is o
 | `Int` | `Str` | **No** — compile error |
 | `Void` | anything | Yes (null can become any type) |
 | anything | `Void` | Yes (any variable can become null) |
+| `Array(T)` | `Array(U)` | Yes, if `T` and `U` merge; heterogeneous indexed values widen to `Array(Mixed)` |
 | `AssocArray(_, T)` | `AssocArray(_, U)` | Yes, if `T` and `U` merge; heterogeneous values widen to `Mixed` |
 | `Pointer(None)` | `Pointer(Some("T"))` | Yes (merged to the more specific pointer tag) |
 | `Pointer(Some("A"))` | `Pointer(Some("B"))` | Yes, but merged to opaque `Pointer(None)` if tags differ |
@@ -137,6 +138,7 @@ The type checker computes the type of every expression:
 | `true` / `false` | `Bool` |
 | `null` | `Void` |
 | `[1, 2, 3]` | `Array(Int)` |
+| `[1, "two", true]` | `Array(Mixed)` |
 | `["a" => 1]` | `AssocArray { key: Str, value: Int }` |
 | `["a" => 1, "b" => "two"]` | `AssocArray { key: Str, value: Mixed }` |
 
@@ -367,11 +369,13 @@ When checking method calls, it verifies the method exists, enforces method visib
 
 When checking `new ClassName(...)`, it also rejects interfaces and abstract classes before codegen.
 
-### Built-in Fiber classes
+### Built-in coroutine and iterator classes
 
 `Throwable`, `Exception`, `Fiber`, and `FiberError` are registered as built-in classes before user code is checked. `Fiber` method bodies are placeholders in `ClassInfo`: their signatures make calls type-checkable, while codegen intercepts construction, instance methods, `Fiber::suspend()`, and `Fiber::getCurrent()` and routes them to `__rt_fiber_*` helpers.
 
 `src/types/fibers.rs` owns the additional static checks for Fiber callbacks. `new Fiber(...)` must receive a closure, a known closure/callable variable, or a known first-class callable; arbitrary runtime callables are rejected. The visible callback parameter count is capped at seven start arguments, by-reference callback start parameters are rejected, and closure captures must fit in the reserved Fiber slot files: seven integer slots and seven float slots, with strings using two integer slots. Values moving through `start()`, `resume()`, `suspend()`, and `getReturn()` are typed as boxed `mixed`.
+
+`Iterator`, `IteratorAggregate`, and the final built-in `Generator` class are injected by `src/types/checker/builtin_iterators.rs`. `Generator` implements `Iterator` and carries placeholder method bodies for `current`, `key`, `next`, `valid`, `rewind`, `send`, `throw`, and `getReturn`; codegen intercepts those methods and routes them to `__rt_gen_*` helpers. `yield_validation` marks any function or closure body containing `yield` as returning `Object("Generator")`, while still allowing declared return types compatible with `Generator`, `Iterator`, `Traversable`, or `iterable`.
 
 ## Output: CheckResult
 

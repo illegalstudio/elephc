@@ -27,6 +27,10 @@ pub(super) fn local_slot_ownership_after_store(ty: &PhpType) -> HeapOwnership {
     HeapOwnership::local_owner_for_type(ty)
 }
 
+pub(super) fn indexed_array_runtime_value_tag(ty: &PhpType) -> i64 {
+    crate::codegen::runtime_value_tag(ty) as i64
+}
+
 pub(super) fn stamp_indexed_array_value_type(
     emitter: &mut Emitter,
     array_reg: &str,

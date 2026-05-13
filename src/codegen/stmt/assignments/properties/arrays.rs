@@ -37,7 +37,7 @@ pub(crate) fn emit_property_array_push_stmt(
     let obj_ty = emit_expr(object, emitter, ctx, data);
     let target = match target::resolve_property_assign_target(&obj_ty, property, None, emitter, ctx) {
         target::PropertyAssignResolution::Resolved(target) => target,
-        target::PropertyAssignResolution::UseMagicSet(_) | target::PropertyAssignResolution::Abort => {
+        target::PropertyAssignResolution::UseMagicSet(_) | target::PropertyAssignResolution::UseDynamicProperty { .. } | target::PropertyAssignResolution::Abort => {
             emitter.comment("WARNING: property array push requires a concrete array property");
             return;
         }

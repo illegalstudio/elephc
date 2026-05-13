@@ -8,12 +8,13 @@
 //! Key details:
 //! - Property writes must respect declared types, visibility checks, and runtime object layout.
 
-use super::{magic_set, references, storage, target};
+use super::{dynamic_props, magic_set, references, storage, target};
 use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::{coerce_result_to_type, emit_expr, objects};
+use crate::codegen::platform::Arch;
 use crate::codegen::stmt::helpers;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
@@ -51,6 +52,24 @@ pub(crate) fn emit_property_assign_stmt(
         return;
     }
 
+    if is_stdclass_receiver(object, ctx) {
+        emit_dynamic_property_assign_stmt(
+            object, property, value, emitter, ctx, data, "__rt_stdclass_set",
+        );
+        return;
+    }
+    if is_mixed_receiver(object, ctx) {
+        emit_dynamic_property_assign_stmt(
+            object,
+            property,
+            value,
+            emitter,
+            ctx,
+            data,
+            "__rt_mixed_property_set",
+        );
+        return;
+    }
     let magic_set_class = magic_set::resolve_magic_set_target(object, property, ctx);
     let declared_target_ty = declared_property_type(object, property, ctx);
     if let Some(class_name) = nullable_object_class(object, ctx) {
@@ -101,6 +120,20 @@ pub(crate) fn emit_property_assign_stmt(
             magic_set::emit_magic_set_call(&class_name, property, &val_ty, emitter, ctx, data);
             return;
         }
+        target::PropertyAssignResolution::UseDynamicProperty {
+            class_name: _,
+            dyn_slot_offset,
+        } => {
+            dynamic_props::emit_dynamic_property_set(
+                property,
+                &val_ty,
+                dyn_slot_offset,
+                emitter,
+                ctx,
+                data,
+            );
+            return;
+        }
         target::PropertyAssignResolution::Abort => {
             abi::emit_release_temporary_stack(emitter, pushed_value_temp_bytes(&val_ty)); // discard the saved RHS value when the property target cannot be resolved
             return;
@@ -122,6 +155,59 @@ pub(crate) fn emit_property_assign_stmt(
     }
 
     storage::store_property_value(emitter, object_reg, &val_ty, target.offset);
+}
+
+fn is_stdclass_receiver(object: &Expr, ctx: &Context) -> bool {
+    let obj_ty = crate::codegen::functions::infer_contextual_type(object, ctx);
+    crate::codegen::functions::singular_object_class(&obj_ty)
+        .is_some_and(crate::types::checker::builtin_stdclass::is_stdclass)
+}
+
+fn is_mixed_receiver(object: &Expr, ctx: &Context) -> bool {
+    let obj_ty = crate::codegen::functions::infer_contextual_type(object, ctx);
+    matches!(obj_ty, PhpType::Mixed)
+}
+
+/// Lower `$obj->name = $value` for receivers whose property storage lives in
+/// a runtime hash (stdClass directly, or a Mixed receiver that resolves to a
+/// stdClass at runtime). Boxes the RHS into a Mixed cell with the existing
+/// helper, evaluates the receiver, and dispatches to the named runtime
+/// helper which performs the write.
+fn emit_dynamic_property_assign_stmt(
+    object: &Expr,
+    property: &str,
+    value: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+    runtime_symbol: &str,
+) {
+    emitter.comment(&format!("{} = ... via {}", property, runtime_symbol));
+
+    let val_ty = emit_expr(value, emitter, ctx, data);
+    crate::codegen::emit_box_current_value_as_mixed(emitter, &val_ty);          // ensure the RHS is a Mixed* before it crosses object evaluation
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // park the boxed Mixed pointer while we evaluate the receiver
+
+    let _obj_ty = emit_expr(object, emitter, ctx, data);                        // receiver pointer lands in int_result_reg
+
+    let (label, len) = data.add_string(property.as_bytes());
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            // x0 already holds the receiver after object eval.
+            abi::emit_symbol_address(emitter, "x1", &label);
+            abi::emit_load_int_immediate(emitter, "x2", len as i64);
+            abi::emit_pop_reg(emitter, "x3");                                   // value Mixed* into x3 for the dynamic setter ABI
+            emitter.instruction(&format!("bl {}", runtime_symbol));             // store the boxed Mixed pointer in the dynamic-property hash
+        }
+        Arch::X86_64 => {
+            // Move the receiver from rax (int_result_reg) into rdi for SysV.
+            emitter.instruction("mov rdi, rax");                                // shift the receiver into the SysV first-arg register
+            abi::emit_symbol_address(emitter, "rsi", &label);
+            abi::emit_load_int_immediate(emitter, "rdx", len as i64);
+            abi::emit_pop_reg(emitter, "rcx");                                  // value Mixed* into rcx for the dynamic setter ABI
+            emitter.instruction(&format!("call {}", runtime_symbol));           // store the boxed Mixed pointer in the dynamic-property hash
+        }
+    }
 }
 
 fn nullable_object_class(object: &Expr, ctx: &Context) -> Option<String> {
@@ -188,6 +274,21 @@ fn emit_nullable_property_assign_stmt(
         target::PropertyAssignResolution::UseMagicSet(class_name) => {
             magic_set::emit_magic_set_call(&class_name, property, &val_ty, emitter, ctx, data);
             abi::emit_release_temporary_stack(emitter, 16);                     // discard the saved nullable receiver after __set consumes the RHS
+            return;
+        }
+        target::PropertyAssignResolution::UseDynamicProperty {
+            class_name: _,
+            dyn_slot_offset,
+        } => {
+            dynamic_props::emit_dynamic_property_set(
+                property,
+                &val_ty,
+                dyn_slot_offset,
+                emitter,
+                ctx,
+                data,
+            );
+            abi::emit_release_temporary_stack(emitter, 16);                     // discard the saved nullable receiver after dynamic-property storage consumes the RHS
             return;
         }
         target::PropertyAssignResolution::Abort => {

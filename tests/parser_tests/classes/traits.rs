@@ -20,6 +20,7 @@ fn test_parse_trait_decl_and_use_adaptations() {
             trait_uses,
             properties,
             methods,
+            ..
         } => {
             assert_eq!(name, "A");
             assert!(trait_uses.is_empty());

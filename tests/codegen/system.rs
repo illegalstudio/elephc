@@ -289,7 +289,7 @@ echo json_encode([
     );
     assert_eq!(
         out,
-        r#"{"floats":[1.5,2.25],"bools":[true,false],"objects":[null]}"#
+        r#"{"floats":[1.5,2.25],"bools":[true,false],"objects":[{}]}"#
     );
 }
 
@@ -337,26 +337,36 @@ fn test_json_decode_trimmed_string() {
 
 #[test]
 fn test_json_decode_true_literal() {
+    // PHP-faithful: json_decode("true") returns Mixed(bool=true), and
+    // `echo true` prints "1" (PHP's bool→string coercion rule).
     let out = compile_and_run(r#"<?php echo json_decode(" true ");"#);
-    assert_eq!(out, "true");
+    assert_eq!(out, "1");
 }
 
 #[test]
 fn test_json_decode_null_literal() {
+    // PHP-faithful: json_decode("null") returns Mixed(null), and `echo null`
+    // prints nothing (the empty string).
     let out = compile_and_run(r#"<?php echo json_decode("\nnull\t");"#);
-    assert_eq!(out, "null");
+    assert_eq!(out, "");
 }
 
 #[test]
-fn test_json_decode_array_passthrough() {
-    let out = compile_and_run(r#"<?php echo json_decode(" [1, 2, 3] ");"#);
-    assert_eq!(out, "[1, 2, 3]");
+fn test_json_decode_array_round_trip() {
+    // json_decode now returns a structural Mixed(array) for non-empty
+    // arrays; round-trip through json_encode produces the canonical
+    // compact form (whitespace dropped, scalars re-encoded).
+    let out = compile_and_run(r#"<?php echo json_encode(json_decode(" [1, 2, 3] "));"#);
+    assert_eq!(out, "[1,2,3]");
 }
 
 #[test]
-fn test_json_decode_assoc_passthrough() {
-    let out = compile_and_run(r#"<?php echo json_decode(" {\"a\": 1} ");"#);
-    assert_eq!(out, r#"{"a": 1}"#);
+fn test_json_decode_assoc_round_trip() {
+    // json_decode now returns a structural Mixed(assoc) for non-empty
+    // objects too; round-trip through json_encode produces the canonical
+    // compact form.
+    let out = compile_and_run(r#"<?php echo json_encode(json_decode(" {\"a\": 1} "));"#);
+    assert_eq!(out, r#"{"a":1}"#);
 }
 
 #[test]
@@ -471,4 +481,75 @@ echo count($parts) . "|" . $parts[0] . "|" . $parts[1];
 fn test_preg_replace_case_insensitive() {
     let out = compile_and_run(r#"<?php echo preg_replace("/WORLD/i", "PHP", "hello World");"#);
     assert_eq!(out, "hello PHP");
+}
+// is_callable() — compile-time decisions for string literals (catalog
+// lookup) and Callable-typed values (closures + first-class callables).
+
+#[test]
+fn test_is_callable_known_builtin_returns_true() {
+    let out = compile_and_run(r#"<?php echo is_callable("json_encode") ? "y" : "n";"#);
+    assert_eq!(out, "y");
+}
+
+#[test]
+fn test_is_callable_unknown_string_returns_false() {
+    let out = compile_and_run(r#"<?php echo is_callable("nope_xyz_no_such_fn") ? "y" : "n";"#);
+    assert_eq!(out, "n");
+}
+
+#[test]
+fn test_is_callable_case_insensitive_builtin() {
+    let out = compile_and_run(r#"<?php echo is_callable("Json_Encode") ? "y" : "n";"#);
+    assert_eq!(out, "y");
+}
+
+#[test]
+fn test_is_callable_uppercase_builtin() {
+    let out = compile_and_run(r#"<?php echo is_callable("JSON_DECODE") ? "y" : "n";"#);
+    assert_eq!(out, "y");
+}
+
+#[test]
+fn test_is_callable_user_function_returns_true() {
+    let out = compile_and_run(
+        r#"<?php
+            function my_user_fn() { return 1; }
+            echo is_callable("my_user_fn") ? "y" : "n";
+        "#,
+    );
+    assert_eq!(out, "y");
+}
+
+#[test]
+fn test_is_callable_closure_returns_true() {
+    let out = compile_and_run(
+        r#"<?php
+            $f = function() { return 42; };
+            echo is_callable($f) ? "y" : "n";
+        "#,
+    );
+    assert_eq!(out, "y");
+}
+
+#[test]
+fn test_is_callable_first_class_callable_returns_true() {
+    let out = compile_and_run(
+        r#"<?php
+            $f = json_encode(...);
+            echo is_callable($f) ? "y" : "n";
+        "#,
+    );
+    assert_eq!(out, "y");
+}
+
+#[test]
+fn test_is_callable_int_returns_false() {
+    let out = compile_and_run(r#"<?php echo is_callable(42) ? "y" : "n";"#);
+    assert_eq!(out, "n");
+}
+
+#[test]
+fn test_is_callable_bool_returns_false() {
+    let out = compile_and_run(r#"<?php echo is_callable(true) ? "y" : "n";"#);
+    assert_eq!(out, "n");
 }

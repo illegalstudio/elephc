@@ -136,6 +136,7 @@ fn build_static_method_codegen_sig(
             ref_params,
             declared_params,
             variadic: method.variadic.clone(),
+            deprecation: None,
         },
     )
 }
@@ -209,6 +210,7 @@ fn build_instance_method_codegen_sig(
             ref_params,
             declared_params,
             variadic: method.variadic.clone(),
+            deprecation: None,
         },
     )
 }

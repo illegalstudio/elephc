@@ -145,13 +145,6 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
                 .collect(),
         },
         ExprKind::ConstRef(name) => ExprKind::ConstRef(name),
-        ExprKind::EnumCase {
-            enum_name,
-            case_name,
-        } => ExprKind::EnumCase {
-            enum_name,
-            case_name,
-        },
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
             class_name,
             args: args

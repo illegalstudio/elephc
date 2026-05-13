@@ -138,13 +138,6 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             args: args.into_iter().map(prune_expr).collect(),
         },
         ExprKind::ConstRef(name) => ExprKind::ConstRef(name),
-        ExprKind::EnumCase {
-            enum_name,
-            case_name,
-        } => ExprKind::EnumCase {
-            enum_name,
-            case_name,
-        },
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
             class_name,
             args: args.into_iter().map(prune_expr).collect(),
@@ -202,10 +195,18 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             len: Box::new(prune_expr(*len)),
         },
         ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant { receiver },
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            ExprKind::ScopedConstantAccess { receiver, name }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
             args: args.into_iter().map(prune_expr).collect(),
         },
+        ExprKind::Yield { key, value } => ExprKind::Yield {
+            key: key.map(|k| Box::new(prune_expr(*k))),
+            value: value.map(|v| Box::new(prune_expr(*v))),
+        },
+        ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(prune_expr(*inner))),
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before optimizer passes")
         }

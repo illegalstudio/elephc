@@ -39,6 +39,7 @@ pub(super) fn propagate_property(property: ClassProperty) -> ClassProperty {
             .default
             .map(|expr| propagate_expr(expr, &HashMap::new())),
         span: property.span,
+        attributes: property.attributes,
     }
 }
 
@@ -57,5 +58,6 @@ pub(super) fn propagate_enum_case(case: EnumCaseDecl) -> EnumCaseDecl {
             .value
             .map(|expr| propagate_expr(expr, &HashMap::new())),
         span: case.span,
+        attributes: case.attributes,
     }
 }

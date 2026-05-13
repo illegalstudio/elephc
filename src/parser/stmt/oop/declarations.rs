@@ -64,7 +64,8 @@ pub(in crate::parser::stmt) fn parse_class_decl(
 
     expect_token(tokens, pos, &Token::LBrace, "Expected '{' after class name")?;
 
-    let (trait_uses, properties, methods) = parse_class_like_body(tokens, pos, "class")?;
+    let (trait_uses, properties, methods, constants) =
+        parse_class_like_body(tokens, pos, "class")?;
 
     expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of class")?;
 
@@ -79,6 +80,7 @@ pub(in crate::parser::stmt) fn parse_class_decl(
             trait_uses,
             properties,
             methods,
+            constants,
         },
         span,
     ))
@@ -110,6 +112,11 @@ pub(in crate::parser::stmt) fn parse_enum_decl(
     expect_token(tokens, pos, &Token::LBrace, "Expected '{' after enum name")?;
     let mut cases = Vec::new();
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+        // Enum cases can carry attributes (`#[Deprecated]`).
+        let case_attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
+        if *pos >= tokens.len() || matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+            break;
+        }
         let case_span = tokens[*pos].1;
         expect_token(tokens, pos, &Token::Case, "Expected 'case' in enum body")?;
         let case_name = match tokens.get(*pos).map(|(t, _)| t) {
@@ -136,6 +143,7 @@ pub(in crate::parser::stmt) fn parse_enum_decl(
             name: case_name,
             value,
             span: case_span,
+            attributes: case_attributes,
         });
     }
 

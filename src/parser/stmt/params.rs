@@ -229,6 +229,8 @@ pub(super) fn parse_params(
                 "Expected ',' between parameters",
             )?;
         }
+        // PHP 8.0 parameter attributes (`function f(#[Sensitive] $s)`).
+        crate::parser::consume_attribute_lists(tokens, pos)?;
         if variadic.is_some() {
             return Err(CompileError::new(
                 span,

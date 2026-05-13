@@ -25,3 +25,7 @@ mod callables;
 mod union_types;
 #[path = "oop/misc.rs"]
 mod misc;
+#[path = "oop/attributes.rs"]
+mod attributes;
+#[path = "oop/constants.rs"]
+mod constants;

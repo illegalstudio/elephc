@@ -262,6 +262,7 @@ mod tests {
             ref_params: vec![false; 3],
             declared_params: vec![true; 3],
             variadic: None,
+            deprecation: None,
         }
     }
 

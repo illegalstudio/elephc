@@ -353,6 +353,7 @@ pub(super) fn resolve_stmts(
                 trait_uses,
                 properties,
                 methods,
+            constants,
             } => {
                 let methods = resolve_methods(
                     methods,
@@ -362,7 +363,7 @@ pub(super) fn resolve_stmts(
                     state,
                     function_variants,
                 )?;
-                result.push(Stmt::new(
+                result.push(Stmt::with_attributes(
                     StmtKind::ClassDecl {
                         name: name.clone(),
                         extends: extends.clone(),
@@ -373,33 +374,14 @@ pub(super) fn resolve_stmts(
                         trait_uses: trait_uses.clone(),
                         properties: properties.clone(),
                         methods,
+                        constants: constants.clone(),
                     },
                     stmt.span,
+                    stmt.attributes.clone(),
                 ));
             }
-            StmtKind::InterfaceDecl { name, extends, methods } => {
-                let methods = resolve_methods(
-                    methods,
-                    base_dir,
-                    declared_once,
-                    include_chain,
-                    state,
-                    function_variants,
-                )?;
-                result.push(Stmt::new(
-                    StmtKind::InterfaceDecl {
-                        name: name.clone(),
-                        extends: extends.clone(),
-                        methods,
-                    },
-                    stmt.span,
-                ));
-            }
-            StmtKind::TraitDecl {
-                name,
-                trait_uses,
-                properties,
-                methods,
+            StmtKind::InterfaceDecl { name, extends, methods,
+            constants,
             } => {
                 let methods = resolve_methods(
                     methods,
@@ -409,14 +391,42 @@ pub(super) fn resolve_stmts(
                     state,
                     function_variants,
                 )?;
-                result.push(Stmt::new(
+                result.push(Stmt::with_attributes(
+                    StmtKind::InterfaceDecl {
+                        name: name.clone(),
+                        extends: extends.clone(),
+                        methods,
+                        constants: constants.clone(),
+                    },
+                    stmt.span,
+                    stmt.attributes.clone(),
+                ));
+            }
+            StmtKind::TraitDecl {
+                name,
+                trait_uses,
+                properties,
+                methods,
+            constants,
+            } => {
+                let methods = resolve_methods(
+                    methods,
+                    base_dir,
+                    declared_once,
+                    include_chain,
+                    state,
+                    function_variants,
+                )?;
+                result.push(Stmt::with_attributes(
                     StmtKind::TraitDecl {
                         name: name.clone(),
                         trait_uses: trait_uses.clone(),
                         properties: properties.clone(),
                         methods,
+                        constants: constants.clone(),
                     },
                     stmt.span,
+                    stmt.attributes.clone(),
                 ));
             }
             _ => {

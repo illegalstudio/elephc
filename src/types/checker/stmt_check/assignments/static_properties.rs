@@ -78,7 +78,7 @@ pub(super) fn check_static_property_array_push(
             } else {
                 let merged_ty = checker
                     .merge_array_element_type(&elem_ty, &val_ty)
-                    .unwrap_or(val_ty.clone());
+                    .unwrap_or(PhpType::Mixed);
                 PhpType::Array(Box::new(merged_ty))
             }
         }
@@ -141,7 +141,7 @@ pub(super) fn check_static_property_array_assign(
             } else {
                 let merged_ty = checker
                     .merge_array_element_type(&elem_ty, &val_ty)
-                    .unwrap_or(val_ty.clone());
+                    .unwrap_or(PhpType::Mixed);
                 PhpType::Array(Box::new(merged_ty))
             }
         }

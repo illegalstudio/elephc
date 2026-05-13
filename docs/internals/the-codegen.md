@@ -193,7 +193,7 @@ Floats are stored as their raw 64-bit IEEE 754 bit patterns (`.quad` directive).
 
 **Files:** `src/codegen/expr.rs`, `src/codegen/expr/`
 
-`emit_expr()` takes an expression node and emits code that leaves the result in the standard registers. The top-level `expr.rs` file now mainly dispatches into focused helpers under `expr/` such as `scalars.rs`, `variables.rs`, `binops.rs`, `arrays.rs`, `compare.rs`, `calls/`, and `objects/`.
+`emit_expr()` takes an expression node and emits code that leaves the result in the standard registers. The top-level `expr.rs` file now mainly dispatches into focused helpers under `expr/` such as `scalars.rs`, `variables.rs`, `binops.rs`, `arrays.rs`, `compare/`, `calls/`, and `objects/`.
 
 | Type | Result location |
 |---|---|
@@ -345,7 +345,7 @@ For floats, `fcmp` replaces `cmp`, but the same `cset`/`csinv` pattern applies.
 
 ### Array union
 
-When both operands of `+` are arrays, codegen routes the expression to PHP array-union lowering instead of numeric addition. Indexed arrays call `__rt_array_union`, which clones the left operand and appends only the right-side numeric suffix whose keys are missing from the left. Associative arrays call `__rt_hash_union`, which clones the left hash, walks the right hash in insertion order, and inserts only keys that are absent from the clone. Mixed indexed/associative operands are rejected by the checker until that compatibility case is modeled.
+When both operands of `+` are arrays, codegen routes the expression to PHP array-union lowering instead of numeric addition. Indexed arrays call `__rt_array_union`, which clones the left operand and appends only the right-side numeric suffix whose keys are missing from the left. Associative arrays call `__rt_hash_union`, which clones the left hash, walks the right hash in insertion order, and inserts only keys that are absent from the clone. Mixed indexed/associative operands return a hash result: `__rt_array_hash_union` maps left indexed positions into integer hash keys before merging the right hash, while `__rt_hash_array_union` clones the left hash and probes right indexed positions as integer keys.
 
 ### Null coalescing operator
 
@@ -496,9 +496,22 @@ For captured closures passed through `array_map` / `array_filter`, codegen build
 
 First-class callable wrappers reuse this hidden argument path when the callable target carries context. `$obj->method(...)` records the receiver variable as a hidden capture and the wrapper calls that method with the visible arguments. `static::method(...)` records the forwarded called-class id, or `$this` in an instance method, so late static binding is preserved for direct callable calls and for callback paths that forward an environment, such as `array_map`, `array_filter`, `call_user_func`, and `call_user_func_array`.
 
+## Generator codegen
+
+**Files:** `src/codegen/functions/generator/`, `src/codegen/runtime/generators/`, `src/codegen/expr/objects/dispatch/vtable.rs`
+
+A function or closure body that contains `yield` does not emit as an ordinary function body. Codegen emits two symbols:
+
+1. `_fn_<name>` — a wrapper that allocates a heap `GeneratorFrame`, stamps it as the built-in `Generator` object, copies supported scalar parameters/captures into frame slots, zeroes local slots, and returns the frame pointer.
+2. `_fn_<name>__resume` — a state-machine entry point. State `0` enters the body; each yield gets a numbered resume label. At a yield, the resume function boxes the key/value into Mixed cells, replaces the frame's last key/value slots, stores the next state index, and returns to the caller.
+
+Generator closures reuse the same path as ordinary deferred closures, but their hidden `use (...)` captures are copied into the generator frame alongside visible parameters. `yield from` stores the active inner generator in the frame's `delegated_iter` slot and resumes it through the same `__rt_gen_*` runtime helpers used by user-visible `Generator` methods.
+
+The generated `Generator` object has a custom payload layout rather than ordinary PHP properties. Method dispatch for `current`, `key`, `valid`, `next`, `rewind`, `send`, `throw`, and `getReturn` is intercepted before vtable lookup and routed directly to `__rt_gen_*`. Both AArch64 and Linux `x86_64` follow the same high-level state-machine model; the wrapper, resume dispatcher, and runtime helper emitters select target-specific instruction sequences internally.
+
 ## Fiber codegen
 
-**Files:** `src/codegen/expr/objects/allocation.rs`, `src/codegen/expr/objects/dispatch.rs`, `src/codegen/expr/objects/fiber_wrapper.rs`, `src/codegen/functions/fiber_wrapper.rs`, `src/codegen/runtime/fibers/`
+**Files:** `src/codegen/expr/objects/allocation.rs`, `src/codegen/expr/objects/dispatch/`, `src/codegen/expr/objects/fiber_wrapper.rs`, `src/codegen/functions/fiber_wrapper.rs`, `src/codegen/runtime/fibers/`
 
 `Fiber` is a built-in class, but codegen does not lower it through the ordinary object constructor and method-dispatch path. `new Fiber($callable)` is intercepted and delegated to `__rt_fiber_construct`, which allocates the larger runtime-managed Fiber object, creates its guarded native stack, stores the original callable pointer, and records the generated wrapper label that adapts Fiber start values to the callback ABI.
 
@@ -760,7 +773,7 @@ foreach ($arr as $v) { body }
 For indexed arrays:
 
 1. Save array pointer, length, and index counter on the stack (3 × 16-byte slots)
-2. Loop: load element at current index, store to `$v`, and classify heap-backed loop variables as borrowed aliases of the iterated container
+2. Loop: load element at current index, unbox through the runtime `value_type` tag when the static element type is `Mixed`, store to `$v`, and classify heap-backed loop variables as borrowed aliases of the iterated container
 3. Branch back to condition check
 4. Cleanup: deallocate the 48 bytes
 

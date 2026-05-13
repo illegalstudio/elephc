@@ -76,6 +76,14 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor) {
             continue;
         }
 
+        if cursor.remaining().starts_with('#') && !cursor.remaining().starts_with("#[") {
+            // PHP line comment introduced by `#` (but `#[` opens an attribute group).
+            while let Some(ch) = cursor.advance() {
+                if ch == '\n' { break; }
+            }
+            continue;
+        }
+
         if cursor.remaining().starts_with("/*") {
             cursor.advance();
             cursor.advance();
@@ -257,6 +265,16 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         // '"' is handled in the main loop (interpolation support)
         '\'' => literals::scan_single_string(cursor),
         '@' => { cursor.advance(); Ok(Token::At) }
+        '#' => {
+            if cursor.remaining().starts_with("#[") {
+                cursor.advance(); // consume '#'
+                cursor.advance(); // consume '['
+                Ok(Token::AttrOpen)
+            } else {
+                // Bare '#' that wasn't consumed by skip_whitespace_and_comments
+                Err(CompileError::new(cursor.span(), "Unexpected '#'"))
+            }
+        }
         '$' => literals::scan_variable(cursor),
         '0'..='9' => literals::scan_number(cursor),
         'a'..='z' | 'A'..='Z' | '_' => literals::scan_keyword(cursor),
