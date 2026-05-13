@@ -59,6 +59,10 @@ pub(super) fn resolve_expr(
             value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
             default: Box::new(resolve_expr(default, current_namespace, imports, symbols)),
         },
+        ExprKind::Pipe { value, callable } => ExprKind::Pipe {
+            value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
+            callable: Box::new(resolve_expr(callable, current_namespace, imports, symbols)),
+        },
         ExprKind::FunctionCall { name, args } => {
             let function_name = resolve_function_name(name, current_namespace, imports, symbols);
             ExprKind::FunctionCall {

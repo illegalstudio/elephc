@@ -24,6 +24,18 @@ echo $r;
 }
 
 #[test]
+fn test_pipe_with_namespaced_first_class_callable_user_function() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+function double(int $n): int { return $n * 2; }
+echo 21 |> double(...);
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+#[test]
 fn test_pipe_chained_user_functions() {
     let out = compile_and_run(
         r#"<?php
