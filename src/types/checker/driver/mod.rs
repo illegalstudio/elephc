@@ -21,7 +21,9 @@ use super::builtin_types::{
     patch_builtin_fiber_signatures, patch_builtin_reflection_signatures,
     patch_magic_method_signatures, InterfaceDeclInfo,
 };
-use super::builtin_interfaces::inject_builtin_interfaces;
+use super::builtin_interfaces::{
+    apply_implicit_stringable_interfaces, inject_builtin_interfaces,
+};
 use super::builtin_iterators::{inject_builtin_iterators, patch_builtin_generator_signatures};
 use super::builtin_json::{inject_builtin_json_interfaces, patch_builtin_json_signatures};
 use super::builtin_spl_exceptions::inject_builtin_spl_exceptions;
@@ -197,6 +199,7 @@ pub(super) fn check_types_impl(
 
     checker.resolve_unchecked_functions(&mut errors);
     checker.type_check_methods_until_stable(&flattened_classes, &global_env, &mut errors)?;
+    apply_implicit_stringable_interfaces(&mut checker.classes);
 
     let (final_global_env, final_top_level_errors) = checker.check_top_level_program(program);
     for ((stmt, initial_errors), final_errors) in program

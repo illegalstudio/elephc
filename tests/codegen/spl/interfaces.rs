@@ -196,6 +196,22 @@ var_dump($s instanceof Stringable);
 }
 
 #[test]
+fn test_tostring_method_implicitly_implements_stringable() {
+    let out = compile_and_run(
+        r#"<?php
+class Stamp {
+    public function __construct(private string $label) {}
+    public function __toString(): string { return "[" . $this->label . "]"; }
+}
+$s = new Stamp("hi");
+echo (string)$s;
+var_dump($s instanceof Stringable);
+"#,
+    );
+    assert_eq!(out, "[hi]bool(true)\n");
+}
+
+#[test]
 fn test_json_serializable_interface_typechecks() {
     let out = compile_and_run(
         r#"<?php

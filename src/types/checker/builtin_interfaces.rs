@@ -14,7 +14,7 @@ use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::names::Name;
 use crate::parser::ast::{ClassMethod, Expr, TypeExpr, Visibility};
-use crate::types::traits::FlattenedClass;
+use crate::types::{traits::FlattenedClass, ClassInfo, PhpType};
 
 use super::builtin_types::InterfaceDeclInfo;
 
@@ -238,6 +238,30 @@ pub(crate) fn inject_builtin_interfaces(
     );
 
     Ok(())
+}
+
+pub(crate) fn apply_implicit_stringable_interfaces(
+    classes: &mut HashMap<String, ClassInfo>,
+) {
+    let tostring_key = php_symbol_key("__toString");
+    for class_info in classes.values_mut() {
+        let has_compatible_tostring = class_info
+            .methods
+            .get(&tostring_key)
+            .is_some_and(|sig| sig.return_type == PhpType::Str)
+            && class_info
+                .method_visibilities
+                .get(&tostring_key)
+                .is_some_and(|visibility| *visibility == Visibility::Public);
+        if has_compatible_tostring
+            && !class_info
+                .interfaces
+                .iter()
+                .any(|iface| php_symbol_key(iface) == php_symbol_key("Stringable"))
+        {
+            class_info.interfaces.push("Stringable".to_string());
+        }
+    }
 }
 
 fn marker_interface(name: &str) -> InterfaceDeclInfo {
