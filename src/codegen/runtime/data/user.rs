@@ -253,7 +253,7 @@ pub(crate) fn emit_runtime_data_user(
     );
     out.push_str("    .quad 0\n");
 
-    // -- attribute metadata (PHP 8 attributes, future ReflectionClass) --
+    // -- class-level PHP 8 attribute metadata table --
     // Per-class layout: count followed by (name_ptr, name_len) pairs.
     // Top-level pointer table indexes by class_id.
     out.push_str(".p2align 3\n");
@@ -655,6 +655,10 @@ mod tests {
             constants: HashMap::new(),
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
+            method_attribute_names: HashMap::new(),
+            method_attribute_args: HashMap::new(),
+            property_attribute_names: HashMap::new(),
+            property_attribute_args: HashMap::new(),
             properties: Vec::new(),
             property_offsets: HashMap::new(),
             property_declaring_classes: HashMap::new(),

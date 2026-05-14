@@ -18,7 +18,7 @@ use super::{FunctionSig, PhpType};
 /// Compile-time attribute argument literal. Captures the subset of PHP
 /// attribute argument expressions that reflection helpers can currently
 /// materialize: strings, ints, bools, null, and negative int literals.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AttrArgValue {
     Null,
     Int(i64),
@@ -56,14 +56,25 @@ pub struct ClassInfo {
     /// Names of PHP 8 attributes attached to this class declaration, in
     /// source order. Name resolution stores canonical class-like text without
     /// a synthetic leading backslash, matching `ReflectionAttribute::getName()`.
-    /// Future ReflectionClass support will read this list from per-class
-    /// metadata emitted at codegen time.
+    /// Reflection helpers read this list during codegen when materializing
+    /// attribute-name arrays and `ReflectionAttribute` objects.
     pub attribute_names: Vec<String>,
     /// Literal arguments captured for each attribute, in source order and
     /// aligned with `attribute_names`. `None` means the source uses legal PHP
     /// attribute arguments that this reflection metadata model cannot
     /// materialize yet; callers that need arguments report that at query time.
     pub attribute_args: Vec<Option<Vec<AttrArgValue>>>,
+    /// Attribute names attached to methods visible on this class, keyed by
+    /// PHP's case-insensitive method key. Inherited methods keep the metadata
+    /// from the declaring class until overridden.
+    pub method_attribute_names: HashMap<String, Vec<String>>,
+    /// Literal method-attribute args aligned with `method_attribute_names`.
+    pub method_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgValue>>>>,
+    /// Attribute names attached to properties visible on this class. Property
+    /// names are case-sensitive, so the source property name is the key.
+    pub property_attribute_names: HashMap<String, Vec<String>>,
+    /// Literal property-attribute args aligned with `property_attribute_names`.
+    pub property_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgValue>>>>,
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,

@@ -792,3 +792,186 @@ echo $args[0];
     );
     assert_eq!(out, "1/first");
 }
+
+#[test]
+fn test_reflection_class_get_attributes_returns_reflection_attribute_array() {
+    let out = compile_and_run(
+        r#"<?php
+#[Author("Ada", 1815), Version("1.0", true)]
+class Greeter {}
+$ref = new ReflectionClass('Greeter');
+$attrs = $ref->getAttributes();
+echo count($attrs) . "\n";
+foreach ($attrs as $attr) {
+    echo $attr->getName() . ":";
+    foreach ($attr->getArguments() as $arg) {
+        echo "[" . $arg . "]";
+    }
+    echo "\n";
+}
+"#,
+    );
+    assert_eq!(out, "2\nAuthor:[Ada][1815]\nVersion:[1.0][1]\n");
+}
+
+#[test]
+fn test_reflection_get_attributes_survives_temporary_reflector() {
+    let out = compile_and_run(
+        r#"<?php
+#[Marker("owned")]
+class Greeter {}
+$attrs = (new ReflectionClass('Greeter'))->getAttributes();
+echo $attrs[0]->getName() . "/";
+echo $attrs[0]->getArguments()[0];
+"#,
+    );
+    assert_eq!(out, "Marker/owned");
+}
+
+#[test]
+fn test_reflection_method_get_attributes_returns_method_attributes() {
+    let out = compile_and_run(
+        r#"<?php
+class Controller {
+    #[Route("/home", "GET")]
+    public function index() {}
+}
+$ref = new ReflectionMethod('Controller', 'index');
+$attrs = $ref->getAttributes();
+echo count($attrs) . "/";
+echo $attrs[0]->getName() . "/";
+echo $attrs[0]->getArguments()[0] . "/";
+echo $attrs[0]->getArguments()[1];
+"#,
+    );
+    assert_eq!(out, "1/Route//home/GET");
+}
+
+#[test]
+fn test_reflection_method_constructor_supports_named_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class Controller {
+    #[Route("/home")]
+    public function index() {}
+}
+$ref = new ReflectionMethod(method_name: 'index', class_name: 'Controller');
+$attrs = $ref->getAttributes();
+echo count($attrs) . "/";
+echo $attrs[0]->getName() . "/";
+echo $attrs[0]->getArguments()[0];
+"#,
+    );
+    assert_eq!(out, "1/Route//home");
+}
+
+#[test]
+fn test_reflection_property_get_attributes_accepts_class_constant() {
+    let out = compile_and_run(
+        r#"<?php
+class User {
+    #[Column("id")]
+    public int $id = 0;
+}
+$ref = new ReflectionProperty(User::class, 'id');
+$attrs = $ref->getAttributes();
+echo count($attrs) . "/";
+echo $attrs[0]->getName() . "/";
+echo $attrs[0]->getArguments()[0];
+"#,
+    );
+    assert_eq!(out, "1/Column/id");
+}
+
+#[test]
+fn test_reflection_property_constructor_supports_static_assoc_spread() {
+    let out = compile_and_run(
+        r#"<?php
+class User {
+    #[Column("id")]
+    public int $id = 0;
+}
+$ref = new ReflectionProperty(...["property_name" => "id", "class_name" => "User"]);
+$attrs = $ref->getAttributes();
+echo count($attrs) . "/";
+echo $attrs[0]->getName() . "/";
+echo $attrs[0]->getArguments()[0];
+"#,
+    );
+    assert_eq!(out, "1/Column/id");
+}
+
+#[test]
+fn test_reflection_class_constant_lookup_is_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+#[Marker("ok")]
+class User {}
+$ref = new ReflectionClass(user::class);
+$attrs = $ref->getAttributes();
+echo count($attrs) . "/";
+echo $attrs[0]->getName() . "/";
+echo $attrs[0]->getArguments()[0];
+"#,
+    );
+    assert_eq!(out, "1/Marker/ok");
+}
+
+#[test]
+fn test_reflection_attribute_new_instance_runs_on_demand() {
+    let out = compile_and_run(
+        r#"<?php
+class Route {
+    public function __construct(string $path) {
+        echo "ctor:" . $path . "\n";
+    }
+}
+#[Route("/lazy")]
+class Controller {}
+$ref = new ReflectionClass('Controller');
+echo "before\n";
+$attrs = $ref->getAttributes();
+echo "middle\n";
+$instance = $attrs[0]->newInstance();
+echo ($instance instanceof Route) ? "instance\n" : "bad\n";
+"#,
+    );
+    assert_eq!(out, "before\nmiddle\nctor:/lazy\ninstance\n");
+}
+
+#[test]
+fn test_reflection_attribute_new_instance_expression_statement_is_preserved() {
+    let out = compile_and_run(
+        r#"<?php
+class Route {
+    public function __construct(string $path) {
+        echo "ctor:" . $path;
+    }
+}
+#[Route("/effect")]
+class Controller {}
+$attrs = (new ReflectionClass('Controller'))->getAttributes();
+$attrs[0]->newInstance();
+"#,
+    );
+    assert_eq!(out, "ctor:/effect");
+}
+
+#[test]
+fn test_reflection_attribute_new_instance_preserves_large_negative_int_args() {
+    let out = compile_and_run(
+        r#"<?php
+class Code {
+    public function __construct(int $value) {
+        echo $value;
+    }
+}
+#[Code(-65537)]
+class Controller {}
+$attrs = (new ReflectionClass('Controller'))->getAttributes();
+echo $attrs[0]->getArguments()[0] . "/";
+$attrs[0]->newInstance();
+"#,
+    );
+    assert_eq!(out, "-65537/-65537");
+}

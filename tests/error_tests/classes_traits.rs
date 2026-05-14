@@ -439,3 +439,51 @@ fn test_error_reflection_attribute_internal_properties_are_private() {
         "Cannot access private property: ReflectionAttribute::__name",
     );
 }
+
+#[test]
+fn test_error_reflection_class_redeclaration() {
+    expect_error(
+        "<?php class ReflectionClass {}",
+        "Cannot redeclare built-in reflection type: ReflectionClass",
+    );
+}
+
+#[test]
+fn test_error_reflection_class_undefined_class() {
+    expect_error(
+        "<?php $r = new ReflectionClass('Missing');",
+        "ReflectionClass::__construct(): undefined class 'Missing'",
+    );
+}
+
+#[test]
+fn test_error_reflection_class_dynamic_argument() {
+    expect_error(
+        "<?php $name = 'C'; class C {} $r = new ReflectionClass($name);",
+        "requires a string literal class name",
+    );
+}
+
+#[test]
+fn test_error_reflection_method_undefined_method() {
+    expect_error(
+        "<?php class C {} $r = new ReflectionMethod('C', 'missing');",
+        "undefined method 'C::missing'",
+    );
+}
+
+#[test]
+fn test_error_reflection_property_undefined_property() {
+    expect_error(
+        "<?php class C {} $r = new ReflectionProperty('C', 'missing');",
+        "undefined property 'C::$missing'",
+    );
+}
+
+#[test]
+fn test_error_reflection_method_unsupported_attribute_args() {
+    expect_error(
+        "<?php class C { #[A(1 + 2)] public function f() {} } $r = new ReflectionMethod('C', 'f');",
+        "method has attribute argument metadata that is not supported yet",
+    );
+}

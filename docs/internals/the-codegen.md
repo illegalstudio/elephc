@@ -880,6 +880,14 @@ When the codegen encounters a `NewObject` expression:
 
 The result is the object pointer in `x0`.
 
+### Attribute reflection objects
+
+`new ReflectionClass(...)`, `new ReflectionMethod(...)`, and `new ReflectionProperty(...)` are intercepted by `src/codegen/expr/objects/reflection.rs` instead of relying on ordinary user-defined constructor bodies. The type checker has already forced their class/member arguments to compile-time strings after normal call-argument planning, so codegen can look up the target `ClassInfo` directly and populate the private `__attrs` slot with a freshly built `array<ReflectionAttribute>`.
+
+`src/codegen/reflection.rs` owns the shared materialization path. It allocates each synthetic `ReflectionAttribute`, writes the resolved `__name`, builds the `array<mixed>` `__args` payload from supported literal attribute arguments, and stores a deterministic `__factory` id. `ReflectionAttribute::newInstance()` is then generated in `src/codegen/class_methods.rs` as a branch table over those factory ids; each branch constructs the real attribute class with the captured literal args, and the fallback returns `null` when no defined attribute class can be materialized.
+
+The `_class_attribute_*` runtime data tables still emit class-level attribute metadata from the same `ClassInfo` fields, but the supported Reflection owner constructors are compile-time materialized and do not perform runtime name lookups for classes, methods, or properties.
+
 ### Type checks (`$obj instanceof ClassName`)
 
 `ExprKind::InstanceOf` evaluates the left-hand side exactly once, materializes the target class or interface id from emitted metadata, and returns a boolean in `x0`. Direct object values call `__rt_exception_matches`, the same metadata matcher used by exception catch lowering, so inherited classes and implemented interfaces are handled through the same parent-id and class-interface tables.
