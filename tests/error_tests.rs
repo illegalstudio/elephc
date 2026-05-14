@@ -247,7 +247,7 @@ class Bad implements Iterator {
 fn test_error_generator_cannot_be_redeclared() {
     expect_error(
         "<?php class Generator { public function current(): mixed { return null; } }",
-        "Cannot redeclare built-in interface: Generator",
+        "Cannot redeclare built-in class: Generator",
     );
 }
 
