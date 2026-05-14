@@ -206,6 +206,7 @@ pub(super) fn emit_deferred_closures(
                     &ctx.function_variant_groups,
                     &ctx.constants,
                     &ctx.interfaces,
+                    &ctx.traits,
                     &ctx.classes,
                     &ctx.packed_classes,
                     &ctx.extern_functions,

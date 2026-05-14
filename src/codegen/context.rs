@@ -147,6 +147,8 @@ pub struct Context {
     pub classes: HashMap<String, ClassInfo>,
     /// Interface definitions for OOP support.
     pub interfaces: HashMap<String, InterfaceInfo>,
+    /// Trait declarations preserved for AOT introspection builtins.
+    pub traits: HashSet<String>,
     /// Enum definitions.
     pub enums: HashMap<String, EnumInfo>,
     /// Packed layout-only record definitions.
@@ -229,6 +231,7 @@ impl Context {
             variable_fcc_label: HashMap::new(),
             classes: HashMap::new(),
             interfaces: HashMap::new(),
+            traits: HashSet::new(),
             enums: HashMap::new(),
             packed_classes: HashMap::new(),
             current_class: None,

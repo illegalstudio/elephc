@@ -46,10 +46,7 @@ fn literal_lookup_result(name: &str, args: &[Expr], ctx: &Context) -> Option<i64
         "class_exists" => contains_folded(ctx.classes.keys(), cleaned),
         "interface_exists" => contains_folded(ctx.interfaces.keys(), cleaned),
         "enum_exists" => contains_folded(ctx.enums.keys(), cleaned),
-        // The compiler doesn't keep a separate trait registry on Context:
-        // traits are flattened away before codegen. Returning false is safer
-        // than claiming every queried trait exists.
-        "trait_exists" => false,
+        "trait_exists" => contains_folded(ctx.traits.iter(), cleaned),
         _ => return None,
     };
     Some(if present { 1 } else { 0 })

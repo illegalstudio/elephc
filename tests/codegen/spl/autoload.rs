@@ -897,6 +897,18 @@ echo enum_exists("status", false) ? "e" : "n";
     assert_eq!(out, "cie");
 }
 
+#[test]
+fn test_trait_exists_reports_declared_traits() {
+    let out = compile_and_run(
+        r#"<?php
+trait VisibleTrait {}
+echo trait_exists("VisibleTrait", false) ? "y" : "n";
+echo trait_exists("visibletrait", false) ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "yy");
+}
+
 // --- alternative register call shapes ---
 
 #[test]

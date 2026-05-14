@@ -25,10 +25,7 @@ pub fn emit(
     let mut names: Vec<String> = match name {
         "get_declared_classes" => ctx.classes.keys().cloned().collect(),
         "get_declared_interfaces" => ctx.interfaces.keys().cloned().collect(),
-        // The compiler flattens traits; their names don't survive in a
-        // queryable map. Return an empty array — same fallback as
-        // trait_exists.
-        "get_declared_traits" => Vec::new(),
+        "get_declared_traits" => ctx.traits.iter().cloned().collect(),
         _ => return None,
     };
     names.sort();

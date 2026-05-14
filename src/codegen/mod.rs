@@ -100,6 +100,7 @@ pub fn generate_user_asm(
 
     // Pre-scan for static variable declarations across all functions
     let all_static_vars = collect_static_vars(program, global_env);
+    let declared_traits = collect_trait_names(program);
 
     // Emit user-defined functions before _main (skip extern functions)
     let function_variant_groups = function_variants::collect_function_variant_groups(program);
@@ -126,6 +127,7 @@ pub fn generate_user_asm(
             &function_variant_group_names,
             &global_constants, &all_global_var_names, &all_static_vars,
             interfaces,
+            &declared_traits,
             Some(classes),
             packed_classes,
             extern_functions,
@@ -173,6 +175,7 @@ pub fn generate_user_asm(
             &function_variant_group_names,
             &global_constants,
             interfaces,
+            &declared_traits,
             classes,
             packed_classes,
             extern_functions,
@@ -196,6 +199,7 @@ pub fn generate_user_asm(
         functions,
         &function_variant_group_names,
         interfaces,
+        &declared_traits,
         classes,
         enums,
         packed_classes,
@@ -209,6 +213,22 @@ pub fn generate_user_asm(
         gc_stats,
         heap_debug,
     )
+}
+
+fn collect_trait_names(program: &Program) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::TraitDecl { name, .. } => {
+                names.insert(name.clone());
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                names.extend(collect_trait_names(body));
+            }
+            _ => {}
+        }
+    }
+    names
 }
 
 fn collect_x86_emitted_class_names(
