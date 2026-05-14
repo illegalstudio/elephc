@@ -1209,6 +1209,21 @@ echo is_subclass_of($dog, "animal") ? "s" : "n";
 }
 
 #[test]
+fn test_is_a_parent_chain_normalizes_namespaced_parent() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+class Animal {}
+class Dog extends \App\Animal {}
+$dog = new Dog();
+echo is_a($dog, "app\\animal") ? "a" : "n";
+echo is_subclass_of($dog, "\\APP\\ANIMAL") ? "s" : "n";
+"#,
+    );
+    assert_eq!(out, "as");
+}
+
+#[test]
 fn test_is_a_walks_implemented_interface() {
     let out = compile_and_run(
         r#"<?php

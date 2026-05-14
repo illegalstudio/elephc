@@ -20,7 +20,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
-use crate::types::PhpType;
+use crate::types::{ClassInfo, PhpType};
 
 pub fn emit(
     name: &str,
@@ -70,20 +70,20 @@ fn static_relation_holds(
 
     // Walk the parent chain.
     let mut current = obj_class.to_string();
-    while let Some(info) = ctx.classes.get(&current) {
+    while let Some(info) = lookup_class(ctx, &current) {
         if let Some(parent) = &info.parent {
             let parent_clean = parent.trim_start_matches('\\');
             if php_symbol_key(parent_clean) == target_key {
                 return true;
             }
-            current = parent.clone();
+            current = parent_clean.to_string();
         } else {
             break;
         }
     }
 
     // Walk implemented (and transitively-inherited) interfaces.
-    if let Some(info) = ctx.classes.get(obj_class) {
+    if let Some(info) = lookup_class(ctx, obj_class) {
         for iface in &info.interfaces {
             if php_symbol_key(iface.trim_start_matches('\\')) == target_key {
                 return true;
@@ -92,4 +92,16 @@ fn static_relation_holds(
     }
 
     false
+}
+
+fn lookup_class<'a>(ctx: &'a Context, name: &str) -> Option<&'a ClassInfo> {
+    let clean = name.trim_start_matches('\\');
+    if let Some(info) = ctx.classes.get(clean) {
+        return Some(info);
+    }
+    let key = php_symbol_key(clean);
+    ctx.classes
+        .iter()
+        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        .map(|(_, info)| info)
 }
