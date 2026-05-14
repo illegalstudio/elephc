@@ -200,9 +200,9 @@ If `$autoload` is `false`, no compile-time load is forced; the call returns whet
 
 | Function | Behaviour |
 |---|---|
-| `get_declared_classes()` | Returns the indexed array of every compiled class name (user-declared plus built-in `Exception`, SPL exception subclasses, etc.). Sorted alphabetically for determinism |
+| `get_declared_classes()` | Returns the indexed array of every compiled class name. Internal/builtin names are emitted first in deterministic order; user declarations follow source order |
 | `get_declared_interfaces()` | Same as above for interfaces |
-| `get_declared_traits()` | Always returns `[]` — traits are flattened during type checking and don't survive in a queryable map |
+| `get_declared_traits()` | Returns user-declared trait names in source order |
 | `spl_classes()` | Returns the indexed array of SPL/core class and interface names shipped by the compiler today (currently 27 entries: 10 SPL/core interfaces + `Throwable` + `Exception` + 13 SPL exception subclasses + `Stringable` + `JsonSerializable`). The list grows as later phases ship more SPL types |
 | `spl_object_id($obj)` | The object's heap pointer cast to int — unique per object, stable per process |
 | `spl_object_hash($obj)` | The object's heap pointer formatted as a decimal string. PHP returns a 32-character hex string; we return a decimal string. Both are unique-per-object and stable per-process — only the textual format differs |

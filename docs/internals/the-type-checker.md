@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-**Source:** `src/types/` — `mod.rs`, `model.rs`, `traits.rs`, `checker/mod.rs`, `checker/driver/`, `checker/builtin_types/`, `checker/builtin_iterators.rs`, `checker/builtins/`, `checker/functions.rs`, `checker/functions/`, `checker/inference/`, `checker/stmt_check.rs`, `checker/stmt_check/`, `checker/type_compat.rs`, `checker/type_compat/`, `checker/schema/`, `checker/yield_validation/`, `warnings/`
+**Source:** `src/types/` — `mod.rs`, `model.rs`, `traits.rs`, `checker/mod.rs`, `checker/driver/`, `checker/builtin_interfaces.rs`, `checker/builtin_iterators.rs`, `checker/builtin_json.rs`, `checker/builtin_spl_exceptions.rs`, `checker/builtin_stdclass.rs`, `checker/builtin_types/`, `checker/builtins/`, `checker/functions.rs`, `checker/functions/`, `checker/inference/`, `checker/stmt_check.rs`, `checker/stmt_check/`, `checker/type_compat.rs`, `checker/type_compat/`, `checker/schema/`, `checker/yield_validation/`, `warnings/`
 
 PHP is dynamically typed — variables can change type at runtime. But elephc compiles to native code where every value must have a known size and location. The type checker bridges this gap by **inferring types at compile time**.
 

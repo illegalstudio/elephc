@@ -1,3 +1,13 @@
+//! Purpose:
+//! Codegen regression tests for the SPL exception hierarchy.
+//! Verifies direct catches, parent catches, and user subclasses of SPL exception classes.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through Rust's test harness.
+//!
+//! Key details:
+//! - The tests compile small PHP programs and assert the emitted native binary output.
+
 use crate::support::*;
 
 #[test]

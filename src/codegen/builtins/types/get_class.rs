@@ -1,13 +1,13 @@
-//! Codegen for `get_class` and `get_parent_class`.
+//! Purpose:
+//! Emits `get_class()` and `get_parent_class()` through AOT static-type lookup.
+//! Materializes the resolved class or parent name as a string literal.
 //!
-//! In the AOT model the static type of the argument is enough to derive
-//! the class name at compile time. The argument is evaluated for side
-//! effects, then the class name (or its parent) is emitted as a string
-//! literal. When the static type isn't a known `Object(...)` (e.g. a
-//! plain `mixed`), we emit an empty string — runtime polymorphism via a
-//! class_id → name table is left for a follow-up; the static-type path
-//! covers the dominant cases (`get_class($this)`, `get_class(new Foo())`,
-//! `$x = new Bar(); get_class($x);`).
+//! Called from:
+//! - `crate::codegen::builtins::types::emit()`
+//!
+//! Key details:
+//! - Arguments are still evaluated for side effects before the folded string result is loaded.
+//! - Dynamic class-id to name lookup is not emitted yet; unknown static types produce an empty string.
 
 use crate::codegen::abi;
 use crate::codegen::context::Context;

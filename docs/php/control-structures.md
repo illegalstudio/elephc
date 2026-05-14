@@ -71,7 +71,7 @@ foreach ($map as $key => $value) {
 
 `foreach` also accepts any object that implements the built-in `Iterator`
 interface (`current`, `key`, `next`, `valid`, `rewind`) or the
-`IteratorAggregate` interface (`getIterator(): Iterator`):
+`IteratorAggregate` interface (`getIterator(): Traversable`):
 
 ```php
 <?php

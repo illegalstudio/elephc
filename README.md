@@ -40,7 +40,7 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 ## What you can expect
 
-You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, `instanceof`, nullsafe access (`?->`), abstract classes, final classes, methods and typed/static properties, PHP-style static property redeclarations, constructor property promotion, traits, constructors, instance/static methods, case-insensitive PHP symbol lookup for functions/classes/methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, PHP 8 attributes on declarations, named arguments, first-class callables, typed function and method parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order and integer/numeric-string key normalization, array union with `+`, closures, generator functions and generator closures with `yield` / `yield from`, namespaces, includes, and PHP 8.1-style `Fiber` coroutines on macOS ARM64, Linux ARM64, and Linux x86_64.
+You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, `instanceof`, nullsafe access (`?->`), abstract classes, final classes, methods and typed/static properties, PHP-style static property redeclarations, constructor property promotion, traits, constructors, instance/static methods, case-insensitive PHP symbol lookup for functions/classes/methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, PHP 8 attributes on declarations, named arguments, first-class callables, typed function and method parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order and integer/numeric-string key normalization, array union with `+`, closures, generator functions and generator closures with `yield` / `yield from`, namespaces, includes, compile-time Composer/SPL autoloading, class/introspection helpers, and PHP 8.1-style `Fiber` coroutines on macOS ARM64, Linux ARM64, and Linux x86_64.
 
 For performance-oriented code, elephc exposes compiler extensions beyond standard PHP — see the Why section above.
 
@@ -250,11 +250,11 @@ The full list of supported constructs, operators, and control structures is in t
 - **Statements and literals**: `const` / `define()` constants, `global` declarations, `static` locals, `print` expressions, list unpacking, PHP numeric literal forms, heredoc / nowdoc strings
 - **Operators**: arithmetic, comparison, `instanceof`, logical, bitwise, ternary, null coalescing (`??`), PHP 8.5 pipe (`|>`), assignment expressions for local and stabilized non-local targets, null coalescing assignment (`??=`), error control (`@`), and compound assignments
 - **Types**: union types (`int|string`), nullable (`?int`), `never` return type, `iterable` pseudo-type, inferred `resource|false` values for `fopen()` and `resource` values for standard streams, type casting, typed properties, typed function, method, closure, and arrow parameters and returns
-- **Modules**: namespaces, use imports, include/require/include_once/require_once, PHP magic constants
+- **Modules**: namespaces, use imports, include/require/include_once/require_once, compile-time Composer PSR-4/PSR-0/classmap/files autoloading, `spl_autoload_register()` rule extraction, PHP magic constants
 - **FFI**: extern functions, extern blocks, extern globals, extern classes, pointer builtins
 - **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`
 
-### Built-in functions (270+)
+### Built-in functions (290+)
 
 **Strings:** `strlen`, `substr`, `strpos`, `strrpos`, `strstr`, `str_replace`, `str_ireplace`, `substr_replace`, `strtolower`, `strtoupper`, `ucfirst`, `lcfirst`, `ucwords`, `trim`, `ltrim`, `rtrim`, `str_repeat`, `str_pad`, `strrev`, `str_split`, `strcmp`, `strcasecmp`, `str_contains`, `str_starts_with`, `str_ends_with`, `ord`, `chr`, `explode`, `implode`, `sprintf`, `printf`, `sscanf`, `md5`, `sha1`, `hash`, `number_format`, `addslashes`, `stripslashes`, `nl2br`, `wordwrap`, `bin2hex`, `hex2bin`, `htmlspecialchars`, `htmlentities`, `html_entity_decode`, `urlencode`, `urldecode`, `rawurlencode`, `rawurldecode`, `base64_encode`, `base64_decode`, `ctype_alpha`, `ctype_digit`, `ctype_alnum`, `ctype_space`
 
@@ -262,11 +262,13 @@ The full list of supported constructs, operators, and control structures is in t
 
 **Math:** `abs`, `floor`, `ceil`, `round`, `sqrt`, `pow`, `min`, `max`, `intdiv`, `fmod`, `fdiv`, `rand`, `mt_rand`, `random_int`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `log`, `log2`, `log10`, `exp`, `hypot`, `deg2rad`, `rad2deg`, `pi`
 
-**Types:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `is_iterable`, `is_callable`, `boolval`, `floatval`, `intval`
+**Types and class introspection:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `is_iterable`, `is_callable`, `boolval`, `floatval`, `intval`, `class_exists`, `interface_exists`, `trait_exists`, `enum_exists`, `class_alias`, `get_class`, `get_parent_class`, `get_declared_classes`, `get_declared_interfaces`, `get_declared_traits`, `is_a`, `is_subclass_of`
 
 **I/O:** `fopen`, `fclose`, `fread`, `fwrite`, `fgets`, `fgetc`, `fpassthru`, `flock`, `tmpfile`, `readfile`, `feof`, `readline`, `fseek`, `ftell`, `rewind`, `file_get_contents`, `file_put_contents`, `file`, `fgetcsv`, `fputcsv`, `file_exists`, `is_file`, `is_dir`, `is_readable`, `is_writable`, `is_writeable`, `is_executable`, `is_link`, `symlink`, `link`, `readlink`, `linkinfo`, `filesize`, `filemtime`, `fileatime`, `filectime`, `fileperms`, `fileowner`, `filegroup`, `fileinode`, `filetype`, `stat`, `lstat`, `fstat`, `clearstatcache`, `basename`, `dirname`, `pathinfo`, `realpath`, `fnmatch`, `touch`, `chmod`, `chown`, `chgrp`, `umask`, `ftruncate`, `fflush`, `fsync`, `fdatasync`, `copy`, `rename`, `unlink`, `mkdir`, `rmdir`, `scandir`, `glob`, `getcwd`, `chdir`, `tempnam`, `sys_get_temp_dir`, `var_dump`, `print_r`
 
 **System:** `exit`, `die`, `time`, `microtime`, `date`, `mktime`, `strtotime`, `sleep`, `usleep`, `getenv`, `putenv`, `php_uname`, `phpversion`, `exec`, `shell_exec`, `system`, `passthru`, `json_encode`, `json_decode`, `json_last_error`, `json_last_error_msg`, `json_validate`, `preg_match`, `preg_match_all`, `preg_replace`, `preg_split`, `define`, `class_attribute_names`, `class_attribute_args`, `class_get_attributes`
+
+**SPL/autoload:** `spl_autoload_register`, `spl_autoload_unregister`, `spl_autoload_functions`, `spl_autoload_extensions`, `spl_autoload_call`, `spl_autoload`, `spl_classes`, `spl_object_id`, `spl_object_hash`
 
 **Pointers/Buffers:** `ptr`, `ptr_null`, `ptr_is_null`, `ptr_get`, `ptr_set`, `ptr_read8`, `ptr_read32`, `ptr_write8`, `ptr_write32`, `ptr_offset`, `ptr_cast<T>`, `ptr_sizeof`, `buffer_new<T>`, `buffer_len`, `buffer_free`
 
@@ -279,7 +281,7 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-PHP source → Lexer → Parser (AST) → Magic constants (per-file) → Conditional (ifdef/--define) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → Codegen → as + ld → native executable
+PHP source → Lexer → Parser (AST) → Magic constants (per-file) → Conditional (ifdef/--define) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → Codegen → as + ld → native executable
 ```
 
 The compiler emits human-readable assembly for the selected target. You can inspect the `.s` file to see exactly what your PHP becomes:
@@ -356,6 +358,7 @@ src/
 ├── conditional/         # Build-time `ifdef` pass driven by --define
 ├── magic_constants.rs   # Per-file PHP magic constant lowering
 ├── magic_constants/     # File/scope/trait magic-constant walkers
+├── autoload/            # Composer/SPL AOT autoload indexing and file insertion
 ├── resolver/            # Include/require resolution, declaration discovery, once guards
 ├── runtime_cache.rs     # Preassembled runtime object cache
 ├── source_map.rs        # Assembly/source-map sidecar emission
@@ -391,6 +394,11 @@ src/
 │   ├── warnings/        # Non-fatal diagnostics (unused vars, unreachable code)
 │   └── checker/
 │       ├── mod.rs       # Type-checker orchestration
+│       ├── builtin_interfaces.rs # Built-in SPL/core interface injection
+│       ├── builtin_iterators.rs # Built-in Iterator / IteratorAggregate metadata
+│       ├── builtin_json.rs # JsonException / JsonSerializable metadata
+│       ├── builtin_spl_exceptions.rs # SPL exception hierarchy metadata
+│       ├── builtin_stdclass.rs # stdClass dynamic-property metadata
 │       ├── builtin_types/ # Built-in class/interface/enum metadata
 │       ├── builtins/    # Built-in function type signatures
 │       ├── callables/   # Callable values, first-class callables, and callback checks
@@ -428,6 +436,7 @@ src/
 │   │   ├── arrays/      # count, array_push, array_pop, sort, ...
 │   │   ├── math/        # abs, floor, pow, rand, fmod, ...
 │   │   ├── types/       # is_int, gettype, empty, unset, settype, ...
+│   │   ├── spl/         # spl_autoload_*, spl_classes, spl_object_id/hash
 │   │   ├── io/          # fopen, fclose, fread, fwrite, fgets, var_dump, print_r, file_get_contents, ...
 │   │   ├── pointers/    # ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ...
 │   │   └── system/      # exit, die, time, sleep, getenv, exec, ...
@@ -466,7 +475,7 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 The **[docs/](docs/)** directory is a complete wiki covering every aspect of the compiler. Inside you'll find:
 
-- **PHP syntax reference** — types, operators, control structures, functions, classes, namespaces, and all 270+ built-in functions with signatures and examples
+- **PHP syntax reference** — types, operators, control structures, functions, classes, namespaces, and all 290+ built-in functions with signatures and examples
 - **Compiler extensions** — pointers, `buffer<T>`, `packed class`, FFI with `extern`, and conditional compilation with `ifdef` — the features that take PHP beyond the web
 - **Compiler internals** — a step-by-step walkthrough of the full pipeline, from lexing to Pratt parsing to type checking to code generation and runtime structure
 - **ARM64 primer** — an introduction to ARM64 assembly for people who've never seen it, plus a quick reference of the ARM64 instruction set used by elephc's AArch64 backend

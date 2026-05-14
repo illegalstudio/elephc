@@ -31,7 +31,7 @@ pub fn emit(
     if let PhpType::Object(class_name) = &source_ty {
         if class_implements_countable(class_name, ctx) {
             if emitter.target.arch == Arch::X86_64 {
-                emitter.instruction("mov rdi, rax");                                // forward Countable receiver to first arg slot
+                emitter.instruction("mov rdi, rax");                            // forward Countable receiver to first arg slot
             }
             emit_dispatch_instance_method(class_name, "count", emitter, ctx);
             return Some(PhpType::Int);

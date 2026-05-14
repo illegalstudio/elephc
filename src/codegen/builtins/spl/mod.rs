@@ -1,13 +1,13 @@
-//! Codegen for the 6 `spl_autoload_*` builtins.
+//! Purpose:
+//! Emits SPL autoload and object-introspection builtins.
+//! Provides runtime stubs for AOT-resolved autoload behavior plus simple object ids/hashes.
 //!
-//! In the AOT model, classes are resolved at compile time by `autoload::run`
-//! (which consults composer.json PSR-4 plus any closure rules extracted from
-//! `spl_autoload_register` callsites). The runtime functions therefore have
-//! no real work to do — every conforming `spl_autoload_register` callsite is
-//! stripped from the program before it reaches codegen, and only
-//! "non-conforming" calls (e.g. with captures, multiple params, or with a
-//! non-literal closure) reach this module. Those remaining calls fall back
-//! to harmless defaults documented per-function.
+//! Called from:
+//! - `crate::codegen::builtins::emit_builtin_call()`
+//!
+//! Key details:
+//! - Conforming autoload registrations are consumed before codegen; remaining calls keep PHP-visible defaults.
+//! - `spl_classes()` is a static snapshot of compiler-shipped SPL/core class-like names.
 
 use crate::codegen::abi;
 use crate::codegen::context::Context;

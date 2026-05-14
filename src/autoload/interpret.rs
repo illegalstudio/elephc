@@ -1,27 +1,13 @@
-//! Symbolic interpreter for autoload-registered closure bodies.
+//! Purpose:
+//! Symbolically evaluates supported `spl_autoload_register` closure bodies.
+//! Derives require/include paths for candidate class names at compile time.
 //!
-//! Given an `AutoloadRule` (closure parameter name + body) and a candidate
-//! class name, the interpreter binds the parameter to the class name and
-//! evaluates the body looking for an `Include` statement (require / require_once
-//! / include / include_once) whose path expression folds to a string. The
-//! resolved path is returned to the autoload pass for inlining.
+//! Called from:
+//! - `crate::autoload::rule::AutoloadRule::resolve()`
 //!
-//! The interpreter handles the operations a typical PHP autoloader actually
-//! uses:
-//!
-//!   * String literals
-//!   * Binary `.` concatenation
-//!   * Variable reads and writes
-//!   * `str_replace($from, $to, $haystack)` with literal arguments
-//!   * `file_exists($path)` / `is_file($path)` / `is_readable($path)`
-//!     / `is_dir($path)` (real filesystem checks)
-//!   * `if`/`elseif`/`else` whose conditions fold to a literal bool
-//!   * `require` / `require_once` / `include` / `include_once`
-//!
-//! Anything else — loops, exceptions, method calls, `new`, the
-//! ternary/match/null-coalesce operators — yields `Unfoldable`, in which
-//! case the rule contributes nothing for this candidate and the next rule
-//! (or PSR-4 fallback) is tried.
+//! Key details:
+//! - Only a deliberate subset of PHP is foldable; unsupported constructs return `Unfoldable`.
+//! - Filesystem predicates read the real compile-time filesystem, matching AOT autoload needs.
 
 use std::collections::HashMap;
 use std::fs;

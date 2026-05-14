@@ -39,6 +39,13 @@ PHP source (.php)
 └────┬────────┘
      │
      ▼
+┌──────────┐
+│ Autoload │  src/autoload/
+│ (build)  │  Reads Composer autoload metadata and extracts supported
+│          │  top-level `spl_autoload_register()` rules.
+└────┬─────┘
+     │
+     ▼
 ┌─────────┐
 │ Resolver │  src/resolver/
 │          │  Pre-scans statically resolvable include declarations,
@@ -53,6 +60,13 @@ PHP source (.php)
 └─────┬────────┘
       │
       ▼
+┌──────────┐
+│ Autoload │  src/autoload/
+│  (run)   │  Inserts Composer/SPL-resolved class files before the first
+│          │  reference that needs each class-like symbol.
+└────┬─────┘
+     │
+     ▼
 ┌──────────────┐
 │  Optimizer   │  src/optimize/
 │   (fold)     │  Folds scalar constants and simplifies pure expressions
@@ -139,6 +153,7 @@ src/
 ├── magic_constants.rs         Per-file lowering for PHP magic constants
 ├── magic_constants/           File/scope/trait magic-constant walkers
 ├── conditional/               Build-time `ifdef` pass
+├── autoload/                  Composer/SPL AOT autoload indexing, rule interpretation, and file insertion
 ├── resolver/                  Include/require resolution, declaration discovery, once guards
 ├── optimize.rs                Public optimizer entry points and effect context
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination
@@ -179,7 +194,11 @@ src/
 │   └── checker/
 │       ├── mod.rs             Type-checker orchestration boundary
 │       ├── driver/            Main checker driver and program passes
+│       ├── builtin_interfaces.rs Built-in SPL/core interface injection
 │       ├── builtin_iterators.rs Built-in Iterator / IteratorAggregate metadata
+│       ├── builtin_json.rs    JsonException / JsonSerializable metadata
+│       ├── builtin_spl_exceptions.rs SPL exception hierarchy metadata
+│       ├── builtin_stdclass.rs stdClass dynamic-property metadata
 │       ├── builtin_types/     Shared builtin class/type helper predicates
 │       ├── builtins/          Built-in function type signatures
 │       ├── callables.rs       Closure and first-class callable signature resolution
@@ -272,9 +291,10 @@ src/
 │   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (58 files)
 │   │   ├── arrays/            count, array_push, buffer_len/free, sort, array_map, usort, ... (59 files)
 │   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, sin, cos, ... (32 files)
-│   │   ├── types/             is_*, gettype, empty, unset, settype, ... (18 files)
+│   │   ├── types/             is_*, gettype, empty, unset, settype, class introspection, ... (23 files)
 │   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (74 files)
 │   │   ├── pointers/          ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ... (12 files)
+│   │   ├── spl/               spl_autoload_*, spl_classes, spl_object_id/hash (1 file)
 │   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, attribute reflection, ... (30 files)
 │   │
 │   └── runtime/               Runtime routines and target-specific emission helpers

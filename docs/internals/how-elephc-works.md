@@ -92,7 +92,15 @@ If the program uses elephc-only `ifdef SYMBOL { ... } else { ... }` blocks, the 
 
 In this example, there are no `ifdef` blocks, so the AST passes through unchanged.
 
-## Phase 5: Resolving
+## Phase 5: Autoload registry build
+
+**Files:** `src/autoload/`
+
+Before include resolution, elephc builds the compile-time autoload registry. This pass reads Composer `autoload` and `autoload-dev` sections from the project and vendor packages, indexes PSR-4 / PSR-0 / classmap declarations, records `autoload.files`, and extracts supported top-level `spl_autoload_register()` rules. Rule bodies are kept as symbolic closures so they can be interpreted later for each missing class-like symbol.
+
+In this example, there is no `composer.json` and no SPL registration, so the registry is empty.
+
+## Phase 6: Resolving
 
 **Files:** `src/resolver/`
 
@@ -104,7 +112,7 @@ Executable statements from included files are still left at the include point. F
 
 In this example, there's nothing to resolve — the AST passes through unchanged.
 
-## Phase 6: Name resolution
+## Phase 7: Name resolution
 
 **File:** `src/name_resolver/`
 
@@ -112,7 +120,17 @@ After includes are flattened, elephc resolves namespace-aware names. This pass a
 
 In this example there are no namespaces or imports, so the AST still passes through unchanged.
 
-## Phase 7: Early optimization (constant folding)
+## Phase 8: Static autoload expansion
+
+**Files:** `src/autoload/`
+
+After names are canonicalized, elephc runs the autoload resolver. It repeatedly scans class-like references, skips names already declared or built in, and inserts the file produced by the Composer index or symbolic SPL rule immediately before the first statement that needs that class. Composer `autoload.files` entries are prefixed before the entry program so their top-level side effects run first.
+
+The inserted files go through parsing, magic-constant lowering, include resolution, name resolution, and alias handling before they join the main program. The pass iterates until the transitive class graph is stable.
+
+In this example, no class references need autoloading.
+
+## Phase 9: Early optimization (constant folding)
 
 **File:** `src/optimize/`
 
@@ -132,7 +150,7 @@ The pass is deliberately local and side-effect aware. It simplifies scalar compu
 
 In our running example there is nothing to fold yet: the pass does not currently propagate `$x = 10` into the later `$x > 5` comparison.
 
-## Phase 8: Type checking
+## Phase 10: Type checking
 
 **File:** `src/types/` — See [The Type Checker](the-type-checker.md) for details.
 
@@ -154,7 +172,7 @@ If you tried `$x = "hello"` after `$x = 10`, the type checker would reject it �
 
 On successful type checking, elephc also runs a warning pass that reports issues such as unused variables and unreachable code. On failing compilations, the parser and checker both try to recover conservatively so they can often report more than one independent error in a single run.
 
-## Phase 9: Post-typecheck constant propagation
+## Phase 11: Post-typecheck constant propagation
 
 **File:** `src/optimize/`
 
@@ -182,7 +200,7 @@ if (true) {
 }
 ```
 
-## Phase 10: Post-typecheck control-flow pruning
+## Phase 12: Post-typecheck control-flow pruning
 
 **File:** `src/optimize/`
 
@@ -209,7 +227,7 @@ $x = 10;
 echo "big\n";
 ```
 
-## Phase 11: Control-flow normalization
+## Phase 13: Control-flow normalization
 
 **File:** `src/optimize/`
 
@@ -224,7 +242,7 @@ This pass currently handles cases such as:
 - merging adjacent identical `catch` handlers into canonical multi-catch clauses with deduplicated, stably ordered type lists
 - folding an outer `finally` into an inner `try` when the wrapper is structurally redundant
 
-## Phase 12: Dead-code elimination
+## Phase 14: Dead-code elimination
 
 **File:** `src/optimize/`
 
@@ -243,7 +261,7 @@ This pass currently handles cases such as:
 
 In our running example there is nothing else to remove: the remaining assignment and `echo` stay as they are.
 
-## Phase 13: Code generation
+## Phase 15: Code generation
 
 **File:** `src/codegen/` — See [The Code Generator](the-codegen.md) for details.
 
@@ -286,7 +304,7 @@ Key observations:
 - `echo "big\n"` → load string address + length, then `svc` to write to stdout
 - The string literal lives in the `.data` section, referenced by label `_str_0`
 
-## Phase 14: Runtime preparation, assembly, and linking
+## Phase 16: Runtime preparation, assembly, and linking
 
 **Tools:** native `as` and `ld` (or the equivalent system toolchain)
 
@@ -322,7 +340,7 @@ On Linux, elephc invokes the native assembler/linker for the requested target.
 
 The `.o` file is deleted after linking. The result is a standalone executable.
 
-## Phase 15: Execution
+## Phase 17: Execution
 
 ```bash
 ./file

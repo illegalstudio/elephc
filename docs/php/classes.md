@@ -56,7 +56,7 @@ The compiler injects the following interfaces, available without any
 |---|---|
 | `Traversable` | (marker) |
 | `Iterator` extends `Traversable` | `current(): mixed`, `key(): mixed`, `next(): void`, `valid(): bool`, `rewind(): void` |
-| `IteratorAggregate` extends `Traversable` | `getIterator(): Iterator` |
+| `IteratorAggregate` extends `Traversable` | `getIterator(): Traversable` |
 | `OuterIterator` extends `Iterator` | `getInnerIterator(): ?Iterator` |
 | `RecursiveIterator` extends `Iterator` | `getChildren(): ?RecursiveIterator`, `hasChildren(): bool` |
 | `SeekableIterator` extends `Iterator` | `seek(int $offset): void` |

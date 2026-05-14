@@ -1,17 +1,13 @@
-//! Codegen for `is_a` and `is_subclass_of`.
+//! Purpose:
+//! Emits folded `is_a()` and `is_subclass_of()` checks for literal targets.
+//! Walks class parent/interface metadata using PHP-style case-insensitive names.
 //!
-//! When the second argument is a literal class/interface name and the
-//! first argument's static type is `Object(...)`, the result folds at
-//! compile time:
+//! Called from:
+//! - `crate::codegen::builtins::types::emit()`
 //!
-//!   `is_a($obj, "Foo")`            — same class, parent chain, or
-//!                                    implemented interface
-//!   `is_subclass_of($obj, "Foo")`  — same as above but excluding the
-//!                                    case where the static type IS Foo
-//!
-//! For non-literal target arguments or non-Object first arguments, the
-//! result is `false`. Both arguments are still evaluated for side
-//! effects.
+//! Key details:
+//! - Both arguments are evaluated for side effects before the folded boolean is loaded.
+//! - `is_subclass_of()` uses the same relation check as `is_a()` but excludes an exact self match.
 
 use crate::codegen::abi;
 use crate::codegen::context::Context;

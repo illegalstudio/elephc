@@ -1,12 +1,13 @@
-//! Codegen for `get_declared_classes` / `get_declared_interfaces` /
-//! `get_declared_traits`.
+//! Purpose:
+//! Emits `get_declared_classes()`, `get_declared_interfaces()`, and `get_declared_traits()`.
+//! Materializes compile-time declaration registries as indexed string arrays.
 //!
-//! In the AOT model the registry of compiled classes / interfaces / traits
-//! is fixed at compile time. We can therefore materialise the introspection
-//! array as a constant — allocate it via `__rt_array_new`, then push every
-//! known name as a string. Internal names are emitted first in deterministic
-//! order; user declarations follow source order, matching PHP's observable
-//! declaration-order behavior.
+//! Called from:
+//! - `crate::codegen::builtins::types::emit()`
+//!
+//! Key details:
+//! - Internal names are emitted first in deterministic order, then user declarations in source order.
+//! - The fallback path sorts map keys for tests or callers that bypass normal codegen setup.
 
 use crate::codegen::abi;
 use crate::codegen::context::Context;

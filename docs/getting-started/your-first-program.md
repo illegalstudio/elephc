@@ -91,13 +91,15 @@ When you run `elephc hello.php`, the compiler:
 1. **Lexes** the source into tokens
 2. **Parses** tokens into an AST (Abstract Syntax Tree)
 3. **Lowers** file-local magic constants and applies `ifdef` branches from `--define`
-4. **Resolves** `include` / `require` files, pre-scans statically resolvable include declarations, folds compile-time include paths, and lowers `*_once` runtime guards
-5. **Resolves** namespaces, imports, and fully-qualified names
-6. **Folds** constant expressions that are already statically known
-7. **Type-checks** the program and collects non-fatal warnings
-8. **Optimizes** checked AST control flow through propagation, pruning, normalization, and dead-code elimination
-9. **Generates** assembly for the selected target
-10. **Assembles and links** the `.s` / `.o` files into a native executable
+4. **Builds** the compile-time autoload registry from Composer metadata and supported `spl_autoload_register()` rules
+5. **Resolves** `include` / `require` files, pre-scans statically resolvable include declarations, folds compile-time include paths, and lowers `*_once` runtime guards
+6. **Resolves** namespaces, imports, and fully-qualified names
+7. **Runs** static autoload insertion for referenced class-like symbols
+8. **Folds** constant expressions that are already statically known
+9. **Type-checks** the program and collects non-fatal warnings
+10. **Optimizes** checked AST control flow through propagation, pruning, normalization, and dead-code elimination
+11. **Generates** assembly for the selected target
+12. **Assembles and links** the `.s` / `.o` files into a native executable
 
 The intermediate `.s` and `.o` files are cleaned up automatically. You're left with a single executable.
 

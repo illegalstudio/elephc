@@ -1,16 +1,13 @@
-//! composer.json autoload reader.
+//! Purpose:
+//! Builds the Composer autoload index used by the AOT autoload pass.
+//! Reads PSR-4, PSR-0, classmap, files, and exclude rules from project/vendor composer.json files.
 //!
-//! Builds two compile-time artifacts from the project's `composer.json` and
-//! every `vendor/<vendor>/<package>/composer.json`:
+//! Called from:
+//! - `crate::autoload::Registry::build()`
 //!
-//!   * `fqn_to_path` — FQN → file path map, populated by `psr-4`, `psr-0`,
-//!     and `classmap` autoload sections.
-//!   * `files_to_include` — list of files to splice into the program at
-//!     compile time, populated by the `files` autoload section.
-//!
-//! Both `autoload` and `autoload-dev` sections are read; in the AOT model
-//! there is no production/test split, so dev-only entries (typically the
-//! tests/ tree) are merged into the same index.
+//! Key details:
+//! - Produces FQN-to-path mappings and `autoload.files` entries for compile-time inclusion.
+//! - `autoload` and `autoload-dev` are intentionally merged because compiled binaries have no Composer runtime mode.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
