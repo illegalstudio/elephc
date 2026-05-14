@@ -39,6 +39,21 @@ var_dump($c instanceof Countable);
 }
 
 #[test]
+fn test_builtin_interface_names_are_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter implements \countable {
+    public function count(): int { return 3; }
+}
+$c = new Counter();
+echo count($c);
+var_dump($c instanceof Countable);
+"#,
+    );
+    assert_eq!(out, "3bool(true)\n");
+}
+
+#[test]
 fn test_traversable_inherited_via_iterator() {
     let out = compile_and_run(
         r#"<?php
