@@ -35,6 +35,22 @@ pub(super) fn emit_new_object(
     if class_name == "Fiber" {
         return emit_new_fiber(args, emitter, ctx, data);
     }
+    if super::reflection::is_reflection_owner_class(class_name) {
+        return super::reflection::emit_new_reflection_owner(
+            class_name, args, emitter, ctx, data,
+        );
+    }
+    emit_new_object_core(class_name, args, true, emitter, ctx, data)
+}
+
+pub(super) fn emit_new_object_core(
+    class_name: &str,
+    args: &[Expr],
+    run_constructor: bool,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
     let class_info = match ctx.classes.get(class_name).cloned() {
         Some(c) => c,
         None => {
@@ -211,7 +227,7 @@ pub(super) fn emit_new_object(
     }
 
     // -- call __construct if it exists --
-    if class_info.methods.contains_key("__construct") {
+    if run_constructor && class_info.methods.contains_key("__construct") {
         let sig = class_info.methods.get("__construct").cloned();
         let regular_param_count = call_args::regular_param_count(sig.as_ref(), args.len());
         let emitted_args = call_args::emit_pushed_call_args(

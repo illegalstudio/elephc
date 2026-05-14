@@ -24,6 +24,7 @@ mod main_emission;
 pub mod platform;
 mod prescan;
 mod program_usage;
+mod reflection;
 mod runtime;
 mod stmt;
 
@@ -209,6 +210,17 @@ fn collect_x86_emitted_class_names(
     // class and reports no match.
     for builtin in ["Throwable", "Exception", "RuntimeException", "JsonException"] {
         names.insert(builtin.to_string());
+    }
+    for builtin in [
+        "ReflectionAttribute",
+        "ReflectionClass",
+        "ReflectionMethod",
+        "ReflectionProperty",
+    ] {
+        names.insert(builtin.to_string());
+    }
+    for factory in reflection::collect_attribute_factories(classes) {
+        names.insert(factory.class_name);
     }
     expand_emitted_class_dependencies(&mut names, classes);
     names

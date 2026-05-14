@@ -14,6 +14,7 @@ pub(crate) mod dispatch;
 mod fiber_wrapper;
 mod instanceof;
 mod nullsafe;
+mod reflection;
 mod static_properties;
 
 use super::super::context::Context;
