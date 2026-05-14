@@ -12,6 +12,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileWarning;
+use crate::names::{canonical_name_for_decl, php_symbol_key};
 use crate::parser::ast::{BinOp, Expr, ExprKind, Program, Stmt, StmtKind};
 
 #[derive(Clone, Debug)]
@@ -50,6 +51,8 @@ pub fn collect_register_calls(
     //    to participate in collection.
     let program = flatten_foldable_ifs(program);
 
+    let local_functions = collect_declared_function_keys(&program);
+
     // -- Pass 1: index top-level functions whose bodies look like autoload rules.
     let mut function_rules: HashMap<String, FunctionSource> = HashMap::new();
     for (idx, stmt) in program.iter().enumerate() {
@@ -81,12 +84,19 @@ pub fn collect_register_calls(
     let mut consumed_var_names: HashSet<String> = HashSet::new();
     let mut warnings: Vec<CompileWarning> = Vec::new();
 
+    let mut current_namespace: Option<String> = None;
     for (idx, stmt) in program.iter().enumerate() {
+        if let StmtKind::NamespaceDecl { name } = &stmt.kind {
+            current_namespace = name.as_ref().map(|name| name.as_str().to_string());
+            continue;
+        }
         if classify_and_process(
             stmt,
             idx,
+            current_namespace.as_deref(),
             &current_var_bindings,
             &function_rules,
+            &local_functions,
             &mut chain,
             &mut consumed,
             &mut consumed_function_names,
@@ -173,15 +183,23 @@ struct ConsumesSource {
 fn classify_and_process(
     stmt: &Stmt,
     idx: usize,
+    current_namespace: Option<&str>,
     var_bindings: &HashMap<String, VarBinding>,
     function_rules: &HashMap<String, FunctionSource>,
+    local_functions: &HashSet<String>,
     chain: &mut Vec<AutoloadRule>,
     consumed: &mut HashSet<usize>,
     consumed_functions: &mut HashSet<String>,
     consumed_vars: &mut HashSet<String>,
     warnings: &mut Vec<CompileWarning>,
 ) -> bool {
-    let Some(call) = classify_call(stmt, var_bindings, function_rules) else {
+    let Some(call) = classify_call(
+        stmt,
+        current_namespace,
+        var_bindings,
+        function_rules,
+        local_functions,
+    ) else {
         return false;
     };
     match call {
@@ -235,8 +253,10 @@ fn mark_consumed(
 
 fn classify_call(
     stmt: &Stmt,
+    current_namespace: Option<&str>,
     var_bindings: &HashMap<String, VarBinding>,
     function_rules: &HashMap<String, FunctionSource>,
+    local_functions: &HashSet<String>,
 ) -> Option<CallKind> {
     let StmtKind::ExprStmt(expr) = &stmt.kind else {
         return None;
@@ -244,9 +264,12 @@ fn classify_call(
     let ExprKind::FunctionCall { name, args } = &expr.kind else {
         return None;
     };
-    let canonical = name.as_canonical();
-    let trimmed = canonical.trim_start_matches('\\');
-    if trimmed.eq_ignore_ascii_case("spl_autoload_register") {
+    if is_builtin_autoload_call(
+        name,
+        current_namespace,
+        local_functions,
+        "spl_autoload_register",
+    ) {
         let first = args.first()?;
         match resolve_callable(first, var_bindings, function_rules) {
             Resolved::Rule { rule, consumes } => {
@@ -260,7 +283,12 @@ fn classify_call(
             Resolved::StripUnmatched(reason) => Some(CallKind::StripUnmatchedClosure { reason }),
             Resolved::Unknown => None,
         }
-    } else if trimmed.eq_ignore_ascii_case("spl_autoload_unregister") {
+    } else if is_builtin_autoload_call(
+        name,
+        current_namespace,
+        local_functions,
+        "spl_autoload_unregister",
+    ) {
         let first = args.first()?;
         match resolve_callable(first, var_bindings, function_rules) {
             Resolved::Rule { rule, consumes } => Some(CallKind::Unregister { rule, consumes }),
@@ -269,6 +297,60 @@ fn classify_call(
         }
     } else {
         None
+    }
+}
+
+fn is_builtin_autoload_call(
+    name: &crate::names::Name,
+    current_namespace: Option<&str>,
+    local_functions: &HashSet<String>,
+    builtin: &str,
+) -> bool {
+    if !name.as_str().eq_ignore_ascii_case(builtin) {
+        return false;
+    }
+    if name.is_fully_qualified() {
+        return true;
+    }
+    if !name.is_unqualified() {
+        return false;
+    }
+    let Some(namespace) = current_namespace.filter(|namespace| !namespace.is_empty()) else {
+        return true;
+    };
+    let local_name = canonical_name_for_decl(Some(namespace), builtin);
+    !local_functions.contains(&php_symbol_key(&local_name))
+}
+
+fn collect_declared_function_keys(program: &[Stmt]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    collect_declared_function_keys_in(program, None, &mut out);
+    out
+}
+
+fn collect_declared_function_keys_in(
+    program: &[Stmt],
+    mut current_namespace: Option<String>,
+    out: &mut HashSet<String>,
+) {
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::NamespaceDecl { name } => {
+                current_namespace = name.as_ref().map(|name| name.as_str().to_string());
+            }
+            StmtKind::NamespaceBlock { name, body } => {
+                collect_declared_function_keys_in(
+                    body,
+                    name.as_ref().map(|name| name.as_str().to_string()),
+                    out,
+                );
+            }
+            StmtKind::FunctionDecl { name, .. } => {
+                let canonical = canonical_name_for_decl(current_namespace.as_deref(), name);
+                out.insert(php_symbol_key(&canonical));
+            }
+            _ => {}
+        }
     }
 }
 

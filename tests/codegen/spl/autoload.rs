@@ -296,6 +296,18 @@ echo $m->tag();
 }
 
 #[test]
+fn test_namespaced_local_spl_autoload_register_is_not_collected() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+function spl_autoload_register($loader) { echo "local"; }
+spl_autoload_register(function ($name) {});
+"#,
+    );
+    assert_eq!(out, "local");
+}
+
+#[test]
 fn test_unregister_name_is_case_insensitive_before_name_resolver() {
     let out = compile_and_run(
         r#"<?php
