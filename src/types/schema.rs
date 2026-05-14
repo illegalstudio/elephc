@@ -56,8 +56,8 @@ pub struct ClassInfo {
     /// Names of PHP 8 attributes attached to this class declaration, in
     /// source order. Name resolution stores canonical class-like text without
     /// a synthetic leading backslash, matching `ReflectionAttribute::getName()`.
-    /// Reflection helpers read this list from per-class metadata emitted at
-    /// codegen time.
+    /// Reflection helpers read this list during codegen when materializing
+    /// attribute-name arrays and `ReflectionAttribute` objects.
     pub attribute_names: Vec<String>,
     /// Literal arguments captured for each attribute, in source order and
     /// aligned with `attribute_names`. `None` means the source uses legal PHP

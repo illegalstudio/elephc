@@ -56,7 +56,7 @@ Converts a signed 64-bit integer in `x0` to a decimal string.
 4. Prepend '-' if negative
 5. Update concat buffer offset
 
-The digits are written **right-to-left** because division gives us the least significant digit first. The result is written into the [concat buffer](memory-model.md#the-string-buffer).
+The digits are written **right-to-left** because division gives us the least significant digit first. The result is written into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad).
 
 ### `__rt_resource_to_string` — Resource to string
 
@@ -82,7 +82,7 @@ Converts a double-precision float in `d0` to a decimal string. Handles special c
 
 **File:** `strings/concat.rs`
 
-Concatenates two strings by copying both into the [concat buffer](memory-model.md#the-string-buffer).
+Concatenates two strings by copying both into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad).
 
 **Input:** `x1`/`x2` = left string (ptr/len), `x3`/`x4` = right string (ptr/len)
 **Output:** `x1` = pointer to result, `x2` = total length
@@ -629,7 +629,7 @@ Additionally, the runtime emits static data tables:
 - `_instanceof_target_count`, `_instanceof_target_entries`, `_instanceof_name_*` — case-insensitive class/interface name metadata used by dynamic `instanceof` string targets, including leading-backslash aliases
 - `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal metadata used by object deep-free and cycle collection
 - `_class_json_desc_ptrs`, `_class_json_desc_<id>`, `_class_json_pname_<id>_<slot>`, `_json_exception_class_id`, `_stdclass_class_id` — JSON object encoding descriptors, JsonException construction metadata, and stdClass runtime class id
-- `_class_attribute_count`, `_class_attribute_ptrs`, `_class_attributes_<id>` — class attribute reflection metadata used by `class_attribute_names()`, `class_attribute_args()`, and `class_get_attributes()`
+- `_class_attribute_count`, `_class_attribute_ptrs`, `_class_attributes_<id>` — emitted class-level PHP attribute metadata. The current PHP-facing helpers and Reflection owner constructors materialize their results from the same `ClassInfo` metadata during codegen, rather than doing dynamic runtime class/member lookup.
 - `_class_vtable_ptrs`, `_class_vtable_<id>` — per-class virtual-method tables used by inheritance dispatch through `class_id`
 - `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used by late static binding
 - `static_property_symbol(...)`-derived `.comm` slots — 16-byte storage slots for effective declaring static properties, shared by inherited static properties until a subclass redeclares the property
