@@ -1,3 +1,12 @@
+//! Purpose:
+//! Codegen regressions for SPL-related builtins that redirect to compiler runtime helpers.
+//!
+//! Called from:
+//! - `cargo test --test codegen_tests` through the SPL test module.
+//!
+//! Key details:
+//! - Fixtures keep SPL builtin behavior covered without relying on autoload-specific setup.
+
 use crate::support::*;
 
 #[test]
@@ -63,4 +72,34 @@ echo count($b);
 "#,
     );
     assert_eq!(out, "42");
+}
+
+#[test]
+fn test_spl_object_id_accepts_concrete_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {}
+$a = new Box();
+$b = new Box();
+echo (spl_object_id($a) === spl_object_id($a)) ? "stable" : "drift";
+echo ":";
+echo (spl_object_id($a) !== spl_object_id($b)) ? "unique" : "same";
+"#,
+    );
+    assert_eq!(out, "stable:unique");
+}
+
+#[test]
+fn test_spl_object_hash_accepts_concrete_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {}
+$a = new Box();
+$b = new Box();
+echo (spl_object_hash($a) === spl_object_hash($a)) ? "stable" : "drift";
+echo ":";
+echo (spl_object_hash($a) !== spl_object_hash($b)) ? "unique" : "same";
+"#,
+    );
+    assert_eq!(out, "stable:unique");
 }

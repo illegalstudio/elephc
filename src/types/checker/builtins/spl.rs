@@ -1,12 +1,16 @@
-//! Type-checking stubs for spl_autoload_* functions.
+//! Purpose:
+//! Type-checks SPL helper builtins implemented by the current SPL foundation.
+//! Enforces conservative argument contracts that the AOT codegen can lower safely.
 //!
-//! Because elephc resolves classes statically (via composer.json PSR-4 at
-//! compile time), these functions have no runtime effect — they're stubs
-//! that return harmless defaults. A separate warnings pass surfaces a
-//! diagnostic when they're called, pointing the user at composer.json.
+//! Called from:
+//! - `crate::types::checker::builtins::check_builtin()`
+//!
+//! Key details:
+//! - Autoload helpers are static/AOT approximations rather than runtime code loaders.
+//! - `spl_autoload_extensions()` only accepts literal setters until the runtime owns copied strings.
 
 use crate::errors::CompileError;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -59,8 +63,17 @@ pub(super) fn check_builtin(
                     "spl_autoload_extensions() takes at most 1 argument",
                 ));
             }
-            for arg in args {
+            if let Some(arg) = args.first() {
                 checker.infer_type(arg, env)?;
+                if !matches!(
+                    arg.kind,
+                    ExprKind::StringLiteral(_) | ExprKind::Null
+                ) {
+                    return Err(CompileError::new(
+                        span,
+                        "spl_autoload_extensions() argument must be a string literal or null",
+                    ));
+                }
             }
             Ok(Some(PhpType::Str))
         }
@@ -94,7 +107,7 @@ pub(super) fn check_builtin(
                 ));
             }
             let ty = checker.infer_type(&args[0], env)?;
-            if !matches!(ty, PhpType::Object(_) | PhpType::Mixed) {
+            if !matches!(ty, PhpType::Object(_)) {
                 return Err(CompileError::new(
                     span,
                     "spl_object_id() argument must be an object",
@@ -110,7 +123,7 @@ pub(super) fn check_builtin(
                 ));
             }
             let ty = checker.infer_type(&args[0], env)?;
-            if !matches!(ty, PhpType::Object(_) | PhpType::Mixed) {
+            if !matches!(ty, PhpType::Object(_)) {
                 return Err(CompileError::new(
                     span,
                     "spl_object_hash() argument must be an object",

@@ -182,6 +182,8 @@ mod array_builtins;
 mod callables;
 #[path = "error_tests/never.rs"]
 mod never;
+#[path = "error_tests/spl_builtins.rs"]
+mod spl_builtins;
 #[path = "error_tests/misc.rs"]
 mod misc;
 
