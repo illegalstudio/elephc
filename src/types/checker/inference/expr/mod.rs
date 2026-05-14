@@ -230,6 +230,14 @@ impl Checker {
                             _ => Ok(*elem_ty.clone()),
                         }
                     }
+                    // Mixed receivers fall through to runtime dispatch. The
+                    // boxed payload may carry an indexed array, an assoc
+                    // hash, or a stdClass; codegen unboxes and routes to
+                    // the right runtime helper. Missing keys decode to
+                    // `Mixed(null)` at runtime, mirroring PHP's silent
+                    // "undefined index" warning behavior for this very
+                    // common idiom (e.g. `json_decode($json, true)["k"]`).
+                    PhpType::Mixed => Ok(PhpType::Mixed),
                     _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
                 }
             }
@@ -341,6 +349,9 @@ impl Checker {
                 } else {
                     Ok(wider_type_syntactic(&vt, &dt))
                 }
+            }
+            ExprKind::Pipe { value, callable } => {
+                self.infer_pipe_type(value, callable, expr, env)
             }
             ExprKind::Assignment {
                 target,
@@ -484,6 +495,35 @@ impl Checker {
                     crate::parser::ast::StaticReceiver::Named(name) => name.as_canonical(),
                 };
                 self.infer_new_object_type(&class_name, args, expr, env)
+            }
+            ExprKind::Yield { key, value } => {
+                if let Some(k) = key {
+                    self.infer_type(k, env)?;
+                }
+                if let Some(v) = value {
+                    self.infer_type(v, env)?;
+                }
+                Ok(PhpType::Mixed)
+            }
+            ExprKind::YieldFrom(inner) => {
+                let inner_ty = self.infer_type(inner, env)?;
+                let supported = match &inner.kind {
+                    ExprKind::ArrayLiteral(_) => true,
+                    ExprKind::FunctionCall { .. } | ExprKind::Variable(_) => {
+                        self.type_accepts(&PhpType::Object("Generator".to_string()), &inner_ty)
+                    }
+                    _ => false,
+                };
+                if !supported {
+                    return Err(CompileError::new(
+                        inner.span,
+                        &format!(
+                            "yield from expects an array literal or Generator, got {:?}",
+                            inner_ty
+                        ),
+                    ));
+                }
+                Ok(PhpType::Mixed)
             }
             ExprKind::MagicConstant(_) => {
                 unreachable!("MagicConstant must be lowered before type inference")

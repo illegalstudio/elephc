@@ -240,3 +240,72 @@ class Bad implements Iterator {
         "Cannot implement interface method Bad::valid with incompatible return type int",
     );
 }
+
+// --- Generator-related errors ---
+
+#[test]
+fn test_error_generator_cannot_be_redeclared() {
+    expect_error(
+        "<?php class Generator { public function current(): mixed { return null; } }",
+        "Cannot redeclare built-in interface: Generator",
+    );
+}
+
+#[test]
+fn test_error_yield_outside_function() {
+    expect_error(
+        "<?php yield 1;",
+        "yield can only be used inside a function or method body",
+    );
+}
+
+#[test]
+fn test_error_yield_outside_function_in_pipe_value() {
+    expect_error(
+        "<?php function id($v) { return $v; } $x = (yield 1) |> id(...);",
+        "yield can only be used inside a function or method body",
+    );
+}
+
+#[test]
+fn test_error_yield_outside_function_in_pipe_callable() {
+    expect_error(
+        "<?php $x = 1 |> (yield 2);",
+        "yield can only be used inside a function or method body",
+    );
+}
+
+#[test]
+fn test_error_yield_in_try_block() {
+    expect_error(
+        "<?php function gen() { try { yield 1; } catch (\\Throwable $e) {} }",
+        "yield inside try/catch/finally is not yet supported",
+    );
+}
+
+#[test]
+fn test_error_yield_in_catch_block() {
+    expect_error(
+        "<?php function gen() { try {} catch (\\Throwable $e) { yield 1; } }",
+        "yield inside try/catch/finally is not yet supported",
+    );
+}
+
+#[test]
+fn test_error_yield_from_outside_function() {
+    expect_error(
+        "<?php yield from [1, 2, 3];",
+        "yield can only be used inside a function or method body",
+    );
+}
+
+#[test]
+fn test_error_yield_from_rejects_non_generator_call() {
+    expect_error(
+        "<?php
+function not_gen(): int { return 1; }
+function gen() { yield from not_gen(); }
+",
+        "yield from expects an array literal or Generator, got Int",
+    );
+}

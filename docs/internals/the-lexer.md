@@ -86,7 +86,7 @@ For each token, the scanner looks at the current character and decides:
 
 5. **Letter or `_`** → Start of an identifier or keyword. Read the full word, then check if it's a keyword (`if`, `while`, `echo`, `function`, etc.) or a plain identifier (function name).
 
-6. **Operator characters** (`+`, `-`, `*`, `/`, `=`, `<`, `>`, `!`, `.`, `%`, `&`, `|`, `^`, `~`, `?`, `@`) → Look ahead to handle multi-character operators (`==`, `===`, `!=`, `!==`, `<=`, `>=`, `<=>`, `<<`, `>>`, `&&`, `||`, `**`, `++`, `--`, `?->`, `??`, `??=`, `+=`, `-=`, `*=`, `**=`, `/=`, `.=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`). Note that `<` may lead to `<=`, `<=>`, `<<`, `<<=`, or `<<<` (heredoc/nowdoc — see [below](#heredoc-and-nowdoc)).
+6. **Operator characters** (`+`, `-`, `*`, `/`, `=`, `<`, `>`, `!`, `.`, `%`, `&`, `|`, `^`, `~`, `?`, `@`) → Look ahead to handle multi-character operators (`==`, `===`, `!=`, `!==`, `<=`, `>=`, `<=>`, `<<`, `>>`, `&&`, `||`, `**`, `++`, `--`, `?->`, `??`, `??=`, `|>`, `+=`, `-=`, `*=`, `**=`, `/=`, `.=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`). Note that `<` may lead to `<=`, `<=>`, `<<`, `<<=`, or `<<<` (heredoc/nowdoc — see [below](#heredoc-and-nowdoc)).
 
 7. **Structural characters** (`(`, `)`, `{`, `}`, `[`, `]`, `;`, `,`, `?`, `:`, `\`) → Single-character tokens. Note that `?` followed by another `?` produces `??`, and `??` followed by `=` produces `??=`. `\` is tokenized separately so the parser can build qualified and fully-qualified namespace names.
 
@@ -120,14 +120,14 @@ Include  IncludeOnce  Require  RequireOnce  Stdin  Stdout  Stderr  Fn
 Use  Namespace  Const  Global  Static  Self_  Trait  Parent
 InsteadOf  InstanceOf  PhpEol  PhpOs  DirectorySeparator  DunderDir  DunderFile  DunderLine  DunderFunction
 DunderClass  DunderMethod  DunderNamespace  DunderTrait  Class  Enum  New  Public
-Protected  Private  ReadOnly  This  Extern  Packed  AttrOpen  Assign  DoubleArrow
+Protected  Private  ReadOnly  This  Extern  Packed  Yield  AttrOpen  Assign  DoubleArrow
 Plus  Minus  Star  StarStar  Slash  Percent  Dot  Comma
 Backslash  LBracket  RBracket  Question  Colon  PlusAssign  MinusAssign  StarAssign
 StarStarAssign  SlashAssign  DotAssign  PercentAssign  AmpAssign  PipeAssign  CaretAssign  LessLessAssign
 GreaterGreaterAssign  PlusPlus  MinusMinus  AndAnd  OrOr  And  Or  Xor
 Bang  EqualEqual  EqualEqualEqual  NotEqual  NotEqualEqual  Less  Greater  LessEqual
 GreaterEqual  Spaceship  Ampersand  Pipe  Caret  Tilde  At  LessLess  GreaterGreater
-Arrow  QuestionArrow  DoubleColon  QuestionQuestion  QuestionQuestionAssign  Ellipsis  Eof
+Arrow  QuestionArrow  DoubleColon  QuestionQuestion  QuestionQuestionAssign  PipeArrow  Ellipsis  Eof
 ```
 
 ### Literals
@@ -157,7 +157,7 @@ Arrow  QuestionArrow  DoubleColon  QuestionQuestion  QuestionQuestionAssign  Ell
 echo  if  else  elseif  while  do  for  foreach  as
 break  continue  function  return  include  require
 include_once  require_once  true  false  null  print
-switch  case  default  match  try  catch  finally  throw  fn  use  namespace  ifdef  extern  const
+switch  case  default  match  try  catch  finally  throw  yield  fn  use  namespace  ifdef  extern  const
 global  static  self  class  abstract  final  interface  trait  extends  implements  new
 public  protected  private  readonly  parent  insteadof  instanceof  enum  packed
 ```
@@ -194,6 +194,7 @@ PHP magic constants are tokenized as `Token::DunderDir`, `Token::DunderFile`, `T
 instanceof
 &  |  ^  ~  @  <<  >>
 ??  ->  ::
+|>
 ++  --
 ...
 ```

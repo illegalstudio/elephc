@@ -86,7 +86,7 @@ In this example, there are no magic constants, so the AST passes through unchang
 
 ## Phase 4: Conditional compilation
 
-**File:** `src/conditional.rs`
+**Files:** `src/conditional/`
 
 If the program uses elephc-only `ifdef SYMBOL { ... } else { ... }` blocks, the conditional pass evaluates them against the active CLI `--define` symbols and removes the inactive branches from the AST before any include resolution or type checking happens.
 

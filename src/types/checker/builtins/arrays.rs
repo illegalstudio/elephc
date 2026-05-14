@@ -30,7 +30,9 @@ pub(super) fn check_builtin(
             }
             let ty = checker.infer_type(&args[0], env)?;
             match &ty {
-                PhpType::Array(_) | PhpType::AssocArray { .. } => Ok(Some(PhpType::Int)),
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => {
+                    Ok(Some(PhpType::Int))
+                }
                 PhpType::Object(class_name) => {
                     if checker.class_implements_interface(class_name, "Countable") {
                         Ok(Some(PhpType::Int))

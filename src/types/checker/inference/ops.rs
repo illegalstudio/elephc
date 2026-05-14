@@ -11,7 +11,7 @@
 use crate::errors::CompileError;
 use crate::names::Name;
 use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, TypeExpr};
-use crate::types::{merge_array_key_types, PhpType, TypeEnv};
+use crate::types::{merge_array_key_types, FunctionSig, PhpType, TypeEnv};
 
 use super::super::Checker;
 use super::syntactic::infer_return_type_syntactic;
@@ -212,9 +212,27 @@ impl Checker {
                     value: Box::new(value),
                 })
             }
+            (PhpType::Array(left_elem), PhpType::AssocArray { key, value }) => {
+                let value = self
+                    .merge_array_element_type(left_elem, value)
+                    .unwrap_or(PhpType::Mixed);
+                Ok(PhpType::AssocArray {
+                    key: Box::new(merge_array_key_types(PhpType::Int, *key.clone())),
+                    value: Box::new(value),
+                })
+            }
+            (PhpType::AssocArray { key, value }, PhpType::Array(right_elem)) => {
+                let value = self
+                    .merge_array_element_type(value, right_elem)
+                    .unwrap_or(PhpType::Mixed);
+                Ok(PhpType::AssocArray {
+                    key: Box::new(merge_array_key_types(*key.clone(), PhpType::Int)),
+                    value: Box::new(value),
+                })
+            }
             _ => Err(CompileError::new(
                 expr.span,
-                "Array union requires both operands to be arrays of the same kind",
+                "Array union requires both operands to be arrays",
             )),
         }
     }
@@ -467,6 +485,130 @@ impl Checker {
         } else {
             ret_ty
         }
+    }
+
+    /// Type-checks the PHP 8.5 pipe operator: `value |> callable`.
+    ///
+    /// Semantics: `callable` must evaluate to a callable, and the result is
+    /// computed by invoking it with `value` as its only positional argument.
+    /// By-reference parameters on the callable are rejected per the RFC.
+    pub(crate) fn infer_pipe_type(
+        &mut self,
+        value: &Expr,
+        callable: &Expr,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        // Evaluate the LHS — any type is acceptable as the piped value.
+        let _value_ty = self.infer_type(value, env)?;
+
+        // The RHS must be a callable.
+        let callable_ty = self.infer_type(callable, env)?;
+        if callable_ty != PhpType::Callable {
+            return Err(CompileError::new(
+                expr.span,
+                &format!(
+                    "Pipe operator right-hand side must be a callable, got {:?}",
+                    callable_ty
+                ),
+            ));
+        }
+
+        // Synthesize the equivalent call: `callable(value)`.
+        let synth_args = vec![value.clone()];
+
+        // Resolve the callable's signature using the same dispatch as ExprCall.
+        match &callable.kind {
+            ExprKind::Variable(var_name) => {
+                if let Some(sig) = self.callable_sigs.get(var_name).cloned() {
+                    if let Some(target) = self
+                        .first_class_callable_targets
+                        .get(var_name)
+                        .cloned()
+                    {
+                        let specialized_sig = self.specialize_first_class_callable_target(
+                            &target,
+                            &synth_args,
+                            expr.span,
+                            env,
+                        )?;
+                        return self.check_pipe_known_callable_call(
+                            &specialized_sig,
+                            &synth_args,
+                            expr.span,
+                            env,
+                            &format!("pipe target ${}", var_name),
+                        );
+                    }
+                    return self.check_pipe_known_callable_call(
+                        &sig,
+                        &synth_args,
+                        expr.span,
+                        env,
+                        &format!("pipe target ${}", var_name),
+                    );
+                }
+            }
+            ExprKind::FirstClassCallable(target) => {
+                let sig = self.specialize_first_class_callable_target(
+                    target,
+                    &synth_args,
+                    expr.span,
+                    env,
+                )?;
+                return self.check_pipe_known_callable_call(
+                    &sig,
+                    &synth_args,
+                    expr.span,
+                    env,
+                    "pipe target",
+                );
+            }
+            ExprKind::Closure { .. } => {
+                if let Some(sig) = self.resolve_expr_callable_sig(callable, env)? {
+                    return self.check_pipe_known_callable_call(
+                        &sig,
+                        &synth_args,
+                        expr.span,
+                        env,
+                        "pipe target",
+                    );
+                }
+            }
+            _ => {}
+        }
+
+        // No statically-known signature — fall back to syntactic return-type inference
+        // (matches the unknown-callable path in infer_expr_call_type).
+        match &callable.kind {
+            ExprKind::Closure { body, .. } => {
+                return Ok(infer_return_type_syntactic(body));
+            }
+            ExprKind::Variable(var_name) => {
+                if let Some(ret_ty) = self.closure_return_types.get(var_name) {
+                    return Ok(ret_ty.clone());
+                }
+            }
+            _ => {}
+        }
+        Ok(PhpType::Int)
+    }
+
+    fn check_pipe_known_callable_call(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<PhpType, CompileError> {
+        if sig.ref_params.iter().any(|is_ref| *is_ref) {
+            return Err(CompileError::new(
+                span,
+                "Pipe operator does not support by-reference parameters",
+            ));
+        }
+        self.check_known_callable_call(sig, args, span, env, callee_desc)
     }
 
     fn is_nullable_callable_from_nullsafe_chain(callee: &Expr, callee_ty: &PhpType) -> bool {

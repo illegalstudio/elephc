@@ -8,7 +8,7 @@
 //! Key details:
 //! - Expression traversal must cover every `ExprKind` so raw magic constants cannot reach later passes.
 
-use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget};
 
 use super::stmts::{walk_program, walk_stmt};
 use super::Pass;
@@ -32,8 +32,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         | ExprKind::PostDecrement(_)
         | ExprKind::ConstRef(_)
         | ExprKind::This
-        | ExprKind::StaticPropertyAccess { .. }
-        | ExprKind::FirstClassCallable(_)) => kind,
+        | ExprKind::StaticPropertyAccess { .. }) => kind,
 
         ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
             left: Box::new(walk_expr(*left, pass)),
@@ -53,6 +52,10 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
             value: Box::new(walk_expr(*value, pass)),
             default: Box::new(walk_expr(*default, pass)),
+        },
+        ExprKind::Pipe { value, callable } => ExprKind::Pipe {
+            value: Box::new(walk_expr(*value, pass)),
+            callable: Box::new(walk_expr(*callable, pass)),
         },
         ExprKind::Assignment {
             target,
@@ -200,6 +203,9 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             method,
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
+        ExprKind::FirstClassCallable(target) => {
+            ExprKind::FirstClassCallable(walk_callable_target(target, pass))
+        }
         ExprKind::PtrCast { target_type, expr: inner } => ExprKind::PtrCast {
             target_type,
             expr: Box::new(walk_expr(*inner, pass)),
@@ -216,8 +222,26 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             receiver,
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
+        ExprKind::Yield { key, value } => ExprKind::Yield {
+            key: key.map(|k| Box::new(walk_expr(*k, pass))),
+            value: value.map(|v| Box::new(walk_expr(*v, pass))),
+        },
+        ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(walk_expr(*inner, pass))),
     };
     Expr { kind, span }
+}
+
+fn walk_callable_target<P: Pass>(target: CallableTarget, pass: &mut P) -> CallableTarget {
+    match target {
+        CallableTarget::Method { object, method } => CallableTarget::Method {
+            object: Box::new(walk_expr(*object, pass)),
+            method,
+        },
+        CallableTarget::Function(name) => CallableTarget::Function(name),
+        CallableTarget::StaticMethod { receiver, method } => {
+            CallableTarget::StaticMethod { receiver, method }
+        }
+    }
 }
 
 fn walk_instanceof_target<P: Pass>(

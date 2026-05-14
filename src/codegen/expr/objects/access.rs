@@ -13,6 +13,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::functions;
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -45,6 +46,9 @@ pub(super) fn emit_property_access(
     let (class_name, prop_ty, offset, needs_deref, is_reference) = match &obj_ty {
         PhpType::Object(class_name) => {
             return emit_loaded_object_property_access(class_name, property, emitter, ctx, data);
+        }
+        PhpType::Mixed => {
+            return emit_mixed_property_access(property, emitter, data);
         }
         PhpType::Pointer(Some(class_name)) if ctx.extern_classes.contains_key(class_name) => {
             let class_info = match ctx.extern_classes.get(class_name).cloned() {
@@ -172,6 +176,70 @@ pub(super) fn emit_property_access(
     prop_ty
 }
 
+/// Lower a `$obj->name` read where `$obj` has type `Object("stdClass")`.
+///
+/// stdClass has no static property layout, so route the access through the
+/// runtime helper `__rt_stdclass_get`. The receiver is already in
+/// int_result_reg (x0/rax) at this point thanks to `emit_property_access`.
+fn emit_stdclass_property_access(
+    property: &str,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) -> PhpType {
+    emit_dynamic_property_access(
+        property,
+        emitter,
+        data,
+        "stdClass",
+        "__rt_stdclass_get",
+    )
+}
+
+/// Lower a `$obj->name` read where `$obj` has type `Mixed`.
+///
+/// The runtime helper unboxes the Mixed cell, validates that it carries a
+/// stdClass instance, and routes to `__rt_stdclass_get`. Other payloads
+/// return Mixed(null), matching PHP's "property access on non-object"
+/// warning behaviour for the most common idiom (`json_decode($json)->name`).
+fn emit_mixed_property_access(
+    property: &str,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) -> PhpType {
+    emit_dynamic_property_access(
+        property,
+        emitter,
+        data,
+        "mixed",
+        "__rt_mixed_property_get",
+    )
+}
+
+fn emit_dynamic_property_access(
+    property: &str,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    receiver_label: &str,
+    runtime_symbol: &str,
+) -> PhpType {
+    emitter.comment(&format!("{}->{}  (dynamic)", receiver_label, property));
+    let (label, len) = data.add_string(property.as_bytes());
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x1", &label);
+            abi::emit_load_int_immediate(emitter, "x2", len as i64);
+            emitter.instruction(&format!("bl {}", runtime_symbol));             // call the dynamic-property reader; result Mixed* lands in x0
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rdi, rax");                                // shift the receiver into the SysV first-arg register
+            abi::emit_symbol_address(emitter, "rsi", &label);
+            abi::emit_load_int_immediate(emitter, "rdx", len as i64);
+            emitter.instruction(&format!("call {}", runtime_symbol));           // call the dynamic-property reader; result Mixed* lands in rax
+        }
+    }
+    PhpType::Mixed
+}
+
 pub(super) fn emit_nullable_object_property_access(
     class_name: &str,
     property: &str,
@@ -203,6 +271,9 @@ pub(super) fn emit_loaded_object_property_access(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
+    if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+        return emit_stdclass_property_access(property, emitter, data);
+    }
     let class_info = match ctx.classes.get(class_name).cloned() {
         Some(c) => c,
         None => {

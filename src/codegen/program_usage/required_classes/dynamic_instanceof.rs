@@ -151,6 +151,9 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         | ExprKind::ShortTernary { value, default } => {
             expr_has_dynamic_instanceof(value) || expr_has_dynamic_instanceof(default)
         }
+        ExprKind::Pipe { value, callable } => {
+            expr_has_dynamic_instanceof(value) || expr_has_dynamic_instanceof(callable)
+        }
         ExprKind::Assignment {
             target,
             value,
@@ -230,6 +233,13 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         | ExprKind::This
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. } => false,
+        ExprKind::Yield { key, value } => {
+            key.as_ref().is_some_and(|k| expr_has_dynamic_instanceof(k))
+                || value
+                    .as_ref()
+                    .is_some_and(|v| expr_has_dynamic_instanceof(v))
+        }
+        ExprKind::YieldFrom(inner) => expr_has_dynamic_instanceof(inner),
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before codegen analysis")
         }

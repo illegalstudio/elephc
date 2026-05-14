@@ -84,13 +84,17 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     if emitter.platform.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: check if return value is negative
     }
-    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fopen_ok")); // branch if syscall succeeded
+    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fopen_opened")); // branch if syscall succeeded
     emitter.label("__rt_fopen_fail");
     emit_fopen_failed_warning(emitter);
     emitter.instruction("mov x0, #-1");                                         // return -1 to indicate failure
+    emitter.instruction("b __rt_fopen_return");                                 // skip eof-flag reset on failed opens
 
     // -- restore frame and return fd in x0 --
-    emitter.label("__rt_fopen_ok");
+    emitter.label("__rt_fopen_opened");
+    abi::emit_symbol_address(emitter, "x9", "_eof_flags");
+    emitter.instruction("strb wzr, [x9, x0]");                                  // clear stale EOF state for the newly opened descriptor
+    emitter.label("__rt_fopen_return");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller with fd in x0
@@ -144,11 +148,15 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edx, 0x1A4");                                      // pass mode 0644 for create-capable fopen() modes
     emitter.instruction("call open");                                           // open the requested file through libc open() using the parsed fopen() flags
     emitter.instruction("test rax, rax");                                       // did libc open() return a negative failure descriptor?
-    emitter.instruction("jns __rt_fopen_ok_x86");                               // skip the warning when fopen() succeeded
+    emitter.instruction("jns __rt_fopen_opened_x86");                           // skip the warning when fopen() succeeded
     emitter.label("__rt_fopen_fail_x86");
     emit_fopen_failed_warning(emitter);
     emitter.instruction("mov rax, -1");                                         // normalize all open failures to the PHP false sentinel path
-    emitter.label("__rt_fopen_ok_x86");
+    emitter.instruction("jmp __rt_fopen_return_x86");                           // skip eof-flag reset on failed opens
+    emitter.label("__rt_fopen_opened_x86");
+    emitter.instruction("lea r10, [rip + _eof_flags]");                         // materialize the eof-flag table for the newly opened descriptor
+    emitter.instruction("mov BYTE PTR [r10 + rax], 0");                         // clear stale EOF state before returning the descriptor
+    emitter.label("__rt_fopen_return_x86");
 
     emitter.instruction("add rsp, 32");                                         // release the temporary pathname and mode spill slots before returning the file descriptor
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the x86_64 fopen() helper completes

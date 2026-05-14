@@ -19,3 +19,5 @@ mod operator_tokens;
 mod doc_strings;
 #[path = "keywords/oop_keywords.rs"]
 mod oop_keywords;
+#[path = "keywords/yield_tokens.rs"]
+mod yield_tokens;

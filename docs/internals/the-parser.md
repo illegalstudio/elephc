@@ -56,12 +56,15 @@ Things that have a value:
 | `Throw(Expr)` | `throw new Exception("boom")` | Throw expression node used both in statements and expression positions such as `??` or ternaries |
 | `Print(Expr)` | `print $x` | PHP print expression. It writes the operand and returns `1`; statement-form `print $x;` is represented as `ExprStmt(Print(...))`. |
 | `NullCoalesce { value, default }` | `$x ?? $y` | Returns `$x` if non-null, otherwise `$y` |
+| `Pipe { value, callable }` | `$x |> trim(...)`, `$x |> (fn($v) => $v + 1)` | PHP 8.5 pipe operator. Dedicated node, not a `BinOp`, so later passes can preserve left-hand evaluation before the callable target and emit pipe-specific diagnostics. Arrow functions used as targets must be parenthesized. |
 | `Assignment { target, value, result_target, prelude, conditional_value_temp }` | `$x = 1`, `$arr[$i] ??= "fallback"` | Assignment expression. Complex targets can carry prelude statements and synthetic temporaries so side effects are evaluated once while the assignment still returns the assigned value. |
 | `PreIncrement(String)` | `++$i` | Returns new value |
 | `PostIncrement(String)` | `$i++` | Returns old value |
 | `PreDecrement(String)` | `--$i` | |
 | `PostDecrement(String)` | `$i--` | |
 | `FunctionCall { name, args }` | `strlen($s)`, `Tools\fmt($s)`, `\strlen($s)` | Parsed as a structured name so later phases can resolve namespace aliases and fully-qualified names |
+| `Yield { key, value }` | `yield`, `yield $v`, `yield $k => $v` | Yield expression inside a generator body. The parser keeps optional key/value expressions; later checker/codegen turns the enclosing function or closure into a `Generator` state machine. |
+| `YieldFrom(Expr)` | `yield from inner()` | Contextual `yield from` delegation. The lexer leaves `from` as an identifier and the parser recognizes it only immediately after `yield`. |
 | `ArrayLiteral(Vec<Expr>)` | `[1, 2, 3]`, `[...$arr, 4]` | Indexed array; elements may include `Spread` expressions |
 | `ArrayLiteralAssoc(Vec<(Expr, Expr)>)` | `["a" => 1]` | Associative array |
 | `Match { subject, arms, default }` | `match($x) { 1, 2 => "low", 3 => "high" }` | Match expression (returns a value). `arms` is `Vec<(Vec<Expr>, Expr)>`, so each arm can have multiple comma-separated patterns before `=>`, and `default` is optional (`Option<Box<Expr>>`) |
@@ -76,7 +79,6 @@ Things that have a value:
 | `ExprCall { callee, args }` | `$arr[0](1, 2)` | Calling the result of an expression (e.g., array access returning a callable) |
 | `Spread(Expr)` | `...$arr` | Spread/unpack operator — expands an array into individual arguments or elements |
 | `ConstRef(Name)` | `MAX_RETRIES`, `Config\PORT`, `\App\Config\PORT` | Reference to a user-defined constant |
-| `EnumCase { enum_name, case_name }` | `Color::Red`, `App\Status::Ok` | Reference to a declared enum case before later phases lower it to enum metadata |
 | `NewObject { class_name, args }` | `new Point(1, 2)`, `new App\Model\User()` | Object instantiation |
 | `NewScopedObject { receiver, args }` | `new self()`, `new static()`, `new parent()` | Object instantiation against a static receiver. Distinct from `NewObject` (which carries a fixed `Name`) so codegen can honour late static binding for `static`. |
 | `PropertyAccess { object, property }` | `$p->x` | Property access via `->` |
@@ -135,7 +137,7 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 | `ClassDecl { name, extends, implements, is_abstract, is_final, is_readonly_class, trait_uses, properties, constants, methods }` | `final readonly class Point extends Shape implements Named { use NamedTrait; ... }` |
 | `EnumDecl { name, backing_type, cases }` | `enum Status: int { case Ok = 1; case Err = 2; }` |
 | `PackedClassDecl { name, fields }` | `packed class Vec2 { public float $x; public float $y; }` |
-| `InterfaceDecl { name, extends, constants, methods }` | `interface Named extends Jsonable { public const KIND = "name"; public function name(); }` |
+| `InterfaceDecl { name, extends, methods, constants }` | `interface Named extends Stringable { public function name(): string; }` |
 | `TraitDecl { name, trait_uses, properties, constants, methods }` | `trait Named { public const KIND = "name"; ... }` |
 | `PropertyAssign { object, property, value }` | `$p->x = 10;` |
 | `StaticPropertyAssign { receiver, property, value }` | `Counter::$count = 10;`, `self::$count = 10;` |
@@ -221,7 +223,7 @@ forms such as `?T|U` and normalize accepted declarations.
 | Type | Fields | Description |
 |---|---|---|
 | `Visibility` | `Public`, `Protected`, `Private` | Enum for property/method visibility |
-| `Attribute` | `name`, `args`, `span` | A PHP 8 attribute entry from a `#[...]` group. The parser validates names and optional argument expressions, but runtime reflection is not implemented yet. |
+| `Attribute` | `name`, `args`, `span` | A PHP 8 attribute entry from a `#[...]` group. The parser validates names and optional argument expressions. Class, method, and property names plus supported literal args feed `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported Reflection `getAttributes()` APIs; parameter reflection is not implemented yet. |
 | `AttributeGroup` | `attributes`, `span` | One bracketed attribute group. Declaration sites can carry one or more groups. |
 | `EnumCaseDecl` | `name`, `value`, `span`, `attributes` | A backed or unit enum case declaration, with declaration-level attributes preserved in the AST. |
 | `ClassConst` | `name`, `visibility`, `is_final`, `value`, `span`, `attributes` | A class, interface, or trait constant declaration. |
@@ -268,6 +270,7 @@ assignment          7          6         RIGHT (variable targets)
 &  (bitwise AND)   19         20         left
 == != === !==      21         22         left
 < > <= >= <=>      23         24         left
+|>                 24         25         left (dedicated Pipe node)
 << >>              25         26         left
 .  (concat)        27         28         left
 + -                29         30         left
@@ -284,6 +287,8 @@ unary (- ! ~)          35                prefix
 For `??`, the Pratt table still uses `BinOp::NullCoalesce` to assign binding power, but the parser builds a dedicated `ExprKind::NullCoalesce { value, default }` node rather than a generic `BinaryOp`.
 
 For `instanceof`, the Pratt loop handles the keyword at expression level and then parses either a class/interface target name or a dynamic target expression. Its binding power matches PHP's behavior where `!$obj instanceof User` parses as `!($obj instanceof User)`.
+
+For `|>`, the Pratt loop handles `Token::PipeArrow` before the generic `BinOp` table and builds `ExprKind::Pipe { value, callable }`. The binding power `(24, 25)` places it below concatenation, shifts, and arithmetic, but above comparisons, `??`, ternary, logical operators, and assignment. This matches PHP 8.5 and keeps pipe-specific validation, such as requiring parenthesized arrow-function targets, out of generic binary-operator lowering.
 
 The word-form logical operators (`and`, `xor`, `or`) have PHP's lower precedence. The symbolic `&&` and `||` continue to bind more tightly.
 
@@ -359,6 +364,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `Variable` | Return `Variable` node (with postfix `++`/`--` check) |
 | `throw` | Parse the following expression at the lowest precedence and wrap it in `ExprKind::Throw` |
 | `print` | Parse the operand at ternary-level precedence (bp=7, above word logical operators) and wrap it in `ExprKind::Print` |
+| `yield` | Parse `yield`, `yield expr`, `yield key => value`, or contextual `yield from expr` |
 | `-` (minus) | Parse inner expr at unary precedence (bp=35), return `Negate` |
 | `!` (not) | Parse inner expr at unary precedence (bp=35), return `Not` |
 | `~` (bitwise not) | Parse inner expr at unary precedence (bp=35), return `BitNot` |

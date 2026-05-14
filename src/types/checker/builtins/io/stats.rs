@@ -91,6 +91,16 @@ pub(super) fn check_builtin(
             ensure_stream_resource(checker, name, &args[0], env)?;
             Ok(Some(stat_result_type(checker)))
         }
+        "linkinfo" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "linkinfo() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Int))
+        }
         _ => Ok(None),
     }
 }

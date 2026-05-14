@@ -13,7 +13,9 @@ use super::buffers;
 use super::diagnostics;
 use super::exceptions;
 use super::fibers;
+use super::generators;
 use super::io;
+use super::objects;
 use super::pointers;
 use super::strings;
 use super::system;
@@ -100,11 +102,20 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     system::emit_json_encode_null(emitter);
     system::emit_json_encode_str(emitter);
     system::emit_json_encode_mixed(emitter);
+    system::emit_json_encode_float(emitter);
+    system::emit_json_encode_object(emitter);
+    system::emit_json_pretty_apply(emitter);
+    system::emit_json_throw_error(emitter);
+    system::emit_json_depth_enter(emitter);
+    system::emit_json_depth_exit(emitter);
     system::emit_json_encode_array_dynamic(emitter);
     system::emit_json_encode_array_int(emitter);
     system::emit_json_encode_array_str(emitter);
     system::emit_json_encode_assoc(emitter);
     system::emit_json_decode(emitter);
+    system::emit_json_decode_mixed(emitter);
+    system::emit_json_last_error_msg(emitter);
+    system::emit_json_validate(emitter);
     system::emit_preg_strip(emitter);
     system::emit_pcre_to_posix(emitter);
     system::emit_preg_match(emitter);
@@ -120,6 +131,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     exceptions::emit_exception_matches(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);
+
+    // Generator runtime helpers for Iterator methods, send/throw, and return-value retrieval.
+    generators::emit_generator_runtime(emitter);
 
     // Array runtime functions
     arrays::emit_heap_alloc(emitter);
@@ -138,6 +152,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_array_push_refcounted(emitter);
     arrays::emit_array_push_str(emitter);
     arrays::emit_array_union(emitter);
+    arrays::emit_array_hash_union(emitter);
+    arrays::emit_hash_array_union(emitter);
     arrays::emit_random_u32(emitter);
     arrays::emit_random_uniform(emitter);
     arrays::emit_sort_int(emitter, false);
@@ -225,6 +241,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_mixed_cast_float(emitter);
     arrays::emit_mixed_cast_int(emitter);
     arrays::emit_mixed_cast_string(emitter);
+    arrays::emit_mixed_count(emitter);
     arrays::emit_mixed_free_deep(emitter);
     arrays::emit_mixed_is_empty(emitter);
     arrays::emit_mixed_strict_eq(emitter);
@@ -232,6 +249,16 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_mixed_write_stdout(emitter);
     arrays::emit_object_free_deep(emitter);
     arrays::emit_refcount(emitter);
+
+    // Object runtime functions
+    objects::emit_stdclass_new(emitter);
+    objects::emit_stdclass_from_hash(emitter);
+    objects::emit_stdclass_get(emitter);
+    objects::emit_stdclass_set(emitter);
+    objects::emit_mixed_property_get(emitter);
+    objects::emit_mixed_property_set(emitter);
+    objects::emit_mixed_array_get(emitter);
+    objects::emit_json_encode_stdclass(emitter);
 
     // Buffer runtime functions
     buffers::emit_buffer_new(emitter);
@@ -266,6 +293,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     io::emit_pathinfo_str(emitter);
     io::emit_pathinfo_array(emitter);
     io::emit_modify(emitter);
+    io::emit_streams_ext(emitter);
+    io::emit_symlink(emitter);
 
     // Pointer runtime functions
     pointers::emit_ptoa(emitter);

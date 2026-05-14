@@ -63,4 +63,56 @@ fn test_is_numeric_string() {
     assert_eq!(out, "");
 }
 
+// --- Mixed-cell-aware predicates ---
+//
+// `is_string()` / `is_int()` / `is_bool()` peek at the runtime tag of a
+// boxed Mixed value via `__rt_mixed_unbox`. Driven by the
+// `class_attribute_args()` use case where attribute literals are stored
+// as boxed mixed cells, but applies to any Mixed/Union runtime value.
+
+#[test]
+fn test_is_string_recognizes_string_inside_mixed_array() {
+    let out = compile_and_run(
+        r#"<?php
+#[Tagged("hello", 42, true, null)]
+class C {}
+$args = class_attribute_args('C', 'Tagged');
+foreach ($args as $arg) {
+    echo is_string($arg) ? "s" : "_";
+}
+"#,
+    );
+    assert_eq!(out, "s___");
+}
+
+#[test]
+fn test_is_int_recognizes_int_inside_mixed_array() {
+    let out = compile_and_run(
+        r#"<?php
+#[Tagged("hello", 42, true, null)]
+class C {}
+$args = class_attribute_args('C', 'Tagged');
+foreach ($args as $arg) {
+    echo is_int($arg) ? "i" : "_";
+}
+"#,
+    );
+    assert_eq!(out, "_i__");
+}
+
+#[test]
+fn test_is_bool_recognizes_bool_inside_mixed_array() {
+    let out = compile_and_run(
+        r#"<?php
+#[Tagged("hello", 42, true, null)]
+class C {}
+$args = class_attribute_args('C', 'Tagged');
+foreach ($args as $arg) {
+    echo is_bool($arg) ? "b" : "_";
+}
+"#,
+    );
+    assert_eq!(out, "__b_");
+}
+
 // --- Exponentiation operator ** ---

@@ -36,6 +36,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".comm _heap_debug_enabled, 8, 3\n");
     out.push_str(".comm _gc_collecting, 8, 3\n");
     out.push_str(".comm _gc_release_suppressed, 8, 3\n");
+    out.push_str(".comm _json_last_error, 8, 3\n");
+    out.push_str(".comm _json_active_flags, 8, 3\n");
+    out.push_str(".comm _json_active_depth, 8, 3\n");
+    out.push_str(".comm _json_depth_limit, 8, 3\n");
+    out.push_str(".comm _json_validate_idx, 8, 3\n");
+    out.push_str(".comm _json_validate_ptr, 8, 3\n");
+    out.push_str(".comm _json_validate_len, 8, 3\n");
+    out.push_str(".comm _json_decode_assoc, 8, 3\n");
     out.push_str(&format!(".globl _heap_max\n_heap_max:\n    .quad {}\n", heap_size));
     out.push_str(".globl _heap_err_msg\n_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
     out.push_str(".globl _heap_dbg_bad_refcount_msg\n_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
@@ -132,6 +140,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".globl _pathinfo_key_basename\n_pathinfo_key_basename:\n    .ascii \"basename\"\n");
     out.push_str(".globl _pathinfo_key_extension\n_pathinfo_key_extension:\n    .ascii \"extension\"\n");
     out.push_str(".globl _pathinfo_key_filename\n_pathinfo_key_filename:\n    .ascii \"filename\"\n");
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _tmpfile_template\n_tmpfile_template:\n    .ascii \"/tmp/elephc-XXXXXX\\0\"\n    .byte 0,0,0,0,0\n");
     out.push_str(".globl _pcre_space\n_pcre_space:\n    .ascii \"[[:space:]]\"\n");
     out.push_str(".globl _pcre_digit\n_pcre_digit:\n    .ascii \"[[:digit:]]\"\n");
     out.push_str(".globl _pcre_word\n_pcre_word:\n    .ascii \"[[:alnum:]_]\"\n");

@@ -41,6 +41,17 @@ pub fn emit(
     let source_repr = source_ty.codegen_repr();
     let result_reg = abi::int_result_reg(emitter);
 
+    if matches!(source_repr, PhpType::Mixed) {
+        // Mixed receivers: unbox the cell at runtime and dispatch to the
+        // shared count helper, which reads the array/hash header. Returns
+        // 0 when the boxed payload is not a container, mirroring PHP's
+        // long-standing "count(): Argument is not countable" warning
+        // behavior collapsed to a quiet zero for the most common idiom
+        // (count(json_decode($json, true))).
+        abi::emit_call_label(emitter, "__rt_mixed_count");                       // unbox the Mixed cell and read the array/hash count from its payload header
+        return Some(PhpType::Int);
+    }
+
     if source_repr.is_refcounted() && expr_result_heap_ownership(&args[0]) != HeapOwnership::Owned {
         let count_reg = abi::temp_int_reg(emitter.target);
         abi::emit_incref_if_refcounted(emitter, &source_repr);                   // retain borrowed heap-backed arrays or hashes before reading their header in place

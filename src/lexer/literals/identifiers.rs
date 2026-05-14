@@ -113,6 +113,7 @@ pub(in crate::lexer) fn scan_keyword(cursor: &mut Cursor) -> Result<Token, Compi
         "continue" => Ok(Token::Continue),
         "function" => Ok(Token::Function),
         "return" => Ok(Token::Return),
+        "yield" => Ok(Token::Yield),
         "true" => Ok(Token::True),
         "false" => Ok(Token::False),
         "null" => Ok(Token::Null),

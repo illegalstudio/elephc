@@ -112,6 +112,7 @@ pub enum Token {
     This,           // $this
     Extern,         // extern
     Packed,         // packed
+    Yield,          // yield (also: `yield from`; `from` parsed contextually)
     AttrOpen,       // #[ (start of attribute group)
 
     // Operators
@@ -185,6 +186,9 @@ pub enum Token {
     // Null coalescing
     QuestionQuestion,       // ??
     QuestionQuestionAssign, // ??=
+
+    // PHP 8.5 pipe operator
+    PipeArrow,      // |>
 
     // Variadic / spread
     Ellipsis,         // ...

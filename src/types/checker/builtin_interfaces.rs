@@ -1,3 +1,13 @@
+//! Purpose:
+//! Injects PHP builtin interfaces used by SPL, object contracts, and scalar interoperability.
+//! Provides declarations before class/interface schema validation runs.
+//!
+//! Called from:
+//! - `crate::types::checker::driver`
+//!
+//! Key details:
+//! - Builtin names are checked with PHP case-insensitive collision rules before insertion.
+
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
@@ -20,7 +30,6 @@ const BUILTIN_INTERFACE_NAMES: &[&str] = &[
     "SplObserver",
     "SplSubject",
     "Stringable",
-    "JsonSerializable",
 ];
 
 pub(crate) fn inject_builtin_interfaces(
@@ -223,17 +232,6 @@ pub(crate) fn inject_builtin_interfaces(
             name: "Stringable".to_string(),
             extends: Vec::new(),
             methods: vec![builtin_interface_method("__toString", TypeExpr::Str)],
-            span: crate::span::Span::dummy(),
-            constants: Vec::new(),
-        },
-    );
-
-    interface_map.insert(
-        "JsonSerializable".to_string(),
-        InterfaceDeclInfo {
-            name: "JsonSerializable".to_string(),
-            extends: Vec::new(),
-            methods: vec![builtin_interface_method("jsonSerialize", mixed_type())],
             span: crate::span::Span::dummy(),
             constants: Vec::new(),
         },

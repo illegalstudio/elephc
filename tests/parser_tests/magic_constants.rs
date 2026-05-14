@@ -8,6 +8,7 @@
 //! - Inline PHP snippets are parsed and assertions inspect AST shape, precedence, or expected parse failures.
 
 use super::*;
+use std::path::Path;
 
 #[test]
 fn test_parse_dunder_dir_magic_constant() {
@@ -56,6 +57,38 @@ fn test_parse_dunder_class_magic_constant() {
 fn test_parse_dunder_method_magic_constant() {
     let stmts = parse_source("<?php echo __METHOD__;");
     assert_eq!(echoed_expr(&stmts), &ExprKind::MagicConstant(MagicConstant::Method));
+}
+
+#[test]
+fn test_magic_constants_lower_inside_first_class_callable_receiver() {
+    let stmts = parse_source("<?php echo 1 |> make(__FILE__)->m(...);");
+    let lowered = elephc::magic_constants::substitute_file_and_scope_constants(
+        stmts,
+        Path::new("/tmp/elephc/main.php"),
+    );
+    let expr = match &lowered[0].kind {
+        StmtKind::Echo(expr) => expr,
+        other => panic!("expected Echo, got {:?}", other),
+    };
+    match &expr.kind {
+        ExprKind::Pipe { callable, .. } => match &callable.kind {
+            ExprKind::FirstClassCallable(CallableTarget::Method { object, method }) => {
+                assert_eq!(method, "m");
+                match &object.kind {
+                    ExprKind::FunctionCall { name, args } => {
+                        assert_eq!(name.as_str(), "make");
+                        assert_eq!(
+                            args[0].kind,
+                            ExprKind::StringLiteral("/tmp/elephc/main.php".into())
+                        );
+                    }
+                    other => panic!("expected FunctionCall receiver, got {:?}", other),
+                }
+            }
+            other => panic!("expected method callable, got {:?}", other),
+        },
+        other => panic!("expected Pipe, got {:?}", other),
+    }
 }
 
 #[test]

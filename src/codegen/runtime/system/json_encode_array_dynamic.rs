@@ -29,6 +29,17 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #96");                                    // establish the helper stack frame
     emitter.instruction("str x0, [sp, #0]");                                    // save the source array pointer
 
+    // -- enter the recursion-depth check so JSON_ERROR_DEPTH fires when
+    //    the user-supplied $depth limit is exceeded --
+    emitter.instruction("bl __rt_json_depth_enter");                            // increment _json_active_depth and throw on overflow when requested
+
+    // -- snapshot JSON_FORCE_OBJECT once: when set, the array encodes as a
+    //    JSON object whose keys are the integer indexes "0", "1", ... --
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_json_active_flags");
+    emitter.instruction("ldr x9, [x9]");                                        // load the active flag bitmask
+    emitter.instruction("and x9, x9, #16");                                     // isolate JSON_FORCE_OBJECT (bit 16) for fast subsequent checks
+    emitter.instruction("str x9, [sp, #48]");                                   // park the flag state in a stack slot
+
     // -- initialize concat buffer write pointers --
     crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // load the current concat offset
@@ -37,10 +48,14 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("str x11, [sp, #8]");                                   // save the output start pointer
     emitter.instruction("str x11, [sp, #16]");                                  // save the current write pointer
 
-    // -- write opening bracket --
-    emitter.instruction("mov w12, #91");                                        // ASCII '['
-    emitter.instruction("strb w12, [x11]");                                     // write the opening bracket
-    emitter.instruction("add x11, x11, #1");                                    // advance past the opening bracket
+    // -- write opening bracket or brace, depending on JSON_FORCE_OBJECT --
+    emitter.instruction("ldr x12, [sp, #48]");                                  // reload the cached force-object flag
+    emitter.instruction("mov w13, #91");                                        // ASCII '[' (default for indexed arrays)
+    emitter.instruction("cbz x12, __rt_json_arr_dyn_open_emit");                // skip the brace override when the flag is clear
+    emitter.instruction("mov w13, #123");                                       // ASCII '{' (force-object form opens with a brace)
+    emitter.label("__rt_json_arr_dyn_open_emit");
+    emitter.instruction("strb w13, [x11]");                                     // emit the chosen opening byte
+    emitter.instruction("add x11, x11, #1");                                    // advance past the opening byte
     emitter.instruction("str x11, [sp, #16]");                                  // persist the updated write pointer
 
     // -- cache array length and packed value_type tag --
@@ -67,8 +82,44 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #1");                                    // advance past the comma
     emitter.instruction("str x11, [sp, #16]");                                  // persist the updated write pointer
 
-    // -- update concat_off so nested encoders append from the current write position --
     emitter.label("__rt_json_arr_dyn_elem");
+    // -- when JSON_FORCE_OBJECT is set, prefix every element with `"<idx>":` --
+    emitter.instruction("ldr x12, [sp, #48]");                                  // reload the cached force-object flag
+    emitter.instruction("cbz x12, __rt_json_arr_dyn_elem_no_key");              // skip the key prefix when the flag is clear
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the current concat-buffer write pointer
+    emitter.instruction("mov w13, #34");                                        // ASCII '"'
+    emitter.instruction("strb w13, [x11]");                                     // emit the opening quote of the synthetic key
+    emitter.instruction("add x11, x11, #1");                                    // advance past the opening quote
+    emitter.instruction("str x11, [sp, #16]");                                  // persist the updated write pointer
+    // Sync concat_off so __rt_itoa appends the index digits after the quote.
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_concat_buf");
+    emitter.instruction("sub x12, x11, x10");                                   // compute the absolute concat offset for the current position
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("str x12, [x9]");                                       // publish the offset for itoa
+    emitter.instruction("ldr x0, [sp, #40]");                                   // load the loop index as the integer key value
+    emitter.instruction("bl __rt_itoa");                                        // format the index as decimal digits at concat_off
+    // __rt_itoa returns x1=ptr, x2=len of the formatted slice — copy it into
+    // the running write position so the slice is contiguous with the prefix.
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the running write pointer
+    emitter.instruction("mov x9, #0");                                          // initialize the index-copy index
+    emitter.label("__rt_json_arr_dyn_key_copy");
+    emitter.instruction("cmp x9, x2");                                          // have we copied every digit byte?
+    emitter.instruction("b.ge __rt_json_arr_dyn_key_done");                     // exit once the digits are fully copied
+    emitter.instruction("ldrb w13, [x1, x9]");                                  // load the next digit byte from the formatted slice
+    emitter.instruction("strb w13, [x11, x9]");                                 // copy it into the concat buffer at the running write position
+    emitter.instruction("add x9, x9, #1");                                      // advance the index-copy index
+    emitter.instruction("b __rt_json_arr_dyn_key_copy");                        // continue copying
+    emitter.label("__rt_json_arr_dyn_key_done");
+    emitter.instruction("add x11, x11, x2");                                    // advance the running write pointer past the digits
+    emitter.instruction("mov w13, #34");                                        // ASCII '"'
+    emitter.instruction("strb w13, [x11]");                                     // emit the closing quote of the synthetic key
+    emitter.instruction("mov w13, #58");                                        // ASCII ':'
+    emitter.instruction("strb w13, [x11, #1]");                                 // emit the colon between key and value
+    emitter.instruction("add x11, x11, #2");                                    // advance the running write pointer past `":`
+    emitter.instruction("str x11, [sp, #16]");                                  // persist the updated write pointer
+    emitter.label("__rt_json_arr_dyn_elem_no_key");
+
+    // -- update concat_off so nested encoders append from the current write position --
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the current write pointer
     crate::codegen::abi::emit_symbol_address(emitter, "x10", "_concat_buf");
     emitter.instruction("sub x12, x11, x10");                                   // compute the absolute concat offset for the current write position
@@ -89,9 +140,11 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_json_arr_dyn_value_array");                  // nested arrays encode recursively
     emitter.instruction("cmp x12, #5");                                         // does this array store nested associative arrays?
     emitter.instruction("b.eq __rt_json_arr_dyn_value_assoc");                  // nested hashes encode through the assoc helper
+    emitter.instruction("cmp x12, #6");                                         // does this array store object instances?
+    emitter.instruction("b.eq __rt_json_arr_dyn_value_object");                 // objects encode through the object descriptor walker
     emitter.instruction("cmp x12, #7");                                         // does this array store boxed mixed payloads?
     emitter.instruction("b.eq __rt_json_arr_dyn_value_mixed");                  // boxed mixed payloads encode through the mixed helper
-    emitter.instruction("b __rt_json_arr_dyn_value_null");                      // null and unsupported object payloads encode as JSON null
+    emitter.instruction("b __rt_json_arr_dyn_value_null");                      // null and unsupported payloads encode as JSON null
 
     emitter.label("__rt_json_arr_dyn_value_int");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
@@ -118,7 +171,7 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("add x4, x4, #3");                                      // skip the 24-byte array header
     emitter.instruction("ldr x9, [x0, x4, lsl #3]");                            // load the float bits from the 8-byte array slot
     emitter.instruction("fmov d0, x9");                                         // move the float bits into the FP register file
-    emitter.instruction("bl __rt_ftoa");                                        // encode the float element as decimal digits
+    emitter.instruction("bl __rt_json_encode_float");                           // encode the float element, rejecting Inf/NaN per JSON semantics
     emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded element into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_bool");
@@ -144,6 +197,14 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x0, x4, lsl #3]");                            // load the nested associative-array pointer from the 8-byte array slot
     emitter.instruction("bl __rt_json_encode_assoc");                           // encode the nested associative array recursively
     emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded nested hash into concat_buf
+
+    emitter.label("__rt_json_arr_dyn_value_object");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
+    emitter.instruction("ldr x4, [sp, #40]");                                   // reload the loop index
+    emitter.instruction("add x4, x4, #3");                                      // skip the 24-byte array header
+    emitter.instruction("ldr x0, [x0, x4, lsl #3]");                            // load the object pointer from the 8-byte array slot
+    emitter.instruction("bl __rt_json_encode_object");                          // encode the object via the per-class JSON descriptor walker
+    emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded object into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_mixed");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
@@ -177,9 +238,16 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_arr_dyn_close");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the current concat_buf write pointer
-    emitter.instruction("mov w12, #93");                                        // ASCII ']'
-    emitter.instruction("strb w12, [x11]");                                     // write the closing bracket
-    emitter.instruction("add x11, x11, #1");                                    // advance past the closing bracket
+    emitter.instruction("ldr x12, [sp, #48]");                                  // reload the cached force-object flag
+    emitter.instruction("mov w13, #93");                                        // ASCII ']' (default for indexed arrays)
+    emitter.instruction("cbz x12, __rt_json_arr_dyn_close_emit");               // skip the brace override when the flag is clear
+    emitter.instruction("mov w13, #125");                                       // ASCII '}' (force-object form closes with a brace)
+    emitter.label("__rt_json_arr_dyn_close_emit");
+    emitter.instruction("strb w13, [x11]");                                     // write the chosen closing byte
+    emitter.instruction("add x11, x11, #1");                                    // advance past the closing byte
+    emitter.instruction("str x11, [sp, #16]");                                  // checkpoint the write pointer across the depth-exit helper call
+    emitter.instruction("bl __rt_json_depth_exit");                             // decrement _json_active_depth so a sibling encoder can re-enter cleanly
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the write pointer after the helper call
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the output start pointer
     emitter.instruction("sub x2, x11, x1");                                     // compute the total encoded array length
     crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
@@ -198,16 +266,33 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving JSON-array scratch space
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for array metadata and concat-buffer cursors
-    emitter.instruction("sub rsp, 48");                                         // reserve local slots for the array pointer, output pointers, length, value_type, and loop index
+    emitter.instruction("sub rsp, 64");                                         // reserve local slots (extended for the force-object flag snapshot)
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source array pointer across nested JSON helper calls
+
+    // Enter the recursion-depth check before any output is produced.
+    emitter.instruction("call __rt_json_depth_enter");                          // increment _json_active_depth and throw on overflow when requested
+
+    // Snapshot JSON_FORCE_OBJECT (bit 16): when set, the array encodes as a
+    // JSON object with synthetic integer keys "0", "1", ...
+    emitter.instruction("mov r10, QWORD PTR [rip + _json_active_flags]");       // load the active flag bitmask
+    emitter.instruction("and r10, 16");                                         // isolate JSON_FORCE_OBJECT (bit 16)
+    emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // park the flag state in a dedicated stack slot
     emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // load the current concat-buffer offset before appending the JSON array
     emitter.instruction("lea r11, [rip + _concat_buf]");                        // materialize the concat-buffer base pointer for the current JSON append
     emitter.instruction("add r11, r10");                                        // compute the current concat-buffer write pointer from the base plus offset
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the encoded-array start pointer for the final result slice
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the current concat-buffer write pointer for the element loop
-    emitter.instruction("mov BYTE PTR [r11], 91");                              // write the opening JSON bracket before any encoded element payload
-    emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the opening bracket
+    // Choose the opening byte based on JSON_FORCE_OBJECT.
+    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // reload the cached force-object flag
+    emitter.instruction("mov rcx, 91");                                         // ASCII '[' (default opening for indexed arrays)
+    emitter.instruction("test r10, r10");                                       // is the force-object flag clear?
+    emitter.instruction("jz __rt_json_arr_dyn_open_emit_x");                    // skip the brace override on the default path
+    emitter.instruction("mov rcx, 123");                                        // ASCII '{' (force-object form opens with a brace)
+    emitter.label("__rt_json_arr_dyn_open_emit_x");
+    emitter.instruction("mov BYTE PTR [r11], cl");                              // emit the chosen opening byte
+    emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the opening byte
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer before entering the element loop
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source array pointer (depth_enter clobbered rax)
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the indexed-array length from the first field of the array header
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the array length across nested JSON helper calls
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the packed array kind word so the value_type tag can drive JSON dispatch
@@ -228,6 +313,40 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer after appending the comma separator
 
     emitter.label("__rt_json_arr_dyn_elem");
+    // -- when JSON_FORCE_OBJECT is set, prefix every element with `"<idx>":` --
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the cached force-object flag
+    emitter.instruction("test rcx, rcx");                                       // is the flag clear?
+    emitter.instruction("jz __rt_json_arr_dyn_elem_no_key_x");                  // skip the key prefix when the flag is clear
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the running write pointer
+    emitter.instruction("mov BYTE PTR [r11], 34");                              // emit the opening quote of the synthetic key
+    emitter.instruction("add r11, 1");                                          // advance past the opening quote
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer
+    // Sync concat_off so __rt_itoa appends the index digits at the right place.
+    emitter.instruction("lea r10, [rip + _concat_buf]");                        // materialize the concat-buffer base
+    emitter.instruction("mov rcx, r11");                                        // copy the running write pointer for the offset computation
+    emitter.instruction("sub rcx, r10");                                        // compute the absolute concat offset
+    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // publish the concat offset for itoa
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // load the loop index as the integer key value
+    emitter.instruction("call __rt_itoa");                                      // format the index as decimal digits
+    // __rt_itoa returns rax=ptr, rdx=len of the formatted slice — copy it into
+    // the running write position so the slice is contiguous with the prefix.
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the running write pointer
+    emitter.instruction("xor rcx, rcx");                                        // initialize the index-copy index
+    emitter.label("__rt_json_arr_dyn_key_copy_x");
+    emitter.instruction("cmp rcx, rdx");                                        // have we copied every digit byte?
+    emitter.instruction("jae __rt_json_arr_dyn_key_done_x");                    // exit once finished
+    emitter.instruction("mov r10b, BYTE PTR [rax + rcx]");                      // load the next digit byte
+    emitter.instruction("mov BYTE PTR [r11 + rcx], r10b");                      // copy it into the concat buffer
+    emitter.instruction("add rcx, 1");                                          // advance the index-copy index
+    emitter.instruction("jmp __rt_json_arr_dyn_key_copy_x");                    // continue copying
+    emitter.label("__rt_json_arr_dyn_key_done_x");
+    emitter.instruction("add r11, rdx");                                        // advance the running write pointer past the digits
+    emitter.instruction("mov BYTE PTR [r11], 34");                              // emit the closing quote of the synthetic key
+    emitter.instruction("mov BYTE PTR [r11 + 1], 58");                          // emit the colon between key and value
+    emitter.instruction("add r11, 2");                                          // advance the running write pointer past `":`
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer
+    emitter.label("__rt_json_arr_dyn_elem_no_key_x");
+
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current concat-buffer write pointer before a nested JSON helper appends data
     emitter.instruction("lea r10, [rip + _concat_buf]");                        // materialize the concat-buffer base pointer for the global offset update
     emitter.instruction("mov rcx, r11");                                        // copy the current write pointer before turning it into an absolute concat offset
@@ -246,9 +365,11 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_arr_dyn_value_array");                    // encode nested indexed arrays recursively
     emitter.instruction("cmp r10, 5");                                          // does this indexed array store nested associative arrays?
     emitter.instruction("je __rt_json_arr_dyn_value_assoc");                    // encode nested associative arrays recursively
+    emitter.instruction("cmp r10, 6");                                          // does this indexed array store object instances?
+    emitter.instruction("je __rt_json_arr_dyn_value_object");                   // encode objects through the object descriptor walker
     emitter.instruction("cmp r10, 7");                                          // does this indexed array store boxed mixed payloads?
     emitter.instruction("je __rt_json_arr_dyn_value_mixed");                    // encode boxed mixed payloads through the mixed JSON helper
-    emitter.instruction("jmp __rt_json_arr_dyn_value_null");                    // unsupported object-like payloads currently degrade to JSON null
+    emitter.instruction("jmp __rt_json_arr_dyn_value_null");                    // unsupported payloads currently degrade to JSON null
 
     emitter.label("__rt_json_arr_dyn_value_int");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before loading the integer element payload
@@ -276,7 +397,7 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header to land on the first payload slot
     emitter.instruction("mov r10, QWORD PTR [rax + r10 * 8]");                  // load the raw float bit-pattern from the indexed-array storage slot
     emitter.instruction("movq xmm0, r10");                                      // move the raw float bit-pattern into the x86_64 floating-point argument register
-    emitter.instruction("call __rt_ftoa");                                      // encode the float element as a decimal JSON slice
+    emitter.instruction("call __rt_json_encode_float");                         // encode the float element, rejecting Inf/NaN per JSON semantics
     emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded JSON element into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_bool");
@@ -301,6 +422,14 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header to land on the first payload slot
     emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8]");                  // load the nested associative-array pointer from the indexed-array storage slot
     emitter.instruction("call __rt_json_encode_assoc");                         // encode the nested associative array recursively into a JSON slice
+    emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded nested JSON element into concat_buf
+
+    emitter.label("__rt_json_arr_dyn_value_object");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before loading the object payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index before computing the object slot address
+    emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header to land on the first payload slot
+    emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8]");                  // load the object pointer from the indexed-array storage slot
+    emitter.instruction("call __rt_json_encode_object");                        // encode the object via the per-class JSON descriptor walker
     emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded nested JSON element into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_mixed");
@@ -333,8 +462,17 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_arr_dyn_close");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the concat-buffer write pointer after the final encoded JSON element
-    emitter.instruction("mov BYTE PTR [r11], 93");                              // append the closing JSON bracket to complete the encoded array slice
-    emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the closing bracket
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the cached force-object flag
+    emitter.instruction("mov rax, 93");                                         // ASCII ']' (default for indexed arrays)
+    emitter.instruction("test rcx, rcx");                                       // is the force-object flag clear?
+    emitter.instruction("jz __rt_json_arr_dyn_close_emit_x");                   // skip the brace override on the default path
+    emitter.instruction("mov rax, 125");                                        // ASCII '}' (force-object form closes with a brace)
+    emitter.label("__rt_json_arr_dyn_close_emit_x");
+    emitter.instruction("mov BYTE PTR [r11], al");                              // emit the chosen closing byte
+    emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the closing byte
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // checkpoint the write pointer across the depth-exit helper call
+    emitter.instruction("call __rt_json_depth_exit");                           // decrement _json_active_depth so a sibling encoder can re-enter cleanly
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the write pointer after the helper call
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the encoded-array start pointer in the leading x86_64 string result register
     emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer write pointer before turning it into a slice length
     emitter.instruction("sub rdx, rax");                                        // compute the final encoded-array length from write_end - write_start
@@ -342,7 +480,7 @@ fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the final concat-buffer write pointer before converting it into an absolute offset
     emitter.instruction("sub rcx, r10");                                        // compute the new absolute concat-buffer offset after the encoded JSON array
     emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // publish the updated concat-buffer offset so later writers append after this JSON array
-    emitter.instruction("add rsp, 48");                                         // release the local JSON-array scratch frame before returning to generated code
+    emitter.instruction("add rsp, 64");                                         // release the local JSON-array scratch frame before returning to generated code
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
     emitter.instruction("ret");                                                 // return the encoded JSON array slice in the x86_64 string result registers
 }

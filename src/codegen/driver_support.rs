@@ -193,24 +193,36 @@ pub(super) fn emit_deferred_closures(
     {
         let closures: Vec<_> = ctx.deferred_closures.drain(..).collect();
         for closure in closures {
-            functions::emit_closure(
-                emitter,
-                data,
-                &closure.label,
-                &closure.sig,
-                &closure.hidden_params,
-                &closure.body,
-                closure.current_class.as_deref(),
-                &ctx.functions,
-                &ctx.function_variant_groups,
-                &ctx.constants,
-                &ctx.interfaces,
-                &ctx.classes,
-                &ctx.packed_classes,
-                &ctx.extern_functions,
-                &ctx.extern_classes,
-                &ctx.extern_globals,
-            );
+            if closure.needed {
+                functions::emit_closure(
+                    emitter,
+                    data,
+                    &closure.label,
+                    &closure.sig,
+                    &closure.hidden_params,
+                    &closure.body,
+                    closure.current_class.as_deref(),
+                    &ctx.functions,
+                    &ctx.function_variant_groups,
+                    &ctx.constants,
+                    &ctx.interfaces,
+                    &ctx.classes,
+                    &ctx.packed_classes,
+                    &ctx.extern_functions,
+                    &ctx.extern_classes,
+                    &ctx.extern_globals,
+                );
+            } else {
+                emitter.blank();
+                emitter.comment(&format!("uninvoked FCC wrapper {} (stubbed)", closure.label));
+                emitter.label_global(&closure.label);
+                crate::codegen::abi::emit_load_int_immediate(
+                    emitter,
+                    crate::codegen::abi::int_result_reg(emitter),
+                    0,
+                );
+                crate::codegen::abi::emit_return(emitter);
+            }
         }
         let wrappers: Vec<_> = ctx.deferred_fiber_wrappers.drain(..).collect();
         for wrapper in wrappers {

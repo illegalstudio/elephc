@@ -81,7 +81,7 @@ pub(super) fn emit_instanceof_target_lookup_data(
     out.push_str("    .p2align 3\n");
 }
 
-fn escaped_ascii(value: &str) -> String {
+pub(super) fn escaped_ascii(value: &str) -> String {
     let mut escaped = String::new();
     for byte in value.bytes() {
         match byte {

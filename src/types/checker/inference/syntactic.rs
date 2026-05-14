@@ -15,6 +15,10 @@ use crate::types::{merge_array_key_types, normalized_array_key_type, PhpType};
 /// This is a syntactic/heuristic check — no full type inference.
 /// Used for functions that are never called directly (only used as callbacks).
 pub fn infer_return_type_syntactic(body: &[Stmt]) -> PhpType {
+    if crate::types::checker::yield_validation::body_contains_yield(body) {
+        return PhpType::Object("Generator".to_string());
+    }
+
     let mut types = Vec::new();
     for stmt in body {
         collect_return_types_syntactic(stmt, &mut types);
@@ -159,7 +163,31 @@ fn array_union_type_syntactic(a: &PhpType, b: &PhpType) -> Option<PhpType> {
             };
             Some(PhpType::AssocArray { key, value })
         }
+        (PhpType::Array(left_value), PhpType::AssocArray { key, value }) => {
+            Some(PhpType::AssocArray {
+                key: Box::new(merge_array_key_types(PhpType::Int, *key.clone())),
+                value: Box::new(array_union_value_type_syntactic(left_value, value)),
+            })
+        }
+        (PhpType::AssocArray { key, value }, PhpType::Array(right_value)) => {
+            Some(PhpType::AssocArray {
+                key: Box::new(merge_array_key_types(*key.clone(), PhpType::Int)),
+                value: Box::new(array_union_value_type_syntactic(value, right_value)),
+            })
+        }
         _ => None,
+    }
+}
+
+fn array_union_value_type_syntactic(left: &PhpType, right: &PhpType) -> PhpType {
+    if left == right {
+        left.clone()
+    } else if matches!(left, PhpType::Never) {
+        right.clone()
+    } else if matches!(right, PhpType::Never) {
+        left.clone()
+    } else {
+        PhpType::Mixed
     }
 }
 
@@ -197,13 +225,14 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "sha1" | "hash" | "substr_replace" | "addslashes" | "stripslashes"
             | "htmlspecialchars" | "html_entity_decode" | "urlencode" | "urldecode"
             | "base64_encode" | "base64_decode" | "bin2hex" | "hex2bin" | "number_format"
-            | "date" | "json_encode" | "gettype" | "str_word_count" | "chunk_split" => PhpType::Str,
+            | "date" | "json_encode" | "json_decode" | "json_last_error_msg" | "gettype"
+            | "str_word_count" | "chunk_split" => PhpType::Str,
             "strpos" | "strrpos" | "array_search" | "fileatime" | "filectime" | "fileperms"
             | "fileowner" | "filegroup" | "fileinode" | "filetype" | "stat" | "lstat"
-            | "fstat" => PhpType::Mixed,
-            "fopen" => PhpType::Union(vec![PhpType::stream_resource(), PhpType::Bool]),
+            | "fstat" | "fgetc" | "readfile" | "readlink" => PhpType::Mixed,
+            "fopen" | "tmpfile" => PhpType::Union(vec![PhpType::stream_resource(), PhpType::Bool]),
             "strlen" | "ord" | "count" | "intval" | "abs" | "intdiv"
-            | "rand" | "time" => PhpType::Int,
+            | "rand" | "time" | "fpassthru" | "linkinfo" => PhpType::Int,
             "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" | "fmod" | "sin" | "cos"
             | "tan" | "asin" | "acos" | "atan" | "atan2" | "sinh" | "cosh" | "tanh" | "log"
             | "log2" | "log10" | "exp" | "hypot" | "pi" | "deg2rad" | "rad2deg" => PhpType::Float,
@@ -218,7 +247,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     PhpType::Pointer(None)
                 }
             }
-            "ptr_is_null" | "define" => PhpType::Bool,
+            "ptr_is_null" | "define" | "json_validate" | "flock" | "symlink" | "link" => {
+                PhpType::Bool
+            }
             "ptr_sizeof" | "ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
             _ => PhpType::Int,
         },
@@ -345,5 +376,48 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         },
         ExprKind::InstanceOf { .. } => PhpType::Bool,
         _ => PhpType::Int,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_syntactic_indexed_plus_assoc_array_union_type() {
+        let ty = array_union_type_syntactic(
+            &PhpType::Array(Box::new(PhpType::Str)),
+            &PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Str),
+            },
+        );
+
+        assert_eq!(
+            ty,
+            Some(PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Str),
+            })
+        );
+    }
+
+    #[test]
+    fn test_syntactic_assoc_plus_indexed_array_union_type() {
+        let ty = array_union_type_syntactic(
+            &PhpType::AssocArray {
+                key: Box::new(PhpType::Int),
+                value: Box::new(PhpType::Str),
+            },
+            &PhpType::Array(Box::new(PhpType::Int)),
+        );
+
+        assert_eq!(
+            ty,
+            Some(PhpType::AssocArray {
+                key: Box::new(PhpType::Int),
+                value: Box::new(PhpType::Mixed),
+            })
+        );
     }
 }

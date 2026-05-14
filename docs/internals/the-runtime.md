@@ -1,11 +1,11 @@
 ---
 title: "The Runtime"
-description: "Hand-written assembly routines for strings, arrays, system calls, exceptions, and I/O."
+description: "Hand-written assembly routines for strings, arrays, generators, fibers, system calls, exceptions, and I/O."
 sidebar:
   order: 8
 ---
 
-**Source:** `src/codegen/runtime/` — `mod.rs`, `emitters.rs`, `data.rs`, `x86_minimal.rs`, `strings/`, `arrays/`, `buffers/`, `exceptions.rs`, `exceptions/`, `io/`, `system/`, `pointers/`, `fibers/`
+**Source:** `src/codegen/runtime/` — `mod.rs`, `emitters.rs`, `data/`, `x86_minimal.rs`, `strings/`, `arrays/`, `buffers/`, `exceptions.rs`, `exceptions/`, `io/`, `objects/`, `system/`, `pointers/`, `fibers/`, `generators/`
 
 The runtime is a collection of **hand-written assembly routines** that handle operations too complex for inline code generation. When the [code generator](the-codegen.md) needs to convert an integer to a string or concatenate two strings, it emits a `bl __rt_itoa` or `bl __rt_concat` — a call to a runtime routine.
 
@@ -56,7 +56,7 @@ Converts a signed 64-bit integer in `x0` to a decimal string.
 4. Prepend '-' if negative
 5. Update concat buffer offset
 
-The digits are written **right-to-left** because division gives us the least significant digit first. The result is written into the [concat buffer](memory-model.md#the-string-buffer).
+The digits are written **right-to-left** because division gives us the least significant digit first. The result is written into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad).
 
 ### `__rt_resource_to_string` — Resource to string
 
@@ -82,7 +82,7 @@ Converts a double-precision float in `d0` to a decimal string. Handles special c
 
 **File:** `strings/concat.rs`
 
-Concatenates two strings by copying both into the [concat buffer](memory-model.md#the-string-buffer).
+Concatenates two strings by copying both into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad).
 
 **Input:** `x1`/`x2` = left string (ptr/len), `x3`/`x4` = right string (ptr/len)
 **Output:** `x1` = pointer to result, `x2` = total length
@@ -170,7 +170,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (112 files)
+**Source:** `src/codegen/runtime/arrays/` (118 files)
 
 ### Core allocation
 
@@ -190,6 +190,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_array_grow` | Ensure uniqueness, double array capacity, copy elements, free old unique storage | `x0` = array | `x0` = new array |
 | `__rt_array_free_deep` | Free array storage and release nested heap-backed elements | `x0` = array | — |
 | `__rt_array_union` | Build PHP indexed-array union: left numeric keys win, only missing right suffix keys are appended | `x0` = left array, `x1` = right array | `x0` = result array |
+| `__rt_array_hash_union` | Build PHP indexed+associative union by converting left indexes to integer hash keys before appending missing right entries | `x0` = left array, `x1` = right hash | `x0` = result hash |
 | `__rt_array_push_int` | Append int to array (grows if needed) | `x0` = array, `x1` = value | `x0` = array |
 | `__rt_array_push_refcounted` | `incref` borrowed heap payload, then append it as an 8-byte array element | `x0` = array, `x1` = heap ptr | `x0` = array |
 | `__rt_array_push_str` | Persist string + append to array (grows if needed) | `x0` = array, `x1`/`x2` = str | `x0` = array |
@@ -229,6 +230,7 @@ Common copy-producing array/hash routines now also have dedicated `_refcounted` 
 | `__rt_hash_get` | Look up value by key | `x0`=hash, `x1`/`x2`=normalized key | `x0`=found, `x1`=val_lo, `x2`=val_hi, `x3`=value_tag |
 | `__rt_hash_iter_next` | Iterate to next entry in insertion order | `x0`=hash, `x1`=cursor | `x0`=next cursor, `x1`/`x2`=key, `x3`/`x4`=value, `x5`=value_tag |
 | `__rt_hash_union` | Build PHP associative-array union: left duplicate keys win, missing right entries append in insertion order | `x0`=left hash, `x1`=right hash | `x0`=result hash |
+| `__rt_hash_array_union` | Build PHP associative+indexed union by cloning the left hash and appending right indexes absent from the shared key space | `x0`=left hash, `x1`=right array | `x0`=result hash |
 | `__rt_hash_count` | Count occupied entries | `x0`=hash | `x0`=count |
 | `__rt_hash_free_deep` | Free a hash table plus owned keys and nested heap-backed values | `x0`=hash | — |
 | `__rt_mixed_from_value` | Box a tagged payload into a heap-allocated mixed cell | `x0`=value_tag, `x1`=value_lo, `x2`=value_hi | `x0` = mixed cell |
@@ -249,7 +251,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_shift` / `__rt_array_unshift` | Remove/add at beginning |
 | `__rt_array_merge` | Concatenate two indexed arrays into a new array |
 | `__rt_array_merge_into` | Append all elements from source array into dest array (in-place) |
-| `__rt_array_slice` / `__rt_array_splice` | Extract/replace subarray |
+| `__rt_array_slice` / `__rt_array_splice` | Extract slices and remove splice windows from indexed arrays |
 | `__rt_array_unique` | Remove duplicate values |
 | `__rt_array_diff` / `__rt_array_intersect` | Set difference/intersection by value |
 | `__rt_array_diff_key` / `__rt_array_intersect_key` | Set operations by key |
@@ -294,7 +296,7 @@ Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[
 
 ## System routines
 
-**Source:** `src/codegen/runtime/system/` (29 files)
+**Source:** `src/codegen/runtime/system/` (34 files)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -345,7 +347,7 @@ The fatal uncaught-exception path writes `Fatal error: uncaught exception` to st
 
 ### JSON routines
 
-**Files:** `system/json_data.rs`, `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_str.rs`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_array_dynamic.rs`, `system/json_encode_assoc.rs`, `system/json_encode_mixed.rs`, `system/json_decode.rs`
+**Files:** `system/json_data.rs`, `system/json_depth.rs`, `system/json_throw_error.rs`, `system/json_last_error_msg.rs`, `system/json_validate/`, `system/json_decode.rs`, `system/json_decode_mixed/`, `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_float.rs`, `system/json_encode_str/`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_array_dynamic.rs`, `system/json_encode_assoc.rs`, `system/json_encode_mixed.rs`, `system/json_encode_object.rs`, `system/json_pretty_apply.rs`, plus `objects/stdclass.rs` for stdClass-specific JSON object encoding.
 
 The `json_encode` implementation uses **type-aware dispatch** — the codegen calls a different runtime routine depending on the compile-time type of the value being encoded:
 
@@ -358,8 +360,17 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 | `__rt_json_encode_array_str` | Encode a string array as a JSON array with quoted elements | `x0` = array ptr | `x1`/`x2` = JSON string |
 | `__rt_json_encode_array_dynamic` | Encode an indexed array by inspecting its packed runtime `value_type` tag at runtime (int, string, float, bool, nested array/hash, mixed, or null fallback) | `x0` = array ptr | `x1`/`x2` = JSON string |
 | `__rt_json_encode_assoc` | Encode an associative array as a JSON object (e.g., `{"key":"val"}`) | `x0` = hash ptr | `x1`/`x2` = JSON string |
+| `__rt_json_encode_float` | Encode finite floats and record `JSON_ERROR_INF_OR_NAN` for `INF`/`NAN`, honoring throw and partial-output flags | `d0` = float | `x1`/`x2` = JSON string |
 | `__rt_json_encode_mixed` | Encode a boxed mixed payload by unboxing its runtime tag and dispatching to the concrete JSON encoder | `x0` = mixed ptr | `x1`/`x2` = JSON string |
-| `__rt_json_decode` | Decode the current string-only JSON contract — trims outer whitespace, unescapes quoted JSON strings including `\uXXXX` surrogate-aware UTF-8 decoding, and otherwise returns a trimmed borrowed JSON slice | `x1`/`x2` = JSON string | `x1`/`x2` = decoded string |
+| `__rt_json_encode_object` | Encode class objects by consulting per-class JSON descriptors; dispatches `JsonSerializable::jsonSerialize()` when present, otherwise walks public properties | `x0` = object ptr | `x1`/`x2` = JSON string |
+| `__rt_json_encode_stdclass` | Encode the dynamic-property hash backing `stdClass`, preserving `{}` for empty instances | `x0` = stdClass hash ptr | `x1`/`x2` = JSON string |
+| `__rt_json_decode` | String-only compatibility helper used by string decode paths; trims outer whitespace and unescapes quoted JSON strings including surrogate-aware `\uXXXX` sequences | `x1`/`x2` = JSON string | `x1`/`x2` = decoded string |
+| `__rt_json_decode_mixed` | Full structural recursive decoder that returns boxed `Mixed` cells for null, bool, int, float, string, indexed arrays, associative arrays, and stdClass objects depending on `_json_decode_assoc` | `x1`/`x2` = JSON string | `x0` = Mixed* |
+| `__rt_json_validate` | RFC 8259 validator used by `json_validate()` and by `json_decode()` before structural decoding; sets syntax/depth/UTF-16 errors | `x1`/`x2` = JSON string | `x0` = 1 valid / 0 invalid |
+| `__rt_json_depth_enter` / `__rt_json_depth_exit` | Maintain `_json_active_depth` and compare against `_json_depth_limit` for recursive encode/decode/validate walks | global JSON state | status / updated state |
+| `__rt_json_throw_error` | Record a JSON error code and construct/throw `JsonException` when `JSON_THROW_ON_ERROR` is active | `x0` = JSON_ERROR_* code | may not return |
+| `__rt_json_last_error_msg` | Return the message string corresponding to `_json_last_error` through the `_json_err_msg_table` data table | global JSON state | `x1`/`x2` = message |
+| `__rt_json_pretty_apply` | Post-process compact JSON output into PHP-style pretty-printed output while skipping string contents | `x1`/`x2` = compact JSON | `x1`/`x2` = pretty JSON |
 
 ### Regex routines
 
@@ -376,7 +387,7 @@ All regex routines use **POSIX extended regular expressions** via libc's `regcom
 
 ## I/O routines
 
-**Source:** `src/codegen/runtime/io/` (27 files)
+**Source:** `src/codegen/runtime/io/` (30 files)
 
 These routines handle file and filesystem operations through target-aware libc/syscall helpers. PHP strings (pointer + length) must be converted to null-terminated C strings before passing to C or OS APIs — `__rt_cstr` handles the primary buffer and also emits `__rt_cstr2` for routines that need a second simultaneous C string.
 
@@ -453,15 +464,52 @@ These helpers support the compiler-specific `buffer<T>` hot-path data type.
 | `__rt_mixed_is_empty` | Check emptiness of a mixed cell (PHP semantics) | `x0` = mixed cell pointer | `x0` = 0 or 1 |
 | `__rt_mixed_strict_eq` | Compare two mixed cells by tag and value | `x0`, `x1` = mixed pointers | `x0` = 0 or 1 |
 | `__rt_mixed_unbox` | Extract the raw payload from a mixed cell | `x0` = mixed cell pointer | `x0`/`x1`/`x2` depending on type |
+| `__rt_mixed_count` | Count boxed indexed arrays and hashes, returning zero for non-countable payloads | `x0` = mixed cell pointer | `x0` = count |
 | `__rt_iterable_write_stdout` | Print iterable arrays and hashes as PHP's `"Array"` display string | `x0` = iterable heap pointer | — |
 | `__rt_iterable_unsupported_kind` | Abort when runtime iterable dispatch sees an unsupported heap kind | — | does not return |
 | `__rt_hash_may_have_cyclic_values` | Scan hash entries to check if any contain refcounted children | `x0` = hash pointer | `x0` = 0 (scalar-only) or 1 (has cycles) |
 | `__rt_match_unhandled` | Abort with `Fatal error: unhandled match case` | — | does not return |
 | `__rt_enum_from_fail` | Abort with `Fatal error: enum case not found` when `Enum::from()` has no match | — | does not return |
 
+## Object and stdClass routines
+
+**Source:** `src/codegen/runtime/objects/` (3 files)
+
+These helpers support `stdClass`, `json_decode()` object results, and boxed Mixed property/index access. `stdClass` instances use a compact `[class_id][hash_ptr]` payload, with dynamic properties stored in a hash of boxed `Mixed` values.
+
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_stdclass_new` | Allocate an empty stdClass object with hash-backed dynamic property storage | stdClass class id from runtime data | object pointer |
+| `__rt_stdclass_from_hash` | Wrap a decoded JSON object hash in a stdClass instance | hash pointer | object pointer |
+| `__rt_stdclass_get` | Read a dynamic property and return a boxed Mixed value, or Mixed(null) when missing | object pointer + property string | boxed `mixed` payload |
+| `__rt_stdclass_set` | Store a boxed Mixed value into a dynamic property hash | object pointer + property string + boxed value | — |
+| `__rt_mixed_property_get` | Unbox a Mixed object payload and dispatch stdClass property reads | boxed `mixed` + property string | boxed `mixed` payload |
+| `__rt_mixed_property_set` | Unbox a Mixed object payload and dispatch stdClass property writes | boxed `mixed` + property string + boxed value | — |
+| `__rt_mixed_array_get` | Unbox Mixed array/hash/stdClass payloads for `$mixed[$key]` access | boxed `mixed` + normalized key tuple | boxed `mixed` payload |
+| `__rt_json_encode_stdclass` | Encode the dynamic-property hash backing stdClass as a JSON object | stdClass hash pointer | `x1`/`x2` = JSON string |
+
+## Generator routines
+
+**Source:** `src/codegen/runtime/generators/` (2 files)
+
+These helpers back the built-in `Generator` class. Generator functions emit a heap-allocated frame and a generated resume function; the runtime helpers read/write that frame for the public Iterator surface and coroutine operations.
+
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_gen_current` | Return an owned ref to the boxed Mixed value from the most recent yield | `GeneratorFrame*` | boxed `mixed` payload |
+| `__rt_gen_key` | Return an owned ref to the boxed Mixed key from the most recent yield | `GeneratorFrame*` | boxed `mixed` key |
+| `__rt_gen_valid` | Report whether the generator is not terminated | `GeneratorFrame*` | bool |
+| `__rt_gen_next` | Resume the state machine past the current yield unless terminated | `GeneratorFrame*` | — |
+| `__rt_gen_send` | Store a boxed Mixed sent value, then resume the state machine | `GeneratorFrame*`, boxed `mixed` value | boxed `mixed` payload |
+| `__rt_gen_rewind` | Run the generator to its first yield once | `GeneratorFrame*` | — |
+| `__rt_gen_throw` | Mark the generator terminated and throw through the normal exception runtime | `GeneratorFrame*`, throwable object | does not return |
+| `__rt_gen_get_return` | Return an owned ref to the boxed terminal return value | `GeneratorFrame*` | boxed `mixed` payload |
+
+Generator frames are stamped as object heap blocks because `Generator` is a built-in class implementing `Iterator`. `__rt_object_free_deep` detects the built-in Generator class id and releases the frame's custom Mixed slots plus any active `yield from` delegate instead of treating the payload as ordinary class properties.
+
 ## Fiber routines
 
-**Source:** `src/codegen/runtime/fibers/` (5 files including `mod.rs`)
+**Source:** `src/codegen/runtime/fibers/` (4 files)
 
 These helpers implement PHP 8.1-style cooperative coroutines. They are emitted on AArch64 and in the Linux x86_64 runtime slice.
 
@@ -497,18 +545,20 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     // arrays: heap alloc/free, array/hash helpers, sort, callbacks, refcount
     // buffers: contiguous buffer allocation, bounds checking, UAF traps
     // io: c-string buffers, file I/O, stat/fs helpers, scandir/glob/tempnam, CSV
+    // objects: stdClass dynamic properties and boxed Mixed property/index dispatch
     // pointers: ptoa, null check, str_to_cstr, cstr_to_str
+    // generators: Generator current/key/valid/next/send/rewind/throw/getReturn helpers
     // fibers: guarded stack allocation, context switch, entry trampoline, Fiber API
 }
 ```
 
-Notable runtime-only helpers emitted here include `__rt_diag_push_suppression`, `__rt_diag_pop_suppression`, `__rt_diag_warning`, `__rt_exception_cleanup_frames`, `__rt_exception_matches`, `__rt_instanceof_lookup`, `__rt_instanceof_invalid_target`, `__rt_throw_current`, `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_mixed_instanceof`, `__rt_iterable_write_stdout`, `__rt_iterable_unsupported_kind`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, `__rt_cstr_to_str`, `__rt_fiber_switch`, and `__rt_fiber_entry` in addition to the more user-visible helpers.
+Notable runtime-only helpers emitted here include `__rt_diag_push_suppression`, `__rt_diag_pop_suppression`, `__rt_diag_warning`, `__rt_exception_cleanup_frames`, `__rt_exception_matches`, `__rt_instanceof_lookup`, `__rt_instanceof_invalid_target`, `__rt_throw_current`, `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_mixed_instanceof`, `__rt_iterable_write_stdout`, `__rt_iterable_unsupported_kind`, `__rt_gen_current`, `__rt_gen_send`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, `__rt_cstr_to_str`, `__rt_fiber_switch`, and `__rt_fiber_entry` in addition to the more user-visible helpers.
 
 Every routine in the selected target runtime slice is linked into the binary, even if unused by the current program. elephc already does AST-side control-flow pruning and dead-code elimination before codegen, but runtime-specific dead stripping is still future work.
 
 ## Runtime data
 
-The runtime data layer is split between `emit_runtime_data_fixed()` (shared buffers, error strings, lookup tables) and `emit_runtime_data_user()` (per-program globals, statics, enum-case slots, and metadata tables). Together they declare global buffers using `.comm` and static data tables:
+The runtime data layer lives in `src/codegen/runtime/data/`. `fixed.rs` emits shared buffers, error strings, and lookup tables; `user.rs` emits per-program globals, statics, enum-case slots, and metadata tables; `instanceof.rs` formats dynamic `instanceof` lookup names. Together they declare global buffers using `.comm` and static data tables:
 
 ```asm
 .comm _concat_buf, 65536     ; 64KB string buffer
@@ -530,6 +580,14 @@ The runtime data layer is split between `emit_runtime_data_fixed()` (shared buff
 .comm _heap_debug_enabled, 8 ; BSS-backed debug flag, set to 1 in _main when compiled with --heap-debug
 .comm _gc_collecting, 8      ; cycle collector re-entry guard
 .comm _gc_release_suppressed, 8 ; suppress nested collection during deep frees
+.comm _json_last_error, 8    ; last JSON_ERROR_* code
+.comm _json_active_flags, 8  ; active JSON flags for encode/decode/validate
+.comm _json_active_depth, 8  ; current recursive JSON container depth
+.comm _json_depth_limit, 8   ; configured JSON depth limit
+.comm _json_validate_idx, 8  ; validator cursor index
+.comm _json_validate_ptr, 8  ; validator input pointer
+.comm _json_validate_len, 8  ; validator input length
+.comm _json_decode_assoc, 8  ; json_decode object-shape selector
 _heap_max:
     .quad 8388608            ; configured heap size limit
 .comm _gc_allocs, 8          ; allocation counter
@@ -560,13 +618,18 @@ Additionally, the runtime emits static data tables:
 - `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — suppressible runtime warning text routed through `__rt_diag_warning`
 - `_fiber_msg_already_started`, `_fiber_msg_not_suspended`, `_fiber_msg_throw_not_suspended`, `_fiber_msg_not_terminated`, `_fiber_msg_suspend_outside`, `_fiber_msg_unsupported_callable`, `_fiber_msg_stack_alloc_failed` — messages used by `FiberError` runtime paths
 - `_fiber_class_id`, `_fiber_error_class_id` — per-program class ids used by Fiber object cleanup and `FiberError` construction
+- `_generator_class_id` — per-program class id used to recognize Generator frames during object deep-free
 - `_php_uname_mode_len_msg`, `_php_uname_mode_value_msg` — fatal `php_uname()` argument diagnostics for invalid mode strings
 - `_pcre_space`, `_pcre_digit`, `_pcre_word`, `_pcre_nspace`, `_pcre_ndigit`, `_pcre_nword` — PCRE shorthand replacement strings for regex translation
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings used by `__rt_json_encode_bool` and `__rt_json_encode_null`
+- `_json_int_max_str`, `_json_int_min_str` — decimal threshold strings used by `JSON_BIGINT_AS_STRING` overflow detection without wrapping through integer parsing
+- `_json_err_msg_0` ... `_json_err_msg_10`, `_json_err_msg_table`, `_json_err_msg_count` — `json_last_error_msg()` lookup data for the supported `JSON_ERROR_*` code range
 - `_day_names` — 7 entries (84 bytes), each 12 bytes: day name padded to 10 chars + 1 length byte + 1 padding byte. Used by `__rt_date` for `l` (full name) and `D` (abbreviated) format characters
 - `_month_names` — 12 entries (144 bytes), same layout as day names. Used by `__rt_date` for `F` (full name) and `M` (abbreviated) format characters
 - `_instanceof_target_count`, `_instanceof_target_entries`, `_instanceof_name_*` — case-insensitive class/interface name metadata used by dynamic `instanceof` string targets, including leading-backslash aliases
 - `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal metadata used by object deep-free and cycle collection
+- `_class_json_desc_ptrs`, `_class_json_desc_<id>`, `_class_json_pname_<id>_<slot>`, `_json_exception_class_id`, `_stdclass_class_id` — JSON object encoding descriptors, JsonException construction metadata, and stdClass runtime class id
+- `_class_attribute_count`, `_class_attribute_ptrs`, `_class_attributes_<id>` — emitted class-level PHP attribute metadata. The current PHP-facing helpers and Reflection owner constructors materialize their results from the same `ClassInfo` metadata during codegen, rather than doing dynamic runtime class/member lookup.
 - `_class_vtable_ptrs`, `_class_vtable_<id>` — per-class virtual-method tables used by inheritance dispatch through `class_id`
 - `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used by late static binding
 - `static_property_symbol(...)`-derived `.comm` slots — 16-byte storage slots for effective declaring static properties, shared by inherited static properties until a subclass redeclares the property
@@ -574,6 +637,6 @@ Additionally, the runtime emits static data tables:
 
 When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_check_live`, `__rt_heap_debug_validate_free_list`, and `__rt_heap_debug_report`. These helpers turn allocator corruption into immediate fatal errors for duplicate frees, zero-refcount `incref`/`decref` paths, and malformed free-list or small-bin state, poison freed payload bytes with `0xA5`, and print an end-of-process summary with alloc/free counts, live block count, live bytes, leak summary, and the peak live-byte watermark.
 
-Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, and `5=boxed mixed`, which lets runtime dispatch stay independent from each payload's internal layout. The low 16 bits keep the persistent container metadata: low byte = heap kind, bits `8..14` = indexed-array runtime `value_type`, and bit `15` = copy-on-write container flag. The collector reuses higher bits for transient reachable/incoming-edge metadata during `__rt_gc_collect_cycles`. Runtime data also now includes `_gc_collecting`, `_gc_release_suppressed`, `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_vtable_ptrs`, `_class_static_vtable_ptrs`, and static-property storage slots so deep-free / cycle-collection paths can coordinate nested releases, discover class property traversal metadata, and support inherited instance dispatch, static-property reads/writes, and late static binding.
+Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, and `5=boxed mixed`, which lets runtime dispatch stay independent from each payload's internal layout. Generator frames use heap kind `4` because `Generator` is a built-in object with a custom payload layout. The low 16 bits keep the persistent container metadata: low byte = heap kind, bits `8..14` = indexed-array runtime `value_type`, and bit `15` = copy-on-write container flag. The collector reuses higher bits for transient reachable/incoming-edge metadata during `__rt_gc_collect_cycles`. Runtime data also now includes `_gc_collecting`, `_gc_release_suppressed`, `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_vtable_ptrs`, `_class_static_vtable_ptrs`, and static-property storage slots so deep-free / cycle-collection paths can coordinate nested releases, discover class property traversal metadata, and support inherited instance dispatch, static-property reads/writes, and late static binding.
 
 See [Memory Model](memory-model.md) for details on how these buffers work.

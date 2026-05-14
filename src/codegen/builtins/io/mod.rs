@@ -20,8 +20,10 @@ mod fclose;
 mod fdatasync;
 mod feof;
 mod fflush;
+mod fgetc;
 mod fgetcsv;
 mod fgets;
+mod flock;
 mod fnmatch;
 mod file;
 mod file_exists;
@@ -37,8 +39,11 @@ mod fileperms;
 mod filesize;
 mod filetype;
 mod fopen;
+mod fpassthru;
 mod fputcsv;
 mod fread;
+mod readfile;
+mod readlink;
 mod fseek;
 mod fsync;
 mod ftell;
@@ -52,6 +57,8 @@ mod is_file;
 mod is_link;
 mod is_readable;
 mod is_writable;
+mod link;
+mod linkinfo;
 mod mkdir;
 mod pathinfo;
 mod print_r;
@@ -66,8 +73,10 @@ mod scandir;
 mod stat;
 mod stat_result;
 mod stream_arg;
+mod symlink;
 mod sys_get_temp_dir;
 mod tempnam;
+mod tmpfile;
 mod touch;
 mod umask;
 mod unlink;
@@ -94,6 +103,15 @@ pub fn emit(
         "fread" => fread::emit(name, args, emitter, ctx, data),
         "fwrite" => fwrite::emit(name, args, emitter, ctx, data),
         "fgets" => fgets::emit(name, args, emitter, ctx, data),
+        "fgetc" => fgetc::emit(name, args, emitter, ctx, data),
+        "fpassthru" => fpassthru::emit(name, args, emitter, ctx, data),
+        "flock" => flock::emit(name, args, emitter, ctx, data),
+        "tmpfile" => tmpfile::emit(name, args, emitter, ctx, data),
+        "readfile" => readfile::emit(name, args, emitter, ctx, data),
+        "symlink" => symlink::emit(name, args, emitter, ctx, data),
+        "link" => link::emit(name, args, emitter, ctx, data),
+        "readlink" => readlink::emit(name, args, emitter, ctx, data),
+        "linkinfo" => linkinfo::emit(name, args, emitter, ctx, data),
         "feof" => feof::emit(name, args, emitter, ctx, data),
         "readline" => readline::emit(name, args, emitter, ctx, data),
         "fseek" => fseek::emit(name, args, emitter, ctx, data),

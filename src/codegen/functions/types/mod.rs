@@ -152,6 +152,7 @@ pub(super) fn infer_local_type(
             let right = infer_local_type(default, sig, ctx);
             wider_of(&left, &right)
         }
+        ExprKind::Pipe { callable, .. } => infer_pipe_result_type(callable, sig, ctx),
         ExprKind::Assignment { value, .. } => infer_local_type(value, sig, ctx),
         ExprKind::Ternary {
             then_expr,
@@ -315,6 +316,31 @@ pub(super) fn infer_local_type(
         }
         ExprKind::This => infer_this_type(ctx),
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),
+        _ => PhpType::Int,
+    }
+}
+
+fn infer_pipe_result_type(
+    callable: &Expr,
+    sig: &FunctionSig,
+    ctx: Option<&Context>,
+) -> PhpType {
+    match &callable.kind {
+        ExprKind::Variable(var_name) => ctx
+            .and_then(|c| c.closure_sigs.get(var_name).map(|sig| sig.return_type.clone()))
+            .unwrap_or(PhpType::Int),
+        ExprKind::FirstClassCallable(target) => ctx
+            .and_then(|c| crate::codegen::expr::calls::first_class_callable_sig(target, c))
+            .map(|sig| sig.return_type)
+            .unwrap_or(PhpType::Int),
+        ExprKind::Closure {
+            return_type: Some(type_ann),
+            ..
+        } => ctx
+            .map(|c| codegen_static_type(type_ann, c))
+            .unwrap_or(PhpType::Mixed),
+        ExprKind::Closure { body, .. } => crate::types::checker::infer_return_type_syntactic(body),
+        ExprKind::Assignment { value, .. } => infer_pipe_result_type(value, sig, ctx),
         _ => PhpType::Int,
     }
 }

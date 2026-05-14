@@ -145,6 +145,7 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `is_numeric()`  | `is_numeric($val): bool`     | Returns true if int or float   |
 | `is_bool()`     | `is_bool($val): bool`        | Returns true if bool           |
 | `is_iterable()` | `is_iterable($val): bool`    | Returns true if array or Traversable-compatible iterable |
+| `is_callable()` | `is_callable($val): bool`    | Returns true for closures, first-class callables, and string literals naming a known builtin or user function. Non-literal strings, `[$obj, "method"]` arrays, and `__invoke` objects are tracked as follow-ups. |
 | `is_nan()`      | `is_nan($val): bool`         | Returns true if NAN            |
 | `is_finite()`   | `is_finite($val): bool`      | Returns true if not INF/NAN    |
 | `is_infinite()` | `is_infinite($val): bool`    | Returns true if INF or -INF    |

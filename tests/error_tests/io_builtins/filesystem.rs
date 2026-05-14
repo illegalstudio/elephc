@@ -30,6 +30,23 @@ function read_file(): string {
 }
 
 #[test]
+fn test_error_readfile_wrong_args() {
+    expect_error("<?php readfile();", "readfile() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_readfile_false_return_rejects_int_return_type() {
+    expect_error(
+        r#"<?php
+function dump_file(): int {
+    return readfile("missing.txt");
+}
+"#,
+        "Function 'dump_file' return type expects Int, got Union([Int, Bool])",
+    );
+}
+
+#[test]
 fn test_error_file_put_contents_wrong_args() {
     expect_error(
         r#"<?php file_put_contents("x");"#,
@@ -53,6 +70,29 @@ fn test_error_mkdir_wrong_args() {
 #[test]
 fn test_error_copy_wrong_args() {
     expect_error(r#"<?php copy("x");"#, "copy() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_link_wrong_args() {
+    expect_error(r#"<?php link("x");"#, "link() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_symlink_wrong_args() {
+    expect_error(
+        r#"<?php symlink("target");"#,
+        "symlink() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_readlink_wrong_args() {
+    expect_error("<?php readlink();", "readlink() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_linkinfo_wrong_args() {
+    expect_error("<?php linkinfo();", "linkinfo() takes exactly 1 argument");
 }
 
 #[test]
@@ -169,4 +209,3 @@ fn test_error_sys_get_temp_dir_wrong_args() {
         "sys_get_temp_dir() takes no arguments",
     );
 }
-

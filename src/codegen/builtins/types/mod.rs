@@ -18,6 +18,7 @@ mod get_declared;
 mod gettype;
 mod is_a;
 mod is_bool;
+mod is_callable;
 mod is_finite;
 mod is_float;
 mod is_infinite;
@@ -45,6 +46,7 @@ pub fn emit(
 ) -> Option<PhpType> {
     match name {
         "is_bool" => is_bool::emit(name, args, emitter, ctx, data),
+        "is_callable" => is_callable::emit(name, args, emitter, ctx, data),
         "boolval" => boolval::emit(name, args, emitter, ctx, data),
         "is_null" => is_null::emit(name, args, emitter, ctx, data),
         "floatval" => floatval::emit(name, args, emitter, ctx, data),

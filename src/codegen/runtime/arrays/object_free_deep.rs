@@ -10,6 +10,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen::runtime::generators::frame as gen_frame;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
@@ -98,6 +99,21 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the Fiber pointer one last time before the struct free
     emitter.instruction("b __rt_object_free_deep_struct");                      // skip the property-tag walk and free the Fiber struct itself
     emitter.label("__rt_object_free_deep_not_fiber");
+
+    // -- Generator special case: GeneratorFrame has a custom payload layout, not PHP property slots --
+    emitter.instruction("ldr x10, [x0]");                                       // x10 = receiver class_id
+    crate::codegen::abi::emit_load_symbol_to_reg(emitter, "x11", "_generator_class_id", 0); // x11 = compile-time class id of the built-in Generator class
+    emitter.instruction("cmp x10, x11");                                        // is the receiver a Generator frame?
+    emitter.instruction("b.ne __rt_object_free_deep_not_generator");            // skip generator-frame cleanup for ordinary PHP objects
+    emit_generator_mixed_field_release_aarch64(emitter, gen_frame::OFF_LAST_KEY, "last_key");
+    emit_generator_mixed_field_release_aarch64(emitter, gen_frame::OFF_LAST_VALUE, "last_value");
+    emit_generator_mixed_field_release_aarch64(emitter, gen_frame::OFF_RETURN_VALUE, "return_value");
+    emit_generator_mixed_field_release_aarch64(emitter, gen_frame::OFF_SENT_VALUE, "sent_value");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Generator frame pointer before delegated-iterator cleanup
+    emitter.instruction(&format!("ldr x0, [x0, #{}]", gen_frame::OFF_DELEGATED_ITER)); // load the delegated inner iterator pointer from the frame
+    emitter.instruction("bl __rt_decref_any");                                  // release a suspended inner generator/iterator if yield-from left one attached
+    emitter.instruction("b __rt_object_free_deep_no_dyn_props");                // free the custom frame storage without walking property descriptors
+    emitter.label("__rt_object_free_deep_not_generator");
 
     // -- derive property count from the object payload size --
     emitter.instruction("ldr w9, [x0, #-16]");                                  // load the object payload size from the heap header
@@ -240,6 +256,21 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_object_free_deep_struct");                    // skip property-tag walking for runtime-managed Fiber payloads
     emitter.label("__rt_object_free_deep_not_fiber");
 
+    // -- Generator special case: GeneratorFrame has a custom payload layout, not PHP property slots --
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // r10 = receiver class_id
+    crate::codegen::abi::emit_load_symbol_to_reg(emitter, "r11", "_generator_class_id", 0); // r11 = compile-time class id of the built-in Generator class
+    emitter.instruction("cmp r10, r11");                                        // is the receiver a Generator frame?
+    emitter.instruction("jne __rt_object_free_deep_not_generator");             // skip generator-frame cleanup for ordinary PHP objects
+    emit_generator_mixed_field_release_x86_64(emitter, gen_frame::OFF_LAST_KEY, "last_key");
+    emit_generator_mixed_field_release_x86_64(emitter, gen_frame::OFF_LAST_VALUE, "last_value");
+    emit_generator_mixed_field_release_x86_64(emitter, gen_frame::OFF_RETURN_VALUE, "return_value");
+    emit_generator_mixed_field_release_x86_64(emitter, gen_frame::OFF_SENT_VALUE, "sent_value");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Generator frame pointer before delegated-iterator cleanup
+    emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", gen_frame::OFF_DELEGATED_ITER)); // load the delegated inner iterator pointer from the frame
+    emitter.instruction("call __rt_decref_any");                                // release a suspended inner generator/iterator if yield-from left one attached
+    emitter.instruction("jmp __rt_object_free_deep_no_dyn_props");              // free the custom frame storage without walking property descriptors
+    emitter.label("__rt_object_free_deep_not_generator");
+
     emitter.instruction("mov r10d, DWORD PTR [rax - 16]");                      // load the object payload size from the uniform heap header
     emitter.instruction("sub r10, 8");                                          // subtract the leading class_id field from the payload size to isolate property storage
     emitter.instruction("shr r10, 4");                                          // divide by 16 because every property slot occupies two qwords
@@ -310,4 +341,18 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_object_free_deep_done");
     emitter.instruction("ret");                                                 // return to the caller after releasing the object and any owned heap-backed properties
+}
+
+fn emit_generator_mixed_field_release_aarch64(emitter: &mut Emitter, offset: usize, name: &str) {
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Generator frame pointer before field cleanup
+    emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));                 // load the Generator frame's boxed Mixed field for release
+    emitter.instruction("bl __rt_decref_mixed");                                // release the Generator frame's boxed Mixed field if present
+    emitter.comment(&format!("released Generator::{}", name));
+}
+
+fn emit_generator_mixed_field_release_x86_64(emitter: &mut Emitter, offset: usize, name: &str) {
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Generator frame pointer before field cleanup
+    emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", offset));     // load the Generator frame's boxed Mixed field for release
+    emitter.instruction("call __rt_decref_mixed");                              // release the Generator frame's boxed Mixed field if present
+    emitter.comment(&format!("released Generator::{}", name));
 }

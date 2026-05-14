@@ -88,6 +88,15 @@ foreach ($settings as $key => $value) {
     echo "  " . $key . " = " . $value . "\n";
 }
 
+// Indexed and associative operands share the same normalized key space
+$base = ["slot 0", "slot 1"];
+$labels = ["1" => "ignored duplicate", "01" => "string key", "name" => "display"];
+$mixedUnion = $base + $labels;
+echo "\nMixed representation union:\n";
+foreach ($mixedUnion as $key => $value) {
+    echo "  " . $key . " = " . $value . "\n";
+}
+
 // Mixed-value associative arrays keep a runtime tag per entry
 $profile = ["name" => "Alice", "age" => 30, "active" => true, "note" => null];
 echo "\nMixed profile:\n";

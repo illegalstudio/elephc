@@ -193,7 +193,7 @@ Floats are stored as their raw 64-bit IEEE 754 bit patterns (`.quad` directive).
 
 **Files:** `src/codegen/expr.rs`, `src/codegen/expr/`
 
-`emit_expr()` takes an expression node and emits code that leaves the result in the standard registers. The top-level `expr.rs` file now mainly dispatches into focused helpers under `expr/` such as `scalars.rs`, `variables.rs`, `binops.rs`, `arrays.rs`, `compare.rs`, `calls/`, and `objects/`.
+`emit_expr()` takes an expression node and emits code that leaves the result in the standard registers. The top-level `expr.rs` file now mainly dispatches into focused helpers under `expr/` such as `scalars.rs`, `variables.rs`, `binops.rs`, `arrays.rs`, `compare/`, `calls/`, and `objects/`.
 
 | Type | Result location |
 |---|---|
@@ -345,7 +345,7 @@ For floats, `fcmp` replaces `cmp`, but the same `cset`/`csinv` pattern applies.
 
 ### Array union
 
-When both operands of `+` are arrays, codegen routes the expression to PHP array-union lowering instead of numeric addition. Indexed arrays call `__rt_array_union`, which clones the left operand and appends only the right-side numeric suffix whose keys are missing from the left. Associative arrays call `__rt_hash_union`, which clones the left hash, walks the right hash in insertion order, and inserts only keys that are absent from the clone. Mixed indexed/associative operands are rejected by the checker until that compatibility case is modeled.
+When both operands of `+` are arrays, codegen routes the expression to PHP array-union lowering instead of numeric addition. Indexed arrays call `__rt_array_union`, which clones the left operand and appends only the right-side numeric suffix whose keys are missing from the left. Associative arrays call `__rt_hash_union`, which clones the left hash, walks the right hash in insertion order, and inserts only keys that are absent from the clone. Mixed indexed/associative operands return a hash result: `__rt_array_hash_union` maps left indexed positions into integer hash keys before merging the right hash, while `__rt_hash_array_union` clones the left hash and probes right indexed positions as integer keys.
 
 ### Null coalescing operator
 
@@ -372,6 +372,21 @@ $x ??= "default";
 ```
 
 The generated code loads `$x`, branches past the assignment when it is non-null, and evaluates/stores the right-hand side only on the null path. This preserves PHP's `??=` short-circuit behavior and avoids rewriting an already-owned heap value back into the same local slot.
+
+### Pipe operator
+
+PHP 8.5 `value |> callable` lowers through `src/codegen/expr/calls/pipe.rs`.
+`emit_expr()` first stores the left-hand value into a hidden local slot so the
+left side is observably evaluated before the callable target. It then builds a
+synthetic one-argument call using that hidden local as the single positional
+argument.
+
+The pipe lowering delegates to the existing call paths whenever possible:
+first-class function targets become `FunctionCall`, first-class static method
+targets become `StaticMethodCall`, first-class instance method targets become
+`MethodCall`, local callable variables become `ClosureCall`, and other callable
+expressions become `ExprCall`. Argument planning, ABI materialization,
+ownership, and diagnostics therefore stay aligned with ordinary calls.
 
 ### Error-control operator
 
@@ -413,7 +428,7 @@ echo MAX;
 
 Constants declared with `const` or `define()` are resolved at compile time. When the codegen encounters a `ConstRef`, it looks up the constant's value and emits it as a literal — `mov x0, #100` for an integer, or loads a string label from the data section. `define()` call sites still emit a per-constant runtime seen flag so the call returns `true` only for the first runtime definition and returns `false` with a suppressible warning on duplicate attempts.
 
-Enum cases reuse the same idea, but through enum metadata instead of scalar constants: `ExprKind::EnumCase` resolves to a canonical enum-case symbol emitted in runtime data, and helper builtins such as `Enum::from()` / `Enum::tryFrom()` lower through the checker/codegen enum tables carried in `Context`.
+Enum cases reuse the same idea, but through enum metadata instead of scalar constants: parser output uses `ExprKind::ScopedConstantAccess` for `Color::Red`, and codegen detects enum receivers to load the canonical enum-case symbol emitted in runtime data. Helper builtins such as `Enum::from()` / `Enum::tryFrom()` lower through the checker/codegen enum tables carried in `Context`.
 
 ### Pointer values and casts
 
@@ -496,9 +511,22 @@ For captured closures passed through `array_map` / `array_filter`, codegen build
 
 First-class callable wrappers reuse this hidden argument path when the callable target carries context. `$obj->method(...)` records the receiver variable as a hidden capture and the wrapper calls that method with the visible arguments. `static::method(...)` records the forwarded called-class id, or `$this` in an instance method, so late static binding is preserved for direct callable calls and for callback paths that forward an environment, such as `array_map`, `array_filter`, `call_user_func`, and `call_user_func_array`.
 
+## Generator codegen
+
+**Files:** `src/codegen/functions/generator/`, `src/codegen/runtime/generators/`, `src/codegen/expr/objects/dispatch/vtable.rs`
+
+A function or closure body that contains `yield` does not emit as an ordinary function body. Codegen emits two symbols:
+
+1. `_fn_<name>` — a wrapper that allocates a heap `GeneratorFrame`, stamps it as the built-in `Generator` object, copies supported scalar parameters/captures into frame slots, zeroes local slots, and returns the frame pointer.
+2. `_fn_<name>__resume` — a state-machine entry point. State `0` enters the body; each yield gets a numbered resume label. At a yield, the resume function boxes the key/value into Mixed cells, replaces the frame's last key/value slots, stores the next state index, and returns to the caller.
+
+Generator closures reuse the same path as ordinary deferred closures, but their hidden `use (...)` captures are copied into the generator frame alongside visible parameters. `yield from` stores the active inner generator in the frame's `delegated_iter` slot and resumes it through the same `__rt_gen_*` runtime helpers used by user-visible `Generator` methods.
+
+The generated `Generator` object has a custom payload layout rather than ordinary PHP properties. Method dispatch for `current`, `key`, `valid`, `next`, `rewind`, `send`, `throw`, and `getReturn` is intercepted before vtable lookup and routed directly to `__rt_gen_*`. Both AArch64 and Linux `x86_64` follow the same high-level state-machine model; the wrapper, resume dispatcher, and runtime helper emitters select target-specific instruction sequences internally.
+
 ## Fiber codegen
 
-**Files:** `src/codegen/expr/objects/allocation.rs`, `src/codegen/expr/objects/dispatch.rs`, `src/codegen/expr/objects/fiber_wrapper.rs`, `src/codegen/functions/fiber_wrapper.rs`, `src/codegen/runtime/fibers/`
+**Files:** `src/codegen/expr/objects/allocation.rs`, `src/codegen/expr/objects/dispatch/`, `src/codegen/expr/objects/fiber_wrapper.rs`, `src/codegen/functions/fiber_wrapper.rs`, `src/codegen/runtime/fibers/`
 
 `Fiber` is a built-in class, but codegen does not lower it through the ordinary object constructor and method-dispatch path. `new Fiber($callable)` is intercepted and delegated to `__rt_fiber_construct`, which allocates the larger runtime-managed Fiber object, creates its guarded native stack, stores the original callable pointer, and records the generated wrapper label that adapts Fiber start values to the callback ABI.
 
@@ -851,6 +879,14 @@ When the codegen encounters a `NewObject` expression:
 6. **Call constructor**: if the class exposes `__construct`, pass the new object pointer as `x0` (`$this`) followed by the constructor arguments, then branch to the implementation label recorded in class metadata (which may come from an inherited constructor)
 
 The result is the object pointer in `x0`.
+
+### Attribute reflection objects
+
+`new ReflectionClass(...)`, `new ReflectionMethod(...)`, and `new ReflectionProperty(...)` are intercepted by `src/codegen/expr/objects/reflection.rs` instead of relying on ordinary user-defined constructor bodies. The type checker has already forced their class/member arguments to compile-time strings after normal call-argument planning, so codegen can look up the target `ClassInfo` directly and populate the private `__attrs` slot with a freshly built `array<ReflectionAttribute>`.
+
+`src/codegen/reflection.rs` owns the shared materialization path. It allocates each synthetic `ReflectionAttribute`, writes the resolved `__name`, builds the `array<mixed>` `__args` payload from supported literal attribute arguments, and stores a deterministic `__factory` id. `ReflectionAttribute::newInstance()` is then generated in `src/codegen/class_methods.rs` as a branch table over those factory ids; each branch constructs the real attribute class with the captured literal args, and the fallback returns `null` when no defined attribute class can be materialized.
+
+The `_class_attribute_*` runtime data tables still emit class-level attribute metadata from the same `ClassInfo` fields, but the supported Reflection owner constructors are compile-time materialized and do not perform runtime name lookups for classes, methods, or properties.
 
 ### Type checks (`$obj instanceof ClassName`)
 

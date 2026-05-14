@@ -231,11 +231,76 @@ pub(super) fn parse_prefix(
         }
         Token::New => parse_new_object(tokens, pos, span),
         Token::This => parse_simple(tokens, pos, span, ExprKind::This),
+        Token::Yield => parse_yield(tokens, pos, span),
         other => Err(CompileError::new(
             span,
             &format!("Unexpected token: {:?}", other),
         )),
     }
+}
+
+fn parse_yield(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    *pos += 1;
+
+    if *pos >= tokens.len() {
+        return Ok(Expr::new(
+            ExprKind::Yield {
+                key: None,
+                value: None,
+            },
+            span,
+        ));
+    }
+
+    if let Token::Identifier(name) = &tokens[*pos].0 {
+        if name.eq_ignore_ascii_case("from") {
+            *pos += 1;
+            let inner = parse_expr_bp(tokens, pos, 0)?;
+            return Ok(Expr::new(ExprKind::YieldFrom(Box::new(inner)), span));
+        }
+    }
+
+    match &tokens[*pos].0 {
+        Token::Semicolon
+        | Token::RParen
+        | Token::RBracket
+        | Token::RBrace
+        | Token::Comma
+        | Token::Eof => {
+            return Ok(Expr::new(
+                ExprKind::Yield {
+                    key: None,
+                    value: None,
+                },
+                span,
+            ));
+        }
+        _ => {}
+    }
+
+    let first = parse_expr_bp(tokens, pos, 0)?;
+    if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
+        *pos += 1;
+        let value = parse_expr_bp(tokens, pos, 0)?;
+        return Ok(Expr::new(
+            ExprKind::Yield {
+                key: Some(Box::new(first)),
+                value: Some(Box::new(value)),
+            },
+            span,
+        ));
+    }
+    Ok(Expr::new(
+        ExprKind::Yield {
+            key: None,
+            value: Some(Box::new(first)),
+        },
+        span,
+    ))
 }
 
 fn parse_simple(

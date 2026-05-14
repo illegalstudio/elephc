@@ -12,6 +12,7 @@ mod cleanup;
 mod callback_wrapper;
 mod control_flow;
 mod fiber_wrapper;
+mod generator;
 mod locals;
 mod types;
 
@@ -60,6 +61,15 @@ pub fn emit_function(
     extern_classes: &HashMap<String, ExternClassInfo>,
     extern_globals: &HashMap<String, PhpType>,
 ) {
+    // A function whose body contains `yield` is a generator. The wrapper
+    // allocates a `GeneratorFrame`, stamps it as a Generator object, and
+    // returns it; a separate `<f>__resume` symbol holds the state machine
+    // that drives the body across `yield` points.
+    if crate::types::checker::yield_validation::body_contains_yield(body) {
+        generator::emit_generator_function(emitter, data, name, sig, body, classes);
+        return;
+    }
+
     let label = function_symbol(name);
     let epilogue_label = function_epilogue_symbol(name);
     emit_function_with_label(
@@ -101,6 +111,19 @@ pub fn emit_closure(
     extern_classes: &HashMap<String, ExternClassInfo>,
     extern_globals: &HashMap<String, PhpType>,
 ) {
+    if crate::types::checker::yield_validation::body_contains_yield(body) {
+        generator::emit_generator_closure(
+            emitter,
+            data,
+            label,
+            sig,
+            hidden_params,
+            body,
+            Some(classes),
+        );
+        return;
+    }
+
     let epilogue_label = format!("{}_epilogue", label);
     let empty_globals = HashSet::new();
     let empty_statics = HashMap::new();
@@ -401,24 +424,41 @@ fn emit_function_with_label_and_class(
     {
         let closures: Vec<_> = ctx.deferred_closures.drain(..).collect();
         for closure in closures {
-            emit_closure(
-                emitter,
-                data,
-                &closure.label,
-                &closure.sig,
-                &closure.hidden_params,
-                &closure.body,
-                closure.current_class.as_deref(),
-                all_functions,
-                &ctx.function_variant_groups,
-                constants,
-                interfaces,
-                classes,
-                packed_classes,
-                extern_functions,
-                extern_classes,
-                extern_globals,
-            );
+            if closure.needed {
+                emit_closure(
+                    emitter,
+                    data,
+                    &closure.label,
+                    &closure.sig,
+                    &closure.hidden_params,
+                    &closure.body,
+                    closure.current_class.as_deref(),
+                    all_functions,
+                    &ctx.function_variant_groups,
+                    constants,
+                    interfaces,
+                    classes,
+                    packed_classes,
+                    extern_functions,
+                    extern_classes,
+                    extern_globals,
+                );
+            } else {
+                // The FCC value never escapes a short-circuited call, so the
+                // wrapper body is unreachable. Emit a stub that keeps the
+                // symbol resolvable (the FCC assignment still loads its
+                // address) and returns 0 if reached at runtime — a defensive
+                // floor in case the escape analysis ever missed a site.
+                emitter.blank();
+                emitter.comment(&format!("uninvoked FCC wrapper {} (stubbed)", closure.label));
+                emitter.label_global(&closure.label);
+                super::abi::emit_load_int_immediate(
+                    emitter,
+                    super::abi::int_result_reg(emitter),
+                    0,
+                );
+                super::abi::emit_return(emitter);
+            }
         }
         let wrappers: Vec<_> = ctx.deferred_fiber_wrappers.drain(..).collect();
         for wrapper in wrappers {

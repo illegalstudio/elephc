@@ -14,6 +14,7 @@ mod array_keys;
 pub(crate) mod call_args;
 pub(crate) mod fibers;
 mod ffi;
+pub(crate) mod json_constants;
 mod model;
 mod result;
 mod schema;
@@ -28,8 +29,8 @@ pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
 pub use result::{check_with_target, CheckResult};
 pub use schema::{
-    ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo, ExternClassInfo, ExternFieldInfo,
-    ExternFunctionSig, InterfaceInfo, PackedClassInfo, PackedFieldInfo,
+    AttrArgValue, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo, ExternClassInfo,
+    ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo, PackedFieldInfo,
 };
 pub(crate) use signatures::{
     builtin_call_sig, callable_wrapper_sig, first_class_callable_builtin_sig,

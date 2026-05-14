@@ -10,6 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::errors::CompileError;
 use crate::parser::ast::{Expr, Visibility};
 use crate::types::traits::FlattenedClass;
 use crate::types::{ClassInfo, FunctionSig, PhpType};
@@ -47,6 +48,12 @@ pub(super) struct ClassBuildState {
     pub(super) static_vtable_methods: Vec<String>,
     pub(super) static_vtable_slots: HashMap<String, usize>,
     pub(super) interfaces: Vec<String>,
+    pub(super) method_attribute_names: HashMap<String, Vec<String>>,
+    pub(super) method_attribute_args:
+        HashMap<String, Vec<Option<Vec<crate::types::AttrArgValue>>>>,
+    pub(super) property_attribute_names: HashMap<String, Vec<String>>,
+    pub(super) property_attribute_args:
+        HashMap<String, Vec<Option<Vec<crate::types::AttrArgValue>>>>,
 }
 
 impl ClassBuildState {
@@ -68,8 +75,9 @@ impl ClassBuildState {
         class_id: u64,
         class: &FlattenedClass,
         constructor_param_to_prop: Vec<Option<String>>,
-    ) -> ClassInfo {
-        ClassInfo {
+    ) -> Result<ClassInfo, CompileError> {
+        let attribute_args = collect_attribute_args(&class.attributes);
+        Ok(ClassInfo {
             class_id,
             parent: class.extends.clone(),
             is_abstract: class.is_abstract,
@@ -82,6 +90,12 @@ impl ClassBuildState {
                 .iter()
                 .map(|c| (c.name.clone(), c.value.clone()))
                 .collect(),
+            attribute_names: collect_attribute_names(&class.attributes),
+            attribute_args,
+            method_attribute_names: self.method_attribute_names,
+            method_attribute_args: self.method_attribute_args,
+            property_attribute_names: self.property_attribute_names,
+            property_attribute_args: self.property_attribute_args,
             properties: self.prop_types,
             property_offsets: self.property_offsets,
             property_declaring_classes: self.property_declaring_classes,
@@ -114,9 +128,79 @@ impl ClassBuildState {
             static_vtable_slots: self.static_vtable_slots,
             interfaces: self.interfaces,
             constructor_param_to_prop,
-        }
+        })
     }
 
+}
+
+/// Collect attribute names from a class's attribute groups, preserving source
+/// order. Name resolution has already canonicalised fully-qualified names by
+/// the time this runs, so names are emitted in ReflectionAttribute::getName()
+/// shape without a synthetic leading backslash.
+pub(super) fn collect_attribute_names(
+    groups: &[crate::parser::ast::AttributeGroup],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for group in groups {
+        for attr in &group.attributes {
+            // Name resolution normalises attribute references to the canonical
+            // class-like text (no leading backslash), so emit it as-is and let
+            // `class_attribute_names()` callers see PHP's `ReflectionAttribute::
+            // getName()` shape — namespace-qualified or bare identifier, never a
+            // synthetic leading `\`.
+            out.push(attr.name.as_str().to_string());
+        }
+    }
+    out
+}
+
+/// Collect the positional literal arguments of every attribute, in the
+/// same order as `collect_attribute_names`. Captures strings, ints, bools,
+/// and null directly. Negation (`-N`) of an int literal is folded so PHP's
+/// `#[Status(-1)]` survives parsing. Unsupported metadata is marked as
+/// `None` so legal PHP attribute syntax can still compile until a runtime
+/// reflection helper needs the missing argument payload.
+pub(super) fn collect_attribute_args(
+    groups: &[crate::parser::ast::AttributeGroup],
+) -> Vec<Option<Vec<crate::types::AttrArgValue>>> {
+    use crate::parser::ast::ExprKind;
+    use crate::types::AttrArgValue;
+
+    let mut out = Vec::new();
+    for group in groups {
+        for attr in &group.attributes {
+            let mut args = Vec::new();
+            let mut supported = true;
+            for arg_expr in &attr.args {
+                match &arg_expr.kind {
+                    ExprKind::StringLiteral(value) => {
+                        args.push(AttrArgValue::Str(value.clone()))
+                    }
+                    ExprKind::IntLiteral(value) => args.push(AttrArgValue::Int(*value)),
+                    ExprKind::BoolLiteral(value) => args.push(AttrArgValue::Bool(*value)),
+                    ExprKind::Null => args.push(AttrArgValue::Null),
+                    ExprKind::Negate(inner) => {
+                        if let ExprKind::IntLiteral(n) = &inner.kind {
+                            args.push(AttrArgValue::Int(n.wrapping_neg()));
+                        } else {
+                            supported = false;
+                            break;
+                        }
+                    }
+                    ExprKind::NamedArg { .. } => {
+                        supported = false;
+                        break;
+                    }
+                    _ => {
+                        supported = false;
+                        break;
+                    }
+                }
+            }
+            out.push(if supported { Some(args) } else { None });
+        }
+    }
+    out
 }
 
 /// Returns `true` if the class declaration carries the PHP 8.2
@@ -149,6 +233,14 @@ impl ClassBuildState {
                 self.property_declaring_classes
                     .insert(name.clone(), declaring_class.clone());
             }
+            if let Some(names) = parent.property_attribute_names.get(name) {
+                self.property_attribute_names
+                    .insert(name.clone(), names.clone());
+            }
+            if let Some(args) = parent.property_attribute_args.get(name) {
+                self.property_attribute_args
+                    .insert(name.clone(), args.clone());
+            }
             if parent.final_properties.contains(name) {
                 self.final_properties.insert(name.clone());
             }
@@ -177,6 +269,14 @@ impl ClassBuildState {
                 self.static_property_declaring_classes
                     .insert(name.clone(), declaring_class.clone());
             }
+            if let Some(names) = parent.property_attribute_names.get(name) {
+                self.property_attribute_names
+                    .insert(name.clone(), names.clone());
+            }
+            if let Some(args) = parent.property_attribute_args.get(name) {
+                self.property_attribute_args
+                    .insert(name.clone(), args.clone());
+            }
             if parent.final_static_properties.contains(name) {
                 self.final_static_properties.insert(name.clone());
             }
@@ -204,6 +304,14 @@ impl ClassBuildState {
                 self.method_impl_classes
                     .insert(name.clone(), impl_class.clone());
             }
+            if let Some(names) = parent.method_attribute_names.get(name) {
+                self.method_attribute_names
+                    .insert(name.clone(), names.clone());
+            }
+            if let Some(args) = parent.method_attribute_args.get(name) {
+                self.method_attribute_args
+                    .insert(name.clone(), args.clone());
+            }
         }
         self.vtable_methods = parent.vtable_methods.clone();
         self.vtable_slots = parent.vtable_slots.clone();
@@ -229,6 +337,14 @@ impl ClassBuildState {
             if let Some(impl_class) = parent.static_method_impl_classes.get(name) {
                 self.static_method_impl_classes
                     .insert(name.clone(), impl_class.clone());
+            }
+            if let Some(names) = parent.method_attribute_names.get(name) {
+                self.method_attribute_names
+                    .insert(name.clone(), names.clone());
+            }
+            if let Some(args) = parent.method_attribute_args.get(name) {
+                self.method_attribute_args
+                    .insert(name.clone(), args.clone());
             }
         }
         self.static_vtable_methods = parent.static_vtable_methods.clone();

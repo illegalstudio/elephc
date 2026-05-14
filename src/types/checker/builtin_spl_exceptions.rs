@@ -1,3 +1,13 @@
+//! Purpose:
+//! Injects SPL exception classes into checker metadata.
+//! Models the standard hierarchy as builtin subclasses of `Exception`.
+//!
+//! Called from:
+//! - `crate::types::checker::driver`
+//!
+//! Key details:
+//! - These classes inherit behavior from `Exception`; only their nominal hierarchy is inserted here.
+
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
@@ -29,6 +39,9 @@ pub(crate) fn inject_builtin_spl_exceptions(
     class_map: &mut HashMap<String, FlattenedClass>,
 ) -> Result<(), CompileError> {
     for (name, _) in SPL_EXCEPTION_HIERARCHY {
+        if *name == "RuntimeException" && class_map.contains_key(*name) {
+            continue;
+        }
         if interface_map.contains_key(*name) || class_map.contains_key(*name) {
             return Err(CompileError::new(
                 crate::span::Span::dummy(),
@@ -38,6 +51,9 @@ pub(crate) fn inject_builtin_spl_exceptions(
     }
 
     for (name, parent) in SPL_EXCEPTION_HIERARCHY {
+        if class_map.contains_key(*name) {
+            continue;
+        }
         class_map.insert(
             (*name).to_string(),
             FlattenedClass {

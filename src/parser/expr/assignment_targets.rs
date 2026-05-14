@@ -242,6 +242,10 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
             collect_assignment_target_dependencies(value, dependencies);
             collect_assignment_target_dependencies(default, dependencies);
         }
+        ExprKind::Pipe { value, callable } => {
+            collect_assignment_target_dependencies(value, dependencies);
+            collect_assignment_target_dependencies(callable, dependencies);
+        }
         ExprKind::Ternary {
             condition,
             then_expr,
@@ -305,6 +309,8 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::BufferNew { .. }
         | ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::NewScopedObject { .. }
+        | ExprKind::Yield { .. }
+        | ExprKind::YieldFrom(_)
         | ExprKind::MagicConstant(_) => {}
     }
 }
@@ -360,6 +366,10 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         | ExprKind::ShortTernary { value, default } => {
             expr_may_write_dependency(value, dependencies)
                 || expr_may_write_dependency(default, dependencies)
+        }
+        ExprKind::Pipe { value, callable } => {
+            expr_may_write_dependency(value, dependencies)
+                || expr_may_write_dependency(callable, dependencies)
         }
         ExprKind::Ternary {
             condition,
@@ -427,7 +437,10 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         | ExprKind::StaticPropertyAccess { .. }
         | ExprKind::FirstClassCallable(_)
         | ExprKind::This
-        | ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::Yield { .. }
+        | ExprKind::YieldFrom(_)
         | ExprKind::MagicConstant(_) => false,
     }
 }

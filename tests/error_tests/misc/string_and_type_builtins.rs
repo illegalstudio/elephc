@@ -236,3 +236,9 @@ expect_builtin_arity_error!(
     "<?php is_iterable();",
     "is_iterable() takes exactly 1 argument"
 );
+
+expect_builtin_arity_error!(
+    test_error_is_callable_wrong_args,
+    "<?php is_callable();",
+    "is_callable() takes exactly 1 argument"
+);

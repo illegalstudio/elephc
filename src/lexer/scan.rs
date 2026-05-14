@@ -174,6 +174,7 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
             cursor.advance();
             if cursor.peek() == Some('|') { cursor.advance(); Ok(Token::OrOr) }
             else if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::PipeAssign) }
+            else if cursor.peek() == Some('>') { cursor.advance(); Ok(Token::PipeArrow) }
             else { Ok(Token::Pipe) }
         }
         '^' => {

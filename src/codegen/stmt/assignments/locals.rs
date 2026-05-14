@@ -15,7 +15,8 @@ use super::super::super::emit::Emitter;
 use super::super::super::expr::emit_expr;
 use super::super::super::functions;
 use super::super::PhpType;
-use crate::parser::ast::{Expr, ExprKind};
+use crate::names::Name;
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
 
 pub(crate) fn emit_assign_stmt(
     name: &str,
@@ -157,6 +158,7 @@ pub(crate) fn emit_assign_stmt(
 
     match &value.kind {
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => {
+            let last_wrapper_label = ctx.deferred_closures.last().map(|d| d.label.clone());
             if let Some(deferred) = ctx.deferred_closures.last() {
                 ctx.closure_sigs.insert(name.to_string(), deferred.sig.clone());
                 if !deferred.captures.is_empty() {
@@ -165,6 +167,33 @@ pub(crate) fn emit_assign_stmt(
                 } else {
                     ctx.closure_captures.remove(name);
                 }
+            }
+            if let ExprKind::FirstClassCallable(target) = &value.kind {
+                if let Some(resolved) = resolve_storable_target(target, ctx) {
+                    ctx.first_class_callable_targets
+                        .insert(name.to_string(), resolved);
+                } else {
+                    ctx.first_class_callable_targets.remove(name);
+                }
+                if let Some(label) = last_wrapper_label {
+                    // Track which wrapper backs this local so `emit_variable`
+                    // can later mark it `needed` if the FCC value escapes.
+                    ctx.variable_fcc_label
+                        .insert(name.to_string(), label.clone());
+                    // The wrapper is dead code unless and until that escape is
+                    // detected — flip the flag now so the emission loop emits
+                    // a stub instead of the full body.
+                    if let Some(deferred) =
+                        ctx.deferred_closures.iter_mut().find(|d| d.label == label)
+                    {
+                        deferred.needed = false;
+                    }
+                } else {
+                    ctx.variable_fcc_label.remove(name);
+                }
+            } else {
+                ctx.first_class_callable_targets.remove(name);
+                ctx.variable_fcc_label.remove(name);
             }
         }
         ExprKind::Variable(src_name) if ty == PhpType::Callable => {
@@ -178,10 +207,23 @@ pub(crate) fn emit_assign_stmt(
             } else {
                 ctx.closure_captures.remove(name);
             }
+            if let Some(target) = ctx.first_class_callable_targets.get(src_name).cloned() {
+                ctx.first_class_callable_targets
+                    .insert(name.to_string(), target);
+            } else {
+                ctx.first_class_callable_targets.remove(name);
+            }
+            if let Some(label) = ctx.variable_fcc_label.get(src_name).cloned() {
+                ctx.variable_fcc_label.insert(name.to_string(), label);
+            } else {
+                ctx.variable_fcc_label.remove(name);
+            }
         }
         _ => {
             ctx.closure_sigs.remove(name);
             ctx.closure_captures.remove(name);
+            ctx.first_class_callable_targets.remove(name);
+            ctx.variable_fcc_label.remove(name);
         }
     }
 
@@ -194,6 +236,37 @@ pub(crate) fn emit_assign_stmt(
                 super::super::helpers::local_slot_ownership_after_store(&ty),
             );
         }
+    }
+}
+
+/// Returns the callable target to store in `ctx.first_class_callable_targets` so
+/// that subsequent `$cb(args)` invocations can short-circuit. `self::method(...)`
+/// and `parent::method(...)` are resolved to their concrete class at storage time
+/// (lexically — `ctx.current_class` at the assignment site). `static::method(...)`
+/// is stored as-is: the short-circuit re-uses the caller scope's late-static
+/// binding context the same way the closure wrapper would, via
+/// `emit_forwarded_called_class_id`.
+fn resolve_storable_target(target: &CallableTarget, ctx: &Context) -> Option<CallableTarget> {
+    match target {
+        CallableTarget::StaticMethod { receiver, method } => match receiver {
+            StaticReceiver::Named(_) | StaticReceiver::Static => Some(target.clone()),
+            StaticReceiver::Self_ => {
+                let class = ctx.current_class.as_ref()?;
+                Some(CallableTarget::StaticMethod {
+                    receiver: StaticReceiver::Named(Name::unqualified(class)),
+                    method: method.clone(),
+                })
+            }
+            StaticReceiver::Parent => {
+                let current = ctx.current_class.as_ref()?;
+                let parent = ctx.classes.get(current).and_then(|info| info.parent.clone())?;
+                Some(CallableTarget::StaticMethod {
+                    receiver: StaticReceiver::Named(Name::unqualified(parent)),
+                    method: method.clone(),
+                })
+            }
+        },
+        _ => Some(target.clone()),
     }
 }
 
