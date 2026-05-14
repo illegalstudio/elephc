@@ -190,7 +190,11 @@ fn string_literal_arg(expr: &Expr) -> Option<String> {
 
 fn resolve_static_receiver_class(receiver: &StaticReceiver, ctx: &Context) -> Option<String> {
     match receiver {
-        StaticReceiver::Named(name) => Some(name.as_canonical()),
+        StaticReceiver::Named(name) => crate::codegen::reflection::resolve_class_name(
+            &ctx.classes,
+            &name.as_canonical(),
+        )
+        .map(str::to_string),
         StaticReceiver::Self_ | StaticReceiver::Static => ctx.current_class.clone(),
         StaticReceiver::Parent => ctx
             .current_class

@@ -815,6 +815,20 @@ foreach ($attrs as $attr) {
 }
 
 #[test]
+fn test_reflection_get_attributes_survives_temporary_reflector() {
+    let out = compile_and_run(
+        r#"<?php
+#[Marker("owned")]
+class Greeter {}
+$attrs = (new ReflectionClass('Greeter'))->getAttributes();
+echo $attrs[0]->getName() . "/";
+echo $attrs[0]->getArguments()[0];
+"#,
+    );
+    assert_eq!(out, "Marker/owned");
+}
+
+#[test]
 fn test_reflection_method_get_attributes_returns_method_attributes() {
     let out = compile_and_run(
         r#"<?php
@@ -849,6 +863,22 @@ echo $attrs[0]->getArguments()[0];
 "#,
     );
     assert_eq!(out, "1/Column/id");
+}
+
+#[test]
+fn test_reflection_class_constant_lookup_is_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+#[Marker("ok")]
+class User {}
+$ref = new ReflectionClass(user::class);
+$attrs = $ref->getAttributes();
+echo count($attrs) . "/";
+echo $attrs[0]->getName() . "/";
+echo $attrs[0]->getArguments()[0];
+"#,
+    );
+    assert_eq!(out, "1/Marker/ok");
 }
 
 #[test]
