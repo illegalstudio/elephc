@@ -792,3 +792,83 @@ echo $args[0];
     );
     assert_eq!(out, "1/first");
 }
+
+#[test]
+fn test_reflection_class_get_attributes_returns_reflection_attribute_array() {
+    let out = compile_and_run(
+        r#"<?php
+#[Author("Ada", 1815), Version("1.0", true)]
+class Greeter {}
+$ref = new ReflectionClass('Greeter');
+$attrs = $ref->getAttributes();
+echo count($attrs) . "\n";
+foreach ($attrs as $attr) {
+    echo $attr->getName() . ":";
+    foreach ($attr->getArguments() as $arg) {
+        echo "[" . $arg . "]";
+    }
+    echo "\n";
+}
+"#,
+    );
+    assert_eq!(out, "2\nAuthor:[Ada][1815]\nVersion:[1.0][1]\n");
+}
+
+#[test]
+fn test_reflection_method_get_attributes_returns_method_attributes() {
+    let out = compile_and_run(
+        r#"<?php
+class Controller {
+    #[Route("/home", "GET")]
+    public function index() {}
+}
+$ref = new ReflectionMethod('Controller', 'index');
+$attrs = $ref->getAttributes();
+echo count($attrs) . "/";
+echo $attrs[0]->getName() . "/";
+echo $attrs[0]->getArguments()[0] . "/";
+echo $attrs[0]->getArguments()[1];
+"#,
+    );
+    assert_eq!(out, "1/Route//home/GET");
+}
+
+#[test]
+fn test_reflection_property_get_attributes_accepts_class_constant() {
+    let out = compile_and_run(
+        r#"<?php
+class User {
+    #[Column("id")]
+    public int $id = 0;
+}
+$ref = new ReflectionProperty(User::class, 'id');
+$attrs = $ref->getAttributes();
+echo count($attrs) . "/";
+echo $attrs[0]->getName() . "/";
+echo $attrs[0]->getArguments()[0];
+"#,
+    );
+    assert_eq!(out, "1/Column/id");
+}
+
+#[test]
+fn test_reflection_attribute_new_instance_runs_on_demand() {
+    let out = compile_and_run(
+        r#"<?php
+class Route {
+    public function __construct(string $path) {
+        echo "ctor:" . $path . "\n";
+    }
+}
+#[Route("/lazy")]
+class Controller {}
+$ref = new ReflectionClass('Controller');
+echo "before\n";
+$attrs = $ref->getAttributes();
+echo "middle\n";
+$instance = $attrs[0]->newInstance();
+echo ($instance instanceof Route) ? "instance\n" : "bad\n";
+"#,
+    );
+    assert_eq!(out, "before\nmiddle\nctor:/lazy\ninstance\n");
+}
