@@ -511,6 +511,28 @@ fn test_autoload_files_section_executes_before_main_in_composer_order() {
 }
 
 #[test]
+fn test_class_triggered_autoload_executes_before_first_use() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Foo.php",
+                "<?php\nnamespace App;\necho \"load\";\nclass Foo {}\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$f = new App\\Foo();\necho \"main\";\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "loadmain");
+}
+
+#[test]
 fn test_autoload_classmap_explicit_file() {
     // classmap entry pointing directly at a .php file: the compiler
     // scans it for class declarations and indexes them under their FQN.

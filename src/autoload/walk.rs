@@ -42,10 +42,14 @@ fn collect_declared_in_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
     }
 }
 
-pub(super) fn collect_referenced_fqns(program: &Program) -> HashSet<String> {
-    let mut out = HashSet::new();
-    for stmt in program {
-        collect_refs_stmt(stmt, &mut out);
+pub(super) fn collect_reference_points(program: &Program) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    for (stmt_idx, stmt) in program.iter().enumerate() {
+        let mut refs = HashSet::new();
+        collect_refs_stmt(stmt, &mut refs);
+        let mut refs: Vec<String> = refs.into_iter().collect();
+        refs.sort();
+        out.extend(refs.into_iter().map(|fqn| (stmt_idx, fqn)));
     }
     out
 }

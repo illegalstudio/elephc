@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Runtime autoload callbacks cannot run in native binaries; supported rules are interpreted at compile time.
-//! - Composer files execute before the entry program while class-triggered files append at discovery points.
+//! - Composer files execute before the entry program while class-triggered files splice before first use.
 
 mod alias;
 mod index;
@@ -26,7 +26,7 @@ use crate::parser::ast::Program;
 use crate::parser::ast::Stmt;
 use crate::span::Span;
 
-use walk::{collect_declared_fqns, collect_referenced_fqns};
+use walk::{collect_declared_fqns, collect_reference_points};
 
 const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "ArrayAccess",
@@ -102,24 +102,28 @@ pub fn run(
     for _ in 0..MAX_ITERATIONS {
         let mut declared = collect_declared_fqns(&program);
         seed_builtin_declared_fqns(&mut declared);
-        let referenced = collect_referenced_fqns(&program);
-        let mut new_paths: Vec<PathBuf> = Vec::new();
-        for fqn in &referenced {
-            if declared.contains(fqn) {
+        let reference_points = collect_reference_points(&program);
+        let mut insertions: Vec<(usize, Program)> = Vec::new();
+        for (stmt_idx, fqn) in reference_points {
+            if declared.contains(&fqn) {
                 continue;
             }
-            if let Some(path) = resolve_class(fqn, registry) {
+            if let Some(path) = resolve_class(&fqn, registry) {
                 let canonical = path.canonicalize().unwrap_or(path);
                 if included.insert(canonical.clone()) {
-                    new_paths.push(canonical);
+                    let loaded = load_autoloaded_file(&canonical, base_dir)?;
+                    insertions.push((stmt_idx, loaded));
                 }
             }
         }
-        if new_paths.is_empty() {
+        if insertions.is_empty() {
             break;
         }
-        for path in new_paths {
-            program = splice_autoloaded_file(program, &path, base_dir)?;
+        let mut offset = 0usize;
+        for (stmt_idx, loaded) in insertions {
+            let insert_at = stmt_idx + offset;
+            offset += loaded.len();
+            program.splice(insert_at..insert_at, loaded);
         }
     }
     Ok(program)
@@ -146,19 +150,6 @@ fn resolve_class(fqn: &str, registry: &Registry) -> Option<PathBuf> {
         }
     }
     None
-}
-
-/// Parse, resolve includes, and name-resolve a single file, then append the
-/// resulting statements to `program`. Used by class-triggered autoloads whose
-/// top-level effects happen at the point the class is first referenced.
-pub(super) fn splice_autoloaded_file(
-    mut program: Program,
-    path: &Path,
-    base_dir: &Path,
-) -> Result<Program, CompileError> {
-    let canonicalized = load_autoloaded_file(path, base_dir)?;
-    program.extend(canonicalized);
-    Ok(program)
 }
 
 fn load_autoloaded_file(path: &Path, base_dir: &Path) -> Result<Program, CompileError> {
