@@ -11,7 +11,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::parser::ast::{ExprKind, Stmt};
+use crate::parser::ast::{CallableTarget, ExprKind, Stmt};
 use crate::types::{
     ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
     PackedClassInfo, PhpType,
@@ -79,6 +79,14 @@ pub struct DeferredClosure {
     pub captures: Vec<(String, PhpType)>,
     pub hidden_params: Vec<(String, PhpType)>,
     pub current_class: Option<String>,
+    /// `true` when the wrapper body must be emitted because the runtime can
+    /// invoke it. Real closures default to `true` (the only way to call them is
+    /// via the wrapper). First-class-callable wrappers are downgraded to `false`
+    /// at the FCC variable assignment site and only flipped back to `true` if
+    /// the variable's value is read in a context other than the short-circuit
+    /// (see `emit_variable`). When `false`, the wrapper is replaced by a tiny
+    /// `ret`-only stub that keeps the symbol resolvable for the address load.
+    pub needed: bool,
 }
 
 /// A Fiber entry wrapper emitted next to deferred closure bodies.
@@ -123,10 +131,24 @@ pub struct Context {
     pub closure_sigs: HashMap<String, FunctionSig>,
     /// Captured variables per closure variable name: maps $fn -> [(capture_name, type)].
     pub closure_captures: HashMap<String, Vec<(String, PhpType)>>,
+    /// First-class callable target stored in a variable, mirroring the Checker's
+    /// `first_class_callable_targets` so call sites can short-circuit to a direct
+    /// function/method/static-method call instead of going through the closure
+    /// wrapper. Populated at assignment time; cleared on reassignment to a
+    /// non-FCC value. See `emit_closure_call` for consumers.
+    pub first_class_callable_targets: HashMap<String, CallableTarget>,
+    /// For each variable currently bound to an FCC, the label of the deferred
+    /// wrapper that materialises that FCC. Used by `emit_variable` to mark a
+    /// wrapper as `needed = true` when the FCC value escapes to anything other
+    /// than a short-circuited call — at which point the dead-wrapper stub
+    /// optimisation must back off and emit the full body.
+    pub variable_fcc_label: HashMap<String, String>,
     /// Class definitions for OOP support.
     pub classes: HashMap<String, ClassInfo>,
     /// Interface definitions for OOP support.
     pub interfaces: HashMap<String, InterfaceInfo>,
+    /// Trait declarations preserved for AOT introspection builtins.
+    pub traits: HashSet<String>,
     /// Enum definitions.
     pub enums: HashMap<String, EnumInfo>,
     /// Packed layout-only record definitions.
@@ -205,8 +227,11 @@ impl Context {
             all_static_vars: HashMap::new(),
             closure_sigs: HashMap::new(),
             closure_captures: HashMap::new(),
+            first_class_callable_targets: HashMap::new(),
+            variable_fcc_label: HashMap::new(),
             classes: HashMap::new(),
             interfaces: HashMap::new(),
+            traits: HashSet::new(),
             enums: HashMap::new(),
             packed_classes: HashMap::new(),
             current_class: None,
@@ -283,6 +308,23 @@ impl Context {
         ownership: HeapOwnership,
     ) {
         self.update_var_type_static_and_ownership(name, ty.clone(), ty, ownership);
+    }
+
+    /// Marks the deferred FCC wrapper backing `var` as `needed = true`, so the
+    /// emission loop emits its body instead of the dead-wrapper stub. Call this
+    /// from any site that consumes an FCC variable's runtime value (loads its
+    /// address for an indirect call, threads its captures through a callback
+    /// builtin, materialises it into a Fiber, etc.). The short-circuit paths
+    /// in `emit_closure_call` deliberately do NOT call this — that's the whole
+    /// point of the optimisation.
+    pub fn mark_fcc_used(&mut self, var: &str) {
+        if let Some(label) = self.variable_fcc_label.get(var).cloned() {
+            if let Some(deferred) =
+                self.deferred_closures.iter_mut().find(|d| d.label == label)
+            {
+                deferred.needed = true;
+            }
+        }
     }
 
     pub fn update_var_type_static_and_ownership(

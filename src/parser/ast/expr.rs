@@ -48,6 +48,13 @@ pub enum ExprKind {
         value: Box<Expr>,
         default: Box<Expr>,
     },
+    /// PHP 8.5 pipe operator: `value |> callable` evaluates `value`, then invokes
+    /// `callable` with the resulting value as the single positional argument.
+    /// Left-associative; LHS is observably evaluated before RHS.
+    Pipe {
+        value: Box<Expr>,
+        callable: Box<Expr>,
+    },
     Assignment {
         target: Box<Expr>,
         value: Box<Expr>,
@@ -172,6 +179,11 @@ pub enum ExprKind {
         args: Vec<Expr>,
     },
     MagicConstant(MagicConstant),
+    Yield {
+        key: Option<Box<Expr>>,
+        value: Option<Box<Expr>>,
+    },
+    YieldFrom(Box<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]

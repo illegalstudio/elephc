@@ -39,8 +39,11 @@ pub(crate) fn compile_source_to_asm_with_defines(
     let synthetic_main = dir.join("test.php");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
     let ast = elephc::conditional::apply(ast, defines);
+    let (autoload_registry, ast) = elephc::autoload::Registry::build(dir, ast);
+    elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    let resolved = elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);

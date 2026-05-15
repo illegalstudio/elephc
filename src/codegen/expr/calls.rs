@@ -13,12 +13,14 @@ mod closure;
 mod first_class;
 mod function;
 mod indirect;
+mod pipe;
 
 use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use super::Expr;
 use crate::parser::ast::TypeExpr;
+use crate::span::Span;
 use crate::types::PhpType;
 
 pub(super) fn emit_function_call(
@@ -93,9 +95,24 @@ pub(super) fn emit_first_class_callable(
     first_class::emit_first_class_callable(target, emitter, ctx, data)
 }
 
-pub(super) fn first_class_callable_sig(
+pub(crate) fn first_class_callable_sig(
     target: &crate::parser::ast::CallableTarget,
     ctx: &Context,
 ) -> Option<crate::types::FunctionSig> {
     first_class::first_class_callable_sig(target, ctx)
+}
+
+pub(crate) fn pipe_value_temp_name(span: Span) -> String {
+    format!("__elephc_pipe_value_{}_{}", span.line, span.col)
+}
+
+pub(super) fn emit_pipe(
+    value: &Expr,
+    callable: &Expr,
+    span: Span,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    pipe::emit_pipe(value, callable, span, emitter, ctx, data)
 }

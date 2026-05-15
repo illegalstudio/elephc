@@ -17,13 +17,21 @@ use crate::parser::ast::{Program, StmtKind};
 use crate::types::{traits::flatten_classes, TypeEnv};
 
 use super::builtin_types::{
-    inject_builtin_throwables, patch_builtin_exception_signatures,
-    patch_builtin_fiber_signatures, patch_magic_method_signatures, InterfaceDeclInfo,
+    inject_builtin_reflection, inject_builtin_throwables, patch_builtin_exception_signatures,
+    patch_builtin_fiber_signatures, patch_builtin_reflection_signatures,
+    patch_magic_method_signatures, InterfaceDeclInfo,
 };
-use super::builtin_iterators::inject_builtin_iterators;
+use super::builtin_interfaces::{
+    apply_implicit_stringable_interfaces, inject_builtin_interfaces,
+};
+use super::builtin_iterators::{inject_builtin_iterators, patch_builtin_generator_signatures};
+use super::builtin_json::{inject_builtin_json_interfaces, patch_builtin_json_signatures};
+use super::builtin_spl_exceptions::inject_builtin_spl_exceptions;
+use super::builtin_stdclass::inject_builtin_stdclass;
 use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
 };
+use super::yield_validation::validate_yield_contexts;
 use super::Checker;
 
 mod externs;
@@ -38,10 +46,19 @@ pub(super) fn check_types_impl(
     let mut checker = Checker::new(target_platform);
     let mut errors = Vec::new();
 
+    errors.extend(validate_yield_contexts(program));
+
     checker.collect_function_decls(program, &mut errors);
 
     let (flattened_classes, flatten_errors) = flatten_classes(program);
     errors.extend(flatten_errors);
+    let declared_traits: HashSet<String> = program
+        .iter()
+        .filter_map(|stmt| match &stmt.kind {
+            StmtKind::TraitDecl { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
     let mut seen_classes = HashSet::new();
     let mut class_map = HashMap::new();
     for class in &flattened_classes {
@@ -97,9 +114,27 @@ pub(super) fn check_types_impl(
     if let Err(error) = inject_builtin_throwables(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }
+    if let Err(error) = inject_builtin_interfaces(&mut interface_map, &mut class_map) {
+        errors.extend(error.flatten());
+    }
+    if let Err(error) = inject_builtin_spl_exceptions(&mut interface_map, &mut class_map) {
+        errors.extend(error.flatten());
+    }
     if let Err(error) = inject_builtin_iterators(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }
+    if let Err(error) = inject_builtin_json_interfaces(&mut interface_map, &mut class_map) {
+        errors.extend(error.flatten());
+    }
+    if let Err(error) = inject_builtin_stdclass(&mut class_map) {
+        errors.extend(error.flatten());
+    }
+    if let Err(error) =
+        inject_builtin_reflection(&interface_map, &mut class_map, &declared_traits)
+    {
+        errors.extend(error.flatten());
+    }
+    checker.declared_classes = class_map.keys().cloned().collect();
     checker.declared_interfaces = interface_map.keys().cloned().collect();
 
     let mut next_interface_id = 0u64;
@@ -153,6 +188,9 @@ pub(super) fn check_types_impl(
     }
     patch_builtin_exception_signatures(&mut checker);
     patch_builtin_fiber_signatures(&mut checker);
+    patch_builtin_json_signatures(&mut checker);
+    patch_builtin_reflection_signatures(&mut checker);
+    patch_builtin_generator_signatures(&mut checker);
     patch_magic_method_signatures(&mut checker);
 
     checker.prescan_extern_decls(program, &mut errors);
@@ -161,6 +199,7 @@ pub(super) fn check_types_impl(
 
     checker.resolve_unchecked_functions(&mut errors);
     checker.type_check_methods_until_stable(&flattened_classes, &global_env, &mut errors)?;
+    apply_implicit_stringable_interfaces(&mut checker.classes);
 
     let (final_global_env, final_top_level_errors) = checker.check_top_level_program(program);
     for ((stmt, initial_errors), final_errors) in program

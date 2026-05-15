@@ -22,6 +22,8 @@ pub(super) fn is_array_union_candidate(left: &Expr, right: &Expr, ctx: &Context)
         ),
         (PhpType::Array(_), PhpType::Array(_))
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+            | (PhpType::Array(_), PhpType::AssocArray { .. })
+            | (PhpType::AssocArray { .. }, PhpType::Array(_))
     )
 }
 
@@ -36,7 +38,13 @@ pub(super) fn emit_array_union_binop(
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // save the left array pointer while evaluating the right operand
     let right_static_ty = emit_expr(right, emitter, ctx, data);
     let result_ty = array_union_result_type(left, &left_static_ty, right, &right_static_ty);
-    let use_hash_union = matches!(left_static_ty, PhpType::AssocArray { .. });
+    let runtime_helper = match (&left_static_ty, &right_static_ty) {
+        (PhpType::Array(_), PhpType::Array(_)) => "__rt_array_union",
+        (PhpType::AssocArray { .. }, PhpType::AssocArray { .. }) => "__rt_hash_union",
+        (PhpType::Array(_), PhpType::AssocArray { .. }) => "__rt_array_hash_union",
+        (PhpType::AssocArray { .. }, PhpType::Array(_)) => "__rt_hash_array_union",
+        _ => "__rt_array_union",
+    };
 
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -49,11 +57,7 @@ pub(super) fn emit_array_union_binop(
         }
     }
 
-    if use_hash_union {
-        abi::emit_call_label(emitter, "__rt_hash_union");                       // compute PHP associative-array union with left-key precedence
-    } else {
-        abi::emit_call_label(emitter, "__rt_array_union");                      // compute PHP indexed-array union with numeric-key precedence
-    }
+    abi::emit_call_label(emitter, runtime_helper);                              // compute PHP array union with left-key precedence for the active storage pair
 
     result_ty
 }
@@ -97,10 +101,38 @@ fn array_union_result_type(
             };
             PhpType::AssocArray { key, value }
         }
+        (PhpType::Array(left_elem), PhpType::AssocArray { key, value }) => PhpType::AssocArray {
+            key: Box::new(merge_array_union_key_with_indexed(key)),
+            value: Box::new(merge_array_union_value_types(left_elem, value)),
+        },
+        (PhpType::AssocArray { key, value }, PhpType::Array(right_elem)) => PhpType::AssocArray {
+            key: Box::new(merge_array_union_key_with_indexed(key)),
+            value: Box::new(merge_array_union_value_types(value, right_elem)),
+        },
         _ => left.clone(),
     }
 }
 
 fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
     matches!(&expr.kind, ExprKind::ArrayLiteral(elems) if elems.is_empty())
+}
+
+fn merge_array_union_key_with_indexed(key: &PhpType) -> PhpType {
+    if matches!(key, PhpType::Int) {
+        PhpType::Int
+    } else {
+        PhpType::Mixed
+    }
+}
+
+fn merge_array_union_value_types(left: &PhpType, right: &PhpType) -> PhpType {
+    if left == right {
+        left.clone()
+    } else if matches!(left, PhpType::Never) {
+        right.clone()
+    } else if matches!(right, PhpType::Never) {
+        left.clone()
+    } else {
+        PhpType::Mixed
+    }
 }

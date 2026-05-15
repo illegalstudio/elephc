@@ -15,7 +15,7 @@ use crate::types::PhpType;
 
 use super::super::super::{infer_expr_type_syntactic, Checker};
 use super::super::validation::visibility_rank;
-use super::state::ClassBuildState;
+use super::state::{collect_attribute_args, collect_attribute_names, ClassBuildState};
 
 pub(super) fn apply_properties(
     state: &mut ClassBuildState,
@@ -98,6 +98,12 @@ fn apply_static_property(
     state
         .static_property_declaring_classes
         .insert(prop.name.clone(), class.name.clone());
+    state
+        .property_attribute_names
+        .insert(prop.name.clone(), collect_attribute_names(&prop.attributes));
+    state
+        .property_attribute_args
+        .insert(prop.name.clone(), collect_attribute_args(&prop.attributes));
     state
         .static_property_visibilities
         .insert(prop.name.clone(), prop.visibility.clone());
@@ -259,6 +265,12 @@ fn apply_instance_property(
     state
         .property_declaring_classes
         .insert(prop.name.clone(), class.name.clone());
+    state
+        .property_attribute_names
+        .insert(prop.name.clone(), collect_attribute_names(&prop.attributes));
+    state
+        .property_attribute_args
+        .insert(prop.name.clone(), collect_attribute_args(&prop.attributes));
     state.defaults.push(prop.default.clone());
     state
         .property_visibilities

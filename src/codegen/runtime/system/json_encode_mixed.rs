@@ -35,9 +35,11 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_json_encode_mixed_array");                   // encode nested arrays via the indexed-array helpers
     emitter.instruction("cmp x9, #5");                                          // is the boxed value an associative array?
     emitter.instruction("b.eq __rt_json_encode_mixed_assoc");                   // encode nested associative arrays recursively
+    emitter.instruction("cmp x9, #6");                                          // is the boxed value an object instance?
+    emitter.instruction("b.eq __rt_json_encode_mixed_object");                  // encode objects via the public-property descriptor walker
     emitter.instruction("cmp x9, #8");                                          // is the boxed value null?
     emitter.instruction("b.eq __rt_json_encode_mixed_null");                    // encode null via json_encode_null
-    emitter.instruction("b __rt_json_encode_mixed_null");                       // unsupported object/mixed payloads currently encode as null
+    emitter.instruction("b __rt_json_encode_mixed_null");                       // remaining tags (resource, ...) currently encode as null
 
     emitter.label("__rt_json_encode_mixed_int");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed integer payload
@@ -51,7 +53,7 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
     emitter.label("__rt_json_encode_mixed_float");
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the boxed float bits
     emitter.instruction("fmov d0, x9");                                         // move the boxed float bits into the FP argument register
-    emitter.instruction("b __rt_ftoa");                                         // tail-call to float JSON encoding
+    emitter.instruction("b __rt_json_encode_float");                            // tail-call the Inf/NaN-checking float JSON encoder
 
     emitter.label("__rt_json_encode_mixed_bool");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed bool payload
@@ -64,6 +66,21 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
     emitter.label("__rt_json_encode_mixed_assoc");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed associative-array pointer
     emitter.instruction("b __rt_json_encode_assoc");                            // tail-call to associative-array JSON encoding
+
+    emitter.label("__rt_json_encode_mixed_object");
+    emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed object pointer
+    // stdClass instances do not have static property descriptors; encode them
+    // through the assoc-array path using the dynamic-property hash at obj+8.
+    emitter.instruction("ldr x9, [x0]");                                        // load class_id from the object header
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_stdclass_class_id");
+    emitter.instruction("ldr x10, [x10]");                                      // load the compile-time stdClass class_id sentinel
+    emitter.instruction("cmp x9, x10");                                         // is the receiver a stdClass instance?
+    emitter.instruction("b.ne __rt_json_encode_mixed_object_regular");          // no → fall through to the standard property-walking encoder
+    emitter.instruction("ldr x0, [x0, #8]");                                    // yes → load the dynamic-property hash from obj+8
+    emitter.instruction("b __rt_json_encode_stdclass");                         // tail-call to the stdClass-aware encoder so empty hashes render as `{}`
+
+    emitter.label("__rt_json_encode_mixed_object_regular");
+    emitter.instruction("b __rt_json_encode_object");                           // tail-call to the object JSON encoder for declared classes
 
     emitter.label("__rt_json_encode_mixed_null");
     emitter.instruction("b __rt_json_encode_null");                             // tail-call to JSON null encoding
@@ -89,9 +106,11 @@ fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_encode_mixed_array");                     // encode nested indexed arrays recursively
     emitter.instruction("cmp r10, 5");                                          // is the boxed payload an associative array?
     emitter.instruction("je __rt_json_encode_mixed_assoc");                     // encode nested associative arrays recursively
+    emitter.instruction("cmp r10, 6");                                          // is the boxed payload an object instance?
+    emitter.instruction("je __rt_json_encode_mixed_object");                    // encode objects via the public-property descriptor walker
     emitter.instruction("cmp r10, 8");                                          // is the boxed payload null?
     emitter.instruction("je __rt_json_encode_mixed_null");                      // encode explicit null payloads through the shared helper
-    emitter.instruction("jmp __rt_json_encode_mixed_null");                     // unsupported payload families currently degrade to JSON null on x86_64 too
+    emitter.instruction("jmp __rt_json_encode_mixed_null");                     // remaining tags (resource, ...) currently encode as null on x86_64 too
 
     emitter.label("__rt_json_encode_mixed_int");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed integer payload into the standard integer result register
@@ -105,7 +124,7 @@ fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_json_encode_mixed_float");
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the boxed float bit-pattern from the mixed cell payload
     emitter.instruction("movq xmm0, r10");                                      // move the boxed float bits into the x86_64 floating-point argument register
-    emitter.instruction("jmp __rt_ftoa");                                       // tail-call to the float JSON encoder
+    emitter.instruction("jmp __rt_json_encode_float");                          // tail-call the Inf/NaN-checking float JSON encoder
 
     emitter.label("__rt_json_encode_mixed_bool");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed bool payload into the standard integer result register
@@ -118,6 +137,20 @@ fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_json_encode_mixed_assoc");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed associative-array pointer from the mixed cell payload
     emitter.instruction("jmp __rt_json_encode_assoc");                          // tail-call to the associative-array JSON encoder
+
+    emitter.label("__rt_json_encode_mixed_object");
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed object pointer from the mixed cell payload
+    // stdClass instances do not have static property descriptors; encode them
+    // through the assoc-array path using the dynamic-property hash at obj+8.
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load class_id from the object header
+    emitter.instruction("mov r11, QWORD PTR [rip + _stdclass_class_id]");       // load the compile-time stdClass class_id sentinel
+    emitter.instruction("cmp r10, r11");                                        // is the receiver a stdClass instance?
+    emitter.instruction("jne __rt_json_encode_mixed_object_regular");           // no → fall through to the standard property-walking encoder
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // yes → load the dynamic-property hash from obj+8
+    emitter.instruction("jmp __rt_json_encode_stdclass");                       // tail-call to the stdClass-aware encoder so empty hashes render as `{}`
+
+    emitter.label("__rt_json_encode_mixed_object_regular");
+    emitter.instruction("jmp __rt_json_encode_object");                         // tail-call to the object JSON encoder for declared classes
 
     emitter.label("__rt_json_encode_mixed_null");
     emitter.instruction("jmp __rt_json_encode_null");                           // tail-call to the shared JSON null encoder

@@ -97,6 +97,7 @@ pub fn emit(
             .sig
             .clone()
     } else if let ExprKind::Variable(var_name) = &args[0].kind {
+        ctx.mark_fcc_used(var_name);
         let var = ctx.variables.get(var_name).expect("undefined callback variable");
         let offset = var.stack_offset;
         abi::load_at_offset(emitter, call_reg, offset);                          // load the callback address from the callable variable slot

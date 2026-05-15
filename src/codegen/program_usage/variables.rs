@@ -190,6 +190,9 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         ExprKind::NullCoalesce { value, default } => {
             expr_uses_variable(value, needle) || expr_uses_variable(default, needle)
         }
+        ExprKind::Pipe { value, callable } => {
+            expr_uses_variable(value, needle) || expr_uses_variable(callable, needle)
+        }
         ExprKind::Assignment {
             target,
             value,
@@ -286,6 +289,11 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         ExprKind::NewScopedObject { args, .. } => {
             args.iter().any(|arg| expr_uses_variable(arg, needle))
         }
+        ExprKind::Yield { key, value } => {
+            key.as_ref().is_some_and(|k| expr_uses_variable(k, needle))
+                || value.as_ref().is_some_and(|v| expr_uses_variable(v, needle))
+        }
+        ExprKind::YieldFrom(inner) => expr_uses_variable(inner, needle),
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before codegen analysis")
         }

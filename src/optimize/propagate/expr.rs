@@ -57,6 +57,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             value: Box::new(propagate_expr(*value, env)),
             default: Box::new(propagate_expr(*default, env)),
         },
+        ExprKind::Pipe { value, callable } => ExprKind::Pipe {
+            value: Box::new(propagate_expr(*value, env)),
+            callable: Box::new(propagate_expr(*callable, env)),
+        },
         ExprKind::Assignment {
             target,
             value,
@@ -245,6 +249,11 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             receiver,
             args: propagate_args(args, None),
         },
+        ExprKind::Yield { key, value } => ExprKind::Yield {
+            key: key.map(|k| Box::new(propagate_expr(*k, env))),
+            value: value.map(|v| Box::new(propagate_expr(*v, env))),
+        },
+        ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(propagate_expr(*inner, env))),
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before optimizer passes")
         }

@@ -32,7 +32,10 @@ This page explains where every value lives in memory at runtime.
 │  (heap state, counters,      │  _heap_off, _heap_free_list,
 │   globals, static storage)   │  _heap_small_bins, _gc_allocs/_frees/_live/_peak,
 │                              │  _gc_collecting/_gc_release_suppressed,
+│                              │  _json_last_error, _json_active_*,
+│                              │  _json_validate_*, _json_decode_assoc,
 │                              │  _fiber_current, _fiber_main_saved_*,
+│                              │  _generator_class_id,
 │                              │  _include_once_*, _fn_variant_active_*, ...
 ├─────────────────────────────┤
 │       Data section           │  String literals, float constants
@@ -185,7 +188,7 @@ Every allocation has a **16-byte header**: two 32-bit fields for block size and 
        header (16 bytes total)          ← pointer returned to caller
 ```
 
-The size is stored at header offset `+0`, the reference count at `+4`, and the heap kind tag at `+8`. New allocations start with refcount `1`; typed constructors then stamp the kind as `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, while raw helper buffers remain `0`. For array/hash containers, the low 16 bits of the kind word are persistent metadata: the low byte is still the heap kind, indexed arrays still pack their runtime `value_type` in the next byte, and bit 15 is reserved as the persistent copy-on-write container flag. Higher bits remain transient collector metadata.
+The size is stored at header offset `+0`, the reference count at `+4`, and the heap kind tag at `+8`. New allocations start with refcount `1`; typed constructors then stamp the kind as `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, while raw helper buffers remain `0`. Generator frames are stamped as kind `4` object blocks because `Generator` is a built-in class with a custom payload layout. For array/hash containers, the low 16 bits of the kind word are persistent metadata: the low byte is still the heap kind, indexed arrays still pack their runtime `value_type` in the next byte, and bit 15 is reserved as the persistent copy-on-write container flag. Higher bits remain transient collector metadata.
 
 The runtime routine `__rt_heap_alloc`:
 
@@ -225,6 +228,7 @@ When one of these checks trips, the program exits with a fatal heap-debug error 
 - **Variable reassignment**: when a heap-backed local/global/static slot is overwritten, codegen releases the previous owner through the appropriate runtime path (`__rt_heap_free_safe` for persisted strings, `__rt_decref_*` for refcounted arrays / hashes / objects)
 - **`unset()`**: releases the current heap-backed value before nulling the slot
 - **Targeted cycle collection**: when decref reaches a container/object graph that may only be keeping itself alive, `__rt_gc_collect_cycles` counts heap-only incoming edges, marks externally reachable blocks, and deep-frees the remaining unreachable array/hash/object island
+- **Generator frame release**: Generator frames are object-kind heap blocks, but their custom Mixed slots and active `yield from` delegate are released by a Generator-specific branch in object deep-free
 - **Process exit**: all memory is reclaimed by the OS
 
 ### Configurable heap size
@@ -394,6 +398,28 @@ Property access is O(1) — the compiler resolves each property's final inherite
 
 Unlike arrays, objects are not resizable. The number of properties is fixed by the class declaration. Properties are stored in parent-first order, then by the child class's own declarations.
 
+## Generator frame layout
+
+`Generator` objects are heap-allocated object-kind blocks with a fixed custom header, followed by generator-specific parameter/local slots. The first word is still a class id, so ordinary `instanceof Generator` and `Iterator` checks work, but the rest of the payload is interpreted by the generated resume function and `__rt_gen_*` runtime helpers rather than by property metadata.
+
+```
+Offset  Size  Field
+  0      8    class_id
+  8      8    resume_fn_ptr
+ 16      4    state_idx
+ 20      4    flags (bit 0 = rewound, bit 1 = terminated)
+ 24      8    auto_key_counter
+ 32      8    last_key boxed Mixed pointer
+ 40      8    last_value boxed Mixed pointer
+ 48      8    return_value boxed Mixed pointer
+ 56      8    sent_value boxed Mixed pointer
+ 64      8    delegated_iter pointer used by `yield from`
+ 72      8    layout_id
+ 80      ...  parameter and local slots, 8 bytes each
+```
+
+The Mixed fields own boxed cells while present. When a generator frame is released, object deep-free detects `_generator_class_id` and releases `last_key`, `last_value`, `return_value`, `sent_value`, and any active delegated iterator through the same refcounted runtime paths used elsewhere.
+
 ## The data section
 
 String literals and float constants are embedded directly in the binary:
@@ -413,7 +439,7 @@ _float_1: .quad 0x4000000000000000    ; 2.0
 
 These are **read-only** — the program never modifies them. When a string operation needs to work with a literal, it reads from the data section and writes the result to the [string buffer](#the-string-buffer).
 
-The runtime data layer is split into `emit_runtime_data_fixed()` (shared buffers, diagnostics, lookup tables) and `emit_runtime_data_user()` (per-program globals, statics, enum-case slots, and metadata). Together they emit these static data tables:
+The runtime data layer is split into fixed shared data, user-program data, and dynamic `instanceof` lookup formatting under `src/codegen/runtime/data/`. Together they emit these static data tables:
 - `_fmt_g` — printf format string for float-to-string conversion (`%.14G`)
 - `_b64_encode_tbl` — 64-byte Base64 encoding lookup table
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
@@ -423,10 +449,16 @@ The runtime data layer is split into `emit_runtime_data_fixed()` (shared buffers
 - `_php_uname_mode_len_msg`, `_php_uname_mode_value_msg` — fatal `php_uname()` diagnostics for invalid mode arguments
 - `_pcre_space`, `_pcre_digit`, `_pcre_word`, `_pcre_nspace`, `_pcre_ndigit`, `_pcre_nword` — regex shorthand replacement strings used by the POSIX regex bridge
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings (4, 5, and 4 bytes) used by `json_encode` for boolean and null values
+- `_json_int_max_str`, `_json_int_min_str` — decimal threshold strings used by `JSON_BIGINT_AS_STRING`
+- `_json_err_msg_0` ... `_json_err_msg_10`, `_json_err_msg_table`, `_json_err_msg_count` — `json_last_error_msg()` message lookup data
 - `_day_names` — 84-byte table (7 entries x 12 bytes each) with day names, lengths, and padding. Used by `date()` for day-of-week formatting
 - `_month_names` — 144-byte table (12 entries x 12 bytes each) with month names, lengths, and padding. Used by `date()` for month formatting
 - `_instanceof_target_count`, `_instanceof_target_entries`, `_instanceof_name_*` — case-insensitive class/interface name metadata for dynamic `instanceof` string targets, including leading-backslash aliases
+- `_generator_class_id` — per-program class id used to recognize Generator frames during object deep-free
+- `_json_exception_class_id`, `_stdclass_class_id` — per-program class ids used by JSON throw paths and stdClass dynamic-property helpers
 - `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal descriptors used by object deep-free and cycle collection
+- `_class_json_desc_ptrs`, `_class_json_desc_<id>`, `_class_json_pname_<id>_<slot>` — per-class JSON descriptors used by object encoding and JsonSerializable dispatch
+- `_class_attribute_count`, `_class_attribute_ptrs`, `_class_attributes_<id>` — per-class PHP attribute metadata emitted from `ClassInfo`; current helper and Reflection APIs materialize supported static lookups during codegen instead of performing dynamic runtime class/member lookup
 - `_class_vtable_ptrs`, `_class_vtable_<id>` — per-class virtual tables used for inherited instance-method dispatch
 - `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used for late static binding
 - enum-case `.comm` symbols produced via `enum_case_symbol(...)` — one 8-byte singleton storage slot per declared enum case
@@ -488,6 +520,10 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 | String buffer | 64KB | Resets each statement — effectively unlimited |
 | Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
 | Heap metadata | `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_gc_*` flags/counters = 104 bytes total | Fixed-size bookkeeping, not user-visible |
+| Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value` = 24 bytes total | Fixed-size setjmp/longjmp handler and thrown-value bookkeeping |
+| Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame` = 32 bytes total | Fixed-size current-fiber and main-frame resume bookkeeping |
+| Runtime diagnostics | `_rt_diag_suppression` = 8 bytes total | Fixed-size warning-suppression depth used by `@` and exception unwinding |
+| JSON state | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_depth_limit`, `_json_validate_idx`, `_json_validate_ptr`, `_json_validate_len`, `_json_decode_assoc` = 64 bytes total | Fixed-size bookkeeping for JSON calls |
 | CLI globals | `_global_argc`, `_global_argv` = 16 bytes total | Fixed-size bookkeeping |
 | User globals | 16 bytes per `global $var` slot | Grows with number of referenced globals |
 | Static vars | 24 bytes per `static $var` (`16 + 8 init flag`) | Grows with number of declared static locals |
@@ -509,7 +545,8 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 6. **FFI string-call cleanup** — temporary C strings created for `extern function foo(string $s)` calls are released immediately after the native call returns
 7. **String buffer reset** — the concat buffer resets at each statement, with strings that need to survive copied to heap via `__rt_str_persist`
 8. **Stack memory** — automatically reclaimed when functions return
-9. **Process exit** — all memory reclaimed by the OS
+9. **Generator frame release** — Generator frames participate in object refcounting, with a custom deep-free branch for their frame slots and delegated iterator
+10. **Process exit** — all memory reclaimed by the OS
 
 ### What is NOT freed
 
@@ -527,7 +564,7 @@ The runtime now includes a targeted collector for heap-backed `array`, associati
 
 - the allocator header carries a uniform heap-kind tag (`raw`, `string`, `array`, `hash`, `object`, `boxed mixed`)
 - indexed arrays pack their runtime `value_type` into the same kind word so the collector knows whether their elements can contain nested heap pointers
-- objects record runtime property tags/metadata, with `_class_gc_desc_*` tables as a compile-time fallback for property traversal
+- objects record runtime property tags/metadata, with `_class_gc_desc_*` tables as a compile-time fallback for property traversal; Generator frames are object-kind blocks with a custom deep-free branch keyed by `_generator_class_id`
 - mixed release paths use `__rt_decref_any`, so deep-free and GC walks can release nested strings/arrays/hashes/objects through one uniform dispatcher
 
 `__rt_gc_collect_cycles` is intentionally narrower than a full tracing GC: it ignores strings and raw helper buffers, clears transient metadata, counts heap-only incoming edges, marks externally reachable container/object blocks, then frees the unmarked remainder with deep-release helpers. That keeps the collector focused on the structural leak class that plain refcounting cannot solve without turning the whole runtime into a moving or stop-the-world heap.

@@ -110,6 +110,15 @@ impl Checker {
             }
         }
 
+        // Generator override: any function whose body contains `yield` is
+        // implicitly a generator and returns a `Generator` object regardless
+        // of its declared/inferred return type. PHP requires the declared
+        // type to be `Generator`, `Iterator`, `Traversable`, or `iterable` —
+        // we accept any of those plus the absence of an explicit annotation.
+        if super::super::super::yield_validation::body_contains_yield(&decl.body) {
+            return_type = PhpType::Object("Generator".to_string());
+        }
+
         let sig = FunctionSig {
             params: param_types,
             defaults: decl.defaults.clone(),

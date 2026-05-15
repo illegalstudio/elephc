@@ -37,6 +37,7 @@ pub(super) fn emit_main_and_finalize(
     functions: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
     interfaces: &HashMap<String, InterfaceInfo>,
+    traits: &HashSet<String>,
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
     packed_classes: &HashMap<String, PackedClassInfo>,
@@ -54,6 +55,7 @@ pub(super) fn emit_main_and_finalize(
         functions,
         function_variant_groups,
         interfaces,
+        traits,
         classes,
         enums,
         packed_classes,
@@ -118,6 +120,7 @@ fn build_main_context(
     functions: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
     interfaces: &HashMap<String, InterfaceInfo>,
+    traits: &HashSet<String>,
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
     packed_classes: &HashMap<String, PackedClassInfo>,
@@ -138,6 +141,7 @@ fn build_main_context(
     ctx.all_static_vars = all_static_vars.clone();
     ctx.classes = classes.clone();
     ctx.interfaces = interfaces.clone();
+    ctx.traits = traits.clone();
     ctx.enums = enums.clone();
     ctx.packed_classes = packed_classes.clone();
     ctx.extern_functions = extern_functions.clone();

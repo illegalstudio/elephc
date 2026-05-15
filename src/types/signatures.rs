@@ -56,8 +56,8 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
 
 pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
     match name {
-        "time" | "phpversion" | "json_last_error" | "pi" | "ptr_null" | "getcwd"
-        | "sys_get_temp_dir" => Some(fixed(&[])),
+        "time" | "phpversion" | "json_last_error" | "json_last_error_msg" | "pi"
+        | "ptr_null" | "getcwd" | "sys_get_temp_dir" | "tmpfile" => Some(fixed(&[])),
 
         "strlen" | "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "strrev"
         | "addslashes" | "stripslashes" | "nl2br" | "bin2hex" | "hex2bin"
@@ -82,6 +82,9 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             Some(sig)
         }
         "function_exists" => Some(fixed(&["function"])),
+        "is_callable" => Some(fixed(&["value"])),
+        "class_attribute_names" | "class_get_attributes" => Some(fixed(&["class_name"])),
+        "class_attribute_args" => Some(fixed(&["class_name", "attribute_name"])),
 
         "is_nan" | "is_finite" | "is_infinite" | "abs" | "floor" | "ceil" | "sqrt"
         | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh"
@@ -230,8 +233,21 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "date" => Some(optional(&["format", "timestamp"], 1, vec![null_lit()])),
         "mktime" => Some(fixed(&["hour", "minute", "second", "month", "day", "year"])),
         "strtotime" => Some(fixed(&["datetime"])),
-        "json_encode" => Some(fixed(&["value"])),
-        "json_decode" => Some(fixed(&["json"])),
+        "json_encode" => Some(optional(
+            &["value", "flags", "depth"],
+            1,
+            vec![int_lit(0), int_lit(512)],
+        )),
+        "json_decode" => Some(optional(
+            &["json", "associative", "depth", "flags"],
+            1,
+            vec![null_lit(), int_lit(512), int_lit(0)],
+        )),
+        "json_validate" => Some(optional(
+            &["json", "depth", "flags"],
+            1,
+            vec![int_lit(512), int_lit(0)],
+        )),
         "preg_match" | "preg_match_all" => Some(fixed(&["pattern", "subject"])),
         "preg_replace" => Some(fixed(&["pattern", "replacement", "subject"])),
         "preg_split" => Some(fixed(&["pattern", "subject"])),
@@ -261,8 +277,16 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "realpath" => Some(fixed(&["path"])),
         "pathinfo" => Some(optional(&["path", "flags"], 1, vec![int_lit(15)])),
         "fopen" => Some(fixed(&["filename", "mode"])),
-        "fclose" | "fgets" | "feof" | "ftell" | "rewind" | "fstat" | "fsync"
-        | "fflush" | "fdatasync" => Some(fixed(&["stream"])),
+        "fclose" | "fgets" | "fgetc" | "fpassthru" | "feof" | "ftell" | "rewind"
+        | "fstat" | "fsync" | "fflush" | "fdatasync" => Some(fixed(&["stream"])),
+        "flock" => {
+            let mut sig = optional(&["stream", "operation", "would_block"], 2, vec![null_lit()]);
+            sig.ref_params[2] = true;
+            Some(sig)
+        }
+        "readfile" => Some(fixed(&["filename"])),
+        "symlink" | "link" => Some(fixed(&["target", "link"])),
+        "readlink" | "linkinfo" => Some(fixed(&["path"])),
         "fread" => Some(fixed(&["stream", "length"])),
         "fwrite" => Some(fixed(&["stream", "data"])),
         "fseek" => Some(optional(&["stream", "offset", "whence"], 2, vec![int_lit(0)])),
@@ -347,7 +371,7 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         | "addslashes" | "stripslashes" | "nl2br" | "bin2hex" | "hex2bin"
         | "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode"
         | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode"
-        | "base64_decode" => Some(typed_first_class_builtin_sig(
+        | "base64_decode" | "json_last_error_msg" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Str],
             PhpType::Str,
@@ -355,6 +379,26 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         "array_sum" | "array_product" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Array(Box::new(PhpType::Int))],
+            PhpType::Int,
+        )),
+        "json_encode" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed, PhpType::Int, PhpType::Int],
+            PhpType::Union(vec![PhpType::Str, PhpType::Bool]),
+        )),
+        "json_decode" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str, PhpType::Bool, PhpType::Int, PhpType::Int],
+            PhpType::Mixed,
+        )),
+        "json_validate" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str, PhpType::Int, PhpType::Int],
+            PhpType::Bool,
+        )),
+        "json_last_error" => Some(typed_first_class_builtin_sig(
+            name,
+            &[],
             PhpType::Int,
         )),
         _ => None,

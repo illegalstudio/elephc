@@ -10,7 +10,9 @@
 
 mod casts;
 mod expr;
+mod inline_closure;
 mod ops;
+mod pipes;
 mod scalar;
 
 pub(super) use expr::{fold_enum_case, fold_expr, fold_method, fold_params, fold_property};

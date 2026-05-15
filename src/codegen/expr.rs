@@ -8,7 +8,7 @@
 //! Key details:
 //! - Each expression leaves its result in the type-specific ABI result registers expected by callers.
 
-mod arrays;
+pub(crate) mod arrays;
 mod assignment;
 mod binops;
 mod chains;
@@ -104,6 +104,9 @@ pub fn emit_expr(
         }
         ExprKind::NullCoalesce { value, default } => {
             compare::emit_null_coalesce(value, default, emitter, ctx, data)
+        }
+        ExprKind::Pipe { value, callable } => {
+            calls::emit_pipe(value, callable, expr.span, emitter, ctx, data)
         }
         ExprKind::Assignment {
             target,
@@ -248,6 +251,9 @@ pub fn emit_expr(
         }
         ExprKind::NewScopedObject { receiver, args } => {
             objects::emit_new_scoped_object(receiver, args, emitter, ctx, data)
+        }
+        ExprKind::Yield { .. } | ExprKind::YieldFrom(_) => {
+            unreachable!("yield expressions must be lowered by the generator-function codegen path")
         }
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before codegen")

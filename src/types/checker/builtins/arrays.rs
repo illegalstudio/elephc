@@ -29,10 +29,25 @@ pub(super) fn check_builtin(
                 return Err(CompileError::new(span, "count() takes exactly 1 argument"));
             }
             let ty = checker.infer_type(&args[0], env)?;
-            if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-                return Err(CompileError::new(span, "count() argument must be array"));
+            match &ty {
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => {
+                    Ok(Some(PhpType::Int))
+                }
+                PhpType::Object(class_name) => {
+                    if checker.class_implements_interface(class_name, "Countable") {
+                        Ok(Some(PhpType::Int))
+                    } else {
+                        Err(CompileError::new(
+                            span,
+                            "count() object argument must implement Countable",
+                        ))
+                    }
+                }
+                _ => Err(CompileError::new(
+                    span,
+                    "count() argument must be array or Countable object",
+                )),
             }
-            Ok(Some(PhpType::Int))
         }
         "array_pop" => {
             if args.len() != 1 {

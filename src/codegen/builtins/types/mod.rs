@@ -9,10 +9,16 @@
 //! - Dispatcher names must stay aligned with the builtin catalog and signature normalization layer.
 
 mod boolval;
+mod class_alias;
+mod class_exists;
 mod empty;
 mod floatval;
+mod get_class;
+mod get_declared;
 mod gettype;
+mod is_a;
 mod is_bool;
+mod is_callable;
 mod is_finite;
 mod is_float;
 mod is_infinite;
@@ -40,6 +46,7 @@ pub fn emit(
 ) -> Option<PhpType> {
     match name {
         "is_bool" => is_bool::emit(name, args, emitter, ctx, data),
+        "is_callable" => is_callable::emit(name, args, emitter, ctx, data),
         "boolval" => boolval::emit(name, args, emitter, ctx, data),
         "is_null" => is_null::emit(name, args, emitter, ctx, data),
         "floatval" => floatval::emit(name, args, emitter, ctx, data),
@@ -55,6 +62,15 @@ pub fn emit(
         "empty" => empty::emit(name, args, emitter, ctx, data),
         "unset" => unset::emit(name, args, emitter, ctx, data),
         "settype" => settype::emit(name, args, emitter, ctx, data),
+        "class_alias" => class_alias::emit(name, args, emitter, ctx, data),
+        "class_exists" | "interface_exists" | "trait_exists" | "enum_exists" => {
+            class_exists::emit(name, args, emitter, ctx, data)
+        }
+        "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
+            get_declared::emit(name, args, emitter, ctx, data)
+        }
+        "get_class" | "get_parent_class" => get_class::emit(name, args, emitter, ctx, data),
+        "is_a" | "is_subclass_of" => is_a::emit(name, args, emitter, ctx, data),
         _ => None,
     }
 }

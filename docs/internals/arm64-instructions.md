@@ -13,6 +13,7 @@ This is a reference for the ARM64 instructions elephc uses most often, organized
 |---|---|---|
 | `add` | `add x0, x1, x2` | x0 = x1 + x2 |
 | `sub` | `sub x0, x1, x2` | x0 = x1 - x2 |
+| `subs` | `subs x0, x0, #1` | Subtract and set condition flags, often used when decrementing a counter before a conditional branch |
 | `mul` | `mul x0, x1, x2` | x0 = x1 × x2 |
 | `udiv` | `udiv x0, x1, x2` | x0 = x1 ÷ x2 (unsigned) |
 | `sdiv` | `sdiv x0, x1, x2` | x0 = x1 ÷ x2 (signed) |
@@ -22,6 +23,7 @@ This is a reference for the ARM64 instructions elephc uses most often, organized
 | `clz` | `clz x0, x1` | Count leading zero bits |
 | `cneg` | `cneg x0, x0, mi` | Conditionally negate a register |
 | `sxtw` | `sxtw x0, w0` | Sign-extend a 32-bit value to 64 bits |
+| `uxtw` | `uxtw x0, w0` | Zero-extend a 32-bit value to 64 bits |
 
 ### With immediates
 
@@ -45,6 +47,7 @@ This is a reference for the ARM64 instructions elephc uses most often, organized
 | `frintm` | `frintm d0, d0` | d0 = floor(d0) |
 | `frintp` | `frintp d0, d0` | d0 = ceil(d0) |
 | `frinta` | `frinta d0, d0` | d0 = round(d0) using the current FP rounding rule that elephc emits for `round()` |
+| `frintz` | `frintz d0, d0` | d0 = round toward zero, used for truncating floating-point values |
 | `fmax` | `fmax d0, d0, d1` | d0 = max(d0, d1) |
 | `fmin` | `fmin d0, d0, d1` | d0 = min(d0, d1) |
 
@@ -140,6 +143,7 @@ After `cmp`, these codes test the result:
 | `le` | Less or equal (signed) | `<=` |
 | `ge` | Greater or equal (signed) | `>=` |
 | `mi` | Minus (negative) | Used for sign checks |
+| `cs` | Carry set | Used after unsigned comparisons or flag-setting arithmetic |
 
 ## Branch (control flow)
 
@@ -156,10 +160,14 @@ After `cmp`, these codes test the result:
 | `b.hs` | `b.hs _label` | Jump if higher or same (unsigned compare) |
 | `b.hi` | `b.hi _label` | Jump if higher (unsigned compare) |
 | `b.ls` | `b.ls _label` | Jump if lower or same (unsigned compare) |
+| `b.cs` | `b.cs _label` | Jump if carry set |
 | `cbz` | `cbz x0, _label` | Jump if x0 == 0 |
 | `cbnz` | `cbnz x0, _label` | Jump if x0 != 0 |
+| `tbnz` | `tbnz x0, #3, _label` | Test one bit and jump if it is non-zero |
 | `bl` | `bl _fn_add` | Branch with link — call a function (saves return address in x30) |
 | `blr` | `blr x9` | Branch with link to register — indirect function call through a register (used for closures and callbacks) |
+| `br` | `br x9` | Branch to the address in a register without saving a return address |
+| `brk` | `brk #0` | Trap into the debugger / terminate with a breakpoint exception |
 | `ret` | `ret` | Return — jump to address in x30 |
 
 ### How branches map to PHP

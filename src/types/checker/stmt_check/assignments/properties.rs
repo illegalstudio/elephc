@@ -167,6 +167,9 @@ fn check_object_property_write(
     val_ty: &PhpType,
     span: Span,
 ) -> Result<(), CompileError> {
+    if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+        return Ok(());
+    }
     if let Some(class_info) = checker.classes.get(class_name) {
         if !class_info.properties.iter().any(|(n, _)| n == property) {
             if class_info.methods.contains_key("__set") {

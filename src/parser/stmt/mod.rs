@@ -99,6 +99,11 @@ fn parse_stmt_dispatch(
         Token::Use => namespace_use::parse_use_stmt(tokens, pos, span),
         Token::Return => simple::parse_return(tokens, pos, span),
         Token::Throw => simple::parse_throw(tokens, pos, span),
+        Token::Yield => {
+            let expr = parse_expr(tokens, pos)?;
+            expect_semicolon(tokens, pos)?;
+            Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
+        }
         Token::Include => simple::parse_include(tokens, pos, span, false, false),
         Token::IncludeOnce => simple::parse_include(tokens, pos, span, true, false),
         Token::Require => simple::parse_include(tokens, pos, span, false, true),

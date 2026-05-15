@@ -142,6 +142,9 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::ShortTernary { value, default } => {
             expr_has_includes(value) || expr_has_includes(default)
         }
+        ExprKind::Pipe { value, callable } => {
+            expr_has_includes(value) || expr_has_includes(callable)
+        }
         ExprKind::Assignment {
             target,
             value,
@@ -216,7 +219,10 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::StaticPropertyAccess { .. }
         | ExprKind::FirstClassCallable(_)
         | ExprKind::This
-        | ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::Yield { .. }
+        | ExprKind::YieldFrom(_)
         | ExprKind::MagicConstant(_) => false,
     }
 }

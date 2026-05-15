@@ -169,7 +169,27 @@ Proper type system for PHP compatibility.
 - [x] `time()`, `microtime()`
 - [x] `date()`, `mktime()`, `strtotime()`
 - [x] `sleep()`, `usleep()`
-- [x] `json_encode()`, `json_decode()`, `json_last_error()`
+- [x] `json_encode()`, `json_decode()`, `json_last_error()` (basic surface)
+- [x] Extended JSON surface: `json_encode($value, $flags, $depth)`, `json_decode($json, $associative, $depth, $flags)`, `json_last_error_msg()`, `json_validate()` (signatures, structural decode, depth/flag handling, validation, and JSON error state)
+- [x] All PHP `JSON_*` flag and `JSON_ERROR_*` constants exposed
+- [x] Object encoding via public properties + `JsonSerializable` dispatch (including nested objects, arrays of objects, and assoc-of-objects)
+- [x] `JsonException` + `RuntimeException` class hierarchy (catchable as themselves and any parent class)
+- [x] `JSON_PRETTY_PRINT` (4-space indent, newlines between elements, single space after `:`) and `JSON_UNESCAPED_SLASHES`
+- [x] `JSON_HEX_TAG`, `JSON_HEX_AMP`, `JSON_HEX_APOS`, `JSON_HEX_QUOT` (hex-escape `<`/`>`, `&`, `'`, `"` for HTML/XML embedding contexts)
+- [x] `JSON_FORCE_OBJECT` (indexed arrays encode as `{"0":val,...}`; specialized array_int / array_str fast paths runtime-redirect to array_dynamic when the flag is on)
+- [x] `JSON_PRESERVE_ZERO_FRACTION` (integer-valued floats encode as `1.0` instead of collapsing to `1`; tail-appends `.0` when the formatted slice has no `.` / `e` / `E` marker)
+- [x] `JSON_UNESCAPED_UNICODE` (multibyte UTF-8 escaped to `\uXXXX` by default, with surrogate-pair encoding for codepoints ≥ U+10000; flag preserves the literal bytes); ARM64 + x86_64 paths both implemented (Linux runtime parity validated via Docker scripts).
+- [x] `JSON_NUMERIC_CHECK` (numeric strings encode as raw JSON numbers when the entire input matches the RFC 8259 number grammar; `array_str` redirects to `array_dynamic` so the per-element check fires inside indexed string arrays).
+- [x] `$depth` enforcement: each container encoder (assoc, indexed array, object) increments `_json_active_depth` at entry, compares with `_json_depth_limit`, triggers `JSON_ERROR_DEPTH` (and `JsonException` under `JSON_THROW_ON_ERROR`) when the limit is crossed, and decrements on exit so siblings start fresh.
+- [x] `JSON_THROW_ON_ERROR` for `json_encode()` and `json_decode()` errors (raises `JsonException` with PHP-compatible messages); `json_validate()` follows PHP's allowed flag set and rejects `JSON_THROW_ON_ERROR`
+- [x] `json_validate()` recursive-descent RFC 8259 validator: literals (`null`/`true`/`false`), number grammar (`-?(0|[1-9][0-9]*)(.[0-9]+)?([eE][+-]?[0-9]+)?`), string escapes (`\"`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`, `\uHHHH`), balanced arrays/objects, colon between key and value, no trailing content; depth tracked against `$depth` and routed through `__rt_json_throw_error` (`JSON_ERROR_DEPTH` for overflow, `JSON_ERROR_SYNTAX` for any malformed token).
+- [x] Inf/NaN detection in `json_encode()` (sets `JSON_ERROR_INF_OR_NAN`, returns `false` by default, substitutes `0` with `JSON_PARTIAL_OUTPUT_ON_ERROR`, and throws with `JSON_THROW_ON_ERROR`)
+- [x] List-shape detection in associative-array encoder: hashes whose keys form `0..count-1` in insertion order emit JSON arrays (`[...]`), matching PHP's runtime detection. `JSON_FORCE_OBJECT` overrides; empty hashes encode as `[]`.
+- [x] Malformed UTF-8 detection in `json_encode()` (lead-byte validation, continuation-byte validation, bounds-checked truncated sequences) honoring `JSON_INVALID_UTF8_IGNORE` (silent drop), `JSON_INVALID_UTF8_SUBSTITUTE` (emit `�`), and `JSON_THROW_ON_ERROR` (raises `JsonException` for `JSON_ERROR_UTF8`)
+- [x] `JSON_PARTIAL_OUTPUT_ON_ERROR` semantics: encoder errors return `false` by default; when the flag is set, substitutable failures such as Inf/NaN keep partial output (`0`) while malformed UTF-8 is handled by the explicit ignore/substitute flags
+- [x] `json_decode()` returning a fully structured `Mixed` value: scalars (null, bool, int, float, string with full escape decoding), empty containers, **non-empty arrays** (recursive-descent with depth-and-string-aware boundary scanner; each element recursively decodes via `__rt_json_decode_mixed`), and **non-empty objects** (recursive: keys parsed as JSON strings, values recursively decoded, pairs inserted into a hash via `__rt_hash_set`).
+- [x] `stdClass` builtin class with dynamic property storage. `new stdClass()` allocates a 16-byte object whose hidden hash backs `$obj->name = $val` / `$obj->name`. Property access on `stdClass` (and on `Mixed` receivers — the common `json_decode($json)->name` idiom) routes through `__rt_stdclass_get` / `__rt_stdclass_set` (and `__rt_mixed_property_get` / `__rt_mixed_property_set` for the unbox+dispatch path). `json_decode($json)` returns `stdClass` by default (PHP semantics), `json_decode($json, true)` returns the assoc array; the `_json_decode_assoc` runtime flag threads the choice through nested objects. `json_encode()` of `stdClass` walks the dynamic-property hash through a stdClass-aware wrapper that preserves `{}` for empty instances.
+- [x] Structural decode-error detectors. `json_decode()` now runs a full RFC 8259 validator pass before structural decoding: invalid input returns `Mixed(null)` and sets `JSON_ERROR_SYNTAX` (and raises `JsonException` under `JSON_THROW_ON_ERROR`); depth overflow sets `JSON_ERROR_DEPTH` and raises `JsonException` likewise. The `_json_active_flags`/`_json_depth_limit`/`_json_active_depth` plumbing is shared with `json_validate()` and `json_encode()`. `json_last_error()` / `json_last_error_msg()` reflect the failure; `json_decode()` resets the slot at entry so a previous failure does not leak.
 - [x] `preg_match()`, `preg_match_all()`, `preg_replace()`, `preg_split()`
 - [x] `exec()`, `shell_exec()`, `system()`, `passthru()`
 - [x] `getenv()`, `putenv()`
@@ -394,21 +414,78 @@ product mode. This is also the series that delivered the Fibers MVP.
 - [x] Full first-class callable targets — support `static::method(...)` and `$object->method(...)` in addition to function, `ClassName::`, `self::`, and `parent::` targets
 - [x] Captured closures as callback values — forward hidden `use (...)` environments through callback-style built-ins such as `array_map`, `array_filter`, and `call_user_func`
 
-## v0.21.x — PHP array and type-model parity
+### JSON parity polish (post v0.8.x base surface)
 
-Tighten the PHP value model where the current static representation is still
-more restrictive than PHP.
+- [x] `JSON_BIGINT_AS_STRING` in `json_decode()`: integer-grammar tokens (no `.`, no `e`/`E`) whose magnitude exceeds PHP_INT_MAX (`9223372036854775807`) promote to a `Mixed(string)` preserving the original digits; in-range integers and float-grammar tokens are unaffected. Length-then-lex compare against the threshold strings `9223372036854775807` (positive) / `-9223372036854775808` (negative) detects overflow without invoking `__rt_atoi` (which silently wraps via `imul`).
+- [x] Lone UTF-16 surrogate detection in `json_decode()` / `json_validate()`: every `\uXXXX` escape in the high-surrogate range (`0xD800..0xDBFF`) must be immediately followed by a `\uYYYY` escape in the low-surrogate range (`0xDC00..0xDFFF`). Unpaired high surrogates and stand-alone low surrogates set `JSON_ERROR_UTF16` (10) and raise `JsonException` under `JSON_THROW_ON_ERROR`, with the PHP-faithful message `Single unpaired UTF-16 surrogate in unicode escape`. The string parser accumulates each escape into a 16-bit codepoint and walks the surrogate-pair handshake before resuming content scanning.
+- [x] PHP-strict depth semantics for `json_decode()` / `json_validate()`: PHP rejects when the active nesting depth equals the `$depth` argument (`active >= limit`), so a flat array fails at depth=1 and a one-level-nested container fails at depth=2. The shared `__rt_json_depth_enter` keeps the lenient `active <= limit` rule (used by `json_encode()` per PHP), and the decode/validate dispatchers pass `$depth - 1` as the runtime limit so both surfaces match PHP exactly without forking the depth helper.
+- [x] `Exception::$code` and `Exception::getCode(): int`. The constructor now accepts an optional `$code = 0` second argument and stores it as a `protected int` property. `JsonException` thrown via `JSON_THROW_ON_ERROR` carries the originating `JSON_ERROR_*` code, so `catch (JsonException $e) { $e->getCode(); }` matches PHP exactly (4 = SYNTAX, 1 = DEPTH, 10 = UTF16, 7 = INF_OR_NAN, etc.). User-code `new Exception("msg", $code)` also surfaces the value through `getCode()`.
+- [x] `is_callable($value): bool` builtin. Compile-time decision when the value is a string literal (resolves against the catalog + user functions; case-insensitive for builtins) or a `Callable`-typed expression (closures, first-class callables). Non-literal strings, `[$obj, "method"]` arrays, and `__invoke` objects route to a future runtime helper.
+- [x] Cache `_json_active_flags` in a callee-saved register (`x19` ARM64 / `r15` x86_64) inside `__rt_json_encode_str`: 8 reload sites collapse to a single-instruction `tst`/`test` against the cached register, eliminating one address-load + memory dereference per HEX_*/UNESCAPED_*/UTF-8 dispatch in the per-byte escape loop.
+
+## v0.21.x — PHP runtime and language parity
+
+Close broad PHP-visible parity gaps across the value model, modern syntax,
+runtime helpers, and standard-library surfaces.
 
 - [x] Heterogeneous indexed arrays — allow mixed payloads in indexed arrays instead of requiring homogeneous indexed values
 - [x] PHP 8.0 attribute syntax — `#[Name]`, `#[Name(args)]`, stacked groups (`#[A] #[B]`), comma-separated within a group (`#[A, B(1)]`), qualified names (`#[\Ns\Name]`). Lexer adds `Token::AttrOpen` for `#[` ; bare `#` becomes a PHP-style line comment (no longer ambiguous). Parser invokes `parse_attribute_lists` at every site PHP allows: top-level statements, class/trait/interface members, enum cases, function/method parameters, closures, arrow functions. Attributes preserved in the AST via `attributes: Vec<AttributeGroup>` on `Stmt`, `ClassProperty`, `ClassMethod`, `EnumCaseDecl`, plus per-`ClassConst` storage on the new `ClassConst` AST type. Class-like declarations gain `constants: Vec<ClassConst>`.
 - [x] `#[\Override]` enforcement — methods marked `#[\Override]` must override a parent-chain method; otherwise the type checker emits the PHP-faithful error `"<Class>::<method>() has #[\Override] attribute, but no matching parent method was found"`.
 - [x] `#[\Deprecated]` warning — calls to functions/methods marked deprecated emit `"Call to deprecated function: <name>()"` warnings, optionally appending the user-supplied reason. Reason extraction lives in `types::checker::schema::validation::extract_deprecation` and threads through `FunctionSig::deprecation`.
 - [x] User-defined `#[Attribute]` declarations — classes marked `#[Attribute]` parse without error and accept argument lists at usage sites (`#[MyAttribute("test")] class C {}`).
-- [ ] PHP attributes runtime introspection — implement `ReflectionClass::getAttributes()`, `ReflectionMethod::getAttributes()`, `ReflectionProperty::getAttributes()`, plus the `ReflectionAttribute` shape exposing `getName()`, `getArguments()`, `newInstance()`. Currently the parser preserves attribute groups in the AST and the checker enforces `#[\Override]` + `#[\Deprecated]`, but Reflection lookups (`new ReflectionClass(...)->getAttributes()`) return `Undefined class: ReflectionClass`.
-- [ ] Mixed indexed/associative array union — model `array + array` across indexed/hash representations while preserving PHP's shared int/string key space and left-key precedence
+- [x] Generators / `yield` MVP — `Generator` built-in class with `yield`, `yield $k => $v`, generator functions and captured generator closures, `$x = yield` resume assignment, boxed `Generator::send()` payload delivery, `Generator::throw()`, `Generator::getReturn()`, terminal `return <expr>`, state-machine codegen backed by heap-allocated `GeneratorFrame` objects on ARM64 and Linux x86_64, and yield-context validation that rejects `yield` outside functions or inside `try`/`catch`/`finally`
+- [x] `yield from` delegation — forward iteration through compile-time array literals, direct generator calls, and local generator variables, including case-insensitive `from` parsing and cleanup of owned direct-call delegates after completion
+- [x] Filesystem stream extensions: `fgetc()` (thin wrapper over `fread`, length 1, returning `false` at EOF/read failure), `readfile()` (open + chunked read+write to stdout + close, returns bytes copied, `-1` on read failure, or `false` on open failure), `fpassthru()` (same loop on an already-open fd, returning `-1` on read failure), `flock()` (libc `flock` with PHP→POSIX `LOCK_UN` translation, preserves the `LOCK_NB` flag, and supports the optional `$would_block` output), and `tmpfile()` (`mkstemp("/tmp/elephc-XXXXXX")` + immediate `unlink` so the file auto-deletes on close, returns a PHP `resource|false`). Also predefines `LOCK_SH=1`, `LOCK_EX=2`, `LOCK_UN=3`, `LOCK_NB=4` constants matching PHP's numbering.
+- [x] Filesystem symbolic links: `symlink($target, $link)`, `link($target, $link)`, `readlink($path)` (returns owned heap string boxed as Mixed for the `string|false` convention), and `linkinfo($path)` (returns `st_dev` or PHP's `-1` failure sentinel). All routed through libc to avoid per-syscall remapping work.
+- [x] PHP 8.5 pipe operator (`|>`) — left-associative, lower precedence than additive operators, supporting first-class callables, static and instance methods, closures, and variable callables; rejects by-reference callable parameters
+- [x] PHP attributes runtime introspection — implement `ReflectionClass::getAttributes()`, `ReflectionMethod::getAttributes()`, `ReflectionProperty::getAttributes()`, plus `ReflectionAttribute::newInstance()`. Class/member declarations expose attribute names and supported literal args through helper builtins and Reflection objects; `ReflectionAttribute::newInstance()` constructs the attribute class on demand from the captured literal args.
+- [x] Mixed indexed/associative array union — model `array + array` across indexed/hash representations while preserving PHP's shared int/string key space and left-key precedence
 - [ ] Callable parity follow-up — support captured method/static first-class callables in the remaining callback runtimes (`array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()`), direct callable expression calls such as `($obj->method(...))()`, non-local method receivers such as `(new Foo())->method(...)`, nullsafe first-class callables, broader builtin first-class callable wrappers, and the remaining `call_user_func_array()` by-reference callback gaps
 - [ ] Runtime-value compatibility polishing v2 — continue with PHP's uninitialized typed-property state, integer overflow promotion, broader loose-comparison semantics, and future warning/notice sites as they are added
-- [ ] Broader date, regex, and JSON PHP parity — expand `strtotime()` relative formats, PCRE-compatible regex features/captures/backreferences, and `json_decode()` structured array/object decoding
+- [ ] Broader date and regex PHP parity — expand `strtotime()` relative formats and PCRE-compatible regex features/captures/backreferences (JSON parity now closed: see v0.8.x base + v0.20.x polish)
+- [ ] JSON encoder optimization — fold `__rt_json_assoc_is_list_shape` into the main encoding walk so list-shape associative arrays don't traverse the hash twice. Existing helper already short-circuits on the first non-list key (object-shape inputs are already O(1)), so the gain is concentrated on real list-shape payloads. Requires a buffer-rewrite to retroactively switch from `{` to `[` mid-emission; defer until benchmarks justify the complexity.
+- [ ] JSON decoder optimization — fuse the `__rt_json_validate` pre-pass with `__rt_json_decode_mixed` so `json_decode()` walks the buffer once instead of twice. Requires making the decoder robust against malformed input (currently it assumes well-formed input post-validation), so error detection has to live inside every recursive parser. Sized at 2-3 days of refactoring; defer until benchmarks justify the complexity.
+- [ ] JSON encoder optimization — extend the `_json_active_flags` callee-saved-register cache (already shipped for `__rt_json_encode_str`) to `__rt_json_encode_assoc` and `__rt_json_encode_array_dynamic`. Blocked by `__rt_json_encode_object` clobbering x19 internally without saving; needs an ABI-preservation audit of every helper in the recursive encoder chain before x19/r15 can be relied upon as a long-lived cache.
+- [ ] JSON pretty-print optimization — inline indent emission inside each container encoder (assoc, array_int/str/dynamic, object) and retire the `__rt_json_pretty_apply` post-processor. Eliminates the second buffer walk for JSON_PRETTY_PRINT workloads. Multi-day refactor: needs a `_json_indent_depth` BSS slot, careful invariant maintenance across throws, and bytewise PHP cross-check on ~10 representative payloads.
+- [ ] `is_callable()` runtime fallback — handle non-literal strings, `[$obj, "method"]` arrays, and objects implementing `__invoke`. The string-literal + Callable-typed compile-time path is already in place.
+- [ ] Case-insensitive user-function lookup — `function_exists("USER_FN")` and `is_callable("USER_FN")` currently require the exact case. PHP accepts any case for user functions too; tighten the lookup table (shared by both builtins).
+
+### Standard PHP Library (SPL)
+
+PHP-compatible Standard PHP Library coverage, rolled out in phases.
+
+- [x] Phase 1 — built-in interfaces: `Traversable`, `Iterator` (extends `Traversable`), `IteratorAggregate` (extends `Traversable`), `OuterIterator`, `RecursiveIterator`, `SeekableIterator`, `Countable`, `ArrayAccess`, `SplObserver`, `SplSubject`, `Stringable`, `JsonSerializable`
+- [x] Phase 2 — `count($obj)` redirects to `Countable::count()`
+- [x] Phase 3 — SPL exception hierarchy: `LogicException`, `BadFunctionCallException`, `BadMethodCallException`, `DomainException`, `InvalidArgumentException`, `LengthException`, `OutOfRangeException`, `RuntimeException`, `OutOfBoundsException`, `OverflowException`, `RangeException`, `UnderflowException`, `UnexpectedValueException`
+- [ ] `$obj[$k]` subscript syntax for `ArrayAccess` implementers (read, write, `isset`, `unset` paths) — defers `Mixed`-boxing work
+- [x] Static autoload — composer.json `autoload.psr-4` driven, includes `vendor/<vendor>/<package>/composer.json`. Replaces runtime autoload by inlining every reachable PSR-4 class at compile time
+- [x] `spl_autoload_*` stubs — `register`/`unregister` return `true`, `functions` returns `[]`, `extensions` returns `".inc,.php"`, `call` and `spl_autoload` are no-ops. Defensive code that calls these at boot compiles unchanged
+- [x] Closure-aware `spl_autoload_register` — the closure body is evaluated symbolically at compile time. Supports `__DIR__ . '/' . str_replace('\\', '/', $name) . '.php'` style autoloaders, intermediate variable assignments, and `if (file_exists(...))` guards. `spl_autoload_unregister` removes matching rules; `spl_autoload_call("App\\Foo")` with a literal name forces compile-time autoload of that class
+- [x] Runtime r/w for `spl_autoload_extensions` — backed by mutable globals (`_spl_autoload_exts_ptr` / `_spl_autoload_exts_len`) initialized to `".inc,.php"`. Read returns the current value; write swaps in the new and returns the previous, matching PHP semantics
+- [x] `spl_autoload_functions()` returns an indexed array sized to the number of registered closure rules — `count()` and `foreach` see one entry per rule
+- [x] Read `autoload.classmap`, `autoload.files`, `autoload.psr-0`, and `autoload-dev.*` sections from composer.json. Longest-prefix wins for PSR-4. PSR-0 supports both namespaced and underscore-class conventions
+- [x] `class_exists` / `interface_exists` / `trait_exists` / `enum_exists` with literal class name and `autoload = true` (default) trigger compile-time autoload of the literal
+- [x] Variable-stored closures and function-name string callables are accepted by `spl_autoload_register`. The closure assignment / function declaration is stripped from the program after the rule is extracted
+- [x] Top-level `if (...)` whose condition folds to a literal bool flattens before rule collection — guard your register call with `if (true)`, `if (false)/else`, or chained `elseif` and the chosen branch is inlined at compile time
+- [x] `sprintf`, `dirname`, `basename` are supported by the symbolic interpreter — common autoloader patterns like `require_once sprintf("%s/%s.php", __DIR__, $name)` and `dirname(__DIR__) . '/lib/' . $name . '.php'` fold at compile time
+- [x] `get_declared_classes` / `get_declared_interfaces` / `get_declared_traits` return AOT introspection snapshots of the compiled symbol set
+- [x] `class_alias($orig, $alias)` synthesises a subclass at compile time so `new $alias()` and `instanceof $alias` work as the user expects
+- [x] `autoload.exclude-from-classmap` skips matching paths during classmap scanning. Supports glob patterns (`*`, `**`, `?`) plus the trailing-slash directory shorthand
+- [x] PSR-4 empty namespace prefix `""` (root namespace) verified working
+- [x] `realpath` and `pathinfo` (with `PATHINFO_*` flags) added to the symbolic interpreter
+- [x] PSR-0 underscore-class convention (`Twig_Loader_Filesystem` → `lib/Twig/Loader/Filesystem.php`) verified
+- [x] `spl_object_id`, `spl_object_hash`, `spl_classes` runtime helpers; pointer-based identity, stable per process
+- [x] `get_class` / `get_parent_class` resolve via the argument's static type at compile time
+- [x] `is_a` / `is_subclass_of` with literal class arg fold at compile time, walking parent chain and implemented interfaces
+- [x] Compile-time warning when a `spl_autoload_register` closure is rejected (use captures, multi-param, variadic) — explains why the autoloader silently became a no-op
+- [ ] Phase 4 — `IntrinsicCall` foundation + `SplDoublyLinkedList`, `SplStack`, `SplQueue`, `SplFixedArray`
+- [ ] Phase 5 — iterator decorators (`ArrayIterator`, `ArrayObject`, `IteratorIterator`, `LimitIterator`, `NoRewindIterator`, `InfiniteIterator`, `EmptyIterator`, `AppendIterator`, `MultipleIterator`, `CallbackFilterIterator`, `FilterIterator`, `CachingIterator`, `RecursiveArrayIterator`, `RecursiveCallbackFilterIterator`, `RecursiveFilterIterator`, `RecursiveIteratorIterator`, `ParentIterator`); functions `iterator_to_array`, `iterator_count`, `iterator_apply`, `class_implements`, `class_parents`, `class_uses`
+- [ ] Phase 6 — `SplHeap`, `SplMaxHeap`, `SplMinHeap`, `SplPriorityQueue`, `SplObjectStorage`; `spl_object_id`, `spl_object_hash`, `spl_classes`; `spl_autoload_*` decision and per-instance handle finalization
+- [ ] Phase 7 — `RegexIterator`, `RecursiveRegexIterator`
+- [ ] Phase 8 — file/directory iterators: `SplFileInfo`, `SplFileObject`, `SplTempFileObject`, `DirectoryIterator`, `FilesystemIterator`, `GlobIterator`, `RecursiveDirectoryIterator`, `RecursiveCachingIterator`
+- [ ] `Throwable`-via-interface `getMessage()` dispatch fix (pre-existing): catching by `Throwable` and calling `getMessage()` on the typed binding returns garbage instead of the message string
+
+`Serializable` is intentionally not implemented — it has been deprecated since PHP 8.1.
 
 ## v0.22.x — PHP OOP parity finish
 
@@ -417,26 +494,79 @@ language contract.
 
 - [ ] OOP property parity v2 — cover abstract properties, `readonly static` properties, instance property redeclaration rules, and the remaining by-reference constructor-promotion gaps (`readonly` and default values)
 
-## v0.23.x — Optimization and release performance pass
+## v0.23.x — Optimization and release performance pass (superseded)
+
+This section was reorganized when the EIR plan landed. The items that
+required an intermediate representation were absorbed into v0.24.x (EIR
+introduction + register allocation) and v0.25.x (EIR optimization passes).
+The remaining release-track and AST-level optimizer items moved to v0.26.x.
+
+The v0.23.x label is preserved here so that any external references stay
+resolvable. No new work is planned under this label.
+
+## v0.24.x — EIR introduction and register allocation
+
+Introduce a domain-specific intermediate representation (EIR) between the
+AST-level optimizer and the assembly emitter, then add a real register
+allocator.
+
+EIR is a custom, PHP-shaped IR — not Cranelift or LLVM. It preserves the
+hand-written-and-commented assembly philosophy while removing the
+structural ceiling on optimization that the direct AST → ASM emitter
+imposed. See `docs/internals/the-ir.md`.
+
+- [ ] EIR design specification (`docs/internals/the-ir.md`) — types, instructions, terminators, effects, ownership, textual format
+- [ ] `src/ir/` module — types, instructions, builder, validator, printer
+- [ ] AST → EIR lowering pass — every `ExprKind`/`StmtKind` variant
+- [ ] `--emit-ir` CLI flag for diagnostics and snapshot testing
+- [ ] EIR → ASM backend producing semantically equivalent output to the legacy backend (no optimizations yet)
+- [ ] `--ir-backend` CLI flag (opt-in stable)
+- [ ] Two-week soak period to collect external feedback
+- [ ] Default backend switch from AST to EIR
+- [ ] Deprecation warning on `--ast-backend`
+- [ ] Linear-scan register allocator (Poletto-Sarkar) with separate int / float pools and callee-saved preservation across calls
+- [ ] Register-pressure mitigations: caller-saved reuse for non-call-crossing intervals; better spill heuristic
+
+Expected outcome: feature parity at end of v0.24.0; ≥15% performance
+improvement on compute benchmarks at end of v0.24.x.
+
+## v0.25.x — EIR optimization passes
+
+Build the IR-level passes that the AST optimizer could not reach.
+
+- [ ] Identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, etc.)
+- [ ] Peephole patterns: redundant load/store, box/unbox cancellation, string-literal concat folding, paired acquire/release cancellation
+- [ ] Dead instruction elimination over the IR CFG (absorbs former v0.23 "Dead code elimination v3")
+- [ ] Dead store elimination over PHP local slots
+- [ ] Branch simplification (constant-condition `CondBr`, empty-block jump threading, unreachable block removal)
+- [ ] Common subexpression elimination — per-block, then dominance-aware cross-block (absorbs former v0.23 "Constant propagation v4")
+- [ ] Loop detection and natural-loop construction (back edges, headers, preheaders)
+- [ ] Loop-invariant code motion for pure operations
+- [ ] Small-function inliner (size threshold 24 instructions, non-recursive, no try/catch, no generators/fibers) (absorbs former v0.23 "Inline small functions")
+- [ ] Pipeline integration in fixed-point order
+
+Expected outcome: additional 10–20% performance gain on loop-heavy and
+call-heavy benchmarks; cumulative ≥30% improvement vs end-of-v0.23
+baseline.
+
+## v0.26.x — Performance closure, legacy cleanup, and release stabilization
 
 Optimization work should now be driven by benchmarks, generated assembly size,
 and release-candidate validation rather than by speculative pass work.
 
+- [ ] Remove legacy AST → ASM backend (`src/codegen/expr/`, `stmt/`, `class_methods.rs`, `functions/`, related modules)
+- [ ] Rename `src/codegen_ir/` to `src/codegen/`
+- [ ] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
 - [ ] Source maps v2 — richer mappings for functions / expressions / labels and a more stable machine-readable schema for external tooling
-- [ ] Peephole optimization (redundant load/store elimination)
-- [ ] Dead code elimination v3 — fuller fixed-point/basic-block pass beyond the current path-aware AST pruning
-- [ ] Constant propagation v4 — full fixed-point / basic-block propagation across arbitrary loops and general path merges once there are measured cases that justify the extra pass complexity
 - [ ] Memory-model-aware propagation for heap-backed locals and targeted runtime invalidations beyond `unset($var)` and the currently modeled local writes
-- [ ] Purity / may-throw v2 for dynamic instance dispatch, richer property/array reads, and less pessimistic builtin modeling
+- [ ] Purity / may-throw v2 for dynamic instance dispatch, richer property/array reads, and less pessimistic builtin modeling (feeds the EIR effects table)
 - [ ] Guard reasoning v2 for dead-code elimination — broader range reasoning and multi-variable facts beyond current strict-scalar, boolean, loose-comparison, and safe relational-complement guards
 - [ ] Exception-aware DCE v2 — exact thrown-type / handler reachability, nested try rethrow modeling, and less conservative finally-path invalidation
 - [ ] Control-flow normalization v2 — broader canonicalization of nested block/control shells before CFG-aware optimization passes
 - [ ] Composite conditional include function variants — extend include-graph exclusivity from one direct `if` / `elseif` / `else` chain to nested/composed conditional paths where declarations are pairwise exclusive only after combining multiple branch decisions
 - [ ] Switch-aware conditional include function variants — extend include-graph exclusivity beyond `if` / `elseif` / `else` to `switch` cases once fall-through, `break`, and terminating case bodies are modeled precisely; revisit `match` only if include-like statement lowering ever appears inside match arms
 - [ ] Runtime routine dead stripping — include or link only runtime helpers reachable from the generated program instead of carrying the whole target runtime slice
-- [ ] Register allocation (reduce stack spills)
-- [ ] Inline small functions
-- [ ] Tail-call optimization
+- [ ] Tail-call optimization — direct tail self- and mutual-recursion lowering on top of EIR (`Br` to function entry with parameter rebinding)
 - [ ] Performance within 2x of C -O0 on compute benchmarks
 - [ ] Real-world CLI tools compiled as validation
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
@@ -498,8 +628,7 @@ post-1.0 use cases.
 |---|---|---|
 | Buffer ergonomics v2 | Medium | Consider dynamic resize/push/pop, `foreach`, array conversion, and automatic cleanup for `buffer<T>` while keeping the hot-path POD contract explicit. |
 | String-capable FFI callbacks | Medium | Allow C callback signatures that pass or return strings once ownership and temporary C-string lifetimes are modeled safely across callback boundaries. |
-| Generators / `yield` | High | Requires compile-time state machine transformation: every yield point becomes a switch case, all locals promoted to heap-allocated generator object. Edge cases with yield inside try/catch/finally are significant. |
-| `yield from` delegation | High | Depends on generators. Forwards iteration to an inner generator, propagating values and return. |
+| Generator parity v2 | Medium | MVP delivered in v0.21.x for ARM64 and Linux x86_64. Remaining parity work: `yield` inside `try`/`catch`/`finally`, dynamic `yield from` arrays beyond the compile-time literal form, broader dynamic `yield from` Iterator targets, exception propagation through `Generator::throw` to caller-visible finally paths, and PHP-exact `Generator` interface inheritance with `Iterator`. See `docs/php/generators.md`. |
 | Fiber parity v2 | Medium | MVP delivered in v0.20.x for ARM64 and Linux x86_64. Remaining parity work: arithmetic auto-unboxing on `mixed` payloads received from `suspend()`, true variadic `start(...$args)` beyond seven args, dynamic callback targets, by-reference callback start parameters, configurable stack sizing, and PHP-exact `FiberError` hierarchy. See `docs/php/fibers.md`. |
 | Conditional include class-like variants | High | Keep class/interface/trait/enum duplicate detection strict for now. Supporting branch-selected class-like declarations would require runtime class metadata/layout dispatch, while modern PHP can avoid the ambiguity with namespaces. |
 

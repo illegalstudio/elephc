@@ -34,6 +34,8 @@ mod scandir;
 mod stat;
 mod stat_array;
 mod stat_ext;
+mod streams_ext;
+mod symlink;
 mod tempnam;
 
 pub(crate) use basename::emit_basename;
@@ -61,4 +63,6 @@ pub(crate) use scandir::emit_scandir;
 pub(crate) use stat::emit_stat;
 pub(crate) use stat_array::emit_stat_array;
 pub(crate) use stat_ext::emit_stat_ext;
+pub(crate) use streams_ext::emit_streams_ext;
+pub(crate) use symlink::emit_symlink;
 pub(crate) use tempnam::emit_tempnam;

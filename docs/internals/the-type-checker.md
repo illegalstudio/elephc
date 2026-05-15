@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-**Source:** `src/types/` — `mod.rs`, `model.rs`, `traits.rs`, `checker/mod.rs`, `checker/driver/`, `checker/builtin_types.rs`, `checker/builtins/`, `checker/functions.rs`, `checker/functions/`, `checker/inference/`, `checker/stmt_check.rs`, `checker/stmt_check/`, `checker/type_compat.rs`, `checker/type_compat/`, `checker/schema/`, `warnings/`
+**Source:** `src/types/` — `mod.rs`, `model.rs`, `traits.rs`, `checker/mod.rs`, `checker/driver/`, `checker/builtin_interfaces.rs`, `checker/builtin_iterators.rs`, `checker/builtin_json.rs`, `checker/builtin_spl_exceptions.rs`, `checker/builtin_stdclass.rs`, `checker/builtin_types/`, `checker/builtins/`, `checker/functions.rs`, `checker/functions/`, `checker/inference/`, `checker/stmt_check.rs`, `checker/stmt_check/`, `checker/type_compat.rs`, `checker/type_compat/`, `checker/schema/`, `checker/yield_validation/`, `warnings/`
 
 PHP is dynamically typed — variables can change type at runtime. But elephc compiles to native code where every value must have a known size and location. The type checker bridges this gap by **inferring types at compile time**.
 
@@ -369,11 +369,13 @@ When checking method calls, it verifies the method exists, enforces method visib
 
 When checking `new ClassName(...)`, it also rejects interfaces and abstract classes before codegen.
 
-### Built-in Fiber classes
+### Built-in coroutine and iterator classes
 
 `Throwable`, `Exception`, `Fiber`, and `FiberError` are registered as built-in classes before user code is checked. `Fiber` method bodies are placeholders in `ClassInfo`: their signatures make calls type-checkable, while codegen intercepts construction, instance methods, `Fiber::suspend()`, and `Fiber::getCurrent()` and routes them to `__rt_fiber_*` helpers.
 
 `src/types/fibers.rs` owns the additional static checks for Fiber callbacks. `new Fiber(...)` must receive a closure, a known closure/callable variable, or a known first-class callable; arbitrary runtime callables are rejected. The visible callback parameter count is capped at seven start arguments, by-reference callback start parameters are rejected, and closure captures must fit in the reserved Fiber slot files: seven integer slots and seven float slots, with strings using two integer slots. Values moving through `start()`, `resume()`, `suspend()`, and `getReturn()` are typed as boxed `mixed`.
+
+`Iterator`, `IteratorAggregate`, and the final built-in `Generator` class are injected by `src/types/checker/builtin_iterators.rs`. `Generator` implements `Iterator` and carries placeholder method bodies for `current`, `key`, `next`, `valid`, `rewind`, `send`, `throw`, and `getReturn`; codegen intercepts those methods and routes them to `__rt_gen_*` helpers. `yield_validation` marks any function or closure body containing `yield` as returning `Object("Generator")`, while still allowing declared return types compatible with `Generator`, `Iterator`, `Traversable`, or `iterable`.
 
 ## Output: CheckResult
 

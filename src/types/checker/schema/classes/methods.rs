@@ -18,7 +18,7 @@ use super::super::validation::{
     build_method_sig, matches_global_builtin_attribute, validate_override_signature,
     visibility_rank,
 };
-use super::state::ClassBuildState;
+use super::state::{collect_attribute_args, collect_attribute_names, ClassBuildState};
 
 pub(super) fn apply_methods(
     state: &mut ClassBuildState,
@@ -149,6 +149,12 @@ fn apply_static_method(
     state
         .static_method_declaring_classes
         .insert(method_key.clone(), class.name.clone());
+    state
+        .method_attribute_names
+        .insert(method_key.clone(), collect_attribute_names(&method.attributes));
+    state
+        .method_attribute_args
+        .insert(method_key.clone(), collect_attribute_args(&method.attributes));
     if method.is_abstract {
         state.static_method_impl_classes.remove(&method_key);
     } else {
@@ -236,6 +242,12 @@ fn apply_instance_method(
     state
         .method_declaring_classes
         .insert(method_key.clone(), class.name.clone());
+    state
+        .method_attribute_names
+        .insert(method_key.clone(), collect_attribute_names(&method.attributes));
+    state
+        .method_attribute_args
+        .insert(method_key.clone(), collect_attribute_args(&method.attributes));
     if method.is_abstract {
         state.method_impl_classes.remove(&method_key);
     } else {

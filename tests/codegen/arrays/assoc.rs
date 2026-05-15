@@ -175,6 +175,97 @@ echo $result["b"] + $result["c"];
 }
 
 #[test]
+fn test_indexed_plus_assoc_array_union_uses_shared_key_space() {
+    let out = compile_and_run(
+        r#"<?php
+$left = ["zero", "one"];
+$right = [0 => "skip-zero", "1" => "skip-one", "01" => "leading", 2 => "two", "name" => "alice"];
+$result = $left + $right;
+echo count($result) . ":";
+foreach ($result as $k => $v) {
+    echo $k . "=" . $v . ";";
+}
+echo "|" . $result[0] . "|" . $result[1] . "|" . $result["01"] . "|" . $result[2] . "|" . $result["name"];
+"#,
+    );
+    assert_eq!(
+        out,
+        "5:0=zero;1=one;01=leading;2=two;name=alice;|zero|one|leading|two|alice"
+    );
+}
+
+#[test]
+fn test_assoc_plus_indexed_array_union_uses_shared_key_space() {
+    let out = compile_and_run(
+        r#"<?php
+$left = ["0" => "zero-left", "01" => "leading-left", "name" => "left"];
+$right = ["zero-right", "one-right", "two-right"];
+$result = $left + $right;
+echo count($result) . ":";
+foreach ($result as $k => $v) {
+    echo $k . "=" . $v . ";";
+}
+echo "|" . $result[0] . "|" . $result[1] . "|" . $result["01"] . "|" . $result[2];
+"#,
+    );
+    assert_eq!(
+        out,
+        "5:0=zero-left;01=leading-left;name=left;1=one-right;2=two-right;|zero-left|one-right|leading-left|two-right"
+    );
+}
+
+#[test]
+fn test_mixed_representation_array_union_retains_nested_values() {
+    let out = compile_and_run(
+        r#"<?php
+$left = [[10], [20]];
+$right = ["meta" => [30], 0 => [99]];
+$result = $left + $right;
+unset($left);
+unset($right);
+echo $result[0][0] . "|" . $result[1][0] . "|" . $result["meta"][0];
+"#,
+    );
+    assert_eq!(out, "10|20|30");
+}
+
+#[test]
+fn test_indexed_plus_assoc_array_union_inside_function_foreach() {
+    let out = compile_and_run(
+        r#"<?php
+function render(): void {
+    $left = ["zero", "one"];
+    $right = [0 => "skip", "name" => "alice"];
+    $result = $left + $right;
+    foreach ($result as $k => $v) {
+        echo $k . "=" . $v . ";";
+    }
+}
+render();
+"#,
+    );
+    assert_eq!(out, "0=zero;1=one;name=alice;");
+}
+
+#[test]
+fn test_assoc_plus_indexed_array_union_inside_function_foreach() {
+    let out = compile_and_run(
+        r#"<?php
+function render(): void {
+    $left = ["0" => "zero-left", "name" => "left"];
+    $right = ["zero-right", "one-right"];
+    $result = $left + $right;
+    foreach ($result as $k => $v) {
+        echo $k . "=" . $v . ";";
+    }
+}
+render();
+"#,
+    );
+    assert_eq!(out, "0=zero-left;name=left;1=one-right;");
+}
+
+#[test]
 fn test_assoc_foreach_key_value() {
     let out = compile_and_run(
         r#"<?php

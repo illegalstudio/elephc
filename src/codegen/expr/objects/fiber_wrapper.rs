@@ -53,6 +53,7 @@ pub(super) fn prepare_fiber_wrapper(callable_expr: &Expr, ctx: &mut Context) -> 
             )
         }
         ExprKind::Variable(name) => {
+            ctx.mark_fcc_used(name);
             let captures = ctx.closure_captures.get(name).cloned().unwrap_or_default();
             let mut sig = ctx.closure_sigs.get(name).cloned()?;
             let visible_param_count = sig.params.len();

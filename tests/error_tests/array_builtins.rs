@@ -1,5 +1,5 @@
 //! Purpose:
-//! Integration or regression tests for diagnostic coverage of array builtins, including array mixed type checks, array union requires same container kind, and indexed array union requires compatible element types.
+//! Integration or regression tests for diagnostic coverage of array builtins, including array mixed type checks, array union operand checks, and indexed array union compatible element types.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -18,10 +18,10 @@ fn test_assoc_array_mixed_type_checks() {
 }
 
 #[test]
-fn test_error_array_union_requires_same_container_kind() {
+fn test_error_array_union_requires_array_operands() {
     expect_error(
-        r#"<?php $result = [1, 2] + ["a" => 3];"#,
-        "Array union requires both operands to be arrays of the same kind",
+        r#"<?php $result = [1, 2] + 3;"#,
+        "Array union requires both operands to be arrays",
     );
 }
 

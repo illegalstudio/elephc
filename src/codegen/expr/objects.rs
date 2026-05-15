@@ -14,6 +14,7 @@ pub(crate) mod dispatch;
 mod fiber_wrapper;
 mod instanceof;
 mod nullsafe;
+mod reflection;
 mod static_properties;
 
 use super::super::context::Context;
@@ -25,7 +26,7 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::{Expr, InstanceOfTarget, StaticReceiver};
 use crate::types::PhpType;
 
-pub(super) fn emit_new_object(
+pub(crate) fn emit_new_object(
     class_name: &str,
     args: &[Expr],
     emitter: &mut Emitter,

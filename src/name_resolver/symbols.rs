@@ -14,10 +14,19 @@ use crate::parser::ast::{Stmt, StmtKind};
 use super::{canonical_builtin_function_name, namespace_name, Symbols};
 
 const BUILTIN_CLASS_LIKE_SYMBOLS: &[&str] = &[
+    "ArrayAccess",
+    "Countable",
     "Throwable",
     "Exception",
     "Iterator",
     "IteratorAggregate",
+    "OuterIterator",
+    "RecursiveIterator",
+    "SeekableIterator",
+    "SplObserver",
+    "SplSubject",
+    "Stringable",
+    "Traversable",
 ];
 
 impl Symbols {

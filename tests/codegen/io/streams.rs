@@ -240,6 +240,27 @@ unlink("guarded.txt");
 }
 
 #[test]
+fn test_fopen_clears_stale_eof_for_reused_descriptor() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("first.txt", "x");
+file_put_contents("second.txt", "y");
+$f = fopen("first.txt", "r");
+fread($f, 1);
+fread($f, 1);
+fclose($f);
+$g = fopen("second.txt", "r");
+echo feof($g) ? "eof" : "not-eof";
+fclose($g);
+unlink("first.txt");
+unlink("second.txt");
+"#,
+    );
+    assert_eq!(out, "not-eof");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_fseek_ftell() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -276,6 +297,25 @@ unlink("seek2.txt");
 "#,
     );
     assert_eq!(out, "0005");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_fseek_clears_eof_after_successful_seek() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("seek-eof.txt", "x");
+$f = fopen("seek-eof.txt", "r");
+fread($f, 1);
+fread($f, 1);
+echo feof($f) ? "eof" : "not-eof";
+fseek($f, 0);
+echo "|" . (feof($f) ? "eof" : "not-eof");
+fclose($f);
+unlink("seek-eof.txt");
+"#,
+    );
+    assert_eq!(out, "eof|not-eof");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -327,6 +367,25 @@ unlink("rw.txt");
 "#,
     );
     assert_eq!(out, "abc|abc");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_rewind_clears_eof_after_successful_seek() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("rewind-eof.txt", "x");
+$f = fopen("rewind-eof.txt", "r");
+fread($f, 1);
+fread($f, 1);
+echo feof($f) ? "eof" : "not-eof";
+rewind($f);
+echo "|" . (feof($f) ? "eof" : "not-eof");
+fclose($f);
+unlink("rewind-eof.txt");
+"#,
+    );
+    assert_eq!(out, "eof|not-eof");
     let _ = fs::remove_dir_all(&dir);
 }
 
