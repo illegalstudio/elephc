@@ -505,11 +505,11 @@ When a closure variable is called (`$fn(1, 2)`), the codegen:
 
 ### Closures as callback arguments
 
-Built-in functions like `array_map`, `array_filter`, `array_reduce`, `array_walk`, and `usort` accept callback values. The callback function pointer is passed in a register (like any other `Callable` argument) and the runtime routine calls it via `blr`.
+Built-in functions like `array_map`, `array_filter`, `array_reduce`, `array_walk`, `usort`, `uksort`, and `uasort` accept callback values. The callback function pointer is passed in a register (like any other `Callable` argument) and the runtime routine calls it via `blr`.
 
-For captured closures passed through `array_map` / `array_filter`, codegen builds a temporary callback environment containing the original closure pointer plus its hidden `use (...)` values. The runtime passes that environment to a generated callback wrapper, and the wrapper re-materializes the original visible arguments plus hidden captures before calling the closure. `call_user_func()` and `call_user_func_array()` do not need a runtime loop, so they append the hidden capture arguments directly at the indirect call site.
+For captured closures passed through callback runtimes such as `array_map`, `array_filter`, `array_reduce`, `array_walk`, `usort`, `uksort`, and `uasort`, codegen builds a temporary callback environment containing the original closure pointer plus its hidden `use (...)` values. The runtime passes that environment to a generated callback wrapper, and the wrapper re-materializes the original visible arguments plus hidden captures before calling the closure. `call_user_func()` and `call_user_func_array()` do not need a runtime loop, so they append the hidden capture arguments directly at the indirect call site.
 
-First-class callable wrappers reuse this hidden argument path when the callable target carries context. `$obj->method(...)` records the receiver variable as a hidden capture and the wrapper calls that method with the visible arguments. `static::method(...)` records the forwarded called-class id, or `$this` in an instance method, so late static binding is preserved for direct callable calls and for callback paths that forward an environment, such as `array_map`, `array_filter`, `call_user_func`, and `call_user_func_array`.
+First-class callable wrappers reuse this hidden argument path when the callable target carries context. `$obj->method(...)` records the receiver as a hidden capture; non-local receiver expressions are evaluated once into a hidden temporary before wrapper creation. `static::method(...)` records the forwarded called-class id, or `$this` in an instance method, so late static binding is preserved for direct callable calls and for callback paths that forward an environment.
 
 ## Generator codegen
 

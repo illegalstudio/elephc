@@ -9,7 +9,7 @@
 //! - Any lowering path that introduces storage must be represented here before stack offsets are assigned.
 
 use crate::codegen::context::Context;
-use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, StmtKind};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget, StmtKind};
 use crate::types::{FunctionSig, PhpType};
 use super::types::{codegen_declared_type, codegen_static_type, infer_local_type};
 
@@ -355,6 +355,21 @@ fn collect_assignment_expr_vars(expr: &Expr, ctx: &mut Context, sig: &FunctionSi
             for (_, _, default, _) in params {
                 if let Some(default) = default {
                     collect_assignment_expr_vars(default, ctx, sig);
+                }
+            }
+        }
+        ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => {
+            collect_assignment_expr_vars(object, ctx, sig);
+            if !matches!(&object.kind, ExprKind::Variable(_) | ExprKind::This) {
+                let temp_name =
+                    crate::codegen::expr::calls::first_class_method_receiver_temp_name(object.span);
+                if !ctx.variables.contains_key(&temp_name) {
+                    let static_ty = infer_local_type(object, sig, Some(ctx));
+                    ctx.alloc_var_with_static_type(
+                        &temp_name,
+                        static_ty.codegen_repr(),
+                        static_ty,
+                    );
                 }
             }
         }

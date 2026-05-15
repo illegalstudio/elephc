@@ -272,9 +272,9 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_map` | Apply callback to each scalar element, return new array; an optional third argument carries a captured-closure environment for generated callback wrappers |
 | `__rt_array_map_str` | Apply callback to each scalar or string element and return a string array; an optional third argument carries a captured-closure environment |
 | `__rt_array_filter` | Filter scalar elements where callback returns truthy; an optional third argument carries a captured-closure environment |
-| `__rt_array_reduce` | Reduce array to single value via callback |
-| `__rt_array_walk` | Call callback on each element (side-effects) |
-| `__rt_usort` | Sort array using user comparison callback |
+| `__rt_array_reduce` | Reduce array to single value via callback; an optional fourth argument carries a captured-callback environment |
+| `__rt_array_walk` | Call callback on each element (side-effects); an optional third argument carries a captured-callback environment |
+| `__rt_usort` | Sort array using user comparison callback; an optional third argument carries a captured-callback environment |
 
 ### Reference counting
 

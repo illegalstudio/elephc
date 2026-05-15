@@ -156,7 +156,7 @@ $double = MathBox::double(...);
 ```
 
 Supported: user-defined function names, extern function names, `ClassName::method(...)`, `self::method(...)`, `parent::method(...)`, and the registered builtin wrappers `strlen(...)`, `count(...)`, `buffer_len(...)`, `intval(...)`, `strtolower(...)`, `strtoupper(...)`, `ucfirst(...)`, `lcfirst(...)`, `strrev(...)`, `addslashes(...)`, `stripslashes(...)`, `nl2br(...)`, `bin2hex(...)`, `hex2bin(...)`, `htmlspecialchars(...)`, `htmlentities(...)`, `html_entity_decode(...)`, `urlencode(...)`, `urldecode(...)`, `rawurlencode(...)`, `rawurldecode(...)`, `base64_encode(...)`, `base64_decode(...)`, `json_encode(...)`, `json_decode(...)`, `json_validate(...)`, `json_last_error(...)`, `json_last_error_msg(...)`, `array_sum(...)`, and `array_product(...)`.
-Also supported: `static::method(...)` inside class methods, preserving late static binding for direct callable calls, and `$obj->method(...)` / `$this->method(...)` with a stable object receiver variable.
+Also supported: `static::method(...)` inside class methods, preserving late static binding for direct callable calls, and `$obj->method(...)` / `$this->method(...)` with either a local receiver variable or a non-local receiver expression such as `(new Greeter("Hi "))->greet(...)`.
 
 ```php
 <?php
@@ -171,7 +171,7 @@ $hello = $greeter->hello(...);
 echo $hello("Ada"); // Hello Ada
 ```
 
-Captured first-class callable targets (`static::method(...)` and `$obj->method(...)`) can be called directly through a local callable variable. They can also be passed to callback paths that forward captured callable environments, including `array_map()`, `array_filter()`, `call_user_func()`, and `call_user_func_array()`. Runtime helpers without callback environments (`array_reduce()`, `array_walk()`, `usort()`, `uksort()`, and `uasort()`) still reject captured method/static targets. Immediate expression calls such as `($obj->method(...))()` are also rejected; assign the callable to a local variable before calling it.
+Captured first-class callable targets (`static::method(...)` and `$obj->method(...)`) can be called directly through a local callable variable or as an immediate callable expression such as `($obj->method(...))("Ada")`. They can also be passed to callback paths that forward captured callable environments, including `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()`, `call_user_func()`, and `call_user_func_array()`. Nullsafe first-class callable syntax (`$obj?->method(...)`) is not supported yet.
 
 ## Global variables
 

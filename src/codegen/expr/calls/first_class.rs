@@ -9,16 +9,21 @@
 //! - Callable metadata and argument signatures must stay synchronized with type checking and runtime dispatch.
 
 use crate::codegen::abi;
-use crate::codegen::context::{Context, DeferredClosure};
+use crate::codegen::context::{Context, DeferredClosure, HeapOwnership};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::names::Name;
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
+use crate::span::Span;
 use crate::types::{callable_wrapper_sig, first_class_callable_builtin_sig, FunctionSig, PhpType};
 
 const FCC_CALLED_CLASS_ID_PARAM: &str = "__elephc_fcc_called_class_id";
 const FCC_THIS_PARAM: &str = "__elephc_fcc_this";
 const FCC_RECEIVER_PARAM: &str = "__elephc_fcc_receiver";
+
+pub(crate) fn method_receiver_temp_name(span: Span) -> String {
+    format!("__elephc_fcc_receiver_{}_{}", span.line, span.col)
+}
 
 fn resolved_static_callable_target(receiver: &StaticReceiver, ctx: &Context) -> Option<StaticReceiver> {
     match receiver {
@@ -124,7 +129,12 @@ fn unsupported_fcc_diagnostic(target: &CallableTarget) -> String {
     }
 }
 
-fn capture_for_method_receiver(object: &Expr, ctx: &Context) -> Option<(String, PhpType)> {
+fn capture_for_method_receiver(
+    object: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<(String, PhpType)> {
     match &object.kind {
         ExprKind::Variable(name) => {
             let ty = ctx
@@ -138,14 +148,40 @@ fn capture_for_method_receiver(object: &Expr, ctx: &Context) -> Option<(String, 
             .variables
             .get("this")
             .map(|var| ("this".to_string(), var.ty.clone())),
-        _ => None,
+        _ => {
+            let temp_name = method_receiver_temp_name(object.span);
+            let receiver_static_ty = crate::codegen::functions::infer_contextual_type(object, ctx);
+            let receiver_ty = crate::codegen::expr::emit_expr(object, emitter, ctx, data);
+            if receiver_ty.is_refcounted()
+                && super::super::expr_result_heap_ownership(object) != HeapOwnership::Owned
+            {
+                abi::emit_incref_if_refcounted(emitter, &receiver_ty);
+            }
+            let Some(temp_offset) = ctx.variables.get(&temp_name).map(|info| info.stack_offset) else {
+                emitter.comment(&format!(
+                    "WARNING: missing first-class callable receiver temp ${}",
+                    temp_name
+                ));
+                return None;
+            };
+            abi::emit_store(emitter, &receiver_ty, temp_offset);
+            ctx.update_var_type_static_and_ownership(
+                &temp_name,
+                receiver_ty.codegen_repr(),
+                receiver_static_ty,
+                HeapOwnership::local_owner_for_type(&receiver_ty),
+            );
+            Some((temp_name, receiver_ty))
+        }
     }
 }
 
 fn normalized_target_and_captures(
     target: &CallableTarget,
     sig: &FunctionSig,
-    ctx: &Context,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
 ) -> Option<(
     CallableTarget,
     Vec<(String, PhpType)>,
@@ -183,7 +219,7 @@ fn normalized_target_and_captures(
             }
         },
         CallableTarget::Method { object, method } => {
-            let capture = capture_for_method_receiver(object, ctx)?;
+            let capture = capture_for_method_receiver(object, emitter, ctx, data)?;
             let hidden_name = unique_hidden_param(FCC_RECEIVER_PARAM, sig);
             let hidden_ty = capture.1.clone();
             Some((
@@ -264,7 +300,7 @@ pub(super) fn emit_first_class_callable(
     target: &CallableTarget,
     emitter: &mut Emitter,
     ctx: &mut Context,
-    _data: &mut DataSection,
+    data: &mut DataSection,
 ) -> PhpType {
     let Some(sig) = first_class_callable_sig(target, ctx) else {
         emitter.comment("WARNING: unsupported first-class callable target");
@@ -273,7 +309,7 @@ pub(super) fn emit_first_class_callable(
     };
 
     let Some((normalized_target, captures, hidden_params)) =
-        normalized_target_and_captures(target, &sig, ctx)
+        normalized_target_and_captures(target, &sig, emitter, ctx, data)
     else {
         emitter.comment(&unsupported_fcc_diagnostic(target));
         abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);

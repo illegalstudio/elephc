@@ -12,7 +12,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
 /// usort: sort an integer array in-place using a user-defined comparison callback.
-/// Input: x0 = callback function address, x1 = array pointer
+/// Input: x0 = callback function address, x1 = array pointer, x2 = optional callback environment pointer
 /// Output: none (sorts in place)
 /// The callback receives (a, b) and returns negative/zero/positive for ordering.
 /// Uses bubble sort for simplicity.
@@ -27,11 +27,12 @@ pub fn emit_usort(emitter: &mut Emitter) {
     emitter.label_global("__rt_usort");
 
     // -- set up stack frame, save callee-saved registers --
-    emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #48");                                    // set up new frame pointer
-    emitter.instruction("stp x19, x20, [sp, #32]");                             // save callee-saved x19, x20
-    emitter.instruction("stp x21, x22, [sp, #16]");                             // save callee-saved x21, x22
+    emitter.instruction("sub sp, sp, #80");                                     // allocate 80 bytes on the stack
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #64");                                    // set up new frame pointer
+    emitter.instruction("stp x19, x20, [sp, #48]");                             // save callee-saved x19, x20
+    emitter.instruction("stp x21, x22, [sp, #32]");                             // save callee-saved x21, x22
+    emitter.instruction("str x2, [sp, #16]");                                   // save optional callback environment pointer to stack
     emitter.instruction("mov x19, x0");                                         // x19 = callback address (callee-saved)
     emitter.instruction("str x1, [sp, #0]");                                    // save array pointer to stack
 
@@ -57,11 +58,13 @@ pub fn emit_usort(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x9, x22, lsl #3]");                           // x0 = data[j] (first element)
     emitter.instruction("add x10, x22, #1");                                    // x10 = j + 1
     emitter.instruction("ldr x1, [x9, x10, lsl #3]");                           // x1 = data[j+1] (second element)
-
-    // -- save data base pointer and element values for potential swap --
-    emitter.instruction("str x9, [sp, #8]");                                    // save data base pointer
+    emitter.instruction("str x9, [sp, #8]");                                    // save data base pointer before the callback can clobber x9
+    emitter.instruction("ldr x11, [sp, #16]");                                  // load optional callback environment pointer
+    emitter.instruction("cbz x11, __rt_usort_call");                            // keep legacy two-argument comparator ABI when no environment is present
+    emitter.instruction("mov x2, x11");                                         // pass capture environment after the compared pair
 
     // -- call comparator callback(a, b) --
+    emitter.label("__rt_usort_call");
     emitter.instruction("blr x19");                                             // call callback(data[j], data[j+1]) → x0=result
 
     // -- if result > 0, swap elements --
@@ -90,10 +93,10 @@ pub fn emit_usort(emitter: &mut Emitter) {
     emitter.label("__rt_usort_done");
 
     // -- tear down stack frame and return --
-    emitter.instruction("ldp x21, x22, [sp, #16]");                             // restore callee-saved x21, x22
-    emitter.instruction("ldp x19, x20, [sp, #32]");                             // restore callee-saved x19, x20
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
+    emitter.instruction("ldp x21, x22, [sp, #32]");                             // restore callee-saved x21, x22
+    emitter.instruction("ldp x19, x20, [sp, #48]");                             // restore callee-saved x19, x20
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return (void, array sorted in place)
 }
 
@@ -109,8 +112,10 @@ fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r13");                                            // preserve the indexed-array pointer across nested comparator calls
     emitter.instruction("push r14");                                            // preserve the indexed-array length across nested comparator calls
     emitter.instruction("push r15");                                            // preserve the swapped flag across nested comparator calls
+    emitter.instruction("sub rsp, 16");                                         // reserve a local slot for the optional callback environment pointer
     emitter.instruction("mov r12, rdi");                                        // preserve the comparator callback address in a callee-saved register for the whole bubble-sort pass
     emitter.instruction("mov r13, rsi");                                        // preserve the indexed-array pointer in a callee-saved register for the whole bubble-sort pass
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save optional callback environment pointer for captured comparator wrappers
     emitter.instruction("mov r14, QWORD PTR [r13]");                            // load the indexed-array logical length once before the bubble-sort passes begin
     emitter.instruction("cmp r14, 2");                                          // does the indexed array contain fewer than two elements?
     emitter.instruction("jl __rt_usort_done_linux_x86_64");                     // arrays of length zero or one are already sorted
@@ -128,6 +133,10 @@ fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [r10 + rbx * 8]");                  // load the left comparator argument from the current indexed-array slot
     emitter.instruction("lea r11, [rbx + 1]");                                  // derive the right adjacent slot index before loading the second comparator argument
     emitter.instruction("mov rsi, QWORD PTR [r10 + r11 * 8]");                  // load the right comparator argument from the adjacent indexed-array slot
+    emitter.instruction("cmp QWORD PTR [rbp - 48], 0");                         // check whether this runtime call carries a callback capture environment
+    emitter.instruction("je __rt_usort_call_linux_x86_64");                     // keep legacy two-argument comparator ABI when no environment is present
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // pass capture environment after the compared pair
+    emitter.label("__rt_usort_call_linux_x86_64");
     emitter.instruction("call r12");                                            // invoke the user comparator callback on the current adjacent indexed-array pair
     emitter.instruction("cmp rax, 0");                                          // did the comparator report that the current adjacent pair is already ordered?
     emitter.instruction("jle __rt_usort_noswap_linux_x86_64");                  // skip the swap path when the comparator says the left element should stay before the right element
@@ -148,6 +157,7 @@ fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_usort_outer_linux_x86_64");                   // repeat another bubble-sort pass while at least one adjacent pair was swapped
 
     emitter.label("__rt_usort_done_linux_x86_64");
+    emitter.instruction("add rsp, 16");                                         // release the comparator environment slot before restoring callee-saved registers
     emitter.instruction("pop r15");                                             // restore the saved swapped-flag register after the x86_64 usort() helper finishes
     emitter.instruction("pop r14");                                             // restore the saved indexed-array length register after the x86_64 usort() helper finishes
     emitter.instruction("pop r13");                                             // restore the saved indexed-array pointer register after the x86_64 usort() helper finishes
