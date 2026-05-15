@@ -492,7 +492,7 @@ PHP-compatible Standard PHP Library coverage, rolled out in phases.
 Close the remaining class/property compatibility gaps before freezing the 1.0
 language contract.
 
-- [ ] OOP property parity v2 — cover abstract properties, `readonly static` properties, instance property redeclaration rules, and the remaining by-reference constructor-promotion gaps (`readonly` and default values)
+- [ ] OOP property parity v2 — finish PHP 8.4 property-hook contracts, including interface properties and abstract properties in traits; cover `readonly static` properties, instance property redeclaration rules, and the remaining by-reference constructor-promotion gaps (`readonly` and default values)
 
 ## v0.23.x — Optimization and release performance pass (superseded)
 

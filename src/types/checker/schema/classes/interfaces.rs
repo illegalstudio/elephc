@@ -130,6 +130,20 @@ pub(super) fn ensure_concrete_class_implements_abstracts(
             ),
         ));
     }
+    if let Some(prop_name) = state.abstract_properties.iter().next() {
+        let declaring_class = state
+            .property_declaring_classes
+            .get(prop_name)
+            .cloned()
+            .unwrap_or_else(|| class.name.clone());
+        return Err(CompileError::new(
+            crate::span::Span::dummy(),
+            &format!(
+                "Concrete class {} must declare abstract property {}::${}",
+                class.name, declaring_class, prop_name
+            ),
+        ));
+    }
     Ok(())
 }
 

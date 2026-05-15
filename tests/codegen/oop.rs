@@ -29,3 +29,5 @@ mod misc;
 mod attributes;
 #[path = "oop/constants.rs"]
 mod constants;
+#[path = "oop/abstract_properties.rs"]
+mod abstract_properties;

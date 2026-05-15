@@ -34,6 +34,7 @@ pub(super) fn propagate_property(property: ClassProperty) -> ClassProperty {
         readonly: property.readonly,
         is_final: property.is_final,
         is_static: property.is_static,
+        is_abstract: property.is_abstract,
         by_ref: property.by_ref,
         default: property
             .default

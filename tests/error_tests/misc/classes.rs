@@ -198,7 +198,15 @@ fn test_error_typed_property_rejects_callable_type() {
 fn test_error_static_property_rejects_readonly() {
     expect_error(
         "<?php class Box { public static readonly int $count = 1; }",
-        "Readonly static properties are not supported",
+        "Static properties cannot be readonly",
+    );
+}
+
+#[test]
+fn test_error_readonly_class_static_property_with_readonly_modifier() {
+    expect_error(
+        "<?php readonly class Box { public static readonly int $count = 1; }",
+        "Static properties cannot be readonly",
     );
 }
 
@@ -295,14 +303,6 @@ fn test_error_subclass_cannot_access_parent_private_property() {
     expect_error(
         "<?php class Base { private $value = 1; } class Child extends Base { public function read() { return $this->value; } } $c = new Child(); echo $c->read();",
         "Cannot access private property: Child::value",
-    );
-}
-
-#[test]
-fn test_error_property_shadowing_across_inheritance_not_supported() {
-    expect_error(
-        "<?php class Base { public $value = 1; } class Child extends Base { public $value = 2; }",
-        "Property redeclaration across inheritance is not yet supported: Child::value",
     );
 }
 
@@ -441,5 +441,125 @@ fn test_error_readonly_class_cannot_extend_non_readonly_parent() {
     expect_error(
         "<?php class Base {} readonly class Child extends Base {}",
         "readonly class cannot extend non-readonly parent",
+    );
+}
+
+#[test]
+fn test_error_property_redeclaration_changes_type() {
+    expect_error(
+        "<?php class Base { public int $x = 0; } class Child extends Base { public string $x = \"hello\"; }",
+        "Type of Child::$x must be int, not string (as in class Base)",
+    );
+}
+
+#[test]
+fn test_error_property_redeclaration_reduces_visibility() {
+    expect_error(
+        "<?php class Base { public int $value = 1; } class Child extends Base { protected int $value = 2; }",
+        "Cannot reduce visibility when overriding property: Child::$value",
+    );
+}
+
+#[test]
+fn test_error_property_redeclaration_removes_readonly() {
+    expect_error(
+        "<?php class Base { public readonly int $value; public function __construct() { $this->value = 1; } } class Child extends Base { public int $value = 5; }",
+        "Cannot remove readonly modifier when redeclaring property: Child::$value",
+    );
+}
+
+#[test]
+fn test_error_property_redeclaration_drops_parent_type_declaration() {
+    expect_error(
+        "<?php class Base { public int $x = 0; } class Child extends Base { public $x = 5; }",
+        "Type of Child::$x must be int (as in class Base)",
+    );
+}
+
+#[test]
+fn test_error_property_redeclaration_adds_type_to_untyped_parent() {
+    expect_error(
+        "<?php class Base { public $x = 0; } class Child extends Base { public int $x = 5; }",
+        "Type of Child::$x must not be defined (as in class Base)",
+    );
+}
+
+#[test]
+fn test_error_property_redeclaration_shadows_private_parent_property() {
+    expect_error(
+        "<?php class Base { private int $secret = 1; } class Child extends Base { public int $secret = 2; }",
+        "shadowing private parent properties is not yet supported",
+    );
+}
+
+#[test]
+fn test_error_property_redeclaration_changes_by_ref_qualifier() {
+    expect_error(
+        "<?php class Base { public function __construct(public int &$ref) {} } class Child extends Base { public int $ref = 0; }",
+        "Cannot change by-reference qualifier when redeclaring property: Child::$ref",
+    );
+}
+
+#[test]
+fn test_error_abstract_property_in_non_abstract_class() {
+    expect_error(
+        "<?php class Box { abstract public int $value; }",
+        "Abstract properties can only be declared in abstract classes",
+    );
+}
+
+#[test]
+fn test_error_abstract_property_in_trait_is_not_yet_supported() {
+    expect_error(
+        "<?php trait HasValue { abstract public int $value; }",
+        "Abstract properties in traits are not yet supported",
+    );
+}
+
+#[test]
+fn test_error_abstract_property_with_default() {
+    expect_error(
+        "<?php abstract class Box { abstract public int $value = 1; }",
+        "Abstract property $value cannot have a default value",
+    );
+}
+
+#[test]
+fn test_error_abstract_property_with_static() {
+    expect_error(
+        "<?php abstract class Box { abstract public static int $value; }",
+        "Abstract static properties are not supported",
+    );
+}
+
+#[test]
+fn test_error_abstract_property_with_final() {
+    expect_error(
+        "<?php abstract class Box { abstract final public int $value; }",
+        "Cannot use the final modifier on an abstract property",
+    );
+}
+
+#[test]
+fn test_error_abstract_property_with_private() {
+    expect_error(
+        "<?php abstract class Box { abstract private int $value; }",
+        "Private abstract properties are not supported",
+    );
+}
+
+#[test]
+fn test_error_concrete_class_missing_abstract_property() {
+    expect_error(
+        "<?php abstract class Shape { abstract public int $sides; } class Triangle extends Shape {}",
+        "Concrete class Triangle must declare abstract property Shape::$sides",
+    );
+}
+
+#[test]
+fn test_error_concrete_property_redeclared_as_abstract() {
+    expect_error(
+        "<?php class Base { public int $value = 1; } abstract class Child extends Base { abstract public int $value; }",
+        "Cannot make concrete property abstract: Child::$value",
     );
 }

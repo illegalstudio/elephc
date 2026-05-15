@@ -98,7 +98,7 @@ pub(in crate::parser::stmt) fn parse_trait_decl(
 
     expect_token(tokens, pos, &Token::LBrace, "Expected '{' after trait name")?;
     let (trait_uses, properties, methods, constants) =
-        parse_class_like_body(tokens, pos, "trait")?;
+        parse_class_like_body(tokens, pos, "trait", false)?;
     expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of trait")?;
 
     Ok(Stmt::new(
@@ -117,6 +117,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     owner_kind: &str,
+    enclosing_is_abstract: bool,
 ) -> Result<
     (
         Vec<TraitUse>,
@@ -239,14 +240,39 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
             if modifiers.is_static && modifiers.is_readonly {
                 return Err(CompileError::new(
                     member_span,
-                    "Readonly static properties are not supported",
+                    "Static properties cannot be readonly",
                 ));
             }
             if modifiers.is_abstract {
-                return Err(CompileError::new(
-                    member_span,
-                    "Abstract properties are not supported",
-                ));
+                if !enclosing_is_abstract {
+                    let message = if owner_kind == "trait" {
+                        "Abstract properties in traits are not yet supported"
+                    } else {
+                        "Abstract properties can only be declared in abstract classes"
+                    };
+                    return Err(CompileError::new(
+                        member_span,
+                        message,
+                    ));
+                }
+                if modifiers.is_static {
+                    return Err(CompileError::new(
+                        member_span,
+                        "Abstract static properties are not supported",
+                    ));
+                }
+                if modifiers.is_final {
+                    return Err(CompileError::new(
+                        member_span,
+                        "Cannot use the final modifier on an abstract property",
+                    ));
+                }
+                if modifiers.visibility == Visibility::Private {
+                    return Err(CompileError::new(
+                        member_span,
+                        "Private abstract properties are not supported",
+                    ));
+                }
             }
             let prop_name = prop_name.clone();
             *pos += 1;
@@ -262,6 +288,12 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
             } else {
                 None
             };
+            if modifiers.is_abstract && default.is_some() {
+                return Err(CompileError::new(
+                    member_span,
+                    &format!("Abstract property ${} cannot have a default value", prop_name),
+                ));
+            }
             expect_semicolon(tokens, pos)?;
             properties.push(ClassProperty {
                 name: prop_name,
@@ -270,6 +302,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 readonly: modifiers.is_readonly,
                 is_final: modifiers.is_final,
                 is_static: modifiers.is_static,
+                is_abstract: modifiers.is_abstract,
                 by_ref: false,
                 default,
                 span: member_span,

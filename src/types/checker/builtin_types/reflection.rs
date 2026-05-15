@@ -115,6 +115,7 @@ fn builtin_property(
         readonly: false,
         is_final: false,
         is_static: false,
+        is_abstract: false,
         by_ref: false,
         default,
         span: crate::span::Span::dummy(),

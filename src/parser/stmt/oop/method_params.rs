@@ -123,6 +123,7 @@ pub(super) fn parse_method_params(
                         readonly,
                         is_final: false,
                         is_static: false,
+                        is_abstract: false,
                         by_ref: is_ref,
                         default: None,
                         span: property_span,

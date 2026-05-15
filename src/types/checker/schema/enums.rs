@@ -282,6 +282,7 @@ pub(crate) fn build_enum_info(
             final_properties,
             readonly_properties,
             reference_properties,
+            abstract_properties: HashSet::new(),
             static_properties: Vec::new(),
             static_defaults: Vec::new(),
             static_property_declaring_classes: HashMap::new(),

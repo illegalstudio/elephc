@@ -366,3 +366,223 @@ echo $f("World");
     );
     assert_eq!(out, "Hello World");
 }
+
+#[test]
+fn test_property_redeclaration_concrete_overrides_default() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public int $x = 1;
+}
+
+class Child extends Base {
+    public int $x = 5;
+}
+
+$c = new Child();
+echo $c->x;
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_property_redeclaration_untyped() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public $value = 1;
+}
+
+class Child extends Base {
+    public $value = 2;
+}
+
+$c = new Child();
+echo $c->value;
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn test_property_redeclaration_widens_visibility() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    protected int $value = 10;
+
+    public function get() {
+        return $this->value;
+    }
+}
+
+class Child extends Base {
+    public int $value = 20;
+}
+
+$c = new Child();
+echo $c->value;
+echo ":";
+echo $c->get();
+"#,
+    );
+    assert_eq!(out, "20:20");
+}
+
+#[test]
+fn test_property_redeclaration_preserves_slot_offset() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public int $a = 1;
+    public int $b = 2;
+
+    public function pair() {
+        return $this->a + $this->b;
+    }
+}
+
+class Child extends Base {
+    public int $a = 10;
+}
+
+$c = new Child();
+echo $c->pair();
+echo ":";
+echo $c->a;
+echo ":";
+echo $c->b;
+"#,
+    );
+    assert_eq!(out, "12:10:2");
+}
+
+#[test]
+fn test_property_redeclaration_adds_readonly() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public int $value = 0;
+}
+
+class Child extends Base {
+    public readonly int $value;
+
+    public function __construct() {
+        $this->value = 7;
+    }
+}
+
+$c = new Child();
+echo $c->value;
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_property_redeclaration_multi_level_inheritance() {
+    let out = compile_and_run(
+        r#"<?php
+class GrandParent {
+    public int $value = 1;
+
+    public function show() {
+        return $this->value;
+    }
+}
+
+class Parent_ extends GrandParent {
+    public int $value = 2;
+}
+
+class Child extends Parent_ {
+    public int $value = 3;
+}
+
+$c = new Child();
+echo $c->value;
+echo ":";
+echo $c->show();
+"#,
+    );
+    assert_eq!(out, "3:3");
+}
+
+#[test]
+fn test_property_redeclaration_widens_visibility_and_adds_readonly() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    protected int $value = 0;
+
+    public function get() {
+        return $this->value;
+    }
+}
+
+class Child extends Base {
+    public readonly int $value;
+
+    public function __construct() {
+        $this->value = 9;
+    }
+}
+
+$c = new Child();
+echo $c->value;
+echo ":";
+echo $c->get();
+"#,
+    );
+    assert_eq!(out, "9:9");
+}
+
+#[test]
+fn test_property_redeclaration_from_trait() {
+    let out = compile_and_run(
+        r#"<?php
+trait HasValue {
+    public int $value = 1;
+}
+
+class Base {
+    use HasValue;
+}
+
+class Child extends Base {
+    public int $value = 5;
+}
+
+$c = new Child();
+echo $c->value;
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_property_redeclaration_redeclares_parent_promoted_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public function __construct(public int $value = 1) {}
+
+    public function show() {
+        return $this->value;
+    }
+}
+
+class Child extends Base {
+    public int $value = 7;
+}
+
+$c = new Child(42);
+echo $c->show();
+echo ":";
+echo $c->value;
+"#,
+    );
+    assert_eq!(out, "42:42");
+}

@@ -109,6 +109,7 @@ pub struct ClassProperty {
     pub readonly: bool,
     pub is_final: bool,
     pub is_static: bool,
+    pub is_abstract: bool,
     pub by_ref: bool,
     pub default: Option<Expr>,
     #[allow(dead_code)] // Used for error reporting in future phases
@@ -123,6 +124,7 @@ impl PartialEq for ClassProperty {
             && self.readonly == other.readonly
             && self.is_final == other.is_final
             && self.is_static == other.is_static
+            && self.is_abstract == other.is_abstract
             && self.by_ref == other.by_ref
             && self.attributes == other.attributes
     }

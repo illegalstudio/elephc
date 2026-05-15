@@ -113,6 +113,25 @@ abstract class BaseGreeter {
 - abstract methods must be bodyless
 - non-abstract classes may not have abstract methods
 
+### Abstract properties
+
+An abstract class may declare a property as `abstract`. The declaration has no default value, and every concrete subclass must redeclare the property with the same type. Static, final, and private modifiers are rejected on abstract properties.
+
+```php
+<?php
+abstract class Shape {
+    abstract public int $sides;
+}
+
+class Square extends Shape {
+    public int $sides = 4;
+}
+```
+
+The concrete redeclaration reuses the parent's slot (offsets are stable across the inheritance chain), so the property is accessible to both parent and child methods.
+
+Current scope: elephc supports abstract property declarations in abstract classes only. PHP 8.4 property hooks (`{ get; }` / `{ set; }`), interface property contracts, and abstract properties in traits are not yet supported.
+
 ## Final classes, methods, and properties
 ```php
 <?php
@@ -139,7 +158,7 @@ final class InvoiceNumber {
 - `readonly` properties (only assigned in `__construct`)
 - `final` properties, which can be read normally but cannot be redeclared by subclasses
 - Static properties with `public static`, `protected static`, or `private static`, including typed static properties
-- `readonly class` makes all properties readonly
+- `readonly class` makes all instance properties readonly; static properties stay mutable
 
 ```php
 <?php
@@ -155,6 +174,32 @@ class User {
 ```
 
 Property type declarations are checked at compile time for both instance and static properties. Defaults and later assignments must be compatible with the declared type, including constructor assignments through untyped parameters. Nullable shorthand (`?T`) and union storage use the compiler's boxed mixed representation internally. `void` and `callable` property types are rejected.
+
+### Property redeclaration
+
+A child class may redeclare a property inherited from a non-private parent. The redeclaration is checked at compile time and must follow PHP rules:
+
+- Visibility cannot be reduced (`public` → `protected` is rejected; `protected` → `public` is allowed).
+- Declared types are invariant. A typed parent property must be redeclared with the same type. A typed parent property cannot become untyped, and an untyped parent property cannot gain a type in the child.
+- `readonly` is monotonic — a `readonly` parent property must stay `readonly` in the child. A non-readonly parent property may become `readonly` in the child.
+- The by-reference qualifier on a property cannot change across inheritance.
+- `final` parent properties cannot be redeclared.
+- The child shares the parent's slot, so reads of the property from inherited methods see the child's value.
+
+```php
+<?php
+class Base {
+    public int $value = 0;
+}
+
+class Child extends Base {
+    public int $value = 5;
+}
+
+echo (new Child())->value; // 5
+```
+
+Private parent properties are still considered separate slots in PHP, but elephc rejects same-named redeclarations through them; declare a different name in the child for now.
 
 ## Static properties
 Static properties use class-scoped storage and are accessed with `::`.
@@ -176,6 +221,8 @@ echo Counter::bump(); // 6
 ```
 
 Supported receivers are `ClassName::$prop`, `self::$prop`, `parent::$prop`, and `static::$prop`. Static property visibility and declared types are checked at compile time. Inherited static properties share the declaring class storage until a subclass redeclares the property. Redeclarations follow PHP rules: non-private inherited properties keep invariant declared types, cannot reduce visibility, and cannot override `final` properties. Private static properties redeclared in subclasses are independent slots; `static::$prop` is still late-bound and reports a fatal runtime error if the current method scope cannot access the matched private slot.
+
+Static properties in elephc, like in PHP, are always mutable — even on a `readonly class`. PHP's `readonly` modifier only constrains instance properties; declaring `public readonly static` is a compile error in both PHP and elephc.
 
 Static array properties support direct element writes:
 
@@ -324,6 +371,8 @@ Same parameter count, same pass-by-reference positions, same default layout, sam
 
 ## Traits
 Flattened at compile time. Support: `use Trait;`, multiple traits, `insteadof`, `as`, trait properties, static trait methods.
+
+Abstract properties in traits are not yet supported; use an abstract base class for property requirements until PHP 8.4 property-hook contracts are implemented.
 
 ## Property access
 `->` for properties and methods.
@@ -538,10 +587,9 @@ class Bound implements Limits {
 Class constants (PHP 7.1+ visibility, PHP 8.1+ `final`) live on classes, interfaces, and traits. They are inherited from parents and implemented interfaces (transitively). At codegen time elephc inlines the constant's literal value at every access site — there is no runtime lookup, and recursive constant references (`const FOO = self::BAR + 1`) are not yet supported. Attributes on class constants are accepted and stored in the AST.
 
 ## Limitations
-- No abstract properties
-- No `readonly static` properties
+- `readonly static` properties are rejected to match PHP. Static properties in a `readonly class` are still mutable.
 - No `readonly` or default-valued by-reference promoted properties
-- No instance property redeclaration across an inheritance chain; static property redeclarations are supported, but inherited instance-property redeclarations are still rejected.
+- Shadowing a private parent property with a same-named child property is not yet supported (PHP gives them separate slots; elephc uses one slot per name)
 - Class constants must be literal-or-foldable expressions; `self::OTHER + 1` style recursive references are not supported.
 - Anonymous classes (`new class { ... }`) are not yet supported.
 - Class attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported `ReflectionClass`/`ReflectionMethod`/`ReflectionProperty::getAttributes()` APIs; parameter reflection is not yet available. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to parameters (refactor of param representation and stack-trace infrastructure pending).

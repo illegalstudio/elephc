@@ -311,7 +311,7 @@ fn test_error_static_property_type_mismatch() {
 fn test_error_static_property_redeclaration_type_mismatch() {
     expect_error(
         "<?php class Base { public static int $count = 1; } class Child extends Base { public static string $count = \"x\"; }",
-        "Type of Child::$count must be int (as in class Base)",
+        "Type of Child::$count must be int, not string (as in class Base)",
     );
 }
 

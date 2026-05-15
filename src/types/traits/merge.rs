@@ -131,6 +131,7 @@ fn properties_compatible(left: &ClassProperty, right: &ClassProperty) -> bool {
         && left.type_expr == right.type_expr
         && left.readonly == right.readonly
         && left.is_static == right.is_static
+        && left.is_abstract == right.is_abstract
         && left.by_ref == right.by_ref
         && left.default == right.default
 }

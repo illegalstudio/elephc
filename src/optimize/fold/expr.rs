@@ -35,6 +35,7 @@ pub(in crate::optimize) fn fold_property(property: ClassProperty) -> ClassProper
         readonly: property.readonly,
         is_final: property.is_final,
         is_static: property.is_static,
+        is_abstract: property.is_abstract,
         by_ref: property.by_ref,
         default: property.default.map(fold_expr),
         span: property.span,

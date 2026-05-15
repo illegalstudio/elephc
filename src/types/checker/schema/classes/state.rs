@@ -27,6 +27,7 @@ pub(super) struct ClassBuildState {
     pub(super) final_properties: HashSet<String>,
     pub(super) readonly_properties: HashSet<String>,
     pub(super) reference_properties: HashSet<String>,
+    pub(super) abstract_properties: HashSet<String>,
     pub(super) static_prop_types: Vec<(String, PhpType)>,
     pub(super) static_defaults: Vec<Option<Expr>>,
     pub(super) static_property_declaring_classes: HashMap<String, String>,
@@ -105,6 +106,7 @@ impl ClassBuildState {
             final_properties: self.final_properties,
             readonly_properties: self.readonly_properties,
             reference_properties: self.reference_properties,
+            abstract_properties: self.abstract_properties,
             static_properties: self.static_prop_types,
             static_defaults: self.static_defaults,
             static_property_declaring_classes: self.static_property_declaring_classes,
@@ -249,6 +251,9 @@ impl ClassBuildState {
             }
             if parent.reference_properties.contains(name) {
                 self.reference_properties.insert(name.clone());
+            }
+            if parent.abstract_properties.contains(name) {
+                self.abstract_properties.insert(name.clone());
             }
         }
     }

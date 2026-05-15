@@ -129,6 +129,58 @@ echo $user->email;
 }
 
 #[test]
+fn test_readonly_class_static_property_is_mutable() {
+    let out = compile_and_run(
+        r#"<?php
+readonly class Counter {
+    public static int $count = 0;
+}
+Counter::$count = 5;
+echo Counter::$count;
+Counter::$count = Counter::$count + 1;
+echo ":";
+echo Counter::$count;
+"#,
+    );
+    assert_eq!(out, "5:6");
+}
+
+#[test]
+fn test_readonly_abstract_class_static_property_is_mutable() {
+    let out = compile_and_run(
+        r#"<?php
+abstract readonly class Counter {
+    public static int $count = 0;
+}
+Counter::$count = 7;
+echo Counter::$count;
+Counter::$count = Counter::$count + 1;
+echo ":";
+echo Counter::$count;
+"#,
+    );
+    assert_eq!(out, "7:8");
+}
+
+#[test]
+fn test_readonly_inherited_static_property_remains_mutable() {
+    let out = compile_and_run(
+        r#"<?php
+readonly class Base {
+    public static int $shared = 1;
+}
+readonly class Child extends Base {
+}
+Child::$shared = 42;
+echo Base::$shared;
+echo ":";
+echo Child::$shared;
+"#,
+    );
+    assert_eq!(out, "42:42");
+}
+
+#[test]
 fn test_example_final_classes_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/final-classes/main.php"));
     assert_eq!(out, "invoice:42\n");

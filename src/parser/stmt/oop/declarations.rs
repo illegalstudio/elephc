@@ -65,7 +65,7 @@ pub(in crate::parser::stmt) fn parse_class_decl(
     expect_token(tokens, pos, &Token::LBrace, "Expected '{' after class name")?;
 
     let (trait_uses, properties, methods, constants) =
-        parse_class_like_body(tokens, pos, "class")?;
+        parse_class_like_body(tokens, pos, "class", is_abstract)?;
 
     expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of class")?;
 
