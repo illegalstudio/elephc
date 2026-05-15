@@ -161,6 +161,7 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_hash_key_eq(emitter);
     arrays::emit_hash_normalize_key(emitter);
     arrays::emit_hash_new(emitter);
+    arrays::emit_hash_grow(emitter);
     arrays::emit_hash_insert_owned(emitter);
     arrays::emit_hash_clone_shallow(emitter);
     arrays::emit_hash_ensure_unique(emitter);
