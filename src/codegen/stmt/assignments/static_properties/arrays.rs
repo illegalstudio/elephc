@@ -80,7 +80,9 @@ pub(crate) fn emit_static_property_array_push_stmt(
         && matches!(elem_ty, PhpType::Mixed)
         && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
     {
-        crate::codegen::emit_box_current_value_as_mixed(emitter, &val_ty);
+        crate::codegen::emit_box_current_expr_value_as_mixed_for_container(
+            emitter, value, &val_ty,
+        );
         val_ty = PhpType::Mixed;
     } else if !boxed_iterable {
         helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
@@ -221,9 +223,11 @@ fn emit_array_push_runtime_call(array_reg: &str, val_ty: &PhpType, emitter: &mut
                 emitter.instruction("bl __rt_array_push_int");                  // append the callable pointer bits as a scalar slot
             }
             PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+                abi::emit_push_reg(emitter, "x0");                              // save the codegen-owned payload pointer across the refcounted append helper
                 emitter.instruction("mov x1, x0");                              // move the retained heap payload into the runtime value register
                 emitter.instruction(&format!("mov x0, {}", array_reg));         // move the static array pointer into the runtime receiver register
                 emitter.instruction("bl __rt_array_push_refcounted");           // append the retained heap payload into the static array
+                crate::codegen::emit_release_pushed_refcounted_temp_after_array_push(emitter, val_ty); // drop the codegen's owning reference now that the static array holds its own
             }
             _ => emitter.comment("WARNING: unsupported static property array push payload"),
         },
@@ -249,9 +253,11 @@ fn emit_array_push_runtime_call(array_reg: &str, val_ty: &PhpType, emitter: &mut
                 abi::emit_call_label(emitter, "__rt_array_push_int");
             }
             PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+                abi::emit_push_reg(emitter, "rax");                             // save the codegen-owned payload pointer across the refcounted append helper
                 emitter.instruction("mov rsi, rax");                            // move the retained heap payload into the SysV value register
                 emitter.instruction(&format!("mov rdi, {}", array_reg));        // move the static array pointer into the SysV receiver register
                 abi::emit_call_label(emitter, "__rt_array_push_refcounted");
+                crate::codegen::emit_release_pushed_refcounted_temp_after_array_push(emitter, val_ty); // drop the codegen's owning reference now that the static array holds its own
             }
             _ => emitter.comment("WARNING: unsupported static property array push payload"),
         },

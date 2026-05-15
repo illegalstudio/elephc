@@ -476,6 +476,56 @@ echo count($x->a);
 }
 
 #[test]
+fn test_regression_static_property_array_push_scalar_releases_old_payload() {
+    // Static storage itself is process-lifetime state, but an overwritten
+    // static array must release the payloads appended to the old array. The
+    // scalar is boxed into Mixed and then retained by `__rt_array_push_refcounted`;
+    // only the replacement static array should remain live at exit.
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public static array $a; }
+C::$a = [];
+C::$a[] = 4;
+C::$a = [];
+echo count(C::$a);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0");
+    assert!(
+        out.stderr
+            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
+        "expected only the current static array to remain live, got: {}",
+        out.stderr
+    );
+}
+
+#[test]
+fn test_regression_static_property_array_push_array_value_releases_old_payload() {
+    // Pushing an owned array literal into a Mixed-element static property array
+    // needs both the container-aware boxer and the post-push release. After the
+    // static property is overwritten, the old array and appended literal should
+    // be gone; only the replacement static array remains live by design.
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public static array $a; }
+C::$a = [];
+C::$a[] = [1, 2, 3];
+C::$a = [];
+echo count(C::$a);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0");
+    assert!(
+        out.stderr
+            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
+        "expected only the current static array to remain live, got: {}",
+        out.stderr
+    );
+}
+
+#[test]
 fn test_regression_spread_array_literal_does_not_leak() {
     // Array literals with spread build their result through
     // `__rt_array_push_refcounted` for refcounted elements. The non-spread
