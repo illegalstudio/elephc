@@ -397,3 +397,153 @@ echo $c->area();
     );
     assert_eq!(out, "314");
 }
+
+#[test]
+fn test_regression_property_array_push_scalar_does_not_leak() {
+    // `$obj->prop[] = <scalar>` boxes the scalar into a Mixed cell, then
+    // `__rt_array_push_refcounted` retains its own reference to that cell.
+    // The codegen kept the cell's original (heap_alloc) reference and never
+    // released it, so the boxed Mixed cell leaked one reference and survived
+    // past the array's deep-free. Regression: heap must be clean at exit.
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public array $a; }
+$x = new C();
+$x->a = [];
+$x->a[] = 4;
+echo count($x->a);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+#[test]
+fn test_regression_property_array_push_array_value_does_not_leak() {
+    // Pushing an owned array literal into a Mixed-element property array adds
+    // a second ownership layer: the inner array is retained by the Mixed box,
+    // and the Mixed box is retained by `__rt_array_push_refcounted`. The
+    // property push path must use the container-aware boxer (so the inner
+    // array's original reference is released) and release the boxed cell
+    // after the append. Regression: heap must be clean at exit.
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public array $a; }
+$x = new C();
+$x->a = [];
+$x->a[] = "hello";
+$x->a[] = [1, 2, 3];
+echo count($x->a);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+#[test]
+fn test_regression_property_array_push_in_loop_does_not_leak() {
+    // A loop pushing scalars into a property array repeatedly exercises the
+    // boxing + push path; each iteration must balance its refcount or the
+    // leak compounds.
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public array $a; }
+$x = new C();
+$x->a = [];
+for ($i = 0; $i < 20; $i++) {
+    $x->a[] = $i;
+}
+echo count($x->a);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+#[test]
+fn test_regression_static_property_array_push_scalar_releases_old_payload() {
+    // Static storage itself is process-lifetime state, but an overwritten
+    // static array must release the payloads appended to the old array. The
+    // scalar is boxed into Mixed and then retained by `__rt_array_push_refcounted`;
+    // only the replacement static array should remain live at exit.
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public static array $a; }
+C::$a = [];
+C::$a[] = 4;
+C::$a = [];
+echo count(C::$a);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0");
+    assert!(
+        out.stderr
+            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
+        "expected only the current static array to remain live, got: {}",
+        out.stderr
+    );
+}
+
+#[test]
+fn test_regression_static_property_array_push_array_value_releases_old_payload() {
+    // Pushing an owned array literal into a Mixed-element static property array
+    // needs both the container-aware boxer and the post-push release. After the
+    // static property is overwritten, the old array and appended literal should
+    // be gone; only the replacement static array remains live by design.
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public static array $a; }
+C::$a = [];
+C::$a[] = [1, 2, 3];
+C::$a = [];
+echo count(C::$a);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0");
+    assert!(
+        out.stderr
+            .contains("HEAP DEBUG: leak summary: live_blocks=1"),
+        "expected only the current static array to remain live, got: {}",
+        out.stderr
+    );
+}
+
+#[test]
+fn test_regression_spread_array_literal_does_not_leak() {
+    // Array literals with spread build their result through
+    // `__rt_array_push_refcounted` for refcounted elements. The non-spread
+    // element path retained the element via `retain_borrowed_heap_arg` and
+    // again inside the push helper without releasing the codegen's owning
+    // reference, leaking the appended element. Regression: heap clean at exit.
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [[1], [2]];
+$b = [...$a, [3]];
+echo count($b);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "3");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

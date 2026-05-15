@@ -75,7 +75,13 @@ pub(crate) fn emit_property_array_push_stmt(
         && matches!(elem_ty, PhpType::Mixed)
         && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
     {
-        crate::codegen::emit_box_current_value_as_mixed(emitter, &val_ty);
+        // Use the container-aware boxer so an owned heap value (e.g. an array
+        // literal) releases its original reference once the Mixed cell retains
+        // its own — otherwise the boxed child leaks. Borrowed values and
+        // scalars fall through to the plain boxer.
+        crate::codegen::emit_box_current_expr_value_as_mixed_for_container(
+            emitter, value, &val_ty,
+        );
         val_ty = PhpType::Mixed;
     } else if !boxed_iterable {
         helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
@@ -108,9 +114,15 @@ pub(crate) fn emit_property_array_push_stmt(
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_) => {
+                    // The boxing / `retain_borrowed_heap_result` step above leaves the codegen
+                    // owning exactly one reference to the payload. `__rt_array_push_refcounted`
+                    // then retains its own reference for the destination array, so the codegen's
+                    // owning reference must be released afterward or the boxed cell leaks.
+                    abi::emit_push_reg(emitter, "x0");                          // save the codegen-owned payload pointer across the append helper
                     emitter.instruction("mov x1, x0");                          // move the retained heap payload pointer into the runtime helper child register
                     emitter.instruction("mov x0, x9");                          // move the current array pointer into the runtime helper receiver register
                     emitter.instruction("bl __rt_array_push_refcounted");       // append the retained heap payload and return the possibly-grown array pointer
+                    crate::codegen::emit_release_pushed_refcounted_temp_after_array_push(emitter, &val_ty); // drop the codegen's owning reference now that the array holds its own
                 }
                 _ => {
                     emitter.comment("WARNING: unsupported property array push payload");
@@ -148,9 +160,14 @@ pub(crate) fn emit_property_array_push_stmt(
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_) => {
+                    // See the AArch64 arm: the codegen owns one reference to the payload here,
+                    // and `__rt_array_push_refcounted` retains its own, so the codegen's
+                    // reference must be released afterward to avoid leaking the boxed cell.
+                    abi::emit_push_reg(emitter, "rax");                         // save the codegen-owned payload pointer across the append helper
                     emitter.instruction("mov rsi, rax");                        // move the retained heap payload pointer into the SysV runtime helper child register
                     emitter.instruction("mov rdi, r11");                        // move the current array pointer into the SysV runtime helper receiver register
                     abi::emit_call_label(emitter, "__rt_array_push_refcounted");
+                    crate::codegen::emit_release_pushed_refcounted_temp_after_array_push(emitter, &val_ty); // drop the codegen's owning reference now that the array holds its own
                 }
                 _ => {
                     emitter.comment("WARNING: unsupported property array push payload");

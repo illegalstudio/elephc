@@ -312,11 +312,20 @@ pub(crate) fn emit_array_literal_with_spread(
                     emitter.instruction("str x0, [sp]");                        // persist the possibly-grown dest array pointer after the push
                 }
                 _ => {
-                    emitter.instruction("mov x1, x0");                          // x1 = value to push
-                    emitter.instruction("mov x0, x9");                          // x0 = array pointer
                     if ty.is_refcounted() {
+                        // The codegen owns one reference to the element here (a fresh literal,
+                        // or a borrowed value retained by `retain_borrowed_heap_arg` above).
+                        // `__rt_array_push_refcounted` retains its own reference for the
+                        // destination array, so the codegen's reference must be released
+                        // afterward or the element leaks.
+                        abi::emit_push_reg(emitter, "x0");                      // save the codegen-owned element across the append helper
+                        emitter.instruction("mov x1, x0");                      // x1 = value to push
+                        emitter.instruction("mov x0, x9");                      // x0 = array pointer
                         emitter.instruction("bl __rt_array_push_refcounted");   // push retained refcounted payload and stamp array metadata
+                        crate::codegen::emit_release_pushed_refcounted_temp_after_array_push(emitter, &ty); // drop the codegen's owning reference now that the array holds its own
                     } else {
+                        emitter.instruction("mov x1, x0");                      // x1 = value to push
+                        emitter.instruction("mov x0, x9");                      // x0 = array pointer
                         emitter.instruction("bl __rt_array_push_int");          // push value onto array
                     }
                     emitter.instruction("str x0, [sp]");                        // persist the possibly-grown dest array pointer after the push
@@ -393,11 +402,18 @@ fn emit_array_literal_with_spread_linux_x86_64(
                     emitter.instruction("mov QWORD PTR [rsp], rax");            // persist the possibly-grown destination indexed-array pointer after the append
                 }
                 _ => {
-                    emitter.instruction("mov rsi, rax");                        // place the payload pointer or scalar bits in the shared x86_64 append helper value register
-                    emitter.instruction("mov rdi, r11");                        // place the destination indexed-array pointer in the shared x86_64 append helper receiver register
                     if ty.is_refcounted() {
+                        // See the AArch64 arm: the codegen owns one reference to the element,
+                        // and `__rt_array_push_refcounted` retains its own, so the codegen's
+                        // reference must be released afterward to avoid leaking the element.
+                        abi::emit_push_reg(emitter, "rax");                     // save the codegen-owned element across the append helper
+                        emitter.instruction("mov rsi, rax");                    // place the payload pointer in the shared x86_64 append helper value register
+                        emitter.instruction("mov rdi, r11");                    // place the destination indexed-array pointer in the shared x86_64 append helper receiver register
                         abi::emit_call_label(emitter, "__rt_array_push_refcounted"); // append the retained refcounted payload and stamp the indexed-array value_type metadata
+                        crate::codegen::emit_release_pushed_refcounted_temp_after_array_push(emitter, &ty); // drop the codegen's owning reference now that the array holds its own
                     } else {
+                        emitter.instruction("mov rsi, rax");                    // place the payload bits in the shared x86_64 append helper value register
+                        emitter.instruction("mov rdi, r11");                    // place the destination indexed-array pointer in the shared x86_64 append helper receiver register
                         abi::emit_call_label(emitter, "__rt_array_push_int");   // append the payload bits through the scalar append helper
                     }
                     emitter.instruction("mov QWORD PTR [rsp], rax");            // persist the possibly-grown destination indexed-array pointer after the append
