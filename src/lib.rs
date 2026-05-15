@@ -8,6 +8,7 @@
 //! Key details:
 //! - Public module boundaries here are part of the crate-facing compiler API.
 
+pub mod autoload;
 pub mod codegen;
 pub mod conditional;
 pub mod errors;

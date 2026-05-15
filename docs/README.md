@@ -25,7 +25,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Arrays](php/arrays.md) — indexed, associative, copy-on-write, 50+ built-in array functions
 - [Math](php/math.md) — abs, floor, ceil, round, trigonometry, logarithms, random, constants
 - [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties, static property redeclarations, constructor promotion, methods, traits, enums, magic methods
-- [Namespaces](php/namespaces.md) — namespace, use, include/require/include_once/require_once, constants, superglobals
+- [Namespaces](php/namespaces.md) — namespace, use, include/require/include_once/require_once, Composer/SPL autoloading, class introspection, constants, superglobals
 - [System & I/O](php/system-and-io.md) — file I/O, date/time, JSON, regex, exec, debugging
 - [Magic Constants](php/magic-constants.md) — `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__`
 - [Fibers](php/fibers.md) — cooperative coroutines (PHP 8.1+ Fiber): start, suspend, resume, FiberError

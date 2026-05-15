@@ -57,6 +57,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             value: Box::new(propagate_expr(*value, env)),
             default: Box::new(propagate_expr(*default, env)),
         },
+        ExprKind::Pipe { value, callable } => ExprKind::Pipe {
+            value: Box::new(propagate_expr(*value, env)),
+            callable: Box::new(propagate_expr(*callable, env)),
+        },
         ExprKind::Assignment {
             target,
             value,

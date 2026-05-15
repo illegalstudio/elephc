@@ -338,6 +338,74 @@ It now recognizes a useful subset of call expressions precisely, but it still do
 
 That conservatism is why the pass is safe to run by default: if an expression could have runtime behavior and elephc cannot prove otherwise with its local summaries, the optimizer prefers to keep it.
 
+## Pipe operator optimizations
+
+PHP 8.5's pipe operator `|>` is implemented as a dedicated `ExprKind::Pipe`
+node rather than a `BinOp`, which lets the optimizer reason about it as a
+first-class call site rather than an opaque binary operation. Three layers of
+optimization apply, end to end:
+
+### Effect modelling
+
+`ExprKind::Pipe { value, callable }` in `src/optimize/effects.rs` combines
+the effects of `value`, the effects of `callable`, and the effects of
+*invoking* `callable` via `expr_call_effect`. Because the per-target call
+effect already collapses to `Effect::PURE` when the callable is a
+first-class callable referencing a pure built-in (`strlen`, `strtoupper`, …),
+a pure pipe expression statement is observably dead and the DCE pass
+removes it. No extra wrapping with `with_side_effects()` is applied — that
+would mask the precise effect of the target and defeat DCE.
+
+### Constant folding for pure pipes
+
+`src/optimize/fold/pipes.rs::try_fold_pure_pipe` is called from
+`fold_expr`'s Pipe branch. When the value is a literal scalar (or
+literal array, for predicates) and the callable is `FirstClassCallable(
+Function(name))` referencing a whitelisted pure built-in, the pipe folds to
+a literal at compile time. Examples:
+
+- `"hello" |> strlen(...)` → `5`
+- `3.7 |> floor(...)` → `3.0`
+- `"hello" |> strtoupper(...) |> strrev(...)` → `"OLLEH"` (each stage
+  folds and feeds the next)
+- `5 |> is_int(...)` → `true`
+- `5 |> gettype(...)` → `"integer"`
+
+The whitelist is intentionally narrow: only built-ins whose Rust
+implementation is byte-equivalent to PHP for the literal types we accept.
+Non-ASCII strings, `NaN`/infinity floats, and `i64::MIN` for `abs` fall
+back to the runtime call so PHP semantics are preserved.
+
+### First-class-callable short-circuit (codegen-side)
+
+Tracked from the optimizer's perspective because the type checker's
+`first_class_callable_targets` map is mirrored into the codegen `Context`
+and used to bypass the closure wrapper at call sites. `$cb = foo(...)`
+followed by `$x |> $cb` lowers to a direct `bl _fn_foo` instead of an
+indirect call through the FCC wrapper. The same short-circuit fires for
+`$cb(args)` outside the pipe operator — `array_map`, `call_user_func`, or
+plain `$cb()` calls all benefit.
+
+`self::method(...)` and `parent::method(...)` are pre-resolved to
+`Named(class)` at FCC variable storage time, so the short-circuit applies
+to them too. `static::method(...)` keeps its `Static` receiver in storage
+and the call site re-uses the caller-scope's `__elephc_fcc_called_class_id`
+/ `__elephc_called_class_id` / `__elephc_fcc_this` / `$this` chain — the
+exact same chain the closure wrapper would consult, just without the
+wrapper trampoline.
+
+### Dead-wrapper stubbing
+
+When a first-class callable is assigned to a local and every read of that
+local is short-circuited (the variable never reaches `emit_variable`,
+`emit_closure_call`'s fallback path, `call_user_func`, `array_map`,
+`Fiber::new`, etc.), the deferred wrapper body is replaced by a tiny
+`mov #0; ret` stub. The address load at the assignment site stays
+resolvable, the slot still receives a value, and the binary loses the
+~50–100 instructions of dead prologue/body/epilogue per uninvoked
+wrapper. `Context::mark_fcc_used` is the central hook every "this FCC
+value escapes" path calls.
+
 ## What the optimizer does not do yet
 
 The current optimizer is still intentionally local. It does not yet implement:
@@ -350,5 +418,6 @@ The current optimizer is still intentionally local. It does not yet implement:
 - backend-specific peephole cleanup
 - runtime dead stripping
 - register allocation
+- elimination of the `adrp/add/stur` instruction triple at the FCC assignment site when the wrapper is stubbed (the stub address still gets loaded and stored even though both are dead)
 
 Those remain roadmap items for later optimization work.

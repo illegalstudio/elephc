@@ -53,6 +53,10 @@ pub(super) fn discover_expr(
             discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
             discover_expr(default, base_dir, loaded_paths, include_chain, state, output)?;
         }
+        ExprKind::Pipe { value, callable } => {
+            discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_expr(callable, base_dir, loaded_paths, include_chain, state, output)?;
+        }
         ExprKind::Assignment { target, value, result_target, prelude, .. } => {
             discover_expr(target, base_dir, loaded_paths, include_chain, state, output)?;
             discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;

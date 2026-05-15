@@ -57,7 +57,12 @@ impl AssignmentExpressionLowerer {
         self.stabilize_assignment_target(target, rhs)
     }
 
-    pub(super) fn bind_value(&mut self, value: Expr) -> Expr {
+    pub(super) fn bind_value(&mut self, target: &Expr, value: Expr) -> Expr {
+        if can_replay_assignment_target(&value)
+            && !assignment_value_reads_target_container(target, &value)
+        {
+            return value;
+        }
         self.bind_temp(value)
     }
 
@@ -200,6 +205,13 @@ pub(super) fn assignment_value_may_mutate_target_dependency(
     !dependencies.is_empty() && expr_may_write_dependency(value, &dependencies)
 }
 
+pub(super) fn assignment_value_reads_target_container(target: &Expr, value: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::ArrayAccess { array, .. } => expr_contains_equivalent(value, array),
+        _ => false,
+    }
+}
+
 fn target_part_reads_mutated_dependency(target: &Expr, value: &Expr) -> bool {
     assignment_value_may_mutate_target_dependency(target, value)
 }
@@ -241,6 +253,10 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::ShortTernary { value, default } => {
             collect_assignment_target_dependencies(value, dependencies);
             collect_assignment_target_dependencies(default, dependencies);
+        }
+        ExprKind::Pipe { value, callable } => {
+            collect_assignment_target_dependencies(value, dependencies);
+            collect_assignment_target_dependencies(callable, dependencies);
         }
         ExprKind::Ternary {
             condition,
@@ -362,6 +378,10 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         | ExprKind::ShortTernary { value, default } => {
             expr_may_write_dependency(value, dependencies)
                 || expr_may_write_dependency(default, dependencies)
+        }
+        ExprKind::Pipe { value, callable } => {
+            expr_may_write_dependency(value, dependencies)
+                || expr_may_write_dependency(callable, dependencies)
         }
         ExprKind::Ternary {
             condition,
@@ -485,4 +505,141 @@ fn expr_contains_dependency(expr: &Expr, dependencies: &HashSet<String>) -> bool
     let mut found = HashSet::new();
     collect_assignment_target_dependencies(expr, &mut found);
     found.iter().any(|name| dependencies.contains(name))
+}
+
+fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
+    if expr == needle {
+        return true;
+    }
+
+    match &expr.kind {
+        ExprKind::BinaryOp { left, right, .. } => {
+            expr_contains_equivalent(left, needle) || expr_contains_equivalent(right, needle)
+        }
+        ExprKind::InstanceOf { value, target } => {
+            expr_contains_equivalent(value, needle)
+                || instanceof_target_contains_equivalent(target, needle)
+        }
+        ExprKind::Negate(value)
+        | ExprKind::Not(value)
+        | ExprKind::BitNot(value)
+        | ExprKind::Throw(value)
+        | ExprKind::ErrorSuppress(value)
+        | ExprKind::Print(value)
+        | ExprKind::Cast { expr: value, .. }
+        | ExprKind::PtrCast { expr: value, .. }
+        | ExprKind::NamedArg { value, .. }
+        | ExprKind::Spread(value)
+        | ExprKind::YieldFrom(value) => expr_contains_equivalent(value, needle),
+        ExprKind::NullCoalesce { value, default }
+        | ExprKind::ShortTernary { value, default } => {
+            expr_contains_equivalent(value, needle)
+                || expr_contains_equivalent(default, needle)
+        }
+        ExprKind::Pipe { value, callable } => {
+            expr_contains_equivalent(value, needle)
+                || expr_contains_equivalent(callable, needle)
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            expr_contains_equivalent(condition, needle)
+                || expr_contains_equivalent(then_expr, needle)
+                || expr_contains_equivalent(else_expr, needle)
+        }
+        ExprKind::Assignment {
+            target,
+            value,
+            result_target,
+            ..
+        } => {
+            expr_contains_equivalent(target, needle)
+                || expr_contains_equivalent(value, needle)
+                || result_target
+                    .as_deref()
+                    .is_some_and(|target| expr_contains_equivalent(target, needle))
+        }
+        ExprKind::FunctionCall { args, .. }
+        | ExprKind::StaticMethodCall { args, .. }
+        | ExprKind::ClosureCall { args, .. }
+        | ExprKind::NewObject { args, .. }
+        | ExprKind::NewScopedObject { args, .. } => {
+            args.iter().any(|arg| expr_contains_equivalent(arg, needle))
+        }
+        ExprKind::ExprCall { callee, args } => {
+            expr_contains_equivalent(callee, needle)
+                || args.iter().any(|arg| expr_contains_equivalent(arg, needle))
+        }
+        ExprKind::ArrayLiteral(items) => {
+            items.iter().any(|item| expr_contains_equivalent(item, needle))
+        }
+        ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, value)| {
+            expr_contains_equivalent(key, needle)
+                || expr_contains_equivalent(value, needle)
+        }),
+        ExprKind::ArrayAccess { array, index } => {
+            expr_contains_equivalent(array, needle)
+                || expr_contains_equivalent(index, needle)
+        }
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            expr_contains_equivalent(subject, needle)
+                || arms.iter().any(|(patterns, arm_value)| {
+                    patterns
+                        .iter()
+                        .any(|pattern| expr_contains_equivalent(pattern, needle))
+                        || expr_contains_equivalent(arm_value, needle)
+                })
+                || default
+                    .as_deref()
+                    .is_some_and(|default| expr_contains_equivalent(default, needle))
+        }
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::NullsafePropertyAccess { object, .. } => {
+            expr_contains_equivalent(object, needle)
+        }
+        ExprKind::MethodCall { object, args, .. }
+        | ExprKind::NullsafeMethodCall { object, args, .. } => {
+            expr_contains_equivalent(object, needle)
+                || args.iter().any(|arg| expr_contains_equivalent(arg, needle))
+        }
+        ExprKind::BufferNew { len, .. } => expr_contains_equivalent(len, needle),
+        ExprKind::Yield { key, value } => {
+            key.as_deref()
+                .is_some_and(|key| expr_contains_equivalent(key, needle))
+                || value
+                    .as_deref()
+                    .is_some_and(|value| expr_contains_equivalent(value, needle))
+        }
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::Variable(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::PreIncrement(_)
+        | ExprKind::PostIncrement(_)
+        | ExprKind::PreDecrement(_)
+        | ExprKind::PostDecrement(_)
+        | ExprKind::Closure { .. }
+        | ExprKind::ConstRef(_)
+        | ExprKind::StaticPropertyAccess { .. }
+        | ExprKind::FirstClassCallable(_)
+        | ExprKind::This
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::MagicConstant(_) => false,
+    }
+}
+
+fn instanceof_target_contains_equivalent(target: &InstanceOfTarget, needle: &Expr) -> bool {
+    match target {
+        InstanceOfTarget::Name(_) => false,
+        InstanceOfTarget::Expr(expr) => expr_contains_equivalent(expr, needle),
+    }
 }

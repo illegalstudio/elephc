@@ -25,6 +25,30 @@ fn test_error_function_exists_wrong_args() {
     );
 }
 
+#[test]
+fn test_error_class_exists_requires_literal_name() {
+    expect_error(
+        r#"<?php $name = "DateTime"; class_exists($name);"#,
+        "class_exists() first argument must be a string literal in AOT mode",
+    );
+}
+
+#[test]
+fn test_error_class_exists_requires_literal_autoload_flag() {
+    expect_error(
+        r#"<?php $autoload = false; class_exists("DateTime", $autoload);"#,
+        "class_exists() autoload argument must be a literal bool or int in AOT mode",
+    );
+}
+
+#[test]
+fn test_error_class_alias_rejects_runtime_call_shape() {
+    expect_error(
+        r#"<?php class Original {} $alias = "Alias"; class_alias("Original", $alias);"#,
+        "class_alias() is only supported as a top-level statement with literal class names",
+    );
+}
+
 // --- Closure / arrow function errors ---
 
 #[test]
@@ -151,5 +175,64 @@ $fn = function() use ($a, $b, $c, $d): void {};
 $fiber = new Fiber($fn);
 "#,
         "Fiber capture $d exceeds the 7 integer-slot Fiber capture limit",
+    );
+}
+
+// --- PHP 8.5 pipe operator ---
+
+#[test]
+fn test_error_pipe_rhs_int_not_callable() {
+    expect_error(
+        "<?php $r = 5 |> 42;",
+        "must be a callable",
+    );
+}
+
+#[test]
+fn test_error_pipe_rhs_string_literal_not_callable() {
+    // elephc treats a bare string literal as Str, not Callable, so this rejects at compile time.
+    expect_error(
+        "<?php $r = 5 |> \"strlen\";",
+        "must be a callable",
+    );
+}
+
+#[test]
+fn test_error_pipe_rejects_by_ref_parameter() {
+    expect_error(
+        "<?php function bump(int &$n): int { return ++$n; } $r = 1 |> bump(...);",
+        "by-reference parameters",
+    );
+}
+
+#[test]
+fn test_error_pipe_target_requires_more_than_one_required_arg() {
+    expect_error(
+        "<?php function pair(int $a, int $b): int { return $a + $b; } $r = 1 |> pair(...);",
+        "expects 2 arguments, got 1",
+    );
+}
+
+#[test]
+fn test_error_pipe_closure_literal_requires_two_args() {
+    expect_error(
+        "<?php $r = 1 |> (function(int $a, int $b): int { return $a + $b; });",
+        "pipe target expects 2 arguments, got 1",
+    );
+}
+
+#[test]
+fn test_error_pipe_closure_literal_rejects_by_ref_parameter() {
+    expect_error(
+        "<?php $r = 1 |> (function(&$n): int { return $n; });",
+        "Pipe operator does not support by-reference parameters",
+    );
+}
+
+#[test]
+fn test_error_pipe_closure_literal_typed_parameter_mismatch() {
+    expect_error(
+        r#"<?php $r = "nope" |> (function(int $n): int { $copy = $n; return $copy; });"#,
+        "pipe target parameter $n expects Int, got Str",
     );
 }

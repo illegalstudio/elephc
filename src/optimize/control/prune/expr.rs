@@ -39,6 +39,10 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             value: Box::new(prune_expr(*value)),
             default: Box::new(prune_expr(*default)),
         },
+        ExprKind::Pipe { value, callable } => ExprKind::Pipe {
+            value: Box::new(prune_expr(*value)),
+            callable: Box::new(prune_expr(*callable)),
+        },
         ExprKind::Assignment {
             target,
             value,

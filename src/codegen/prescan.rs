@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Platform;
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
+use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::{PhpType, TypeEnv};
 
 use super::context::{Context, TRY_HANDLER_SLOT_SIZE};
@@ -80,6 +81,28 @@ pub(super) fn collect_constants(
         "STDERR".to_string(),
         (ExprKind::IntLiteral(2), PhpType::stream_resource()),
     );
+    constants.insert(
+        "LOCK_SH".to_string(),
+        (ExprKind::IntLiteral(1), PhpType::Int),
+    );
+    constants.insert(
+        "LOCK_EX".to_string(),
+        (ExprKind::IntLiteral(2), PhpType::Int),
+    );
+    constants.insert(
+        "LOCK_UN".to_string(),
+        (ExprKind::IntLiteral(3), PhpType::Int),
+    );
+    constants.insert(
+        "LOCK_NB".to_string(),
+        (ExprKind::IntLiteral(4), PhpType::Int),
+    );
+    for (name, value) in JSON_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
     for stmt in program {
         match &stmt.kind {
             StmtKind::ConstDecl { name, value } => {

@@ -266,6 +266,15 @@ fn collect_assignment_expr_vars(expr: &Expr, ctx: &mut Context, sig: &FunctionSi
             collect_assignment_expr_vars(value, ctx, sig);
             collect_assignment_expr_vars(default, ctx, sig);
         }
+        ExprKind::Pipe { value, callable } => {
+            collect_assignment_expr_vars(value, ctx, sig);
+            collect_assignment_expr_vars(callable, ctx, sig);
+            let temp_name = crate::codegen::expr::calls::pipe_value_temp_name(expr.span);
+            if !ctx.variables.contains_key(&temp_name) {
+                let static_ty = infer_local_type(value, sig, Some(ctx));
+                ctx.alloc_var_with_static_type(&temp_name, static_ty.codegen_repr(), static_ty);
+            }
+        }
         ExprKind::Ternary {
             condition,
             then_expr,

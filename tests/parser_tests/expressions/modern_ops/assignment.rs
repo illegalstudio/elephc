@@ -67,8 +67,10 @@ fn test_non_local_assignment_expression_parses_array_target() {
     match &stmts[0].kind {
         StmtKind::Echo(expr) => match &expr.kind {
             ExprKind::Assignment { target, value, prelude, .. } => {
-                assert_eq!(prelude.len(), 1);
-                assert!(matches!(value.kind, ExprKind::Variable(_)));
+                // Literal RHS is replayable, so no prelude bind is emitted
+                // and the value field keeps the literal directly.
+                assert!(prelude.is_empty());
+                assert!(matches!(value.kind, ExprKind::IntLiteral(2)));
                 match &target.kind {
                     ExprKind::ArrayAccess { array, index } => {
                         assert!(matches!(array.kind, ExprKind::Variable(ref name) if name == "items"));
@@ -76,6 +78,21 @@ fn test_non_local_assignment_expression_parses_array_target() {
                     }
                     other => panic!("expected array target, got {:?}", other),
                 }
+            }
+            other => panic!("expected assignment expression, got {:?}", other),
+        },
+        other => panic!("expected Echo, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_non_local_assignment_expression_snapshots_rhs_container() {
+    let stmts = parse_source("<?php echo ($items[0] = $items);");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::Assignment { value, prelude, .. } => {
+                assert_eq!(prelude.len(), 1);
+                assert!(matches!(value.kind, ExprKind::Variable(_)));
             }
             other => panic!("expected assignment expression, got {:?}", other),
         },
@@ -226,4 +243,3 @@ fn test_null_coalesce_assignment_expression_stabilizes_computed_mutated_index() 
         other => panic!("expected Echo, got {:?}", other),
     }
 }
-

@@ -159,10 +159,14 @@ The CPU executes instructions sequentially unless a **branch** changes the flow:
 | `b.hs label` | Branch if higher or same (unsigned) | Heap / pointer upper-bound checks |
 | `b.hi label` | Branch if higher (unsigned) | Unsigned range checks |
 | `b.ls label` | Branch if lower or same (unsigned) | Unsigned range checks |
+| `b.cs label` | Branch if carry set | Flag-setting arithmetic and unsigned carry checks |
 | `cbz x0, label` | Branch if x0 is zero | `if` conditions (falsy check) |
 | `cbnz x0, label` | Branch if x0 is not zero | Loop conditions |
+| `tbnz x0, #bit, label` | Test bit and branch if non-zero | Runtime flag/tag checks |
 | `bl label` | Branch with link (function call) | Saves return address in x30 |
 | `blr xN` | Branch with link to register (indirect call) | Call function at address in register (used for closures) |
+| `br xN` | Branch to register | Tail jumps / runtime dispatch without saving a return address |
+| `brk #0` | Breakpoint trap | Runtime guard failures and hard traps |
 | `ret` | Return from function | Jumps to address in x30 |
 
 ### How an `if` becomes assembly

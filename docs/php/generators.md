@@ -273,7 +273,7 @@ echo $g->current();           // "gamma"
 
 `foreach` accepts any object that implements the built-in `Iterator`
 interface (`current`, `key`, `next`, `valid`, `rewind`) or
-`IteratorAggregate` (`getIterator(): Iterator`). Generators are one
+`IteratorAggregate` (`getIterator(): Traversable`). Generators are one
 such producer; user classes can implement either protocol:
 
 ```php

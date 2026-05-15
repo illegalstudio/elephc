@@ -24,10 +24,50 @@ mod main_emission;
 pub mod platform;
 mod prescan;
 mod program_usage;
+mod reflection;
 mod runtime;
 mod stmt;
 
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+
+thread_local! {
+    /// Number of `spl_autoload_register` closure rules the autoload pass
+    /// extracted at compile time. Set via [`set_autoload_rule_count`]
+    /// before `generate` is called; read by `spl_autoload_functions()`
+    /// codegen to size the introspection array. Thread-local so
+    /// parallel test runs don't interfere.
+    static AUTOLOAD_RULE_COUNT: Cell<usize> = const { Cell::new(0) };
+    static DECLARED_CLASS_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static DECLARED_INTERFACE_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static DECLARED_TRAIT_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+pub fn set_autoload_rule_count(n: usize) {
+    AUTOLOAD_RULE_COUNT.with(|c| c.set(n));
+}
+
+pub fn autoload_rule_count() -> usize {
+    AUTOLOAD_RULE_COUNT.with(|c| c.get())
+}
+
+fn set_declared_name_order(classes: Vec<String>, interfaces: Vec<String>, traits: Vec<String>) {
+    DECLARED_CLASS_NAMES.with(|names| *names.borrow_mut() = classes);
+    DECLARED_INTERFACE_NAMES.with(|names| *names.borrow_mut() = interfaces);
+    DECLARED_TRAIT_NAMES.with(|names| *names.borrow_mut() = traits);
+}
+
+pub(crate) fn declared_class_names() -> Vec<String> {
+    DECLARED_CLASS_NAMES.with(|names| names.borrow().clone())
+}
+
+pub(crate) fn declared_interface_names() -> Vec<String> {
+    DECLARED_INTERFACE_NAMES.with(|names| names.borrow().clone())
+}
+
+pub(crate) fn declared_trait_names() -> Vec<String> {
+    DECLARED_TRAIT_NAMES.with(|names| names.borrow().clone())
+}
 
 use crate::parser::ast::{Program, StmtKind};
 use crate::types::{
@@ -81,6 +121,13 @@ pub fn generate_user_asm(
 
     // Pre-scan for static variable declarations across all functions
     let all_static_vars = collect_static_vars(program, global_env);
+    let declared_trait_order = collect_declared_trait_names(program);
+    let declared_traits: HashSet<String> = declared_trait_order.iter().cloned().collect();
+    set_declared_name_order(
+        collect_declared_class_names(program, classes),
+        collect_declared_interface_names(program, interfaces),
+        declared_trait_order,
+    );
 
     // Emit user-defined functions before _main (skip extern functions)
     let function_variant_groups = function_variants::collect_function_variant_groups(program);
@@ -107,6 +154,7 @@ pub fn generate_user_asm(
             &function_variant_group_names,
             &global_constants, &all_global_var_names, &all_static_vars,
             interfaces,
+            &declared_traits,
             Some(classes),
             packed_classes,
             extern_functions,
@@ -116,6 +164,18 @@ pub fn generate_user_asm(
     }
 
     // Emit flattened class methods in class-id order for deterministic output.
+    // The x86_64 path filters classes to those visibly used by the program so
+    // that the test asm stays compact; the filter must include every parent
+    // and implemented interface in the inheritance chain because vtables and
+    // interface_impl tables reference the inherited method symbols (e.g.
+    // JsonException's vtable points at _method_Exception_getmessage).
+    //
+    // The builtin throwable hierarchy is always included unconditionally
+    // because runtime helpers (e.g. __rt_json_throw_error) can raise
+    // JsonException objects whose class_id lands in the user-asm tables
+    // (parent_ids, vtable_ptrs, interface_ptrs). Without those slots
+    // populated, the catch-time inheritance walk in __rt_exception_matches
+    // sees a -1 parent for the thrown class and reports no match.
     let emitted_class_names = if target.arch == platform::Arch::X86_64
         && !program_has_dynamic_instanceof(program)
     {
@@ -142,6 +202,7 @@ pub fn generate_user_asm(
             &function_variant_group_names,
             &global_constants,
             interfaces,
+            &declared_traits,
             classes,
             packed_classes,
             extern_functions,
@@ -165,6 +226,7 @@ pub fn generate_user_asm(
         functions,
         &function_variant_group_names,
         interfaces,
+        &declared_traits,
         classes,
         enums,
         packed_classes,
@@ -180,6 +242,102 @@ pub fn generate_user_asm(
     )
 }
 
+fn collect_declared_class_names(
+    program: &Program,
+    classes: &HashMap<String, ClassInfo>,
+) -> Vec<String> {
+    let mut user_names = Vec::new();
+    collect_program_declared_names(
+        program,
+        classes,
+        &mut HashSet::new(),
+        &mut user_names,
+        |stmt| match &stmt.kind {
+            StmtKind::ClassDecl { name, .. } | StmtKind::EnumDecl { name, .. } => {
+                Some(name.as_str())
+            }
+            _ => None,
+        },
+    );
+    prepend_internal_names(classes.keys(), &user_names)
+}
+
+fn collect_declared_interface_names(
+    program: &Program,
+    interfaces: &HashMap<String, InterfaceInfo>,
+) -> Vec<String> {
+    let mut user_names = Vec::new();
+    collect_program_declared_names(
+        program,
+        interfaces,
+        &mut HashSet::new(),
+        &mut user_names,
+        |stmt| match &stmt.kind {
+            StmtKind::InterfaceDecl { name, .. } => Some(name.as_str()),
+            _ => None,
+        },
+    );
+    prepend_internal_names(interfaces.keys(), &user_names)
+}
+
+fn collect_declared_trait_names(program: &Program) -> Vec<String> {
+    let mut names = Vec::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::TraitDecl { name, .. } => {
+                names.push(name.clone());
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                names.extend(collect_declared_trait_names(body));
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
+fn collect_program_declared_names<T>(
+    program: &Program,
+    known: &HashMap<String, T>,
+    seen: &mut HashSet<String>,
+    out: &mut Vec<String>,
+    pick: impl Copy + Fn(&crate::parser::ast::Stmt) -> Option<&str>,
+) {
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::NamespaceBlock { body, .. } => {
+                collect_program_declared_names(body, known, seen, out, pick);
+            }
+            _ => {
+                let Some(name) = pick(stmt) else {
+                    continue;
+                };
+                let key = crate::names::php_symbol_key(name);
+                if known.contains_key(name) && seen.insert(key) {
+                    out.push(name.to_string());
+                }
+            }
+        }
+    }
+}
+
+fn prepend_internal_names<'a>(
+    known_names: impl Iterator<Item = &'a String>,
+    user_names: &[String],
+) -> Vec<String> {
+    let user_keys: HashSet<String> = user_names
+        .iter()
+        .map(|name| crate::names::php_symbol_key(name))
+        .collect();
+    let mut names: Vec<String> = known_names
+        .filter(|name| !user_keys.contains(&crate::names::php_symbol_key(name)))
+        .cloned()
+        .collect();
+    names.sort();
+    names.extend(user_names.iter().cloned());
+    names
+}
+
 fn collect_x86_emitted_class_names(
     program: &Program,
     classes: &HashMap<String, ClassInfo>,
@@ -187,6 +345,27 @@ fn collect_x86_emitted_class_names(
     let mut names = collect_required_class_names(program);
     if names.contains("Fiber") {
         names.insert("FiberError".to_string());
+    }
+    // Seed the throwable hierarchy unconditionally: json_encode /
+    // json_decode / json_validate can throw JsonException at runtime
+    // through JSON_THROW_ON_ERROR even when user code only catches a
+    // wider type (e.g. `catch (Exception $e)`). Without these
+    // descriptors in the user-asm tables, the catch-time inheritance
+    // walk in __rt_exception_matches sees a -1 parent for the thrown
+    // class and reports no match.
+    for builtin in ["Throwable", "Exception", "RuntimeException", "JsonException"] {
+        names.insert(builtin.to_string());
+    }
+    for builtin in [
+        "ReflectionAttribute",
+        "ReflectionClass",
+        "ReflectionMethod",
+        "ReflectionProperty",
+    ] {
+        names.insert(builtin.to_string());
+    }
+    for factory in reflection::collect_attribute_factories(classes) {
+        names.insert(factory.class_name);
     }
     expand_emitted_class_dependencies(&mut names, classes);
     names

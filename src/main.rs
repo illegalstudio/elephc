@@ -8,6 +8,7 @@
 //! Key details:
 //! - Keep startup thin so CLI validation and pipeline behavior stay in dedicated modules.
 
+mod autoload;
 mod cli;
 mod codegen;
 mod conditional;

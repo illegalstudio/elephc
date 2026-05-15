@@ -32,6 +32,8 @@ This page explains where every value lives in memory at runtime.
 │  (heap state, counters,      │  _heap_off, _heap_free_list,
 │   globals, static storage)   │  _heap_small_bins, _gc_allocs/_frees/_live/_peak,
 │                              │  _gc_collecting/_gc_release_suppressed,
+│                              │  _json_last_error, _json_active_*,
+│                              │  _json_validate_*, _json_decode_assoc,
 │                              │  _fiber_current, _fiber_main_saved_*,
 │                              │  _generator_class_id,
 │                              │  _include_once_*, _fn_variant_active_*, ...
@@ -447,11 +449,16 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_php_uname_mode_len_msg`, `_php_uname_mode_value_msg` — fatal `php_uname()` diagnostics for invalid mode arguments
 - `_pcre_space`, `_pcre_digit`, `_pcre_word`, `_pcre_nspace`, `_pcre_ndigit`, `_pcre_nword` — regex shorthand replacement strings used by the POSIX regex bridge
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings (4, 5, and 4 bytes) used by `json_encode` for boolean and null values
+- `_json_int_max_str`, `_json_int_min_str` — decimal threshold strings used by `JSON_BIGINT_AS_STRING`
+- `_json_err_msg_0` ... `_json_err_msg_10`, `_json_err_msg_table`, `_json_err_msg_count` — `json_last_error_msg()` message lookup data
 - `_day_names` — 84-byte table (7 entries x 12 bytes each) with day names, lengths, and padding. Used by `date()` for day-of-week formatting
 - `_month_names` — 144-byte table (12 entries x 12 bytes each) with month names, lengths, and padding. Used by `date()` for month formatting
 - `_instanceof_target_count`, `_instanceof_target_entries`, `_instanceof_name_*` — case-insensitive class/interface name metadata for dynamic `instanceof` string targets, including leading-backslash aliases
 - `_generator_class_id` — per-program class id used to recognize Generator frames during object deep-free
+- `_json_exception_class_id`, `_stdclass_class_id` — per-program class ids used by JSON throw paths and stdClass dynamic-property helpers
 - `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal descriptors used by object deep-free and cycle collection
+- `_class_json_desc_ptrs`, `_class_json_desc_<id>`, `_class_json_pname_<id>_<slot>` — per-class JSON descriptors used by object encoding and JsonSerializable dispatch
+- `_class_attribute_count`, `_class_attribute_ptrs`, `_class_attributes_<id>` — per-class PHP attribute metadata emitted from `ClassInfo`; current helper and Reflection APIs materialize supported static lookups during codegen instead of performing dynamic runtime class/member lookup
 - `_class_vtable_ptrs`, `_class_vtable_<id>` — per-class virtual tables used for inherited instance-method dispatch
 - `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used for late static binding
 - enum-case `.comm` symbols produced via `enum_case_symbol(...)` — one 8-byte singleton storage slot per declared enum case
@@ -513,6 +520,10 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 | String buffer | 64KB | Resets each statement — effectively unlimited |
 | Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
 | Heap metadata | `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_gc_*` flags/counters = 104 bytes total | Fixed-size bookkeeping, not user-visible |
+| Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value` = 24 bytes total | Fixed-size setjmp/longjmp handler and thrown-value bookkeeping |
+| Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame` = 32 bytes total | Fixed-size current-fiber and main-frame resume bookkeeping |
+| Runtime diagnostics | `_rt_diag_suppression` = 8 bytes total | Fixed-size warning-suppression depth used by `@` and exception unwinding |
+| JSON state | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_depth_limit`, `_json_validate_idx`, `_json_validate_ptr`, `_json_validate_len`, `_json_decode_assoc` = 64 bytes total | Fixed-size bookkeeping for JSON calls |
 | CLI globals | `_global_argc`, `_global_argv` = 16 bytes total | Fixed-size bookkeeping |
 | User globals | 16 bytes per `global $var` slot | Grows with number of referenced globals |
 | Static vars | 24 bytes per `static $var` (`16 + 8 init flag`) | Grows with number of declared static locals |

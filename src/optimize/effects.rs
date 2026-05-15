@@ -197,6 +197,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         }
         ExprKind::Throw(inner) => expr_effect(inner).with_side_effects().with_may_throw(),
         ExprKind::NullCoalesce { value, default } => expr_effect(value).combine(expr_effect(default)),
+        ExprKind::Pipe { value, callable } => expr_effect(value)
+            .combine(expr_effect(callable))
+            .combine(expr_call_effect(callable)),
         ExprKind::Assignment {
             target,
             value,

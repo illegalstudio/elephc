@@ -140,6 +140,10 @@ impl Checker {
                 Self::expr_contains_method_call(value)
                     || Self::expr_contains_method_call(default)
             }
+            ExprKind::Pipe { value, callable } => {
+                Self::expr_contains_method_call(value)
+                    || Self::expr_contains_method_call(callable)
+            }
             ExprKind::Assignment {
                 target,
                 value,

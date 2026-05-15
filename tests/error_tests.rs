@@ -182,6 +182,8 @@ mod array_builtins;
 mod callables;
 #[path = "error_tests/never.rs"]
 mod never;
+#[path = "error_tests/spl_builtins.rs"]
+mod spl_builtins;
 #[path = "error_tests/misc.rs"]
 mod misc;
 
@@ -247,7 +249,7 @@ class Bad implements Iterator {
 fn test_error_generator_cannot_be_redeclared() {
     expect_error(
         "<?php class Generator { public function current(): mixed { return null; } }",
-        "Cannot redeclare built-in interface: Generator",
+        "Cannot redeclare built-in class: Generator",
     );
 }
 
@@ -255,6 +257,22 @@ fn test_error_generator_cannot_be_redeclared() {
 fn test_error_yield_outside_function() {
     expect_error(
         "<?php yield 1;",
+        "yield can only be used inside a function or method body",
+    );
+}
+
+#[test]
+fn test_error_yield_outside_function_in_pipe_value() {
+    expect_error(
+        "<?php function id($v) { return $v; } $x = (yield 1) |> id(...);",
+        "yield can only be used inside a function or method body",
+    );
+}
+
+#[test]
+fn test_error_yield_outside_function_in_pipe_callable() {
+    expect_error(
+        "<?php $x = 1 |> (yield 2);",
         "yield can only be used inside a function or method body",
     );
 }

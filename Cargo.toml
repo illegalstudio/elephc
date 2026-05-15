@@ -1,6 +1,6 @@
 [package]
 name = "elephc"
-version = "0.21.3"
+version = "0.21.8"
 edition = "2021"
 description = "A PHP-to-native compiler targeting macOS ARM64"
 license = "MIT"
@@ -13,3 +13,6 @@ categories = ["compilers", "command-line-utilities"]
 [[bin]]
 name = "elephc"
 path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"

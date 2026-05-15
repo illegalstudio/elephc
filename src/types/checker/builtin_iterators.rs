@@ -1,18 +1,18 @@
 //! Purpose:
-//! Injects PHP iterator interfaces and helper methods into checker metadata.
-//! Provides builtin iterable contracts for classes before trait and interface validation run.
+//! Injects PHP generator class metadata into the checker.
+//! Provides method stubs for generator values after iterator interfaces have been registered.
 //!
 //! Called from:
-//! - `crate::types::checker::schema`
+//! - `crate::types::checker::driver`
 //!
 //! Key details:
-//! - Injected names must obey PHP case-insensitive collision rules and share flattened class metadata.
+//! - The `Generator` class implements the builtin `Iterator` interface injected by the SPL interface module.
 
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
-use crate::names::php_symbol_key;
 use crate::names::Name;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{
     ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind, TypeExpr, Visibility,
 };
@@ -26,52 +26,19 @@ pub(crate) fn inject_builtin_iterators(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
 ) -> Result<(), CompileError> {
-    for builtin_name in ["Iterator", "IteratorAggregate", "Generator"] {
-        let builtin_key = php_symbol_key(builtin_name);
-        if interface_map
+    let generator_key = php_symbol_key("Generator");
+    if interface_map
+        .keys()
+        .any(|name| php_symbol_key(name) == generator_key)
+        || class_map
             .keys()
-            .any(|name| php_symbol_key(name) == builtin_key)
-            || class_map
-                .keys()
-                .any(|name| php_symbol_key(name) == builtin_key)
-        {
-            return Err(CompileError::new(
-                crate::span::Span::dummy(),
-                &format!("Cannot redeclare built-in interface: {}", builtin_name),
-            ));
-        }
+            .any(|name| php_symbol_key(name) == generator_key)
+    {
+        return Err(CompileError::new(
+            crate::span::Span::dummy(),
+            "Cannot redeclare built-in class: Generator",
+        ));
     }
-
-    interface_map.insert(
-        "Iterator".to_string(),
-        InterfaceDeclInfo {
-            name: "Iterator".to_string(),
-            extends: Vec::new(),
-            methods: vec![
-                builtin_iterator_method("current", TypeExpr::Named(Name::unqualified("mixed"))),
-                builtin_iterator_method("key", TypeExpr::Named(Name::unqualified("mixed"))),
-                builtin_iterator_method("next", TypeExpr::Void),
-                builtin_iterator_method("valid", TypeExpr::Bool),
-                builtin_iterator_method("rewind", TypeExpr::Void),
-            ],
-            span: crate::span::Span::dummy(),
-            constants: Vec::new(),
-        },
-    );
-
-    interface_map.insert(
-        "IteratorAggregate".to_string(),
-        InterfaceDeclInfo {
-            name: "IteratorAggregate".to_string(),
-            extends: Vec::new(),
-            methods: vec![builtin_iterator_method(
-                "getIterator",
-                TypeExpr::Named(Name::unqualified("Iterator")),
-            )],
-            span: crate::span::Span::dummy(),
-            constants: Vec::new(),
-        },
-    );
 
     class_map.insert(
         "Generator".to_string(),
@@ -99,23 +66,6 @@ pub(crate) fn inject_builtin_iterators(
     );
 
     Ok(())
-}
-
-fn builtin_iterator_method(name: &str, return_type: TypeExpr) -> ClassMethod {
-    ClassMethod {
-        name: name.to_string(),
-        visibility: Visibility::Public,
-        is_static: false,
-        is_abstract: true,
-        is_final: false,
-        has_body: false,
-        params: Vec::new(),
-        variadic: None,
-        return_type: Some(return_type),
-        body: Vec::new(),
-        span: crate::span::Span::dummy(),
-        attributes: Vec::new(),
-    }
 }
 
 /// A stub method whose body is `return null;`. Used for the `Generator`

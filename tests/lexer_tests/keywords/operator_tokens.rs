@@ -80,3 +80,48 @@ fn test_question_question_assign_token() {
         ]
     );
 }
+
+// --- PHP 8.5 pipe operator ---
+
+#[test]
+fn test_pipe_arrow_token() {
+    let t = tokens("<?php $x |> $y;");
+    assert!(t.contains(&Token::PipeArrow));
+}
+
+#[test]
+fn test_pipe_arrow_does_not_shadow_bitwise_pipe() {
+    let t = tokens("<?php $x | $y;");
+    assert!(t.contains(&Token::Pipe));
+    assert!(!t.contains(&Token::PipeArrow));
+}
+
+#[test]
+fn test_pipe_arrow_does_not_shadow_pipe_assign() {
+    let t = tokens("<?php $x |= $y;");
+    assert!(t.contains(&Token::PipeAssign));
+    assert!(!t.contains(&Token::PipeArrow));
+}
+
+#[test]
+fn test_pipe_arrow_does_not_shadow_or_or() {
+    let t = tokens("<?php $x || $y;");
+    assert!(t.contains(&Token::OrOr));
+    assert!(!t.contains(&Token::PipeArrow));
+}
+
+#[test]
+fn test_pipe_arrow_without_spaces() {
+    let t = tokens("<?php $x|>$y;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Variable("x".into()),
+            Token::PipeArrow,
+            Token::Variable("y".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}

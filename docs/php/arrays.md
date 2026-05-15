@@ -145,7 +145,7 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 
 | Function | Signature | Description |
 |---|---|---|
-| `count()` | `count($arr): int` | Number of elements |
+| `count()` | `count($arr_or_countable): int` | Number of elements; on objects implementing `Countable`, dispatches to `count()` |
 | `array_push()` | `array_push($arr, $val): void` | Add element to end |
 | `array_pop()` | `array_pop($arr): mixed` | Remove and return last element |
 | `in_array()` | `in_array($needle, $arr): int` | Search for value (0/1) |
@@ -154,7 +154,7 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |
 | `array_search()` | `array_search($needle, $arr): int\|string\|false` | Search for value, returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found |
 | `array_slice()` | `array_slice($arr, $offset [, $length]): array` | Extract a slice |
-| `array_splice()` | `array_splice($arr, $offset [, $length]): array` | Remove/replace part |
+| `array_splice()` | `array_splice($arr, $offset [, $length]): array` | Remove a slice in place and return the removed elements |
 | `array_chunk()` | `array_chunk($arr, $size): array` | Split into chunks |
 | `array_merge()` | `array_merge($arr1, $arr2): array` | Merge two arrays |
 | `array_combine()` | `array_combine($keys, $values): array` | Create array from keys/values |

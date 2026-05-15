@@ -9,7 +9,7 @@
 //! - Return types and diagnostics must stay aligned with `crate::types::signatures` and builtin codegen emitters.
 
 use crate::errors::CompileError;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::common::{ensure_stream_resource, BuiltinResult};
@@ -146,6 +146,65 @@ pub(super) fn check_builtin(
             ensure_stream_resource(checker, name, &args[0], env)?;
             Ok(Some(PhpType::Bool))
         }
+        "fgetc" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "fgetc() takes exactly 1 argument"));
+            }
+            ensure_stream_resource(checker, name, &args[0], env)?;
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Str,
+                PhpType::Bool,
+            ])))
+        }
+        "fpassthru" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "fpassthru() takes exactly 1 argument",
+                ));
+            }
+            ensure_stream_resource(checker, name, &args[0], env)?;
+            Ok(Some(PhpType::Int))
+        }
+        "flock" => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(CompileError::new(span, "flock() takes 2 or 3 arguments"));
+            }
+            ensure_stream_resource(checker, name, &args[0], env)?;
+            let operation_ty = checker.infer_type(&args[1], env)?;
+            if operation_ty != PhpType::Int {
+                return Err(CompileError::new(
+                    args[1].span,
+                    "flock() operation must be int",
+                ));
+            }
+            if args.len() == 3 && !matches!(args[2].kind, ExprKind::Variable(_)) {
+                return Err(CompileError::new(
+                    args[2].span,
+                    "flock() parameter $would_block must be passed a variable",
+                ));
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "tmpfile" => {
+            if !args.is_empty() && !is_empty_static_array_spread(args) {
+                return Err(CompileError::new(span, "tmpfile() takes no arguments"));
+            }
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::stream_resource(),
+                PhpType::Bool,
+            ])))
+        }
         _ => Ok(None),
     }
+}
+
+fn is_empty_static_array_spread(args: &[Expr]) -> bool {
+    let [arg] = args else {
+        return false;
+    };
+    let ExprKind::Spread(inner) = &arg.kind else {
+        return false;
+    };
+    matches!(&inner.kind, ExprKind::ArrayLiteral(items) if items.is_empty())
 }

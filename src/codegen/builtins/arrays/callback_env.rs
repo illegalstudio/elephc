@@ -20,14 +20,17 @@ pub(super) struct CallbackEnv {
     pub(super) array_slot_offset: usize,
 }
 
-pub(super) fn callback_captures(callback: &Expr, ctx: &Context) -> Vec<(String, PhpType)> {
+pub(super) fn callback_captures(callback: &Expr, ctx: &mut Context) -> Vec<(String, PhpType)> {
     match &callback.kind {
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => ctx
             .deferred_closures
             .last()
             .map(|closure| closure.captures.clone())
             .unwrap_or_default(),
-        ExprKind::Variable(name) => ctx.closure_captures.get(name).cloned().unwrap_or_default(),
+        ExprKind::Variable(name) => {
+            ctx.mark_fcc_used(name);
+            ctx.closure_captures.get(name).cloned().unwrap_or_default()
+        }
         _ => Vec::new(),
     }
 }

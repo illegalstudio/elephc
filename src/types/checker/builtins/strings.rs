@@ -29,7 +29,13 @@ pub(super) fn check_builtin(
                 return Err(CompileError::new(span, "strlen() takes exactly 1 argument"));
             }
             let ty = checker.infer_type(&args[0], env)?;
-            if ty != PhpType::Str {
+            // Accept Str, Mixed, and Union types — PHP's strlen() coerces its
+            // argument to a string per the standard PHP type juggling rules
+            // (numbers become their decimal representation, true → "1",
+            // false/null → ""). Mixed inputs flow through __rt_mixed_strlen
+            // at codegen time which reads the cell tag and returns the
+            // length of the coerced representation.
+            if !matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_)) {
                 return Err(CompileError::new(span, "strlen() argument must be string"));
             }
             Ok(Some(PhpType::Int))

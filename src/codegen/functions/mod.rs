@@ -55,6 +55,7 @@ pub fn emit_function(
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
+    traits: &HashSet<String>,
     classes: Option<&HashMap<String, ClassInfo>>,
     packed_classes: &HashMap<String, PackedClassInfo>,
     extern_functions: &HashMap<String, ExternFunctionSig>,
@@ -85,6 +86,7 @@ pub fn emit_function(
         all_global_var_names,
         all_static_vars,
         interfaces,
+        traits,
         classes,
         packed_classes,
         extern_functions,
@@ -105,6 +107,7 @@ pub fn emit_closure(
     function_variant_groups: &HashSet<String>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     interfaces: &HashMap<String, InterfaceInfo>,
+    traits: &HashSet<String>,
     classes: &HashMap<String, ClassInfo>,
     packed_classes: &HashMap<String, PackedClassInfo>,
     extern_functions: &HashMap<String, ExternFunctionSig>,
@@ -142,6 +145,7 @@ pub fn emit_closure(
         &empty_globals,
         &empty_statics,
         interfaces,
+        traits,
         Some((classes, closure_class_name)),
         packed_classes,
         extern_functions,
@@ -162,6 +166,7 @@ pub fn emit_method(
     function_variant_groups: &HashSet<String>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     interfaces: &HashMap<String, InterfaceInfo>,
+    traits: &HashSet<String>,
     classes: &HashMap<String, ClassInfo>,
     packed_classes: &HashMap<String, PackedClassInfo>,
     class_name: &str,
@@ -185,6 +190,7 @@ pub fn emit_method(
         &empty_globals,
         &empty_statics,
         interfaces,
+        traits,
         Some((classes, class_name)),
         packed_classes,
         extern_functions,
@@ -207,6 +213,7 @@ fn emit_function_with_label(
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
+    traits: &HashSet<String>,
     classes: Option<&HashMap<String, ClassInfo>>,
     packed_classes: &HashMap<String, PackedClassInfo>,
     extern_functions: &HashMap<String, ExternFunctionSig>,
@@ -228,6 +235,7 @@ fn emit_function_with_label(
         all_global_var_names,
         all_static_vars,
         interfaces,
+        traits,
         class_ctx,
         packed_classes,
         extern_functions,
@@ -275,6 +283,7 @@ fn emit_function_with_label_and_class(
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
+    traits: &HashSet<String>,
     class_context: Option<(&HashMap<String, ClassInfo>, &str)>,
     packed_classes: &HashMap<String, PackedClassInfo>,
     extern_functions: &HashMap<String, ExternFunctionSig>,
@@ -290,6 +299,7 @@ fn emit_function_with_label_and_class(
     ctx.all_global_var_names = all_global_var_names.clone();
     ctx.all_static_vars = all_static_vars.clone();
     ctx.interfaces = interfaces.clone();
+    ctx.traits = traits.clone();
     ctx.packed_classes = packed_classes.clone();
     ctx.extern_functions = extern_functions.clone();
     ctx.extern_classes = extern_classes.clone();
@@ -424,24 +434,42 @@ fn emit_function_with_label_and_class(
     {
         let closures: Vec<_> = ctx.deferred_closures.drain(..).collect();
         for closure in closures {
-            emit_closure(
-                emitter,
-                data,
-                &closure.label,
-                &closure.sig,
-                &closure.hidden_params,
-                &closure.body,
-                closure.current_class.as_deref(),
-                all_functions,
-                &ctx.function_variant_groups,
-                constants,
-                interfaces,
-                classes,
-                packed_classes,
-                extern_functions,
-                extern_classes,
-                extern_globals,
-            );
+            if closure.needed {
+                emit_closure(
+                    emitter,
+                    data,
+                    &closure.label,
+                    &closure.sig,
+                    &closure.hidden_params,
+                    &closure.body,
+                    closure.current_class.as_deref(),
+                    all_functions,
+                    &ctx.function_variant_groups,
+                    constants,
+                    interfaces,
+                    &ctx.traits,
+                    classes,
+                    packed_classes,
+                    extern_functions,
+                    extern_classes,
+                    extern_globals,
+                );
+            } else {
+                // The FCC value never escapes a short-circuited call, so the
+                // wrapper body is unreachable. Emit a stub that keeps the
+                // symbol resolvable (the FCC assignment still loads its
+                // address) and returns 0 if reached at runtime — a defensive
+                // floor in case the escape analysis ever missed a site.
+                emitter.blank();
+                emitter.comment(&format!("uninvoked FCC wrapper {} (stubbed)", closure.label));
+                emitter.label_global(&closure.label);
+                super::abi::emit_load_int_immediate(
+                    emitter,
+                    super::abi::int_result_reg(emitter),
+                    0,
+                );
+                super::abi::emit_return(emitter);
+            }
         }
         let wrappers: Vec<_> = ctx.deferred_fiber_wrappers.drain(..).collect();
         for wrapper in wrappers {

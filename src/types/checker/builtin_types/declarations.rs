@@ -16,7 +16,8 @@ use crate::names::php_symbol_key;
 use crate::types::traits::FlattenedClass;
 
 use super::exception::{
-    builtin_exception_constructor_method, builtin_exception_get_message_method,
+    builtin_exception_code_property, builtin_exception_constructor_method,
+    builtin_exception_get_code_method, builtin_exception_get_message_method,
     builtin_exception_message_property, builtin_throwable_get_message_method,
 };
 use super::fiber::builtin_fiber_methods;
@@ -45,7 +46,14 @@ pub(crate) fn inject_builtin_throwables(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
 ) -> Result<(), CompileError> {
-    for builtin_name in ["Throwable", "Exception", "Fiber", "FiberError"] {
+    for builtin_name in [
+        "Throwable",
+        "Exception",
+        "RuntimeException",
+        "JsonException",
+        "Fiber",
+        "FiberError",
+    ] {
         let builtin_key = php_symbol_key(builtin_name);
         if interface_map
             .keys()
@@ -80,11 +88,48 @@ pub(crate) fn inject_builtin_throwables(
             is_abstract: false,
             is_final: false,
             is_readonly_class: false,
-            properties: vec![builtin_exception_message_property()],
+            properties: vec![
+                builtin_exception_message_property(),
+                builtin_exception_code_property(),
+            ],
             methods: vec![
                 builtin_exception_constructor_method(),
                 builtin_exception_get_message_method(),
+                builtin_exception_get_code_method(),
             ],
+            attributes: Vec::new(),
+            constants: Vec::new(),
+        },
+    );
+    // RuntimeException and JsonException inherit message + code + constructor
+    // + getMessage + getCode from Exception via the standard inheritance
+    // machinery; they don't need to redeclare anything locally.
+    class_map.insert(
+        "RuntimeException".to_string(),
+        FlattenedClass {
+            name: "RuntimeException".to_string(),
+            extends: Some("Exception".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+        },
+    );
+    class_map.insert(
+        "JsonException".to_string(),
+        FlattenedClass {
+            name: "JsonException".to_string(),
+            extends: Some("RuntimeException".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
             attributes: Vec::new(),
             constants: Vec::new(),
         },

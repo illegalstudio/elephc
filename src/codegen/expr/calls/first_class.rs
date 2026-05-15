@@ -97,6 +97,33 @@ fn capture_for_static_target(ctx: &Context) -> Option<(String, PhpType)> {
         .map(|var| ("this".to_string(), var.ty.clone()))
 }
 
+/// Builds the codegen diagnostic shown when first-class callable creation
+/// rejects a target. Pinpoints the specific limitation (complex method
+/// receiver, missing late-static binding context, etc.) so the developer
+/// understands which form is unsupported instead of seeing a generic warning.
+fn unsupported_fcc_diagnostic(target: &CallableTarget) -> String {
+    match target {
+        CallableTarget::Method { object, method } => match &object.kind {
+            ExprKind::Variable(_) | ExprKind::This => format!(
+                "WARNING: unsupported first-class callable target for method ->{}() (internal: capture failed)",
+                method
+            ),
+            _ => format!(
+                "WARNING: first-class callable creation for ->{}() requires a simple receiver (\\$variable or \\$this); complex receiver expressions are not captured yet",
+                method
+            ),
+        },
+        CallableTarget::StaticMethod { method, .. } => format!(
+            "WARNING: unsupported first-class callable target for static method ::{}() (late-static binding requires \\$this or __elephc_called_class_id in the enclosing frame)",
+            method
+        ),
+        CallableTarget::Function(name) => format!(
+            "WARNING: unsupported first-class callable target for function {}()",
+            name.as_str()
+        ),
+    }
+}
+
 fn capture_for_method_receiver(object: &Expr, ctx: &Context) -> Option<(String, PhpType)> {
     match &object.kind {
         ExprKind::Variable(name) => {
@@ -248,7 +275,7 @@ pub(super) fn emit_first_class_callable(
     let Some((normalized_target, captures, hidden_params)) =
         normalized_target_and_captures(target, &sig, ctx)
     else {
-        emitter.comment("WARNING: unsupported first-class callable target");
+        emitter.comment(&unsupported_fcc_diagnostic(target));
         abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
         return PhpType::Callable;
     };
@@ -265,6 +292,11 @@ pub(super) fn emit_first_class_callable(
         captures,
         hidden_params,
         current_class: ctx.current_class.clone(),
+        // Safe default: assume the wrapper is reached at runtime. The local
+        // assignment site downgrades this to `false` when it can prove the
+        // FCC value cannot escape, and `emit_variable` flips it back to `true`
+        // if the variable's value is read outside the short-circuit.
+        needed: true,
     });
 
     emitter.comment("first-class callable: load wrapper address");

@@ -241,3 +241,40 @@ $label = $name ?: "anonymous";
 ```
 
 The short ternary / Elvis form `expr ?: fallback` returns the original left-hand value when it is truthy, otherwise it evaluates and returns the fallback. The left-hand expression is evaluated once.
+
+## Pipe (PHP 8.5)
+
+The pipe operator `|>` invokes its right-hand callable with the left-hand value as the single positional argument. `$x |> foo(...)` is equivalent to `foo($x)`. The left-hand side is evaluated before the right-hand side, and chained pipes apply left-to-right.
+
+```php
+$result = "hello world"
+    |> strtoupper(...)
+    |> strrev(...);
+// equivalent to: strrev(strtoupper("hello world"))
+```
+
+The right-hand side may be any expression that evaluates to a callable:
+
+- First-class callable syntax: `foo(...)`, `Class::method(...)`, `$obj->method(...)`
+- A closure literal: `(fn($v) => $v + 1)`
+- A variable holding a callable: `$cb`
+- Any other expression returning a callable
+
+The callable must accept the piped value as its first parameter; remaining parameters must be optional or variadic. By-reference parameters are not supported on the pipe target.
+
+First-class callable creation requires a simple receiver: `$obj->method(...)` and `$this->method(...)` are accepted, but receivers with intermediate property accesses or call results (`$obj->inner->method(...)`, `(getThing())->method(...)`) are not yet captured by the optimizer. Use a temporary variable in those cases:
+
+```php
+$inner = $obj->inner;
+$cb = $inner->method(...);
+$value |> $cb;
+```
+
+Precedence is left-associative and sits below concatenation (`.`), bit shifts, and the additive operators (`+`, `-`). Comparisons, `??`, ternary, logical operators, and assignment all bind looser than `|>`:
+
+```php
+echo 5 + 2 |> double(...);          // (5 + 2) |> double(...)
+echo "a" . "b" |> wrap(...);        // ("a" . "b") |> wrap(...)
+echo "beep" |> strlen(...) == 4;    // (...|> strlen(...)) == 4
+echo $id |> get(...) ?? "default";  // (...|> get(...)) ?? "default"
+```

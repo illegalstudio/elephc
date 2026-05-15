@@ -17,6 +17,16 @@ use super::super::emit::Emitter;
 use super::{expr_result_heap_ownership, Expr, PhpType};
 
 pub(super) fn emit_variable(name: &str, emitter: &mut Emitter, ctx: &mut Context) -> PhpType {
+    // Loading the variable's value as an Expr means the FCC pointer escapes the
+    // short-circuit path (`emit_closure_call` bypasses this function when it
+    // short-circuits, so we don't see those reads here). Mark the wrapper as
+    // needed so the dead-wrapper optimisation emits its full body.
+    if let Some(label) = ctx.variable_fcc_label.get(name).cloned() {
+        if let Some(deferred) = ctx.deferred_closures.iter_mut().find(|d| d.label == label) {
+            deferred.needed = true;
+        }
+    }
+
     if let Some(ty) = ctx.extern_globals.get(name).cloned() {
         super::super::stmt::emit_global_load(emitter, ctx, name, &ty);
         return ty;

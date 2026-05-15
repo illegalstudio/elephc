@@ -179,6 +179,18 @@ fn test_array_assignment_expression_returns_assigned_value() {
 }
 
 #[test]
+fn test_array_assignment_expression_snapshots_rhs_container_before_write() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [];
+$result = ($items[0] = $items);
+echo count($result) . ":" . count($items[0]);
+"#,
+    );
+    assert_eq!(out, "0:0");
+}
+
+#[test]
 fn test_array_assignment_expression_variable_index_returns_assigned_value() {
     let out = compile_and_run("<?php $items = [1, 2]; $i = 1; echo ($items[$i] = 9); echo ':' . $items[1];");
     assert_eq!(out, "9:9");
@@ -217,6 +229,18 @@ echo ":" . $items[0] . ":" . $items[1];
 }
 
 #[test]
+fn test_array_null_coalesce_assignment_expression_snapshots_rhs_container_before_write() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [];
+$result = ($items[0] ??= $items);
+echo count($result) . ":" . count($items[0]);
+"#,
+    );
+    assert_eq!(out, "0:0");
+}
+
+#[test]
 fn test_property_assignment_expression_returns_assigned_value() {
     let out = compile_and_run(
         r#"<?php
@@ -244,6 +268,21 @@ echo ":" . $box->items[1];
 "#,
     );
     assert_eq!(out, "12:12");
+}
+
+#[test]
+fn test_property_array_assignment_expression_snapshots_rhs_container_before_write() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public $items = [];
+}
+$box = new Box();
+$result = ($box->items[0] = $box->items);
+echo count($result) . ":" . count($box->items[0]);
+"#,
+    );
+    assert_eq!(out, "0:0");
 }
 
 #[test]
@@ -275,6 +314,20 @@ echo ":" . Registry::$items[0];
 }
 
 #[test]
+fn test_static_property_array_assignment_expression_snapshots_rhs_container_before_write() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    public static $items = [];
+}
+$result = (Registry::$items[0] = Registry::$items);
+echo count($result) . ":" . count(Registry::$items[0]);
+"#,
+    );
+    assert_eq!(out, "0:0");
+}
+
+#[test]
 fn test_static_property_null_coalesce_assignment_expression_returns_value() {
     let out = compile_and_run(
         r#"<?php
@@ -288,3 +341,31 @@ echo ":" . Registry::$value;
     assert_eq!(out, "6:6");
 }
 
+#[test]
+fn test_chained_three_level_local_assignment() {
+    let out = compile_and_run("<?php $a = $b = $c = 5; echo $a + $b + $c;");
+    assert_eq!(out, "15");
+}
+
+#[test]
+fn test_chained_string_local_assignment() {
+    let out = compile_and_run(r#"<?php $a = $b = "hi"; echo $a . $b;"#);
+    assert_eq!(out, "hihi");
+}
+
+#[test]
+fn test_chained_static_property_and_local_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public static int $x = 0;
+    public static function init(): int {
+        self::$x = $local = 42;
+        return self::$x + $local;
+    }
+}
+echo C::init();
+"#,
+    );
+    assert_eq!(out, "84");
+}

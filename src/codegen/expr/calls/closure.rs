@@ -13,7 +13,8 @@ use crate::codegen::context::{Context, DeferredClosure};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::functions;
-use crate::parser::ast::{Expr, Stmt, StmtKind, TypeExpr};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, Stmt, StmtKind, StaticReceiver, TypeExpr};
+use crate::span::Span;
 use crate::types::{FunctionSig, PhpType};
 
 use super::args;
@@ -212,6 +213,9 @@ pub(super) fn emit_closure(
         captures: capture_types.clone(),
         hidden_params: capture_types,
         current_class: ctx.current_class.clone(),
+        // Real closure literals are only reachable through their wrapper, so the
+        // dead-wrapper stub optimisation never applies here.
+        needed: true,
     });
 
     emitter.comment("closure: load function address");
@@ -226,6 +230,72 @@ pub(super) fn emit_closure_call(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
+    // First-class callable short-circuit: when the variable was last bound to a
+    // first-class callable, calling it as `$cb(args)` reaches the target directly
+    // instead of going through the closure wrapper.
+    //
+    // - `Function`: dispatch via extern → builtin → user-defined, mirroring
+    //   `ExprKind::FunctionCall`.
+    // - `Method` with a simple object (`Variable` or `This`): the captured
+    //   receiver is re-loaded from the original variable slot just like the
+    //   closure wrapper does today, so `emit_method_call` preserves semantics.
+    // - `StaticMethod` with a `Named` receiver: late-static binding is already
+    //   absent, so a direct static call is safe.
+    // - `Method` with a complex object expression or `StaticMethod` with a
+    //   `Self_`/`Parent`/`Static` receiver fall through to the closure wrapper
+    //   path; reconstituting their captured runtime context is left for a
+    //   future refinement.
+    if let Some(target) = ctx.first_class_callable_targets.get(var).cloned() {
+        match &target {
+            CallableTarget::Function(name) => {
+                let name_str = name.as_str();
+                let span = args_exprs
+                    .first()
+                    .map(|e| e.span)
+                    .unwrap_or_else(Span::dummy);
+                if ctx.extern_functions.contains_key(name_str) {
+                    return crate::codegen::ffi::emit_extern_call(
+                        name_str, args_exprs, span, emitter, ctx, data,
+                    );
+                }
+                if let Some(ty) = crate::codegen::builtins::emit_builtin_call(
+                    name_str, args_exprs, span, emitter, ctx, data,
+                ) {
+                    return ty;
+                }
+                return super::function::emit_function_call(
+                    name_str, args_exprs, emitter, ctx, data,
+                );
+            }
+            CallableTarget::Method { object, method } => {
+                if matches!(&object.kind, ExprKind::Variable(_) | ExprKind::This) {
+                    return crate::codegen::expr::objects::emit_method_call(
+                        object, method, args_exprs, emitter, ctx, data,
+                    );
+                }
+            }
+            CallableTarget::StaticMethod { receiver, method } => {
+                // `Named`: direct compile-time class. `Static`: late-static binding
+                // resolves via the caller scope's hidden `__elephc_called_class_id` /
+                // `$this` slot, the same chain `emit_forwarded_called_class_id` uses
+                // inside the closure wrapper — so calling here is equivalent without
+                // the wrapper trampoline. `Self_` / `Parent` are pre-resolved to
+                // `Named` at storage time and never reach this match arm.
+                if matches!(receiver, StaticReceiver::Named(_) | StaticReceiver::Static) {
+                    return crate::codegen::expr::objects::emit_static_method_call(
+                        receiver, method, args_exprs, emitter, ctx, data,
+                    );
+                }
+            }
+        }
+    }
+
+    // We reach this point only when the short-circuit above did not fire. The
+    // call is going to invoke the wrapper indirectly via `blr`, so the FCC
+    // wrapper (if any) must keep its body. This is also the path real closures
+    // take, where `mark_fcc_used` is a no-op.
+    ctx.mark_fcc_used(var);
+
     emitter.comment(&format!("call ${}()", var));
     let save_concat_before_args =
         emitter.target.arch == crate::codegen::platform::Arch::X86_64;

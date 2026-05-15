@@ -12,7 +12,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
-use crate::codegen::abi;
+use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -25,8 +25,23 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("is_bool()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
-    // -- return true/false based on compile-time type --
-    let val = if ty == PhpType::Bool { 1 } else { 0 };
-    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), val);  // return the compile-time type predicate result in the active integer result register
+
+    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(emitter, "__rt_mixed_unbox");                      // normalize boxed mixed payloads to their concrete runtime tag
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("cmp x0, #3");                              // runtime tag 3 = boolean payload
+                emitter.instruction("cset x0, eq");                             // x0 = 1 if the unboxed payload is a bool, 0 otherwise
+            }
+            Arch::X86_64 => {
+                emitter.instruction("cmp rax, 3");                              // runtime tag 3 = boolean payload
+                emitter.instruction("sete al");                                 // set al when the unboxed payload is a bool
+                emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
+            }
+        }
+    } else {
+        let val = if matches!(ty, PhpType::Bool) { 1 } else { 0 };
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), val); // return the compile-time type predicate result
+    }
     Some(PhpType::Bool)
 }

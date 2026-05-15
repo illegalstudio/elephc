@@ -17,8 +17,8 @@ use crate::span::Span;
 
 use super::assignment_targets::{
     AssignmentExpressionLowerer,
-    assignment_value_may_mutate_target_dependency, is_assignment_expression_target,
-    is_non_local_assignment_target,
+    assignment_value_may_mutate_target_dependency, assignment_value_reads_target_container,
+    is_assignment_expression_target, is_non_local_assignment_target,
 };
 use super::calls::parse_first_class_callable_parens;
 use super::parse_args;
@@ -257,7 +257,9 @@ pub(super) fn parse_expr_bp(
             if is_non_local_assignment_target(&lhs) {
                 let null_coalesce_assign = matches!(op, AssignmentOperator::NullCoalesce);
                 let needs_conditional_value_temp =
-                    null_coalesce_assign && assignment_value_may_mutate_target_dependency(&lhs, &rhs);
+                    null_coalesce_assign
+                        && (assignment_value_may_mutate_target_dependency(&lhs, &rhs)
+                            || assignment_value_reads_target_container(&lhs, &rhs));
 
                 let mut lowerer = AssignmentExpressionLowerer::new(span);
                 let target = lowerer.stabilize_non_local_target(lhs, &rhs);
@@ -266,9 +268,12 @@ pub(super) fn parse_expr_bp(
                 let rhs = if null_coalesce_assign {
                     rhs
                 } else {
-                    lowerer.bind_value(rhs)
+                    lowerer.bind_value(&target, rhs)
                 };
-                let value = assignment_value(target.clone(), op, rhs, span);
+                let value = match op {
+                    AssignmentOperator::Assign => rhs,
+                    op => assignment_value(target.clone(), op, rhs, span),
+                };
                 let prelude = lowerer.finish();
                 lhs = Expr::new(
                     ExprKind::Assignment {
@@ -281,7 +286,10 @@ pub(super) fn parse_expr_bp(
                     span,
                 );
             } else {
-                let value = assignment_value(lhs.clone(), op, rhs, span);
+                let value = match op {
+                    AssignmentOperator::Assign => rhs,
+                    op => assignment_value(lhs.clone(), op, rhs, span),
+                };
                 lhs = Expr::new(
                     ExprKind::Assignment {
                         target: Box::new(lhs),
@@ -293,6 +301,36 @@ pub(super) fn parse_expr_bp(
                     span,
                 );
             }
+            continue;
+        }
+
+        // PHP 8.5 pipe operator `|>`: left-associative, BP (24, 25) — sits between
+        // comparisons (23, 24) and shifts (25, 26), matching php-src/RFC precedence
+        // (lower than `.`, shifts, `+`/`-`, higher than comparisons, `??`, ternary,
+        // logical, and assignment). Built as a dedicated `ExprKind::Pipe` node, not a
+        // `BinOp`, so that LHS-first evaluation order and pipe-specific diagnostics are
+        // preserved through later passes.
+        if matches!(tokens[*pos].0, Token::PipeArrow) {
+            let (l_bp, r_bp) = (24u8, 25u8);
+            if l_bp < min_bp {
+                break;
+            }
+            let span = tokens[*pos].1;
+            *pos += 1;
+            if starts_unparenthesized_arrow_function(tokens, *pos) {
+                return Err(CompileError::new(
+                    tokens[*pos].1,
+                    "Arrow functions used as pipe targets must be parenthesized",
+                ));
+            }
+            let rhs = parse_expr_bp(tokens, pos, r_bp)?;
+            lhs = Expr::new(
+                ExprKind::Pipe {
+                    value: Box::new(lhs),
+                    callable: Box::new(rhs),
+                },
+                span,
+            );
             continue;
         }
 
@@ -329,6 +367,12 @@ pub(super) fn parse_expr_bp(
     }
 
     Ok(lhs)
+}
+
+fn starts_unparenthesized_arrow_function(tokens: &[(Token, Span)], pos: usize) -> bool {
+    matches!(tokens.get(pos).map(|(token, _)| token), Some(Token::Fn))
+        || (matches!(tokens.get(pos).map(|(token, _)| token), Some(Token::Static))
+            && matches!(tokens.get(pos + 1).map(|(token, _)| token), Some(Token::Fn)))
 }
 
 #[derive(Debug, Clone, PartialEq)]

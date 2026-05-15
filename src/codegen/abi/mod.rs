@@ -52,5 +52,5 @@ pub use values::{
 };
 pub(crate) use registers::{
     float_arg_reg_name, float_result_reg, int_arg_reg_name, int_result_reg,
-    string_result_regs, symbol_scratch_reg,
+    secondary_scratch_reg, string_result_regs, symbol_scratch_reg, tertiary_scratch_reg,
 };

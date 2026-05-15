@@ -24,6 +24,12 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     emitter.comment("--- runtime: json_encode_array_int ---");
     emitter.label_global("__rt_json_encode_array_int");
 
+    // -- redirect to the dynamic encoder when JSON_FORCE_OBJECT is set --
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_json_active_flags");
+    emitter.instruction("ldr x9, [x9]");                                        // load the active flag bitmask
+    emitter.instruction("tst x9, #16");                                         // is JSON_FORCE_OBJECT (bit 16) set?
+    emitter.instruction("b.ne __rt_json_encode_array_dynamic");                 // tail-call the object-aware encoder when the flag is on
+
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
@@ -31,6 +37,9 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
 
     // -- save array pointer --
     emitter.instruction("str x0, [sp, #0]");                                    // save array ptr
+
+    // -- enter the recursion-depth check --
+    emitter.instruction("bl __rt_json_depth_enter");                            // increment _json_active_depth and throw on overflow when requested
 
     // -- get output position in concat_buf --
     crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
@@ -100,6 +109,9 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     emitter.instruction("mov w12, #93");                                        // ASCII ']'
     emitter.instruction("strb w12, [x11]");                                     // write ']'
     emitter.instruction("add x11, x11, #1");                                    // advance
+    emitter.instruction("str x11, [sp, #16]");                                  // checkpoint the write pointer across the depth-exit helper call
+    emitter.instruction("bl __rt_json_depth_exit");                             // decrement _json_active_depth so a sibling encoder can re-enter cleanly
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the write pointer after the helper call
 
     // -- compute result --
     emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = output start
@@ -122,10 +134,19 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: json_encode_array_int ---");
     emitter.label_global("__rt_json_encode_array_int");
 
+    // -- redirect to the dynamic encoder when JSON_FORCE_OBJECT is set --
+    emitter.instruction("mov r10, QWORD PTR [rip + _json_active_flags]");       // load the active flag bitmask
+    emitter.instruction("test r10, 16");                                        // is JSON_FORCE_OBJECT (bit 16) set?
+    emitter.instruction("jne __rt_json_encode_array_dynamic");                  // tail-call the object-aware encoder when the flag is on
+
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving JSON-array scratch space
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source array and concat-buffer cursors
     emitter.instruction("sub rsp, 40");                                         // reserve local slots for the array pointer, output pointers, array length, and loop index
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source integer array pointer across itoa calls and concat-buffer copies
+
+    // Enter the recursion-depth check.
+    emitter.instruction("call __rt_json_depth_enter");                          // increment _json_active_depth and throw on overflow when requested
+
     emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // load the current concat-buffer absolute offset before appending the JSON array
     emitter.instruction("lea r11, [rip + _concat_buf]");                        // materialize the concat-buffer base pointer for the current JSON append
     emitter.instruction("add r11, r10");                                        // compute the current concat-buffer write pointer from the base plus offset
@@ -134,6 +155,7 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r11], 91");                              // write the opening JSON bracket before any encoded integer payloads
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the opening bracket
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer before entering the element loop
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source array pointer (depth_enter clobbered rax)
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the integer-array length from the first header field
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the array length across itoa calls and concat-buffer copies
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize the integer-array element loop counter to zero
@@ -176,6 +198,9 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the concat-buffer write pointer after the final encoded integer element
     emitter.instruction("mov BYTE PTR [r11], 93");                              // append the closing JSON bracket to complete the encoded integer array slice
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the closing bracket
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // checkpoint the write pointer across the depth-exit helper call
+    emitter.instruction("call __rt_json_depth_exit");                           // decrement _json_active_depth so a sibling encoder can re-enter cleanly
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the write pointer after the helper call
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the encoded-array start pointer in the leading x86_64 string result register
     emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer write pointer before turning it into a slice length
     emitter.instruction("sub rdx, rax");                                        // compute the final encoded-array length from write_end - write_start
