@@ -12,6 +12,7 @@ use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
+use super::canonical_builtin_function_name;
 use super::super::Checker;
 
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
@@ -195,6 +196,32 @@ pub(super) fn check_builtin(
                 }
             }
             if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
+                if let Some(extern_name) = checker.canonical_extern_function_name_folded(cb_name) {
+                    if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+                        let ret_ty =
+                            checker.check_extern_function_call(&extern_name, elems, span, env)?;
+                        return Ok(Some(ret_ty));
+                    }
+                    if let Some(sig) = checker.functions.get(extern_name.as_str()).cloned() {
+                        return Ok(Some(sig.return_type));
+                    }
+                }
+                if let Some(builtin_name) = canonical_builtin_function_name(cb_name) {
+                    if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+                        if let Some(ret_ty) =
+                            checker.check_builtin(&builtin_name, elems, span, env)?
+                        {
+                            return Ok(Some(ret_ty));
+                        }
+                    }
+                    if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_name)
+                    {
+                        return Ok(Some(sig.return_type));
+                    }
+                }
+                let cb_name = checker
+                    .canonical_function_name_folded(cb_name)
+                    .unwrap_or_else(|| cb_name.clone());
                 if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
                     if sig.ref_params.iter().any(|is_ref| *is_ref) {
                         return Err(CompileError::new(
@@ -223,7 +250,7 @@ pub(super) fn check_builtin(
                     }
                 }
                 if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
-                    let ret_ty = checker.check_function_call(cb_name, elems, span, env)?;
+                    let ret_ty = checker.check_function_call(&cb_name, elems, span, env)?;
                     return Ok(Some(ret_ty));
                 }
                 if let Some(decl) = checker.fn_decls.get(cb_name.as_str()).cloned() {
@@ -232,7 +259,7 @@ pub(super) fn check_builtin(
                         .iter()
                         .map(|_| Expr::new(ExprKind::IntLiteral(0), span))
                         .collect();
-                    let ret_ty = checker.check_function_call(cb_name, &dummy_args, span, env)?;
+                    let ret_ty = checker.check_function_call(&cb_name, &dummy_args, span, env)?;
                     return Ok(Some(ret_ty));
                 }
             }
@@ -302,6 +329,21 @@ pub(super) fn check_builtin(
                 }
             }
             if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
+                if let Some(extern_name) = checker.canonical_extern_function_name_folded(cb_name) {
+                    let ret_ty =
+                        checker.check_extern_function_call(&extern_name, &args[1..], span, env)?;
+                    return Ok(Some(ret_ty));
+                }
+                if let Some(builtin_name) = canonical_builtin_function_name(cb_name) {
+                    if let Some(ret_ty) =
+                        checker.check_builtin(&builtin_name, &args[1..], span, env)?
+                    {
+                        return Ok(Some(ret_ty));
+                    }
+                }
+                let cb_name = checker
+                    .canonical_function_name_folded(cb_name)
+                    .unwrap_or_else(|| cb_name.clone());
                 if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
                     let ret_ty = checker.check_known_callable_call(
                         &sig,
@@ -313,7 +355,7 @@ pub(super) fn check_builtin(
                     return Ok(Some(ret_ty));
                 }
                 let cb_args = args[1..].to_vec();
-                let ret_ty = checker.check_function_call(cb_name, &cb_args, span, env)?;
+                let ret_ty = checker.check_function_call(&cb_name, &cb_args, span, env)?;
                 return Ok(Some(ret_ty));
             }
             if let Some(sig) = checker.resolve_expr_callable_sig(&args[0], env)? {
@@ -429,6 +471,9 @@ pub(super) fn check_builtin(
             }
             checker.infer_type(&args[0], env)?;
             if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
+                let cb_name = checker
+                    .canonical_function_name_folded(cb_name)
+                    .unwrap_or_else(|| cb_name.clone());
                 if checker.fn_decls.contains_key(cb_name.as_str())
                     && !checker.functions.contains_key(cb_name.as_str())
                 {
@@ -438,12 +483,12 @@ pub(super) fn check_builtin(
                             .iter()
                             .map(|_| Expr::new(ExprKind::IntLiteral(0), span))
                             .collect();
-                        let _ = checker.check_function_call(cb_name, &dummy_args, span, env);
+                        let _ = checker.check_function_call(&cb_name, &dummy_args, span, env);
                     }
                 } else if checker.function_variant_groups.contains_key(cb_name.as_str())
                     && !checker.functions.contains_key(cb_name.as_str())
                 {
-                    let _ = checker.ensure_function_variant_group_signature(cb_name, span);
+                    let _ = checker.ensure_function_variant_group_signature(&cb_name, span);
                 }
             }
             Ok(Some(PhpType::Bool))

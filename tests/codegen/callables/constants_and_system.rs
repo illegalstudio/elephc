@@ -254,6 +254,12 @@ fn test_call_user_func_array_string_return() {
 }
 
 #[test]
+fn test_call_user_func_array_string_builtin_callback() {
+    let out = compile_and_run(r#"<?php echo call_user_func_array("STRLEN", ["hello"]);"#);
+    assert_eq!(out, "5");
+}
+
+#[test]
 fn test_call_user_func_array_variadic_callback() {
     let out = compile_and_run(
         "<?php

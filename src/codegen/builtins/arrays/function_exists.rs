@@ -40,7 +40,11 @@ pub fn emit(
             emit_variant_function_exists(&variant_name, emitter, data);
             return Some(PhpType::Bool);
         }
-        Some(FunctionLookup::AlwaysAvailable) => {
+        Some(
+            FunctionLookup::Builtin(_)
+            | FunctionLookup::Extern(_)
+            | FunctionLookup::UserFunction(_),
+        ) => {
             abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 1);
         }
         None => {

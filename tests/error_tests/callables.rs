@@ -73,6 +73,14 @@ fn test_error_call_user_func_string_literal_ref_param_requires_variable() {
 }
 
 #[test]
+fn test_error_case_insensitive_function_string_introspection_keeps_callback_checks() {
+    expect_error(
+        "<?php function Bump(&$n) { $n = $n + 1; } if (function_exists(\"BUMP\") && is_callable(\"BUMP\")) { call_user_func(\"BUMP\", 1); }",
+        "parameter $n must be passed a variable",
+    );
+}
+
+#[test]
 fn test_error_closure_return_type_rejects_mismatch() {
     expect_error(
         "<?php $f = function(): string { return 1; };",

@@ -18,6 +18,7 @@ use crate::names::function_symbol;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 use super::callback_env;
+use super::super::callable_lookup::{lookup_function, FunctionLookup};
 
 pub fn emit(
     _name: &str,
@@ -27,6 +28,33 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("call_user_func()");
+    if let ExprKind::StringLiteral(name) = &args[0].kind {
+        match lookup_function(ctx, name) {
+            Some(FunctionLookup::Extern(extern_name)) => {
+                return Some(crate::codegen::ffi::emit_extern_call(
+                    &extern_name,
+                    &args[1..],
+                    args[0].span,
+                    emitter,
+                    ctx,
+                    data,
+                ));
+            }
+            Some(FunctionLookup::Builtin(builtin_name)) => {
+                if let Some(ret_ty) = crate::codegen::builtins::emit_builtin_call(
+                    &builtin_name,
+                    &args[1..],
+                    args[0].span,
+                    emitter,
+                    ctx,
+                    data,
+                ) {
+                    return Some(ret_ty);
+                }
+            }
+            Some(FunctionLookup::UserFunction(_)) | Some(FunctionLookup::IncludeVariant(_)) | None => {}
+        }
+    }
     let save_concat_before_args =
         emitter.target.arch == crate::codegen::platform::Arch::X86_64;
     if save_concat_before_args {
@@ -65,6 +93,17 @@ pub fn emit(
         let func_name = match &args[0].kind {
             ExprKind::StringLiteral(name) => name.clone(),
             _ => panic!("call_user_func() callback must be a string literal, callable expression, or callable variable"),
+        };
+        let func_name = match lookup_function(ctx, &func_name) {
+            Some(FunctionLookup::UserFunction(name))
+            | Some(FunctionLookup::IncludeVariant(name)) => name,
+            Some(FunctionLookup::Builtin(name)) | Some(FunctionLookup::Extern(name)) => {
+                panic!(
+                    "call_user_func() direct string callback '{}' should have been emitted directly",
+                    name
+                );
+            }
+            None => func_name,
         };
         let label = function_symbol(&func_name);
         sig = ctx.functions.get(&func_name).cloned();

@@ -43,6 +43,28 @@ echo strlen("hello world");
 }
 
 #[test]
+fn test_ffi_extern_call_user_func_string_callback() {
+    let out = compile_and_run(
+        r#"<?php
+extern function strlen(string $s): int;
+echo call_user_func("STRLEN", "hello");
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_ffi_extern_call_user_func_array_string_callback() {
+    let out = compile_and_run(
+        r#"<?php
+extern function strlen(string $s): int;
+echo call_user_func_array("STRLEN", ["hello"]);
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+#[test]
 fn test_ffi_extern_named_arguments_reorder_call() {
     let out = compile_and_run(
         r#"<?php

@@ -96,10 +96,11 @@ function FormatName(string $name): string {
 
 echo FUNCTION_EXISTS("formatname") ? "Y:" : "N:";
 echo IS_CALLABLE("FORMATNAME") ? "C:" : "N:";
-echo CALL_USER_FUNC("formatname", "ada");
+echo CALL_USER_FUNC("formatname", "ada") . ":";
+echo CALL_USER_FUNC_ARRAY("FORMATNAME", ["lovelace"]);
 "#,
     );
-    assert_eq!(out, "Y:C:ADA");
+    assert_eq!(out, "Y:C:ADA:LOVELACE");
 }
 
 #[test]

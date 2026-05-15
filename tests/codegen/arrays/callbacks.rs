@@ -221,6 +221,12 @@ echo call_user_func("sum9", 1, 2, 3, 4, 5, 6, 7, 8, 9);
 }
 
 #[test]
+fn test_call_user_func_string_builtin_callback() {
+    let out = compile_and_run(r#"<?php echo call_user_func("STRLEN", "hello");"#);
+    assert_eq!(out, "5");
+}
+
+#[test]
 fn test_function_exists_true() {
     let out = compile_and_run(
         r#"<?php

@@ -8,7 +8,7 @@
 //! Key details:
 //! - Phase order controls diagnostics, available declarations, required libraries, and function-local environments.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -109,6 +109,16 @@ impl Checker {
                 .extern_functions
                 .keys()
                 .any(|existing| php_symbol_key(existing) == key)
+    }
+
+    pub(crate) fn canonical_function_name_folded(&self, name: &str) -> Option<String> {
+        folded_map_key(&self.functions, name)
+            .or_else(|| folded_map_key(&self.function_variant_groups, name))
+            .or_else(|| folded_map_key(&self.fn_decls, name))
+    }
+
+    pub(crate) fn canonical_extern_function_name_folded(&self, name: &str) -> Option<String> {
+        folded_map_key(&self.extern_functions, name)
     }
 
     pub(super) fn resolve_unchecked_functions(&mut self, errors: &mut Vec<CompileError>) {
@@ -243,4 +253,11 @@ impl Checker {
             deprecation: None,
         }))
     }
+}
+
+fn folded_map_key<T>(map: &HashMap<String, T>, name: &str) -> Option<String> {
+    let key = php_symbol_key(name);
+    map.keys()
+        .find(|existing| php_symbol_key(existing) == key)
+        .cloned()
 }

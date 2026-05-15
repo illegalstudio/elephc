@@ -42,6 +42,14 @@ impl Checker {
         span: crate::span::Span,
         caller_env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        if let Some(extern_name) = self.canonical_extern_function_name_folded(name) {
+            return self.check_extern_function_call(&extern_name, args, span, caller_env);
+        }
+        let canonical_name = self
+            .canonical_function_name_folded(name)
+            .unwrap_or_else(|| name.to_string());
+        let name = canonical_name.as_str();
+
         if let Some(sig) = self.functions.get(name).cloned() {
             if let Some(reason) = sig.deprecation.as_deref() {
                 let message = if reason.is_empty() {
