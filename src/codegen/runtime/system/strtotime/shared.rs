@@ -47,8 +47,9 @@ fn emit_trim_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldrb w9, [x1]");                                       // load first byte
     emitter.instruction("cmp w9, #32");                                         // space?
     emitter.instruction("b.eq __rt_strtotime_trim_lead_adv");                   // yes → advance
-    emitter.instruction("cmp w9, #9");                                          // tab?
-    emitter.instruction("b.ne __rt_strtotime_trim_trail");                      // not WS → go to trail trim
+    emitter.instruction("sub w10, w9, #9");                                     // normalize ASCII control whitespace range
+    emitter.instruction("cmp w10, #4");                                         // tab/newline/vtab/form-feed/carriage-return?
+    emitter.instruction("b.hi __rt_strtotime_trim_trail");                      // not WS → go to trail trim
     emitter.label("__rt_strtotime_trim_lead_adv");
     emitter.instruction("add x1, x1, #1");                                      // advance pointer
     emitter.instruction("sub x2, x2, #1");                                      // shrink length
@@ -61,8 +62,9 @@ fn emit_trim_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldrb w10, [x1, x9]");                                  // load last byte
     emitter.instruction("cmp w10, #32");                                        // space?
     emitter.instruction("b.eq __rt_strtotime_trim_trail_adv");                  // yes → shrink
-    emitter.instruction("cmp w10, #9");                                         // tab?
-    emitter.instruction("b.ne __rt_strtotime_trim_done");                       // not WS → done
+    emitter.instruction("sub w11, w10, #9");                                    // normalize ASCII control whitespace range
+    emitter.instruction("cmp w11, #4");                                         // tab/newline/vtab/form-feed/carriage-return?
+    emitter.instruction("b.hi __rt_strtotime_trim_done");                       // not WS → done
     emitter.label("__rt_strtotime_trim_trail_adv");
     emitter.instruction("sub x2, x2, #1");                                      // shrink length
     emitter.instruction("b __rt_strtotime_trim_trail");                         // continue
@@ -168,8 +170,10 @@ fn emit_trim_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx eax, BYTE PTR [rdi]");                           // load first byte
     emitter.instruction("cmp al, 32");                                          // space ?
     emitter.instruction("je __rt_strtotime_trim_lead_adv_linux_x86_64");        // yes → advance
-    emitter.instruction("cmp al, 9");                                           // tab ?
-    emitter.instruction("jne __rt_strtotime_trim_trail_linux_x86_64");          // not WS → trail
+    emitter.instruction("mov ecx, eax");                                        // copy byte for control whitespace check
+    emitter.instruction("sub ecx, 9");                                          // normalize tab..carriage-return range
+    emitter.instruction("cmp ecx, 4");                                          // ASCII control whitespace ?
+    emitter.instruction("ja __rt_strtotime_trim_trail_linux_x86_64");           // not WS → trail
     emitter.label("__rt_strtotime_trim_lead_adv_linux_x86_64");
     emitter.instruction("inc rdi");                                             // advance pointer
     emitter.instruction("dec rsi");                                             // shrink length
@@ -183,8 +187,10 @@ fn emit_trim_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx ecx, BYTE PTR [rdi + rax]");                     // load last byte
     emitter.instruction("cmp cl, 32");                                          // space ?
     emitter.instruction("je __rt_strtotime_trim_trail_adv_linux_x86_64");       // yes → shrink
-    emitter.instruction("cmp cl, 9");                                           // tab ?
-    emitter.instruction("jne __rt_strtotime_trim_done_linux_x86_64");           // not WS → done
+    emitter.instruction("mov edx, ecx");                                        // copy byte for control whitespace check
+    emitter.instruction("sub edx, 9");                                          // normalize tab..carriage-return range
+    emitter.instruction("cmp edx, 4");                                          // ASCII control whitespace ?
+    emitter.instruction("ja __rt_strtotime_trim_done_linux_x86_64");            // not WS → done
     emitter.label("__rt_strtotime_trim_trail_adv_linux_x86_64");
     emitter.instruction("dec rsi");                                             // shrink length
     emitter.instruction("jmp __rt_strtotime_trim_trail_linux_x86_64");          // continue
@@ -292,8 +298,9 @@ fn emit_skip_ws_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldrb w9, [x3]");                                       // load byte at cursor
     emitter.instruction("cmp w9, #32");                                         // space ?
     emitter.instruction("b.eq __rt_strtotime_skip_ws_adv");                     // yes → advance
-    emitter.instruction("cmp w9, #9");                                          // tab ?
-    emitter.instruction("b.ne __rt_strtotime_skip_ws_done");                    // not WS → done
+    emitter.instruction("sub w10, w9, #9");                                     // normalize ASCII control whitespace range
+    emitter.instruction("cmp w10, #4");                                         // tab/newline/vtab/form-feed/carriage-return?
+    emitter.instruction("b.hi __rt_strtotime_skip_ws_done");                    // not WS → done
     emitter.label("__rt_strtotime_skip_ws_adv");
     emitter.instruction("add x3, x3, #1");                                      // advance cursor
     emitter.instruction("b __rt_strtotime_skip_ws_loop");                       // continue
@@ -363,8 +370,10 @@ fn emit_skip_ws_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx eax, BYTE PTR [rdi]");                           // load byte at cursor
     emitter.instruction("cmp al, 32");                                          // space ?
     emitter.instruction("je __rt_strtotime_skip_ws_adv_linux_x86_64");          // yes → advance
-    emitter.instruction("cmp al, 9");                                           // tab ?
-    emitter.instruction("jne __rt_strtotime_skip_ws_done_linux_x86_64");        // not WS → done
+    emitter.instruction("mov ecx, eax");                                        // copy byte for control whitespace check
+    emitter.instruction("sub ecx, 9");                                          // normalize tab..carriage-return range
+    emitter.instruction("cmp ecx, 4");                                          // ASCII control whitespace ?
+    emitter.instruction("ja __rt_strtotime_skip_ws_done_linux_x86_64");         // not WS → done
     emitter.label("__rt_strtotime_skip_ws_adv_linux_x86_64");
     emitter.instruction("inc rdi");                                             // advance cursor
     emitter.instruction("jmp __rt_strtotime_skip_ws_loop_linux_x86_64");        // continue

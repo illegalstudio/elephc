@@ -196,6 +196,14 @@ echo date("H:i:s", $ts);
 }
 
 #[test]
+fn test_strtotime_trims_ascii_whitespace() {
+    let out = compile_and_run(
+        "<?php $ts = strtotime(\"\\n\\t today \\n\"); echo date(\"H:i:s\", $ts);",
+    );
+    assert_eq!(out, "00:00:00");
+}
+
+#[test]
 fn test_strtotime_tomorrow() {
     let out = compile_and_run(
         r#"<?php
@@ -414,6 +422,20 @@ $now = time();
 $ts = strtotime("+1 day 2 hours");
 $diff = $ts - $now;
 // 1 day + 2 hours = 93600 seconds, allow ±1 hour for DST
+if ($diff >= 93600 - 3700 && $diff <= 93600 + 3700) echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_strtotime_offset_allows_ascii_whitespace_between_terms() {
+    let out = compile_and_run(
+        r#"<?php
+$now = time();
+$ts = strtotime("+1 day
+2 hours");
+$diff = $ts - $now;
 if ($diff >= 93600 - 3700 && $diff <= 93600 + 3700) echo "ok";
 "#,
     );
