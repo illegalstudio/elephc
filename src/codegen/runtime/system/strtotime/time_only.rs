@@ -8,7 +8,7 @@
 //! Key details:
 //! - Accepts `H:MM`, `HH:MM`, `H:MM:SS`, `HH:MM:SS`. Single-digit hour permitted (PHP-style).
 //! - Hour/min/sec are stashed in dispatcher scratch slots `[sp+80/84/88]` so the `today_tm` helper can clobber temporaries.
-//! - Trailing characters after the optional `:SS` are tolerated for symmetry with PHP's permissive parsing.
+//! - The parser consumes the whole trimmed input and validates PHP-compatible time ranges before `mktime` normalization.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
@@ -74,6 +74,10 @@ fn emit_time_only_arm64(emitter: &mut Emitter) {
     emitter.instruction("mul w10, w10, w12");                                   // first minute digit * 10
     emitter.instruction("add w10, w10, w11");                                   // minute
     emitter.instruction("add x1, x1, #2");                                      // advance past MM
+    emitter.instruction("cmp w9, #24");                                         // hour in PHP's accepted 0..24 range ?
+    emitter.instruction("b.hi __rt_strtotime_fail");                            // reject invalid hour
+    emitter.instruction("cmp w10, #59");                                        // minute in 0..59 ?
+    emitter.instruction("b.hi __rt_strtotime_fail");                            // reject invalid minute
 
     // -- stash hour/min in scratch slots so today_tm can clobber w9..w15 --
     emitter.instruction("str w9, [sp, #80]");                                   // save hour
@@ -81,11 +85,12 @@ fn emit_time_only_arm64(emitter: &mut Emitter) {
 
     // -- optional :SS suffix --
     emitter.instruction("sub x15, x14, x1");                                    // remaining bytes
-    emitter.instruction("cmp x15, #3");                                         // at least 3 for ":SS" ?
-    emitter.instruction("b.lt __rt_strtotime_time_no_secs");                    // no → second = 0
+    emitter.instruction("cbz x15, __rt_strtotime_time_no_secs");                // no suffix → second = 0
+    emitter.instruction("cmp x15, #3");                                         // suffix must be exactly ":SS"
+    emitter.instruction("b.ne __rt_strtotime_fail");                            // reject partial or trailing suffix junk
     emitter.instruction("ldrb w11, [x1, #0]");                                  // expect ':'
     emitter.instruction("cmp w11, #58");                                        // ':' ?
-    emitter.instruction("b.ne __rt_strtotime_time_no_secs");                    // no → second = 0
+    emitter.instruction("b.ne __rt_strtotime_fail");                            // trailing junk without seconds → fail
     emitter.instruction("ldrb w11, [x1, #1]");                                  // first second digit
     emitter.instruction("sub w11, w11, #48");                                   // numeric value
     emitter.instruction("cmp w11, #9");                                         // digit ?
@@ -97,6 +102,8 @@ fn emit_time_only_arm64(emitter: &mut Emitter) {
     emitter.instruction("mov w13, #10");                                        // tens multiplier
     emitter.instruction("mul w11, w11, w13");                                   // first second digit * 10
     emitter.instruction("add w11, w11, w12");                                   // second
+    emitter.instruction("cmp w11, #60");                                        // second in PHP's accepted 0..60 range ?
+    emitter.instruction("b.hi __rt_strtotime_fail");                            // reject invalid second
     emitter.instruction("str w11, [sp, #88]");                                  // save second
     emitter.instruction("b __rt_strtotime_time_apply");                         // continue
 
@@ -166,6 +173,10 @@ fn emit_time_only_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("imul ecx, ecx, 10");                                   // first minute digit * 10
     emitter.instruction("add ecx, r8d");                                        // minute
     emitter.instruction("add rdi, 2");                                          // advance past MM
+    emitter.instruction("cmp eax, 24");                                         // hour in PHP's accepted 0..24 range ?
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // reject invalid hour
+    emitter.instruction("cmp ecx, 59");                                         // minute in 0..59 ?
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // reject invalid minute
 
     // -- stash hour/min in scratch slots [rbp-48]/[rbp-44] = [rsp+80]/[rsp+84] --
     emitter.instruction("mov DWORD PTR [rbp - 48], eax");                       // save hour
@@ -174,11 +185,13 @@ fn emit_time_only_linux_x86_64(emitter: &mut Emitter) {
     // -- optional :SS --
     emitter.instruction("mov r11, r10");                                        // end ptr again
     emitter.instruction("sub r11, rdi");                                        // remaining bytes
-    emitter.instruction("cmp r11, 3");                                          // at least 3 for ":SS" ?
-    emitter.instruction("jl __rt_strtotime_time_no_secs_linux_x86_64");         // no → second = 0
+    emitter.instruction("test r11, r11");                                       // no suffix ?
+    emitter.instruction("jz __rt_strtotime_time_no_secs_linux_x86_64");         // yes → second = 0
+    emitter.instruction("cmp r11, 3");                                          // suffix must be exactly ":SS"
+    emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // reject partial or trailing suffix junk
     emitter.instruction("movzx r8d, BYTE PTR [rdi + 0]");                       // expect ':'
     emitter.instruction("cmp r8b, 58");                                         // ':' ?
-    emitter.instruction("jne __rt_strtotime_time_no_secs_linux_x86_64");        // no → second = 0
+    emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // trailing junk without seconds → fail
     emitter.instruction("movzx r8d, BYTE PTR [rdi + 1]");                       // first second digit
     emitter.instruction("sub r8d, 48");                                         // numeric value
     emitter.instruction("cmp r8d, 9");                                          // digit ?
@@ -189,6 +202,8 @@ fn emit_time_only_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // not a digit
     emitter.instruction("imul r8d, r8d, 10");                                   // first second digit * 10
     emitter.instruction("add r8d, r9d");                                        // second
+    emitter.instruction("cmp r8d, 60");                                         // second in PHP's accepted 0..60 range ?
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // reject invalid second
     emitter.instruction("mov DWORD PTR [rbp - 40], r8d");                       // save second ([rsp+88])
     emitter.instruction("jmp __rt_strtotime_time_apply_linux_x86_64");          // continue
 

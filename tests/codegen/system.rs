@@ -317,6 +317,30 @@ echo date("H:i:s", $ts);
 }
 
 #[test]
+fn test_strtotime_rejects_invalid_time_only_shapes() {
+    let out = compile_and_run(
+        r#"<?php
+echo strtotime("14:30abc") . ",";
+echo strtotime("14:30:99") . ",";
+echo strtotime("99:99") . ",";
+echo strtotime("14:30:");
+"#,
+    );
+    assert_eq!(out, "-1,-1,-1,-1");
+}
+
+#[test]
+fn test_strtotime_time_only_php_upper_bounds() {
+    let out = compile_and_run(
+        r#"<?php
+$ts = strtotime("24:59:60");
+echo date("H:i:s", $ts);
+"#,
+    );
+    assert_eq!(out, "01:00:00");
+}
+
+#[test]
 fn test_strtotime_offset_plus_one_hour() {
     let out = compile_and_run(
         r#"<?php
