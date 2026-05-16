@@ -1,5 +1,6 @@
 //! Purpose:
-//! Integration or regression tests for end-to-end codegen coverage of object-oriented PHP, callables methods, including first class callable instance method call user func with capture, first class callable inline instance method call user func with capture, and first class callable instance method call user func array with capture.
+//! Integration or regression tests for object-oriented callable codegen, including captured method
+//! and static first-class callables used through direct calls, indirect calls, and callback builtins.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -219,6 +220,32 @@ foreach ($values as $value) {
 }
 
 #[test]
+fn test_array_filter_evaluates_array_before_method_callable_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+function values() {
+    echo "array:";
+    return [1, 3];
+}
+
+class FilterBox {
+    public function __construct() {
+        echo "receiver:";
+    }
+
+    public function keep($n) {
+        return $n > 1;
+    }
+}
+
+$values = array_filter(values(), (new FilterBox())->keep(...));
+echo count($values);
+"#,
+    );
+    assert_eq!(out, "array:receiver:1");
+}
+
+#[test]
 fn test_first_class_callable_instance_method_preserves_by_ref_params() {
     let out = compile_and_run(
         r#"<?php
@@ -345,4 +372,333 @@ ChildMapper::run();
 "#,
     );
     assert_eq!(out, "11:12|21:22");
+}
+
+#[test]
+fn test_first_class_callable_instance_method_array_reduce_with_capture() {
+    let out = compile_and_run(
+        r#"<?php
+class Reducer {
+    public function add_offset($carry, $item) {
+        return $carry + $item + 10;
+    }
+}
+
+$reducer = new Reducer();
+$fn = $reducer->add_offset(...);
+echo array_reduce([1, 2], $fn, 0);
+"#,
+    );
+    assert_eq!(out, "23");
+}
+
+#[test]
+fn test_array_reduce_evaluates_args_left_to_right_for_method_callable() {
+    let out = compile_and_run(
+        r#"<?php
+function values() {
+    echo "array:";
+    return [1, 2];
+}
+
+function initial() {
+    echo "initial:";
+    return 0;
+}
+
+class Reducer {
+    public function __construct() {
+        echo "receiver:";
+    }
+
+    public function add($carry, $item) {
+        return $carry + $item;
+    }
+}
+
+echo array_reduce(values(), (new Reducer())->add(...), initial());
+"#,
+    );
+    assert_eq!(out, "array:receiver:initial:3");
+}
+
+#[test]
+fn test_array_filter_accepts_complex_noncaptured_callable_expression() {
+    let out = compile_and_run(
+        r#"<?php
+function keep_even($n) {
+    return $n % 2 == 0;
+}
+
+function keep_big($n) {
+    return $n > 2;
+}
+
+$use_even = true;
+$values = array_filter([1, 2, 3, 4], $use_even ? keep_even(...) : keep_big(...));
+echo count($values);
+foreach ($values as $value) {
+    echo ":";
+    echo $value;
+}
+"#,
+    );
+    assert_eq!(out, "2:2:4");
+}
+
+#[test]
+fn test_first_class_callable_instance_method_array_walk_with_capture() {
+    let out = compile_and_run(
+        r#"<?php
+class Walker {
+    public function show($item) {
+        echo $item + 5;
+        echo ":";
+    }
+}
+
+$walker = new Walker();
+array_walk([1, 2], $walker->show(...));
+"#,
+    );
+    assert_eq!(out, "6:7:");
+}
+
+#[test]
+fn test_first_class_callable_instance_method_usort_with_capture() {
+    let out = compile_and_run(
+        r#"<?php
+class Sorter {
+    public function desc($a, $b) {
+        return $b - $a;
+    }
+}
+
+$sorter = new Sorter();
+$values = [1, 3, 2];
+usort($values, $sorter->desc(...));
+foreach ($values as $value) {
+    echo $value;
+}
+"#,
+    );
+    assert_eq!(out, "321");
+}
+
+#[test]
+fn test_first_class_callable_instance_method_uksort_with_capture() {
+    let out = compile_and_run(
+        r#"<?php
+class KeySorter {
+    public function desc($a, $b) {
+        return $b - $a;
+    }
+}
+
+$sorter = new KeySorter();
+$values = [1, 3, 2];
+uksort($values, $sorter->desc(...));
+foreach ($values as $value) {
+    echo $value;
+}
+"#,
+    );
+    assert_eq!(out, "321");
+}
+
+#[test]
+fn test_first_class_callable_instance_method_uasort_with_capture() {
+    let out = compile_and_run(
+        r#"<?php
+class ValueSorter {
+    public function asc($a, $b) {
+        return $a - $b;
+    }
+}
+
+$sorter = new ValueSorter();
+$values = [3, 1, 2];
+uasort($values, $sorter->asc(...));
+foreach ($values as $value) {
+    echo $value;
+}
+"#,
+    );
+    assert_eq!(out, "123");
+}
+
+#[test]
+fn test_first_class_callable_static_late_bound_array_reduce_with_capture() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseReducer {
+    public static function run() {
+        return array_reduce([1, 2], static::add(...), 0);
+    }
+
+    public static function add($carry, $item) {
+        return $carry + $item + 10;
+    }
+}
+
+class ChildReducer extends BaseReducer {
+    public static function add($carry, $item) {
+        return $carry + $item + 20;
+    }
+}
+
+echo BaseReducer::run();
+echo ":";
+echo ChildReducer::run();
+"#,
+    );
+    assert_eq!(out, "23:43");
+}
+
+#[test]
+fn test_first_class_callable_static_late_bound_remaining_callback_runtimes_with_capture() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseCallbacks {
+    public static function run() {
+        echo array_reduce([1, 2], static::add(...), 0);
+        echo ":";
+        array_walk([1, 2], static::show(...));
+        echo ":";
+
+        $usorted = [1, 3, 2];
+        usort($usorted, static::compare(...));
+        foreach ($usorted as $value) {
+            echo $value;
+        }
+        echo ":";
+
+        $uksorted = [1, 3, 2];
+        uksort($uksorted, static::compare(...));
+        foreach ($uksorted as $value) {
+            echo $value;
+        }
+        echo ":";
+
+        $uasorted = [1, 3, 2];
+        uasort($uasorted, static::compare(...));
+        foreach ($uasorted as $value) {
+            echo $value;
+        }
+    }
+
+    public static function add($carry, $item) {
+        return $carry + $item + 10;
+    }
+
+    public static function show($item) {
+        echo $item + 10;
+        echo ",";
+    }
+
+    public static function compare($a, $b) {
+        return $b - $a;
+    }
+}
+
+class ChildCallbacks extends BaseCallbacks {
+    public static function add($carry, $item) {
+        return $carry + $item + 20;
+    }
+
+    public static function show($item) {
+        echo $item + 20;
+        echo ",";
+    }
+
+    public static function compare($a, $b) {
+        return $a - $b;
+    }
+}
+
+BaseCallbacks::run();
+echo "|";
+ChildCallbacks::run();
+"#,
+    );
+    assert_eq!(out, "23:11,12,:321:321:321|43:21,22,:123:123:123");
+}
+
+#[test]
+fn test_direct_first_class_callable_instance_method_expr_call() {
+    let out = compile_and_run(
+        r#"<?php
+class Greeter {
+    public function greet($name) {
+        return "Hi " . $name;
+    }
+}
+
+$greeter = new Greeter();
+echo ($greeter->greet(...))("Ada");
+"#,
+    );
+    assert_eq!(out, "Hi Ada");
+}
+
+#[test]
+fn test_direct_first_class_callable_expr_call_evaluates_receiver_before_args() {
+    let out = compile_and_run(
+        r#"<?php
+class Greeter {
+    public function __construct() {
+        echo "receiver:";
+    }
+
+    public function greet($name) {
+        return $name;
+    }
+}
+
+function name_arg() {
+    echo "arg:";
+    return "Ada";
+}
+
+echo ((new Greeter())->greet(...))(name_arg());
+"#,
+    );
+    assert_eq!(out, "receiver:arg:Ada");
+}
+
+#[test]
+fn test_parenthesized_captured_first_class_callable_variable_expr_call() {
+    let out = compile_and_run(
+        r#"<?php
+class Bumper {
+    public function apply($n) {
+        return $n + 7;
+    }
+}
+
+$bumper = new Bumper();
+$fn = $bumper->apply(...);
+echo ($fn)(5);
+"#,
+    );
+    assert_eq!(out, "12");
+}
+
+#[test]
+fn test_first_class_callable_non_local_method_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Greeter {
+    public function __construct(private string $prefix) {}
+
+    public function greet(string $name): string {
+        return $this->prefix . $name;
+    }
+}
+
+$fn = (new Greeter("Hi "))->greet(...);
+echo $fn("Ada");
+"#,
+    );
+    assert_eq!(out, "Hi Ada");
 }

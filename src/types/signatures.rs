@@ -362,25 +362,151 @@ pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig
 
 fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
     match name {
-        "intval" => Some(typed_first_class_builtin_sig(
+        "time" | "json_last_error" => Some(typed_first_class_builtin_sig(
+            name,
+            &[],
+            PhpType::Int,
+        )),
+        "phpversion" | "getcwd" | "sys_get_temp_dir" | "json_last_error_msg" => {
+            Some(typed_first_class_builtin_sig(name, &[], PhpType::Str))
+        }
+        "pi" => Some(typed_first_class_builtin_sig(name, &[], PhpType::Float)),
+        "intval" | "ord" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Str],
             PhpType::Int,
+        )),
+        "floatval" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed],
+            PhpType::Float,
+        )),
+        "boolval" | "is_bool" | "is_null" | "is_float" | "is_int" | "is_iterable"
+        | "is_string" | "is_numeric" | "is_nan" | "is_finite" | "is_infinite"
+        | "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
+            Some(typed_first_class_builtin_sig(name, &[PhpType::Mixed], PhpType::Bool))
+        }
+        "gettype" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed],
+            PhpType::Str,
         )),
         "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "strrev"
         | "addslashes" | "stripslashes" | "nl2br" | "bin2hex" | "hex2bin"
         | "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode"
         | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode"
-        | "base64_decode" | "json_last_error_msg" => Some(typed_first_class_builtin_sig(
+        | "base64_decode" | "trim" | "ltrim" | "rtrim" | "ucwords" | "substr"
+        | "str_repeat" | "strstr" | "str_replace" | "str_ireplace" | "explode"
+        | "implode" | "substr_replace" | "str_pad" | "str_split" | "wordwrap"
+        | "sprintf" | "hash" | "md5" | "sha1" | "number_format" | "chr" => {
+            Some(typed_first_class_builtin_sig(
+                name,
+                &[PhpType::Str],
+                PhpType::Str,
+            ))
+        }
+        "strpos" | "strrpos" | "strcmp" | "strcasecmp" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Str],
-            PhpType::Str,
+            PhpType::Int,
+        )),
+        "str_contains" | "str_starts_with" | "str_ends_with" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str, PhpType::Str],
+            PhpType::Bool,
+        )),
+        "array_keys" | "array_values" | "array_reverse" | "array_unique" | "array_rand" => {
+            Some(typed_first_class_builtin_sig(
+                name,
+                &[PhpType::Array(Box::new(PhpType::Mixed))],
+                PhpType::Array(Box::new(PhpType::Mixed)),
+            ))
+        }
+        "array_chunk" | "array_pad" | "array_fill" | "array_slice" | "array_diff"
+        | "array_intersect" | "range" => return_typed_first_class_builtin_sig(
+            name,
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        ),
+        "array_flip" | "array_combine" | "array_fill_keys" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Array(Box::new(PhpType::Mixed))],
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            },
         )),
         "array_sum" | "array_product" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Array(Box::new(PhpType::Int))],
             PhpType::Int,
         )),
+        "array_key_exists" | "in_array" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed, PhpType::Array(Box::new(PhpType::Mixed))],
+            PhpType::Bool,
+        )),
+        "array_search" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed, PhpType::Array(Box::new(PhpType::Mixed)), PhpType::Bool],
+            PhpType::Mixed,
+        )),
+        "array_pop" | "array_shift" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Array(Box::new(PhpType::Mixed))],
+            PhpType::Mixed,
+        )),
+        "array_push" | "array_unshift" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Array(Box::new(PhpType::Mixed)), PhpType::Mixed],
+            PhpType::Void,
+        )),
+        "sort" | "rsort" | "shuffle" | "natsort" | "natcasesort" | "asort"
+        | "arsort" | "ksort" | "krsort" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Array(Box::new(PhpType::Mixed))],
+            PhpType::Void,
+        )),
+        "is_file" | "is_dir" | "is_readable" | "is_writable" | "is_writeable"
+        | "is_executable" | "is_link" | "file_exists" | "fnmatch" | "chmod" | "chown"
+        | "chgrp" | "touch" | "ftruncate" | "fflush" | "fsync" | "fdatasync"
+        | "symlink" | "link" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Bool,
+        )),
+        "file_get_contents" | "file" | "filesize" | "filemtime" | "fileatime"
+        | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
+        | "filetype" | "stat" | "lstat" | "basename" | "dirname" | "realpath"
+        | "pathinfo" | "readlink" | "linkinfo" | "tempnam" => {
+            let mut sig = builtin_call_sig(name)?;
+            sig.return_type = PhpType::Mixed;
+            sig.declared_return = true;
+            Some(sig)
+        }
+        "abs" | "min" | "max" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed],
+            PhpType::Mixed,
+        )),
+        "floor" | "ceil" | "sqrt" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
+        | "sinh" | "cosh" | "tanh" | "log2" | "log10" | "exp" | "deg2rad"
+        | "rad2deg" | "microtime" | "log" | "atan2" | "hypot" | "pow" | "fmod"
+        | "fdiv" | "round" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Mixed],
+            PhpType::Float,
+        )),
+        "intdiv" | "rand" | "mt_rand" | "random_int" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Int, PhpType::Int],
+            PhpType::Int,
+        )),
+        "date" | "php_uname" | "readline" => {
+            let mut sig = builtin_call_sig(name)?;
+            sig.return_type = PhpType::Str;
+            sig.declared_return = true;
+            Some(sig)
+        }
         "json_encode" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Mixed, PhpType::Int, PhpType::Int],
@@ -395,11 +521,6 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             name,
             &[PhpType::Str, PhpType::Int, PhpType::Int],
             PhpType::Bool,
-        )),
-        "json_last_error" => Some(typed_first_class_builtin_sig(
-            name,
-            &[],
-            PhpType::Int,
         )),
         _ => None,
     }
@@ -419,6 +540,13 @@ fn typed_first_class_builtin_sig(
     sig.return_type = return_type;
     sig.declared_return = true;
     sig
+}
+
+fn return_typed_first_class_builtin_sig(name: &str, return_type: PhpType) -> Option<FunctionSig> {
+    let mut sig = builtin_call_sig(name)?;
+    sig.return_type = return_type;
+    sig.declared_return = true;
+    Some(sig)
 }
 
 fn fixed(params: &[&str]) -> FunctionSig {

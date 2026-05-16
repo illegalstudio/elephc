@@ -230,6 +230,7 @@ pub struct FunctionSig {
     pub ref_params: Vec<bool>,         // which parameters are pass-by-reference (&$param)
     pub declared_params: Vec<bool>,    // whether each parameter came from an explicit type hint
     pub variadic: Option<String>,      // variadic parameter name (...$args), if any
+    pub deprecation: Option<String>,   // #[Deprecated] reason; "" when no reason was supplied
 }
 ```
 
@@ -237,6 +238,7 @@ pub struct FunctionSig {
 - `declared_params` lets later phases distinguish explicit PHP type hints from inferred/defaulted parameter types.
 - `declared_return` lets later phases distinguish explicit PHP return hints from inferred return types.
 - `variadic` holds the name of the variadic parameter (e.g., `$args` in `function foo(...$args)`). Extra arguments beyond the regular parameters are collected into an array.
+- `deprecation` carries PHP 8.4 `#[Deprecated]` metadata when present, so call sites can surface the warning consistently.
 
 This information is then used when checking calls to that function.
 

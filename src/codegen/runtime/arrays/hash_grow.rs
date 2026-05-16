@@ -9,6 +9,7 @@
 //! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
 
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// hash_grow: double the capacity of a hash table while preserving insertion order.
 /// Allocates a new table with 2x capacity, reinserts all owned entries in their
@@ -16,6 +17,11 @@ use crate::codegen::emit::Emitter;
 /// Input:  x0 = old hash table pointer
 /// Output: x0 = new hash table pointer (with doubled capacity)
 pub fn emit_hash_grow(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_hash_grow_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: hash_grow ---");
     emitter.label_global("__rt_hash_grow");
@@ -72,4 +78,67 @@ pub fn emit_hash_grow(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = new table
+}
+
+fn emit_hash_grow_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: hash_grow ---");
+    emitter.label_global("__rt_hash_grow");
+
+    // -- set up stack frame --
+    // Frame layout:
+    //   [rbp - 8]  = insertion-order iterator cursor
+    //   [rbp - 16] = old unique hash table
+    //   [rbp - 24] = new hash table
+    //   [rbp - 32] = saved r12
+    //   [rbp - 40] = saved r13
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving grow spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for rehashing state
+    emitter.instruction("sub rsp, 48");                                         // reserve local storage while keeping nested calls aligned
+    emitter.instruction("mov QWORD PTR [rbp - 32], r12");                       // preserve r12 because SysV treats it as callee-saved
+    emitter.instruction("mov QWORD PTR [rbp - 40], r13");                       // preserve r13 because SysV treats it as callee-saved
+    emitter.instruction("call __rt_hash_ensure_unique");                        // split shared hash tables before moving entries into new storage
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the unique old hash table
+
+    // -- create new table with 2x capacity --
+    emitter.instruction("mov r12, QWORD PTR [rax + 8]");                        // load the old table capacity
+    emitter.instruction("mov rsi, QWORD PTR [rax + 16]");                       // load the table-wide runtime value tag
+    emitter.instruction("lea rdi, [r12 + r12]");                                // requested capacity = old capacity * 2
+    emitter.instruction("test rdi, rdi");                                       // protect callers that grow a zero-capacity hash
+    emitter.instruction("jne __rt_hash_grow_capacity_ready_x");                 // non-zero capacities can be used as-is
+    emitter.instruction("mov rdi, 1");                                          // minimum grown capacity for an empty table
+    emitter.label("__rt_hash_grow_capacity_ready_x");
+    emitter.instruction("call __rt_hash_new");                                  // allocate the destination hash table
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the destination hash table
+    emitter.instruction("mov QWORD PTR [rbp - 8], 0");                          // iterator cursor = fresh insertion-order walk
+
+    // -- iterate old entries in insertion order and reinsert them --
+    emitter.label("__rt_hash_grow_loop_x");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // old table pointer for hash_iter_next
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // current insertion-order cursor
+    emitter.instruction("call __rt_hash_iter_next");                            // fetch the next owned entry in insertion order
+    emitter.instruction("cmp rax, -1");                                         // did the iterator signal end-of-walk?
+    emitter.instruction("je __rt_hash_grow_free_x");                            // finish after every entry has been moved
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the next insertion-order cursor
+    emitter.instruction("mov rsi, rdi");                                        // move returned key pointer into hash_insert_owned arg1
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // destination table for hash_insert_owned
+                                                                                 // rdx/rcx/r8/r9 still hold key_len/value_lo/value_hi/value_tag
+    emitter.instruction("call __rt_hash_insert_owned");                         // rehash and move existing entry ownership
+    // The new table is allocated at 2x old capacity, so reinserting exactly
+    // old_count entries should not need another grow. Still retain the return
+    // value because hash_insert_owned is allowed to grow defensively if the
+    // load-factor invariant changes later.
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // keep the latest destination table pointer
+    emitter.instruction("jmp __rt_hash_grow_loop_x");                           // continue rehashing entries
+
+    // -- free old table and return new table --
+    emitter.label("__rt_hash_grow_free_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // old table pointer for the x86_64 heap_free ABI
+    emitter.instruction("call __rt_heap_free");                                 // release the old hash table storage
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the grown hash table
+    emitter.instruction("mov r13, QWORD PTR [rbp - 40]");                       // restore caller r13
+    emitter.instruction("mov r12, QWORD PTR [rbp - 32]");                       // restore caller r12
+    emitter.instruction("add rsp, 48");                                         // release the grow spill frame
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return with rax = new table
 }

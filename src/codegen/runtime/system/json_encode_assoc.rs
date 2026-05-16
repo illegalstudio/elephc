@@ -32,27 +32,29 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     //   [sp + 0..87]   = existing scratch slots (hash ptr, output, count, etc.)
     //   [sp + 88]      = current entry's value tag (existing)
     //   [sp + 96..111] = saved x29/x30
-    //   [sp + 112]     = list_mode flag (1 = emit JSON array form, 0 = object form)
-    emitter.instruction("sub sp, sp, #128");                                    // allocate 128 bytes (was 112, +16 for the list_mode flag + alignment padding)
+    //   [sp + 112]     = list_possible flag (1 = can compact object form to JSON array form)
+    //   [sp + 120]     = saved x19 (active JSON flags cache)
+    emitter.instruction("sub sp, sp, #128");                                    // allocate 128 bytes including list-shape tracking and saved x19
     emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #96");                                    // set new frame pointer
+    emitter.instruction("str x19, [sp, #120]");                                 // preserve caller x19 before caching active JSON flags
 
     // -- save hash table pointer --
     emitter.instruction("str x0, [sp, #0]");                                    // save hash ptr
 
-    // -- detect list-shape: an associative array whose keys form the
-    //    sequence 0..count-1 in insertion order encodes as a JSON array
-    //    `[...]` (PHP semantics). Skip detection when JSON_FORCE_OBJECT
-    //    is set so that flag still wins. --
+    // -- initialize list-shape tracking. Associative arrays are emitted in
+    //    object form first; if every key is the sequential integer key
+    //    0..count-1, the finished buffer is compacted in-place to `[...]`.
+    //    JSON_FORCE_OBJECT disables the compaction path. --
     crate::codegen::abi::emit_symbol_address(emitter, "x9", "_json_active_flags");
-    emitter.instruction("ldr x9, [x9]");                                        // load the active flag bitmask
-    emitter.instruction("tst x9, #16");                                         // is JSON_FORCE_OBJECT (bit 16) set?
-    emitter.instruction("b.ne __rt_json_assoc_force_object_mode");              // FORCE_OBJECT wins → emit object form
-    emitter.instruction("bl __rt_json_assoc_is_list_shape");                    // x0 = 1 if list-shape, 0 otherwise
-    emitter.instruction("str x0, [sp, #112]");                                  // park the list_mode flag for the loop and close
-    emitter.instruction("b __rt_json_assoc_after_list_check");                  // continue in the JSON object encoder control path
+    emitter.instruction("ldr x19, [x9]");                                       // cache the active flag bitmask for the whole associative-array encode
+    emitter.instruction("tst x19, #16");                                        // is JSON_FORCE_OBJECT (bit 16) set?
+    emitter.instruction("b.ne __rt_json_assoc_force_object_mode");              // FORCE_OBJECT wins → keep object form
+    emitter.instruction("mov x0, #1");                                          // start optimistic: keys may still be list-shaped
+    emitter.instruction("str x0, [sp, #112]");                                  // park the list_possible flag for the loop and close
+    emitter.instruction("b __rt_json_assoc_after_list_check");                  // continue after initializing list tracking
     emitter.label("__rt_json_assoc_force_object_mode");
-    emitter.instruction("str xzr, [sp, #112]");                                 // FORCE_OBJECT path always uses object form
+    emitter.instruction("str xzr, [sp, #112]");                                 // FORCE_OBJECT path never compacts to array form
 
     emitter.label("__rt_json_assoc_after_list_check");
     // -- enter the recursion-depth check so JSON_ERROR_DEPTH fires when
@@ -67,17 +69,12 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("str x11, [sp, #8]");                                   // save output start
     emitter.instruction("str x11, [sp, #16]");                                  // save output write pos
 
-    // -- write opening bracket: '[' for list-shape, '{' otherwise --
-    emitter.instruction("ldr x12, [sp, #112]");                                 // reload the list_mode flag
-    emitter.instruction("cbz x12, __rt_json_assoc_open_obj");                   // 0 → object form
-    emitter.instruction("mov w12, #91");                                        // ASCII '['
-    emitter.instruction("b __rt_json_assoc_open_emit");                         // continue in the JSON object encoder control path
-    emitter.label("__rt_json_assoc_open_obj");
+    // -- write opening brace; list-shape arrays rewrite it to '[' after the walk --
     emitter.instruction("mov w12, #123");                                       // ASCII '{'
-    emitter.label("__rt_json_assoc_open_emit");
-    emitter.instruction("strb w12, [x11]");                                     // write the opening bracket
+    emitter.instruction("strb w12, [x11]");                                     // write the provisional opening brace
     emitter.instruction("add x11, x11, #1");                                    // advance
     emitter.instruction("str x11, [sp, #16]");                                  // save write pos
+    emitter.instruction("bl __rt_json_pretty_push");                            // enter one pretty-print indentation level after the container opens
 
     // -- get hash table count --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload hash ptr
@@ -106,6 +103,20 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #72]");                                   // save val_hi
     emitter.instruction("str x5, [sp, #88]");                                   // save val_tag
 
+    // -- fold list-shape detection into the main hash walk --
+    emitter.instruction("ldr x6, [sp, #112]");                                  // reload the optimistic list_possible flag
+    emitter.instruction("cbz x6, __rt_json_assoc_list_shape_checked");          // once false, skip further key checks
+    emitter.instruction("ldr x6, [sp, #56]");                                   // load key length for the current entry
+    emitter.instruction("cmn x6, #1");                                          // is this an integer key?
+    emitter.instruction("b.ne __rt_json_assoc_list_shape_clear");               // string keys force object form
+    emitter.instruction("ldr x6, [sp, #48]");                                   // load the integer key payload
+    emitter.instruction("ldr x7, [sp, #40]");                                   // load the expected sequential key
+    emitter.instruction("cmp x6, x7");                                          // does the key match the insertion-order index?
+    emitter.instruction("b.eq __rt_json_assoc_list_shape_checked");             // matching key keeps list compaction possible
+    emitter.label("__rt_json_assoc_list_shape_clear");
+    emitter.instruction("str xzr, [sp, #112]");                                 // mark the encoded object as non-list-shaped
+    emitter.label("__rt_json_assoc_list_shape_checked");
+
     // -- add comma if not first entry --
     emitter.instruction("ldr x5, [sp, #40]");                                   // load items written
     emitter.instruction("cbz x5, __rt_json_assoc_key");                         // skip comma for first
@@ -115,17 +126,17 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #1");                                    // advance
     emitter.instruction("str x11, [sp, #16]");                                  // save write pos
 
-    // -- write key as quoted JSON string (skipped in list mode) --
-    // List-shape arrays emit `[...]` form so keys must not be written;
-    // jump straight to the value emission. Otherwise, string keys are
-    // encoded through __rt_json_encode_str so every JSON escape (control
-    // bytes, quotes, backslashes, multibyte UTF-8, the active flag set)
-    // is honored on the key. Integer keys are formatted through itoa and
-    // copied into place inline because their decimal representation
-    // never contains JSON-significant bytes.
+    // -- write key as a quoted JSON string --
+    // String keys are encoded through __rt_json_encode_str so every JSON
+    // escape (control bytes, quotes, backslashes, multibyte UTF-8, the active
+    // flag set) is honored on the key. Integer keys are formatted through
+    // itoa and copied into place inline because their decimal representation
+    // never contains JSON-significant bytes. If the completed object is still
+    // list-shaped, this key prefix is removed by the compaction pass.
     emitter.label("__rt_json_assoc_key");
-    emitter.instruction("ldr x12, [sp, #112]");                                 // reload the list_mode flag
-    emitter.instruction("cbnz x12, __rt_json_assoc_after_key_prefix");          // list mode skips the key + colon prefix
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload write pos before optional pretty indentation
+    emitter.instruction("bl __rt_json_pretty_line");                            // append newline and indentation for this entry when pretty-printing
+    emitter.instruction("str x11, [sp, #16]");                                  // save the write pos after any pretty indentation
     emitter.instruction("ldr x1, [sp, #48]");                                   // load key ptr (or integer payload when len = -1)
     emitter.instruction("ldr x2, [sp, #56]");                                   // load key len (or -1 sentinel for integer keys)
     emitter.instruction("cmn x2, #1");                                          // is this an integer key?
@@ -151,6 +162,10 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("strb w12, [x11]");                                     // opening quote for the integer key
     emitter.instruction("add x11, x11, #1");                                    // advance past the opening quote
     emitter.instruction("str x11, [sp, #80]");                                  // park the JSON write pointer across the itoa call
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_concat_buf");
+    emitter.instruction("sub x12, x11, x10");                                   // compute scratch-safe concat offset from the current key write position
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("str x12, [x9]");                                       // move itoa scratch after the pretty-printed key prefix
     emitter.instruction("mov x0, x1");                                          // move the integer key payload into the decimal-formatter input register
     emitter.instruction("bl __rt_itoa");                                        // x1=ptr to digits in itoa's scratch area, x2=digit count
     emitter.instruction("ldr x11, [sp, #80]");                                  // reload the parked JSON write pointer
@@ -173,6 +188,7 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("mov w12, #58");                                        // ASCII ':'
     emitter.instruction("strb w12, [x11]");                                     // write ':'
     emitter.instruction("add x11, x11, #1");                                    // advance
+    emitter.instruction("bl __rt_json_pretty_colon_space");                     // append the pretty-print key/value space when requested
     emitter.instruction("str x11, [sp, #16]");                                  // save write pos after emitting the JSON key prefix
 
     emitter.label("__rt_json_assoc_after_key_prefix");
@@ -270,21 +286,130 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("str x5, [sp, #40]");                                   // save items written
     emitter.instruction("b __rt_json_assoc_loop");                              // continue loop
 
-    // -- write closing bracket: ']' for list-shape, '}' otherwise --
+    // -- write closing brace; list-shape arrays rewrite it to ']' after the walk --
     emitter.label("__rt_json_assoc_close");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload write pos
-    emitter.instruction("ldr x10, [sp, #112]");                                 // reload the list_mode flag
-    emitter.instruction("cbz x10, __rt_json_assoc_close_obj");                  // 0 → object form
-    emitter.instruction("mov w12, #93");                                        // ASCII ']'
-    emitter.instruction("b __rt_json_assoc_close_emit");                        // continue in the JSON object encoder control path
-    emitter.label("__rt_json_assoc_close_obj");
+    emitter.instruction("bl __rt_json_pretty_pop");                             // leave the container indentation level before closing it
+    emitter.instruction("ldr x5, [sp, #40]");                                   // reload written item count to decide whether closing needs its own line
+    emitter.instruction("cbz x5, __rt_json_assoc_close_choose");                // empty containers stay compact even under JSON_PRETTY_PRINT
+    emitter.instruction("bl __rt_json_pretty_line");                            // append the closing-line indentation for non-empty pretty containers
+    emitter.label("__rt_json_assoc_close_choose");
     emitter.instruction("mov w12, #125");                                       // ASCII '}'
-    emitter.label("__rt_json_assoc_close_emit");
-    emitter.instruction("strb w12, [x11]");                                     // write the closing bracket
+    emitter.instruction("strb w12, [x11]");                                     // write the provisional closing brace
     emitter.instruction("add x11, x11, #1");                                    // advance
     emitter.instruction("str x11, [sp, #16]");                                  // checkpoint the write pointer across the depth-exit helper call
     emitter.instruction("bl __rt_json_depth_exit");                             // decrement _json_active_depth so a sibling encoder can re-enter cleanly
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the write pointer after the helper call
+
+    // -- compact provisional object output to array output when the keys were 0..n-1 --
+    emitter.instruction("ldr x12, [sp, #112]");                                 // reload the final list_possible flag
+    emitter.instruction("cbz x12, __rt_json_assoc_compute_result");             // non-list objects keep their provisional object bytes
+    emitter.instruction("ldr x0, [sp, #8]");                                    // x0 = output start pointer
+    emitter.instruction("mov w12, #91");                                        // ASCII '['
+    emitter.instruction("strb w12, [x0]");                                      // rewrite the opening brace to an opening bracket
+    emitter.instruction("add x9, x0, #1");                                      // read cursor starts after the opening byte
+    emitter.instruction("add x10, x0, #1");                                     // write cursor starts after the opening byte
+    emitter.instruction("ldrb w12, [x9]");                                      // inspect the first byte after the opening brace
+    emitter.instruction("cmp w12, #125");                                       // was the object empty?
+    emitter.instruction("b.eq __rt_json_assoc_compact_close");                  // empty object compacts directly to []
+    // The provisional object can already contain pretty-print whitespace.
+    // Copy whitespace before each generated `"index":` key, then drop the
+    // key prefix itself so pretty list-shape output remains an array layout.
+    emitter.label("__rt_json_assoc_compact_key");
+    emitter.instruction("ldrb w12, [x9]");                                      // inspect the byte before the skipped key prefix
+    emitter.instruction("cmp w12, #125");                                       // did pretty output reach the closing object brace?
+    emitter.instruction("b.eq __rt_json_assoc_compact_close");                  // replace the object close with an array close
+    emitter.instruction("cmp w12, #34");                                        // reached the opening quote of the integer key?
+    emitter.instruction("b.eq __rt_json_assoc_compact_key_start");              // skip the generated key prefix itself
+    emitter.instruction("strb w12, [x10]");                                     // preserve pretty-print whitespace before the array value
+    emitter.instruction("add x9, x9, #1");                                      // advance the read cursor over the copied whitespace
+    emitter.instruction("add x10, x10, #1");                                    // advance the compacted write cursor
+    emitter.instruction("b __rt_json_assoc_compact_key");                       // keep copying whitespace until the generated key starts
+    emitter.label("__rt_json_assoc_compact_key_start");
+    emitter.instruction("add x9, x9, #1");                                      // skip the opening quote of the integer key
+    emitter.label("__rt_json_assoc_compact_key_scan");
+    emitter.instruction("ldrb w12, [x9]");                                      // load the next key byte
+    emitter.instruction("add x9, x9, #1");                                      // advance through the key byte
+    emitter.instruction("cmp w12, #34");                                        // reached the closing key quote?
+    emitter.instruction("b.ne __rt_json_assoc_compact_key_scan");               // keep skipping key digits
+    emitter.instruction("add x9, x9, #1");                                      // skip the colon after the key
+    // Pretty object output inserts a key/value space after `:`, but the
+    // compacted array form has no key/value separator. Drop only that local
+    // separator; value-owned spaces still copy through the value scanner.
+    emitter.label("__rt_json_assoc_compact_value_ws");
+    emitter.instruction("ldrb w12, [x9]");                                      // inspect whitespace between the object colon and value
+    emitter.instruction("cmp w12, #32");                                        // pretty-print object form inserts a single space after `:`
+    emitter.instruction("b.ne __rt_json_assoc_compact_value_init");             // first non-space byte belongs to the value
+    emitter.instruction("add x9, x9, #1");                                      // drop the key/value separator space for array output
+    emitter.instruction("b __rt_json_assoc_compact_value_ws");                  // continue through any repeated separator spaces
+    emitter.label("__rt_json_assoc_compact_value_init");
+    emitter.instruction("mov x13, #0");                                         // nested container depth = 0
+    emitter.instruction("mov x14, #0");                                         // string-mode flag = false
+    // Commas and braces only delimit the synthetic top-level object while
+    // depth == 0 and we are not inside a JSON string. Nested arrays/objects
+    // and string contents must be copied verbatim into the compacted value.
+    emitter.label("__rt_json_assoc_compact_value");
+    emitter.instruction("ldrb w12, [x9]");                                      // load the next value/delimiter byte
+    emitter.instruction("cbnz x14, __rt_json_assoc_compact_in_string");         // strings copy bytes until an unescaped quote
+    emitter.instruction("cbnz x13, __rt_json_assoc_compact_not_delim");         // nested containers own their commas/braces
+    emitter.instruction("cmp w12, #44");                                        // top-level comma after a value?
+    emitter.instruction("b.eq __rt_json_assoc_compact_comma");                  // keep the comma and start the next key
+    emitter.instruction("cmp w12, #125");                                       // top-level object close after the final value?
+    emitter.instruction("b.eq __rt_json_assoc_compact_close");                  // replace it with the array close
+    emitter.label("__rt_json_assoc_compact_not_delim");
+    emitter.instruction("cmp w12, #34");                                        // value string opening quote?
+    emitter.instruction("b.eq __rt_json_assoc_compact_string_open");            // enter string-copy mode
+    emitter.instruction("cmp w12, #91");                                        // nested array opening bracket?
+    emitter.instruction("b.eq __rt_json_assoc_compact_depth_inc");              // enter one nested container level
+    emitter.instruction("cmp w12, #123");                                       // nested object opening brace?
+    emitter.instruction("b.eq __rt_json_assoc_compact_depth_inc");              // enter one nested container level
+    emitter.instruction("cmp w12, #93");                                        // nested array closing bracket?
+    emitter.instruction("b.eq __rt_json_assoc_compact_depth_dec");              // leave one nested container level
+    emitter.instruction("cmp w12, #125");                                       // nested object closing brace?
+    emitter.instruction("b.eq __rt_json_assoc_compact_depth_dec");              // leave one nested container level
+    emitter.label("__rt_json_assoc_compact_copy");
+    emitter.instruction("strb w12, [x10]");                                     // copy the value byte to the compacted output
+    emitter.instruction("add x9, x9, #1");                                      // advance the read cursor
+    emitter.instruction("add x10, x10, #1");                                    // advance the write cursor
+    emitter.instruction("b __rt_json_assoc_compact_value");                     // continue copying the current value
+    emitter.label("__rt_json_assoc_compact_string_open");
+    emitter.instruction("mov x14, #1");                                         // remember that subsequent bytes are inside a JSON string
+    emitter.instruction("b __rt_json_assoc_compact_copy");                      // copy the opening quote
+    emitter.label("__rt_json_assoc_compact_depth_inc");
+    emitter.instruction("add x13, x13, #1");                                    // increment nested container depth
+    emitter.instruction("b __rt_json_assoc_compact_copy");                      // copy the nested opening delimiter
+    emitter.label("__rt_json_assoc_compact_depth_dec");
+    emitter.instruction("sub x13, x13, #1");                                    // decrement nested container depth
+    emitter.instruction("b __rt_json_assoc_compact_copy");                      // copy the nested closing delimiter
+    emitter.label("__rt_json_assoc_compact_in_string");
+    emitter.instruction("strb w12, [x10]");                                     // copy the string byte
+    emitter.instruction("add x9, x9, #1");                                      // advance the read cursor
+    emitter.instruction("add x10, x10, #1");                                    // advance the write cursor
+    emitter.instruction("cmp w12, #92");                                        // escaped JSON string byte?
+    emitter.instruction("b.eq __rt_json_assoc_compact_string_escape");          // copy the escaped byte without interpreting it
+    emitter.instruction("cmp w12, #34");                                        // unescaped closing quote?
+    emitter.instruction("b.ne __rt_json_assoc_compact_value");                  // stay inside the string
+    emitter.instruction("mov x14, #0");                                         // leave string mode after the closing quote
+    emitter.instruction("b __rt_json_assoc_compact_value");                     // continue scanning after the string
+    emitter.label("__rt_json_assoc_compact_string_escape");
+    emitter.instruction("ldrb w12, [x9]");                                      // load the escaped byte after the backslash
+    emitter.instruction("strb w12, [x10]");                                     // copy the escaped byte verbatim
+    emitter.instruction("add x9, x9, #1");                                      // advance past the escaped byte
+    emitter.instruction("add x10, x10, #1");                                    // advance the compacted write cursor
+    emitter.instruction("b __rt_json_assoc_compact_value");                     // resume string scanning
+    emitter.label("__rt_json_assoc_compact_comma");
+    emitter.instruction("strb w12, [x10]");                                     // keep the comma between compacted array elements
+    emitter.instruction("add x9, x9, #1");                                      // advance past the comma in the object form
+    emitter.instruction("add x10, x10, #1");                                    // advance past the comma in the array form
+    emitter.instruction("b __rt_json_assoc_compact_key");                       // compact the next key/value pair
+    emitter.label("__rt_json_assoc_compact_close");
+    emitter.instruction("mov w12, #93");                                        // ASCII ']'
+    emitter.instruction("strb w12, [x10]");                                     // write the closing array bracket
+    emitter.instruction("add x10, x10, #1");                                    // advance past the closing array bracket
+    emitter.instruction("mov x11, x10");                                        // x11 = compacted write end
+    emitter.instruction("str x11, [sp, #16]");                                  // persist the compacted write end for concat_off
+
+    emitter.label("__rt_json_assoc_compute_result");
 
     // -- compute result --
     emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = output start
@@ -297,52 +422,10 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("str x10, [x9]");                                       // store updated offset
 
     // -- tear down and return --
+    emitter.instruction("ldr x19, [sp, #120]");                                 // restore caller x19 after using it as the flag cache
     emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #128");                                    // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
-
-    emit_assoc_is_list_shape_aarch64(emitter);
-}
-
-/// __rt_json_assoc_is_list_shape: walk the hash's insertion-order chain
-/// and decide whether the keys are exactly 0..count-1 in order. Returns
-/// x0 = 1 for list-shape (including empty hashes) or 0 otherwise.
-///
-/// Hash header layout: [count:8][capacity:8][value_type:8][head:8][tail:8]
-/// Entry layout: [occupied:8][key_ptr:8][key_len:8][value_lo:8][value_hi:8]
-///               [value_tag:8][prev:8][next:8]
-/// An integer key is signaled by key_len = -1, with key_ptr holding the
-/// integer payload directly.
-fn emit_assoc_is_list_shape_aarch64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: json_assoc_is_list_shape ---");
-    emitter.label_global("__rt_json_assoc_is_list_shape");
-    emitter.instruction("ldr x1, [x0]");                                        // x1 = count
-    emitter.instruction("cbz x1, __rt_json_assoc_is_list_shape_yes");           // empty hash → list shape (PHP encodes [])
-    emitter.instruction("ldr x2, [x0, #24]");                                   // x2 = head index (insertion-order chain)
-    emitter.instruction("cmn x2, #1");                                          // is the head sentinel (-1, empty chain)?
-    emitter.instruction("b.eq __rt_json_assoc_is_list_shape_no");               // count > 0 but no head → object form
-    emitter.instruction("mov x3, #0");                                          // expected key value for this iteration
-    emitter.label("__rt_json_assoc_is_list_shape_loop");
-    emitter.instruction("add x4, x0, #40");                                     // entries base = hash + 40 (header size)
-    emitter.instruction("lsl x5, x2, #6");                                      // entry index * 64 (entry size)
-    emitter.instruction("add x5, x4, x5");                                      // x5 = current entry pointer
-    emitter.instruction("ldr x6, [x5, #16]");                                   // x6 = entry.key_len
-    emitter.instruction("cmn x6, #1");                                          // is the key an integer (key_len == -1)?
-    emitter.instruction("b.ne __rt_json_assoc_is_list_shape_no");               // string keys disqualify list shape
-    emitter.instruction("ldr x6, [x5, #8]");                                    // x6 = entry.key_ptr (integer key payload)
-    emitter.instruction("cmp x6, x3");                                          // does it match the expected sequential key?
-    emitter.instruction("b.ne __rt_json_assoc_is_list_shape_no");               // mismatch → object form
-    emitter.instruction("add x3, x3, #1");                                      // expected_key++
-    emitter.instruction("ldr x2, [x5, #56]");                                   // x2 = entry.next
-    emitter.instruction("cmn x2, #1");                                          // hit the chain sentinel (-1)?
-    emitter.instruction("b.ne __rt_json_assoc_is_list_shape_loop");             // continue scanning
-    emitter.label("__rt_json_assoc_is_list_shape_yes");
-    emitter.instruction("mov x0, #1");                                          // report list shape
-    emitter.instruction("ret");                                                 // return from the JSON object encoder helper
-    emitter.label("__rt_json_assoc_is_list_shape_no");
-    emitter.instruction("mov x0, #0");                                          // report object form
-    emitter.instruction("ret");                                                 // return from the JSON object encoder helper
 }
 
 fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
@@ -352,20 +435,20 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving JSON-assoc scratch space
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for hash iteration state and concat-buffer cursors
-    emitter.instruction("sub rsp, 112");                                        // reserve local slots (was 96, +16 for the list_mode flag + alignment padding)
+    emitter.instruction("sub rsp, 112");                                        // reserve local slots including list-shape tracking and saved r15
+    emitter.instruction("mov QWORD PTR [rbp - 104], r15");                      // preserve caller r15 before caching active JSON flags
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source associative-array pointer across nested JSON helper calls
 
-    // Detect list-shape so [0=>'a',1=>'b'] (and post-unset arrays) emit
-    // ["a","b"] instead of {"0":"a","1":"b"}. JSON_FORCE_OBJECT skips the
-    // detection so the flag still wins.
-    emitter.instruction("mov rdx, QWORD PTR [rip + _json_active_flags]");       // load the active flag bitmask
-    emitter.instruction("test rdx, 16");                                        // is JSON_FORCE_OBJECT (bit 16) set?
-    emitter.instruction("jne __rt_json_assoc_force_object_mode_x");             // FORCE_OBJECT wins → emit object form
-    emitter.instruction("call __rt_json_assoc_is_list_shape");                  // rax = 1 if list-shape, 0 otherwise
-    emitter.instruction("mov QWORD PTR [rbp - 96], rax");                       // park the list_mode flag for the loop and close
-    emitter.instruction("jmp __rt_json_assoc_after_list_check_x");              // continue in the JSON object encoder control path
+    // Track list-shape while the object form is emitted. If every key is the
+    // sequential integer key 0..count-1, the finished buffer is compacted
+    // from {"0":...} to [...]. JSON_FORCE_OBJECT disables that compaction.
+    emitter.instruction("mov r15, QWORD PTR [rip + _json_active_flags]");       // cache the active flag bitmask for the whole associative-array encode
+    emitter.instruction("test r15, 16");                                        // is JSON_FORCE_OBJECT (bit 16) set?
+    emitter.instruction("jne __rt_json_assoc_force_object_mode_x");             // FORCE_OBJECT wins → keep object form
+    emitter.instruction("mov QWORD PTR [rbp - 96], 1");                         // start optimistic: keys may still be list-shaped
+    emitter.instruction("jmp __rt_json_assoc_after_list_check_x");              // continue after initializing list tracking
     emitter.label("__rt_json_assoc_force_object_mode_x");
-    emitter.instruction("mov QWORD PTR [rbp - 96], 0");                         // FORCE_OBJECT path always uses object form
+    emitter.instruction("mov QWORD PTR [rbp - 96], 0");                         // FORCE_OBJECT path never compacts to array form
 
     emitter.label("__rt_json_assoc_after_list_check_x");
     // Enter the recursion-depth check before any output is produced.
@@ -376,17 +459,11 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r11, r10");                                        // compute the current concat-buffer write pointer from the base plus offset
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the encoded-object start pointer for the final result slice
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the current concat-buffer write pointer for the hash iteration loop
-    // Write the opening bracket: '[' for list-shape, '{' otherwise.
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 96]");                       // reload the list_mode flag
-    emitter.instruction("test rdx, rdx");                                       // check the current JSON object encoder condition
-    emitter.instruction("jz __rt_json_assoc_open_obj_x");                       // 0 → object form
-    emitter.instruction("mov BYTE PTR [r11], 91");                              // ASCII '['
-    emitter.instruction("jmp __rt_json_assoc_open_emit_x");                     // continue in the JSON object encoder control path
-    emitter.label("__rt_json_assoc_open_obj_x");
+    // Write the opening brace; list-shape arrays rewrite it to '[' after the walk.
     emitter.instruction("mov BYTE PTR [r11], 123");                             // ASCII '{'
-    emitter.label("__rt_json_assoc_open_emit_x");
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the opening bracket
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer before entering the hash iteration loop
+    emitter.instruction("call __rt_json_pretty_push");                          // enter one pretty-print indentation level after the container opens
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize the hash iterator cursor to the insertion-order start sentinel
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize the number of encoded key/value pairs to zero
 
@@ -402,6 +479,16 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // save the current associative-array value low payload word for runtime JSON dispatch
     emitter.instruction("mov QWORD PTR [rbp - 72], r8");                        // save the current associative-array value high payload word for runtime JSON dispatch
     emitter.instruction("mov QWORD PTR [rbp - 80], r9");                        // save the current associative-array runtime value tag for runtime JSON dispatch
+    emitter.instruction("cmp QWORD PTR [rbp - 96], 0");                         // is list-shape compaction still possible?
+    emitter.instruction("je __rt_json_assoc_list_shape_checked_x");             // skip key checks after the first mismatch
+    emitter.instruction("cmp QWORD PTR [rbp - 56], -1");                        // is this an integer key?
+    emitter.instruction("jne __rt_json_assoc_list_shape_clear_x");              // string keys force object form
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // load the integer key payload
+    emitter.instruction("cmp r10, QWORD PTR [rbp - 40]");                       // does it match the insertion-order index?
+    emitter.instruction("je __rt_json_assoc_list_shape_checked_x");             // matching key keeps list compaction possible
+    emitter.label("__rt_json_assoc_list_shape_clear_x");
+    emitter.instruction("mov QWORD PTR [rbp - 96], 0");                         // mark the encoded object as non-list-shaped
+    emitter.label("__rt_json_assoc_list_shape_checked_x");
     emitter.instruction("cmp QWORD PTR [rbp - 40], 0");                         // is this the first encoded associative-array entry in the JSON object?
     emitter.instruction("je __rt_json_assoc_key");                              // skip the comma separator before the first encoded associative-array entry
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current concat-buffer write pointer before appending the comma separator
@@ -414,13 +501,13 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     // active flag set) is honored. Integer keys are formatted through
     // __rt_itoa (which writes into its own 21-byte scratch area inside
     // concat_buf and advances _concat_off by 21) and the digit bytes are
-    // copied inline into the JSON output position bracketed by quotes.
-    // List-mode skips the key + colon prefix and jumps straight to the
-    // value emission.
+    // copied inline into the JSON output position bracketed by quotes. If
+    // the completed object is still list-shaped, this key prefix is removed
+    // by the compaction pass.
     emitter.label("__rt_json_assoc_key");
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 96]");                       // reload the list_mode flag
-    emitter.instruction("test rdx, rdx");                                       // check the current JSON object encoder condition
-    emitter.instruction("jne __rt_json_assoc_after_key_prefix");                // list mode skips the key + colon prefix
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload write pos before optional pretty indentation
+    emitter.instruction("call __rt_json_pretty_line");                          // append newline and indentation for this entry when pretty-printing
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the write pos after any pretty indentation
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // load the key pointer (or integer payload when len = -1)
     emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // load the key length (or -1 sentinel for integer keys)
     emitter.instruction("cmp rdx, -1");                                         // is this an integer key?
@@ -446,6 +533,10 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r11], 34");                              // write the opening JSON key quote
     emitter.instruction("add r11, 1");                                          // advance past the opening quote
     emitter.instruction("mov QWORD PTR [rbp - 88], r11");                       // park the JSON write pointer across the itoa call
+    emitter.instruction("lea r10, [rip + _concat_buf]");                        // materialize the concat-buffer base before positioning itoa scratch
+    emitter.instruction("mov rcx, r11");                                        // copy the current key write pointer for the concat-offset calculation
+    emitter.instruction("sub rcx, r10");                                        // compute scratch-safe concat offset from the current key write position
+    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // move itoa scratch after the pretty-printed key prefix
     emitter.instruction("call __rt_itoa");                                      // rax = ptr to digits in itoa's scratch area, rdx = digit count
     emitter.instruction("mov r10, rax");                                        // remember the source pointer before the copy loop
     emitter.instruction("mov rcx, rdx");                                        // remember the digit count for the copy loop bound
@@ -466,6 +557,7 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_json_assoc_key_colon");
     emitter.instruction("mov BYTE PTR [r11], 58");                              // write the JSON colon separator between the encoded key and encoded value
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the colon separator
+    emitter.instruction("call __rt_json_pretty_colon_space");                   // append the pretty-print key/value space when requested
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer after emitting the full JSON key prefix
 
     emitter.label("__rt_json_assoc_after_key_prefix");
@@ -559,19 +651,123 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_assoc_close");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the concat-buffer write pointer after the final encoded JSON entry
-    // Write the closing bracket: ']' for list-shape, '}' otherwise.
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 96]");                       // reload the list_mode flag
-    emitter.instruction("test rdx, rdx");                                       // check the current JSON object encoder condition
-    emitter.instruction("jz __rt_json_assoc_close_obj_x");                      // 0 → object form
-    emitter.instruction("mov BYTE PTR [r11], 93");                              // ASCII ']'
-    emitter.instruction("jmp __rt_json_assoc_close_emit_x");                    // continue in the JSON object encoder control path
-    emitter.label("__rt_json_assoc_close_obj_x");
+    // Write the closing brace; list-shape arrays rewrite it to ']' after the walk.
+    emitter.instruction("call __rt_json_pretty_pop");                           // leave the container indentation level before closing it
+    emitter.instruction("cmp QWORD PTR [rbp - 40], 0");                         // did the container contain any entries?
+    emitter.instruction("je __rt_json_assoc_close_choose_x");                   // empty containers stay compact even under JSON_PRETTY_PRINT
+    emitter.instruction("call __rt_json_pretty_line");                          // append the closing-line indentation for non-empty pretty containers
+    emitter.label("__rt_json_assoc_close_choose_x");
     emitter.instruction("mov BYTE PTR [r11], 125");                             // ASCII '}'
-    emitter.label("__rt_json_assoc_close_emit_x");
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the closing bracket
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // checkpoint the write pointer across the depth-exit helper call
     emitter.instruction("call __rt_json_depth_exit");                           // decrement _json_active_depth so a sibling encoder can re-enter cleanly
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the write pointer after the helper call
+    emitter.instruction("cmp QWORD PTR [rbp - 96], 0");                         // was every emitted key sequential?
+    emitter.instruction("je __rt_json_assoc_compute_result_x");                 // non-list objects keep their provisional object bytes
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // rax = output start pointer
+    emitter.instruction("mov BYTE PTR [rax], 91");                              // rewrite the opening brace to an opening bracket
+    emitter.instruction("lea r10, [rax + 1]");                                  // read cursor starts after the opening byte
+    emitter.instruction("lea r11, [rax + 1]");                                  // write cursor starts after the opening byte
+    emitter.instruction("cmp BYTE PTR [r10], 125");                             // was the object empty?
+    emitter.instruction("je __rt_json_assoc_compact_close_x");                  // empty object compacts directly to []
+    // The provisional object can already contain pretty-print whitespace.
+    // Copy whitespace before each generated `"index":` key, then drop the
+    // key prefix itself so pretty list-shape output remains an array layout.
+    emitter.label("__rt_json_assoc_compact_key_x");
+    emitter.instruction("mov r8b, BYTE PTR [r10]");                             // inspect the byte before the skipped key prefix
+    emitter.instruction("cmp r8b, 125");                                        // did pretty output reach the closing object brace?
+    emitter.instruction("je __rt_json_assoc_compact_close_x");                  // replace the object close with an array close
+    emitter.instruction("cmp r8b, 34");                                         // reached the opening quote of the integer key?
+    emitter.instruction("je __rt_json_assoc_compact_key_start_x");              // skip the generated key prefix itself
+    emitter.instruction("mov BYTE PTR [r11], r8b");                             // preserve pretty-print whitespace before the array value
+    emitter.instruction("add r10, 1");                                          // advance the read cursor over the copied whitespace
+    emitter.instruction("add r11, 1");                                          // advance the compacted write cursor
+    emitter.instruction("jmp __rt_json_assoc_compact_key_x");                   // keep copying whitespace until the generated key starts
+    emitter.label("__rt_json_assoc_compact_key_start_x");
+    emitter.instruction("add r10, 1");                                          // skip the opening quote of the integer key
+    emitter.label("__rt_json_assoc_compact_key_scan_x");
+    emitter.instruction("mov r8b, BYTE PTR [r10]");                             // load the next key byte
+    emitter.instruction("add r10, 1");                                          // advance through the key byte
+    emitter.instruction("cmp r8b, 34");                                         // reached the closing key quote?
+    emitter.instruction("jne __rt_json_assoc_compact_key_scan_x");              // keep skipping key digits
+    emitter.instruction("add r10, 1");                                          // skip the colon after the key
+    // Pretty object output inserts a key/value space after `:`, but the
+    // compacted array form has no key/value separator. Drop only that local
+    // separator; value-owned spaces still copy through the value scanner.
+    emitter.label("__rt_json_assoc_compact_value_ws_x");
+    emitter.instruction("mov r8b, BYTE PTR [r10]");                             // inspect whitespace between the object colon and value
+    emitter.instruction("cmp r8b, 32");                                         // pretty-print object form inserts a single space after `:`
+    emitter.instruction("jne __rt_json_assoc_compact_value_init_x");            // first non-space byte belongs to the value
+    emitter.instruction("add r10, 1");                                          // drop the key/value separator space for array output
+    emitter.instruction("jmp __rt_json_assoc_compact_value_ws_x");              // continue through any repeated separator spaces
+    emitter.label("__rt_json_assoc_compact_value_init_x");
+    emitter.instruction("xor ecx, ecx");                                        // nested container depth = 0
+    emitter.instruction("xor r9d, r9d");                                        // string-mode flag = false
+    // Commas and braces only delimit the synthetic top-level object while
+    // depth == 0 and we are not inside a JSON string. Nested arrays/objects
+    // and string contents must be copied verbatim into the compacted value.
+    emitter.label("__rt_json_assoc_compact_value_x");
+    emitter.instruction("mov r8b, BYTE PTR [r10]");                             // load the next value/delimiter byte
+    emitter.instruction("test r9, r9");                                         // currently inside a JSON string?
+    emitter.instruction("jnz __rt_json_assoc_compact_in_string_x");             // strings copy bytes until an unescaped quote
+    emitter.instruction("test rcx, rcx");                                       // currently inside a nested container?
+    emitter.instruction("jnz __rt_json_assoc_compact_not_delim_x");             // nested containers own their commas/braces
+    emitter.instruction("cmp r8b, 44");                                         // top-level comma after a value?
+    emitter.instruction("je __rt_json_assoc_compact_comma_x");                  // keep the comma and start the next key
+    emitter.instruction("cmp r8b, 125");                                        // top-level object close after the final value?
+    emitter.instruction("je __rt_json_assoc_compact_close_x");                  // replace it with the array close
+    emitter.label("__rt_json_assoc_compact_not_delim_x");
+    emitter.instruction("cmp r8b, 34");                                         // value string opening quote?
+    emitter.instruction("je __rt_json_assoc_compact_string_open_x");            // enter string-copy mode
+    emitter.instruction("cmp r8b, 91");                                         // nested array opening bracket?
+    emitter.instruction("je __rt_json_assoc_compact_depth_inc_x");              // enter one nested container level
+    emitter.instruction("cmp r8b, 123");                                        // nested object opening brace?
+    emitter.instruction("je __rt_json_assoc_compact_depth_inc_x");              // enter one nested container level
+    emitter.instruction("cmp r8b, 93");                                         // nested array closing bracket?
+    emitter.instruction("je __rt_json_assoc_compact_depth_dec_x");              // leave one nested container level
+    emitter.instruction("cmp r8b, 125");                                        // nested object closing brace?
+    emitter.instruction("je __rt_json_assoc_compact_depth_dec_x");              // leave one nested container level
+    emitter.label("__rt_json_assoc_compact_copy_x");
+    emitter.instruction("mov BYTE PTR [r11], r8b");                             // copy the value byte to the compacted output
+    emitter.instruction("add r10, 1");                                          // advance the read cursor
+    emitter.instruction("add r11, 1");                                          // advance the write cursor
+    emitter.instruction("jmp __rt_json_assoc_compact_value_x");                 // continue copying the current value
+    emitter.label("__rt_json_assoc_compact_string_open_x");
+    emitter.instruction("mov r9, 1");                                           // remember that subsequent bytes are inside a JSON string
+    emitter.instruction("jmp __rt_json_assoc_compact_copy_x");                  // copy the opening quote
+    emitter.label("__rt_json_assoc_compact_depth_inc_x");
+    emitter.instruction("add rcx, 1");                                          // increment nested container depth
+    emitter.instruction("jmp __rt_json_assoc_compact_copy_x");                  // copy the nested opening delimiter
+    emitter.label("__rt_json_assoc_compact_depth_dec_x");
+    emitter.instruction("sub rcx, 1");                                          // decrement nested container depth
+    emitter.instruction("jmp __rt_json_assoc_compact_copy_x");                  // copy the nested closing delimiter
+    emitter.label("__rt_json_assoc_compact_in_string_x");
+    emitter.instruction("mov BYTE PTR [r11], r8b");                             // copy the string byte
+    emitter.instruction("add r10, 1");                                          // advance the read cursor
+    emitter.instruction("add r11, 1");                                          // advance the write cursor
+    emitter.instruction("cmp r8b, 92");                                         // escaped JSON string byte?
+    emitter.instruction("je __rt_json_assoc_compact_string_escape_x");          // copy the escaped byte without interpreting it
+    emitter.instruction("cmp r8b, 34");                                         // unescaped closing quote?
+    emitter.instruction("jne __rt_json_assoc_compact_value_x");                 // stay inside the string
+    emitter.instruction("xor r9d, r9d");                                        // leave string mode after the closing quote
+    emitter.instruction("jmp __rt_json_assoc_compact_value_x");                 // continue scanning after the string
+    emitter.label("__rt_json_assoc_compact_string_escape_x");
+    emitter.instruction("mov r8b, BYTE PTR [r10]");                             // load the escaped byte after the backslash
+    emitter.instruction("mov BYTE PTR [r11], r8b");                             // copy the escaped byte verbatim
+    emitter.instruction("add r10, 1");                                          // advance past the escaped byte
+    emitter.instruction("add r11, 1");                                          // advance the compacted write cursor
+    emitter.instruction("jmp __rt_json_assoc_compact_value_x");                 // resume string scanning
+    emitter.label("__rt_json_assoc_compact_comma_x");
+    emitter.instruction("mov BYTE PTR [r11], r8b");                             // keep the comma between compacted array elements
+    emitter.instruction("add r10, 1");                                          // advance past the comma in the object form
+    emitter.instruction("add r11, 1");                                          // advance past the comma in the array form
+    emitter.instruction("jmp __rt_json_assoc_compact_key_x");                   // compact the next key/value pair
+    emitter.label("__rt_json_assoc_compact_close_x");
+    emitter.instruction("mov BYTE PTR [r11], 93");                              // write the closing array bracket
+    emitter.instruction("add r11, 1");                                          // advance past the closing array bracket
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the compacted write end for concat_off
+
+    emitter.label("__rt_json_assoc_compute_result_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the encoded-object start pointer in the leading x86_64 string result register
     emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer write pointer before turning it into a slice length
     emitter.instruction("sub rdx, rax");                                        // compute the final encoded-object length from write_end - write_start
@@ -579,43 +775,8 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the final concat-buffer write pointer before converting it into an absolute offset
     emitter.instruction("sub rcx, r10");                                        // compute the new absolute concat-buffer offset after the encoded JSON object
     emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // publish the updated concat-buffer offset so later writers append after this JSON object
+    emitter.instruction("mov r15, QWORD PTR [rbp - 104]");                      // restore caller r15 after using it as the flag cache
     emitter.instruction("add rsp, 112");                                        // release the local JSON-assoc scratch frame before returning to generated code
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
     emitter.instruction("ret");                                                 // return the encoded JSON object slice in the x86_64 string result registers
-
-    emit_assoc_is_list_shape_x86_64(emitter);
-}
-
-fn emit_assoc_is_list_shape_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: json_assoc_is_list_shape ---");
-    emitter.label_global("__rt_json_assoc_is_list_shape");
-    emitter.instruction("mov rdx, QWORD PTR [rax]");                            // rdx = count
-    emitter.instruction("test rdx, rdx");                                       // empty hash?
-    emitter.instruction("je __rt_json_assoc_is_list_shape_yes_x");              // empty → list shape (PHP encodes [])
-    emitter.instruction("mov rcx, QWORD PTR [rax + 24]");                       // rcx = head index (insertion-order chain)
-    emitter.instruction("cmp rcx, -1");                                         // sentinel for empty chain?
-    emitter.instruction("je __rt_json_assoc_is_list_shape_no_x");               // count > 0 but no head → object form
-    emitter.instruction("xor r8, r8");                                          // expected key value for this iteration
-    emitter.label("__rt_json_assoc_is_list_shape_loop_x");
-    emitter.instruction("lea r9, [rax + 40]");                                  // entries base = hash + 40 (header size)
-    emitter.instruction("mov r10, rcx");                                        // copy entry index for shift
-    emitter.instruction("shl r10, 6");                                          // entry index * 64 (entry size)
-    emitter.instruction("add r9, r10");                                         // r9 = current entry pointer
-    emitter.instruction("mov r11, QWORD PTR [r9 + 16]");                        // r11 = entry.key_len
-    emitter.instruction("cmp r11, -1");                                         // is the key an integer (key_len == -1)?
-    emitter.instruction("jne __rt_json_assoc_is_list_shape_no_x");              // string keys disqualify list shape
-    emitter.instruction("mov r11, QWORD PTR [r9 + 8]");                         // r11 = entry.key_ptr (integer key payload)
-    emitter.instruction("cmp r11, r8");                                         // does it match the expected sequential key?
-    emitter.instruction("jne __rt_json_assoc_is_list_shape_no_x");              // mismatch → object form
-    emitter.instruction("add r8, 1");                                           // expected_key++
-    emitter.instruction("mov rcx, QWORD PTR [r9 + 56]");                        // rcx = entry.next
-    emitter.instruction("cmp rcx, -1");                                         // hit the chain sentinel?
-    emitter.instruction("jne __rt_json_assoc_is_list_shape_loop_x");            // continue scanning
-    emitter.label("__rt_json_assoc_is_list_shape_yes_x");
-    emitter.instruction("mov rax, 1");                                          // report list shape
-    emitter.instruction("ret");                                                 // return from the JSON object encoder helper
-    emitter.label("__rt_json_assoc_is_list_shape_no_x");
-    emitter.instruction("mov rax, 0");                                          // report object form
-    emitter.instruction("ret");                                                 // return from the JSON object encoder helper
 }

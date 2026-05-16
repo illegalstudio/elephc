@@ -16,6 +16,118 @@ use super::super::Checker;
 
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
+fn validate_call_user_func_array_ref_args(
+    sig: &crate::types::FunctionSig,
+    arg_array: &Expr,
+    span: crate::span::Span,
+) -> Result<(), CompileError> {
+    if !sig.ref_params.iter().any(|is_ref| *is_ref) {
+        return Ok(());
+    }
+    if matches!(arg_array.kind, ExprKind::ArrayLiteral(_)) {
+        return Ok(());
+    }
+    Err(CompileError::new(
+        span,
+        "call_user_func_array() requires a literal argument array when the callback has pass-by-reference parameters",
+    ))
+}
+
+fn dummy_arg_for_array_scalar_elem(arr_ty: &PhpType, span: crate::span::Span) -> Expr {
+    let elem_ty = match arr_ty {
+        PhpType::Array(elem_ty) => elem_ty.as_ref(),
+        PhpType::AssocArray { value, .. } => value.as_ref(),
+        _ => &PhpType::Int,
+    };
+    match elem_ty {
+        PhpType::Str => Expr::new(ExprKind::StringLiteral(String::new()), span),
+        PhpType::Float => Expr::new(ExprKind::FloatLiteral(0.0), span),
+        PhpType::Bool => Expr::new(ExprKind::BoolLiteral(false), span),
+        _ => Expr::new(ExprKind::IntLiteral(0), span),
+    }
+}
+
+fn check_callback_builtin_call(
+    checker: &mut Checker,
+    callback: &Expr,
+    callback_args: &[Expr],
+    span: crate::span::Span,
+    env: &TypeEnv,
+    label: &str,
+) -> Result<PhpType, CompileError> {
+    if checker.expr_call_complex_callee_needs_runtime_capture(callback) {
+        return Err(CompileError::new(
+            callback.span,
+            &format!(
+                "{} does not support complex expressions that select captured callables at runtime",
+                label
+            ),
+        ));
+    }
+
+    if let ExprKind::FirstClassCallable(target) = &callback.kind {
+        let sig = checker.specialize_first_class_callable_target(target, callback_args, span, env)?;
+        return checker.check_known_callable_call(&sig, callback_args, span, env, label);
+    }
+
+    if let ExprKind::Variable(var_name) = &callback.kind {
+        if let Some(target) = checker.first_class_callable_targets.get(var_name).cloned() {
+            let sig =
+                checker.specialize_first_class_callable_target(&target, callback_args, span, env)?;
+            checker.callable_sigs.insert(var_name.clone(), sig.clone());
+            checker
+                .closure_return_types
+                .insert(var_name.clone(), sig.return_type.clone());
+            return checker.check_known_callable_call(&sig, callback_args, span, env, label);
+        }
+    }
+
+    if let ExprKind::StringLiteral(cb_name) = &callback.kind {
+        if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
+            return checker.check_known_callable_call(&sig, callback_args, span, env, label);
+        }
+        if let Some(decl) = checker.fn_decls.get(cb_name.as_str()).cloned() {
+            let effective_arg_count = callback_args.len();
+            let required = decl.defaults.iter().filter(|default| default.is_none()).count();
+            if decl.variadic.is_some() {
+                if effective_arg_count < required {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "Function '{}' expects at least {} arguments, got {}",
+                            cb_name, required, effective_arg_count
+                        ),
+                    ));
+                }
+            } else if effective_arg_count < required || effective_arg_count > decl.params.len() {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Function '{}' expects {} arguments, got {}",
+                        cb_name,
+                        Checker::format_fixed_or_range_arity(required, decl.params.len()),
+                        effective_arg_count
+                    ),
+                ));
+            }
+            // Keep function-variant discovery, but do not treat scalar dummy args
+            // as authoritative parameter types for callbacks over refcounted arrays.
+            let _ = checker.check_function_call(cb_name, callback_args, span, env);
+            return Ok(PhpType::Int);
+        }
+        return checker.check_function_call(cb_name, callback_args, span, env);
+    }
+
+    if let Some(sig) = checker.resolve_expr_callable_sig(callback, env)? {
+        return checker.check_known_callable_call(&sig, callback_args, span, env, label);
+    }
+
+    Err(CompileError::new(
+        callback.span,
+        &format!("{} must have a statically known callable signature", label),
+    ))
+}
+
 pub(super) fn check_builtin(
     checker: &mut Checker,
     name: &str,
@@ -32,20 +144,20 @@ pub(super) fn check_builtin(
                 checker.infer_type(arg, env)?;
             }
             let arr_ty = checker.infer_type(&args[1], env)?;
-            if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
-                if let PhpType::Array(ref elem_ty) = arr_ty {
-                    let dummy_arg = match elem_ty.as_ref() {
-                        PhpType::Str => Expr::new(ExprKind::StringLiteral(String::new()), span),
-                        PhpType::Float => Expr::new(ExprKind::FloatLiteral(0.0), span),
-                        PhpType::Bool => Expr::new(ExprKind::BoolLiteral(false), span),
-                        _ => Expr::new(ExprKind::IntLiteral(0), span),
-                    };
-                    let dummy_args = vec![dummy_arg];
-                    let _ = checker.check_function_call(cb_name, &dummy_args, span, env);
-                }
-            }
             match arr_ty {
-                PhpType::Array(elem_ty) => Ok(Some(PhpType::Array(elem_ty))),
+                PhpType::Array(elem_ty) => {
+                    let arr_ty = PhpType::Array(elem_ty.clone());
+                    let dummy_args = vec![dummy_arg_for_array_scalar_elem(&arr_ty, span)];
+                    check_callback_builtin_call(
+                        checker,
+                        &args[0],
+                        &dummy_args,
+                        span,
+                        env,
+                        "array_map() callback",
+                    )?;
+                    Ok(Some(PhpType::Array(elem_ty)))
+                }
                 _ => Err(CompileError::new(
                     span,
                     "array_map() second argument must be array",
@@ -63,12 +175,20 @@ pub(super) fn check_builtin(
                 checker.infer_type(arg, env)?;
             }
             let arr_ty = checker.infer_type(&args[0], env)?;
-            if let ExprKind::StringLiteral(cb_name) = &args[1].kind {
-                let dummy_args = vec![Expr::new(ExprKind::IntLiteral(0), span)];
-                let _ = checker.check_function_call(cb_name, &dummy_args, span, env);
-            }
             match arr_ty {
-                PhpType::Array(elem_ty) => Ok(Some(PhpType::Array(elem_ty))),
+                PhpType::Array(elem_ty) => {
+                    let arr_ty = PhpType::Array(elem_ty.clone());
+                    let dummy_args = vec![dummy_arg_for_array_scalar_elem(&arr_ty, span)];
+                    check_callback_builtin_call(
+                        checker,
+                        &args[1],
+                        &dummy_args,
+                        span,
+                        env,
+                        "array_filter() callback",
+                    )?;
+                    Ok(Some(PhpType::Array(elem_ty)))
+                }
                 _ => Err(CompileError::new(
                     span,
                     "array_filter() first argument must be array",
@@ -82,31 +202,41 @@ pub(super) fn check_builtin(
                     "array_reduce() takes exactly 3 arguments",
                 ));
             }
-            checker.reject_captured_first_class_callable_callback(&args[1], span, "array_reduce")?;
             for arg in args {
                 checker.infer_type(arg, env)?;
             }
-            if let ExprKind::StringLiteral(cb_name) = &args[1].kind {
-                let dummy_args = vec![
-                    Expr::new(ExprKind::IntLiteral(0), span),
-                    Expr::new(ExprKind::IntLiteral(0), span),
-                ];
-                let _ = checker.check_function_call(cb_name, &dummy_args, span, env);
-            }
+            let arr_ty = checker.infer_type(&args[0], env)?;
+            let dummy_args = vec![
+                Expr::new(ExprKind::IntLiteral(0), span),
+                dummy_arg_for_array_scalar_elem(&arr_ty, span),
+            ];
+            check_callback_builtin_call(
+                checker,
+                &args[1],
+                &dummy_args,
+                span,
+                env,
+                "array_reduce() callback",
+            )?;
             Ok(Some(PhpType::Int))
         }
         "array_walk" => {
             if args.len() != 2 {
                 return Err(CompileError::new(span, "array_walk() takes exactly 2 arguments"));
             }
-            checker.reject_captured_first_class_callable_callback(&args[1], span, "array_walk")?;
             for arg in args {
                 checker.infer_type(arg, env)?;
             }
-            if let ExprKind::StringLiteral(cb_name) = &args[1].kind {
-                let dummy_args = vec![Expr::new(ExprKind::IntLiteral(0), span)];
-                let _ = checker.check_function_call(cb_name, &dummy_args, span, env);
-            }
+            let arr_ty = checker.infer_type(&args[0], env)?;
+            let dummy_args = vec![dummy_arg_for_array_scalar_elem(&arr_ty, span)];
+            check_callback_builtin_call(
+                checker,
+                &args[1],
+                &dummy_args,
+                span,
+                env,
+                "array_walk() callback",
+            )?;
             Ok(Some(PhpType::Void))
         }
         "usort" | "uksort" | "uasort" => {
@@ -116,17 +246,24 @@ pub(super) fn check_builtin(
                     &format!("{}() takes exactly 2 arguments", name),
                 ));
             }
-            checker.reject_captured_first_class_callable_callback(&args[1], span, name)?;
             for arg in args {
                 checker.infer_type(arg, env)?;
             }
-            if let ExprKind::StringLiteral(cb_name) = &args[1].kind {
-                let dummy_args = vec![
-                    Expr::new(ExprKind::IntLiteral(0), span),
-                    Expr::new(ExprKind::IntLiteral(0), span),
-                ];
-                let _ = checker.check_function_call(cb_name, &dummy_args, span, env);
-            }
+            let arr_ty = checker.infer_type(&args[0], env)?;
+            let cmp_arg = if name == "uksort" {
+                Expr::new(ExprKind::IntLiteral(0), span)
+            } else {
+                dummy_arg_for_array_scalar_elem(&arr_ty, span)
+            };
+            let dummy_args = vec![cmp_arg.clone(), cmp_arg];
+            check_callback_builtin_call(
+                checker,
+                &args[1],
+                &dummy_args,
+                span,
+                env,
+                &format!("{}() callback", name),
+            )?;
             Ok(Some(PhpType::Void))
         }
         "call_user_func_array" => {
@@ -139,18 +276,19 @@ pub(super) fn check_builtin(
             for arg in args {
                 checker.infer_type(arg, env)?;
             }
+            if checker.expr_call_complex_callee_needs_runtime_capture(&args[0]) {
+                return Err(CompileError::new(
+                    args[0].span,
+                    "call_user_func_array() callback does not support complex expressions that select captured callables at runtime",
+                ));
+            }
             if let ExprKind::FirstClassCallable(target) = &args[0].kind {
                 let elems = match &args[1].kind {
                     ExprKind::ArrayLiteral(elems) => elems.as_slice(),
                     _ => &[],
                 };
                 let sig = checker.specialize_first_class_callable_target(target, elems, span, env)?;
-                if sig.ref_params.iter().any(|is_ref| *is_ref) {
-                    return Err(CompileError::new(
-                        span,
-                        "call_user_func_array() does not support pass-by-reference callback parameters yet",
-                    ));
-                }
+                validate_call_user_func_array_ref_args(&sig, &args[1], span)?;
                 if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
                     let ret_ty = checker.check_known_callable_call(
                         &sig,
@@ -175,12 +313,7 @@ pub(super) fn check_builtin(
                     checker
                         .closure_return_types
                         .insert(var_name.clone(), sig.return_type.clone());
-                    if sig.ref_params.iter().any(|is_ref| *is_ref) {
-                        return Err(CompileError::new(
-                            span,
-                            "call_user_func_array() does not support pass-by-reference callback parameters yet",
-                        ));
-                    }
+                    validate_call_user_func_array_ref_args(&sig, &args[1], span)?;
                     if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
                         let ret_ty = checker.check_known_callable_call(
                             &sig,
@@ -196,12 +329,7 @@ pub(super) fn check_builtin(
             }
             if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
                 if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
-                    if sig.ref_params.iter().any(|is_ref| *is_ref) {
-                        return Err(CompileError::new(
-                            span,
-                            "call_user_func_array() does not support pass-by-reference callback parameters yet",
-                        ));
-                    }
+                    validate_call_user_func_array_ref_args(&sig, &args[1], span)?;
                     if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
                         let ret_ty = checker.check_known_callable_call(
                             &sig,
@@ -215,10 +343,12 @@ pub(super) fn check_builtin(
                     return Ok(Some(sig.return_type.clone()));
                 }
                 if let Some(decl) = checker.fn_decls.get(cb_name.as_str()).cloned() {
-                    if decl.ref_params.iter().any(|is_ref| *is_ref) {
+                    if decl.ref_params.iter().any(|is_ref| *is_ref)
+                        && !matches!(args[1].kind, ExprKind::ArrayLiteral(_))
+                    {
                         return Err(CompileError::new(
                             span,
-                            "call_user_func_array() does not support pass-by-reference callback parameters yet",
+                            "call_user_func_array() requires a literal argument array when the callback has pass-by-reference parameters",
                         ));
                     }
                 }
@@ -237,12 +367,7 @@ pub(super) fn check_builtin(
                 }
             }
             if let Some(sig) = checker.resolve_expr_callable_sig(&args[0], env)? {
-                if sig.ref_params.iter().any(|is_ref| *is_ref) {
-                    return Err(CompileError::new(
-                        span,
-                        "call_user_func_array() does not support pass-by-reference callback parameters yet",
-                    ));
-                }
+                validate_call_user_func_array_ref_args(&sig, &args[1], span)?;
                 if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
                     let ret_ty = checker.check_known_callable_call(
                         &sig,
@@ -255,7 +380,10 @@ pub(super) fn check_builtin(
                 }
                 return Ok(Some(sig.return_type.clone()));
             }
-            Ok(Some(PhpType::Int))
+            Err(CompileError::new(
+                args[0].span,
+                "call_user_func_array() callback must have a statically known callable signature",
+            ))
         }
         "call_user_func" => {
             if args.is_empty() {
@@ -266,6 +394,12 @@ pub(super) fn check_builtin(
             }
             for arg in args {
                 checker.infer_type(arg, env)?;
+            }
+            if checker.expr_call_complex_callee_needs_runtime_capture(&args[0]) {
+                return Err(CompileError::new(
+                    args[0].span,
+                    "call_user_func() callback does not support complex expressions that select captured callables at runtime",
+                ));
             }
             if let ExprKind::FirstClassCallable(target) = &args[0].kind {
                 let sig =
@@ -326,7 +460,10 @@ pub(super) fn check_builtin(
                 )?;
                 return Ok(Some(ret_ty));
             }
-            Ok(Some(PhpType::Int))
+            Err(CompileError::new(
+                args[0].span,
+                "call_user_func() callback must have a statically known callable signature",
+            ))
         }
         "class_alias" => {
             if args.len() < 2 || args.len() > 3 {

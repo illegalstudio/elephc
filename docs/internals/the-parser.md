@@ -85,7 +85,7 @@ Things that have a value:
 | `NullsafePropertyAccess { object, property }` | `$p?->x` | Nullsafe property access via `?->` |
 | `StaticPropertyAccess { receiver, property }` | `Point::$count`, `self::$count`, `parent::$count`, `static::$count` | Class-scoped property access via `::`, where `receiver` is a named class, `Self_`, `Static`, or `Parent` |
 | `MethodCall { object, method, args }` | `$p->move(1, 2)` | Instance method call |
-| `NullsafeMethodCall { object, method, args }` | `$p?->move(1, 2)` | Nullsafe instance method call; `?->method(...)` cannot form a first-class callable |
+| `NullsafeMethodCall { object, method, args }` | `$p?->move(1, 2)` | Nullsafe instance method call; PHP rejects `?->method(...)` closure creation, so elephc reports `Cannot combine nullsafe operator with Closure creation` for that form |
 | `StaticMethodCall { receiver, method, args }` | `Point::origin()`, `self::boot()`, `parent::boot()`, `static::boot()` | Static-style call via `::`, where `receiver` is a named class, `Self_`, `Static`, or `Parent` |
 | `FirstClassCallable(CallableTarget)` | `strlen(...)`, `Tools\fmt(...)`, `Math::twice(...)` | PHP-style first-class callable syntax; the target is preserved structurally instead of being parsed as a call |
 | `This` | `$this` | Reference to the current object inside a method |

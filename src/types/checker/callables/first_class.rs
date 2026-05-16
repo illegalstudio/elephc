@@ -157,12 +157,6 @@ impl Checker {
                 Ok(Self::callable_wrapper_sig(&effective_sig))
             }
             CallableTarget::Method { object, method } => {
-                if !matches!(&object.kind, ExprKind::Variable(_) | ExprKind::This) {
-                    return Err(CompileError::new(
-                        span,
-                        "First-class method callable requires a variable or $this receiver",
-                    ));
-                }
                 let object_ty = self.infer_type(object, env)?;
                 match object_ty {
                     PhpType::Object(class_name) => {

@@ -281,6 +281,59 @@ fn test_call_user_func_array_variadic_float_tail_count() {
     assert_eq!(out, "2");
 }
 
+#[test]
+fn test_call_user_func_array_first_class_callable_preserves_by_ref_params() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$n) {
+    $n = $n + 1;
+}
+
+$f = bump(...);
+$value = 5;
+call_user_func_array($f, [$value]);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+#[test]
+fn test_call_user_func_array_string_callback_preserves_by_ref_params() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$n) {
+    $n = $n + 1;
+}
+
+$value = 5;
+call_user_func_array("bump", [$value]);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+#[test]
+fn test_call_user_func_array_method_callable_preserves_by_ref_params_and_capture() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter {
+    public function bump(&$n) {
+        $n = $n + 2;
+    }
+}
+
+$counter = new Counter();
+$f = $counter->bump(...);
+$value = 5;
+call_user_func_array($f, [$value]);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
 // -- v0.8 constants --
 
 #[test]

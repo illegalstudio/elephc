@@ -50,6 +50,9 @@ echo "Word count: " . $words . "\n";
 $cleaned = preg_replace("/[ ]+/", " ", "hello    world    test");
 echo "Cleaned: " . $cleaned . "\n";
 
+$name = preg_replace("/([a-z]+) ([a-z]+)/", '$2, $1', "ada lovelace");
+echo "Name swap: " . $name . "\n";
+
 // Split
 $parts = preg_split("/[,;]+/", "one,two;;three,four");
 echo "Parts: " . count($parts) . "\n";

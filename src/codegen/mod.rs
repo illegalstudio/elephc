@@ -10,6 +10,7 @@
 
 mod abi;
 mod builtins;
+mod callables;
 mod class_methods;
 pub mod context;
 mod data_section;

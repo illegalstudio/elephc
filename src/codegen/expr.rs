@@ -183,7 +183,8 @@ pub fn emit_expr(
             calls::emit_closure_call(var, args, emitter, ctx, data)
         }
         ExprKind::ExprCall { callee, args } => {
-            calls::emit_expr_call(callee, args, emitter, ctx, data)
+            let loaded_callee_ty = emit_expr(callee, emitter, ctx, data);
+            calls::emit_loaded_expr_call(callee, args, &loaded_callee_ty, emitter, ctx, data)
         }
         ExprKind::ConstRef(name) => {
             let (value, ty) = match ctx.constants.get(name.as_str()) {

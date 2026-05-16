@@ -54,6 +54,7 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     emitter.instruction("strb w12, [x11]");                                     // write '['
     emitter.instruction("add x11, x11, #1");                                    // advance
     emitter.instruction("str x11, [sp, #16]");                                  // save write pos
+    emitter.instruction("bl __rt_json_pretty_push");                            // enter one pretty-print indentation level after the array opens
 
     // -- get array length --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload array ptr
@@ -78,10 +79,17 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
 
     // -- load element value and convert to string --
     emitter.label("__rt_json_arr_int_elem");
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload write pos before optional pretty indentation
+    emitter.instruction("bl __rt_json_pretty_line");                            // append newline and indentation for this element when pretty-printing
+    emitter.instruction("str x11, [sp, #16]");                                  // save the write pos after any pretty indentation
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload array ptr
     emitter.instruction("ldr x4, [sp, #32]");                                   // reload index
     emitter.instruction("add x4, x4, #3");                                      // skip 24-byte header (3 * 8 bytes)
     emitter.instruction("ldr x0, [x0, x4, lsl #3]");                            // load element value
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_concat_buf");
+    emitter.instruction("sub x12, x11, x10");                                   // compute scratch-safe concat offset from the current write position
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("str x12, [x9]");                                       // move itoa scratch after the pretty-printed prefix
     emitter.instruction("bl __rt_itoa");                                        // convert to string → x1/x2
 
     // -- copy itoa result to output --
@@ -106,6 +114,11 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     // -- write closing bracket --
     emitter.label("__rt_json_arr_int_close");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload write pos
+    emitter.instruction("bl __rt_json_pretty_pop");                             // leave the array indentation level before closing it
+    emitter.instruction("ldr x3, [sp, #24]");                                   // reload array length to decide whether closing needs its own line
+    emitter.instruction("cbz x3, __rt_json_arr_int_close_emit");                // empty arrays stay compact even under JSON_PRETTY_PRINT
+    emitter.instruction("bl __rt_json_pretty_line");                            // append the closing-line indentation for non-empty pretty arrays
+    emitter.label("__rt_json_arr_int_close_emit");
     emitter.instruction("mov w12, #93");                                        // ASCII ']'
     emitter.instruction("strb w12, [x11]");                                     // write ']'
     emitter.instruction("add x11, x11, #1");                                    // advance
@@ -155,6 +168,7 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r11], 91");                              // write the opening JSON bracket before any encoded integer payloads
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the opening bracket
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer before entering the element loop
+    emitter.instruction("call __rt_json_pretty_push");                          // enter one pretty-print indentation level after the array opens
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source array pointer (depth_enter clobbered rax)
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the integer-array length from the first header field
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the array length across itoa calls and concat-buffer copies
@@ -172,10 +186,17 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer after appending the comma separator
 
     emitter.label("__rt_json_arr_int_elem");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current write pointer before optional pretty indentation
+    emitter.instruction("call __rt_json_pretty_line");                          // append newline and indentation for this element when pretty-printing
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the write pointer after any pretty indentation
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source integer-array pointer before loading the current element payload
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current integer-array element index before computing the payload slot address
     emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header to land on the first integer payload slot
     emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8]");                  // load the integer element payload from the indexed-array storage slot
+    emitter.instruction("lea r10, [rip + _concat_buf]");                        // materialize the concat-buffer base before positioning itoa scratch
+    emitter.instruction("mov rcx, r11");                                        // copy the current write pointer for the concat-offset calculation
+    emitter.instruction("sub rcx, r10");                                        // compute scratch-safe concat offset from the current write position
+    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // move itoa scratch after the pretty-printed prefix
     emitter.instruction("call __rt_itoa");                                      // encode the integer element as a decimal JSON slice
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current concat-buffer write pointer before copying the encoded integer bytes
     emitter.instruction("xor rcx, rcx");                                        // initialize the encoded-integer copy index to the beginning of the returned decimal slice
@@ -196,6 +217,11 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_arr_int_close");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the concat-buffer write pointer after the final encoded integer element
+    emitter.instruction("call __rt_json_pretty_pop");                           // leave the array indentation level before closing it
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // did the array contain any elements?
+    emitter.instruction("je __rt_json_arr_int_close_emit_x");                   // empty arrays stay compact even under JSON_PRETTY_PRINT
+    emitter.instruction("call __rt_json_pretty_line");                          // append the closing-line indentation for non-empty pretty arrays
+    emitter.label("__rt_json_arr_int_close_emit_x");
     emitter.instruction("mov BYTE PTR [r11], 93");                              // append the closing JSON bracket to complete the encoded integer array slice
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the closing bracket
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // checkpoint the write pointer across the depth-exit helper call

@@ -109,6 +109,8 @@ fn emit_dispatcher_arm64(emitter: &mut Emitter) {
     emitter.instruction("sub w10, w9, #97");                                    // 'a' = 97
     emitter.instruction("cmp w10, #25");                                        // ASCII alpha (a-z) ?
     emitter.instruction("b.hi __rt_strtotime_fail");                            // not alpha → fail
+    emitter.instruction("cmp w9, #97");                                         // possible "a/an <unit>" article-relative form ?
+    emitter.instruction("b.eq __rt_strtotime_offsets_entry");                   // let offsets parse or reject the article form
 
     // -- alpha: try keyword table match --
     emitter.instruction("add x6, sp, #64");                                     // x6 = lc16 buffer ptr (candidate)
@@ -134,7 +136,11 @@ fn emit_dispatcher_arm64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #10");                                         // kind 9 = bare "ago" (not a top-level term)
     emitter.instruction("b.lt __rt_strtotime_fail");                            // → fail
     emitter.instruction("cmp x9, #16");                                         // kind 10..16 = weekday name ?
-    emitter.instruction("b.gt __rt_strtotime_fail");                            // unknown kind → fail
+    emitter.instruction("b.le __rt_strtotime_alpha_direct_weekday");            // yes → direct weekday strategy
+    emitter.instruction("cmp x9, #18");                                         // kind 17..18 = a/an relative magnitude ?
+    emitter.instruction("b.le __rt_strtotime_offsets_entry");                   // let the offsets strategy parse the full relative expression
+    emitter.instruction("b __rt_strtotime_fail");                               // unknown kind → fail
+    emitter.label("__rt_strtotime_alpha_direct_weekday");
     emitter.instruction("ldr x8, [sp, #56]");                                   // reload trimmed input length
     emitter.instruction("cmp x10, x8");                                         // weekday consumed the whole input ?
     emitter.instruction("b.ne __rt_strtotime_fail");                            // trailing junk after weekday → fail
@@ -210,6 +216,8 @@ fn emit_dispatcher_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub ecx, 97");                                         // 'a' = 97
     emitter.instruction("cmp ecx, 25");                                         // ASCII alpha ?
     emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // not alpha → fail
+    emitter.instruction("cmp al, 97");                                          // possible "a/an <unit>" article-relative form ?
+    emitter.instruction("je __rt_strtotime_offsets_entry_linux_x86_64");        // let offsets parse or reject the article form
 
     // -- alpha: try keyword table match --
     // Args (caller-saved): rdi = candidate ptr, rsi = table base, rcx = available bytes.
@@ -236,7 +244,11 @@ fn emit_dispatcher_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdx, 10");                                         // kind 9 = bare "ago" → fail
     emitter.instruction("jl __rt_strtotime_fail_linux_x86_64");                 // below 10 → fail
     emitter.instruction("cmp rdx, 16");                                         // weekday name ?
-    emitter.instruction("jg __rt_strtotime_fail_linux_x86_64");                 // unknown kind → fail
+    emitter.instruction("jle __rt_strtotime_alpha_direct_weekday_linux_x86_64"); // yes → direct weekday strategy
+    emitter.instruction("cmp rdx, 18");                                         // kind 17..18 = a/an relative magnitude ?
+    emitter.instruction("jle __rt_strtotime_offsets_entry_linux_x86_64");       // let the offsets strategy parse the full relative expression
+    emitter.instruction("jmp __rt_strtotime_fail_linux_x86_64");                // unknown kind → fail
+    emitter.label("__rt_strtotime_alpha_direct_weekday_linux_x86_64");
     emitter.instruction("cmp rax, QWORD PTR [rbp - 72]");                       // weekday consumed the whole input ?
     emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // trailing junk after weekday → fail
     emitter.instruction("jmp __rt_strtotime_weekdays_entry_linux_x86_64");      // yes → weekdays

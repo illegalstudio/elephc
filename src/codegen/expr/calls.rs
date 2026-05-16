@@ -65,16 +65,6 @@ pub(super) fn emit_closure_call(
     closure::emit_closure_call(var, args, emitter, ctx, data)
 }
 
-pub(super) fn emit_expr_call(
-    callee: &Expr,
-    args: &[Expr],
-    emitter: &mut Emitter,
-    ctx: &mut Context,
-    data: &mut DataSection,
-) -> PhpType {
-    indirect::emit_expr_call(callee, args, emitter, ctx, data)
-}
-
 pub(super) fn emit_loaded_expr_call(
     callee: &Expr,
     args: &[Expr],
@@ -100,6 +90,10 @@ pub(crate) fn first_class_callable_sig(
     ctx: &Context,
 ) -> Option<crate::types::FunctionSig> {
     first_class::first_class_callable_sig(target, ctx)
+}
+
+pub(crate) fn first_class_method_receiver_temp_name(span: Span) -> String {
+    first_class::method_receiver_temp_name(span)
 }
 
 pub(crate) fn pipe_value_temp_name(span: Span) -> String {

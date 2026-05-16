@@ -201,7 +201,7 @@ src/
 │       ├── builtin_stdclass.rs stdClass dynamic-property metadata
 │       ├── builtin_types/     Shared builtin class/type helper predicates
 │       ├── builtins/          Built-in function type signatures
-│       ├── callables.rs       Closure and first-class callable signature resolution
+│       ├── callables/         Closure, extern-callable, and first-class callable signature resolution
 │       ├── extern_decl.rs     Extern declaration validation
 │       ├── functions.rs       Function-checking module root / orchestration
 │       ├── functions/         Call validation, signature resolution, return collection
@@ -270,7 +270,7 @@ src/
 │   ├── abi/                   Target-aware calling convention helpers
 │   │   ├── mod.rs             Public ABI helpers
 │   │   ├── bootstrap.rs       Program entry / bootstrap helpers
-│   │   ├── calls.rs           Call-site argument / result wiring
+│   │   ├── calls/             Call-site argument / result wiring
 │   │   ├── frame.rs           Stack frame prologue / epilogue
 │   │   ├── registers.rs       Register names per architecture
 │   │   ├── symbols.rs         Symbol / literal address loading
@@ -309,7 +309,7 @@ src/
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current helpers (5 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, mktime, strtotime, match_unhandled, enum_from_fail, json_encode_*, json_decode, preg_*, ... (34 files)
+│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, mktime, strtotime, match_unhandled, enum_from_fail, json_encode_*, json_decode, preg_*, ... (33 files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ... (5 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline, public API helpers (4 files)
 │       ├── objects/           stdClass, Mixed property/index access, JSON stdClass encoding helpers (3 files)
@@ -423,7 +423,7 @@ The runtime data emission in `src/codegen/runtime/data/` is split into `emit_run
 | Include-loaded function variants | `_fn_variant_active_<function>` | Active hidden implementation pointer for a function loaded through an include point |
 | I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags` | Syscall-oriented C-string scratch buffers and EOF bookkeeping |
 | String/regex tables | `_fmt_g`, `_b64_encode_tbl`, `_b64_decode_tbl`, `_pcre_*` | Formatting and lookup tables for runtime helpers |
-| JSON/date state and tables | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_depth_limit`, `_json_validate_*`, `_json_decode_assoc`, `_json_true`, `_json_false`, `_json_null`, `_json_err_msg_*`, `_json_err_msg_table`, `_json_int_max_str`, `_json_int_min_str`, `_day_names`, `_month_names` | Runtime JSON state, JSON literal/error lookup data, bigint thresholds, and date lookup tables |
+| JSON/date state and tables | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_indent_depth`, `_json_depth_limit`, `_json_validate_*`, `_json_decode_assoc`, `_json_true`, `_json_false`, `_json_null`, `_json_err_msg_*`, `_json_err_msg_table`, `_json_int_max_str`, `_json_int_min_str`, `_day_names`, `_month_names`, `_strtotime_*` | Runtime JSON state, JSON literal/error lookup data, bigint thresholds, date lookup tables, and `strtotime()` keyword/unit tables |
 | User-dependent storage | `_gvar_<name>`, `_static_<func>_<name>`, `_static_<func>_<name>_init`, `_static_prop_<class>_<prop>`, enum-case `.comm` symbols via `enum_case_symbol(...)` | Global/static local storage, class static-property storage, plus singleton backing slots for enum cases |
 | Class/interface metadata tables | `_instanceof_target_count`, `_instanceof_target_entries`, `_instanceof_name_*`, `_interface_count`, `_interface_method_ptrs`, `_interface_methods_<id>`, `_class_interface_ptrs`, `_class_interfaces_<id>`, `_class_interface_impl_<class>_<iface>`, `_generator_class_id`, `_fiber_class_id`, `_fiber_error_class_id`, `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>`, `_class_vtable_ptrs`, `_class_vtable_<id>`, `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` | Dynamic `instanceof` lookup names, built-in runtime-managed class ids, per-interface method-order metadata, per-class property traversal metadata, and instance/static dispatch tables |
 

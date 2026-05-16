@@ -20,8 +20,7 @@ use crate::codegen::emit::Emitter;
 ///
 /// Input:  x1 = slice ptr (with leading `[` and trailing `]`),
 ///         x2 = slice length
-/// Output: x0 = Mixed* on success, 0 on parse error (caller should fall
-///              back to the legacy string passthrough)
+/// Output: x0 = Mixed* on success, 0 on parse error after recording JSON state
 pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_decode_mixed_array_real ---");
@@ -33,7 +32,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     //   [sp + 16] = cursor (running scan position)
     //   [sp + 24] = arr_ptr (allocated via __rt_array_new, may grow on push)
     //   [sp + 32] = elem_start (saved across the recursive decode call)
-    //   [sp + 40] = (reserved scratch)
+    //   [sp + 40] = after_comma flag
     //   [sp + 48] = saved x29
     //   [sp + 56] = saved x30
     emitter.instruction("sub sp, sp, #64");                                     // update the JSON decoder cursor or counter
@@ -53,6 +52,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     // Initialize the cursor past the leading `[`.
     emitter.instruction("mov x9, #1");                                          // load or prepare JSON decoder state
     emitter.instruction("str x9, [sp, #16]");                                   // store updated JSON decoder state
+    emitter.instruction("str xzr, [sp, #40]");                                  // no comma has been consumed before the first element
 
     // Outer element loop. Each iteration: skip ws → scan element boundary
     // → recursively decode → push → look at separator.
@@ -62,23 +62,11 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #0]");                                    // slice_ptr
     emitter.instruction("ldr x2, [sp, #8]");                                    // slice_len
     emitter.instruction("ldr x9, [sp, #16]");                                   // cursor
-    emitter.label("__rt_json_decode_array_real_skip_ws");
     emitter.instruction("sub x10, x2, #1");                                     // last meaningful index = len - 1 (the `]`)
-    emitter.instruction("cmp x9, x10");                                         // check the current JSON decoder condition
+    emitter.instruction("mov x2, x10");                                         // skip whitespace up to, but not past, the closing bracket
+    emitter.instruction("bl __rt_json_skip_ws");                                // advance to the next element or closing bracket
+    emitter.instruction("cmp x9, x2");                                          // did the scan reach the closing bracket?
     emitter.instruction("b.ge __rt_json_decode_array_real_close");              // ran past the close → finalize
-    emitter.instruction("ldrb w11, [x1, x9]");                                  // load or prepare JSON decoder state
-    emitter.instruction("cmp w11, #32");                                        // check the current JSON decoder condition
-    emitter.instruction("b.eq __rt_json_decode_array_real_skip_ws_step");       // branch on the current JSON decoder condition
-    emitter.instruction("cmp w11, #9");                                         // check the current JSON decoder condition
-    emitter.instruction("b.eq __rt_json_decode_array_real_skip_ws_step");       // branch on the current JSON decoder condition
-    emitter.instruction("cmp w11, #10");                                        // check the current JSON decoder condition
-    emitter.instruction("b.eq __rt_json_decode_array_real_skip_ws_step");       // branch on the current JSON decoder condition
-    emitter.instruction("cmp w11, #13");                                        // check the current JSON decoder condition
-    emitter.instruction("b.ne __rt_json_decode_array_real_skip_ws_done");       // branch on the current JSON decoder condition
-    emitter.label("__rt_json_decode_array_real_skip_ws_step");
-    emitter.instruction("add x9, x9, #1");                                      // update the JSON decoder cursor or counter
-    emitter.instruction("b __rt_json_decode_array_real_skip_ws");               // continue in the JSON decoder control path
-    emitter.label("__rt_json_decode_array_real_skip_ws_done");
     emitter.instruction("str x9, [sp, #16]");                                   // store updated JSON decoder state
 
     // After whitespace skip: peek at the byte. If it's the closing `]`
@@ -89,6 +77,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_json_decode_array_real_close");              // branch on the current JSON decoder condition
 
     // Save elem_start, then run the boundary scanner.
+    emitter.instruction("str xzr, [sp, #40]");                                  // seeing an element clears the trailing-comma guard
     emitter.instruction("str x9, [sp, #32]");                                   // elem_start
 
     // Boundary scanner: advance cursor until we hit ',' or ']' at depth 0,
@@ -164,7 +153,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x1, x11, x10");                                    // sub_ptr = slice_ptr + elem_start
     emitter.instruction("sub x2, x9, x10");                                     // sub_len = elem_end - elem_start
     emitter.instruction("bl __rt_json_decode_mixed");                           // x0 = Mixed* for the element
-    emitter.instruction("cbz x0, __rt_json_decode_array_real_fail");            // recursion failure → propagate
+    emitter.instruction("cbz x0, __rt_json_decode_array_real_propagate");       // recursion already recorded the JSON error
 
     // Push the Mixed pointer into the destination array.
     emitter.instruction("ldr x1, [sp, #24]");                                   // array ptr
@@ -190,9 +179,18 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_json_decode_array_real_after_comma");
     emitter.instruction("add x9, x9, #1");                                      // update the JSON decoder cursor or counter
     emitter.instruction("str x9, [sp, #16]");                                   // store updated JSON decoder state
+    emitter.instruction("mov x10, #1");                                         // mark that the next token must be another element
+    emitter.instruction("str x10, [sp, #40]");                                  // publish the trailing-comma guard
     emitter.instruction("b __rt_json_decode_array_real_loop");                  // continue in the JSON decoder control path
 
     emitter.label("__rt_json_decode_array_real_close");
+    emitter.instruction("ldr x9, [sp, #16]");                                   // cursor should point at the closing bracket
+    emitter.instruction("ldr x10, [sp, #8]");                                   // slice length
+    emitter.instruction("sub x10, x10, #1");                                    // required closing bracket index
+    emitter.instruction("cmp x9, x10");                                         // did the parser stop at the final byte?
+    emitter.instruction("b.ne __rt_json_decode_array_real_fail");               // trailing bytes after the array are invalid
+    emitter.instruction("ldr x11, [sp, #40]");                                  // was the close reached right after a comma?
+    emitter.instruction("cbnz x11, __rt_json_decode_array_real_fail");          // trailing commas are invalid JSON
     // Box the populated array as Mixed(tag=4).
     emitter.instruction("ldr x1, [sp, #24]");                                   // array ptr
     emitter.instruction("mov x0, #4");                                          // tag = indexed array
@@ -203,7 +201,10 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON decoder helper
 
     emitter.label("__rt_json_decode_array_real_fail");
-    emitter.instruction("mov x0, #0");                                          // signal failure → caller falls back
+    emitter.instruction("mov x0, #4");                                          // JSON_ERROR_SYNTAX
+    emitter.instruction("bl __rt_json_throw_error");                            // record syntax error and throw when requested
+    emitter.label("__rt_json_decode_array_real_propagate");
+    emitter.instruction("mov x0, #0");                                          // signal decode failure to the caller
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // load or prepare JSON decoder state
     emitter.instruction("add sp, sp, #64");                                     // update the JSON decoder cursor or counter
     emitter.instruction("ret");                                                 // return from the JSON decoder helper
@@ -225,6 +226,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     //   [rbp - 24] = cursor
     //   [rbp - 32] = arr_ptr
     //   [rbp - 40] = elem_start
+    //   [rbp - 48] = after_comma flag
     emitter.instruction("push rbp");                                            // save the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame
     emitter.instruction("sub rsp, 48");                                         // reserve aligned scratch
@@ -237,6 +239,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // park array pointer
 
     emitter.instruction("mov QWORD PTR [rbp - 24], 1");                         // cursor = 1 (skip leading `[`)
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // no comma has been consumed before the first element
 
     emitter.label("__rt_json_decode_array_real_loop_x");
 
@@ -244,24 +247,10 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // slice_ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // slice_len
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // cursor
-    emitter.label("__rt_json_decode_array_real_skip_ws_x");
-    emitter.instruction("mov r9, rdx");                                         // load or prepare JSON decoder state
-    emitter.instruction("sub r9, 1");                                           // last meaningful index = len - 1 (the `]`)
-    emitter.instruction("cmp rcx, r9");                                         // check the current JSON decoder condition
+    emitter.instruction("sub rdx, 1");                                          // last meaningful index = len - 1 (the `]`)
+    emitter.instruction("call __rt_json_skip_ws");                              // advance to the next element or closing bracket
+    emitter.instruction("cmp rcx, rdx");                                        // did the scan reach the closing bracket?
     emitter.instruction("jge __rt_json_decode_array_real_close_x");             // ran past the close
-    emitter.instruction("movzx r8, BYTE PTR [rax + rcx]");                      // load or prepare JSON decoder state
-    emitter.instruction("cmp r8, 32");                                          // check the current JSON decoder condition
-    emitter.instruction("je __rt_json_decode_array_real_skip_ws_step_x");       // branch on the current JSON decoder condition
-    emitter.instruction("cmp r8, 9");                                           // check the current JSON decoder condition
-    emitter.instruction("je __rt_json_decode_array_real_skip_ws_step_x");       // branch on the current JSON decoder condition
-    emitter.instruction("cmp r8, 10");                                          // check the current JSON decoder condition
-    emitter.instruction("je __rt_json_decode_array_real_skip_ws_step_x");       // branch on the current JSON decoder condition
-    emitter.instruction("cmp r8, 13");                                          // check the current JSON decoder condition
-    emitter.instruction("jne __rt_json_decode_array_real_skip_ws_done_x");      // branch on the current JSON decoder condition
-    emitter.label("__rt_json_decode_array_real_skip_ws_step_x");
-    emitter.instruction("add rcx, 1");                                          // update the JSON decoder cursor or counter
-    emitter.instruction("jmp __rt_json_decode_array_real_skip_ws_x");           // continue in the JSON decoder control path
-    emitter.label("__rt_json_decode_array_real_skip_ws_done_x");
     emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // load or prepare JSON decoder state
 
     // After whitespace skip: peek at the byte. If it's `]` we're done.
@@ -270,6 +259,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_decode_array_real_close_x");              // branch on the current JSON decoder condition
 
     // Save elem_start, then run the boundary scanner.
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // seeing an element clears the trailing-comma guard
     emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // elem_start
 
     // Boundary scanner. Registers:
@@ -280,6 +270,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     //   r11 = in_string flag
     //   r12 = escape flag (callee-saved — we save before clobbering)
     //   r8  = current byte
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore slice_len after the whitespace helper used an exclusive limit
     emitter.instruction("push r12");                                            // preserve callee-saved (System V keeps r12)
     emitter.instruction("xor r10, r10");                                        // depth
     emitter.instruction("xor r11, r11");                                        // in_string
@@ -347,7 +338,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rdx, r10");                                        // update the JSON decoder cursor or counter
     emitter.instruction("call __rt_json_decode_mixed");                         // rax = Mixed* for the element
     emitter.instruction("test rax, rax");                                       // check the current JSON decoder condition
-    emitter.instruction("je __rt_json_decode_array_real_fail_x");               // branch on the current JSON decoder condition
+    emitter.instruction("je __rt_json_decode_array_real_propagate_x");          // recursion already recorded the JSON error
 
     // Push the Mixed pointer into the destination array.
     emitter.instruction("mov rsi, rax");                                        // child = Mixed*
@@ -371,9 +362,17 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_json_decode_array_real_after_comma_x");
     emitter.instruction("add rcx, 1");                                          // update the JSON decoder cursor or counter
     emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // load or prepare JSON decoder state
+    emitter.instruction("mov QWORD PTR [rbp - 48], 1");                         // next token must be another element
     emitter.instruction("jmp __rt_json_decode_array_real_loop_x");              // continue in the JSON decoder control path
 
     emitter.label("__rt_json_decode_array_real_close_x");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // cursor should point at the closing bracket
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // slice length
+    emitter.instruction("sub rdx, 1");                                          // required closing bracket index
+    emitter.instruction("cmp rcx, rdx");                                        // did the parser stop at the final byte?
+    emitter.instruction("jne __rt_json_decode_array_real_fail_x");              // trailing bytes after the array are invalid
+    emitter.instruction("cmp QWORD PTR [rbp - 48], 0");                         // was the close reached right after a comma?
+    emitter.instruction("jne __rt_json_decode_array_real_fail_x");              // trailing commas are invalid JSON
     // Box the populated array as Mixed(tag=4).
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // array ptr
     emitter.instruction("mov rax, 4");                                          // tag = indexed array
@@ -384,7 +383,10 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON decoder helper
 
     emitter.label("__rt_json_decode_array_real_fail_x");
-    emitter.instruction("xor rax, rax");                                        // signal failure → caller falls back
+    emitter.instruction("mov rax, 4");                                          // JSON_ERROR_SYNTAX
+    emitter.instruction("call __rt_json_throw_error");                          // record syntax error and throw when requested
+    emitter.label("__rt_json_decode_array_real_propagate_x");
+    emitter.instruction("xor rax, rax");                                        // signal decode failure to the caller
     emitter.instruction("mov rsp, rbp");                                        // load or prepare JSON decoder state
     emitter.instruction("pop rbp");                                             // preserve or restore JSON decoder scratch state
     emitter.instruction("ret");                                                 // return from the JSON decoder helper

@@ -69,6 +69,54 @@ echo $sum([2, 3, 5]);
 }
 
 #[test]
+fn test_first_class_callable_builtin_trim() {
+    let out = compile_and_run(
+        r#"<?php
+$trim = trim(...);
+echo $trim("  ready  ");
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
+#[test]
+fn test_first_class_callable_builtin_substr() {
+    let out = compile_and_run(
+        r#"<?php
+$substr = substr(...);
+echo $substr("abcdef", 2, 3);
+"#,
+    );
+    assert_eq!(out, "cde");
+}
+
+#[test]
+fn test_first_class_callable_builtin_str_contains() {
+    let out = compile_and_run(
+        r#"<?php
+$contains = str_contains(...);
+echo $contains("compiler", "pile") ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+#[test]
+fn test_first_class_callable_builtin_sort_preserves_by_ref_param() {
+    let out = compile_and_run(
+        r#"<?php
+$sort = sort(...);
+$values = [3, 1, 2];
+$sort($values);
+foreach ($values as $value) {
+    echo $value;
+}
+"#,
+    );
+    assert_eq!(out, "123");
+}
+
+#[test]
 fn test_first_class_callable_preserves_by_ref_params() {
     let out = compile_and_run(
         r#"<?php

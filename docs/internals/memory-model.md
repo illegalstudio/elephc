@@ -33,7 +33,8 @@ This page explains where every value lives in memory at runtime.
 │   globals, static storage)   │  _heap_small_bins, _gc_allocs/_frees/_live/_peak,
 │                              │  _gc_collecting/_gc_release_suppressed,
 │                              │  _json_last_error, _json_active_*,
-│                              │  _json_validate_*, _json_decode_assoc,
+│                              │  _json_indent_depth, _json_validate_*,
+│                              │  _json_decode_assoc,
 │                              │  _fiber_current, _fiber_main_saved_*,
 │                              │  _generator_class_id,
 │                              │  _include_once_*, _fn_variant_active_*, ...
@@ -443,16 +444,21 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_fmt_g` — printf format string for float-to-string conversion (`%.14G`)
 - `_b64_encode_tbl` — 64-byte Base64 encoding lookup table
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
+- `_spl_autoload_exts_default`, `_spl_autoload_exts_ptr`, `_spl_autoload_exts_len` — mutable SPL autoload extension state
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
 - `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_enum_from_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg` — fatal runtime error strings for buffers, `match`, enums, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
+- `_fiber_msg_*` — Fiber state-error message strings used when constructing `FiberError`
 - `_rt_diag_suppression`, `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — runtime warning suppression depth and warning strings used by `@`
+- `_resource_id_prefix` — prefix used by resource display helpers
 - `_php_uname_mode_len_msg`, `_php_uname_mode_value_msg` — fatal `php_uname()` diagnostics for invalid mode arguments
+- `_filetype_*`, `_stat_key_*`, `_dirname_*`, `_pathinfo_key_*`, `_tmpfile_template` — file metadata, path, stat-array, and temporary-file lookup strings used by I/O helpers
 - `_pcre_space`, `_pcre_digit`, `_pcre_word`, `_pcre_nspace`, `_pcre_ndigit`, `_pcre_nword` — regex shorthand replacement strings used by the POSIX regex bridge
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings (4, 5, and 4 bytes) used by `json_encode` for boolean and null values
 - `_json_int_max_str`, `_json_int_min_str` — decimal threshold strings used by `JSON_BIGINT_AS_STRING`
 - `_json_err_msg_0` ... `_json_err_msg_10`, `_json_err_msg_table`, `_json_err_msg_count` — `json_last_error_msg()` message lookup data
 - `_day_names` — 84-byte table (7 entries x 12 bytes each) with day names, lengths, and padding. Used by `date()` for day-of-week formatting
 - `_month_names` — 144-byte table (12 entries x 12 bytes each) with month names, lengths, and padding. Used by `date()` for month formatting
+- `_strtotime_keyword_tab`, `_strtotime_unit_tab` — keyword, weekday, modifier, and unit lookup tables used by `strtotime()`
 - `_instanceof_target_count`, `_instanceof_target_entries`, `_instanceof_name_*` — case-insensitive class/interface name metadata for dynamic `instanceof` string targets, including leading-backslash aliases
 - `_generator_class_id` — per-program class id used to recognize Generator frames during object deep-free
 - `_json_exception_class_id`, `_stdclass_class_id` — per-program class ids used by JSON throw paths and stdClass dynamic-property helpers
@@ -523,7 +529,7 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 | Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value` = 24 bytes total | Fixed-size setjmp/longjmp handler and thrown-value bookkeeping |
 | Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame` = 32 bytes total | Fixed-size current-fiber and main-frame resume bookkeeping |
 | Runtime diagnostics | `_rt_diag_suppression` = 8 bytes total | Fixed-size warning-suppression depth used by `@` and exception unwinding |
-| JSON state | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_depth_limit`, `_json_validate_idx`, `_json_validate_ptr`, `_json_validate_len`, `_json_decode_assoc` = 64 bytes total | Fixed-size bookkeeping for JSON calls |
+| JSON state | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_indent_depth`, `_json_depth_limit`, `_json_validate_idx`, `_json_validate_ptr`, `_json_validate_len`, `_json_decode_assoc` = 72 bytes total | Fixed-size bookkeeping for JSON calls |
 | CLI globals | `_global_argc`, `_global_argv` = 16 bytes total | Fixed-size bookkeeping |
 | User globals | 16 bytes per `global $var` slot | Grows with number of referenced globals |
 | Static vars | 24 bytes per `static $var` (`16 + 8 init flag`) | Grows with number of declared static locals |

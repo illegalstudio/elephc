@@ -43,6 +43,7 @@ pub fn emit(
     // error/configuration state.
     abi::emit_store_zero_to_symbol(emitter, "_json_last_error", 0);
     abi::emit_store_zero_to_symbol(emitter, "_json_active_depth", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_json_indent_depth", 0);
 
     if args.get(2).is_some() {
         abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
@@ -144,10 +145,6 @@ pub fn emit(
         }
     }
 
-    // Apply post-process flags (currently JSON_PRETTY_PRINT). The runtime
-    // helper is a no-op when the flag bit is clear, so this stays cheap for
-    // the common compact encoding path.
-    abi::emit_call_label(emitter, "__rt_json_pretty_apply");
     box_json_encode_result(emitter, ctx);
 
     Some(PhpType::Mixed)

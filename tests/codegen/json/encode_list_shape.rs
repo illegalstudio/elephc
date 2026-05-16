@@ -13,8 +13,9 @@ use super::*;
 // PHP's json_encode emits the JSON array form `[...]` whenever the
 // associative array's keys form a sequential 0..count-1 sequence in
 // insertion order, otherwise the JSON object form `{...}`. elephc's
-// runtime now mirrors that behavior via a list-shape pre-detector that
-// walks the hash's insertion-order chain.
+// runtime now mirrors that behavior while it emits the associative-array
+// payload, compacting the provisional object bytes when the keys stayed
+// list-shaped.
 
 #[test]
 fn test_json_encode_assoc_with_zero_keyed_single_entry_is_list() {
@@ -108,6 +109,14 @@ fn test_json_encode_assoc_nested_object_inside_list() {
         r#"<?php echo json_encode([0=>['name'=>'Alice'], 1=>['name'=>'Bob']]);"#,
     );
     assert_eq!(out, r#"[{"name":"Alice"},{"name":"Bob"}]"#);
+}
+
+#[test]
+fn test_json_encode_assoc_list_shape_compacts_string_delimiters_safely() {
+    let out = compile_and_run(
+        r#"<?php echo json_encode([0=>"a,}]b", 1=>"quote\"slash\\", 2=>["x"=>"{,}"]]);"#,
+    );
+    assert_eq!(out, r#"["a,}]b","quote\"slash\\",{"x":"{,}"}]"#);
 }
 
 #[test]

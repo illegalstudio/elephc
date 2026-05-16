@@ -85,6 +85,38 @@ echo json_encode(["a" => new Tag("hi"), "b" => new Tag("world")]);
 }
 
 #[test]
+fn test_jsonserialize_nested_json_encode_does_not_clobber_pretty_flags() {
+    let out = compile_and_run(
+        r#"<?php
+class Bad implements JsonSerializable {
+    public function jsonSerialize(): mixed {
+        json_encode([1, 2], 0);
+        return ["inner" => [3, 4]];
+    }
+}
+echo json_encode(new Bad(), JSON_PRETTY_PRINT);
+"#,
+    );
+    assert_eq!(out, "{\n    \"inner\": [\n        3,\n        4\n    ]\n}");
+}
+
+#[test]
+fn test_jsonserialize_nested_json_encode_error_does_not_poison_outer_result() {
+    let out = compile_and_run(
+        r#"<?php
+class Noisy implements JsonSerializable {
+    public function jsonSerialize(): mixed {
+        json_encode(INF);
+        return ["ok" => 1];
+    }
+}
+echo json_encode(new Noisy()) . "\n" . json_last_error();
+"#,
+    );
+    assert_eq!(out, "{\"ok\":1}\n0");
+}
+
+#[test]
 fn test_class_without_jsonserializable_walks_public_props() {
     // Sanity test: a class that does NOT implement JsonSerializable should
     // emit its public properties verbatim, not call any jsonSerialize stub.

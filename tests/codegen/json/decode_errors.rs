@@ -116,6 +116,27 @@ fn test_json_decode_resets_error_on_success() {
 }
 
 #[test]
+fn test_json_decode_rejects_malformed_values_inside_decoder() {
+    let out = compile_and_run(
+        r#"<?php
+            $cases = [
+                "[1,]",
+                "{\"a\":1,}",
+                "01",
+                "truex",
+                "[1]x",
+            ];
+
+            foreach ($cases as $json) {
+                $r = json_decode($json);
+                echo gettype($r) . ":" . json_last_error() . "\n";
+            }
+        "#,
+    );
+    assert_eq!(out, "NULL:4\nNULL:4\nNULL:4\nNULL:4\nNULL:4\n");
+}
+
+#[test]
 fn test_json_decode_last_error_msg_after_failure() {
     let out = compile_and_run(
         r#"<?php

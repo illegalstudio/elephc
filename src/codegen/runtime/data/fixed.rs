@@ -40,6 +40,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".comm _json_last_error, 8, 3\n");
     out.push_str(".comm _json_active_flags, 8, 3\n");
     out.push_str(".comm _json_active_depth, 8, 3\n");
+    out.push_str(".comm _json_indent_depth, 8, 3\n");
     out.push_str(".comm _json_depth_limit, 8, 3\n");
     out.push_str(".comm _json_validate_idx, 8, 3\n");
     out.push_str(".comm _json_validate_ptr, 8, 3\n");

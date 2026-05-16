@@ -57,6 +57,53 @@ foreach ($formatted as $v) { echo $v . " "; }
 echo "\n";
 echo "method callable call_user_func_array: " . call_user_func_array($format, ["cb"]) . "\n";
 
+function bump(&$value) {
+    $value = $value + 1;
+}
+
+$bump = bump(...);
+$counter_value = 10;
+call_user_func_array($bump, [$counter_value]);
+echo "call_user_func_array by-ref: " . $counter_value . "\n";
+
+$trim = trim(...);
+echo "builtin callable trim: " . $trim("  ready  ") . "\n";
+
+class OffsetCallbacks {
+    public function add_offset($carry, $item) {
+        return $carry + $item + 10;
+    }
+
+    public function show_shifted($item) {
+        echo ($item + 5) . " ";
+    }
+
+    public function descending($a, $b) {
+        return $b - $a;
+    }
+}
+
+$offsets = new OffsetCallbacks();
+echo "method callable array_reduce: " . array_reduce([1, 2], $offsets->add_offset(...), 0) . "\n";
+echo "method callable array_walk: ";
+array_walk([1, 2], $offsets->show_shifted(...));
+echo "\n";
+$method_sorted = [1, 3, 2];
+usort($method_sorted, $offsets->descending(...));
+echo "method callable usort: ";
+foreach ($method_sorted as $v) { echo $v . " "; }
+echo "\n";
+$method_key_sorted = [1, 3, 2];
+uksort($method_key_sorted, $offsets->descending(...));
+echo "method callable uksort: ";
+foreach ($method_key_sorted as $v) { echo $v . " "; }
+echo "\n";
+$method_value_sorted = [1, 3, 2];
+uasort($method_value_sorted, $offsets->descending(...));
+echo "method callable uasort: ";
+foreach ($method_value_sorted as $v) { echo $v . " "; }
+echo "\n";
+
 class Labeler {
     public static function current() {
         $label = static::name(...);

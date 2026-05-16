@@ -36,7 +36,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.label_global("__rt_json_encode_object");
 
     // -- set up stack frame --
-    // Stack layout (96 bytes):
+    // Stack layout (128 bytes):
     //   [sp, #0]   = object pointer
     //   [sp, #8]   = output start ptr
     //   [sp, #16]  = current write pos
@@ -47,11 +47,15 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     //   [sp, #56]  = scratch (type_tag)
     //   [sp, #64]  = scratch (prop value lo)
     //   [sp, #72]  = scratch (prop value hi)
-    //   [sp, #80]  = saved x29
-    //   [sp, #88]  = saved x30
-    emitter.instruction("sub sp, sp, #96");                                     // allocate the object encoder scratch frame
-    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #80");                                    // establish a stable frame pointer for the encoder
+    //   [sp, #80]  = JsonSerializable saved _json_last_error
+    //   [sp, #88]  = JsonSerializable saved _json_active_flags
+    //   [sp, #96]  = JsonSerializable saved _json_active_depth
+    //   [sp, #104] = JsonSerializable saved _json_indent_depth
+    //   [sp, #112] = saved x29
+    //   [sp, #120] = saved x30
+    emitter.instruction("sub sp, sp, #128");                                    // allocate the object encoder scratch frame
+    emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
+    emitter.instruction("add x29, sp, #112");                                   // establish a stable frame pointer for the encoder
     emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer for downstream loads
 
     // -- enter the recursion-depth check --
@@ -91,6 +95,21 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // capture the caller-visible concat-buffer offset before the user method runs
     emitter.instruction("str x10, [sp, #24]");                                  // save the captured offset (= prefix length) across the user method invocation
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_json_last_error");
+    emitter.instruction("ldr x10, [x9]");                                       // capture the outer JSON error state before user code can run nested JSON calls
+    emitter.instruction("str x10, [sp, #80]");                                  // save _json_last_error across jsonSerialize()
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_json_active_flags");
+    emitter.instruction("ldr x10, [x9]");                                       // capture the outer JSON flag bitmask before user code can change it
+    emitter.instruction("str x10, [sp, #88]");                                  // save _json_active_flags across jsonSerialize()
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_json_active_depth");
+    emitter.instruction("ldr x10, [x9]");                                       // capture the outer JSON depth before user code can reset it
+    emitter.instruction("str x10, [sp, #96]");                                  // save _json_active_depth across jsonSerialize()
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_json_indent_depth");
+    emitter.instruction("ldr x10, [x9]");                                       // capture the outer pretty-print depth before user code can reset it
+    emitter.instruction("str x10, [sp, #104]");                                 // save _json_indent_depth across jsonSerialize()
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_json_depth_limit");
+    emitter.instruction("ldr x10, [x9]");                                       // capture the outer JSON depth limit before user code can change it
+    emitter.instruction("str x10, [sp, #72]");                                  // save _json_depth_limit across jsonSerialize()
     emitter.instruction("str xzr, [sp, #40]");                                  // default the saved prefix heap pointer to null for empty prefixes
     emitter.instruction("cbz x10, __rt_json_obj_jsonserialize_invoke");         // skip the prefix copy when there is no caller-visible prefix to preserve
     crate::codegen::abi::emit_symbol_address(emitter, "x1", "_concat_buf");
@@ -120,14 +139,29 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the saved pre-call concat-buffer offset
     emitter.instruction("str x10, [x9]");                                       // restore the concat-buffer offset so encode_mixed appends at our intended slot
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_json_last_error");
+    emitter.instruction("ldr x10, [sp, #80]");                                  // reload the outer JSON error state after user code returns
+    emitter.instruction("str x10, [x9]");                                       // restore _json_last_error before encoding the serialized value
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_json_active_flags");
+    emitter.instruction("ldr x10, [sp, #88]");                                  // reload the outer JSON flag bitmask after user code returns
+    emitter.instruction("str x10, [x9]");                                       // restore _json_active_flags before encoding the serialized value
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_json_active_depth");
+    emitter.instruction("ldr x10, [sp, #96]");                                  // reload the outer JSON depth after user code returns
+    emitter.instruction("str x10, [x9]");                                       // restore _json_active_depth before recursive JSON encoding resumes
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_json_indent_depth");
+    emitter.instruction("ldr x10, [sp, #104]");                                 // reload the outer pretty-print depth after user code returns
+    emitter.instruction("str x10, [x9]");                                       // restore _json_indent_depth before recursive JSON encoding resumes
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_json_depth_limit");
+    emitter.instruction("ldr x10, [sp, #72]");                                  // reload the outer JSON depth limit after user code returns
+    emitter.instruction("str x10, [x9]");                                       // restore _json_depth_limit before recursive JSON encoding resumes
     emitter.instruction("ldr x0, [sp, #48]");                                   // restore the boxed mixed return value before encoding it
     emitter.instruction("bl __rt_json_encode_mixed");                           // encode the boxed mixed return value as JSON
     // Save the (x1, x2) result across the depth-exit helper call.
     emitter.instruction("stp x1, x2, [sp, #32]");                               // checkpoint the encoded result slice across __rt_json_depth_exit
     emitter.instruction("bl __rt_json_depth_exit");                             // decrement _json_active_depth so a sibling encoder can re-enter cleanly
     emitter.instruction("ldp x1, x2, [sp, #32]");                               // restore the encoded result slice after the helper call
-    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address after JsonSerializable encoding
-    emitter.instruction("add sp, sp, #96");                                     // deallocate the object encoder scratch frame
+    emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address after JsonSerializable encoding
+    emitter.instruction("add sp, sp, #128");                                    // deallocate the object encoder scratch frame
     emitter.instruction("ret");                                                 // return the JSON encoded result produced by mixed encoding
 
     // -- empty object fallback (missing class id) --
@@ -152,6 +186,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("strb w12, [x11]");                                     // emit the opening brace before the first property
     emitter.instruction("add x11, x11, #1");                                    // advance past the opening brace
     emitter.instruction("str x11, [sp, #16]");                                  // save the running write pointer after the opening brace
+    emitter.instruction("bl __rt_json_pretty_push");                            // enter one pretty-print indentation level after the object opens
     emitter.instruction("str xzr, [sp, #32]");                                  // initialize the property loop index to zero
 
     emitter.label("__rt_json_obj_loop");
@@ -185,6 +220,8 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_obj_key");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the running write pointer for the key prefix
+    emitter.instruction("bl __rt_json_pretty_line");                            // append newline and indentation for this property when pretty-printing
+    emitter.instruction("str x11, [sp, #16]");                                  // save the write pointer after any pretty indentation
     emitter.instruction("mov w12, #34");                                        // ASCII '"'
     emitter.instruction("strb w12, [x11]");                                     // emit the opening quote for the property name
     emitter.instruction("add x11, x11, #1");                                    // advance past the opening quote
@@ -207,6 +244,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("mov w12, #58");                                        // ASCII ':'
     emitter.instruction("strb w12, [x11]");                                     // emit the colon separating key and value
     emitter.instruction("add x11, x11, #1");                                    // advance past the colon
+    emitter.instruction("bl __rt_json_pretty_colon_space");                     // append the pretty-print key/value space when requested
     emitter.instruction("str x11, [sp, #16]");                                  // save the running write pointer after the key prefix
 
     // Sync concat_off so nested encoders append after the existing prefix.
@@ -224,9 +262,9 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, #8");                                      // skip the leading class_id field at offset 0
     emitter.instruction("add x9, x0, x9");                                      // resolve the absolute address of the property slot
     emitter.instruction("ldr x18, [x9]");                                       // load the property low payload word
-    emitter.instruction("ldr x19, [x9, #8]");                                   // load the property high payload word
+    emitter.instruction("ldr x15, [x9, #8]");                                   // load the property high payload word without clobbering caller x19
     emitter.instruction("str x18, [sp, #64]");                                  // save the property low payload across the encoder dispatch
-    emitter.instruction("str x19, [sp, #72]");                                  // save the property high payload across the encoder dispatch
+    emitter.instruction("str x15, [sp, #72]");                                  // save the property high payload across the encoder dispatch
 
     // Dispatch on the property type tag. Each branch leaves the encoded
     // result in x1=ptr, x2=len so the shared copy code can append it.
@@ -320,6 +358,11 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_obj_close");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the running write pointer for the closing brace
+    emitter.instruction("bl __rt_json_pretty_pop");                             // leave the object indentation level before closing it
+    emitter.instruction("ldr x14, [sp, #40]");                                  // reload public property count to decide whether closing needs its own line
+    emitter.instruction("cbz x14, __rt_json_obj_close_emit");                   // empty objects stay compact even under JSON_PRETTY_PRINT
+    emitter.instruction("bl __rt_json_pretty_line");                            // append the closing-line indentation for non-empty pretty objects
+    emitter.label("__rt_json_obj_close_emit");
     emitter.instruction("mov w12, #125");                                       // ASCII '}'
     emitter.instruction("strb w12, [x11]");                                     // emit the closing brace after the last property
     emitter.instruction("add x11, x11, #1");                                    // advance past the closing brace
@@ -336,8 +379,8 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     crate::codegen::abi::emit_symbol_address(emitter, "x10", "_concat_buf");
     emitter.instruction("sub x10, x11, x10");                                   // compute the absolute concat-buffer offset after the closing brace
     emitter.instruction("str x10, [x9]");                                       // publish the concat-buffer offset for the next encoder
-    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #96");                                     // deallocate the object encoder scratch frame
+    emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #128");                                    // deallocate the object encoder scratch frame
     emitter.instruction("ret");                                                 // return the encoded object slice in the standard string registers
 }
 
@@ -398,6 +441,16 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     // copy the prefix back before re-establishing concat_off and encoding.
     emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // capture the caller-visible concat-buffer offset before the user method runs
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the captured offset (= prefix length) across the user method invocation
+    emitter.instruction("mov r10, QWORD PTR [rip + _json_last_error]");         // capture the outer JSON error state before user code can run nested JSON calls
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save _json_last_error across jsonSerialize()
+    emitter.instruction("mov r10, QWORD PTR [rip + _json_active_flags]");       // capture the outer JSON flag bitmask before user code can change it
+    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save _json_active_flags across jsonSerialize()
+    emitter.instruction("mov r10, QWORD PTR [rip + _json_active_depth]");       // capture the outer JSON depth before user code can reset it
+    emitter.instruction("mov QWORD PTR [rbp - 80], r10");                       // save _json_active_depth across jsonSerialize()
+    emitter.instruction("mov r10, QWORD PTR [rip + _json_indent_depth]");       // capture the outer pretty-print depth before user code can reset it
+    emitter.instruction("mov QWORD PTR [rbp - 88], r10");                       // save _json_indent_depth across jsonSerialize()
+    emitter.instruction("mov r10, QWORD PTR [rip + _json_depth_limit]");        // capture the outer JSON depth limit before user code can change it
+    emitter.instruction("mov QWORD PTR [rbp - 96], r10");                       // save _json_depth_limit across jsonSerialize()
     emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // default the saved prefix heap pointer to null for empty prefixes
     emitter.instruction("test r10, r10");                                       // is there any caller-visible prefix to preserve?
     emitter.instruction("jz __rt_json_obj_jsonserialize_invoke_x");             // skip the prefix copy when the prefix is empty
@@ -429,6 +482,16 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_json_obj_jsonserialize_after_restore_x");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the saved pre-call concat-buffer offset
     emitter.instruction("mov QWORD PTR [rip + _concat_off], r10");              // restore the concat-buffer offset so encode_mixed appends at our intended slot
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the outer JSON error state after user code returns
+    emitter.instruction("mov QWORD PTR [rip + _json_last_error], r10");         // restore _json_last_error before encoding the serialized value
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the outer JSON flag bitmask after user code returns
+    emitter.instruction("mov QWORD PTR [rip + _json_active_flags], r10");       // restore _json_active_flags before encoding the serialized value
+    emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // reload the outer JSON depth after user code returns
+    emitter.instruction("mov QWORD PTR [rip + _json_active_depth], r10");       // restore _json_active_depth before recursive JSON encoding resumes
+    emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // reload the outer pretty-print depth after user code returns
+    emitter.instruction("mov QWORD PTR [rip + _json_indent_depth], r10");       // restore _json_indent_depth before recursive JSON encoding resumes
+    emitter.instruction("mov r10, QWORD PTR [rbp - 96]");                       // reload the outer JSON depth limit after user code returns
+    emitter.instruction("mov QWORD PTR [rip + _json_depth_limit], r10");        // restore _json_depth_limit before recursive JSON encoding resumes
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // restore the boxed mixed return value before encoding it
     emitter.instruction("call __rt_json_encode_mixed");                         // encode the boxed mixed return value as JSON
     // Save the (rax, rdx) result across __rt_json_depth_exit.
@@ -458,6 +521,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r11], 123");                             // emit the opening brace before the first property
     emitter.instruction("add r11, 1");                                          // advance past the opening brace
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the running write pointer after the opening brace
+    emitter.instruction("call __rt_json_pretty_push");                          // enter one pretty-print indentation level after the object opens
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize the property loop index to zero
 
     emitter.label("__rt_json_obj_loop_x");
@@ -493,6 +557,8 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_obj_key_x");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the running write pointer for the key prefix
+    emitter.instruction("call __rt_json_pretty_line");                          // append newline and indentation for this property when pretty-printing
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the write pointer after any pretty indentation
     emitter.instruction("mov BYTE PTR [r11], 34");                              // emit the opening quote for the property name
     emitter.instruction("add r11, 1");                                          // advance past the opening quote
     emitter.instruction("mov rsi, QWORD PTR [rbp - 88]");                       // reload the property name pointer
@@ -513,6 +579,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r11, 1");                                          // advance past the closing quote
     emitter.instruction("mov BYTE PTR [r11], 58");                              // emit the colon separating key and value
     emitter.instruction("add r11, 1");                                          // advance past the colon
+    emitter.instruction("call __rt_json_pretty_colon_space");                   // append the pretty-print key/value space when requested
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the running write pointer after the key prefix
 
     // Sync concat_off so nested encoders append after the existing prefix.
@@ -622,6 +689,11 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_obj_close_x");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the running write pointer for the closing brace
+    emitter.instruction("call __rt_json_pretty_pop");                           // leave the object indentation level before closing it
+    emitter.instruction("cmp QWORD PTR [rbp - 48], 0");                         // did the object contain any public properties?
+    emitter.instruction("je __rt_json_obj_close_emit_x");                       // empty objects stay compact even under JSON_PRETTY_PRINT
+    emitter.instruction("call __rt_json_pretty_line");                          // append the closing-line indentation for non-empty pretty objects
+    emitter.label("__rt_json_obj_close_emit_x");
     emitter.instruction("mov BYTE PTR [r11], 125");                             // emit the closing brace after the last property
     emitter.instruction("add r11, 1");                                          // advance past the closing brace
 

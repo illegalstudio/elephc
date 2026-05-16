@@ -10,6 +10,54 @@
 use super::*;
 
 #[test]
+fn test_error_spl_autoload_register_wrong_args() {
+    expect_error(
+        "<?php spl_autoload_register(null, true, false, 1);",
+        "spl_autoload_register() takes at most 3 arguments",
+    );
+}
+
+#[test]
+fn test_error_spl_autoload_unregister_wrong_args() {
+    expect_error(
+        "<?php spl_autoload_unregister();",
+        "spl_autoload_unregister() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_spl_autoload_functions_wrong_args() {
+    expect_error(
+        "<?php spl_autoload_functions(1);",
+        "spl_autoload_functions() takes no arguments",
+    );
+}
+
+#[test]
+fn test_error_spl_autoload_call_wrong_args() {
+    expect_error(
+        "<?php spl_autoload_call();",
+        "spl_autoload_call() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_spl_autoload_wrong_args() {
+    expect_error(
+        "<?php spl_autoload();",
+        "spl_autoload() takes 1 or 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_spl_classes_wrong_args() {
+    expect_error(
+        "<?php spl_classes(1);",
+        "spl_classes() takes no arguments",
+    );
+}
+
+#[test]
 fn test_error_spl_autoload_extensions_rejects_int_setter() {
     expect_error(
         "<?php spl_autoload_extensions(123);",

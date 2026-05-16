@@ -10,6 +10,23 @@
 
 use super::*;
 
+fn php_stdout_for(source: &str) -> Option<String> {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!(
+        "elephc_php_pretty_fixture_{}_{}.php",
+        std::process::id(),
+        id
+    ));
+    fs::write(&path, source).ok()?;
+    let output = Command::new("php").arg(&path).output().ok();
+    let _ = fs::remove_file(&path);
+    let output = output?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
+}
+
 // --- JSON_UNESCAPED_SLASHES ---
 
 #[test]
@@ -135,6 +152,129 @@ fn test_json_encode_pretty_print_string_with_escaped_quote() {
         r#"<?php echo json_encode(["q" => "say \"hi\""], JSON_PRETTY_PRINT);"#,
     );
     assert_eq!(out, "{\n    \"q\": \"say \\\"hi\\\"\"\n}");
+}
+
+#[test]
+fn test_json_encode_pretty_print_representative_payloads_match_php() {
+    let source = r#"<?php
+class PrettyPoint { public int $x = 7; public string $label = "pt"; }
+class PrettySerializable implements JsonSerializable {
+    public function jsonSerialize(): mixed {
+        return ["wrapped" => [1, 2], "empty" => []];
+    }
+}
+$o = new stdClass();
+$o->name = "Ada";
+$o->scores = [1, 2];
+
+echo json_encode([1, 2, 3], JSON_PRETTY_PRINT) . "\n---\n";
+echo json_encode(["name" => "Ada", "ok" => true, "none" => null], JSON_PRETTY_PRINT) . "\n---\n";
+echo json_encode(["nested" => ["a" => [1, ["b" => 2]]]], JSON_PRETTY_PRINT) . "\n---\n";
+echo json_encode([], JSON_PRETTY_PRINT) . "\n---\n";
+echo json_encode([1, 2], JSON_PRETTY_PRINT | JSON_FORCE_OBJECT) . "\n---\n";
+echo json_encode(["0" => "a", "1" => "b"], JSON_PRETTY_PRINT) . "\n---\n";
+echo json_encode(new PrettyPoint(), JSON_PRETTY_PRINT) . "\n---\n";
+echo json_encode($o, JSON_PRETTY_PRINT) . "\n---\n";
+echo json_encode(new PrettySerializable(), JSON_PRETTY_PRINT) . "\n---\n";
+echo json_encode(["chars" => "{a:b}", "quote" => "say \"hi\"", "url" => "https://x/y"], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n---\n";
+echo json_encode([[[[[[42]]]]]], JSON_PRETTY_PRINT);
+"#;
+    let php_fixture = r#"[
+    1,
+    2,
+    3
+]
+---
+{
+    "name": "Ada",
+    "ok": true,
+    "none": null
+}
+---
+{
+    "nested": {
+        "a": [
+            1,
+            {
+                "b": 2
+            }
+        ]
+    }
+}
+---
+[]
+---
+{
+    "0": 1,
+    "1": 2
+}
+---
+[
+    "a",
+    "b"
+]
+---
+{
+    "x": 7,
+    "label": "pt"
+}
+---
+{
+    "name": "Ada",
+    "scores": [
+        1,
+        2
+    ]
+}
+---
+{
+    "wrapped": [
+        1,
+        2
+    ],
+    "empty": []
+}
+---
+{
+    "chars": "{a:b}",
+    "quote": "say \"hi\"",
+    "url": "https://x/y"
+}
+---
+[
+    [
+        [
+            [
+                [
+                    [
+                        42
+                    ]
+                ]
+            ]
+        ]
+    ]
+]"#;
+
+    let expected = php_stdout_for(source).unwrap_or_else(|| php_fixture.to_string());
+    assert_eq!(expected, php_fixture);
+
+    let out = compile_and_run(source);
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn test_json_encode_pretty_print_indent_resets_after_throw() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    json_encode([[[1]]], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR, 1);
+} catch (JsonException $e) {
+    echo "caught\n";
+}
+echo json_encode([1], JSON_PRETTY_PRINT);
+"#,
+    );
+    assert_eq!(out, "caught\n[\n    1\n]");
 }
 
 // --- Combined flags ---

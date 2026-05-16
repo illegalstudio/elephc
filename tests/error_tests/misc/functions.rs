@@ -34,50 +34,10 @@ fn test_error_first_class_callable_method_requires_object_receiver() {
 }
 
 #[test]
-fn test_error_first_class_callable_method_requires_stable_receiver() {
-    expect_error(
-        "<?php class User { public function greet() { return 1; } } $f = (new User())->greet(...);",
-        "First-class method callable requires a variable or $this receiver",
-    );
-}
-
-#[test]
-fn test_error_direct_expr_call_rejects_captured_first_class_method_callable() {
-    expect_error(
-        "<?php class User { public function greet() { return \"ok\"; } } $u = new User(); echo ($u->greet(...))();",
-        "Direct calls of captured callable expressions are not supported yet",
-    );
-}
-
-#[test]
-fn test_error_direct_expr_call_rejects_captured_static_first_class_callable() {
-    expect_error(
-        "<?php class User { public static function run() { return (static::make(...))(); } public static function make() { return 1; } }",
-        "Direct calls of captured callable expressions are not supported yet",
-    );
-}
-
-#[test]
-fn test_error_parenthesized_expr_call_rejects_captured_first_class_method_callable() {
-    expect_error(
-        "<?php class User { public function greet() { return \"ok\"; } } $u = new User(); $f = $u->greet(...); echo ($f)();",
-        "Direct calls of captured callable expressions are not supported yet",
-    );
-}
-
-#[test]
-fn test_error_array_reduce_rejects_captured_first_class_method_callable() {
-    expect_error(
-        "<?php class User { public function add($carry, $item) { return $carry + $item; } } $u = new User(); $f = $u->add(...); array_reduce([1, 2], $f, 0);",
-        "array_reduce() does not support captured first-class callable targets yet",
-    );
-}
-
-#[test]
 fn test_error_first_class_callable_rejects_unsupported_builtin() {
     expect_error(
-        "<?php $f = trim(...);",
-        "does not support builtin 'trim' yet",
+        "<?php $f = isset(...);",
+        "does not support builtin 'isset' yet",
     );
 }
 
@@ -86,6 +46,24 @@ fn test_error_first_class_callable_ref_param_requires_variable() {
     expect_error(
         "<?php function bump(&$n) { $n = $n + 1; } $f = bump(...); $f(1);",
         "parameter $n must be passed a variable",
+    );
+}
+
+#[test]
+fn test_error_direct_complex_captured_callable_expr_call_rejected() {
+    expect_error(
+        r#"<?php
+class Counter {
+    public function inc($n) {
+        return $n + 1;
+    }
+}
+
+$counter = new Counter();
+$ok = true;
+echo ($ok ? $counter->inc(...) : $counter->inc(...))(1);
+"#,
+        "Direct calls of complex captured callable expressions are not supported yet",
     );
 }
 

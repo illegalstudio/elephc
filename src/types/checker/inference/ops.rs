@@ -10,7 +10,9 @@
 
 use crate::errors::CompileError;
 use crate::names::Name;
-use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, TypeExpr};
+use crate::parser::ast::{
+    BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver, Stmt, TypeExpr,
+};
 use crate::types::{merge_array_key_types, FunctionSig, PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -397,10 +399,10 @@ impl Checker {
                 ),
             ));
         }
-        if self.expr_call_callee_needs_runtime_capture(callee) {
+        if self.expr_call_complex_callee_needs_runtime_capture(callee) {
             return Err(CompileError::new(
                 expr.span,
-                "Direct calls of captured callable expressions are not supported yet",
+                "Direct calls of complex captured callable expressions are not supported yet",
             ));
         }
         match &callee.kind {
@@ -485,6 +487,73 @@ impl Checker {
         } else {
             ret_ty
         }
+    }
+
+    pub(crate) fn expr_call_complex_callee_needs_runtime_capture(&self, callee: &Expr) -> bool {
+        match &callee.kind {
+            ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) | ExprKind::Variable(_) => {
+                false
+            }
+            ExprKind::Assignment { value, .. } => self.expr_produces_captured_callable(value),
+            ExprKind::Ternary {
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                self.expr_produces_captured_callable(then_expr)
+                    || self.expr_produces_captured_callable(else_expr)
+            }
+            ExprKind::ShortTernary { value, default }
+            | ExprKind::NullCoalesce { value, default } => {
+                self.expr_produces_captured_callable(value)
+                    || self.expr_produces_captured_callable(default)
+            }
+            _ => false,
+        }
+    }
+
+    fn expr_produces_captured_callable(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Closure { captures, .. } => !captures.is_empty(),
+            ExprKind::FirstClassCallable(target) => {
+                Self::first_class_callable_target_needs_runtime_capture(target)
+            }
+            ExprKind::Variable(var_name) => {
+                self.callable_captures
+                    .get(var_name)
+                    .is_some_and(|captures| !captures.is_empty())
+                    || self
+                        .first_class_callable_targets
+                        .get(var_name)
+                        .is_some_and(Self::first_class_callable_target_needs_runtime_capture)
+            }
+            ExprKind::Assignment { value, .. } => self.expr_produces_captured_callable(value),
+            ExprKind::Ternary {
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                self.expr_produces_captured_callable(then_expr)
+                    || self.expr_produces_captured_callable(else_expr)
+            }
+            ExprKind::ShortTernary { value, default }
+            | ExprKind::NullCoalesce { value, default } => {
+                self.expr_produces_captured_callable(value)
+                    || self.expr_produces_captured_callable(default)
+            }
+            _ => false,
+        }
+    }
+
+    fn first_class_callable_target_needs_runtime_capture(target: &CallableTarget) -> bool {
+        matches!(
+            target,
+            CallableTarget::Method { .. }
+                | CallableTarget::StaticMethod {
+                    receiver: StaticReceiver::Static,
+                    ..
+                }
+        )
     }
 
     /// Type-checks the PHP 8.5 pipe operator: `value |> callable`.

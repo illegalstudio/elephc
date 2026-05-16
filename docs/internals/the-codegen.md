@@ -111,6 +111,8 @@ pub struct Context {
     pub functions: HashMap<String, FunctionSig>,
     pub function_variant_groups: HashSet<String>, // include-loaded function dispatchers
     pub deferred_closures: Vec<DeferredClosure>, // closures emitted after current function
+    pub deferred_fiber_wrappers: Vec<DeferredFiberWrapper>,
+    pub deferred_callback_wrappers: Vec<DeferredCallbackWrapper>,
     pub constants: HashMap<String, (ExprKind, PhpType)>, // compile-time constants
     pub global_vars: HashSet<String>,         // globals active in current scope
     pub static_vars: HashSet<String>,         // statics active in current scope
@@ -120,8 +122,11 @@ pub struct Context {
     pub all_static_vars: HashMap<(String, String), PhpType>,
     pub closure_sigs: HashMap<String, FunctionSig>,
     pub closure_captures: HashMap<String, Vec<(String, PhpType)>>,
+    pub first_class_callable_targets: HashMap<String, CallableTarget>,
+    pub variable_fcc_label: HashMap<String, String>,
     pub classes: HashMap<String, ClassInfo>,
     pub interfaces: HashMap<String, InterfaceInfo>,
+    pub traits: HashSet<String>,
     pub enums: HashMap<String, EnumInfo>,
     pub packed_classes: HashMap<String, PackedClassInfo>,
     pub current_class: Option<String>,
@@ -505,11 +510,11 @@ When a closure variable is called (`$fn(1, 2)`), the codegen:
 
 ### Closures as callback arguments
 
-Built-in functions like `array_map`, `array_filter`, `array_reduce`, `array_walk`, and `usort` accept callback values. The callback function pointer is passed in a register (like any other `Callable` argument) and the runtime routine calls it via `blr`.
+Built-in functions like `array_map`, `array_filter`, `array_reduce`, `array_walk`, `usort`, `uksort`, and `uasort` accept callback values. The callback function pointer is passed in a register (like any other `Callable` argument) and the runtime routine calls it via `blr`.
 
-For captured closures passed through `array_map` / `array_filter`, codegen builds a temporary callback environment containing the original closure pointer plus its hidden `use (...)` values. The runtime passes that environment to a generated callback wrapper, and the wrapper re-materializes the original visible arguments plus hidden captures before calling the closure. `call_user_func()` and `call_user_func_array()` do not need a runtime loop, so they append the hidden capture arguments directly at the indirect call site.
+For captured closures passed through callback runtimes such as `array_map`, `array_filter`, `array_reduce`, `array_walk`, `usort`, `uksort`, and `uasort`, codegen builds a temporary callback environment containing the original closure pointer plus its hidden `use (...)` values. The runtime passes that environment to a generated callback wrapper, and the wrapper re-materializes the original visible arguments plus hidden captures before calling the closure. `call_user_func()` and `call_user_func_array()` do not need a runtime loop, so they append the hidden capture arguments directly at the indirect call site. When `call_user_func_array()` targets a by-reference callback and receives a literal argument array, codegen passes frame-slot addresses for variable elements in by-reference positions instead of loading array payload values.
 
-First-class callable wrappers reuse this hidden argument path when the callable target carries context. `$obj->method(...)` records the receiver variable as a hidden capture and the wrapper calls that method with the visible arguments. `static::method(...)` records the forwarded called-class id, or `$this` in an instance method, so late static binding is preserved for direct callable calls and for callback paths that forward an environment, such as `array_map`, `array_filter`, `call_user_func`, and `call_user_func_array`.
+First-class callable wrappers reuse this hidden argument path when the callable target carries context. `$obj->method(...)` records the receiver as a hidden capture; non-local receiver expressions are evaluated once into a hidden temporary before wrapper creation. `static::method(...)` records the forwarded called-class id, or `$this` in an instance method, so late static binding is preserved for direct callable calls and for callback paths that forward an environment.
 
 ## Generator codegen
 

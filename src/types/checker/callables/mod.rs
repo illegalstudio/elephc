@@ -8,7 +8,6 @@
 //! Key details:
 //! - Callable targets must preserve parameter order, capture ownership expectations, and builtin alias resolution.
 
-mod captures;
 mod closures;
 mod extern_calls;
 mod first_class;

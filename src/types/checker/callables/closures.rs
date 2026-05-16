@@ -207,7 +207,36 @@ impl Checker {
                 .resolve_first_class_callable_sig(target, expr.span, env)
                 .map(Some),
             ExprKind::Variable(var_name) => Ok(self.callable_sigs.get(var_name).cloned()),
+            ExprKind::Assignment { value, .. } => self.resolve_expr_callable_sig(value, env),
+            ExprKind::Ternary {
+                then_expr,
+                else_expr,
+                ..
+            } => self.resolve_matching_branch_callable_sig(then_expr, else_expr, env),
+            ExprKind::ShortTernary { value, default }
+            | ExprKind::NullCoalesce { value, default } => {
+                self.resolve_matching_branch_callable_sig(value, default, env)
+            }
             _ => Ok(None),
+        }
+    }
+
+    fn resolve_matching_branch_callable_sig(
+        &mut self,
+        left: &Expr,
+        right: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Option<FunctionSig>, CompileError> {
+        let Some(left_sig) = self.resolve_expr_callable_sig(left, env)? else {
+            return Ok(None);
+        };
+        let Some(right_sig) = self.resolve_expr_callable_sig(right, env)? else {
+            return Ok(None);
+        };
+        if left_sig == right_sig {
+            Ok(Some(left_sig))
+        } else {
+            Ok(None)
         }
     }
 }

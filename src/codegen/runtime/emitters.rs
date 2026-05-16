@@ -108,7 +108,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     system::emit_json_encode_mixed(emitter);
     system::emit_json_encode_float(emitter);
     system::emit_json_encode_object(emitter);
-    system::emit_json_pretty_apply(emitter);
+    system::emit_json_pretty_helpers(emitter);
     system::emit_json_throw_error(emitter);
     system::emit_json_depth_enter(emitter);
     system::emit_json_depth_exit(emitter);

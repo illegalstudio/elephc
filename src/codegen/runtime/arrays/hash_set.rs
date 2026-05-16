@@ -237,6 +237,20 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the candidate hash-table pointer so the copy-on-write helper sees the current mutation target
     emitter.instruction("call __rt_hash_ensure_unique");                        // split shared associative arrays before insert/update mutates shared storage
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the unique hash-table pointer that subsequent probe logic must mutate
+
+    // -- check load factor: grow if count * 4 >= capacity * 3 (75%) --
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the current live-entry count
+    emitter.instruction("mov r11, QWORD PTR [rax + 8]");                        // load the current table capacity
+    emitter.instruction("mov r12, r10");                                        // copy count before scaling it
+    emitter.instruction("shl r12, 2");                                          // scaled_count = count * 4
+    emitter.instruction("lea r13, [r11 + r11 * 2]");                            // scaled_capacity = capacity * 3
+    emitter.instruction("cmp r12, r13");                                        // has the table reached the growth threshold?
+    emitter.instruction("jl __rt_hash_set_no_grow_x");                          // skip growth while under the load threshold
+    emitter.instruction("mov rdi, rax");                                        // pass the unique table to the grow helper
+    emitter.instruction("call __rt_hash_grow");                                 // double the hash table capacity before probing
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the grown table pointer
+    emitter.label("__rt_hash_set_no_grow_x");
+
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the incoming key low word after the copy-on-write helper clobbered caller-saved argument registers
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the incoming key high word after the copy-on-write helper clobbered caller-saved argument registers
     emitter.instruction("call __rt_hash_key_hash");                             // compute the 64-bit hash for the normalized inserted key

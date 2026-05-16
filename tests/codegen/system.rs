@@ -427,6 +427,32 @@ if ($diff >= 3590 && $diff <= 3610) echo "ok";
 }
 
 #[test]
+fn test_strtotime_offset_article_day_ago() {
+    let out = compile_and_run(
+        r#"<?php
+$now = time();
+$ts = strtotime("a day ago");
+$diff = $now - $ts;
+if ($diff >= 86400 - 3700 && $diff <= 86400 + 3700) echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_strtotime_offset_article_an_hour() {
+    let out = compile_and_run(
+        r#"<?php
+$now = time();
+$ts = strtotime("an hour");
+$diff = $ts - $now;
+if ($diff >= 3590 && $diff <= 3610) echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
 fn test_strtotime_offset_plus_30_seconds() {
     let out = compile_and_run(
         r#"<?php
@@ -932,6 +958,26 @@ echo count($parts) . "|" . $parts[0] . "|" . $parts[1];
 fn test_preg_replace_case_insensitive() {
     let out = compile_and_run(r#"<?php echo preg_replace("/WORLD/i", "PHP", "hello World");"#);
     assert_eq!(out, "hello PHP");
+}
+
+#[test]
+fn test_preg_replace_dollar_backreferences() {
+    let out = compile_and_run(
+        r#"<?php echo preg_replace("/([a-z]+) ([a-z]+)/", '$2, $1', "hello world");"#,
+    );
+    assert_eq!(out, "world, hello");
+}
+
+#[test]
+fn test_preg_replace_backslash_backreferences() {
+    let out = compile_and_run(r#"<?php echo preg_replace("/([0-9]+)-([0-9]+)/", "\\2/\\1", "12-34");"#);
+    assert_eq!(out, "34/12");
+}
+
+#[test]
+fn test_preg_replace_unmatched_capture_backreference_is_empty() {
+    let out = compile_and_run(r#"<?php echo preg_replace("/(a)(b)?/", '[$1][$2]', "a");"#);
+    assert_eq!(out, "[a][]");
 }
 // is_callable() — compile-time decisions for string literals (catalog
 // lookup) and Callable-typed values (closures + first-class callables).
