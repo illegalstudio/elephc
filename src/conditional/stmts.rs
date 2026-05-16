@@ -217,7 +217,14 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             is_final,
             is_readonly_class,
             trait_uses,
-            properties,
+            properties: properties
+                .into_iter()
+                .map(|mut property| {
+                    property.default =
+                        property.default.map(|expr| rewrite_expr(expr, defines));
+                    property
+                })
+                .collect(),
             methods: methods
                 .into_iter()
                 .map(|mut method| {
@@ -252,11 +259,20 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
         StmtKind::InterfaceDecl {
             name,
             extends,
+            properties,
             methods,
         constants,
         } => StmtKind::InterfaceDecl {
             name,
             extends,
+            properties: properties
+                .into_iter()
+                .map(|mut property| {
+                    property.default =
+                        property.default.map(|expr| rewrite_expr(expr, defines));
+                    property
+                })
+                .collect(),
             methods,
         constants,
         },

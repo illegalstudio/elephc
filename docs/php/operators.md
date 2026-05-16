@@ -262,11 +262,10 @@ The right-hand side may be any expression that evaluates to a callable:
 
 The callable must accept the piped value as its first parameter; remaining parameters must be optional or variadic. By-reference parameters are not supported on the pipe target.
 
-First-class callable creation requires a simple receiver: `$obj->method(...)` and `$this->method(...)` are accepted, but receivers with intermediate property accesses or call results (`$obj->inner->method(...)`, `(getThing())->method(...)`) are not yet captured by the optimizer. Use a temporary variable in those cases:
+First-class callable creation accepts local receivers such as `$obj->method(...)` and `$this->method(...)`, plus non-local receiver expressions such as `(new Greeter())->greet(...)` or `(getThing())->method(...)`. The receiver expression is evaluated when the callable is created, then captured in the generated wrapper.
 
 ```php
-$inner = $obj->inner;
-$cb = $inner->method(...);
+$cb = (new Greeter())->greet(...);
 $value |> $cb;
 ```
 

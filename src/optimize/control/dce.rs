@@ -469,12 +469,14 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
         StmtKind::InterfaceDecl {
             name,
             extends,
+            properties,
             methods,
         constants,
         } => vec![Stmt {
             kind: StmtKind::InterfaceDecl {
                 name,
                 extends,
+                properties,
                 methods: methods
                     .into_iter()
                     .map(dce_method_without_context)

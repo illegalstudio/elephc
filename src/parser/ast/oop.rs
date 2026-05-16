@@ -72,6 +72,27 @@ pub enum Visibility {
     Private,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PropertyHooks {
+    pub get: bool,
+    pub set: bool,
+    pub get_by_ref: bool,
+}
+
+impl PropertyHooks {
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    pub fn any(&self) -> bool {
+        self.get || self.set || self.get_by_ref
+    }
+
+    pub fn requires_get(&self) -> bool {
+        self.get || self.get_by_ref
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TraitUse {
     pub trait_names: Vec<Name>,
@@ -106,6 +127,7 @@ pub struct ClassProperty {
     pub name: String,
     pub visibility: Visibility,
     pub type_expr: Option<TypeExpr>,
+    pub hooks: PropertyHooks,
     pub readonly: bool,
     pub is_final: bool,
     pub is_static: bool,
@@ -121,11 +143,13 @@ impl PartialEq for ClassProperty {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name && self.visibility == other.visibility
             && self.type_expr == other.type_expr
+            && self.hooks == other.hooks
             && self.readonly == other.readonly
             && self.is_final == other.is_final
             && self.is_static == other.is_static
             && self.is_abstract == other.is_abstract
             && self.by_ref == other.by_ref
+            && self.default == other.default
             && self.attributes == other.attributes
     }
 }

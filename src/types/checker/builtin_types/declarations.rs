@@ -25,6 +25,7 @@ use super::fiber::builtin_fiber_methods;
 pub(crate) struct InterfaceDeclInfo {
     pub name: String,
     pub extends: Vec<String>,
+    pub properties: Vec<crate::parser::ast::ClassProperty>,
     pub methods: Vec<crate::parser::ast::ClassMethod>,
     pub span: crate::span::Span,
     pub constants: Vec<crate::parser::ast::ClassConst>,
@@ -35,6 +36,7 @@ impl Clone for InterfaceDeclInfo {
         InterfaceDeclInfo {
             name: self.name.clone(),
             extends: self.extends.clone(),
+            properties: self.properties.clone(),
             methods: self.methods.clone(),
             span: self.span,
             constants: self.constants.clone(),
@@ -74,6 +76,7 @@ pub(crate) fn inject_builtin_throwables(
         InterfaceDeclInfo {
             name: "Throwable".to_string(),
             extends: Vec::new(),
+            properties: Vec::new(),
             methods: vec![builtin_throwable_get_message_method()],
             span: crate::span::Span::dummy(),
             constants: Vec::new(),

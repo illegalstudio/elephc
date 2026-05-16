@@ -392,11 +392,20 @@ pub(super) fn resolve_stmt_exprs(
         StmtKind::InterfaceDecl {
             name,
             extends,
+            properties,
             methods,
         constants,
         } => StmtKind::InterfaceDecl {
             name,
             extends,
+            properties: resolve_properties(
+                properties,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?,
             methods: resolve_method_exprs(
                 methods,
                 base_dir,

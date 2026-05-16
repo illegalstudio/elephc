@@ -62,6 +62,7 @@ pub(crate) fn inject_builtin_interfaces(
         InterfaceDeclInfo {
             name: "Iterator".to_string(),
             extends: vec!["Traversable".to_string()],
+            properties: Vec::new(),
             methods: vec![
                 builtin_interface_method("current", TypeExpr::Named(Name::unqualified("mixed"))),
                 builtin_interface_method("key", TypeExpr::Named(Name::unqualified("mixed"))),
@@ -79,6 +80,7 @@ pub(crate) fn inject_builtin_interfaces(
         InterfaceDeclInfo {
             name: "IteratorAggregate".to_string(),
             extends: vec!["Traversable".to_string()],
+            properties: Vec::new(),
             methods: vec![builtin_interface_method(
                 "getIterator",
                 TypeExpr::Named(Name::unqualified("Traversable")),
@@ -93,6 +95,7 @@ pub(crate) fn inject_builtin_interfaces(
         InterfaceDeclInfo {
             name: "ArrayAccess".to_string(),
             extends: Vec::new(),
+            properties: Vec::new(),
             methods: vec![
                 builtin_interface_method_with_params(
                     "offsetExists",
@@ -125,6 +128,7 @@ pub(crate) fn inject_builtin_interfaces(
         InterfaceDeclInfo {
             name: "Countable".to_string(),
             extends: Vec::new(),
+            properties: Vec::new(),
             methods: vec![builtin_interface_method("count", TypeExpr::Int)],
             span: crate::span::Span::dummy(),
             constants: Vec::new(),
@@ -136,6 +140,7 @@ pub(crate) fn inject_builtin_interfaces(
         InterfaceDeclInfo {
             name: "OuterIterator".to_string(),
             extends: vec!["Iterator".to_string()],
+            properties: Vec::new(),
             methods: vec![builtin_interface_method(
                 "getInnerIterator",
                 TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified("Iterator")))),
@@ -150,6 +155,7 @@ pub(crate) fn inject_builtin_interfaces(
         InterfaceDeclInfo {
             name: "RecursiveIterator".to_string(),
             extends: vec!["Iterator".to_string()],
+            properties: Vec::new(),
             methods: vec![
                 builtin_interface_method(
                     "getChildren",
@@ -169,6 +175,7 @@ pub(crate) fn inject_builtin_interfaces(
         InterfaceDeclInfo {
             name: "SeekableIterator".to_string(),
             extends: vec!["Iterator".to_string()],
+            properties: Vec::new(),
             methods: vec![builtin_interface_method_with_params(
                 "seek",
                 vec![("offset", TypeExpr::Int)],
@@ -184,6 +191,7 @@ pub(crate) fn inject_builtin_interfaces(
         InterfaceDeclInfo {
             name: "SplObserver".to_string(),
             extends: Vec::new(),
+            properties: Vec::new(),
             methods: vec![builtin_interface_method_with_params(
                 "update",
                 vec![(
@@ -202,6 +210,7 @@ pub(crate) fn inject_builtin_interfaces(
         InterfaceDeclInfo {
             name: "SplSubject".to_string(),
             extends: Vec::new(),
+            properties: Vec::new(),
             methods: vec![
                 builtin_interface_method_with_params(
                     "attach",
@@ -231,6 +240,7 @@ pub(crate) fn inject_builtin_interfaces(
         InterfaceDeclInfo {
             name: "Stringable".to_string(),
             extends: Vec::new(),
+            properties: Vec::new(),
             methods: vec![builtin_interface_method("__toString", TypeExpr::Str)],
             span: crate::span::Span::dummy(),
             constants: Vec::new(),
@@ -268,6 +278,7 @@ fn marker_interface(name: &str) -> InterfaceDeclInfo {
     InterfaceDeclInfo {
         name: name.to_string(),
         extends: Vec::new(),
+        properties: Vec::new(),
         methods: Vec::new(),
         span: crate::span::Span::dummy(),
         constants: Vec::new(),

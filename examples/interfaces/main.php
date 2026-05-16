@@ -1,6 +1,8 @@
 <?php
 
 interface Named {
+    public string $name { get; }
+
     public function name();
 }
 
@@ -19,8 +21,10 @@ abstract class BasePrinter implements Labeled {
 }
 
 class ProductPrinter extends BasePrinter {
+    public string $name = "widget";
+
     public function name() {
-        return "widget";
+        return $this->name;
     }
 }
 

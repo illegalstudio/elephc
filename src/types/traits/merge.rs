@@ -49,6 +49,15 @@ pub(super) fn merge_property_into(
         .position(|existing| existing.name == property.name)
     {
         let existing = &merged[index];
+        if existing.hooks.any() || property.hooks.any() {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "{} has incompatible duplicate hooked property '{}'",
+                    owner_label, property.name
+                ),
+            ));
+        }
         if properties_compatible(existing, &property) {
             if replace_compatible_existing {
                 merged[index] = property;
@@ -129,6 +138,7 @@ pub(super) fn merge_imported_method_set(
 fn properties_compatible(left: &ClassProperty, right: &ClassProperty) -> bool {
     left.visibility == right.visibility
         && left.type_expr == right.type_expr
+        && left.hooks == right.hooks
         && left.readonly == right.readonly
         && left.is_static == right.is_static
         && left.is_abstract == right.is_abstract

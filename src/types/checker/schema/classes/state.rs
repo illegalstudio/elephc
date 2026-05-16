@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, Visibility};
 use crate::types::traits::FlattenedClass;
-use crate::types::{ClassInfo, FunctionSig, PhpType};
+use crate::types::{ClassInfo, FunctionSig, PhpType, PropertyHookContract};
 
 #[derive(Default)]
 pub(super) struct ClassBuildState {
@@ -28,6 +28,7 @@ pub(super) struct ClassBuildState {
     pub(super) readonly_properties: HashSet<String>,
     pub(super) reference_properties: HashSet<String>,
     pub(super) abstract_properties: HashSet<String>,
+    pub(super) abstract_property_hooks: HashMap<String, PropertyHookContract>,
     pub(super) static_prop_types: Vec<(String, PhpType)>,
     pub(super) static_defaults: Vec<Option<Expr>>,
     pub(super) static_property_declaring_classes: HashMap<String, String>,
@@ -107,6 +108,7 @@ impl ClassBuildState {
             readonly_properties: self.readonly_properties,
             reference_properties: self.reference_properties,
             abstract_properties: self.abstract_properties,
+            abstract_property_hooks: self.abstract_property_hooks,
             static_properties: self.static_prop_types,
             static_defaults: self.static_defaults,
             static_property_declaring_classes: self.static_property_declaring_classes,
@@ -254,6 +256,10 @@ impl ClassBuildState {
             }
             if parent.abstract_properties.contains(name) {
                 self.abstract_properties.insert(name.clone());
+            }
+            if let Some(contract) = parent.abstract_property_hooks.get(name) {
+                self.abstract_property_hooks
+                    .insert(name.clone(), contract.clone());
             }
         }
     }

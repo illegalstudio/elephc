@@ -22,7 +22,7 @@ pub use ffi::{CType, ExternField, ExternParam, PackedField};
 pub use operators::BinOp;
 pub use oop::{
     Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl,
-    TraitAdaptation, TraitUse, Visibility,
+    PropertyHooks, TraitAdaptation, TraitUse, Visibility,
 };
 pub use stmt::{CatchClause, Program, Stmt, StmtKind, UseItem, UseKind};
 pub use types::TypeExpr;

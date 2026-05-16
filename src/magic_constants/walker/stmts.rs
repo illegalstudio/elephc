@@ -307,11 +307,16 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         StmtKind::InterfaceDecl {
             name,
             extends,
+            properties,
             methods,
         constants,
         } => StmtKind::InterfaceDecl {
             name,
             extends,
+            properties: properties
+                .into_iter()
+                .map(|p| walk_class_property(p, pass))
+                .collect(),
             methods: methods
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))

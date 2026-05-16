@@ -207,6 +207,7 @@ pub enum StmtKind {
     InterfaceDecl {
         name: String,
         extends: Vec<Name>,
+        properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,
         constants: Vec<ClassConst>,
     },

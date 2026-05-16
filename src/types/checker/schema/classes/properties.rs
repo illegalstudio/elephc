@@ -16,6 +16,7 @@ use crate::types::PhpType;
 
 use super::super::super::{infer_expr_type_syntactic, Checker};
 use super::super::validation::visibility_rank;
+use super::super::interfaces::{build_property_contract, merge_property_contract};
 use super::state::{collect_attribute_args, collect_attribute_names, ClassBuildState};
 
 pub(super) fn apply_properties(
@@ -192,10 +193,13 @@ fn apply_instance_property(
             ),
         ));
     }
-    if prop.by_ref && class.is_readonly_class {
+    if prop.by_ref && (class.is_readonly_class || prop.readonly) {
         return Err(CompileError::new(
             prop.span,
-            "Readonly promoted by-reference properties are not supported",
+            &format!(
+                "Readonly promoted property cannot be by-reference: {}::${}",
+                class.name, prop.name
+            ),
         ));
     }
     if let Some(parent_declaring_class) =
@@ -261,6 +265,10 @@ fn apply_instance_property(
     // when a concrete child overrides an inherited abstract slot.
     if prop.is_abstract {
         state.abstract_properties.insert(prop.name.clone());
+        let contract = build_property_contract(checker, &class.name, prop)?;
+        state
+            .abstract_property_hooks
+            .insert(prop.name.clone(), contract);
     }
     Ok(())
 }
@@ -282,12 +290,13 @@ fn apply_instance_property_redeclaration(
         ));
     }
     let declared_ty = resolve_property_declared_type(checker, &class.name, prop)?;
-    validate_instance_property_override(
-        state,
-        class,
-        prop,
-        declared_ty.as_ref(),
-        parent_declaring_class,
+        validate_instance_property_override(
+            state,
+            class,
+            checker,
+            prop,
+            declared_ty.as_ref(),
+            parent_declaring_class,
     )?;
 
     let ty = if let Some(declared_ty) = declared_ty {
@@ -322,8 +331,27 @@ fn apply_instance_property_redeclaration(
     }
     if prop.is_abstract {
         state.abstract_properties.insert(prop.name.clone());
+        let mut contract = build_property_contract(checker, &class.name, prop)?;
+        if let Some(existing) = state.abstract_property_hooks.get(&prop.name) {
+            merge_property_contract(
+                &mut contract,
+                existing,
+                checker,
+                prop.span,
+                &class.name,
+                &prop.name,
+                "redeclaring abstract property",
+            )?;
+        }
+        state
+            .abstract_property_hooks
+            .insert(prop.name.clone(), contract);
     } else {
         state.abstract_properties.remove(&prop.name);
+        state.abstract_property_hooks.remove(&prop.name);
+    }
+    if prop.by_ref {
+        state.reference_properties.insert(prop.name.clone());
     }
     Ok(())
 }
@@ -331,6 +359,7 @@ fn apply_instance_property_redeclaration(
 fn validate_instance_property_override(
     state: &ClassBuildState,
     class: &FlattenedClass,
+    checker: &Checker,
     prop: &ClassProperty,
     declared_ty: Option<&PhpType>,
     parent_declaring_class: &str,
@@ -361,16 +390,28 @@ fn validate_instance_property_override(
         ));
     }
 
-    let parent_declared = state.declared_properties.contains(&prop.name);
-    validate_property_type_invariance(
-        parent_declared,
-        || inherited_instance_property_type(state, &prop.name),
-        declared_ty,
-        &class.name,
-        &prop.name,
-        parent_declaring_class,
-        prop.span,
-    )?;
+    let parent_abstract = state.abstract_properties.contains(&prop.name);
+    if parent_abstract {
+        validate_abstract_property_contract(
+            state,
+            checker,
+            class,
+            prop,
+            declared_ty,
+            parent_declaring_class,
+        )?;
+    } else {
+        let parent_declared = state.declared_properties.contains(&prop.name);
+        validate_property_type_invariance(
+            parent_declared,
+            || inherited_instance_property_type(state, &prop.name),
+            declared_ty,
+            &class.name,
+            &prop.name,
+            parent_declaring_class,
+            prop.span,
+        )?;
+    }
 
     let parent_readonly = state.readonly_properties.contains(&prop.name);
     let child_readonly = class.is_readonly_class || prop.readonly;
@@ -395,7 +436,6 @@ fn validate_instance_property_override(
         ));
     }
 
-    let parent_abstract = state.abstract_properties.contains(&prop.name);
     if !parent_abstract && prop.is_abstract {
         return Err(CompileError::new(
             prop.span,
@@ -406,6 +446,66 @@ fn validate_instance_property_override(
         ));
     }
 
+    Ok(())
+}
+
+fn validate_abstract_property_contract(
+    state: &ClassBuildState,
+    checker: &Checker,
+    class: &FlattenedClass,
+    prop: &ClassProperty,
+    declared_ty: Option<&PhpType>,
+    parent_declaring_class: &str,
+) -> Result<(), CompileError> {
+    let Some(contract) = state.abstract_property_hooks.get(&prop.name) else {
+        return Ok(());
+    };
+    if prop.is_abstract {
+        let mut child_contract = build_property_contract(checker, &class.name, prop)?;
+        merge_property_contract(
+            &mut child_contract,
+            contract,
+            checker,
+            prop.span,
+            &class.name,
+            &prop.name,
+            "redeclaring abstract property",
+        )?;
+        return Ok(());
+    }
+
+    let actual_ty = declared_ty.cloned().unwrap_or(PhpType::Mixed);
+    if let Some(required_get) = contract.get_type.as_ref() {
+        if !checker.type_accepts(required_get, &actual_ty) {
+            return Err(CompileError::new(
+                prop.span,
+                &format!(
+                    "Type of {}::${} must be compatible with get property contract {} from {}",
+                    class.name, prop.name, required_get, parent_declaring_class
+                ),
+            ));
+        }
+    }
+    if let Some(required_set) = contract.set_type.as_ref() {
+        if class.is_readonly_class || prop.readonly {
+            return Err(CompileError::new(
+                prop.span,
+                &format!(
+                    "Readonly property {}::${} cannot satisfy set property contract from {}",
+                    class.name, prop.name, parent_declaring_class
+                ),
+            ));
+        }
+        if !checker.type_accepts(&actual_ty, required_set) {
+            return Err(CompileError::new(
+                prop.span,
+                &format!(
+                    "Type of {}::${} must accept set property contract {} from {}",
+                    class.name, prop.name, required_set, parent_declaring_class
+                ),
+            ));
+        }
+    }
     Ok(())
 }
 

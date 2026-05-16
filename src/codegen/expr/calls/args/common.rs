@@ -146,6 +146,87 @@ pub(crate) fn push_expr_arg(
     pushed_ty
 }
 
+pub(crate) fn push_non_variable_ref_arg_address(
+    arg: &Expr,
+    target_ty: Option<&PhpType>,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let pushed_ty = push_expr_arg(arg, target_ty, emitter, ctx, data);
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 16);
+    abi::emit_call_label(emitter, "__rt_heap_alloc");                         // allocate a stable 16-byte by-reference cell for a default or temporary argument
+    let cell_reg = abi::symbol_scratch_reg(emitter);
+    emitter.instruction(&format!("mov {}, {}", cell_reg, abi::int_result_reg(emitter))); // keep the allocated reference cell address while storing the initial value
+    store_pushed_value_to_ref_cell(emitter, cell_reg, &pushed_ty);
+    abi::emit_push_reg(emitter, cell_reg);
+    PhpType::Int
+}
+
+fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty: &PhpType) {
+    let temp_reg = abi::temp_int_reg(emitter.target);
+    match val_ty.codegen_repr() {
+        PhpType::Bool
+        | PhpType::Int
+        | PhpType::Callable
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_)
+        | PhpType::Packed(_) => {
+            abi::emit_pop_reg(emitter, temp_reg);
+            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
+            abi::emit_store_zero_to_address(emitter, cell_reg, 8);
+        }
+        PhpType::Resource(_) => {
+            abi::emit_pop_reg(emitter, temp_reg);
+            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
+            abi::emit_load_int_immediate(emitter, temp_reg, 9);
+            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+        }
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => {
+            abi::emit_pop_reg(emitter, temp_reg);
+            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
+            abi::emit_load_int_immediate(emitter, temp_reg, 7);
+            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+        }
+        PhpType::Array(_) => {
+            abi::emit_pop_reg(emitter, temp_reg);
+            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
+            abi::emit_load_int_immediate(emitter, temp_reg, 4);
+            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+        }
+        PhpType::AssocArray { .. } => {
+            abi::emit_pop_reg(emitter, temp_reg);
+            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
+            abi::emit_load_int_immediate(emitter, temp_reg, 5);
+            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+        }
+        PhpType::Object(_) => {
+            abi::emit_pop_reg(emitter, temp_reg);
+            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
+            abi::emit_load_int_immediate(emitter, temp_reg, 6);
+            abi::emit_store_to_address(emitter, temp_reg, cell_reg, 8);
+        }
+        PhpType::Float => {
+            abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter));
+            abi::emit_store_to_address(emitter, abi::float_result_reg(emitter), cell_reg, 0);
+            abi::emit_store_zero_to_address(emitter, cell_reg, 8);
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
+            abi::emit_push_reg(emitter, cell_reg);
+            abi::emit_call_label(emitter, "__rt_str_persist");                 // detach temporary string storage before putting it in the reference cell
+            abi::emit_pop_reg(emitter, cell_reg);
+            abi::emit_store_to_address(emitter, ptr_reg, cell_reg, 0);
+            abi::emit_store_to_address(emitter, len_reg, cell_reg, 8);
+        }
+        PhpType::Void | PhpType::Never => {
+            abi::emit_store_zero_to_address(emitter, cell_reg, 0);
+            abi::emit_store_zero_to_address(emitter, cell_reg, 8);
+        }
+    }
+}
+
 fn should_release_owned_mixed_after_arg_coerce(
     arg: &Expr,
     source_ty: &PhpType,

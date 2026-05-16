@@ -12,6 +12,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::parser::ast::{ClassMethod, Expr, Visibility};
+use crate::span::Span;
 
 use super::{FunctionSig, PhpType};
 
@@ -27,9 +28,29 @@ pub enum AttrArgValue {
 }
 
 #[derive(Debug, Clone)]
+pub struct PropertyHookContract {
+    pub get_type: Option<PhpType>,
+    pub set_type: Option<PhpType>,
+    pub get_by_ref: bool,
+    pub declaring_type: String,
+    pub span: Span,
+}
+
+impl PartialEq for PropertyHookContract {
+    fn eq(&self, other: &Self) -> bool {
+        self.get_type == other.get_type
+            && self.set_type == other.set_type
+            && self.get_by_ref == other.get_by_ref
+            && self.declaring_type == other.declaring_type
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct InterfaceInfo {
     pub interface_id: u64,
     pub parents: Vec<String>,
+    pub properties: HashMap<String, PropertyHookContract>,
+    pub property_order: Vec<String>,
     pub methods: HashMap<String, FunctionSig>,
     pub method_declaring_interfaces: HashMap<String, String>,
     pub method_order: Vec<String>,
@@ -85,6 +106,7 @@ pub struct ClassInfo {
     pub readonly_properties: HashSet<String>,
     pub reference_properties: HashSet<String>,
     pub abstract_properties: HashSet<String>,
+    pub abstract_property_hooks: HashMap<String, PropertyHookContract>,
     pub static_properties: Vec<(String, PhpType)>,
     pub static_defaults: Vec<Option<Expr>>,
     pub static_property_declaring_classes: HashMap<String, String>,

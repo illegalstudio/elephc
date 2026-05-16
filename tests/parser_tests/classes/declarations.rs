@@ -107,6 +107,28 @@ fn test_parse_interface_decl() {
 }
 
 #[test]
+fn test_parse_interface_property_hooks() {
+    let stmts = parse_source(
+        "<?php interface HasName { public string $name { get; set; } }",
+    );
+    match &stmts[0].kind {
+        StmtKind::InterfaceDecl {
+            name,
+            properties,
+            ..
+        } => {
+            assert_eq!(name, "HasName");
+            assert_eq!(properties.len(), 1);
+            assert_eq!(properties[0].name, "name");
+            assert!(properties[0].is_abstract);
+            assert!(properties[0].hooks.get);
+            assert!(properties[0].hooks.set);
+        }
+        other => panic!("Expected InterfaceDecl, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_new_self() {
     let stmts = parse_source("<?php echo new self();");
     match echoed_expr(&stmts) {

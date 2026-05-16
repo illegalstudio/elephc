@@ -5,7 +5,7 @@ sidebar:
   order: 8
 ---
 
-**Source:** `src/codegen/runtime/` — `mod.rs`, `emitters.rs`, `data/`, `x86_minimal.rs`, `strings/`, `arrays/`, `buffers/`, `exceptions.rs`, `exceptions/`, `io/`, `objects/`, `system/`, `pointers/`, `fibers/`, `generators/`
+**Source:** `src/codegen/runtime/` — `mod.rs`, `emitters.rs`, `data/`, `x86_minimal.rs`, `strings/`, `arrays/`, `buffers/`, `callables/`, `exceptions.rs`, `exceptions/`, `io/`, `objects/`, `system/`, `pointers/`, `fibers/`, `generators/`
 
 The runtime is a collection of **hand-written assembly routines** that handle operations too complex for inline code generation. When the [code generator](the-codegen.md) needs to convert an integer to a string or concatenate two strings, it emits a `bl __rt_itoa` or `bl __rt_concat` — a call to a runtime routine.
 
@@ -124,6 +124,8 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_strcopy` | Copy string into concat buffer | `x1`/`x2` | `x1`/`x2` |
+| `__rt_str_to_number` | Parse a PHP numeric string for loose comparison and numeric-string casts | `x1`/`x2` | numeric payload + success flag |
+| `__rt_str_loose_eq` | Compare two strings using PHP loose-comparison numeric-string rules before falling back to bytes | two strings | `x0` (0 or 1) |
 | `__rt_strtolower` | Lowercase conversion | `x1`/`x2` | `x1`/`x2` |
 | `__rt_strtoupper` | Uppercase conversion | `x1`/`x2` | `x1`/`x2` |
 | `__rt_trim` | Strip whitespace (no args) or chars in mask | `x1`/`x2` | `x1`/`x2` |
@@ -168,9 +170,26 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_hash` | Hash with algorithm | algo + data | `x1`/`x2` |
 | `__rt_sscanf` | Parse string with format | str + format | `x0` (array ptr) |
 
+## Callable routines
+
+**Source:** `src/codegen/runtime/callables/` (2 files)
+
+These routines implement the runtime fallback path for `is_callable()` when the argument is not a compile-time literal or statically known callable value. They consult generated metadata for builtins, user functions, public methods, public static methods, and `__invoke` objects.
+
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_is_callable_string` | Resolve a string as a builtin, active user function, or `Class::method` static-method callable | `x1`/`x2` = string | `x0` = bool |
+| `__rt_is_callable_method_name` | Check whether an object exposes a public method with the supplied name | object pointer + method string | `x0` = bool |
+| `__rt_is_callable_static_method_name` | Check whether a class string exposes a public static method with the supplied name | class string + method string | `x0` = bool |
+| `__rt_is_callable_object` | Check object callability through public `__invoke` metadata | object pointer | `x0` = bool |
+| `__rt_is_callable_array` | Validate indexed callable arrays such as `[$obj, "method"]` or `[ClassName::class, "method"]` | array pointer | `x0` = bool |
+| `__rt_is_callable_assoc` | Validate associative callable-array payloads produced through boxed or dynamic data paths | hash pointer | `x0` = bool |
+| `__rt_is_callable_mixed` | Unbox a Mixed value and dispatch string, array, hash, or object callable checks | mixed pointer | `x0` = bool |
+| `__rt_is_callable_heap` | Dispatch callable checks from a raw heap pointer by inspecting its heap-kind tag | heap pointer | `x0` = bool |
+
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (118 files)
+**Source:** `src/codegen/runtime/arrays/` (119 files)
 
 ### Core allocation
 
@@ -186,6 +205,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_heap_kind` | Return the uniform heap-kind tag for a heap-backed pointer | `x0` = pointer | `x0` = kind |
 | `__rt_array_new` | Create indexed array with header | `x0` = capacity, `x1` = elem_size | `x0` = array ptr |
 | `__rt_array_clone_shallow` | Clone indexed array storage for copy-on-write splitting, retaining nested heap children as needed | `x0` = array | `x0` = new array |
+| `__rt_array_to_mixed` | Convert an indexed array's live slots to boxed Mixed cells and stamp the array metadata as mixed | `x0` = array | `x0` = same array |
 | `__rt_array_ensure_unique` | Split a shared indexed array before mutation | `x0` = array | `x0` = unique array |
 | `__rt_array_grow` | Ensure uniqueness, double array capacity, copy elements, free old unique storage | `x0` = array | `x0` = new array |
 | `__rt_array_free_deep` | Free array storage and release nested heap-backed elements | `x0` = array | — |
@@ -263,6 +283,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_column` | Extract column from array of assoc arrays (int values) |
 | `__rt_array_column_ref` | Extract column of retained heap-backed values (arrays / hashes / objects) |
 | `__rt_array_column_str` | Extract column from array of assoc arrays (string values) |
+| `__rt_array_column_mixed` | Extract column values as boxed Mixed cells for heterogeneous input payloads |
 | `__rt_range` | Generate integer range array |
 | `__rt_shuffle` / `__rt_array_rand` | Randomize order / pick random |
 | `__rt_random_u32` / `__rt_random_uniform` | Target-aware random primitives used by `rand()`, `random_int()`, `shuffle()`, and `array_rand()` |
@@ -366,6 +387,8 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 | `__rt_json_encode_stdclass` | Encode the dynamic-property hash backing `stdClass`, preserving `{}` for empty instances | `x0` = stdClass hash ptr | `x1`/`x2` = JSON string |
 | `__rt_json_decode` | String-only compatibility helper used by string decode paths; trims outer whitespace and unescapes quoted JSON strings including surrogate-aware `\uXXXX` sequences | `x1`/`x2` = JSON string | `x1`/`x2` = decoded string |
 | `__rt_json_decode_mixed` | Checked structural recursive decoder that returns boxed `Mixed` cells for null, bool, int, float, string, indexed arrays, associative arrays, and stdClass objects depending on `_json_decode_assoc`; records syntax/depth/UTF-16 errors and returns 0 on malformed input | `x1`/`x2` = JSON string | `x0` = Mixed* or 0 |
+| `__rt_json_decode_mixed_array_real` | Recursive array parser used by `json_decode_mixed` once the outer `[` token is known | parser cursor + JSON bounds | boxed Mixed array |
+| `__rt_json_decode_mixed_object_real` | Recursive object parser used by `json_decode_mixed` once the outer `{` token is known; returns assoc hash or stdClass payload based on decode mode | parser cursor + JSON bounds | boxed Mixed object/hash |
 | `__rt_json_skip_ws` | Shared RFC 8259 whitespace skipper used by `json_decode_mixed` and its recursive array/object parsers; advances a caller-owned cursor to the next token or caller-supplied limit | JSON slice pointer, exclusive limit, cursor | updated cursor |
 | `__rt_json_validate` | Standalone RFC 8259 validator used by `json_validate()`; scalar validator helpers are also reused by `json_decode_mixed` for strings and numbers | `x1`/`x2` = JSON string | `x0` = 1 valid / 0 invalid |
 | `__rt_json_depth_enter` / `__rt_json_depth_exit` | Maintain `_json_active_depth` and compare against `_json_depth_limit` for recursive encode/decode/validate walks | global JSON state | status / updated state |
@@ -399,6 +422,10 @@ These routines handle file and filesystem operations through target-aware libc/s
 | `__rt_fgets` | Read line from file descriptor |
 | `__rt_feof` | Check end-of-file flag for a file descriptor |
 | `__rt_fread` | Read N bytes from file descriptor |
+| `__rt_readfile` | Open a path, stream contents to stdout, and return copied byte count, `-1` on read failure, or a false sentinel on open failure |
+| `__rt_fpassthru` | Stream the remaining bytes from an existing descriptor to stdout and return copied byte count or `-1` on read failure |
+| `__rt_flock` | Call libc `flock()`, translating PHP's `LOCK_UN` constant and exposing would-block state for the optional output parameter |
+| `__rt_tmpfile` | Create an anonymous temporary file descriptor through `mkstemp()` plus immediate unlink |
 | `__rt_file_get_contents` | Read entire file into string, or return a null pointer after emitting a suppressible warning on failure |
 | `__rt_file_put_contents` | Write string to file (create/truncate) |
 | `__rt_file` | Read file into array of lines |
@@ -411,6 +438,9 @@ These routines handle file and filesystem operations through target-aware libc/s
 | `__rt_stat_array` / `__rt_lstat_array` / `__rt_fstat_array` | Build PHP-compatible stat arrays with numeric and string keys, returning a null pointer for codegen to box as `false` on failure |
 | `__rt_unlink` / `__rt_mkdir` / `__rt_rmdir` / `__rt_chdir` | Filesystem path operations via libc/syscalls |
 | `__rt_rename` / `__rt_copy` | Two-path filesystem helpers using dual C-string scratch buffers |
+| `__rt_symlink` / `__rt_link` | Create symbolic or hard links through libc |
+| `__rt_readlink` | Read a symbolic-link target into a heap-backed string, with null output for PHP `false` on failure |
+| `__rt_linkinfo` | Return `lstat()` device metadata for a link path, or PHP's `-1` failure sentinel |
 | `__rt_getcwd` | Get current working directory |
 | `__rt_scandir` | List directory contents into array |
 | `__rt_glob` | Pattern-match filenames |
@@ -501,8 +531,11 @@ These helpers back the built-in `Generator` class. Generator functions emit a he
 | `__rt_gen_key` | Return an owned ref to the boxed Mixed key from the most recent yield | `GeneratorFrame*` | boxed `mixed` key |
 | `__rt_gen_valid` | Report whether the generator is not terminated | `GeneratorFrame*` | bool |
 | `__rt_gen_next` | Resume the state machine past the current yield unless terminated | `GeneratorFrame*` | — |
+| `__rt_gen_next_done` | Shared global return label used after `next()` skips or completes a resume | `GeneratorFrame*` | — |
 | `__rt_gen_send` | Store a boxed Mixed sent value, then resume the state machine | `GeneratorFrame*`, boxed `mixed` value | boxed `mixed` payload |
+| `__rt_gen_send_done` | Shared global return label used after `send()` skips or completes a resume | `GeneratorFrame*` | boxed `mixed` payload |
 | `__rt_gen_rewind` | Run the generator to its first yield once | `GeneratorFrame*` | — |
+| `__rt_gen_rewind_done` | Shared global return label used when `rewind()` has already run or just finished | `GeneratorFrame*` | — |
 | `__rt_gen_throw` | Mark the generator terminated and throw through the normal exception runtime | `GeneratorFrame*`, throwable object | does not return |
 | `__rt_gen_get_return` | Return an owned ref to the boxed terminal return value | `GeneratorFrame*` | boxed `mixed` payload |
 
@@ -541,6 +574,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     // diagnostics: runtime warning emission and @ suppression state
     // strings: itoa, resource display/stdout, ftoa, concat, atoi, equality, formatting, trim/mask,
     // search/replace, explode/implode, hashing, encoding, sscanf, ...
+    // callables: dynamic is_callable() fallback for strings, arrays, hashes, objects, and Mixed
     // system: argv, time, getenv, shell, date/mktime/strtotime, JSON, regex
     // exceptions: cleanup walk, catch matching, throw/rethrow helpers
     // arrays: heap alloc/free, array/hash helpers, sort, callbacks, refcount

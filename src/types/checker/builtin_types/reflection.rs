@@ -112,6 +112,7 @@ fn builtin_property(
         name: name.to_string(),
         visibility,
         type_expr,
+        hooks: crate::parser::ast::PropertyHooks::none(),
         readonly: false,
         is_final: false,
         is_static: false,

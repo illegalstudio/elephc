@@ -25,7 +25,7 @@ This page explains where every value lives in memory at runtime.
 │     String buffer            │  _concat_buf: 64KB, scratch pad
 │  (temporary string results)  │  Reset at each statement
 ├─────────────────────────────┤
-│     I/O buffers              │  _cstr_buf: 4KB × 2, _eof_flags: 256B
+│     I/O buffers              │  _cstr_buf/_cstr_buf2: 4KB each, _eof_flags: 256B
 │  (C-string conversion, EOF)  │
 ├─────────────────────────────┤
 │   Runtime metadata (BSS)     │  _concat_off, _global_argc/_argv,
@@ -535,7 +535,7 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 | Static vars | 24 bytes per `static $var` (`16 + 8 init flag`) | Grows with number of declared static locals |
 | Static properties | 16 bytes per effective declaring class static property | Grows with number of declared and redeclared static properties |
 | Array capacity | Fixed at creation until grow/re-hash logic runs | Fatal error: "array capacity exceeded" if a hard limit is hit |
-| C-string buffers | 4KB each (×2) | Long converted paths/strings are truncated to buffer size |
+| C-string buffers | `_cstr_buf`, `_cstr_buf2` = 4KB each | Long converted paths/strings are truncated to buffer size |
 | EOF flags | 256 bytes | Max 256 simultaneous file descriptors |
 | Data section | No fixed limit | Grows with number of unique literals |
 

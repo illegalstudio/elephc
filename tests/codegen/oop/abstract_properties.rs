@@ -15,7 +15,7 @@ fn test_abstract_property_concrete_child_declares_default() {
     let out = compile_and_run(
         r#"<?php
 abstract class Shape {
-    abstract public int $sides;
+    abstract public int $sides { get; set; }
 }
 
 class Square extends Shape {
@@ -34,7 +34,7 @@ fn test_abstract_property_chain_through_abstract_classes() {
     let out = compile_and_run(
         r#"<?php
 abstract class A {
-    abstract public int $value;
+    abstract public int $value { get; set; }
 }
 
 abstract class B extends A {
@@ -56,7 +56,7 @@ fn test_abstract_property_typed_invariance_in_concrete_child() {
     let out = compile_and_run(
         r#"<?php
 abstract class Box {
-    abstract public string $label;
+    abstract public string $label { get; set; }
 }
 
 class StringBox extends Box {
@@ -75,7 +75,7 @@ fn test_abstract_property_set_in_constructor() {
     let out = compile_and_run(
         r#"<?php
 abstract class Entity {
-    abstract public int $id;
+    abstract public int $id { get; set; }
 }
 
 class User extends Entity {
@@ -104,7 +104,7 @@ fn test_abstract_property_concretized_via_promoted_parameter() {
     let out = compile_and_run(
         r#"<?php
 abstract class Entity {
-    abstract public int $id;
+    abstract public int $id { get; set; }
 }
 
 class User extends Entity {
@@ -123,8 +123,8 @@ fn test_abstract_class_with_only_abstract_properties() {
     let out = compile_and_run(
         r#"<?php
 abstract class Tagged {
-    abstract public int $tag;
-    abstract public string $label;
+    abstract public int $tag { get; set; }
+    abstract public string $label { get; set; }
 }
 
 class Item extends Tagged {
@@ -146,7 +146,7 @@ fn test_abstract_property_inherited_method_reads_concrete_slot() {
     let out = compile_and_run(
         r#"<?php
 abstract class Box {
-    abstract public int $value;
+    abstract public int $value { get; set; }
 
     public function show() {
         return $this->value;
@@ -169,7 +169,7 @@ fn test_abstract_readonly_property_concretized() {
     let out = compile_and_run(
         r#"<?php
 abstract class Box {
-    abstract public readonly int $value;
+    abstract public int $value { get; }
 }
 
 class IntBox extends Box {
@@ -192,7 +192,7 @@ fn test_abstract_property_nullable_type() {
     let out = compile_and_run(
         r#"<?php
 abstract class Source {
-    abstract public ?string $name;
+    abstract public ?string $name { get; set; }
 }
 
 class Named extends Source {

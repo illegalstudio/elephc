@@ -10,7 +10,9 @@
 
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{ClassProperty, Expr, ExprKind, Stmt, StmtKind, TypeExpr, Visibility};
+use crate::parser::ast::{
+    ClassProperty, Expr, ExprKind, PropertyHooks, Stmt, StmtKind, TypeExpr, Visibility,
+};
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
 
@@ -63,17 +65,12 @@ pub(super) fn parse_method_params(
         } else {
             None
         };
-        let is_ref = if *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand {
-            if promotion.as_ref().is_some_and(|(_, readonly, _)| *readonly) {
-                return Err(CompileError::new(
-                    span,
-                    "Readonly promoted by-reference properties are not supported",
-                ));
-            }
+        let (is_ref, ref_span) = if *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand {
+            let ref_span = tokens[*pos].1;
             *pos += 1;
-            true
+            (true, Some(ref_span))
         } else {
-            false
+            (false, None)
         };
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
             if promotion.is_some() {
@@ -109,22 +106,25 @@ pub(super) fn parse_method_params(
                 } else {
                     None
                 };
-                if is_ref && promotion.is_some() && default.is_some() {
-                    return Err(CompileError::new(
-                        span,
-                        "Promoted by-reference properties cannot use default values yet",
-                    ));
-                }
                 if let Some((visibility, readonly, property_span)) = promotion {
+                    if readonly && is_ref {
+                        return Err(CompileError::new(
+                            ref_span.unwrap_or(property_span),
+                            "Readonly promoted property cannot be by-reference",
+                        ));
+                    }
                     promoted_properties.push(ClassProperty {
                         name: n.clone(),
                         visibility,
                         type_expr: type_ann.clone(),
+                        hooks: PropertyHooks::none(),
                         readonly,
                         is_final: false,
                         is_static: false,
                         is_abstract: false,
                         by_ref: is_ref,
+                        // PHP keeps constructor-promotion defaults on the parameter,
+                        // not on the promoted property's default metadata.
                         default: None,
                         span: property_span,
                         attributes: Vec::new(),

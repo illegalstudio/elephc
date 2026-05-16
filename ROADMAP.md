@@ -449,7 +449,7 @@ runtime helpers, and standard-library surfaces.
 - [x] JSON pretty-print optimization — inline indent emission inside each container encoder (assoc, array_int/str/dynamic, object) and retire the `__rt_json_pretty_apply` post-processor. Eliminates the second buffer walk for JSON_PRETTY_PRINT workloads. Multi-day refactor completed with a `_json_indent_depth` BSS slot, balanced normal-path formatting depth maintenance, reset-at-entry protection across throws, and bytewise PHP cross-check coverage on representative payloads.
 - [x] `is_callable()` runtime fallback — handle non-literal strings, `[$obj, "method"]` arrays, and objects implementing `__invoke`. The string-literal + Callable-typed compile-time path is already in place.
 - [x] Case-insensitive user-function lookup — `function_exists("USER_FN")` and `is_callable("USER_FN")` accept any case for user functions through a shared lookup path, matching PHP's function-name rules.
-- [ ] OOP property parity v2 — finish PHP 8.4 property-hook contracts, including interface properties and abstract properties in traits; cover `readonly static` properties, instance property redeclaration rules, and the remaining by-reference constructor-promotion gaps (`readonly` and default values)
+- [x] OOP property parity v2 — PHP 8.4 property-hook contracts now cover interface properties and abstract properties in traits/classes; `readonly static` remains rejected like PHP, instance property redeclaration validates hook get/set contracts, and by-reference constructor promotion now rejects readonly aliases at compile time while supporting default-value reference cells.
 
 ### Standard PHP Library (SPL)
 

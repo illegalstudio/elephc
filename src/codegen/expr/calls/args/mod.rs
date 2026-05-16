@@ -26,7 +26,7 @@ pub(crate) use array_elements::{
 };
 pub(crate) use common::{
     coerce_current_value_to_target, declared_target_ty, emit_ref_arg_variable_address,
-    push_arg_value, push_expr_arg,
+    push_arg_value, push_expr_arg, push_non_variable_ref_arg_address,
 };
 pub(crate) use emit::emit_pushed_call_args;
 pub(crate) use named::pushed_temp_bytes;

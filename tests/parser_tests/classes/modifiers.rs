@@ -213,3 +213,36 @@ fn test_parse_constructor_promoted_properties() {
         other => panic!("Expected ClassDecl with promoted properties, got {:?}", other),
     }
 }
+
+#[test]
+fn test_parse_abstract_property_hook_contract() {
+    let stmts = parse_source(
+        "<?php abstract class Box { abstract public int $value { get; set; } }",
+    );
+    match &stmts[0].kind {
+        StmtKind::ClassDecl { properties, .. } => {
+            assert_eq!(properties.len(), 1);
+            assert_eq!(properties[0].name, "value");
+            assert!(properties[0].is_abstract);
+            assert!(properties[0].hooks.get);
+            assert!(properties[0].hooks.set);
+        }
+        other => panic!("Expected ClassDecl, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_trait_abstract_property_hook_contract() {
+    let stmts = parse_source(
+        "<?php trait NeedsValue { abstract public int $value { &get; } }",
+    );
+    match &stmts[0].kind {
+        StmtKind::TraitDecl { properties, .. } => {
+            assert_eq!(properties.len(), 1);
+            assert_eq!(properties[0].name, "value");
+            assert!(properties[0].is_abstract);
+            assert!(properties[0].hooks.get_by_ref);
+        }
+        other => panic!("Expected TraitDecl, got {:?}", other),
+    }
+}

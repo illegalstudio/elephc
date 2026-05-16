@@ -50,6 +50,7 @@ pub(crate) fn inject_builtin_json_interfaces(
         InterfaceDeclInfo {
             name: "JsonSerializable".to_string(),
             extends: Vec::new(),
+            properties: Vec::new(),
             methods: vec![json_serialize_method()],
             span: crate::span::Span::dummy(),
             constants: Vec::new(),

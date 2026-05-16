@@ -149,6 +149,8 @@ pub(super) fn store_referenced_value(
     } else {
         abi::temp_int_reg(emitter.target)
     };
+    // Reference targets may be one-word local slots. Only strings have a
+    // guaranteed second word in both local slots and default heap ref cells.
     match val_ty {
         PhpType::Bool
         | PhpType::Int
@@ -158,42 +160,30 @@ pub(super) fn store_referenced_value(
         | PhpType::Packed(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, pointer_reg, 0);
-            abi::emit_store_zero_to_address(emitter, pointer_reg, 8);
         }
         PhpType::Resource(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, pointer_reg, 0);
-            abi::emit_load_int_immediate(emitter, temp_reg, 9);
-            abi::emit_store_to_address(emitter, temp_reg, pointer_reg, 8);
         }
         PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, pointer_reg, 0);
-            abi::emit_load_int_immediate(emitter, temp_reg, 7);
-            abi::emit_store_to_address(emitter, temp_reg, pointer_reg, 8);
         }
         PhpType::Array(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, pointer_reg, 0);
-            abi::emit_load_int_immediate(emitter, temp_reg, 4);
-            abi::emit_store_to_address(emitter, temp_reg, pointer_reg, 8);
         }
         PhpType::AssocArray { .. } => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, pointer_reg, 0);
-            abi::emit_load_int_immediate(emitter, temp_reg, 5);
-            abi::emit_store_to_address(emitter, temp_reg, pointer_reg, 8);
         }
         PhpType::Object(_) => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, pointer_reg, 0);
-            abi::emit_load_int_immediate(emitter, temp_reg, 6);
-            abi::emit_store_to_address(emitter, temp_reg, pointer_reg, 8);
         }
         PhpType::Float => {
             abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter));
             abi::emit_store_to_address(emitter, abi::float_result_reg(emitter), pointer_reg, 0);
-            abi::emit_store_zero_to_address(emitter, pointer_reg, 8);
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
@@ -206,7 +196,6 @@ pub(super) fn store_referenced_value(
         }
         PhpType::Void | PhpType::Never => {
             abi::emit_store_zero_to_address(emitter, pointer_reg, 0);
-            abi::emit_store_zero_to_address(emitter, pointer_reg, 8);
         }
     }
 }

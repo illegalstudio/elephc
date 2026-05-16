@@ -14,7 +14,10 @@ use crate::parser::ast::{Expr, ExprKind};
 use crate::types::call_args;
 use crate::types::{FunctionSig, PhpType};
 
-use super::common::{call_target_ty, emit_ref_arg_variable_address, push_arg_value, push_expr_arg};
+use super::common::{
+    call_target_ty, emit_ref_arg_variable_address, push_arg_value,
+    push_expr_arg, push_non_variable_ref_arg_address,
+};
 use super::named;
 use super::normalize::{has_named_args, prepare_call_args};
 use super::spread::{emit_spread_into_named_params, emit_spread_tail_variadic_array_arg};
@@ -124,7 +127,7 @@ pub(crate) fn emit_pushed_non_variadic_args(
     all_args: &[Expr],
     sig: Option<&FunctionSig>,
     ref_arg_context_label: &str,
-    retain_non_variable_ref_args: bool,
+    _retain_non_variable_ref_args: bool,
     coerce_inferred_params: bool,
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -144,13 +147,10 @@ pub(crate) fn emit_pushed_non_variadic_args(
                 if !emit_ref_arg_variable_address(var_name, ref_arg_context_label, emitter, ctx) {
                     continue;
                 }
+                push_arg_value(emitter, &PhpType::Int);
             } else {
-                let source_ty = super::super::super::emit_expr(arg, emitter, ctx, data);
-                if retain_non_variable_ref_args {
-                    super::super::super::retain_borrowed_heap_arg(emitter, arg, &source_ty);
-                }
+                push_non_variable_ref_arg_address(arg, target_ty, emitter, ctx, data);
             }
-            push_arg_value(emitter, &PhpType::Int);
             arg_types.push(PhpType::Int);
         } else {
             let pushed_ty = push_expr_arg(arg, target_ty, emitter, ctx, data);

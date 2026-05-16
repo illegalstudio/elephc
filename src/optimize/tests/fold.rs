@@ -80,6 +80,7 @@ fn test_fold_string_concat_and_property_default() {
         name: "label".to_string(),
         visibility: Visibility::Public,
         type_expr: None,
+        hooks: crate::parser::ast::PropertyHooks::none(),
         readonly: false,
         is_final: false,
         is_static: false,
