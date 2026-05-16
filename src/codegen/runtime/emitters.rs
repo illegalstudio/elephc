@@ -244,6 +244,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_mixed_count(emitter);
     arrays::emit_mixed_free_deep(emitter);
     arrays::emit_mixed_is_empty(emitter);
+    arrays::emit_mixed_numeric_binops(emitter);
     arrays::emit_mixed_strict_eq(emitter);
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_write_stdout(emitter);

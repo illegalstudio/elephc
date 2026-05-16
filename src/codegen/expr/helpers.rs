@@ -53,7 +53,24 @@ pub(crate) fn coerce_result_to_type(
     if source_ty == target_ty {
         return;
     }
-    if matches!(target_ty, PhpType::Mixed | PhpType::Union(_)) {
+    if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+        match target_ty.codegen_repr() {
+            PhpType::Int | PhpType::Resource(_) => {
+                crate::codegen::abi::emit_call_label(emitter, "__rt_mixed_cast_int");
+            }
+            PhpType::Bool => {
+                crate::codegen::abi::emit_call_label(emitter, "__rt_mixed_cast_bool");
+            }
+            PhpType::Float => {
+                crate::codegen::abi::emit_call_label(emitter, "__rt_mixed_cast_float");
+            }
+            PhpType::Str => {
+                super::coerce_to_string(emitter, ctx, data, source_ty);
+            }
+            PhpType::Mixed | PhpType::Union(_) => {}
+            _ => {}
+        }
+    } else if matches!(target_ty, PhpType::Mixed | PhpType::Union(_)) {
         crate::codegen::emit_box_current_value_as_mixed(emitter, source_ty);
     } else if *target_ty == PhpType::Str {
         super::coerce_to_string(emitter, ctx, data, source_ty);

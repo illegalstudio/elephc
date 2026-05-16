@@ -203,6 +203,7 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_mixed_free_deep(emitter);
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_cast_string(emitter);
+    arrays::emit_mixed_numeric_binops(emitter);
     arrays::emit_mixed_write_stdout(emitter);
     arrays::emit_mixed_strict_eq(emitter);
     arrays::emit_iterable_unsupported_kind(emitter);

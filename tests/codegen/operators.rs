@@ -89,6 +89,30 @@ fn test_constant_int_multiply_overflow_promotes_to_float() {
     assert_eq!(out, "double");
 }
 
+#[test]
+fn test_runtime_int_add_overflow_promotes_to_float() {
+    let out = compile_and_run("<?php $a = 9223372036854775807; $b = 1; echo gettype($a + $b);");
+    assert_eq!(out, "double");
+}
+
+#[test]
+fn test_runtime_int_multiply_overflow_promotes_to_float() {
+    let out = compile_and_run("<?php $a = 3037000500; $b = 3037000500; echo gettype($a * $b);");
+    assert_eq!(out, "double");
+}
+
+#[test]
+fn test_runtime_int_arithmetic_without_overflow_stays_integer() {
+    let out = compile_and_run("<?php $a = 40; $b = 2; echo gettype($a + $b) . ':' . ($a + $b);");
+    assert_eq!(out, "integer:42");
+}
+
+#[test]
+fn test_runtime_overflow_result_participates_in_later_arithmetic() {
+    let out = compile_and_run("<?php $a = 9223372036854775807; $b = 1; $c = $a + $b; echo gettype($c + 1);");
+    assert_eq!(out, "double");
+}
+
 // --- Phase 3: Concatenation ---
 
 #[test]
