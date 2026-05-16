@@ -132,12 +132,12 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `ctype_space()` | `ctype_space($str): bool` | All chars are whitespace |
 | `preg_match()` | `preg_match($pattern, $subject): int` | Test if regex matches (1 or 0). Uses POSIX extended regex. |
 | `preg_match_all()` | `preg_match_all($pattern, $subject): int` | Count all non-overlapping matches |
-| `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string` | Replace all regex matches |
+| `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string` | Replace all regex matches; supports `$0`..`$9` and `\0`..`\9` replacement backreferences |
 | `preg_split()` | `preg_split($pattern, $subject): array` | Split string by regex pattern |
 
 ### Regex limitations
 
 - Uses POSIX extended regex via libc, with translation of common PCRE shorthands (`\s`, `\d`, `\w`)
+- `preg_replace()` expands `$0`..`$9` and `\0`..`\9` to captured groups; unmatched optional groups expand to an empty string
 - Lookahead, lookbehind, non-greedy quantifiers are not supported
 - `preg_match()` does not support `$matches` capture parameter
-- `preg_replace()` does not support backreferences like `$1`

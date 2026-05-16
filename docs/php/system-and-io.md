@@ -51,7 +51,7 @@ sidebar:
 - **ISO date / datetime** — `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, `YYYY-MM-DD HH:MM:SS`, `YYYY-MM-DDTHH:MM`, or `YYYY-MM-DDTHH:MM:SS`. Lowercase `t` is also accepted as the date/time separator.
 - **Bare keywords** — `now`, `today`, `tomorrow`, `yesterday`, `midnight`, `noon`. (`midnight` is an alias for `today`.)
 - **Time-only** — `H:MM`, `HH:MM`, `H:MM:SS`, `HH:MM:SS` — combined with today's date.
-- **Relative offsets** — `[+-]?N unit [N unit ...]` and `N unit ago` (negates the whole expression). Units: `sec(s)`, `second(s)`, `min(s)`, `minute(s)`, `hour(s)`, `day(s)`, `week(s)`, `month(s)`, `year(s)`. Composite forms like `"+1 day 2 hours"` and `"3 months ago"` are supported. Day/week offsets honor DST through libc `mktime` normalization.
+- **Relative offsets** — `[+-]?N unit [N unit ...]`, `a/an unit`, and `N unit ago` / `a/an unit ago` (negates the whole expression). Units: `sec(s)`, `second(s)`, `min(s)`, `minute(s)`, `hour(s)`, `day(s)`, `week(s)`, `month(s)`, `year(s)`. Composite forms like `"+1 day 2 hours"`, `"an hour"`, and `"a day ago"` are supported. Day/week offsets honor DST through libc `mktime` normalization.
 - **Named weekdays** — `Monday`..`Sunday` and 3-letter abbreviations `Mon`..`Sun`. Modifiers: `next <weekday>` (next future occurrence; today + 7 if today matches), `last <weekday>` (most recent past; today - 7 if today matches), `this <weekday>` (delta may be zero when today matches). Result is midnight of the target day.
 
 Currently out of scope (not accepted): timezone offsets (`+0200`, `UTC`, ...), `@unix_timestamp` form, `first/last day of` patterns, `MM/DD/YYYY` and `DD-Mon-YYYY` alternative date shapes, `nth <weekday> of <month>` patterns. Malformed input returns `-1`.
@@ -131,10 +131,10 @@ Encoding rules for objects:
 |---|---|---|
 | `preg_match()` | `preg_match($pattern, $subject): int` | Test regex match (1 or 0) |
 | `preg_match_all()` | `preg_match_all($pattern, $subject): int` | Count all non-overlapping matches |
-| `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string` | Replace all regex matches |
+| `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string` | Replace all regex matches; `$0`..`$9` and `\0`..`\9` replacement backreferences expand captured groups |
 | `preg_split()` | `preg_split($pattern, $subject): array` | Split string by regex |
 
-Uses POSIX extended regex with common PCRE shorthand translation (`\s`, `\d`, `\w`). Lookahead, lookbehind, non-greedy quantifiers not supported.
+Uses POSIX extended regex with common PCRE shorthand translation (`\s`, `\d`, `\w`). Replacement backreferences `$0`..`$9` and `\0`..`\9` are expanded by `preg_replace()`. Lookahead, lookbehind, non-greedy quantifiers, and the `$matches` output parameter for `preg_match()` are not supported.
 
 ## File I/O
 

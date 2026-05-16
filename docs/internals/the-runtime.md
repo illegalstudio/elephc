@@ -343,7 +343,7 @@ The fatal uncaught-exception path writes `Fatal error: uncaught exception` to st
 |---|---|---|---|
 | `__rt_date` | Format a Unix timestamp using PHP date format characters (Y, m, d, H, i, s, l, F, etc.). Uses `localtime_r()` from libc and static lookup tables (`_day_names`, `_month_names`) for day/month names | `x1`/`x2` = format string, `x0` = timestamp | `x1`/`x2` = formatted string |
 | `__rt_mktime` | Create a Unix timestamp from date components (hour, minute, second, month, day, year). Populates a `tm` struct on the stack and calls libc `mktime()` | `x0`-`x5` = h, m, s, mon, day, year | `x0` = Unix timestamp |
-| `__rt_strtotime` | Parse trimmed date/time strings through strategy emitters: ISO dates/datetimes, time-only forms, bare keywords (`now`, `today`, `tomorrow`, `yesterday`, `midnight`, `noon`), relative offsets (`+1 day`, `3 months ago`), and named weekdays with `next` / `last` / `this`. Successful paths populate a `tm` struct and call libc `mktime()`; malformed input returns `-1`. | `x1`/`x2` = date string | `x0` = Unix timestamp or `-1` |
+| `__rt_strtotime` | Parse trimmed date/time strings through strategy emitters: ISO dates/datetimes, time-only forms, bare keywords (`now`, `today`, `tomorrow`, `yesterday`, `midnight`, `noon`), relative offsets (`+1 day`, `3 months ago`, `a/an <unit>` article forms), and named weekdays with `next` / `last` / `this`. Successful paths populate a `tm` struct and call libc `mktime()`; malformed input returns `-1`. | `x1`/`x2` = date string | `x0` = Unix timestamp or `-1` |
 
 ### JSON routines
 
@@ -383,7 +383,7 @@ All regex routines use **POSIX extended regular expressions** via libc's `regcom
 |---|---|---|---|
 | `__rt_preg_match` | Test if a regex matches the subject string. Compiles the pattern, executes once, frees | pattern + subject strings | `x0` = 1 (match) or 0 (no match) |
 | `__rt_preg_match_all` | Count all non-overlapping matches by repeatedly executing the regex with advancing offsets | pattern + subject strings | `x0` = match count |
-| `__rt_preg_replace` | Replace all regex matches with a replacement string. Builds the result incrementally in the concat buffer | pattern + replacement + subject | `x1`/`x2` = result string |
+| `__rt_preg_replace` | Replace all regex matches with a replacement string. Builds the result incrementally in the concat buffer and expands `$0`..`$9` / `\0`..`\9` from the `regexec()` capture vector | pattern + replacement + subject | `x1`/`x2` = result string |
 | `__rt_preg_split` | Split the subject string at regex match boundaries. Returns a string array of the non-matching segments | pattern + subject strings | `x0` = array pointer |
 
 ## I/O routines
