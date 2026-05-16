@@ -11,6 +11,7 @@
 
 mod arrays;
 mod buffers;
+mod callables;
 mod data;
 mod diagnostics;
 mod emitters;

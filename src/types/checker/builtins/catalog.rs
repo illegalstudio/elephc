@@ -9,302 +9,307 @@
 //! Key details:
 //! - This catalog is the source of truth for PHP-visible builtin names; avoid parallel tables.
 
+const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
+    "abs",
+    "acos",
+    "addslashes",
+    "array_chunk",
+    "array_column",
+    "array_combine",
+    "array_diff",
+    "array_diff_key",
+    "array_fill",
+    "array_fill_keys",
+    "array_filter",
+    "array_flip",
+    "array_intersect",
+    "array_intersect_key",
+    "array_key_exists",
+    "array_keys",
+    "array_map",
+    "array_merge",
+    "array_pad",
+    "array_pop",
+    "array_product",
+    "array_push",
+    "array_rand",
+    "array_reduce",
+    "array_reverse",
+    "array_search",
+    "array_shift",
+    "array_slice",
+    "array_splice",
+    "array_sum",
+    "array_unique",
+    "array_unshift",
+    "array_values",
+    "array_walk",
+    "arsort",
+    "asin",
+    "asort",
+    "atan",
+    "atan2",
+    "base64_decode",
+    "base64_encode",
+    "basename",
+    "bin2hex",
+    "boolval",
+    "buffer_free",
+    "buffer_len",
+    "buffer_new",
+    "call_user_func",
+    "call_user_func_array",
+    "ceil",
+    "chgrp",
+    "chmod",
+    "chown",
+    "chdir",
+    "chr",
+    "clearstatcache",
+    "copy",
+    "cos",
+    "cosh",
+    "count",
+    "ctype_alnum",
+    "ctype_alpha",
+    "ctype_digit",
+    "ctype_space",
+    "date",
+    "define",
+    "deg2rad",
+    "die",
+    "dirname",
+    "empty",
+    "exec",
+    "exit",
+    "exp",
+    "explode",
+    "fclose",
+    "fdatasync",
+    "fdiv",
+    "feof",
+    "fflush",
+    "fgetc",
+    "fgetcsv",
+    "fgets",
+    "flock",
+    "file",
+    "fileatime",
+    "filectime",
+    "file_exists",
+    "filegroup",
+    "file_get_contents",
+    "fileinode",
+    "file_put_contents",
+    "fileowner",
+    "fileperms",
+    "filetype",
+    "filemtime",
+    "filesize",
+    "floatval",
+    "floor",
+    "fnmatch",
+    "fmod",
+    "fopen",
+    "fpassthru",
+    "fputcsv",
+    "fread",
+    "readfile",
+    "fstat",
+    "fseek",
+    "fsync",
+    "ftell",
+    "ftruncate",
+    "class_alias",
+    "class_attribute_args",
+    "class_attribute_names",
+    "class_exists",
+    "class_get_attributes",
+    "enum_exists",
+    "function_exists",
+    "get_class",
+    "get_parent_class",
+    "get_declared_classes",
+    "get_declared_interfaces",
+    "get_declared_traits",
+    "interface_exists",
+    "trait_exists",
+    "fwrite",
+    "getcwd",
+    "getenv",
+    "gettype",
+    "glob",
+    "hash",
+    "hex2bin",
+    "html_entity_decode",
+    "htmlentities",
+    "htmlspecialchars",
+    "hypot",
+    "implode",
+    "in_array",
+    "intdiv",
+    "intval",
+    "is_bool",
+    "is_callable",
+    "is_dir",
+    "is_executable",
+    "is_file",
+    "is_a",
+    "is_finite",
+    "is_float",
+    "is_subclass_of",
+    "is_infinite",
+    "is_int",
+    "is_iterable",
+    "is_nan",
+    "is_null",
+    "is_numeric",
+    "is_readable",
+    "is_string",
+    "is_link",
+    "is_writeable",
+    "is_writable",
+    "isset",
+    "json_decode",
+    "json_encode",
+    "json_last_error",
+    "json_last_error_msg",
+    "json_validate",
+    "krsort",
+    "ksort",
+    "lcfirst",
+    "link",
+    "linkinfo",
+    "log",
+    "log10",
+    "log2",
+    "lstat",
+    "ltrim",
+    "max",
+    "md5",
+    "microtime",
+    "min",
+    "mkdir",
+    "mktime",
+    "mt_rand",
+    "natcasesort",
+    "natsort",
+    "nl2br",
+    "number_format",
+    "ord",
+    "passthru",
+    "pathinfo",
+    "php_uname",
+    "phpversion",
+    "pi",
+    "pow",
+    "preg_match",
+    "preg_match_all",
+    "preg_replace",
+    "preg_split",
+    "print_r",
+    "printf",
+    "ptr",
+    "ptr_get",
+    "ptr_is_null",
+    "ptr_null",
+    "ptr_offset",
+    "ptr_read32",
+    "ptr_read8",
+    "ptr_set",
+    "ptr_sizeof",
+    "ptr_write32",
+    "ptr_write8",
+    "putenv",
+    "rad2deg",
+    "rand",
+    "random_int",
+    "range",
+    "rawurldecode",
+    "rawurlencode",
+    "readline",
+    "readlink",
+    "realpath",
+    "rename",
+    "rewind",
+    "rmdir",
+    "round",
+    "rsort",
+    "rtrim",
+    "scandir",
+    "settype",
+    "sha1",
+    "shell_exec",
+    "shuffle",
+    "sin",
+    "spl_autoload",
+    "spl_autoload_call",
+    "spl_autoload_extensions",
+    "spl_autoload_functions",
+    "spl_autoload_register",
+    "spl_autoload_unregister",
+    "spl_classes",
+    "spl_object_hash",
+    "spl_object_id",
+    "sinh",
+    "sleep",
+    "sort",
+    "sprintf",
+    "sqrt",
+    "sscanf",
+    "stat",
+    "str_contains",
+    "str_ends_with",
+    "str_ireplace",
+    "str_pad",
+    "str_repeat",
+    "str_replace",
+    "str_split",
+    "str_starts_with",
+    "strcasecmp",
+    "strcmp",
+    "stripslashes",
+    "strlen",
+    "strpos",
+    "strrev",
+    "strrpos",
+    "strstr",
+    "strtolower",
+    "strtotime",
+    "strtoupper",
+    "substr",
+    "substr_replace",
+    "sys_get_temp_dir",
+    "symlink",
+    "system",
+    "tan",
+    "tanh",
+    "tempnam",
+    "time",
+    "tmpfile",
+    "touch",
+    "trim",
+    "uasort",
+    "ucfirst",
+    "ucwords",
+    "uksort",
+    "umask",
+    "unlink",
+    "unset",
+    "urldecode",
+    "urlencode",
+    "usleep",
+    "usort",
+    "var_dump",
+    "wordwrap",
+];
+
 fn is_supported_builtin_function_exact(name: &str) -> bool {
-    matches!(
-        name,
-        "abs"
-            | "acos"
-            | "addslashes"
-            | "array_chunk"
-            | "array_column"
-            | "array_combine"
-            | "array_diff"
-            | "array_diff_key"
-            | "array_fill"
-            | "array_fill_keys"
-            | "array_filter"
-            | "array_flip"
-            | "array_intersect"
-            | "array_intersect_key"
-            | "array_key_exists"
-            | "array_keys"
-            | "array_map"
-            | "array_merge"
-            | "array_pad"
-            | "array_pop"
-            | "array_product"
-            | "array_push"
-            | "array_rand"
-            | "array_reduce"
-            | "array_reverse"
-            | "array_search"
-            | "array_shift"
-            | "array_slice"
-            | "array_splice"
-            | "array_sum"
-            | "array_unique"
-            | "array_unshift"
-            | "array_values"
-            | "array_walk"
-            | "arsort"
-            | "asin"
-            | "asort"
-            | "atan"
-            | "atan2"
-            | "base64_decode"
-            | "base64_encode"
-            | "basename"
-            | "bin2hex"
-            | "boolval"
-            | "buffer_free"
-            | "buffer_len"
-            | "buffer_new"
-            | "call_user_func"
-            | "call_user_func_array"
-            | "ceil"
-            | "chgrp"
-            | "chmod"
-            | "chown"
-            | "chdir"
-            | "chr"
-            | "clearstatcache"
-            | "copy"
-            | "cos"
-            | "cosh"
-            | "count"
-            | "ctype_alnum"
-            | "ctype_alpha"
-            | "ctype_digit"
-            | "ctype_space"
-            | "date"
-            | "define"
-            | "deg2rad"
-            | "die"
-            | "dirname"
-            | "empty"
-            | "exec"
-            | "exit"
-            | "exp"
-            | "explode"
-            | "fclose"
-            | "fdatasync"
-            | "fdiv"
-            | "feof"
-            | "fflush"
-            | "fgetc"
-            | "fgetcsv"
-            | "fgets"
-            | "flock"
-            | "file"
-            | "fileatime"
-            | "filectime"
-            | "file_exists"
-            | "filegroup"
-            | "file_get_contents"
-            | "fileinode"
-            | "file_put_contents"
-            | "fileowner"
-            | "fileperms"
-            | "filetype"
-            | "filemtime"
-            | "filesize"
-            | "floatval"
-            | "floor"
-            | "fnmatch"
-            | "fmod"
-            | "fopen"
-            | "fpassthru"
-            | "fputcsv"
-            | "fread"
-            | "readfile"
-            | "fstat"
-            | "fseek"
-            | "fsync"
-            | "ftell"
-            | "ftruncate"
-            | "class_alias"
-            | "class_attribute_args"
-            | "class_attribute_names"
-            | "class_exists"
-            | "class_get_attributes"
-            | "enum_exists"
-            | "function_exists"
-            | "get_class"
-            | "get_parent_class"
-            | "get_declared_classes"
-            | "get_declared_interfaces"
-            | "get_declared_traits"
-            | "interface_exists"
-            | "trait_exists"
-            | "fwrite"
-            | "getcwd"
-            | "getenv"
-            | "gettype"
-            | "glob"
-            | "hash"
-            | "hex2bin"
-            | "html_entity_decode"
-            | "htmlentities"
-            | "htmlspecialchars"
-            | "hypot"
-            | "implode"
-            | "in_array"
-            | "intdiv"
-            | "intval"
-            | "is_bool"
-            | "is_callable"
-            | "is_dir"
-            | "is_executable"
-            | "is_file"
-            | "is_a"
-            | "is_finite"
-            | "is_float"
-            | "is_subclass_of"
-            | "is_infinite"
-            | "is_int"
-            | "is_iterable"
-            | "is_nan"
-            | "is_null"
-            | "is_numeric"
-            | "is_readable"
-            | "is_string"
-            | "is_link"
-            | "is_writeable"
-            | "is_writable"
-            | "isset"
-            | "json_decode"
-            | "json_encode"
-            | "json_last_error"
-            | "json_last_error_msg"
-            | "json_validate"
-            | "krsort"
-            | "ksort"
-            | "lcfirst"
-            | "link"
-            | "linkinfo"
-            | "log"
-            | "log10"
-            | "log2"
-            | "lstat"
-            | "ltrim"
-            | "max"
-            | "md5"
-            | "microtime"
-            | "min"
-            | "mkdir"
-            | "mktime"
-            | "mt_rand"
-            | "natcasesort"
-            | "natsort"
-            | "nl2br"
-            | "number_format"
-            | "ord"
-            | "passthru"
-            | "pathinfo"
-            | "php_uname"
-            | "phpversion"
-            | "pi"
-            | "pow"
-            | "preg_match"
-            | "preg_match_all"
-            | "preg_replace"
-            | "preg_split"
-            | "print_r"
-            | "printf"
-            | "ptr"
-            | "ptr_get"
-            | "ptr_is_null"
-            | "ptr_null"
-            | "ptr_offset"
-            | "ptr_read32"
-            | "ptr_read8"
-            | "ptr_set"
-            | "ptr_sizeof"
-            | "ptr_write32"
-            | "ptr_write8"
-            | "putenv"
-            | "rad2deg"
-            | "rand"
-            | "random_int"
-            | "range"
-            | "rawurldecode"
-            | "rawurlencode"
-            | "readline"
-            | "readlink"
-            | "realpath"
-            | "rename"
-            | "rewind"
-            | "rmdir"
-            | "round"
-            | "rsort"
-            | "rtrim"
-            | "scandir"
-            | "settype"
-            | "sha1"
-            | "shell_exec"
-            | "shuffle"
-            | "sin"
-            | "spl_autoload"
-            | "spl_autoload_call"
-            | "spl_autoload_extensions"
-            | "spl_autoload_functions"
-            | "spl_autoload_register"
-            | "spl_autoload_unregister"
-            | "spl_classes"
-            | "spl_object_hash"
-            | "spl_object_id"
-            | "sinh"
-            | "sleep"
-            | "sort"
-            | "sprintf"
-            | "sqrt"
-            | "sscanf"
-            | "stat"
-            | "str_contains"
-            | "str_ends_with"
-            | "str_ireplace"
-            | "str_pad"
-            | "str_repeat"
-            | "str_replace"
-            | "str_split"
-            | "str_starts_with"
-            | "strcasecmp"
-            | "strcmp"
-            | "stripslashes"
-            | "strlen"
-            | "strpos"
-            | "strrev"
-            | "strrpos"
-            | "strstr"
-            | "strtolower"
-            | "strtotime"
-            | "strtoupper"
-            | "substr"
-            | "substr_replace"
-            | "sys_get_temp_dir"
-            | "symlink"
-            | "system"
-            | "tan"
-            | "tanh"
-            | "tempnam"
-            | "time"
-            | "tmpfile"
-            | "touch"
-            | "trim"
-            | "uasort"
-            | "ucfirst"
-            | "ucwords"
-            | "uksort"
-            | "umask"
-            | "unlink"
-            | "unset"
-            | "urldecode"
-            | "urlencode"
-            | "usleep"
-            | "usort"
-            | "var_dump"
-            | "wordwrap"
-    )
+    SUPPORTED_BUILTIN_FUNCTIONS.contains(&name)
+}
+
+pub(crate) fn supported_builtin_function_names() -> &'static [&'static str] {
+    SUPPORTED_BUILTIN_FUNCTIONS
 }
 
 pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {

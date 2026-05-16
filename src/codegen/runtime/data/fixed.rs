@@ -10,6 +10,7 @@
 
 use super::{DIRNAME_LEVELS_MSG, PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG};
 use super::super::system;
+use crate::types::checker::builtins::supported_builtin_function_names;
 
 /// Emit the fixed runtime data section — cacheable across compilations.
 /// Contains heap buffers, error messages, lookup tables, and other
@@ -71,6 +72,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".globl _fiber_msg_suspend_outside\n_fiber_msg_suspend_outside:\n    .ascii \"Cannot suspend outside of a fiber\"\n");
     out.push_str(".globl _fiber_msg_unsupported_callable\n_fiber_msg_unsupported_callable:\n    .ascii \"Fiber callable is not supported by this compiler\"\n");
     out.push_str(".globl _fiber_msg_stack_alloc_failed\n_fiber_msg_stack_alloc_failed:\n    .ascii \"Cannot allocate fiber stack\"\n");
+    out.push_str(&emit_builtin_callable_data());
     out.push_str(".comm _gc_allocs, 8, 3\n");
     out.push_str(".comm _gc_frees, 8, 3\n");
     out.push_str(".comm _gc_live, 8, 3\n");
@@ -154,6 +156,29 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(&system::emit_strtotime_data());
     out.push_str(&emit_php_uname_data());
 
+    out
+}
+
+fn emit_builtin_callable_data() -> String {
+    let mut out = String::new();
+    let builtins = supported_builtin_function_names();
+    for (idx, name) in builtins.iter().enumerate() {
+        out.push_str(&format!(
+            ".globl _callable_builtin_name_{0}\n_callable_builtin_name_{0}:\n    .ascii \"{1}\"\n",
+            idx, name
+        ));
+    }
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _callable_invoke_name\n_callable_invoke_name:\n");
+    out.push_str("    .ascii \"__invoke\"\n");
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _callable_builtin_count\n_callable_builtin_count:\n");
+    out.push_str(&format!("    .quad {}\n", builtins.len()));
+    out.push_str(".globl _callable_builtin_table\n_callable_builtin_table:\n");
+    for (idx, name) in builtins.iter().enumerate() {
+        out.push_str(&format!("    .quad _callable_builtin_name_{}\n", idx));
+        out.push_str(&format!("    .quad {}\n", name.len()));
+    }
     out
 }
 

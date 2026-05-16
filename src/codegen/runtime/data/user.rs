@@ -11,11 +11,11 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::names::{
-    enum_case_symbol, interface_method_wrapper_symbol, mangle_fqn, method_symbol, php_symbol_key,
-    static_method_symbol, static_property_symbol,
+    enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
+    method_symbol, php_symbol_key, static_method_symbol, static_property_symbol,
 };
 use crate::parser::ast::Visibility;
-use crate::types::{ClassInfo, EnumInfo, InterfaceInfo, PhpType};
+use crate::types::{ClassInfo, EnumInfo, FunctionSig, InterfaceInfo, PhpType};
 
 use super::instanceof::escaped_ascii;
 
@@ -24,6 +24,8 @@ use super::instanceof::escaped_ascii;
 pub(crate) fn emit_runtime_data_user(
     global_var_names: &HashSet<String>,
     static_vars: &HashMap<(String, String), PhpType>,
+    functions: &HashMap<String, FunctionSig>,
+    function_variant_groups: &HashSet<String>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
@@ -108,6 +110,8 @@ pub(crate) fn emit_runtime_data_user(
     let max_class_id = sorted_classes.iter().map(|(_, class_info)| class_info.class_id).max();
 
     out.push_str(".data\n");
+    out.push_str(".p2align 3\n");
+    emit_callable_function_data(&mut out, functions, function_variant_groups);
     out.push_str(".p2align 3\n");
     super::instanceof::emit_instanceof_target_lookup_data(&mut out, &sorted_interfaces, &sorted_classes);
 
@@ -234,6 +238,17 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    out.push_str(".globl _class_callable_method_ptrs\n_class_callable_method_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_callable_methods_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_callable_methods_missing\n");
+            }
+        }
+    }
+
     out.push_str(".globl _class_interfaces_missing\n_class_interfaces_missing:\n");
     out.push_str("    .quad 0\n");
     out.push_str(".globl _class_gc_desc_missing\n_class_gc_desc_missing:\n");
@@ -252,6 +267,11 @@ pub(crate) fn emit_runtime_data_user(
         ".globl _class_static_vtable_missing\n_class_static_vtable_missing:\n",
     );
     out.push_str("    .quad 0\n");
+    out.push_str("    .p2align 3\n");
+    out.push_str(".globl _class_callable_methods_missing\n_class_callable_methods_missing:\n");
+    out.push_str("    .quad 0\n");
+    out.push_str(".p2align 3\n");
+    emit_static_callable_method_data(&mut out, &sorted_classes);
 
     // -- class-level PHP 8 attribute metadata table --
     // Per-class layout: count followed by (name_ptr, name_len) pairs.
@@ -569,15 +589,17 @@ pub(crate) fn emit_runtime_data_user(
         out.push_str(&format!(".globl _class_static_vtable_{}\n_class_static_vtable_{}:\n", class_info.class_id, class_info.class_id));
         if class_info.static_vtable_methods.is_empty() {
             out.push_str("    .quad 0\n");
-            continue;
-        }
-        for method_name in &class_info.static_vtable_methods {
-            if let Some(impl_class) = class_info.static_method_impl_classes.get(method_name) {
-                out.push_str(&format!("    .quad {}\n", static_method_symbol(impl_class, method_name)));
-            } else {
-                out.push_str("    .quad 0\n");
+        } else {
+            for method_name in &class_info.static_vtable_methods {
+                if let Some(impl_class) = class_info.static_method_impl_classes.get(method_name) {
+                    out.push_str(&format!("    .quad {}\n", static_method_symbol(impl_class, method_name)));
+                } else {
+                    out.push_str("    .quad 0\n");
+                }
             }
         }
+
+        emit_class_callable_methods(&mut out, class_info);
     }
 
     let stdclass_id = classes
@@ -589,6 +611,127 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(&format!("    .quad {}\n", stdclass_id));
 
     out
+}
+
+fn emit_callable_function_data(
+    out: &mut String,
+    functions: &HashMap<String, FunctionSig>,
+    function_variant_groups: &HashSet<String>,
+) {
+    let mut sorted_functions: Vec<&String> = functions.keys().collect();
+    sorted_functions.sort();
+    for (idx, name) in sorted_functions.iter().enumerate() {
+        out.push_str(&format!(
+            ".globl _callable_user_fn_name_{0}\n_callable_user_fn_name_{0}:\n    .ascii \"{1}\"\n",
+            idx,
+            escaped_ascii(name)
+        ));
+    }
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _callable_user_function_count\n_callable_user_function_count:\n");
+    out.push_str(&format!("    .quad {}\n", sorted_functions.len()));
+    out.push_str(".globl _callable_user_function_table\n_callable_user_function_table:\n");
+    for (idx, name) in sorted_functions.iter().enumerate() {
+        out.push_str(&format!("    .quad _callable_user_fn_name_{}\n", idx));
+        out.push_str(&format!("    .quad {}\n", name.len()));
+        if function_variant_groups.contains(name.as_str()) {
+            out.push_str(&format!(
+                "    .quad {}\n",
+                function_variant_active_symbol(name)
+            ));
+        } else {
+            out.push_str("    .quad 0\n");
+        }
+    }
+}
+
+fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {
+    let mut public_methods: Vec<&String> = class_info
+        .methods
+        .keys()
+        .filter(|method_name| {
+            class_info
+                .method_visibilities
+                .get(*method_name)
+                .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+        })
+        .collect();
+    public_methods.sort();
+    for method_name in &public_methods {
+        out.push_str(&format!(
+            ".globl _class_callable_method_name_{0}_{1}\n_class_callable_method_name_{0}_{1}:\n    .ascii \"{2}\"\n",
+            class_info.class_id,
+            mangle_fqn(method_name),
+            escaped_ascii(method_name)
+        ));
+    }
+    out.push_str(".p2align 3\n");
+    out.push_str(&format!(
+        ".globl _class_callable_methods_{0}\n_class_callable_methods_{0}:\n",
+        class_info.class_id
+    ));
+    out.push_str(&format!("    .quad {}\n", public_methods.len()));
+    for method_name in public_methods {
+        out.push_str(&format!(
+            "    .quad _class_callable_method_name_{}_{}\n",
+            class_info.class_id,
+            mangle_fqn(method_name)
+        ));
+        out.push_str(&format!("    .quad {}\n", method_name.len()));
+    }
+}
+
+fn emit_static_callable_method_data(out: &mut String, sorted_classes: &[(&String, &ClassInfo)]) {
+    let mut entries = Vec::new();
+    for (class_name, class_info) in sorted_classes {
+        let mut public_static_methods: Vec<&String> = class_info
+            .static_methods
+            .keys()
+            .filter(|method_name| {
+                class_info
+                    .static_method_visibilities
+                    .get(*method_name)
+                    .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+            })
+            .collect();
+        public_static_methods.sort();
+        if public_static_methods.is_empty() {
+            continue;
+        }
+
+        out.push_str(&format!(
+            ".globl _class_callable_static_class_name_{0}\n_class_callable_static_class_name_{0}:\n    .ascii \"{1}\"\n",
+            class_info.class_id,
+            escaped_ascii(class_name)
+        ));
+        for method_name in public_static_methods {
+            out.push_str(&format!(
+                ".globl _class_callable_static_method_name_{0}_{1}\n_class_callable_static_method_name_{0}_{1}:\n    .ascii \"{2}\"\n",
+                class_info.class_id,
+                mangle_fqn(method_name),
+                escaped_ascii(method_name)
+            ));
+            entries.push((class_info.class_id, class_name.as_str(), method_name.as_str()));
+        }
+    }
+
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _class_callable_static_method_count\n_class_callable_static_method_count:\n");
+    out.push_str(&format!("    .quad {}\n", entries.len()));
+    out.push_str(".globl _class_callable_static_method_table\n_class_callable_static_method_table:\n");
+    for (class_id, class_name, method_name) in entries {
+        out.push_str(&format!(
+            "    .quad _class_callable_static_class_name_{}\n",
+            class_id
+        ));
+        out.push_str(&format!("    .quad {}\n", class_name.len()));
+        out.push_str(&format!(
+            "    .quad _class_callable_static_method_name_{}_{}\n",
+            class_id,
+            mangle_fqn(method_name)
+        ));
+        out.push_str(&format!("    .quad {}\n", method_name.len()));
+    }
 }
 
 fn interface_method_table_symbol(
@@ -714,6 +857,8 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
             &classes,
             &HashMap::new(),
             Some(&allowed_class_names),
@@ -735,6 +880,8 @@ mod tests {
         let asm = emit_runtime_data_user(
             &HashSet::new(),
             &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
             &HashMap::new(),
             &classes,
             &HashMap::new(),

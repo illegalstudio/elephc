@@ -106,6 +106,8 @@ pub(super) fn emit_main_and_finalize(
     finish_user_asm(
         emitter,
         data,
+        functions,
+        function_variant_groups,
         all_global_var_names,
         all_static_vars,
         interfaces,
@@ -318,6 +320,8 @@ fn emit_gc_stats(emitter: &mut Emitter, data: &mut DataSection) {
 fn finish_user_asm(
     emitter: Emitter,
     data: DataSection,
+    functions: &HashMap<String, FunctionSig>,
+    function_variant_groups: &HashSet<String>,
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
@@ -329,6 +333,8 @@ fn finish_user_asm(
     let user_data = runtime::emit_runtime_data_user(
         all_global_var_names,
         all_static_vars,
+        functions,
+        function_variant_groups,
         interfaces,
         classes,
         enums,

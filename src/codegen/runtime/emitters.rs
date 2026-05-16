@@ -10,6 +10,7 @@
 
 use super::arrays;
 use super::buffers;
+use super::callables;
 use super::diagnostics;
 use super::exceptions;
 use super::fibers;
@@ -87,6 +88,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     strings::emit_rtrim_mask(emitter);
     strings::emit_ltrim_mask(emitter);
     strings::emit_trim_mask(emitter);
+
+    // Callable introspection runtime functions
+    callables::emit_is_callable_runtime(emitter);
 
     // System runtime functions
     system::emit_build_argv(emitter);
