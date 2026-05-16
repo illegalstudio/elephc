@@ -183,9 +183,9 @@ fn emit_weekdays_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r13d, DWORD PTR [rsp + 24]");                      // current_wday
 
     emitter.instruction("cmp r12d, 6");                                         // next ?
-    emitter.instruction("je __rt_strtotime_weekdays_next_linux_x86_64");
+    emitter.instruction("je __rt_strtotime_weekdays_next_linux_x86_64");        // modifier is "next"
     emitter.instruction("cmp r12d, 8");                                         // this ?
-    emitter.instruction("je __rt_strtotime_weekdays_this_linux_x86_64");
+    emitter.instruction("je __rt_strtotime_weekdays_this_linux_x86_64");        // modifier is "this"
     // -- last semantics: delta = -((current - target + 7) mod 7); if 0 → -7 --
     emitter.instruction("mov r14d, r13d");                                      // current
     emitter.instruction("sub r14d, r11d");                                      // current - target

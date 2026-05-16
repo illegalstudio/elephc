@@ -42,6 +42,78 @@ fn test_error_class_exists_requires_literal_autoload_flag() {
 }
 
 #[test]
+fn test_error_interface_exists_wrong_args() {
+    expect_error(
+        r#"<?php interface_exists();"#,
+        "interface_exists() takes 1 or 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_trait_exists_wrong_args() {
+    expect_error(
+        r#"<?php trait_exists();"#,
+        "trait_exists() takes 1 or 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_enum_exists_wrong_args() {
+    expect_error(
+        r#"<?php enum_exists();"#,
+        "enum_exists() takes 1 or 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_get_class_wrong_args() {
+    expect_error(
+        r#"<?php class Box {} $box = new Box(); get_class($box, $box);"#,
+        "get_class() takes at most 1 argument",
+    );
+}
+
+#[test]
+fn test_error_get_parent_class_wrong_args() {
+    expect_error(
+        r#"<?php class Box {} $box = new Box(); get_parent_class($box, $box);"#,
+        "get_parent_class() takes at most 1 argument",
+    );
+}
+
+#[test]
+fn test_error_is_subclass_of_wrong_args() {
+    expect_error(
+        r#"<?php is_subclass_of("Child");"#,
+        "is_subclass_of() takes 2 or 3 arguments",
+    );
+}
+
+#[test]
+fn test_error_get_declared_classes_wrong_args() {
+    expect_error(
+        r#"<?php get_declared_classes("extra");"#,
+        "get_declared_classes() takes no arguments",
+    );
+}
+
+#[test]
+fn test_error_get_declared_interfaces_wrong_args() {
+    expect_error(
+        r#"<?php get_declared_interfaces("extra");"#,
+        "get_declared_interfaces() takes no arguments",
+    );
+}
+
+#[test]
+fn test_error_get_declared_traits_wrong_args() {
+    expect_error(
+        r#"<?php get_declared_traits("extra");"#,
+        "get_declared_traits() takes no arguments",
+    );
+}
+
+#[test]
 fn test_error_class_alias_rejects_runtime_call_shape() {
     expect_error(
         r#"<?php class Original {} $alias = "Alias"; class_alias("Original", $alias);"#,
