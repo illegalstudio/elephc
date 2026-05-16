@@ -40,6 +40,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     strings::emit_concat(emitter);
     strings::emit_atoi(emitter);
     strings::emit_str_eq(emitter);
+    strings::emit_str_to_number(emitter);
+    strings::emit_str_loose_eq(emitter);
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
     strings::emit_str_persist(emitter);

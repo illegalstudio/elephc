@@ -57,6 +57,8 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_atoi(emitter);
     strings::emit_str_persist(emitter);
     strings::emit_str_eq(emitter);
+    strings::emit_str_to_number(emitter);
+    strings::emit_str_loose_eq(emitter);
     strings::emit_strtolower(emitter);
     strings::emit_strpos(emitter);
     strings::emit_strrpos(emitter);
