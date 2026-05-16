@@ -44,8 +44,21 @@ class Product implements Named {
     public function label() { return strtoupper($this->name()); }
 }
 ```
-- signature-only methods, no bodies, no properties
+- signature-only methods and PHP 8.4 property hook contracts; method and hook bodies are not allowed in interfaces
 - interface inheritance flattened transitively with cycle detection
+
+Interface properties must be hooked contracts. A concrete class can satisfy a `{ get; }` contract with a public readable property, a `{ set; }` contract with a public writable property, or both with an invariant public property. Get-only contracts allow covariant concrete types; set-only contracts allow contravariant concrete types.
+
+```php
+<?php
+interface HasName {
+    public string $name { get; set; }
+}
+
+class Product implements HasName {
+    public string $name = "widget";
+}
+```
 
 ### Built-in interfaces
 
@@ -115,12 +128,12 @@ abstract class BaseGreeter {
 
 ### Abstract properties
 
-An abstract class may declare a property as `abstract`. The declaration has no default value, and every concrete subclass must redeclare the property with the same type. Static, final, and private modifiers are rejected on abstract properties.
+An abstract class may declare a PHP 8.4 hooked property contract as `abstract`. The declaration has no default value or hook body, and every concrete subclass must redeclare the property with a compatible public/protected property. Static, final, private, and `readonly` hooked abstract properties are rejected.
 
 ```php
 <?php
 abstract class Shape {
-    abstract public int $sides;
+    abstract public int $sides { get; set; }
 }
 
 class Square extends Shape {
@@ -128,9 +141,7 @@ class Square extends Shape {
 }
 ```
 
-The concrete redeclaration reuses the parent's slot (offsets are stable across the inheritance chain), so the property is accessible to both parent and child methods.
-
-Current scope: elephc supports abstract property declarations in abstract classes only. PHP 8.4 property hooks (`{ get; }` / `{ set; }`), interface property contracts, and abstract properties in traits are not yet supported.
+The concrete redeclaration reuses the parent's slot (offsets are stable across the inheritance chain), so the property is accessible to both parent and child methods. elephc supports hook contracts (`{ get; }`, `{ set; }`, and `{ get; set; }`) in abstract classes, interfaces, and traits; executable hook bodies are not implemented yet.
 
 ## Final classes, methods, and properties
 ```php
@@ -284,7 +295,7 @@ $counter->value = 3;
 echo $value;           // 3
 ```
 
-Current limitations for by-reference promotion: the promoted property cannot be `readonly`, and by-reference promoted parameters cannot use default values yet.
+By-reference promoted parameters may also have defaults. If no argument is passed, elephc creates a private reference cell for the default value; if a variable is passed, the promoted property aliases that variable. `readonly` by-reference promoted properties are rejected at compile time because construction would have to bind an indirect mutable alias to a readonly slot.
 
 ## Instance methods and $this
 Virtual dispatch for overrides.
@@ -372,7 +383,7 @@ Same parameter count, same pass-by-reference positions, same default layout, sam
 ## Traits
 Flattened at compile time. Support: `use Trait;`, multiple traits, `insteadof`, `as`, trait properties, static trait methods.
 
-Abstract properties in traits are not yet supported; use an abstract base class for property requirements until PHP 8.4 property-hook contracts are implemented.
+Traits may declare abstract hooked property contracts. A concrete class using the trait must satisfy the contract directly or inherit it through an abstract base class that is later completed by a concrete child.
 
 ## Property access
 `->` for properties and methods.
@@ -588,7 +599,7 @@ Class constants (PHP 7.1+ visibility, PHP 8.1+ `final`) live on classes, interfa
 
 ## Limitations
 - `readonly static` properties are rejected to match PHP. Static properties in a `readonly class` are still mutable.
-- No `readonly` or default-valued by-reference promoted properties
+- Property hook bodies are not implemented; elephc supports hook contracts only.
 - Shadowing a private parent property with a same-named child property is not yet supported (PHP gives them separate slots; elephc uses one slot per name)
 - Class constants must be literal-or-foldable expressions; `self::OTHER + 1` style recursive references are not supported.
 - Anonymous classes (`new class { ... }`) are not yet supported.

@@ -15,6 +15,7 @@ use crate::types::{FunctionSig, PhpType};
 
 use super::super::{
     declared_target_ty, emit_ref_arg_variable_address, push_arg_value, push_expr_arg,
+    push_non_variable_ref_arg_address,
 };
 
 pub(super) fn push_source_temp_type(source_temp_types: &mut Vec<PhpType>, ty: PhpType) -> usize {
@@ -29,7 +30,7 @@ pub(super) fn emit_source_temp_arg(
     sig: &FunctionSig,
     param_idx: Option<usize>,
     ref_arg_context_label: &str,
-    retain_non_variable_ref_args: bool,
+    _retain_non_variable_ref_args: bool,
     source_temp_types: &mut Vec<PhpType>,
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -42,13 +43,11 @@ pub(super) fn emit_source_temp_arg(
     let pushed_ty = if is_ref {
         if let ExprKind::Variable(var_name) = &arg.kind {
             emit_ref_arg_variable_address(var_name, ref_arg_context_label, emitter, ctx);
+            push_arg_value(emitter, &PhpType::Int);
         } else {
-            let source_ty = super::super::super::super::emit_expr(arg, emitter, ctx, data);
-            if retain_non_variable_ref_args {
-                super::super::super::super::retain_borrowed_heap_arg(emitter, arg, &source_ty);
-            }
+            let target_ty = param_idx.and_then(|idx| declared_target_ty(Some(sig), idx));
+            push_non_variable_ref_arg_address(arg, target_ty, emitter, ctx, data);
         }
-        push_arg_value(emitter, &PhpType::Int);
         PhpType::Int
     } else {
         let target_ty = param_idx.and_then(|idx| declared_target_ty(Some(sig), idx));

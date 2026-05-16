@@ -1,8 +1,8 @@
 <?php
 
 abstract class Shape {
-    abstract public int $sides;
-    abstract public string $name;
+    abstract public int $sides { get; set; }
+    abstract public string $name { get; set; }
 
     public function describe() {
         return $this->name . " has " . $this->sides . " sides";

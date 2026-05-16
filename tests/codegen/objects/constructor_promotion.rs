@@ -88,3 +88,39 @@ echo $name;
     );
     assert_eq!(out, "Grace");
 }
+
+#[test]
+fn test_constructor_promoted_by_ref_property_uses_default_reference_cell() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public function __construct(public int &$value = 1) {}
+}
+$box = new Box();
+echo $box->value;
+$box->value = 4;
+echo ":";
+echo $box->value;
+"#,
+    );
+    assert_eq!(out, "1:4");
+}
+
+#[test]
+fn test_constructor_promoted_by_ref_property_with_default_still_links_variable_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public function __construct(public int &$value = 1) {}
+}
+$value = 5;
+$box = new Box($value);
+$box->value = 7;
+echo $value;
+$value = 9;
+echo ":";
+echo $box->value;
+"#,
+    );
+    assert_eq!(out, "7:9");
+}

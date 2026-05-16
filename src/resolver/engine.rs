@@ -380,7 +380,7 @@ pub(super) fn resolve_stmts(
                     stmt.attributes.clone(),
                 ));
             }
-            StmtKind::InterfaceDecl { name, extends, methods,
+            StmtKind::InterfaceDecl { name, extends, properties, methods,
             constants,
             } => {
                 let methods = resolve_methods(
@@ -395,6 +395,7 @@ pub(super) fn resolve_stmts(
                     StmtKind::InterfaceDecl {
                         name: name.clone(),
                         extends: extends.clone(),
+                        properties: properties.clone(),
                         methods,
                         constants: constants.clone(),
                     },

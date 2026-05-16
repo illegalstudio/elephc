@@ -309,6 +309,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
         StmtKind::InterfaceDecl {
             name,
             extends,
+            properties,
             methods,
         constants,
         } => (
@@ -316,6 +317,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
                 StmtKind::InterfaceDecl {
                     name,
                     extends,
+                    properties: properties.into_iter().map(propagate_property).collect(),
                     methods: methods.into_iter().map(propagate_method).collect(),
                 constants,
                 },

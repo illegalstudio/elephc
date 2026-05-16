@@ -144,6 +144,7 @@ pub(super) fn resolve_decl_stmt(
         StmtKind::InterfaceDecl {
             name,
             extends,
+            properties,
             methods,
             constants,
         } => {
@@ -157,6 +158,7 @@ pub(super) fn resolve_decl_stmt(
                             resolved_name(resolved_class_name(name, namespace, imports, symbols))
                         })
                         .collect(),
+                    properties: resolve_properties(properties, namespace, imports, symbols),
                     methods: resolved_methods,
                     constants: resolve_class_consts(constants, namespace, imports, symbols),
                 },

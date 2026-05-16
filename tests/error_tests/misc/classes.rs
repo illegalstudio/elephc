@@ -147,26 +147,26 @@ fn test_error_constructor_promotion_rejects_variadic() {
 }
 
 #[test]
-fn test_error_constructor_promotion_rejects_readonly_by_reference() {
-    expect_error(
-        "<?php class Box { public function __construct(public readonly int &$value) {} }",
-        "Readonly promoted by-reference properties are not supported",
-    );
-}
-
-#[test]
-fn test_error_constructor_promotion_rejects_by_reference_default() {
-    expect_error(
-        "<?php class Box { public function __construct(public int &$value = 1) {} }",
-        "Promoted by-reference properties cannot use default values yet",
-    );
-}
-
-#[test]
 fn test_error_constructor_promotion_by_reference_requires_variable_arg() {
     expect_error(
         "<?php class Box { public function __construct(public int &$value) {} } $box = new Box(1);",
         "Constructor 'Box::__construct' parameter $value must be passed a variable",
+    );
+}
+
+#[test]
+fn test_error_constructor_promotion_readonly_by_reference() {
+    expect_error(
+        "<?php class Box { public function __construct(public readonly int &$value) {} }",
+        "Readonly promoted property cannot be by-reference",
+    );
+}
+
+#[test]
+fn test_error_readonly_class_constructor_promotion_by_reference() {
+    expect_error(
+        "<?php readonly class Box { public function __construct(public int &$value) {} }",
+        "Readonly promoted property cannot be by-reference",
     );
 }
 
@@ -503,23 +503,108 @@ fn test_error_property_redeclaration_changes_by_ref_qualifier() {
 #[test]
 fn test_error_abstract_property_in_non_abstract_class() {
     expect_error(
-        "<?php class Box { abstract public int $value; }",
+        "<?php class Box { abstract public int $value { get; } }",
         "Abstract properties can only be declared in abstract classes",
     );
 }
 
 #[test]
-fn test_error_abstract_property_in_trait_is_not_yet_supported() {
+fn test_error_unhooked_abstract_property_is_rejected() {
     expect_error(
-        "<?php trait HasValue { abstract public int $value; }",
-        "Abstract properties in traits are not yet supported",
+        "<?php abstract class Box { abstract public int $value; }",
+        "Only hooked properties may be declared abstract",
     );
+}
+
+#[test]
+fn test_error_concrete_class_missing_abstract_trait_property() {
+    expect_error(
+        "<?php trait HasValue { abstract public int $value { get; } } class Box { use HasValue; }",
+        "Concrete class Box must declare abstract property Box::$value",
+    );
+}
+
+#[test]
+fn test_error_interface_property_without_hooks_is_rejected() {
+    expect_error(
+        "<?php interface HasValue { public int $value; }",
+        "Interfaces may only include hooked properties",
+    );
+}
+
+#[test]
+fn test_error_interface_set_property_rejects_readonly_implementation() {
+    expect_error(
+        "<?php interface Writable { public int $value { set; } } class Box implements Writable { public readonly int $value; public function __construct(int $value) { $this->value = $value; } }",
+        "Readonly property Box::$value cannot satisfy set property contract",
+    );
+}
+
+#[test]
+fn test_error_interface_property_missing_uses_contract_span() {
+    let err = check_source_full(
+        r#"<?php
+interface HasValue {
+    public int $value { get; }
+}
+class Box implements HasValue {}
+"#,
+    )
+    .expect_err("expected missing interface property error");
+    assert!(
+        err.message
+            .contains("Class Box must implement interface property HasValue::$value")
+    );
+    assert_eq!(err.span.line, 3);
+    assert!(err.span.col > 0);
+}
+
+#[test]
+fn test_error_interface_property_type_mismatch_uses_implementation_span() {
+    let err = check_source_full(
+        r#"<?php
+interface HasValue {
+    public string $value { get; }
+}
+class Box implements HasValue {
+    public int $value;
+}
+"#,
+    )
+    .expect_err("expected interface property type error");
+    assert!(
+        err.message.contains(
+            "Type of Box::$value must be compatible with get property contract string"
+        )
+    );
+    assert_eq!(err.span.line, 6);
+    assert!(err.span.col > 0);
+}
+
+#[test]
+fn test_error_deferred_interface_property_uses_contract_span() {
+    let err = check_source_full(
+        r#"<?php
+interface HasValue {
+    public int $value { get; }
+}
+abstract class Base implements HasValue {}
+class Box extends Base {}
+"#,
+    )
+    .expect_err("expected deferred interface property error");
+    assert!(
+        err.message
+            .contains("Concrete class Box must declare abstract property HasValue::$value")
+    );
+    assert_eq!(err.span.line, 3);
+    assert!(err.span.col > 0);
 }
 
 #[test]
 fn test_error_abstract_property_with_default() {
     expect_error(
-        "<?php abstract class Box { abstract public int $value = 1; }",
+        "<?php abstract class Box { abstract public int $value = 1 { get; } }",
         "Abstract property $value cannot have a default value",
     );
 }
@@ -527,15 +612,15 @@ fn test_error_abstract_property_with_default() {
 #[test]
 fn test_error_abstract_property_with_static() {
     expect_error(
-        "<?php abstract class Box { abstract public static int $value; }",
-        "Abstract static properties are not supported",
+        "<?php abstract class Box { abstract public static int $value { get; } }",
+        "Cannot declare hooks for static property",
     );
 }
 
 #[test]
 fn test_error_abstract_property_with_final() {
     expect_error(
-        "<?php abstract class Box { abstract final public int $value; }",
+        "<?php abstract class Box { abstract final public int $value { get; } }",
         "Cannot use the final modifier on an abstract property",
     );
 }
@@ -543,7 +628,7 @@ fn test_error_abstract_property_with_final() {
 #[test]
 fn test_error_abstract_property_with_private() {
     expect_error(
-        "<?php abstract class Box { abstract private int $value; }",
+        "<?php abstract class Box { abstract private int $value { get; } }",
         "Private abstract properties are not supported",
     );
 }
@@ -551,7 +636,7 @@ fn test_error_abstract_property_with_private() {
 #[test]
 fn test_error_concrete_class_missing_abstract_property() {
     expect_error(
-        "<?php abstract class Shape { abstract public int $sides; } class Triangle extends Shape {}",
+        "<?php abstract class Shape { abstract public int $sides { get; } } class Triangle extends Shape {}",
         "Concrete class Triangle must declare abstract property Shape::$sides",
     );
 }
@@ -559,7 +644,7 @@ fn test_error_concrete_class_missing_abstract_property() {
 #[test]
 fn test_error_concrete_property_redeclared_as_abstract() {
     expect_error(
-        "<?php class Base { public int $value = 1; } abstract class Child extends Base { abstract public int $value; }",
+        "<?php class Base { public int $value = 1; } abstract class Child extends Base { abstract public int $value { get; } }",
         "Cannot make concrete property abstract: Child::$value",
     );
 }

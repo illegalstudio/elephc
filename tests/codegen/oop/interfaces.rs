@@ -118,3 +118,67 @@ fn test_example_interfaces_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/interfaces/main.php"));
     assert_eq!(out, "WIDGET\n");
 }
+
+#[test]
+fn test_interface_get_property_contract_is_satisfied_by_concrete_property() {
+    let out = compile_and_run(
+        r#"<?php
+interface HasId {
+    public int $id { get; }
+}
+
+class User implements HasId {
+    public int $id = 42;
+}
+
+$user = new User();
+echo $user->id;
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_interface_set_property_contract_allows_contravariant_type() {
+    let out = compile_and_run(
+        r#"<?php
+class Animal {}
+class Dog extends Animal {}
+
+interface DogSink {
+    public Dog $pet { set; }
+}
+
+class Kennel implements DogSink {
+    public Animal $pet;
+}
+
+$kennel = new Kennel();
+$kennel->pet = new Dog();
+echo $kennel->pet instanceof Animal;
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_abstract_class_can_defer_interface_property_to_child() {
+    let out = compile_and_run(
+        r#"<?php
+interface HasName {
+    public string $name { get; set; }
+}
+
+abstract class NamedBase implements HasName {
+}
+
+class Product extends NamedBase {
+    public string $name = "widget";
+}
+
+$product = new Product();
+echo $product->name;
+"#,
+    );
+    assert_eq!(out, "widget");
+}

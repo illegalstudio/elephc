@@ -11,7 +11,8 @@
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind, TypeExpr, Visibility,
+    ClassMethod, ClassProperty, Expr, ExprKind, PropertyHooks, Stmt, StmtKind, TypeExpr,
+    Visibility,
 };
 use crate::types::PhpType;
 
@@ -22,6 +23,7 @@ pub(super) fn builtin_exception_message_property() -> ClassProperty {
         name: "message".to_string(),
         visibility: Visibility::Public,
         type_expr: Some(TypeExpr::Str),
+        hooks: PropertyHooks::none(),
         readonly: false,
         is_final: false,
         is_static: false,
@@ -100,6 +102,7 @@ pub(super) fn builtin_exception_code_property() -> ClassProperty {
         name: "code".to_string(),
         visibility: Visibility::Protected,
         type_expr: Some(TypeExpr::Int),
+        hooks: PropertyHooks::none(),
         readonly: false,
         is_final: false,
         is_static: false,

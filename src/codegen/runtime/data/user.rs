@@ -812,6 +812,7 @@ mod tests {
             readonly_properties: HashSet::new(),
             reference_properties: HashSet::new(),
             abstract_properties: HashSet::new(),
+            abstract_property_hooks: HashMap::new(),
             static_properties: Vec::new(),
             static_defaults: Vec::new(),
             static_property_declaring_classes: HashMap::new(),

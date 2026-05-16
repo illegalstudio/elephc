@@ -31,6 +31,7 @@ pub(super) fn propagate_property(property: ClassProperty) -> ClassProperty {
         name: property.name,
         visibility: property.visibility,
         type_expr: property.type_expr,
+        hooks: property.hooks,
         readonly: property.readonly,
         is_final: property.is_final,
         is_static: property.is_static,

@@ -150,3 +150,26 @@ echo $demo->reveal();
     );
     assert_eq!(out, "hello");
 }
+
+#[test]
+fn test_abstract_trait_property_can_be_satisfied_by_concrete_child() {
+    let out = compile_and_run(
+        r#"<?php
+trait RequiresValue {
+    abstract public int $value { get; set; }
+}
+
+abstract class Base {
+    use RequiresValue;
+}
+
+class Box extends Base {
+    public int $value = 9;
+}
+
+$box = new Box();
+echo $box->value;
+"#,
+    );
+    assert_eq!(out, "9");
+}

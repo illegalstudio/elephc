@@ -314,12 +314,14 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
         StmtKind::InterfaceDecl {
             name,
             extends,
+            properties,
             methods,
         constants,
         } => vec![Stmt {
             kind: StmtKind::InterfaceDecl {
                 name,
                 extends,
+                properties,
                 methods: methods
                     .into_iter()
                     .map(prune_method_without_context)

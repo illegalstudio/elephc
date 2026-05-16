@@ -31,6 +31,7 @@ pub use result::{check_with_target, CheckResult};
 pub use schema::{
     AttrArgValue, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo, ExternClassInfo,
     ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo, PackedFieldInfo,
+    PropertyHookContract,
 };
 pub(crate) use signatures::{
     builtin_call_sig, callable_wrapper_sig, first_class_callable_builtin_sig,

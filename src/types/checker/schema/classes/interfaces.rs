@@ -13,8 +13,9 @@ use std::collections::{HashMap, HashSet};
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::Visibility;
+use crate::span::Span;
 use crate::types::traits::FlattenedClass;
-use crate::types::PhpType;
+use crate::types::{PhpType, PropertyHookContract};
 
 use super::super::super::Checker;
 use super::super::validation::{
@@ -93,6 +94,23 @@ pub(super) fn validate_interface_contracts(
                 building,
             )?;
         }
+        for property_name in &interface_info.property_order {
+            let contract = interface_info
+                .properties
+                .get(property_name)
+                .expect("type checker bug: missing interface property contract");
+            validate_interface_property(
+                state,
+                class,
+                &interface_name,
+                property_name,
+                contract,
+                class_map,
+                checker,
+                next_class_id,
+                building,
+            )?;
+        }
     }
     Ok(())
 }
@@ -136,8 +154,13 @@ pub(super) fn ensure_concrete_class_implements_abstracts(
             .get(prop_name)
             .cloned()
             .unwrap_or_else(|| class.name.clone());
+        let span = state
+            .abstract_property_hooks
+            .get(prop_name)
+            .map(|contract| contract.span)
+            .unwrap_or_else(Span::dummy);
         return Err(CompileError::new(
-            crate::span::Span::dummy(),
+            span,
             &format!(
                 "Concrete class {} must declare abstract property {}::${}",
                 class.name, declaring_class, prop_name
@@ -271,4 +294,247 @@ fn validate_interface_method(
         ));
     }
     Ok(())
+}
+
+fn validate_interface_property(
+    state: &mut ClassBuildState,
+    class: &FlattenedClass,
+    interface_name: &str,
+    property_name: &str,
+    contract: &PropertyHookContract,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &mut Checker,
+    next_class_id: &mut u64,
+    building: &mut HashSet<String>,
+) -> Result<(), CompileError> {
+    if state
+        .static_property_declaring_classes
+        .contains_key(property_name)
+    {
+        return Err(CompileError::new(
+            class_property_span(class, property_name, contract.span),
+            &format!(
+                "Cannot use static property to satisfy interface contract: {}::${}",
+                class.name, property_name
+            ),
+        ));
+    }
+    if !state.property_declaring_classes.contains_key(property_name) {
+        if class.is_abstract {
+            defer_interface_property_contract(state, class, interface_name, property_name, contract);
+            return Ok(());
+        }
+        return Err(CompileError::new(
+            contract.span,
+            &format!(
+                "Class {} must implement interface property {}::${}",
+                class.name, interface_name, property_name
+            ),
+        ));
+    }
+
+    if state.abstract_properties.contains(property_name) {
+        if class.is_abstract {
+            state
+                .abstract_property_hooks
+                .entry(property_name.to_string())
+                .or_insert_with(|| contract.clone());
+            return Ok(());
+        }
+        return Ok(());
+    }
+
+    if state.property_visibilities.get(property_name) != Some(&Visibility::Public) {
+        return Err(CompileError::new(
+            class_property_span(class, property_name, contract.span),
+            &format!(
+                "Interface property implementation must be public: {}::${}",
+                class.name, property_name
+            ),
+        ));
+    }
+
+    let actual_ty = instance_property_type_for_contract(state, property_name);
+    ensure_object_type_known(&actual_ty, &class.name, class_map, checker, next_class_id, building)?;
+    if let Some(required_get) = contract.get_type.as_ref() {
+        ensure_object_type_known(
+            required_get,
+            &class.name,
+            class_map,
+            checker,
+            next_class_id,
+            building,
+        )?;
+        if !checker.type_accepts(required_get, &actual_ty) {
+            return Err(CompileError::new(
+                class_property_span(class, property_name, contract.span),
+                &format!(
+                    "Type of {}::${} must be compatible with get property contract {} from interface {}",
+                    class.name, property_name, required_get, interface_name
+                ),
+            ));
+        }
+    }
+    if let Some(required_set) = contract.set_type.as_ref() {
+        ensure_object_type_known(
+            required_set,
+            &class.name,
+            class_map,
+            checker,
+            next_class_id,
+            building,
+        )?;
+        if state.readonly_properties.contains(property_name) {
+            return Err(CompileError::new(
+                class_property_span(class, property_name, contract.span),
+                &format!(
+                    "Readonly property {}::${} cannot satisfy set property contract from interface {}",
+                    class.name, property_name, interface_name
+                ),
+            ));
+        }
+        if !checker.type_accepts(&actual_ty, required_set) {
+            return Err(CompileError::new(
+                class_property_span(class, property_name, contract.span),
+                &format!(
+                    "Type of {}::${} must accept set property contract {} from interface {}",
+                    class.name, property_name, required_set, interface_name
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn class_property_span(
+    class: &FlattenedClass,
+    property_name: &str,
+    fallback: Span,
+) -> Span {
+    class
+        .properties
+        .iter()
+        .find(|property| property.name == property_name)
+        .map(|property| property.span)
+        .unwrap_or(fallback)
+}
+
+fn ensure_object_type_known(
+    ty: &PhpType,
+    current_class: &str,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &mut Checker,
+    next_class_id: &mut u64,
+    building: &mut HashSet<String>,
+) -> Result<(), CompileError> {
+    match ty {
+        PhpType::Object(name) if name != current_class
+            && class_map.contains_key(name)
+            && !checker.classes.contains_key(name) =>
+        {
+            super::build_class_info_recursive(name, class_map, checker, next_class_id, building)?;
+        }
+        PhpType::Union(members) => {
+            for member in members {
+                ensure_object_type_known(
+                    member,
+                    current_class,
+                    class_map,
+                    checker,
+                    next_class_id,
+                    building,
+                )?;
+            }
+        }
+        PhpType::Array(inner) => {
+            ensure_object_type_known(
+                inner,
+                current_class,
+                class_map,
+                checker,
+                next_class_id,
+                building,
+            )?;
+        }
+        PhpType::AssocArray { key, value } => {
+            ensure_object_type_known(
+                key,
+                current_class,
+                class_map,
+                checker,
+                next_class_id,
+                building,
+            )?;
+            ensure_object_type_known(
+                value,
+                current_class,
+                class_map,
+                checker,
+                next_class_id,
+                building,
+            )?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn defer_interface_property_contract(
+    state: &mut ClassBuildState,
+    class: &FlattenedClass,
+    interface_name: &str,
+    property_name: &str,
+    contract: &PropertyHookContract,
+) {
+    if !state.property_declaring_classes.contains_key(property_name) {
+        let slot_index = state.prop_types.len();
+        let ty = contract
+            .get_type
+            .as_ref()
+            .or(contract.set_type.as_ref())
+            .cloned()
+            .unwrap_or(PhpType::Mixed);
+        state.prop_types.push((property_name.to_string(), ty));
+        state
+            .property_offsets
+            .insert(property_name.to_string(), 8 + slot_index * 16);
+        state.defaults.push(None);
+    }
+    state
+        .property_declaring_classes
+        .insert(property_name.to_string(), interface_name.to_string());
+    state
+        .property_visibilities
+        .insert(property_name.to_string(), Visibility::Public);
+    state.abstract_properties.insert(property_name.to_string());
+    state
+        .abstract_property_hooks
+        .insert(property_name.to_string(), contract.clone());
+    state
+        .property_attribute_names
+        .entry(property_name.to_string())
+        .or_default();
+    state
+        .property_attribute_args
+        .entry(property_name.to_string())
+        .or_default();
+    state
+        .property_declaring_classes
+        .entry(property_name.to_string())
+        .or_insert_with(|| class.name.clone());
+}
+
+fn instance_property_type_for_contract(
+    state: &ClassBuildState,
+    property_name: &str,
+) -> PhpType {
+    if !state.declared_properties.contains(property_name) {
+        return PhpType::Mixed;
+    }
+    state
+        .prop_types
+        .iter()
+        .find(|(name, _)| name == property_name)
+        .map(|(_, ty)| ty.clone())
+        .unwrap_or(PhpType::Mixed)
 }

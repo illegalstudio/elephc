@@ -11,7 +11,8 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::parser::ast::{
-    ClassConst, ClassMethod, ClassProperty, Stmt, StmtKind, TraitUse, TypeExpr, Visibility,
+    ClassConst, ClassMethod, ClassProperty, PropertyHooks, Stmt, StmtKind, TraitUse,
+    TypeExpr, Visibility,
 };
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
@@ -60,7 +61,7 @@ pub(in crate::parser::stmt) fn parse_interface_decl(
         &Token::LBrace,
         "Expected '{' after interface name",
     )?;
-    let (methods, constants) = parse_interface_body(tokens, pos)?;
+    let (properties, methods, constants) = parse_interface_body(tokens, pos)?;
     expect_token(
         tokens,
         pos,
@@ -72,6 +73,7 @@ pub(in crate::parser::stmt) fn parse_interface_decl(
         StmtKind::InterfaceDecl {
             name,
             extends,
+            properties,
             methods,
             constants,
         },
@@ -243,16 +245,56 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                     "Static properties cannot be readonly",
                 ));
             }
+            let prop_name = prop_name.clone();
+            *pos += 1;
+            if properties.iter().any(|property| property.name == prop_name) {
+                return Err(CompileError::new(
+                    member_span,
+                    &format!("Cannot redeclare property ${}", prop_name),
+                ));
+            }
+            let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+                *pos += 1;
+                Some(parse_expr(tokens, pos)?)
+            } else {
+                None
+            };
+            let hooks = parse_property_hooks(tokens, pos, member_span)?;
+            if modifiers.is_abstract && default.is_some() {
+                return Err(CompileError::new(
+                    member_span,
+                    &format!("Abstract property ${} cannot have a default value", prop_name),
+                ));
+            }
+            if modifiers.is_abstract && !hooks.any() {
+                return Err(CompileError::new(
+                    member_span,
+                    "Only hooked properties may be declared abstract",
+                ));
+            }
+            if modifiers.is_static && hooks.any() {
+                return Err(CompileError::new(
+                    member_span,
+                    "Cannot declare hooks for static property",
+                ));
+            }
+            if modifiers.is_readonly && hooks.any() {
+                return Err(CompileError::new(
+                    member_span,
+                    "Hooked properties cannot be readonly",
+                ));
+            }
+            if hooks.any() && default.is_some() {
+                return Err(CompileError::new(
+                    member_span,
+                    "Hooked properties cannot have a default value",
+                ));
+            }
             if modifiers.is_abstract {
-                if !enclosing_is_abstract {
-                    let message = if owner_kind == "trait" {
-                        "Abstract properties in traits are not yet supported"
-                    } else {
-                        "Abstract properties can only be declared in abstract classes"
-                    };
+                if owner_kind != "trait" && !enclosing_is_abstract {
                     return Err(CompileError::new(
                         member_span,
-                        message,
+                        "Abstract properties can only be declared in abstract classes",
                     ));
                 }
                 if modifiers.is_static {
@@ -273,32 +315,17 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                         "Private abstract properties are not supported",
                     ));
                 }
-            }
-            let prop_name = prop_name.clone();
-            *pos += 1;
-            if properties.iter().any(|property| property.name == prop_name) {
+            } else if hooks.any() {
                 return Err(CompileError::new(
                     member_span,
-                    &format!("Cannot redeclare property ${}", prop_name),
+                    "Non-abstract property hook must have a body",
                 ));
             }
-            let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
-                *pos += 1;
-                Some(parse_expr(tokens, pos)?)
-            } else {
-                None
-            };
-            if modifiers.is_abstract && default.is_some() {
-                return Err(CompileError::new(
-                    member_span,
-                    &format!("Abstract property ${} cannot have a default value", prop_name),
-                ));
-            }
-            expect_semicolon(tokens, pos)?;
             properties.push(ClassProperty {
                 name: prop_name,
                 visibility: modifiers.visibility,
                 type_expr,
+                hooks,
                 readonly: modifiers.is_readonly,
                 is_final: modifiers.is_final,
                 is_static: modifiers.is_static,
@@ -493,7 +520,8 @@ fn parse_class_like_method(
 fn parse_interface_body(
     tokens: &[(Token, Span)],
     pos: &mut usize,
-) -> Result<(Vec<ClassMethod>, Vec<ClassConst>), CompileError> {
+) -> Result<(Vec<ClassProperty>, Vec<ClassMethod>, Vec<ClassConst>), CompileError> {
+    let mut properties = Vec::new();
     let mut methods = Vec::new();
     let mut constants = Vec::new();
 
@@ -550,10 +578,79 @@ fn parse_interface_body(
             });
             continue;
         }
+        let type_expr = parse_optional_property_type(tokens, pos, member_span)?;
+        if let Some(Token::Variable(prop_name)) = tokens.get(*pos).map(|(t, _)| t.clone()) {
+            if modifiers.is_abstract {
+                return Err(CompileError::new(
+                    member_span,
+                    "Property in interface cannot be explicitly abstract",
+                ));
+            }
+            if modifiers.visibility != Visibility::Public {
+                return Err(CompileError::new(
+                    member_span,
+                    "Property in interface cannot be protected or private",
+                ));
+            }
+            if modifiers.is_final {
+                return Err(CompileError::new(
+                    member_span,
+                    "Interface properties cannot be final",
+                ));
+            }
+            let prop_name = prop_name.clone();
+            *pos += 1;
+            if properties.iter().any(|property: &ClassProperty| property.name == prop_name) {
+                return Err(CompileError::new(
+                    member_span,
+                    &format!("Cannot redeclare interface property ${}", prop_name),
+                ));
+            }
+            if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+                return Err(CompileError::new(
+                    member_span,
+                    "Interface properties cannot have a default value",
+                ));
+            }
+            let hooks = parse_property_hooks(tokens, pos, member_span)?;
+            if !hooks.any() {
+                return Err(CompileError::new(
+                    member_span,
+                    "Interfaces may only include hooked properties",
+                ));
+            }
+            if modifiers.is_static {
+                return Err(CompileError::new(
+                    member_span,
+                    "Cannot declare hooks for static property",
+                ));
+            }
+            if modifiers.is_readonly {
+                return Err(CompileError::new(
+                    member_span,
+                    "Hooked properties cannot be readonly",
+                ));
+            }
+            properties.push(ClassProperty {
+                name: prop_name,
+                visibility: Visibility::Public,
+                type_expr,
+                hooks,
+                readonly: false,
+                is_final: false,
+                is_static: false,
+                is_abstract: true,
+                by_ref: false,
+                default: None,
+                span: member_span,
+                attributes: member_attributes,
+            });
+            continue;
+        }
         if tokens[*pos].0 != Token::Function {
             return Err(CompileError::new(
                 member_span,
-                "Interfaces may only contain method or constant declarations",
+                "Interfaces may only contain method, property, or constant declarations",
             ));
         }
         let (mut method, promoted_properties) = parse_class_like_method(
@@ -575,5 +672,87 @@ fn parse_interface_body(
         methods.push(method);
     }
 
-    Ok((methods, constants))
+    Ok((properties, methods, constants))
+}
+
+fn parse_property_hooks(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<PropertyHooks, CompileError> {
+    if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
+        *pos += 1;
+        return Ok(PropertyHooks::none());
+    }
+    if !matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LBrace)) {
+        return Err(CompileError::new(
+            span,
+            "Expected ';' or property hook block after property declaration",
+        ));
+    }
+    *pos += 1;
+
+    let mut hooks = PropertyHooks::none();
+    while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+        let hook_span = tokens[*pos].1;
+        let get_by_ref = if tokens[*pos].0 == Token::Ampersand {
+            *pos += 1;
+            true
+        } else {
+            false
+        };
+        let hook_name = match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Identifier(name)) => name.clone(),
+            _ => {
+                return Err(CompileError::new(
+                    hook_span,
+                    "Expected property hook name",
+                ))
+            }
+        };
+        *pos += 1;
+
+        if !matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Semicolon)) {
+            return Err(CompileError::new(
+                hook_span,
+                "Property hook bodies are not supported yet",
+            ));
+        }
+        *pos += 1;
+
+        if hook_name.eq_ignore_ascii_case("get") {
+            if hooks.requires_get() {
+                return Err(CompileError::new(hook_span, "Duplicate get property hook"));
+            }
+            hooks.get = !get_by_ref;
+            hooks.get_by_ref = get_by_ref;
+        } else if hook_name.eq_ignore_ascii_case("set") {
+            if get_by_ref {
+                return Err(CompileError::new(
+                    hook_span,
+                    "Set property hook cannot return by reference",
+                ));
+            }
+            if hooks.set {
+                return Err(CompileError::new(hook_span, "Duplicate set property hook"));
+            }
+            hooks.set = true;
+        } else {
+            return Err(CompileError::new(
+                hook_span,
+                &format!("Unknown property hook '{}'", hook_name),
+            ));
+        }
+    }
+
+    expect_token(
+        tokens,
+        pos,
+        &Token::RBrace,
+        "Expected '}' at end of property hook block",
+    )?;
+    if !hooks.any() {
+        return Err(CompileError::new(span, "Expected property hook declaration"));
+    }
+    Ok(hooks)
 }

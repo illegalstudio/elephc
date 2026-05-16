@@ -12,8 +12,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::Visibility;
-use crate::types::InterfaceInfo;
+use crate::parser::ast::{ClassProperty, Visibility};
+use crate::types::{InterfaceInfo, PhpType, PropertyHookContract};
 
 use super::super::Checker;
 use super::super::InterfaceDeclInfo;
@@ -56,6 +56,8 @@ pub(crate) fn build_interface_info_recursive(
     let mut method_declaring_interfaces = HashMap::new();
     let mut method_order = Vec::new();
     let mut method_slots = HashMap::new();
+    let mut properties = HashMap::new();
+    let mut property_order = Vec::new();
 
     for parent_name in &interface.extends {
         if class_map.contains_key(parent_name) {
@@ -112,6 +114,55 @@ pub(crate) fn build_interface_info_recursive(
             let slot = method_order.len();
             method_slots.insert(method_name.clone(), slot);
             method_order.push(method_name.clone());
+        }
+        for property_name in &parent_info.property_order {
+            let parent_contract = parent_info
+                .properties
+                .get(property_name)
+                .expect("type checker bug: missing interface parent property contract");
+            if let Some(existing_contract) = properties.get_mut(property_name) {
+                merge_property_contract(
+                    existing_contract,
+                    parent_contract,
+                    checker,
+                    interface.span,
+                    &interface.name,
+                    property_name,
+                    "combining interface parent",
+                )?;
+                continue;
+            }
+            properties.insert(property_name.clone(), parent_contract.clone());
+            property_order.push(property_name.clone());
+        }
+    }
+
+    let mut direct_property_names = HashSet::new();
+    for property in &interface.properties {
+        if !direct_property_names.insert(property.name.clone()) {
+            return Err(CompileError::new(
+                property.span,
+                &format!(
+                    "Duplicate interface property declaration: {}::${}",
+                    interface.name, property.name
+                ),
+            ));
+        }
+        validate_interface_property_syntax(&interface.name, property)?;
+        let contract = build_property_contract(checker, &interface.name, property)?;
+        if let Some(existing_contract) = properties.get_mut(&property.name) {
+            merge_property_contract(
+                existing_contract,
+                &contract,
+                checker,
+                property.span,
+                &interface.name,
+                &property.name,
+                "redeclaring interface",
+            )?;
+        } else {
+            properties.insert(property.name.clone(), contract);
+            property_order.push(property.name.clone());
         }
     }
 
@@ -203,6 +254,8 @@ pub(crate) fn build_interface_info_recursive(
         InterfaceInfo {
             interface_id: *next_interface_id,
             parents: interface.extends.clone(),
+            properties,
+            property_order,
             methods,
             method_declaring_interfaces,
             method_order,
@@ -212,5 +265,133 @@ pub(crate) fn build_interface_info_recursive(
     );
     *next_interface_id += 1;
     building.remove(interface_name);
+    Ok(())
+}
+
+fn validate_interface_property_syntax(
+    interface_name: &str,
+    property: &ClassProperty,
+) -> Result<(), CompileError> {
+    if property.visibility != Visibility::Public {
+        return Err(CompileError::new(
+            property.span,
+            &format!(
+                "Interface properties must be public: {}::${}",
+                interface_name, property.name
+            ),
+        ));
+    }
+    if property.is_static {
+        return Err(CompileError::new(
+            property.span,
+            &format!(
+                "Interface property {}::${} cannot be static",
+                interface_name, property.name
+            ),
+        ));
+    }
+    if property.readonly {
+        return Err(CompileError::new(
+            property.span,
+            &format!(
+                "Hooked properties cannot be readonly: {}::${}",
+                interface_name, property.name
+            ),
+        ));
+    }
+    if !property.hooks.any() {
+        return Err(CompileError::new(
+            property.span,
+            &format!(
+                "Interfaces may only include hooked properties: {}::${}",
+                interface_name, property.name
+            ),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn build_property_contract(
+    checker: &Checker,
+    declaring_type: &str,
+    property: &ClassProperty,
+) -> Result<PropertyHookContract, CompileError> {
+    let property_ty = match property.type_expr.as_ref() {
+        Some(type_expr) => checker.resolve_declared_property_type_hint(
+            type_expr,
+            property.span,
+            &format!("Property {}::${}", declaring_type, property.name),
+        )?,
+        None => PhpType::Mixed,
+    };
+    Ok(PropertyHookContract {
+        get_type: property
+            .hooks
+            .requires_get()
+            .then(|| property_ty.clone()),
+        set_type: property.hooks.set.then_some(property_ty),
+        get_by_ref: property.hooks.get_by_ref,
+        declaring_type: declaring_type.to_string(),
+        span: property.span,
+    })
+}
+
+pub(crate) fn merge_property_contract(
+    existing: &mut PropertyHookContract,
+    incoming: &PropertyHookContract,
+    checker: &Checker,
+    span: crate::span::Span,
+    owner_name: &str,
+    property_name: &str,
+    context: &str,
+) -> Result<(), CompileError> {
+    if let Some(incoming_get) = incoming.get_type.as_ref() {
+        match existing.get_type.as_ref() {
+            Some(existing_get) if checker.type_accepts(existing_get, incoming_get) => {
+                existing.get_type = Some(incoming_get.clone());
+                existing.get_by_ref |= incoming.get_by_ref;
+                existing.span = incoming.span;
+            }
+            Some(existing_get) if checker.type_accepts(incoming_get, existing_get) => {
+                existing.get_by_ref |= incoming.get_by_ref;
+            }
+            Some(existing_get) => {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Incompatible get property contract when {}: {}::${} requires {}, conflicting with {}",
+                        context, owner_name, property_name, incoming_get, existing_get
+                    ),
+                ))
+            }
+            None => {
+                existing.get_type = Some(incoming_get.clone());
+                existing.get_by_ref = incoming.get_by_ref;
+                existing.span = incoming.span;
+            }
+        }
+    }
+    if let Some(incoming_set) = incoming.set_type.as_ref() {
+        match existing.set_type.as_ref() {
+            Some(existing_set) if checker.type_accepts(existing_set, incoming_set) => {}
+            Some(existing_set) if checker.type_accepts(incoming_set, existing_set) => {
+                existing.set_type = Some(incoming_set.clone());
+                existing.span = incoming.span;
+            }
+            Some(existing_set) => {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Incompatible set property contract when {}: {}::${} requires {}, conflicting with {}",
+                        context, owner_name, property_name, incoming_set, existing_set
+                    ),
+                ))
+            }
+            None => {
+                existing.set_type = Some(incoming_set.clone());
+                existing.span = incoming.span;
+            }
+        }
+    }
     Ok(())
 }

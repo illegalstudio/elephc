@@ -78,6 +78,7 @@ pub(super) fn check_types_impl(
         if let StmtKind::InterfaceDecl {
             name,
             extends,
+            properties,
             methods,
             constants,
         } = &stmt.kind
@@ -104,6 +105,7 @@ pub(super) fn check_types_impl(
                         .iter()
                         .map(|name| name.as_str().to_string())
                         .collect(),
+                    properties: properties.clone(),
                     methods: methods.clone(),
                     span: stmt.span,
                     constants: constants.clone(),

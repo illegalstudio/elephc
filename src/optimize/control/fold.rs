@@ -215,11 +215,13 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
         StmtKind::InterfaceDecl {
             name,
             extends,
+            properties,
             methods,
         constants,
         } => StmtKind::InterfaceDecl {
             name,
             extends,
+            properties: properties.into_iter().map(fold_property).collect(),
             methods: methods.into_iter().map(fold_method).collect(),
         constants,
         },
