@@ -9,6 +9,12 @@ echo "+1 day 2 hours = " . date("Y-m-d H:i:s", $offset) . "\n";
 $past = strtotime("3 days ago");
 echo "3 days ago = " . date("Y-m-d", $past) . "\n";
 
+$article = strtotime("a day ago");
+echo "a day ago = " . date("Y-m-d H:i", $article) . "\n";
+
+$hour = strtotime("an hour");
+echo "an hour = " . date("H:i", $hour) . "\n";
+
 $weekday = strtotime("next Monday");
 echo "next Monday = " . date("Y-m-d (D)", $weekday) . "\n";
 

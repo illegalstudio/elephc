@@ -10,6 +10,8 @@
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
+const PREG_REPLACE_NMATCH: usize = 10;
+
 /// __rt_preg_replace: replace all regex matches in subject string.
 /// Input:  x1=pattern ptr, x2=pattern len, x3=replacement ptr, x4=replacement len,
 ///         x5=subject ptr, x6=subject len
@@ -21,8 +23,10 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     }
 
     let regex_t_size = emitter.platform.regex_t_size();
+    let regmatch_rm_eo_off = emitter.platform.regmatch_rm_eo_offset();
     let regmatch_off = regex_t_size;
-    let pattern_ptr_off = regmatch_off + emitter.platform.regmatch_t_size();
+    let regmatches_size = emitter.platform.regmatch_t_size() * PREG_REPLACE_NMATCH;
+    let pattern_ptr_off = regmatch_off + regmatches_size;
     let pattern_len_off = pattern_ptr_off + 8;
     let replacement_ptr_off = pattern_len_off + 8;
     let replacement_len_off = replacement_ptr_off + 8;
@@ -99,7 +103,7 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("cbz w9, __rt_preg_replace_done");                      // end of string
 
     emitter.instruction("mov x0, sp");                                          // regex_t
-    emitter.instruction("mov x2, #1");                                          // nmatch
+    emitter.instruction(&format!("mov x2, #{}", PREG_REPLACE_NMATCH));          // capture full match plus replacement backreference groups
     emitter.instruction(&format!("add x3, sp, #{}", regmatch_off));             // regmatch_t buffer
     emitter.instruction("mov x4, #0");                                          // eflags
     emitter.bl_c("regexec");                                                    // execute
@@ -119,7 +123,7 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("add x12, x12, #1");                                    // increment
     emitter.instruction("b __rt_preg_replace_pre");                             // continue
 
-    // -- copy replacement string --
+    // -- copy replacement string, expanding $1 and \1 style backreferences --
     emitter.label("__rt_preg_replace_repl");
     emitter.instruction(&format!("ldr x1, [sp, #{}]", replacement_ptr_off));    // replacement ptr
     emitter.instruction(&format!("ldr x2, [sp, #{}]", replacement_len_off));    // replacement len
@@ -128,15 +132,64 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("cmp x12, x2");                                         // check if done
     emitter.instruction("b.ge __rt_preg_replace_advance");                      // done
     emitter.instruction("ldrb w13, [x1, x12]");                                 // load replacement byte
-    emitter.instruction("strb w13, [x11]");                                     // write byte
+    emitter.instruction("cmp w13, #36");                                        // '$' may introduce a replacement backreference
+    emitter.instruction("b.eq __rt_preg_replace_backref_probe");                // inspect the next byte for a group number
+    emitter.instruction("cmp w13, #92");                                        // '\\' may introduce a replacement backreference
+    emitter.instruction("b.eq __rt_preg_replace_backref_probe");                // inspect the next byte for a group number
+    emitter.label("__rt_preg_replace_repl_literal");
+    emitter.instruction("strb w13, [x11]");                                     // write literal replacement byte
     emitter.instruction("add x11, x11, #1");                                    // advance output
-    emitter.instruction("add x12, x12, #1");                                    // increment
+    emitter.instruction("add x12, x12, #1");                                    // consume one replacement byte
     emitter.instruction("b __rt_preg_replace_repl_copy");                       // continue
+
+    emitter.label("__rt_preg_replace_backref_probe");
+    emitter.instruction("add x14, x12, #1");                                    // index of potential group digit
+    emitter.instruction("cmp x14, x2");                                         // replacement ended after marker ?
+    emitter.instruction("b.ge __rt_preg_replace_repl_literal");                 // yes → keep marker literal
+    emitter.instruction("ldrb w15, [x1, x14]");                                 // load potential group digit
+    emitter.instruction("sub w15, w15, #48");                                   // convert ASCII digit to group index
+    emitter.instruction("cmp w15, #9");                                         // is it 0..9 ?
+    emitter.instruction("b.hi __rt_preg_replace_repl_literal");                 // no → keep marker literal
+    emitter.instruction("mov x14, x15");                                        // x14 = group index
+    if emitter.platform.regmatch_t_size() == 16 {
+        emitter.instruction("lsl x14, x14, #4");                                // group index * sizeof(regmatch_t)
+        emitter.instruction(&format!("add x14, x14, #{}", regmatch_off));       // offset to selected regmatch_t
+        emitter.instruction("ldr x15, [sp, x14]");                              // load rm_so for selected capture
+        emitter.instruction(&format!("add x14, x14, #{}", regmatch_rm_eo_off)); // offset to rm_eo
+        emitter.instruction("ldr x16, [sp, x14]");                              // load rm_eo for selected capture
+    } else {
+        emitter.instruction("lsl x14, x14, #3");                                // group index * sizeof(regmatch_t)
+        emitter.instruction(&format!("add x14, x14, #{}", regmatch_off));       // offset to selected regmatch_t
+        emitter.instruction("ldrsw x15, [sp, x14]");                            // load rm_so for selected capture
+        emitter.instruction(&format!("add x14, x14, #{}", regmatch_rm_eo_off)); // offset to rm_eo
+        emitter.instruction("ldrsw x16, [sp, x14]");                            // load rm_eo for selected capture
+    }
+    emitter.instruction("cmp x15, #0");                                         // capture was matched ?
+    emitter.instruction("b.lt __rt_preg_replace_backref_consume");              // unmatched captures expand to an empty string
+    emitter.instruction("sub x16, x16, x15");                                   // capture length = rm_eo - rm_so
+    emitter.instruction(&format!("ldr x17, [sp, #{}]", current_pos_off));       // reload current subject cursor
+    emitter.instruction("add x17, x17, x15");                                   // capture source pointer = current + rm_so
+    emitter.instruction("mov x9, #0");                                          // capture copy index
+    emitter.label("__rt_preg_replace_backref_copy");
+    emitter.instruction("cmp x9, x16");                                         // copied entire capture ?
+    emitter.instruction("b.ge __rt_preg_replace_backref_consume");              // yes → consume marker and group digit
+    emitter.instruction("ldrb w10, [x17, x9]");                                 // load capture byte
+    emitter.instruction("strb w10, [x11]");                                     // append capture byte
+    emitter.instruction("add x11, x11, #1");                                    // advance output
+    emitter.instruction("add x9, x9, #1");                                      // advance capture index
+    emitter.instruction("b __rt_preg_replace_backref_copy");                    // continue copying capture bytes
+    emitter.label("__rt_preg_replace_backref_consume");
+    emitter.instruction("add x12, x12, #2");                                    // consume marker plus group digit
+    emitter.instruction("b __rt_preg_replace_repl_copy");                       // continue scanning replacement
 
     // -- advance past match --
     emitter.label("__rt_preg_replace_advance");
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // save output write pos
     emitter.instruction(&emitter.platform.regoff_load_instr("x9", "sp", regmatch_off + emitter.platform.regmatch_rm_eo_offset())); // load rm_eo with the native regoff_t width
+    emitter.instruction("cmp x9, #0");                                          // zero-length match ?
+    emitter.instruction("b.gt __rt_preg_replace_advance_ok");                   // non-empty match advances by rm_eo
+    emitter.instruction("mov x9, #1");                                          // force progress after zero-length matches
+    emitter.label("__rt_preg_replace_advance_ok");
     emitter.instruction(&format!("ldr x10, [sp, #{}]", current_pos_off));       // current pos
     emitter.instruction("add x10, x10, x9");                                    // advance past match
     emitter.instruction(&format!("str x10, [sp, #{}]", current_pos_off));       // save new pos
@@ -185,8 +238,10 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
 
 fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     let regex_t_size = emitter.platform.regex_t_size();
+    let regmatch_rm_eo_off = emitter.platform.regmatch_rm_eo_offset();
     let regmatch_off = regex_t_size;
-    let pattern_ptr_off = regmatch_off + emitter.platform.regmatch_t_size();
+    let regmatches_size = emitter.platform.regmatch_t_size() * PREG_REPLACE_NMATCH;
+    let pattern_ptr_off = regmatch_off + regmatches_size;
     let pattern_len_off = pattern_ptr_off + 8;
     let replacement_ptr_off = pattern_len_off + 8;
     let replacement_len_off = replacement_ptr_off + 8;
@@ -266,7 +321,7 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r9d, r9d");                                       // treat the terminating null byte as the end-of-subject condition
     emitter.instruction("jz __rt_preg_replace_done_linux_x86_64");              // finish replacement when the full subject payload has been consumed
     emitter.instruction("lea rdi, [rsp]");                                      // pass the compiled regex_t storage as the first regexec() argument
-    emitter.instruction("mov edx, 1");                                          // request exactly one regmatch_t capture because replacement only needs the full match extent
+    emitter.instruction(&format!("mov edx, {}", PREG_REPLACE_NMATCH));          // capture full match plus replacement backreference groups
     emitter.instruction(&format!("lea rcx, [rsp + {}]", regmatch_off));         // pass the local regmatch_t buffer as the match extent output slot
     emitter.instruction("xor r8d, r8d");                                        // pass eflags = 0 so regexec() matches from the current subject cursor
     emitter.bl_c("regexec");                                                    // execute the compiled POSIX regex at the current subject cursor
@@ -287,18 +342,61 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_replace_pre_linux_x86_64");              // continue copying the remaining unmatched prefix bytes
 
     emitter.label("__rt_preg_replace_repl_linux_x86_64");
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", replacement_ptr_off)); // reload the elephc replacement pointer before appending the replacement literal bytes
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", replacement_len_off)); // reload the elephc replacement length before appending the replacement literal bytes
-    emitter.instruction("xor ecx, ecx");                                        // start copying the replacement literal from offset zero
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", replacement_ptr_off)); // reload the elephc replacement pointer before scanning replacement bytes
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", replacement_len_off)); // reload the elephc replacement length before scanning replacement bytes
+    emitter.instruction("xor ecx, ecx");                                        // start scanning the replacement string from offset zero
 
     emitter.label("__rt_preg_replace_repl_copy_linux_x86_64");
-    emitter.instruction("cmp rcx, rdx");                                        // stop copying once the full replacement literal has been appended
+    emitter.instruction("cmp rcx, rdx");                                        // stop once the full replacement string has been scanned
     emitter.instruction("jge __rt_preg_replace_advance_linux_x86_64");          // move on to advancing the current subject cursor past the regex match
-    emitter.instruction("mov r8b, BYTE PTR [rax + rcx]");                       // load one replacement literal byte from the elephc replacement string payload
-    emitter.instruction("mov BYTE PTR [r11], r8b");                             // append the replacement literal byte into the replacement output buffer
-    emitter.instruction("add r11, 1");                                          // advance the replacement output write cursor after appending one literal byte
-    emitter.instruction("add rcx, 1");                                          // advance the replacement literal byte index
-    emitter.instruction("jmp __rt_preg_replace_repl_copy_linux_x86_64");        // continue copying the remaining replacement literal bytes
+    emitter.instruction("mov r8b, BYTE PTR [rax + rcx]");                       // load one replacement byte from the elephc replacement string payload
+    emitter.instruction("cmp r8b, 36");                                         // '$' may introduce a replacement backreference
+    emitter.instruction("je __rt_preg_replace_backref_probe_linux_x86_64");     // inspect the next byte for a group number
+    emitter.instruction("cmp r8b, 92");                                         // '\\' may introduce a replacement backreference
+    emitter.instruction("je __rt_preg_replace_backref_probe_linux_x86_64");     // inspect the next byte for a group number
+    emitter.label("__rt_preg_replace_repl_literal_linux_x86_64");
+    emitter.instruction("mov BYTE PTR [r11], r8b");                             // append a literal replacement byte into the output buffer
+    emitter.instruction("add r11, 1");                                          // advance the replacement output write cursor after appending one byte
+    emitter.instruction("add rcx, 1");                                          // consume one replacement byte
+    emitter.instruction("jmp __rt_preg_replace_repl_copy_linux_x86_64");        // continue scanning the replacement string
+
+    emitter.label("__rt_preg_replace_backref_probe_linux_x86_64");
+    emitter.instruction("lea r10, [rcx + 1]");                                  // index of potential group digit after the marker
+    emitter.instruction("cmp r10, rdx");                                        // replacement ended after marker ?
+    emitter.instruction("jge __rt_preg_replace_repl_literal_linux_x86_64");     // yes → keep marker literal
+    emitter.instruction("movzx r9d, BYTE PTR [rax + r10]");                     // load potential group digit
+    emitter.instruction("sub r9d, 48");                                         // convert ASCII digit to group index
+    emitter.instruction("cmp r9d, 9");                                          // is it 0..9 ?
+    emitter.instruction("ja __rt_preg_replace_repl_literal_linux_x86_64");      // no → keep marker literal
+    emitter.instruction("mov r10, r9");                                         // r10 = group index
+    if emitter.platform.regmatch_t_size() == 16 {
+        emitter.instruction("shl r10, 4");                                      // group index * sizeof(regmatch_t)
+        emitter.instruction(&format!("add r10, {}", regmatch_off));             // offset to selected regmatch_t
+        emitter.instruction("mov rsi, QWORD PTR [rsp + r10]");                  // load rm_so for selected capture
+        emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + r10 + {}]", regmatch_rm_eo_off)); // load rm_eo for selected capture
+    } else {
+        emitter.instruction("shl r10, 3");                                      // group index * sizeof(regmatch_t)
+        emitter.instruction(&format!("add r10, {}", regmatch_off));             // offset to selected regmatch_t
+        emitter.instruction("movsxd rsi, DWORD PTR [rsp + r10]");               // load rm_so for selected capture
+        emitter.instruction(&format!("movsxd rdi, DWORD PTR [rsp + r10 + {}]", regmatch_rm_eo_off)); // load rm_eo for selected capture
+    }
+    emitter.instruction("cmp rsi, 0");                                          // capture was matched ?
+    emitter.instruction("jl __rt_preg_replace_backref_consume_linux_x86_64");   // unmatched captures expand to an empty string
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", current_pos_off)); // reload current subject cursor
+    emitter.instruction("add r10, rsi");                                        // capture source pointer = current + rm_so
+    emitter.instruction("sub rdi, rsi");                                        // capture length = rm_eo - rm_so
+    emitter.instruction("xor esi, esi");                                        // capture copy index = 0
+    emitter.label("__rt_preg_replace_backref_copy_linux_x86_64");
+    emitter.instruction("cmp rsi, rdi");                                        // copied entire capture ?
+    emitter.instruction("jge __rt_preg_replace_backref_consume_linux_x86_64");  // yes → consume marker and group digit
+    emitter.instruction("mov r8b, BYTE PTR [r10 + rsi]");                       // load capture byte
+    emitter.instruction("mov BYTE PTR [r11], r8b");                             // append capture byte into the output buffer
+    emitter.instruction("add r11, 1");                                          // advance output after appending capture byte
+    emitter.instruction("add rsi, 1");                                          // advance capture index
+    emitter.instruction("jmp __rt_preg_replace_backref_copy_linux_x86_64");     // continue copying capture bytes
+    emitter.label("__rt_preg_replace_backref_consume_linux_x86_64");
+    emitter.instruction("add rcx, 2");                                          // consume marker plus group digit
+    emitter.instruction("jmp __rt_preg_replace_repl_copy_linux_x86_64");        // continue scanning the replacement string
 
     emitter.label("__rt_preg_replace_advance_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // preserve the updated replacement output write cursor before advancing the subject cursor

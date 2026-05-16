@@ -14,6 +14,7 @@
 /// Kinds 0-5: bare keywords. Kinds 6-8: modifiers consumed by the weekday strategy.
 /// Kind 9: `ago` (consumed by the offsets strategy as a trailing suffix).
 /// Kinds 10-16: weekday names (10=Sun..16=Sat) — full and abbreviated forms share the same kind.
+/// Kinds 17-18: "a"/"an" relative magnitudes consumed by the offsets strategy.
 const KEYWORDS: &[(&str, u8)] = &[
     ("now", 0),
     ("today", 1),
@@ -25,6 +26,8 @@ const KEYWORDS: &[(&str, u8)] = &[
     ("last", 7),
     ("this", 8),
     ("ago", 9),
+    ("a", 17),
+    ("an", 18),
     ("sunday", 10),
     ("monday", 11),
     ("tuesday", 12),

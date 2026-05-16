@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits the relative-offset parser sub-routine for `__rt_strtotime` — supports `[+-]?N unit`, composite forms (`"+1 day 2 hours"`), and trailing `ago`.
+//! Emits the relative-offset parser sub-routine for `__rt_strtotime` — supports `[+-]?N unit`, `a/an unit`, composite forms (`"+1 day 2 hours"`), and trailing `ago`.
 //! Combines per-term offsets into `tm_*` fields via the now_tm helper, then normalizes through libc `mktime` for DST-aware day/week math.
 //!
 //! Called from:
@@ -63,10 +63,46 @@ fn emit_offsets_arm64(emitter: &mut Emitter) {
     emitter.instruction("str w12, [sp, #104]");                                 // save sign across helper calls
 
     // -- parse decimal magnitude --
-    emitter.instruction("mov x10, x3");                                         // remember cursor before parse_dec
+    emitter.instruction("mov x12, x3");                                         // remember cursor before parse_dec
     emitter.instruction("bl __rt_strtotime_parse_dec");                         // x5 = value, x3 = new cursor
-    emitter.instruction("cmp x3, x10");                                         // cursor advanced ?
-    emitter.instruction("b.eq __rt_strtotime_fail");                            // no digits → fail
+    emitter.instruction("cmp x3, x12");                                         // cursor advanced ?
+    emitter.instruction("b.ne __rt_strtotime_offsets_value_ready");             // numeric value parsed → continue
+
+    // -- accept PHP relative articles: "a day", "an hour" --
+    emitter.instruction("cmp x3, x4");                                          // any bytes left for a/an ?
+    emitter.instruction("b.ge __rt_strtotime_fail");                            // no → fail
+    emitter.instruction("ldrb w14, [x3]");                                      // load candidate article first byte
+    emitter.instruction("orr w14, w14, #0x20");                                 // lowercase ASCII
+    emitter.instruction("cmp w14, #97");                                        // 'a' ?
+    emitter.instruction("b.ne __rt_strtotime_fail");                            // no article → fail
+    emitter.instruction("add x15, x3, #1");                                     // position after "a"
+    emitter.instruction("cmp x15, x4");                                         // input ended after "a" ?
+    emitter.instruction("b.ge __rt_strtotime_offsets_article_a");               // consume it and let unit parsing fail if missing
+    emitter.instruction("ldrb w14, [x3, #1]");                                  // load byte after "a"
+    emitter.instruction("orr w14, w14, #0x20");                                 // lowercase ASCII
+    emitter.instruction("cmp w14, #110");                                       // 'n' ?
+    emitter.instruction("b.eq __rt_strtotime_offsets_article_an_check");        // maybe "an"
+    emitter.instruction("sub w14, w14, #97");                                   // normalize byte after "a" for alpha boundary check
+    emitter.instruction("cmp w14, #25");                                        // alpha immediately after "a" ?
+    emitter.instruction("b.ls __rt_strtotime_fail");                            // yes → not the article word
+    emitter.label("__rt_strtotime_offsets_article_a");
+    emitter.instruction("add x3, x3, #1");                                      // consume "a"
+    emitter.instruction("mov x5, #1");                                          // article magnitude = 1
+    emitter.instruction("b __rt_strtotime_offsets_value_ready");                // continue with unit parsing
+    emitter.label("__rt_strtotime_offsets_article_an_check");
+    emitter.instruction("add x15, x3, #2");                                     // position after "an"
+    emitter.instruction("cmp x15, x4");                                         // input ended after "an" ?
+    emitter.instruction("b.ge __rt_strtotime_offsets_article_an");              // consume it and let unit parsing fail if missing
+    emitter.instruction("ldrb w14, [x3, #2]");                                  // load byte after "an"
+    emitter.instruction("orr w14, w14, #0x20");                                 // lowercase ASCII
+    emitter.instruction("sub w14, w14, #97");                                   // normalize for alpha boundary check
+    emitter.instruction("cmp w14, #25");                                        // alpha immediately after "an" ?
+    emitter.instruction("b.ls __rt_strtotime_fail");                            // yes → not the article word
+    emitter.label("__rt_strtotime_offsets_article_an");
+    emitter.instruction("add x3, x3, #2");                                      // consume "an"
+    emitter.instruction("mov x5, #1");                                          // article magnitude = 1
+
+    emitter.label("__rt_strtotime_offsets_value_ready");
     emitter.instruction("bl __rt_strtotime_skip_ws");                           // WS between number and unit
 
     // -- lowercase next 16 bytes from cursor into [sp+64..79] for unit match --
@@ -251,12 +287,48 @@ fn emit_offsets_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_strtotime_offsets_save_sign_linux_x86_64");
     emitter.instruction("mov DWORD PTR [rsp + 104], ecx");                      // save sign across helper calls
 
-    // -- parse decimal magnitude --
+    // -- parse decimal magnitude or PHP relative articles a/an --
     emitter.label("__rt_strtotime_offsets_parse_value_linux_x86_64");
     emitter.instruction("mov r11, rdi");                                        // cursor before parse_dec
     emitter.instruction("call __rt_strtotime_parse_dec_linux_x86_64");          // rax = value, rdi = new cursor
     emitter.instruction("cmp rdi, r11");                                        // cursor advanced ?
-    emitter.instruction("je __rt_strtotime_fail_linux_x86_64");                 // no digits → fail
+    emitter.instruction("jne __rt_strtotime_offsets_value_ready_linux_x86_64"); // numeric value parsed → continue
+    emitter.instruction("cmp rdi, r10");                                        // any bytes left for a/an ?
+    emitter.instruction("jge __rt_strtotime_fail_linux_x86_64");                // no → fail
+    emitter.instruction("movzx eax, BYTE PTR [rdi]");                           // load candidate article first byte
+    emitter.instruction("or al, 32");                                           // lowercase ASCII
+    emitter.instruction("cmp al, 97");                                          // 'a' ?
+    emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // no article → fail
+    emitter.instruction("lea r8, [rdi + 1]");                                   // position after "a"
+    emitter.instruction("cmp r8, r10");                                         // input ended after "a" ?
+    emitter.instruction("jge __rt_strtotime_offsets_article_a_linux_x86_64");   // consume it and let unit parsing fail if missing
+    emitter.instruction("movzx eax, BYTE PTR [rdi + 1]");                       // load byte after "a"
+    emitter.instruction("or al, 32");                                           // lowercase ASCII
+    emitter.instruction("cmp al, 110");                                         // 'n' ?
+    emitter.instruction("je __rt_strtotime_offsets_article_an_check_linux_x86_64"); // maybe "an"
+    emitter.instruction("mov ecx, eax");                                        // copy byte for boundary check
+    emitter.instruction("sub ecx, 97");                                         // normalize byte after "a"
+    emitter.instruction("cmp ecx, 25");                                         // alpha immediately after "a" ?
+    emitter.instruction("jbe __rt_strtotime_fail_linux_x86_64");                // yes → not the article word
+    emitter.label("__rt_strtotime_offsets_article_a_linux_x86_64");
+    emitter.instruction("inc rdi");                                             // consume "a"
+    emitter.instruction("mov rax, 1");                                          // article magnitude = 1
+    emitter.instruction("jmp __rt_strtotime_offsets_value_ready_linux_x86_64"); // continue with unit parsing
+    emitter.label("__rt_strtotime_offsets_article_an_check_linux_x86_64");
+    emitter.instruction("lea r8, [rdi + 2]");                                   // position after "an"
+    emitter.instruction("cmp r8, r10");                                         // input ended after "an" ?
+    emitter.instruction("jge __rt_strtotime_offsets_article_an_linux_x86_64");  // consume it and let unit parsing fail if missing
+    emitter.instruction("movzx eax, BYTE PTR [rdi + 2]");                       // load byte after "an"
+    emitter.instruction("or al, 32");                                           // lowercase ASCII
+    emitter.instruction("mov ecx, eax");                                        // copy byte for boundary check
+    emitter.instruction("sub ecx, 97");                                         // normalize byte after "an"
+    emitter.instruction("cmp ecx, 25");                                         // alpha immediately after "an" ?
+    emitter.instruction("jbe __rt_strtotime_fail_linux_x86_64");                // yes → not the article word
+    emitter.label("__rt_strtotime_offsets_article_an_linux_x86_64");
+    emitter.instruction("add rdi, 2");                                          // consume "an"
+    emitter.instruction("mov rax, 1");                                          // article magnitude = 1
+
+    emitter.label("__rt_strtotime_offsets_value_ready_linux_x86_64");
     emitter.instruction("mov QWORD PTR [rsp + 120], rax");                      // save value across upcoming helpers
     emitter.instruction("call __rt_strtotime_skip_ws_linux_x86_64");            // WS between number and unit
 
