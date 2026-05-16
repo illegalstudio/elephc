@@ -76,15 +76,90 @@ pub(in crate::optimize) fn loose_eq(left: &Expr, right: &Expr) -> Option<bool> {
     let left = scalar_value(left)?;
     let right = scalar_value(right)?;
     match (&left, &right) {
+        (ScalarValue::Bool(left), right) => Some(*left == right.truthy()),
+        (left, ScalarValue::Bool(right)) => Some(left.truthy() == *right),
         (ScalarValue::Null, ScalarValue::Null) => Some(true),
-        (ScalarValue::Bool(left), ScalarValue::Bool(right)) => Some(left == right),
-        (ScalarValue::String(left), ScalarValue::String(right)) => Some(left == right),
+        (ScalarValue::Null, ScalarValue::String(right)) => Some(right.is_empty()),
+        (ScalarValue::String(left), ScalarValue::Null) => Some(left.is_empty()),
+        (ScalarValue::Null, ScalarValue::Int(right)) => Some(*right == 0),
+        (ScalarValue::Int(left), ScalarValue::Null) => Some(*left == 0),
+        (ScalarValue::Null, ScalarValue::Float(right)) => Some(*right == 0.0),
+        (ScalarValue::Float(left), ScalarValue::Null) => Some(*left == 0.0),
+        (ScalarValue::String(left), ScalarValue::String(right)) => {
+            match (php_numeric_string(left), php_numeric_string(right)) {
+                (Some(left), Some(right)) => Some(left == right),
+                _ => Some(left == right),
+            }
+        }
         (ScalarValue::Int(left), ScalarValue::Int(right)) => Some(left == right),
         (ScalarValue::Float(left), ScalarValue::Float(right)) => Some(left == right),
         (ScalarValue::Int(left), ScalarValue::Float(right)) => Some(*left as f64 == *right),
         (ScalarValue::Float(left), ScalarValue::Int(right)) => Some(*left == *right as f64),
-        _ => None,
+        (ScalarValue::Int(left), ScalarValue::String(right)) => {
+            php_numeric_string(right).map(|right| *left as f64 == right).or(Some(false))
+        }
+        (ScalarValue::String(left), ScalarValue::Int(right)) => {
+            php_numeric_string(left).map(|left| left == *right as f64).or(Some(false))
+        }
+        (ScalarValue::Float(left), ScalarValue::String(right)) => {
+            php_numeric_string(right).map(|right| *left == right).or(Some(false))
+        }
+        (ScalarValue::String(left), ScalarValue::Float(right)) => {
+            php_numeric_string(left).map(|left| left == *right).or(Some(false))
+        }
     }
+}
+
+fn php_numeric_string(value: &str) -> Option<f64> {
+    let trimmed = value.trim_matches(|c: char| c.is_ascii_whitespace());
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let bytes = trimmed.as_bytes();
+    let mut idx = 0;
+    if matches!(bytes[idx], b'+' | b'-') {
+        idx += 1;
+        if idx == bytes.len() {
+            return None;
+        }
+    }
+
+    let mut digits = 0;
+    while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+        idx += 1;
+        digits += 1;
+    }
+
+    if idx < bytes.len() && bytes[idx] == b'.' {
+        idx += 1;
+        while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+            idx += 1;
+            digits += 1;
+        }
+    }
+    if digits == 0 {
+        return None;
+    }
+
+    if idx < bytes.len() && matches!(bytes[idx], b'e' | b'E') {
+        idx += 1;
+        if idx < bytes.len() && matches!(bytes[idx], b'+' | b'-') {
+            idx += 1;
+        }
+        let exp_start = idx;
+        while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+            idx += 1;
+        }
+        if idx == exp_start {
+            return None;
+        }
+    }
+
+    if idx != bytes.len() {
+        return None;
+    }
+    trimmed.parse::<f64>().ok().filter(|value| value.is_finite())
 }
 
 pub(in crate::optimize) fn compare_numeric(

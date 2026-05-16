@@ -93,9 +93,18 @@ fn try_fold_numeric_binop(op: &BinOp, left: &Expr, right: &Expr) -> Option<ExprK
 
 fn try_fold_int_numeric_binop(op: &BinOp, left: i64, right: i64) -> Option<ExprKind> {
     match op {
-        BinOp::Add => left.checked_add(right).map(ExprKind::IntLiteral),
-        BinOp::Sub => left.checked_sub(right).map(ExprKind::IntLiteral),
-        BinOp::Mul => left.checked_mul(right).map(ExprKind::IntLiteral),
+        BinOp::Add => left
+            .checked_add(right)
+            .map(ExprKind::IntLiteral)
+            .or_else(|| fold_int_overflow_to_float(op, left, right)),
+        BinOp::Sub => left
+            .checked_sub(right)
+            .map(ExprKind::IntLiteral)
+            .or_else(|| fold_int_overflow_to_float(op, left, right)),
+        BinOp::Mul => left
+            .checked_mul(right)
+            .map(ExprKind::IntLiteral)
+            .or_else(|| fold_int_overflow_to_float(op, left, right)),
         BinOp::Div => {
             if right == 0 {
                 None
@@ -113,6 +122,16 @@ fn try_fold_int_numeric_binop(op: &BinOp, left: i64, right: i64) -> Option<ExprK
         }
         _ => None,
     }
+}
+
+fn fold_int_overflow_to_float(op: &BinOp, left: i64, right: i64) -> Option<ExprKind> {
+    let result = match op {
+        BinOp::Add => left as f64 + right as f64,
+        BinOp::Sub => left as f64 - right as f64,
+        BinOp::Mul => left as f64 * right as f64,
+        _ => return None,
+    };
+    result.is_finite().then_some(ExprKind::FloatLiteral(result))
 }
 
 fn try_fold_int_mod(left: &Expr, right: &Expr) -> Option<ExprKind> {
