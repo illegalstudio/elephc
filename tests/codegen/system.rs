@@ -1046,6 +1046,24 @@ fn test_is_callable_dynamic_unknown_string_returns_false() {
 }
 
 #[test]
+fn test_is_callable_dynamic_static_method_string_returns_true() {
+    let out = compile_and_run(
+        r#"<?php
+            class MathBox {
+                public static function double($n) {
+                    return $n * 2;
+                }
+            }
+            function check(string $name) {
+                return is_callable($name) ? "y" : "n";
+            }
+            echo check("MathBox::double");
+        "#,
+    );
+    assert_eq!(out, "y");
+}
+
+#[test]
 fn test_is_callable_object_method_array_returns_true() {
     let out = compile_and_run(
         r#"<?php
@@ -1055,6 +1073,24 @@ fn test_is_callable_object_method_array_returns_true() {
                 }
             }
             $obj = new Greeter();
+            $cb = [$obj, "hello"];
+            echo is_callable($cb) ? "y" : "n";
+        "#,
+    );
+    assert_eq!(out, "y");
+}
+
+#[test]
+fn test_is_callable_inherited_object_method_array_returns_true() {
+    let out = compile_and_run(
+        r#"<?php
+            class BaseGreeter {
+                public function hello() {
+                    return "hi";
+                }
+            }
+            class ChildGreeter extends BaseGreeter {}
+            $obj = new ChildGreeter();
             $cb = [$obj, "hello"];
             echo is_callable($cb) ? "y" : "n";
         "#,
@@ -1080,6 +1116,74 @@ fn test_is_callable_object_method_array_missing_method_returns_false() {
 }
 
 #[test]
+fn test_is_callable_class_string_static_method_array_returns_true() {
+    let out = compile_and_run(
+        r#"<?php
+            class MathBox {
+                public static function double($n) {
+                    return $n * 2;
+                }
+            }
+            $class = "MathBox";
+            $cb = [$class, "double"];
+            echo is_callable($cb) ? "y" : "n";
+        "#,
+    );
+    assert_eq!(out, "y");
+}
+
+#[test]
+fn test_is_callable_class_string_static_method_array_is_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+            class MathBox {
+                public static function double($n) {
+                    return $n * 2;
+                }
+            }
+            $class = "mathbox";
+            $cb = [$class, "DOUBLE"];
+            echo is_callable($cb) ? "y" : "n";
+        "#,
+    );
+    assert_eq!(out, "y");
+}
+
+#[test]
+fn test_is_callable_class_string_static_method_array_missing_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+            class MathBox {
+                public static function double($n) {
+                    return $n * 2;
+                }
+            }
+            $class = "MathBox";
+            $cb = [$class, "missing"];
+            echo is_callable($cb) ? "y" : "n";
+        "#,
+    );
+    assert_eq!(out, "n");
+}
+
+#[test]
+fn test_is_callable_class_string_static_method_array_rejects_non_public() {
+    let out = compile_and_run(
+        r#"<?php
+            class MathBox {
+                protected static function hidden() {
+                    return 2;
+                }
+            }
+            $class = "MathBox";
+            $cb = [$class, "hidden"];
+            echo is_callable($cb) ? "y" : "n";
+        "#,
+    );
+    assert_eq!(out, "n");
+}
+
+#[test]
 fn test_is_callable_invokable_object_returns_true() {
     let out = compile_and_run(
         r#"<?php
@@ -1089,6 +1193,23 @@ fn test_is_callable_invokable_object_returns_true() {
                 }
             }
             $task = new Task();
+            echo is_callable($task) ? "y" : "n";
+        "#,
+    );
+    assert_eq!(out, "y");
+}
+
+#[test]
+fn test_is_callable_inherited_invokable_object_returns_true() {
+    let out = compile_and_run(
+        r#"<?php
+            class BaseTask {
+                public function __invoke() {
+                    return 1;
+                }
+            }
+            class ChildTask extends BaseTask {}
+            $task = new ChildTask();
             echo is_callable($task) ? "y" : "n";
         "#,
     );

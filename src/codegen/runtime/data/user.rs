@@ -270,6 +270,8 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_callable_methods_missing\n_class_callable_methods_missing:\n");
     out.push_str("    .quad 0\n");
+    out.push_str(".p2align 3\n");
+    emit_static_callable_method_data(&mut out, &sorted_classes);
 
     // -- class-level PHP 8 attribute metadata table --
     // Per-class layout: count followed by (name_ptr, name_len) pairs.
@@ -673,6 +675,59 @@ fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {
         out.push_str(&format!(
             "    .quad _class_callable_method_name_{}_{}\n",
             class_info.class_id,
+            mangle_fqn(method_name)
+        ));
+        out.push_str(&format!("    .quad {}\n", method_name.len()));
+    }
+}
+
+fn emit_static_callable_method_data(out: &mut String, sorted_classes: &[(&String, &ClassInfo)]) {
+    let mut entries = Vec::new();
+    for (class_name, class_info) in sorted_classes {
+        let mut public_static_methods: Vec<&String> = class_info
+            .static_methods
+            .keys()
+            .filter(|method_name| {
+                class_info
+                    .static_method_visibilities
+                    .get(*method_name)
+                    .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+            })
+            .collect();
+        public_static_methods.sort();
+        if public_static_methods.is_empty() {
+            continue;
+        }
+
+        out.push_str(&format!(
+            ".globl _class_callable_static_class_name_{0}\n_class_callable_static_class_name_{0}:\n    .ascii \"{1}\"\n",
+            class_info.class_id,
+            escaped_ascii(class_name)
+        ));
+        for method_name in public_static_methods {
+            out.push_str(&format!(
+                ".globl _class_callable_static_method_name_{0}_{1}\n_class_callable_static_method_name_{0}_{1}:\n    .ascii \"{2}\"\n",
+                class_info.class_id,
+                mangle_fqn(method_name),
+                escaped_ascii(method_name)
+            ));
+            entries.push((class_info.class_id, class_name.as_str(), method_name.as_str()));
+        }
+    }
+
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _class_callable_static_method_count\n_class_callable_static_method_count:\n");
+    out.push_str(&format!("    .quad {}\n", entries.len()));
+    out.push_str(".globl _class_callable_static_method_table\n_class_callable_static_method_table:\n");
+    for (class_id, class_name, method_name) in entries {
+        out.push_str(&format!(
+            "    .quad _class_callable_static_class_name_{}\n",
+            class_id
+        ));
+        out.push_str(&format!("    .quad {}\n", class_name.len()));
+        out.push_str(&format!(
+            "    .quad _class_callable_static_method_name_{}_{}\n",
+            class_id,
             mangle_fqn(method_name)
         ));
         out.push_str(&format!("    .quad {}\n", method_name.len()));

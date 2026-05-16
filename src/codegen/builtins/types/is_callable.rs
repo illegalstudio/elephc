@@ -37,12 +37,14 @@ pub fn emit(
     // function ⇒ true, else false. Evaluating the literal expression
     // has no side effects, so we skip emit_expr.
     if let ExprKind::StringLiteral(name) = &args[0].kind {
-        let known = ctx.functions.contains_key(name)
-            || is_supported_builtin_function(name)
-            || ctx.function_variant_groups.contains(name);
-        let val: i64 = if known { 1 } else { 0 };
-        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), val);
-        return Some(PhpType::Bool);
+        if !name.contains("::") {
+            let known = ctx.functions.contains_key(name)
+                || is_supported_builtin_function(name)
+                || ctx.function_variant_groups.contains(name);
+            let val: i64 = if known { 1 } else { 0 };
+            abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), val);
+            return Some(PhpType::Bool);
+        }
     }
 
     let ty = emit_expr(&args[0], emitter, ctx, data);
@@ -52,25 +54,32 @@ pub fn emit(
         }
         PhpType::Str => emit_dynamic_string_lookup(emitter),
         PhpType::Array(_) => {
-            abi::emit_call_label(emitter, "__rt_is_callable_array");            // inspect indexed array shape for [$obj, "method"] callables
+            emit_pointer_lookup(emitter, "__rt_is_callable_array");             // inspect indexed array shape for callable arrays
         }
         PhpType::AssocArray { .. } => {
-            abi::emit_call_label(emitter, "__rt_is_callable_assoc");            // inspect hash shape for numeric 0/1 callable-array entries
+            emit_pointer_lookup(emitter, "__rt_is_callable_assoc");             // inspect hash shape for numeric 0/1 callable-array entries
         }
         PhpType::Object(_) => {
-            abi::emit_call_label(emitter, "__rt_is_callable_object");           // check whether the object's runtime class exposes public __invoke
+            emit_pointer_lookup(emitter, "__rt_is_callable_object");            // check whether the object's runtime class exposes public __invoke
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            abi::emit_call_label(emitter, "__rt_is_callable_mixed");            // unwrap Mixed and dispatch to the dynamic callable checks
+            emit_pointer_lookup(emitter, "__rt_is_callable_mixed");             // unwrap Mixed and dispatch to the dynamic callable checks
         }
         PhpType::Iterable => {
-            abi::emit_call_label(emitter, "__rt_is_callable_heap");             // inspect erased iterable heap kind before choosing array/object fallback
+            emit_pointer_lookup(emitter, "__rt_is_callable_heap");              // inspect erased iterable heap kind before choosing array/object fallback
         }
         _ => {
             abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
         }
     }
     Some(PhpType::Bool)
+}
+
+fn emit_pointer_lookup(emitter: &mut Emitter, label: &str) {
+    if emitter.target.arch == crate::codegen::platform::Arch::X86_64 {
+        emitter.instruction("mov rdi, rax");                                    // move pointer-shaped result into SysV helper argument 0
+    }
+    abi::emit_call_label(emitter, label);                                       // call the selected pointer-shaped runtime callable fallback
 }
 
 fn emit_dynamic_string_lookup(emitter: &mut Emitter) {
