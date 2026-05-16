@@ -251,7 +251,7 @@ fn emit_mixed_numeric_binop(
         crate::codegen::emit_box_current_value_as_mixed(emitter, right_ty);
     }
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
-    pop_saved_numeric_operand(emitter, left_stack_ty);
+    load_saved_numeric_operand(emitter, left_stack_ty, 16);
     if !matches!(left_stack_ty, PhpType::Mixed | PhpType::Union(_)) {
         crate::codegen::emit_box_current_value_as_mixed(emitter, left_stack_ty);
     }
@@ -263,6 +263,7 @@ fn emit_mixed_numeric_binop(
             abi::emit_pop_reg(emitter, "rdi");
         }
     }
+    abi::emit_release_temporary_stack(emitter, 16);
     let helper = match op {
         BinOp::Add => "__rt_mixed_numeric_add",
         BinOp::Sub => "__rt_mixed_numeric_sub",
@@ -273,18 +274,23 @@ fn emit_mixed_numeric_binop(
     PhpType::Mixed
 }
 
-fn pop_saved_numeric_operand(emitter: &mut Emitter, ty: &PhpType) {
+fn load_saved_numeric_operand(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty.codegen_repr() {
         PhpType::Float => {
-            abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter));
+            abi::emit_load_temporary_stack_slot(
+                emitter,
+                abi::float_result_reg(emitter),
+                offset,
+            );
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-            abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
+            abi::emit_load_temporary_stack_slot(emitter, ptr_reg, offset);
+            abi::emit_load_temporary_stack_slot(emitter, len_reg, offset + 8);
         }
         PhpType::Void | PhpType::Never => {}
         _ => {
-            abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
+            abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), offset);
         }
     }
 }

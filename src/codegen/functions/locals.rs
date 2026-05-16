@@ -8,8 +8,8 @@
 //! Key details:
 //! - Any lowering path that introduces storage must be represented here before stack offsets are assigned.
 
-use crate::codegen::context::Context;
-use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget, StmtKind};
+use crate::codegen::context::{Context, HeapOwnership};
+use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, StmtKind};
 use crate::types::{FunctionSig, PhpType};
 use super::types::{codegen_declared_type, codegen_static_type, infer_local_type};
 
@@ -29,9 +29,27 @@ pub fn collect_local_vars(
             StmtKind::IncludeOnceMark { .. } => {}
             StmtKind::Assign { name, value } => {
                 collect_assignment_expr_vars(value, ctx, sig);
+                let needs_mixed_numeric_slot = runtime_numeric_result_may_widen(value, sig, ctx);
                 if !ctx.variables.contains_key(name) {
                     let static_ty = infer_local_type(value, sig, Some(ctx));
-                    ctx.alloc_var_with_static_type(name, static_ty.codegen_repr(), static_ty);
+                    let slot_ty = if needs_mixed_numeric_slot {
+                        PhpType::Mixed
+                    } else {
+                        static_ty.codegen_repr()
+                    };
+                    ctx.alloc_var_with_static_type(name, slot_ty, static_ty);
+                } else if needs_mixed_numeric_slot {
+                    let static_ty = ctx
+                        .variables
+                        .get(name)
+                        .map(|var| var.static_ty.clone())
+                        .unwrap_or_else(|| infer_local_type(value, sig, Some(ctx)));
+                    ctx.update_var_type_static_and_ownership(
+                        name,
+                        PhpType::Mixed,
+                        static_ty,
+                        HeapOwnership::for_type(&PhpType::Mixed),
+                    );
                 }
             }
             StmtKind::TypedAssign {
@@ -386,6 +404,16 @@ fn infer_conditional_assignment_temp_type(
         ExprKind::NullCoalesce { default, .. } => infer_local_type(default, sig, Some(ctx)),
         _ => infer_local_type(value, sig, Some(ctx)),
     }
+}
+
+fn runtime_numeric_result_may_widen(value: &Expr, sig: &FunctionSig, ctx: &Context) -> bool {
+    matches!(
+        value.kind,
+        ExprKind::BinaryOp {
+            op: BinOp::Add | BinOp::Sub | BinOp::Mul,
+            ..
+        }
+    ) && infer_local_type(value, sig, Some(ctx)) == PhpType::Int
 }
 
 fn collect_named_builtin_or_extern_call_temps(
