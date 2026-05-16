@@ -262,9 +262,9 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, #8");                                      // skip the leading class_id field at offset 0
     emitter.instruction("add x9, x0, x9");                                      // resolve the absolute address of the property slot
     emitter.instruction("ldr x18, [x9]");                                       // load the property low payload word
-    emitter.instruction("ldr x19, [x9, #8]");                                   // load the property high payload word
+    emitter.instruction("ldr x15, [x9, #8]");                                   // load the property high payload word without clobbering caller x19
     emitter.instruction("str x18, [sp, #64]");                                  // save the property low payload across the encoder dispatch
-    emitter.instruction("str x19, [sp, #72]");                                  // save the property high payload across the encoder dispatch
+    emitter.instruction("str x15, [sp, #72]");                                  // save the property high payload across the encoder dispatch
 
     // Dispatch on the property type tag. Each branch leaves the encoded
     // result in x1=ptr, x2=len so the shared copy code can append it.

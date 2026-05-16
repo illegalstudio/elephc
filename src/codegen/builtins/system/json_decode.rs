@@ -98,43 +98,29 @@ pub fn emit(
 
     let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
     abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
-    let valid_label = ctx.next_label("json_decode_valid");
     let done_label = ctx.next_label("json_decode_done");
     match emitter.target.arch {
         Arch::AArch64 => {
             // x1 = string ptr, x2 = string len after emit_expr.
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // park the json source slice across the validator call
-            emitter.instruction("bl __rt_json_validate");                       // RFC 8259 validator; returns 1 on success, 0 on failure (and sets _json_last_error)
-            emitter.instruction("ldp x1, x2, [sp], #16");                       // restore the json source slice for the structural decoder
-            emitter.instruction(&format!("cbnz x0, {}", valid_label));          // valid input → fall through to structural decode
-            // Invalid: return Mixed(null) without invoking the decoder.
+            emitter.instruction("bl __rt_json_decode_mixed");                   // checked structural decoder; returns 0 after recording JSON errors
+            emitter.instruction(&format!("cbnz x0, {}", done_label));           // valid input already returned a boxed Mixed value
+            // Invalid: return Mixed(null) after the decoder recorded the error.
             emitter.instruction("mov x0, #8");                                  // tag = 8 (null)
             emitter.instruction("mov x1, #0");                                  // value_lo = 0
             emitter.instruction("mov x2, #0");                                  // value_hi = 0
             emitter.instruction("bl __rt_mixed_from_value");                    // box Mixed(null) so callers see a uniform result shape
-            emitter.instruction(&format!("b {}", done_label));                  // skip the structural decoder when validation already rejected the input
-            emitter.label(&valid_label);
-            emitter.instruction("bl __rt_json_decode_mixed");                   // structural decoder: scalars box natively; arrays decode as Mixed(array); objects honor _json_decode_assoc
             emitter.label(&done_label);
         }
         Arch::X86_64 => {
             // rax = string ptr, rdx = string len after emit_expr.
-            emitter.instruction("push rax");                                    // park the json string pointer across the validator call
-            emitter.instruction("push rdx");                                    // park the json string length across the validator call (kept aligned to 16 bytes)
-            emitter.instruction("call __rt_json_validate");                     // RFC 8259 validator; returns 1 on success, 0 on failure (and sets _json_last_error)
-            emitter.instruction("pop rdx");                                     // restore the json string length for the structural decoder
-            emitter.instruction("pop rsi");                                     // pop the saved pointer into a scratch register before swapping into rax
-            emitter.instruction("test rax, rax");                               // valid → non-zero; invalid → zero
-            emitter.instruction(&format!("jne {}", valid_label));               // valid → fall through to structural decode (rsi has the saved ptr)
-            // Invalid: return Mixed(null) without invoking the decoder.
+            emitter.instruction("call __rt_json_decode_mixed");                 // checked structural decoder honoring _json_decode_assoc
+            emitter.instruction("test rax, rax");                               // valid input returns a boxed Mixed pointer
+            emitter.instruction(&format!("jne {}", done_label));                // non-zero result is ready for the caller
+            // Invalid: return Mixed(null) after the decoder recorded the error.
             emitter.instruction("mov rax, 8");                                  // tag = 8 (null)
             emitter.instruction("mov rdi, 0");                                  // value_lo = 0
             emitter.instruction("mov rsi, 0");                                  // value_hi = 0
             emitter.instruction("call __rt_mixed_from_value");                  // box Mixed(null) so callers see a uniform result shape
-            emitter.instruction(&format!("jmp {}", done_label));                // skip the structural decoder when validation already rejected the input
-            emitter.label(&valid_label);
-            emitter.instruction("mov rax, rsi");                                // restore the json string pointer into the rax/rdx string-arg pair
-            emitter.instruction("call __rt_json_decode_mixed");                 // structural decoder honoring _json_decode_assoc
             emitter.label(&done_label);
         }
     }

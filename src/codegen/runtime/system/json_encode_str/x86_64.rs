@@ -312,17 +312,17 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // is the continuation byte within the input?
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated 2-byte sequence → malformed
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source pointer
-    emitter.instruction("movzx r15, BYTE PTR [r10 + r13 + 1]");                 // load b2
+    emitter.instruction("movzx r8, BYTE PTR [r10 + r13 + 1]");                  // load b2 without disturbing the cached flag register
     // Validate b2 is a continuation byte (0x80..0xBF).
-    emitter.instruction("cmp r15, 0x80");                                       // continuation bytes start at 0x80
+    emitter.instruction("cmp r8, 0x80");                                        // continuation bytes start at 0x80
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range → malformed
-    emitter.instruction("cmp r15, 0xC0");                                       // continuation bytes end at 0xBF
+    emitter.instruction("cmp r8, 0xC0");                                        // continuation bytes end at 0xBF
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
     emitter.instruction("movzx rax, r14b");                                     // widen the lead byte for arithmetic
     emitter.instruction("and rax, 0x1F");                                       // b1 & 0x1F → top 5 bits
     emitter.instruction("shl rax, 6");                                          // shift into bits 6..10
-    emitter.instruction("and r15, 0x3F");                                       // b2 & 0x3F → low 6 bits
-    emitter.instruction("or rax, r15");                                         // assemble the codepoint in rax
+    emitter.instruction("and r8, 0x3F");                                        // b2 & 0x3F → low 6 bits
+    emitter.instruction("or rax, r8");                                          // assemble the codepoint in rax
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // park the codepoint for the emit helper
     emitter.instruction("mov r12, 2");                                          // 2 source bytes consumed
     emitter.instruction("jmp __rt_json_str_utf8_emit_bmp_x");                   // emit a single \uXXXX
@@ -335,11 +335,11 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // is the last byte within the input?
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated 3-byte sequence → malformed
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source pointer
-    emitter.instruction("movzx r15, BYTE PTR [r10 + r13 + 1]");                 // load b2
+    emitter.instruction("movzx r8, BYTE PTR [r10 + r13 + 1]");                  // load b2 without disturbing the cached flag register
     // Validate b2 is a continuation byte.
-    emitter.instruction("cmp r15, 0x80");                                       // continuation bytes start at 0x80
+    emitter.instruction("cmp r8, 0x80");                                        // continuation bytes start at 0x80
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range → malformed
-    emitter.instruction("cmp r15, 0xC0");                                       // continuation bytes end at 0xBF
+    emitter.instruction("cmp r8, 0xC0");                                        // continuation bytes end at 0xBF
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
     emitter.instruction("movzx rcx, BYTE PTR [r10 + r13 + 2]");                 // load b3
     // Validate b3 is a continuation byte.
@@ -350,9 +350,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("movzx rax, r14b");                                     // widen the lead byte
     emitter.instruction("and rax, 0x0F");                                       // b1 & 0x0F → top 4 bits
     emitter.instruction("shl rax, 12");                                         // shift into bits 12..15
-    emitter.instruction("and r15, 0x3F");                                       // b2 & 0x3F → middle 6 bits
-    emitter.instruction("shl r15, 6");                                          // shift into bits 6..11
-    emitter.instruction("or rax, r15");                                         // merge middle bits
+    emitter.instruction("and r8, 0x3F");                                        // b2 & 0x3F → middle 6 bits
+    emitter.instruction("shl r8, 6");                                           // shift into bits 6..11
+    emitter.instruction("or rax, r8");                                          // merge middle bits
     emitter.instruction("and rcx, 0x3F");                                       // b3 & 0x3F → low 6 bits
     emitter.instruction("or rax, rcx");                                         // assemble the codepoint in rax
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // park the codepoint for the emit helper
@@ -366,11 +366,11 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cmp r8, QWORD PTR [rbp - 16]");                        // is the last byte within the input?
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // truncated 4-byte sequence → malformed
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source pointer
-    emitter.instruction("movzx r15, BYTE PTR [r10 + r13 + 1]");                 // load b2
+    emitter.instruction("movzx r8, BYTE PTR [r10 + r13 + 1]");                  // load b2 without disturbing the cached flag register
     // Validate b2 is a continuation byte.
-    emitter.instruction("cmp r15, 0x80");                                       // continuation bytes start at 0x80
+    emitter.instruction("cmp r8, 0x80");                                        // continuation bytes start at 0x80
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range → malformed
-    emitter.instruction("cmp r15, 0xC0");                                       // continuation bytes end at 0xBF
+    emitter.instruction("cmp r8, 0xC0");                                        // continuation bytes end at 0xBF
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
     emitter.instruction("movzx rcx, BYTE PTR [r10 + r13 + 2]");                 // load b3
     // Validate b3 is a continuation byte.
@@ -387,9 +387,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("movzx rax, r14b");                                     // widen the lead byte
     emitter.instruction("and rax, 0x07");                                       // b1 & 0x07 → top 3 bits
     emitter.instruction("shl rax, 18");                                         // shift into bits 18..20
-    emitter.instruction("and r15, 0x3F");                                       // b2 & 0x3F → 6 bits
-    emitter.instruction("shl r15, 12");                                         // shift into bits 12..17
-    emitter.instruction("or rax, r15");                                         // merge bits 12..17
+    emitter.instruction("and r8, 0x3F");                                        // b2 & 0x3F → 6 bits
+    emitter.instruction("shl r8, 12");                                          // shift into bits 12..17
+    emitter.instruction("or rax, r8");                                          // merge bits 12..17
     emitter.instruction("and rcx, 0x3F");                                       // b3 & 0x3F → 6 bits
     emitter.instruction("shl rcx, 6");                                          // shift into bits 6..11
     emitter.instruction("or rax, rcx");                                         // merge bits 6..11
@@ -398,14 +398,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // Compute the surrogate pair: cp -= 0x10000; high = 0xD800 + (cp >> 10);
     // low = 0xDC00 + (cp & 0x3FF).
     emitter.instruction("sub rax, 0x10000");                                    // cp -= 0x10000
-    emitter.instruction("mov r15, rax");                                        // copy cp for the high-surrogate computation
-    emitter.instruction("shr r15, 10");                                         // (cp >> 10) → high-surrogate index
-    emitter.instruction("add r15, 0xD800");                                     // high surrogate codepoint
+    emitter.instruction("mov r8, rax");                                         // copy cp for the high-surrogate computation
+    emitter.instruction("shr r8, 10");                                          // (cp >> 10) → high-surrogate index
+    emitter.instruction("add r8, 0xD800");                                      // high surrogate codepoint
     emitter.instruction("and rax, 0x3FF");                                      // (cp & 0x3FF) → low-surrogate index
     emitter.instruction("add rax, 0xDC00");                                     // low surrogate codepoint
     emitter.instruction("mov QWORD PTR [rbp - 48], r13");                       // checkpoint the source index across the helper calls
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // park the low surrogate
-    emitter.instruction("mov rdi, r15");                                        // pass the high surrogate to the emit helper
+    emitter.instruction("mov rdi, r8");                                         // pass the high surrogate to the emit helper
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the running write pointer
     emitter.instruction("call __rt_json_str_emit_u16_x");                       // emit \uHHHH for the high surrogate
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the low surrogate
