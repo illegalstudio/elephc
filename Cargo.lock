@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "elephc"
-version = "0.21.9"
+version = "0.21.10"
 dependencies = [
  "serde_json",
 ]
