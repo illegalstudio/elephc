@@ -161,8 +161,8 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 ### Known incompatibilities with PHP
 
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
-- Non-folded runtime integer overflow wraps instead of promoting to float; constant-folded integer overflow promotes to float.
-- Non-folded runtime loose comparison (`==`) between different types coerces both sides to integer; constant-folded scalar literals use broader PHP-style bool/null/numeric-string rules.
+- Integer `+`, `-`, and `*` overflow promotes to `double` for both constant-folded and non-folded runtime scalar arithmetic.
+- Scalar loose comparison (`==`, `!=`) follows PHP-style bool truthiness, null-vs-empty-string, numeric-string, and non-numeric string byte-comparison rules for constant-folded literals and non-folded runtime scalar operands.
 - `??=` is checked against typed assignment storage for variables, object properties, static properties, and non-append array elements. For concrete local variable types, the fallback must keep the same type or be a literal `null`.
 - Plain array numeric casts (`(int)$array`, `(float)$array`) follow elephc's existing array cast semantics (return the element count rather than PHP's `0`/`1`). Direct `iterable` numeric casts use PHP's empty/non-empty `0`/`1` semantics.
 - `FiberError` is currently modeled as an `Exception` subclass in elephc; PHP models `FiberError` under `Error`.

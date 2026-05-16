@@ -9,9 +9,9 @@ sidebar:
 
 | Operator | Example | Notes |
 |---|---|---|
-| `+` | `$a + $b` | Numeric addition, or PHP array union when both operands are arrays |
-| `-` | `$a - $b` | Subtraction |
-| `*` | `$a * $b` | Multiplication |
+| `+` | `$a + $b` | Numeric addition, or PHP array union when both operands are arrays. Integer overflow promotes to `double`. |
+| `-` | `$a - $b` | Subtraction. Integer overflow promotes to `double`. |
+| `*` | `$a * $b` | Multiplication. Integer overflow promotes to `double`. |
 | `/` | `$a / $b` | Division (always returns float) |
 | `%` | `$a % $b` | Modulo |
 | `**` | `$a ** $b` | Exponentiation (right-associative, returns float) |
@@ -21,8 +21,8 @@ sidebar:
 
 | Operator | Example | Notes |
 |---|---|---|
-| `==` | `$a == $b` | Loose equality (cross-type: coerces to int) |
-| `!=` | `$a != $b` | Inequality |
+| `==` | `$a == $b` | Loose equality using PHP-style scalar coercions for bool, null, numeric strings, and non-numeric strings |
+| `!=` | `$a != $b` | Loose inequality using the same scalar coercions as `==` |
 | `===` | `$a === $b` | Strict equality (type and value) |
 | `!==` | `$a !== $b` | Strict inequality |
 | `<` | `$a < $b` | Less than |
