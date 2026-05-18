@@ -181,13 +181,13 @@ pub(crate) fn emit_pcre_to_posix(emitter: &mut Emitter) {
     emitter.instruction("cbnz x14, __rt_p2p_prop_nalpha");                      // choose negated alpha for \P{L}
     emitter.adrp("x15", "_pcre_alpha");                                         // load page of alpha replacement string
     emitter.add_lo12("x15", "x15", "_pcre_alpha");                              // resolve alpha replacement address
-    emitter.instruction("mov x16, #11");                                        // replacement length = 11
-    emitter.instruction("b __rt_p2p_replace");                                  // copy the alpha class into the output
+    emitter.instruction("mov x16, #30");                                        // replacement length = 30
+    emitter.instruction("b __rt_p2p_replace");                                  // copy the broad letter shim into the output
     emitter.label("__rt_p2p_prop_nalpha");
     emitter.adrp("x15", "_pcre_nalpha");                                        // load page of negated alpha replacement string
     emitter.add_lo12("x15", "x15", "_pcre_nalpha");                             // resolve negated alpha replacement address
-    emitter.instruction("mov x16, #12");                                        // replacement length = 12
-    emitter.instruction("b __rt_p2p_replace");                                  // copy the negated alpha class into the output
+    emitter.instruction("mov x16, #29");                                        // replacement length = 29
+    emitter.instruction("b __rt_p2p_replace");                                  // copy the negated letter shim into the output
     emitter.label("__rt_p2p_prop_lower");
     emitter.instruction("cbnz x14, __rt_p2p_prop_nlower");                      // choose negated lower for \P{Ll}
     emitter.adrp("x15", "_pcre_lower");                                         // load page of lower replacement string
@@ -408,13 +408,13 @@ fn emit_pcre_to_posix_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_p2p_prop_alpha_linux_x86_64");                // other L* aliases use broad alpha
     emitter.label("__rt_p2p_prop_alpha_linux_x86_64");
     emitter.instruction("test r11d, r11d");                                     // choose positive or negated alpha class
-    emitter.instruction("jnz __rt_p2p_prop_nalpha_linux_x86_64");               // negated \P{L} uses [^[:alpha:]]
+    emitter.instruction("jnz __rt_p2p_prop_nalpha_linux_x86_64");               // negated \P{L} uses the broad non-letter shim
     abi::emit_symbol_address(emitter, "rsi", "_pcre_alpha");
-    emitter.instruction("mov ecx, 11");                                         // materialize the replacement length for the [[:alpha:]] POSIX character class
+    emitter.instruction("mov ecx, 30");                                         // materialize the replacement length for the broad letter shim
     emitter.instruction("jmp __rt_p2p_replace_linux_x86_64");                   // copy the translated POSIX replacement into the converted pattern buffer
     emitter.label("__rt_p2p_prop_nalpha_linux_x86_64");
     abi::emit_symbol_address(emitter, "rsi", "_pcre_nalpha");
-    emitter.instruction("mov ecx, 12");                                         // materialize the replacement length for the [^[:alpha:]] POSIX character class
+    emitter.instruction("mov ecx, 29");                                         // materialize the replacement length for the negated letter shim
     emitter.instruction("jmp __rt_p2p_replace_linux_x86_64");                   // copy the translated POSIX replacement into the converted pattern buffer
     emitter.label("__rt_p2p_prop_lower_linux_x86_64");
     emitter.instruction("test r11d, r11d");                                     // choose positive or negated lower class

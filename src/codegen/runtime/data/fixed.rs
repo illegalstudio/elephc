@@ -153,8 +153,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".globl _pcre_nspace\n_pcre_nspace:\n    .ascii \"[^[:space:]]\"\n");
     out.push_str(".globl _pcre_ndigit\n_pcre_ndigit:\n    .ascii \"[^[:digit:]]\"\n");
     out.push_str(".globl _pcre_nword\n_pcre_nword:\n    .ascii \"[^[:alnum:]_]\"\n");
-    out.push_str(".globl _pcre_alpha\n_pcre_alpha:\n    .ascii \"[[:alpha:]]\"\n");
-    out.push_str(".globl _pcre_nalpha\n_pcre_nalpha:\n    .ascii \"[^[:alpha:]]\"\n");
+    out.push_str(".globl _pcre_alpha\n_pcre_alpha:\n    .ascii \"[^[:digit:][:space:][:punct:]]\"\n");
+    out.push_str(".globl _pcre_nalpha\n_pcre_nalpha:\n    .ascii \"[[:digit:][:space:][:punct:]]\"\n");
     out.push_str(".globl _pcre_lower\n_pcre_lower:\n    .ascii \"[[:lower:]]\"\n");
     out.push_str(".globl _pcre_nlower\n_pcre_nlower:\n    .ascii \"[^[:lower:]]\"\n");
     out.push_str(".globl _pcre_upper\n_pcre_upper:\n    .ascii \"[[:upper:]]\"\n");

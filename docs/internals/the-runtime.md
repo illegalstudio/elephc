@@ -400,7 +400,7 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 
 **Files:** `system/preg_strip.rs`, `system/pcre_to_posix.rs`, `system/preg_match.rs`, `system/preg_match_all.rs`, `system/preg_replace.rs`, `system/preg_split.rs`
 
-All regex routines use **POSIX extended regular expressions** via libc's `regcomp()`, `regexec()`, and `regfree()`. Shared helpers (`__rt_preg_strip` and `__rt_pcre_to_posix`) strip PHP-style delimiters and translate common PCRE shorthands and Unicode property shims before passing the pattern to the POSIX API. Before compilation, regex helpers activate `LC_CTYPE` with `C.UTF-8` and fall back to `setlocale(LC_CTYPE, "")` so POSIX character classes can observe UTF-8 text.
+All regex routines use **POSIX extended regular expressions** via libc's `regcomp()`, `regexec()`, and `regfree()`. Shared helpers (`__rt_preg_strip` and `__rt_pcre_to_posix`) strip PHP-style delimiters and translate common PCRE shorthands and Unicode property shims before passing the pattern to the POSIX API. Before compilation, regex helpers activate `LC_CTYPE` with `C.UTF-8` and fall back to `setlocale(LC_CTYPE, "")` so POSIX character classes can observe UTF-8 text when the host provides that locale; the broad `\p{L}` shim avoids relying on locale-specific alpha tables.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|

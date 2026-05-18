@@ -909,6 +909,12 @@ fn test_preg_match_unicode_property_letter() {
 }
 
 #[test]
+fn test_preg_match_unicode_property_letter_rejects_digit_suffix() {
+    let out = compile_and_run(r#"<?php echo preg_match("/^\p{L}+$/u", "日本語123");"#);
+    assert_eq!(out, "0");
+}
+
+#[test]
 fn test_preg_match_unicode_property_case_aliases() {
     let out = compile_and_run(r#"<?php echo preg_match("/^\p{Lu}\p{Ll}+$/u", "Hello");"#);
     assert_eq!(out, "1");
