@@ -159,6 +159,13 @@ impl Checker {
                         // Assoc arrays accept string or int keys
                         Ok(*value.clone())
                     }
+                    PhpType::Object(class_name) => {
+                        if self.object_type_implements_interface(class_name, "ArrayAccess") {
+                            Ok(self.array_access_offset_get_type(class_name))
+                        } else {
+                            Err(CompileError::new(expr.span, "Cannot index non-array"))
+                        }
+                    }
                     PhpType::Union(members) => {
                         let mut result_members = Vec::new();
                         let mut saw_indexable_member = false;
@@ -187,6 +194,16 @@ impl Checker {
                                 PhpType::AssocArray { value, .. } => {
                                     saw_indexable_member = true;
                                     result_members.push(*value.clone());
+                                }
+                                PhpType::Object(class_name) => {
+                                    if self.object_type_implements_interface(
+                                        class_name,
+                                        "ArrayAccess",
+                                    ) {
+                                        saw_indexable_member = true;
+                                        result_members
+                                            .push(self.array_access_offset_get_type(class_name));
+                                    }
                                 }
                                 PhpType::Buffer(elem_ty) => {
                                     saw_indexable_member = true;
@@ -529,6 +546,20 @@ impl Checker {
                 unreachable!("MagicConstant must be lowered before type inference")
             }
         }
+    }
+
+    fn array_access_offset_get_type(&self, class_name: &str) -> PhpType {
+        self.classes
+            .get(class_name)
+            .and_then(|class_info| class_info.methods.get("offsetget"))
+            .map(|sig| sig.return_type.clone())
+            .or_else(|| {
+                self.interfaces
+                    .get("ArrayAccess")
+                    .and_then(|interface_info| interface_info.methods.get("offsetget"))
+                    .map(|sig| sig.return_type.clone())
+            })
+            .unwrap_or(PhpType::Mixed)
     }
 
 }

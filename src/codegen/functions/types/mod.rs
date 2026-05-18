@@ -113,6 +113,10 @@ pub(super) fn infer_local_type(
             PhpType::Str => PhpType::Str,
             PhpType::Array(t) => *t,
             PhpType::AssocArray { value, .. } => *value,
+            PhpType::Object(class_name) => ctx
+                .filter(|ctx| ctx.object_type_implements_interface(&class_name, "ArrayAccess"))
+                .map(|ctx| array_access_offset_get_type(ctx, &class_name))
+                .unwrap_or(PhpType::Int),
             PhpType::Union(members) => {
                 let mut result_members = Vec::new();
                 for member in members {
@@ -121,6 +125,14 @@ pub(super) fn infer_local_type(
                         PhpType::Str => result_members.push(PhpType::Str),
                         PhpType::Array(t) => result_members.push(*t),
                         PhpType::AssocArray { value, .. } => result_members.push(*value),
+                        PhpType::Object(class_name) => {
+                            if let Some(c) = ctx {
+                                if c.object_type_implements_interface(&class_name, "ArrayAccess") {
+                                    result_members
+                                        .push(array_access_offset_get_type(c, &class_name));
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -343,6 +355,20 @@ fn infer_pipe_result_type(
         ExprKind::Assignment { value, .. } => infer_pipe_result_type(value, sig, ctx),
         _ => PhpType::Int,
     }
+}
+
+fn array_access_offset_get_type(ctx: &Context, class_name: &str) -> PhpType {
+    ctx.classes
+        .get(class_name)
+        .and_then(|class_info| class_info.methods.get("offsetget"))
+        .map(|method_sig| method_sig.return_type.clone())
+        .or_else(|| {
+            ctx.interfaces
+                .get("ArrayAccess")
+                .and_then(|interface_info| interface_info.methods.get("offsetget"))
+                .map(|method_sig| method_sig.return_type.clone())
+        })
+        .unwrap_or(PhpType::Mixed)
 }
 
 fn indexed_literal_element_type(

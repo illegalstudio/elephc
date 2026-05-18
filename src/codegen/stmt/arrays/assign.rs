@@ -53,11 +53,22 @@ pub(super) fn emit_array_assign_stmt(
             return;
         }
     };
+    let var_ty = var.ty.clone();
+    let var_static_ty = var.static_ty.clone();
+    let offset = var.stack_offset;
+    let is_ref = ctx.ref_params.contains(array);
+    if crate::codegen::expr::arrays::type_is_array_access_object(&var_static_ty, ctx) {
+        let object = Expr::new(ExprKind::Variable(array.to_string()), index.span);
+        crate::codegen::expr::arrays::emit_array_access_offset_set(
+            &object, index, value, emitter, ctx, data,
+        );
+        return;
+    }
     let target = ArrayAssignTarget {
         array,
-        offset: var.stack_offset,
-        is_ref: ctx.ref_params.contains(array),
-        elem_ty: match &var.ty {
+        offset,
+        is_ref,
+        elem_ty: match &var_ty {
             PhpType::Array(t) => *t.clone(),
             PhpType::AssocArray { value: v, .. } => *v.clone(),
             PhpType::Buffer(t) => *t.clone(),
@@ -65,7 +76,7 @@ pub(super) fn emit_array_assign_stmt(
         },
     };
 
-    match &var.ty {
+    match &var_ty {
         PhpType::Buffer(_) => {
             buffer::emit_buffer_array_assign(&target, index, value, emitter, ctx, data);
         }

@@ -18,6 +18,8 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+use super::object;
+
 pub(crate) fn emit_array_access(
     array: &Expr,
     index: &Expr,
@@ -25,6 +27,10 @@ pub(crate) fn emit_array_access(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
+    if object::expr_is_array_access_object(array, ctx) {
+        return object::emit_offset_get(array, index, emitter, ctx, data);
+    }
+
     let arr_ty = emit_expr(array, emitter, ctx, data);
     emit_array_access_with_loaded_base(&arr_ty, index, emitter, ctx, data, false)
 }

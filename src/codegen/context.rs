@@ -399,6 +399,21 @@ impl Context {
         false
     }
 
+    pub(crate) fn object_type_implements_interface(
+        &self,
+        type_name: &str,
+        interface_name: &str,
+    ) -> bool {
+        if self.classes.contains_key(type_name) {
+            return self.class_implements_interface(type_name, interface_name);
+        }
+        if self.interfaces.contains_key(type_name) {
+            return type_name == interface_name
+                || self.interface_extends_interface(type_name, interface_name);
+        }
+        false
+    }
+
     fn class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
         self.classes.get(class_name).is_some_and(|class_info| {
             class_info.interfaces.iter().any(|implemented| {

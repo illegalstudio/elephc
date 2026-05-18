@@ -122,6 +122,11 @@ pub(super) fn check_static_property_array_assign(
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
+    if let PhpType::Object(class_name) = &target.prop_ty {
+        if checker.object_type_implements_interface(class_name, "ArrayAccess") {
+            return Ok(());
+        }
+    }
     if idx_ty != PhpType::Int {
         return Err(CompileError::new(span, "Array index must be integer"));
     }

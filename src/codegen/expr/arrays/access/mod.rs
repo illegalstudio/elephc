@@ -11,7 +11,14 @@
 mod buffer;
 mod indexed;
 mod match_expr;
+mod object;
 
 pub(crate) use buffer::emit_buffer_new;
 pub(crate) use indexed::{emit_array_access, emit_array_access_with_loaded_base};
 pub(crate) use match_expr::emit_match_expr;
+pub(crate) use object::{
+    emit_offset_exists as emit_array_access_offset_exists,
+    emit_offset_set as emit_array_access_offset_set,
+    emit_offset_unset as emit_array_access_offset_unset,
+    type_is_array_access_object,
+};

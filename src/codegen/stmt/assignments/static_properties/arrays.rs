@@ -150,6 +150,27 @@ pub(crate) fn emit_static_property_array_assign_stmt(
         }
         return;
     }
+    let array_access_receiver = Expr::new(
+        ExprKind::StaticPropertyAccess {
+            receiver: receiver.clone(),
+            property: property.to_string(),
+        },
+        index.span,
+    );
+    if crate::codegen::expr::arrays::type_is_array_access_object(
+        &crate::codegen::functions::infer_contextual_type(&array_access_receiver, ctx),
+        ctx,
+    ) {
+        crate::codegen::expr::arrays::emit_array_access_offset_set(
+            &array_access_receiver,
+            index,
+            value,
+            emitter,
+            ctx,
+            data,
+        );
+        return;
+    }
 
     let Some((_, declaring_class, prop_ty, _)) =
         resolve::resolve_static_property(receiver, property, ctx, emitter)

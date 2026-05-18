@@ -20,9 +20,21 @@ pub fn emit(
     args: &[Expr],
     emitter: &mut Emitter,
     ctx: &mut Context,
-    _data: &mut DataSection,
+    data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("unset()");
+    if let crate::parser::ast::ExprKind::ArrayAccess { array, index } = &args[0].kind {
+        if crate::codegen::expr::arrays::type_is_array_access_object(
+            &crate::codegen::functions::infer_contextual_type(array, ctx),
+            ctx,
+        ) {
+            crate::codegen::expr::arrays::emit_array_access_offset_unset(
+                array, index, emitter, ctx, data,
+            );
+            return Some(PhpType::Void);
+        }
+    }
+
     if let crate::parser::ast::ExprKind::Variable(name) = &args[0].kind {
         let var = ctx.variables.get(name).expect("undefined variable");
         let offset = var.stack_offset;

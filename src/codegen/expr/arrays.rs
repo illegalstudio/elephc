@@ -17,4 +17,8 @@ pub(super) use access::{
 };
 pub(super) use assoc::emit_assoc_array_literal;
 pub(super) use indexed::emit_array_literal;
+pub(crate) use access::{
+    emit_array_access_offset_exists, emit_array_access_offset_set,
+    emit_array_access_offset_unset, type_is_array_access_object,
+};
 pub(crate) use indexed::emit_array_value_type_stamp;

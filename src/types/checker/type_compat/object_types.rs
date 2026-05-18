@@ -65,6 +65,21 @@ impl Checker {
         })
     }
 
+    pub(crate) fn object_type_implements_interface(
+        &self,
+        type_name: &str,
+        interface_name: &str,
+    ) -> bool {
+        if self.classes.contains_key(type_name) {
+            return self.class_implements_interface(type_name, interface_name);
+        }
+        if self.interfaces.contains_key(type_name) {
+            return type_name == interface_name
+                || self.interface_extends_interface(type_name, interface_name);
+        }
+        false
+    }
+
     pub(crate) fn interface_extends_interface(
         &self,
         interface_name: &str,

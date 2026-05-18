@@ -105,6 +105,11 @@ pub(super) fn check_property_array_assign(
         PhpType::Object(class_name) => {
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
+            if let PhpType::Object(prop_class_name) = &prop_ty {
+                if checker.object_type_implements_interface(prop_class_name, "ArrayAccess") {
+                    return Ok(());
+                }
+            }
             if idx_ty != PhpType::Int {
                 return Err(CompileError::new(span, "Array index must be integer"));
             }

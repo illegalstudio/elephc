@@ -85,6 +85,13 @@ pub(super) fn check_array_assign(
             }
             _ => {}
         }
+    } else if let PhpType::Object(class_name) = &arr_ty {
+        if !checker.object_type_implements_interface(class_name, "ArrayAccess") {
+            return Err(CompileError::new(
+                span,
+                "Object array assignment requires ArrayAccess",
+            ));
+        }
     }
     Ok(())
 }
