@@ -292,6 +292,38 @@ fn test_isset() {
 }
 
 #[test]
+fn test_isset_string_offset_respects_bounds() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "abc";
+echo isset($s[0]) ? "y\n" : "n\n";
+echo isset($s[3]) ? "y\n" : "n\n";
+echo isset($s[-1]) ? "y\n" : "n\n";
+echo isset($s[-4]) ? "y\n" : "n\n";
+"#,
+    );
+    assert_eq!(out, "y\nn\ny\nn\n");
+}
+
+#[test]
+fn test_isset_array_offset_respects_bounds_for_non_scalar_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x"];
+echo isset($a[0]) ? "y\n" : "n\n";
+echo isset($a[1]) ? "y\n" : "n\n";
+"#,
+    );
+    assert_eq!(out, "y\nn\n");
+}
+
+#[test]
+fn test_isset_null_variable_is_false() {
+    let out = compile_and_run("<?php $x = null; $y = 0; echo isset($x); echo isset($y);");
+    assert_eq!(out, "01");
+}
+
+#[test]
 fn test_array_values() {
     let out = compile_and_run(
         r#"<?php $a = [10, 20, 30]; $v = array_values($a); foreach ($v as $x) { echo $x; }"#,
