@@ -138,7 +138,7 @@ impl Checker {
                 let idx_ty = self.infer_type(index, env)?;
                 match &arr_ty {
                     PhpType::Str => {
-                        if idx_ty != PhpType::Int {
+                        if !is_valid_string_offset_index(index, &idx_ty) {
                             return Err(CompileError::new(
                                 expr.span,
                                 "String index must be integer",
@@ -175,7 +175,7 @@ impl Checker {
                                 PhpType::Void => result_members.push(PhpType::Void),
                                 PhpType::Str => {
                                     saw_indexable_member = true;
-                                    if idx_ty != PhpType::Int {
+                                    if !is_valid_string_offset_index(index, &idx_ty) {
                                         first_index_error =
                                             first_index_error.or(Some("String index must be integer"));
                                         continue;
@@ -562,4 +562,13 @@ impl Checker {
             .unwrap_or(PhpType::Mixed)
     }
 
+}
+
+fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
+    *idx_ty == PhpType::Int
+        || matches!(
+            &index.kind,
+            ExprKind::StringLiteral(value)
+                if crate::types::parse_php_string_offset_literal(value).is_some()
+        )
 }

@@ -8,6 +8,7 @@
 //! Key details:
 //! - Must distinguish PHP null/unset semantics from false, zero, and empty string values.
 
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -25,13 +26,16 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("isset()");
     if let ExprKind::ArrayAccess { array, index } = &args[0].kind {
-        if crate::codegen::expr::arrays::type_is_array_access_object(
-            &crate::codegen::functions::infer_contextual_type(array, ctx),
-            ctx,
-        ) {
+        let array_ty = crate::codegen::functions::infer_contextual_type(array, ctx);
+        if crate::codegen::expr::arrays::type_is_array_access_object(&array_ty, ctx) {
             crate::codegen::expr::arrays::emit_array_access_offset_exists(
                 array, index, emitter, ctx, data,
             );
+            return Some(PhpType::Int);
+        }
+        if array_ty.codegen_repr() == PhpType::Str {
+            emit_expr(&args[0], emitter, ctx, data);
+            emit_string_offset_isset_result(emitter);
             return Some(PhpType::Int);
         }
     }
@@ -48,4 +52,19 @@ pub fn emit(
     }
 
     Some(PhpType::Int)
+}
+
+fn emit_string_offset_isset_result(emitter: &mut Emitter) {
+    let (_, len_reg) = abi::string_result_regs(emitter);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {}, #0", len_reg));               // check whether string offset access produced a character
+            emitter.instruction("cset x0, ne");                                 // return true only when the string offset is in bounds
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {}, 0", len_reg));                // check whether string offset access produced a character
+            emitter.instruction("setne al");                                    // return true only when the string offset is in bounds
+            emitter.instruction("movzx eax, al");                               // widen the boolean byte into the canonical integer result
+        }
+    }
 }

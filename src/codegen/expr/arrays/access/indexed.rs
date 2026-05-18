@@ -19,6 +19,7 @@ use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
 use super::object;
+use super::string_offset::emit_string_offset_index;
 
 pub(crate) fn emit_array_access(
     array: &Expr,
@@ -122,7 +123,7 @@ pub(crate) fn emit_array_access_with_loaded_base(
     if *arr_ty == PhpType::Str {
         let (str_ptr_reg, str_len_reg) = abi::string_result_regs(emitter);
         abi::emit_push_reg_pair(emitter, str_ptr_reg, str_len_reg);             // preserve the indexed source string while evaluating the scalar offset expression
-        emit_expr(index, emitter, ctx, data);
+        emit_string_offset_index(index, emitter, ctx, data);
         emitter.comment("string indexing");
 
         let non_negative = ctx.next_label("str_idx_pos");
