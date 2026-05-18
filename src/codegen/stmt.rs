@@ -11,7 +11,7 @@
 mod assignments;
 mod arrays;
 mod control_flow;
-mod helpers;
+pub(crate) mod helpers;
 mod includes;
 mod io;
 mod null_coalesce_assign;

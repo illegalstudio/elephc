@@ -404,11 +404,21 @@ impl Checker {
                 is_arrow: _,
                 is_static,
                 captures,
+                capture_refs,
             } => {
                 if *is_static {
                     body_must_not_use_this(body, expr.span)?;
                 }
-                self.infer_closure_type(params, variadic, return_type, body, captures, expr, env)
+                self.infer_closure_type(
+                    params,
+                    variadic,
+                    return_type,
+                    body,
+                    captures,
+                    capture_refs,
+                    expr,
+                    env,
+                )
             }
             ExprKind::Spread(inner) => {
                 let ty = self.infer_type(inner, env)?;

@@ -296,6 +296,7 @@ impl Checker {
         return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
+        capture_refs: &[String],
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
@@ -306,11 +307,12 @@ impl Checker {
             expr.span,
             env,
         )?;
-        let closure_ref_params: Vec<String> = params
+        let mut closure_ref_params: Vec<String> = params
             .iter()
             .filter(|(_, _, _, is_ref)| *is_ref)
             .map(|(name, _, _, _)| name.clone())
             .collect();
+        closure_ref_params.extend(capture_refs.iter().cloned());
         self.with_local_storage_context(closure_ref_params, |checker| {
             for stmt in body {
                 checker.check_stmt(stmt, &mut closure_sig.env)?;

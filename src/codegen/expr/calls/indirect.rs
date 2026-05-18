@@ -108,22 +108,39 @@ fn callee_sig_for_expr(
 }
 
 fn push_captures_as_hidden_args(
-    captures: &[(String, PhpType)],
+    captures: &[(String, PhpType, bool)],
     emitter: &mut Emitter,
     ctx: &Context,
     arg_types: &mut Vec<PhpType>,
 ) {
-    for (capture_name, capture_ty) in captures {
+    for (capture_name, capture_ty, by_ref) in captures {
         emitter.comment(&format!("push callable capture ${}", capture_name));
-        let Some(capture_info) = ctx.variables.get(capture_name) else {
-            emitter.comment(&format!(
-                "WARNING: captured callable variable ${} not found",
-                capture_name
-            ));
-            continue;
-        };
-        crate::codegen::abi::emit_load(emitter, capture_ty, capture_info.stack_offset);
-        args::push_arg_value(emitter, capture_ty);
-        arg_types.push(capture_ty.clone());
+        if *by_ref {
+            if !args::emit_ref_arg_variable_address(
+                capture_name,
+                "callable capture ref",
+                emitter,
+                ctx,
+            ) {
+                emitter.comment(&format!(
+                    "WARNING: captured callable variable ${} not found",
+                    capture_name
+                ));
+                continue;
+            }
+            args::push_arg_value(emitter, &PhpType::Int);
+            arg_types.push(PhpType::Int);
+        } else {
+            let Some(capture_info) = ctx.variables.get(capture_name) else {
+                emitter.comment(&format!(
+                    "WARNING: captured callable variable ${} not found",
+                    capture_name
+                ));
+                continue;
+            };
+            crate::codegen::abi::emit_load(emitter, capture_ty, capture_info.stack_offset);
+            args::push_arg_value(emitter, capture_ty);
+            arg_types.push(capture_ty.clone());
+        }
     }
 }

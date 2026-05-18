@@ -12,11 +12,14 @@
 
 use crate::codegen::context::Context;
 use crate::parser::ast::{Expr, ExprKind};
-use crate::types::{FunctionSig, PhpType};
+use crate::types::FunctionSig;
 
 use super::builtins::callable_lookup::{lookup_function, FunctionLookup};
 
-pub(crate) fn callable_captures(callback: &Expr, ctx: &mut Context) -> Vec<(String, PhpType)> {
+pub(crate) fn callable_captures(
+    callback: &Expr,
+    ctx: &mut Context,
+) -> Vec<(String, crate::types::PhpType, bool)> {
     match &callback.kind {
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => ctx
             .deferred_closures

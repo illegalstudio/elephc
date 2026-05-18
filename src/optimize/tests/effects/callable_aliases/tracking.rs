@@ -40,6 +40,7 @@ fn test_program_function_effects_track_closure_alias_locals() {
                                 is_arrow: false,
                                 is_static: false,
                                 captures: Vec::new(),
+                                capture_refs: Vec::new(),
                             },
                             Span::dummy(),
                         ),
