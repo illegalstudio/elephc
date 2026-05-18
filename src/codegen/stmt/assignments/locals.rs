@@ -38,13 +38,19 @@ pub(crate) fn emit_assign_stmt(
 
     emitter.blank();
     emitter.comment(&format!("${} = ...", name));
-    let static_ty = ctx
-        .variables
-        .get(name)
-        .map(|var| var.static_ty.clone())
-        .filter(|ty| matches!(ty, PhpType::Union(_)))
-        .unwrap_or_else(|| functions::infer_contextual_type(value, ctx));
-    let mut ty = emit_expr(value, emitter, ctx, data);
+    let target_static_ty = ctx.variables.get(name).map(|var| var.static_ty.clone());
+    let assoc_array_target = assoc_array_literal_target_type(value, target_static_ty.as_ref());
+    let static_ty = assoc_array_target.clone().unwrap_or_else(|| {
+        target_static_ty
+            .clone()
+            .filter(|ty| matches!(ty, PhpType::Union(_)))
+            .unwrap_or_else(|| functions::infer_contextual_type(value, ctx))
+    });
+    let mut ty = if let Some(target_ty) = assoc_array_target {
+        emit_indexed_literal_as_assoc_target(value, &target_ty, emitter, ctx, data)
+    } else {
+        emit_expr(value, emitter, ctx, data)
+    };
     let dest_needs_mixed_box = ctx.variables.get(name).is_some_and(|var| {
         !ctx.ref_params.contains(name)
             && matches!(var.ty, PhpType::Mixed)
@@ -280,6 +286,54 @@ pub(crate) fn emit_assign_stmt(
             );
         }
     }
+}
+
+fn assoc_array_literal_target_type(value: &Expr, target_ty: Option<&PhpType>) -> Option<PhpType> {
+    if !matches!(value.kind, ExprKind::ArrayLiteral(_)) {
+        return None;
+    }
+    match target_ty {
+        Some(PhpType::AssocArray { .. }) => target_ty.cloned(),
+        _ => None,
+    }
+}
+
+fn emit_indexed_literal_as_assoc_target(
+    value: &Expr,
+    target_ty: &PhpType,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let ExprKind::ArrayLiteral(elems) = &value.kind else {
+        unreachable!("assoc target literal lowering only accepts indexed array literals");
+    };
+    let PhpType::AssocArray {
+        key: target_key_ty,
+        value: target_value_ty,
+    } = target_ty
+    else {
+        unreachable!("assoc target literal lowering requires an associative array target");
+    };
+    if elems.is_empty() {
+        return crate::codegen::expr::arrays::emit_empty_assoc_array_literal(
+            *target_key_ty.clone(),
+            *target_value_ty.clone(),
+            emitter,
+        );
+    }
+
+    let pairs: Vec<(Expr, Expr)> = elems
+        .iter()
+        .enumerate()
+        .map(|(idx, elem)| {
+            (
+                Expr::new(ExprKind::IntLiteral(idx as i64), elem.span),
+                elem.clone(),
+            )
+        })
+        .collect();
+    crate::codegen::expr::arrays::emit_assoc_array_literal(&pairs, emitter, ctx, data)
 }
 
 /// Returns the callable target to store in `ctx.first_class_callable_targets` so

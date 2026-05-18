@@ -8,9 +8,11 @@
 //! Key details:
 //! - Any lowering path that introduces storage must be represented here before stack offsets are assigned.
 
-use crate::codegen::context::Context;
+use crate::codegen::context::{Context, HeapOwnership};
 use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, StmtKind};
-use crate::types::{FunctionSig, PhpType};
+use crate::types::{
+    merge_array_key_types, normalized_array_key_type, FunctionSig, PhpType,
+};
 use super::types::{codegen_declared_type, codegen_static_type, infer_local_type};
 
 pub fn collect_local_vars(
@@ -199,8 +201,16 @@ pub fn collect_local_vars(
             | StmtKind::Include { path: expr, .. } => {
                 collect_assignment_expr_vars(expr, ctx, sig);
             }
-            StmtKind::ArrayAssign { index, value, .. }
-            | StmtKind::PropertyArrayAssign { index, value, .. }
+            StmtKind::ArrayAssign {
+                array,
+                index,
+                value,
+            } => {
+                collect_assignment_expr_vars(index, ctx, sig);
+                collect_assignment_expr_vars(value, ctx, sig);
+                refine_local_array_type_for_keyed_write(array, index, value, ctx, sig);
+            }
+            StmtKind::PropertyArrayAssign { index, value, .. }
             | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
                 collect_assignment_expr_vars(index, ctx, sig);
                 collect_assignment_expr_vars(value, ctx, sig);
@@ -214,6 +224,51 @@ pub fn collect_local_vars(
             _ => {}
         }
     }
+}
+
+fn refine_local_array_type_for_keyed_write(
+    array: &str,
+    index: &Expr,
+    value: &Expr,
+    ctx: &mut Context,
+    sig: &FunctionSig,
+) {
+    let Some(existing_ty) = ctx.variables.get(array).map(|var| var.static_ty.clone()) else {
+        return;
+    };
+    let PhpType::Array(existing_elem_ty) = existing_ty else {
+        return;
+    };
+
+    let index_ty = infer_local_type(index, sig, Some(ctx));
+    let normalized_key_ty = normalized_array_key_type(index, index_ty);
+    if matches!(normalized_key_ty, PhpType::Int) {
+        return;
+    }
+
+    let value_ty = infer_local_type(value, sig, Some(ctx));
+    let assoc_key_ty = if matches!(existing_elem_ty.as_ref(), PhpType::Never) {
+        normalized_key_ty
+    } else {
+        merge_array_key_types(PhpType::Int, normalized_key_ty)
+    };
+    let assoc_value_ty = if matches!(existing_elem_ty.as_ref(), PhpType::Never) {
+        value_ty
+    } else if existing_elem_ty.as_ref() == &value_ty {
+        *existing_elem_ty
+    } else {
+        PhpType::Mixed
+    };
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(assoc_key_ty),
+        value: Box::new(assoc_value_ty),
+    };
+    ctx.update_var_type_static_and_ownership(
+        array,
+        assoc_ty.clone(),
+        assoc_ty.clone(),
+        HeapOwnership::for_type(&assoc_ty),
+    );
 }
 
 fn collect_assignment_expr_vars(expr: &Expr, ctx: &mut Context, sig: &FunctionSig) {
