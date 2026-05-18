@@ -13,8 +13,15 @@ Support escape sequences:
 <?php
 echo "Hello\n";      // newline
 echo "Tab\there";    // tab
+echo "Return\r";     // carriage return
+echo "Vert\v";       // vertical tab
+echo "Esc\e";        // escape byte
+echo "Form\f";       // form feed
 echo "Quote: \"";    // escaped quote
 echo "Backslash: \\"; // backslash
+echo "\x41";         // hex byte: A
+echo "\101";         // octal byte: A
+echo "\u{1F600}";    // Unicode codepoint: 😀
 ```
 
 ## Single-quoted strings

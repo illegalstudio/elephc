@@ -83,7 +83,8 @@ pub(super) fn classify_mixed_expr(
         return Some(MixedSource::Null);
     }
     if let ExprKind::StringLiteral(s) = expr {
-        let (label, len) = data.add_string(s.as_bytes());
+        let bytes = crate::string_bytes::literal_bytes(s);
+        let (label, len) = data.add_string(&bytes);
         return Some(MixedSource::Str { label, len });
     }
     if let ExprKind::ArrayLiteral(items) = expr {

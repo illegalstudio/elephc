@@ -20,6 +20,14 @@ fn test_error_unterminated_string() {
 }
 
 #[test]
+fn test_error_invalid_unicode_string_escape() {
+    expect_error(
+        r#"<?php echo "\u{110000}";"#,
+        "Invalid UTF-8 codepoint escape sequence",
+    );
+}
+
+#[test]
 fn test_error_empty_variable() {
     expect_error("<?php $;", "Expected variable name");
 }

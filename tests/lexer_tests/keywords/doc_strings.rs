@@ -30,6 +30,12 @@ fn test_heredoc_interpolation_token() {
 }
 
 #[test]
+fn test_heredoc_php_escape_sequences() {
+    let t = tokens("<?php <<<EOT\nA\\r\\x42\\102\\u{1F600}\nEOT;");
+    assert!(t.contains(&Token::StringLiteral("A\rBB😀".into())));
+}
+
+#[test]
 fn test_nowdoc_no_interpolation_token() {
     let t = tokens("<?php <<<'EOT'\nHello $name\nEOT;");
     // Nowdoc: $name stays as literal text, no Variable token
