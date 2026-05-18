@@ -177,6 +177,7 @@ impl Checker {
                 return_type,
                 body,
                 captures,
+                capture_refs: _,
                 ..
             } => {
                 let closure_sig = self.prepare_closure_signature_context(

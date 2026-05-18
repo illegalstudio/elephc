@@ -142,6 +142,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             is_arrow,
             is_static,
             captures,
+            capture_refs,
         } => ExprKind::Closure {
             params: propagate_params(params),
             variadic,
@@ -150,6 +151,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             is_arrow,
             is_static,
             captures,
+            capture_refs,
         },
         ExprKind::NamedArg { name, value } => ExprKind::NamedArg {
             name,

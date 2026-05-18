@@ -416,6 +416,7 @@ impl Checker {
                 params,
                 variadic,
                 captures,
+                capture_refs,
                 ..
             } => {
                 let visible_param_count =
@@ -426,6 +427,7 @@ impl Checker {
                         (
                             name.clone(),
                             env.get(name).cloned().unwrap_or(PhpType::Mixed),
+                            capture_refs.iter().any(|ref_capture| ref_capture == name),
                         )
                     })
                     .collect::<Vec<_>>();

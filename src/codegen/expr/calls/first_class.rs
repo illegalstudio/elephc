@@ -184,8 +184,8 @@ fn normalized_target_and_captures(
     data: &mut DataSection,
 ) -> Option<(
     CallableTarget,
-    Vec<(String, PhpType)>,
-    Vec<(String, PhpType)>,
+    Vec<(String, PhpType, bool)>,
+    Vec<(String, PhpType, bool)>,
 )> {
     match target {
         CallableTarget::StaticMethod { receiver, method } => match receiver {
@@ -202,8 +202,8 @@ fn normalized_target_and_captures(
                         receiver: StaticReceiver::Static,
                         method: method.clone(),
                     },
-                    vec![capture],
-                    vec![(hidden_name, hidden_ty)],
+                    vec![(capture.0, capture.1, false)],
+                    vec![(hidden_name, hidden_ty, false)],
                 ))
             }
             _ => {
@@ -230,8 +230,8 @@ fn normalized_target_and_captures(
                     )),
                     method: method.clone(),
                 },
-                vec![capture],
-                vec![(hidden_name, hidden_ty)],
+                vec![(capture.0, capture.1, false)],
+                vec![(hidden_name, hidden_ty, false)],
             ))
         }
         other => Some((other.clone(), Vec::new(), Vec::new())),

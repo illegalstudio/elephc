@@ -147,6 +147,7 @@ pub(super) fn resolve_expr(
             is_arrow,
             is_static,
             captures,
+            capture_refs,
         } => ExprKind::Closure {
             params: resolve_params(params, current_namespace, imports, symbols),
             variadic: variadic.clone(),
@@ -158,6 +159,7 @@ pub(super) fn resolve_expr(
             is_arrow: *is_arrow,
             is_static: *is_static,
             captures: captures.clone(),
+            capture_refs: capture_refs.clone(),
         },
         ExprKind::Spread(inner) => {
             ExprKind::Spread(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))

@@ -9,7 +9,7 @@
 //! - Local writes must release replaced heap values only when the frame owns the previous value.
 
 use super::super::super::abi;
-use super::super::super::context::Context;
+use super::super::super::context::{Context, HeapOwnership};
 use super::super::super::data_section::DataSection;
 use super::super::super::emit::Emitter;
 use super::super::super::expr::{coerce_result_to_type, emit_expr};
@@ -38,6 +38,7 @@ pub(crate) fn emit_assign_stmt(
 
     emitter.blank();
     emitter.comment(&format!("${} = ...", name));
+    let saved_self_ref_var = prepare_self_ref_closure_capture(name, value, ctx);
     let target_static_ty = ctx.variables.get(name).map(|var| var.static_ty.clone());
     let assoc_array_target = assoc_array_literal_target_type(value, target_static_ty.as_ref());
     let static_ty = assoc_array_target.clone().unwrap_or_else(|| {
@@ -51,6 +52,7 @@ pub(crate) fn emit_assign_stmt(
     } else {
         emit_expr(value, emitter, ctx, data)
     };
+    restore_self_ref_closure_capture(name, saved_self_ref_var, ctx);
     let dest_needs_mixed_box = ctx.variables.get(name).is_some_and(|var| {
         !ctx.ref_params.contains(name)
             && matches!(var.ty, PhpType::Mixed)
@@ -286,6 +288,55 @@ pub(crate) fn emit_assign_stmt(
             );
         }
     }
+}
+
+fn prepare_self_ref_closure_capture(
+    name: &str,
+    value: &Expr,
+    ctx: &mut Context,
+) -> Option<(PhpType, PhpType, HeapOwnership, bool)> {
+    if !closure_captures_name_by_ref(value, name) {
+        return None;
+    }
+    let var = ctx.variables.get_mut(name)?;
+    let saved = (
+        var.ty.clone(),
+        var.static_ty.clone(),
+        var.ownership,
+        var.epilogue_cleanup_safe,
+    );
+    var.ty = PhpType::Callable;
+    var.static_ty = PhpType::Callable;
+    var.ownership = HeapOwnership::NonHeap;
+    Some(saved)
+}
+
+fn restore_self_ref_closure_capture(
+    name: &str,
+    saved: Option<(PhpType, PhpType, HeapOwnership, bool)>,
+    ctx: &mut Context,
+) {
+    let Some((ty, static_ty, ownership, epilogue_cleanup_safe)) = saved else {
+        return;
+    };
+    if let Some(var) = ctx.variables.get_mut(name) {
+        var.ty = ty;
+        var.static_ty = static_ty;
+        var.ownership = ownership;
+        var.epilogue_cleanup_safe = epilogue_cleanup_safe;
+    }
+}
+
+fn closure_captures_name_by_ref(value: &Expr, name: &str) -> bool {
+    matches!(
+        &value.kind,
+        ExprKind::Closure {
+            captures,
+            capture_refs,
+            ..
+        } if captures.iter().any(|capture| capture == name)
+            && capture_refs.iter().any(|capture| capture == name)
+    )
 }
 
 fn assoc_array_literal_target_type(value: &Expr, target_ty: Option<&PhpType>) -> Option<PhpType> {

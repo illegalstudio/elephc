@@ -139,7 +139,7 @@ pub(crate) fn push_expr_arg(
     if release_mixed_after_coerce {
         release_preserved_mixed_after_arg_coercion(emitter, &pushed_ty);
     }
-    if !boxed_to_mixed {
+    if !boxed_to_mixed && source_ty.codegen_repr() == pushed_ty {
         super::super::super::retain_borrowed_heap_arg(emitter, arg, &source_ty);
     }
     push_arg_value(emitter, &pushed_ty);

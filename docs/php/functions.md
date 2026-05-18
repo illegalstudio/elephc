@@ -94,6 +94,18 @@ $multiply = function(int $x) use ($factor): int {
 echo $multiply(5); // 15
 ```
 
+Use `&` in the capture list when the closure must share and mutate the outer
+variable, including recursive anonymous functions:
+
+```php
+<?php
+$factorial = null;
+$factorial = function($n) use (&$factorial) {
+    return $n <= 1 ? 1 : $n * $factorial($n - 1);
+};
+echo $factorial(5); // 120
+```
+
 Captured closures can also be used as callback values:
 
 ```php

@@ -84,7 +84,7 @@ pub(crate) fn validate_callback_signature(
 pub(crate) fn validate_capture_slots(
     sig: &FunctionSig,
     visible_param_count: usize,
-    capture_types: &[(String, PhpType)],
+    capture_types: &[(String, PhpType, bool)],
     span: Span,
 ) -> Result<(), CompileError> {
     let mut int_slot = sig
@@ -100,8 +100,13 @@ pub(crate) fn validate_capture_slots(
         .filter(|(_, ty)| matches!(ty.codegen_repr(), PhpType::Float))
         .count();
 
-    for (name, ty) in capture_types {
-        match ty.codegen_repr() {
+    for (name, ty, by_ref) in capture_types {
+        let slot_ty = if *by_ref {
+            PhpType::Int
+        } else {
+            ty.codegen_repr()
+        };
+        match slot_ty {
             PhpType::Float => {
                 if float_slot >= FIBER_FLOAT_SLOT_LIMIT {
                     return Err(CompileError::new(

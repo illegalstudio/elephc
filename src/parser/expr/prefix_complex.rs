@@ -137,6 +137,7 @@ pub(super) fn parse_closure(
     *pos += 2;
     let (params, variadic) = parse_closure_params(tokens, pos, span)?;
     let mut captures = Vec::new();
+    let mut capture_refs = Vec::new();
     if *pos < tokens.len() && tokens[*pos].0 == Token::Use {
         *pos += 1;
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
@@ -153,8 +154,17 @@ pub(super) fn parse_closure(
                 }
                 *pos += 1;
             }
+            let is_ref = if tokens.get(*pos).map(|(token, _)| token) == Some(&Token::Ampersand) {
+                *pos += 1;
+                true
+            } else {
+                false
+            };
             match tokens.get(*pos).map(|(token, _)| token) {
                 Some(Token::Variable(name)) => {
+                    if is_ref {
+                        capture_refs.push(name.clone());
+                    }
                     captures.push(name.clone());
                     *pos += 1;
                 }
@@ -185,6 +195,7 @@ pub(super) fn parse_closure(
             is_arrow: false,
             is_static,
             captures,
+            capture_refs,
         },
         span,
     ))
@@ -221,6 +232,7 @@ pub(super) fn parse_arrow_closure(
             is_arrow: true,
             is_static,
             captures: vec![],
+            capture_refs: vec![],
         },
         span,
     ))
