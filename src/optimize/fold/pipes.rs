@@ -13,6 +13,7 @@
 //!   semantics. The whitelist is intentionally narrow.
 
 use crate::parser::ast::{CallableTarget, Expr, ExprKind};
+use crate::string_bytes;
 
 pub(super) fn try_fold_pure_pipe(value: &Expr, callable: &Expr) -> Option<ExprKind> {
     let target = match &callable.kind {
@@ -25,7 +26,9 @@ pub(super) fn try_fold_pure_pipe(value: &Expr, callable: &Expr) -> Option<ExprKi
     };
     match (name, &value.kind) {
         // -- length / arithmetic conversions ----------------------------------
-        ("strlen", ExprKind::StringLiteral(s)) => Some(ExprKind::IntLiteral(s.len() as i64)),
+        ("strlen", ExprKind::StringLiteral(s)) => {
+            Some(ExprKind::IntLiteral(string_bytes::literal_byte_len(s) as i64))
+        }
         ("intval", ExprKind::IntLiteral(n)) => Some(ExprKind::IntLiteral(*n)),
         ("intval", ExprKind::FloatLiteral(f)) if f.is_finite() => {
             Some(ExprKind::IntLiteral(*f as i64))

@@ -212,6 +212,14 @@ fn test_error_preg_replace_wrong_args() {
 }
 
 #[test]
+fn test_error_preg_replace_callback_wrong_args() {
+    expect_error(
+        r#"<?php preg_replace_callback("/a/", function($matches) { return $matches[0]; });"#,
+        "preg_replace_callback() takes exactly 3 arguments",
+    );
+}
+
+#[test]
 fn test_error_preg_split_no_args() {
     expect_error(
         "<?php preg_split();",

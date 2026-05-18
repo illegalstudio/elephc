@@ -175,8 +175,8 @@ fn emit_node(emitter: &mut Emitter, node: &ResumeNode, ctx: &mut ResumeCtx) {
         ResumeNode::Switch { subject, cases, default } => {
             emit_switch(emitter, subject, cases, default, ctx);
         }
-        ResumeNode::YieldFromGenerator { source, state_idx } => {
-            emit_yield_from_generator(emitter, source, *state_idx, ctx);
+        ResumeNode::YieldFromGenerator { source, state_idx, result_local } => {
+            emit_yield_from_generator(emitter, source, *state_idx, *result_local, ctx);
         }
         ResumeNode::Return(value) => {
             // Box the return value (if any) into the frame's return_value

@@ -52,11 +52,31 @@ pub(super) fn parse_include(
     ))
 }
 
-pub(super) fn parse_echo(tokens: &[(Token, Span)], pos: &mut usize, span: Span) -> Result<Stmt, CompileError> {
+pub(super) fn parse_echo(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
     *pos += 1;
-    let expr = parse_expr(tokens, pos)?;
+    let mut echoed = Vec::new();
+
+    loop {
+        let expr = parse_expr(tokens, pos)?;
+        echoed.push(Stmt::new(StmtKind::Echo(expr), span));
+        if !matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Comma)) {
+            break;
+        }
+        *pos += 1;
+    }
+
     expect_semicolon(tokens, pos)?;
-    Ok(Stmt::new(StmtKind::Echo(expr), span))
+    // Preserve the single-expression AST shape and reuse the existing
+    // statement sequence wrapper for PHP's multi-argument echo syntax.
+    if echoed.len() == 1 {
+        Ok(echoed.remove(0))
+    } else {
+        Ok(Stmt::new(StmtKind::Synthetic(echoed), span))
+    }
 }
 
 pub(super) fn parse_expr_stmt(
@@ -67,6 +87,32 @@ pub(super) fn parse_expr_stmt(
     let expr = parse_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
+}
+
+pub(super) fn parse_error_suppressed_stmt(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    match tokens.get(*pos + 1).map(|(token, _)| token) {
+        Some(Token::Include) => {
+            *pos += 1;
+            parse_include(tokens, pos, span, false, false)
+        }
+        Some(Token::IncludeOnce) => {
+            *pos += 1;
+            parse_include(tokens, pos, span, true, false)
+        }
+        Some(Token::Require) => {
+            *pos += 1;
+            parse_include(tokens, pos, span, false, true)
+        }
+        Some(Token::RequireOnce) => {
+            *pos += 1;
+            parse_include(tokens, pos, span, true, true)
+        }
+        _ => parse_expr_stmt(tokens, pos, span),
+    }
 }
 
 pub(super) fn parse_return(

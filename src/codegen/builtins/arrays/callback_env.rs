@@ -32,7 +32,7 @@ pub(super) fn materialize_callback_address(
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
-) -> Vec<(String, PhpType)> {
+) -> Vec<(String, PhpType, bool)> {
     match &callback.kind {
         ExprKind::StringLiteral(name) => {
             let resolved_name = match lookup_function(ctx, name) {
@@ -59,30 +59,47 @@ pub(super) fn materialize_callback_address(
 }
 
 pub(super) fn push_captures_as_hidden_args(
-    captures: &[(String, PhpType)],
+    captures: &[(String, PhpType, bool)],
     emitter: &mut Emitter,
     ctx: &Context,
     arg_types: &mut Vec<PhpType>,
 ) {
-    for (capture_name, capture_ty) in captures {
+    for (capture_name, capture_ty, by_ref) in captures {
         emitter.comment(&format!("push callback capture ${}", capture_name));
-        let Some(capture_info) = ctx.variables.get(capture_name) else {
-            emitter.comment(&format!(
-                "WARNING: captured callback variable ${} not found",
-                capture_name
-            ));
-            continue;
-        };
-        abi::emit_load(emitter, capture_ty, capture_info.stack_offset);
-        crate::codegen::expr::calls::args::push_arg_value(emitter, capture_ty);
-        arg_types.push(capture_ty.clone());
+        if *by_ref {
+            if !crate::codegen::expr::calls::args::emit_ref_arg_variable_address(
+                capture_name,
+                "callback capture ref",
+                emitter,
+                ctx,
+            ) {
+                emitter.comment(&format!(
+                    "WARNING: captured callback variable ${} not found",
+                    capture_name
+                ));
+                continue;
+            }
+            crate::codegen::expr::calls::args::push_arg_value(emitter, &PhpType::Int);
+            arg_types.push(PhpType::Int);
+        } else {
+            let Some(capture_info) = ctx.variables.get(capture_name) else {
+                emitter.comment(&format!(
+                    "WARNING: captured callback variable ${} not found",
+                    capture_name
+                ));
+                continue;
+            };
+            abi::emit_load(emitter, capture_ty, capture_info.stack_offset);
+            crate::codegen::expr::calls::args::push_arg_value(emitter, capture_ty);
+            arg_types.push(capture_ty.clone());
+        }
     }
 }
 
 pub(super) fn emit_captured_callback_env(
     callback_reg: &str,
     array_reg: &str,
-    captures: &[(String, PhpType)],
+    captures: &[(String, PhpType, bool)],
     visible_arg_types: Vec<PhpType>,
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -91,7 +108,10 @@ pub(super) fn emit_captured_callback_env(
     ctx.deferred_callback_wrappers.push(DeferredCallbackWrapper {
         label: wrapper_label.clone(),
         visible_arg_types,
-        capture_types: captures.iter().map(|(_, ty)| ty.clone()).collect(),
+        capture_types: captures
+            .iter()
+            .map(|(_, ty, by_ref)| if *by_ref { PhpType::Int } else { ty.clone() })
+            .collect(),
     });
 
     let env_slots = captures.len() + 2;
@@ -103,17 +123,33 @@ pub(super) fn emit_captured_callback_env(
     store_reg_to_env_slot(emitter, callback_reg, 0);
     store_reg_to_env_slot(emitter, array_reg, array_slot_offset);
 
-    for (idx, (capture_name, capture_ty)) in captures.iter().enumerate() {
+    for (idx, (capture_name, capture_ty, by_ref)) in captures.iter().enumerate() {
         emitter.comment(&format!("store callback capture ${}", capture_name));
-        let Some(capture_info) = ctx.variables.get(capture_name) else {
-            emitter.comment(&format!(
-                "WARNING: captured callback variable ${} not found",
-                capture_name
-            ));
-            continue;
-        };
-        abi::emit_load(emitter, capture_ty, capture_info.stack_offset);
-        store_current_result_to_env_slot(emitter, capture_ty, (idx + 1) * 16);
+        if *by_ref {
+            if !crate::codegen::expr::calls::args::emit_ref_arg_variable_address(
+                capture_name,
+                "callback capture ref",
+                emitter,
+                ctx,
+            ) {
+                emitter.comment(&format!(
+                    "WARNING: captured callback variable ${} not found",
+                    capture_name
+                ));
+                continue;
+            }
+            store_current_result_to_env_slot(emitter, &PhpType::Int, (idx + 1) * 16);
+        } else {
+            let Some(capture_info) = ctx.variables.get(capture_name) else {
+                emitter.comment(&format!(
+                    "WARNING: captured callback variable ${} not found",
+                    capture_name
+                ));
+                continue;
+            };
+            abi::emit_load(emitter, capture_ty, capture_info.stack_offset);
+            store_current_result_to_env_slot(emitter, capture_ty, (idx + 1) * 16);
+        }
     }
 
     CallbackEnv {

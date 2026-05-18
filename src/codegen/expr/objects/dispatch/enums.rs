@@ -151,7 +151,8 @@ fn emit_enum_from_like(
                 };
                 let match_label = ctx.next_label("enum_from_case");
                 let next_label = ctx.next_label("enum_from_next");
-                let (label, len) = data.add_string(value.as_bytes());
+                let bytes = crate::string_bytes::literal_bytes(value);
+                let (label, len) = data.add_string(&bytes);
                 let (input_ptr_reg, input_len_reg, candidate_ptr_reg, candidate_len_reg) =
                     match emitter.target.arch {
                         crate::codegen::platform::Arch::AArch64 => ("x1", "x2", "x3", "x4"),

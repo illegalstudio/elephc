@@ -14,6 +14,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::functions;
 use crate::codegen::platform::Arch;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
@@ -380,15 +381,30 @@ fn emit_loaded_method_call(
     data: &mut DataSection,
 ) -> PhpType {
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                 // save the loaded receiver below later method arguments
-    let sig = ctx
-        .classes
-        .get(class_name)
-        .and_then(|class_info| class_info.methods.get(method))
-        .cloned();
-    let emitted_args = objects::emit_pushed_method_args(args, sig.as_ref(), emitter, ctx, data);
+    let method_key = php_symbol_key(method);
+    let mut dispatch_method = method_key.as_str();
+    let mut magic_args = None;
+    let sig = ctx.classes.get(class_name).and_then(|class_info| {
+        if let Some(sig) = class_info.methods.get(&method_key) {
+            return Some(sig.clone());
+        }
+        if let Some(sig) = class_info.methods.get("__call") {
+            dispatch_method = "__call";
+            let span = args
+                .first()
+                .map(|arg| arg.span)
+                .unwrap_or_else(crate::span::Span::dummy);
+            magic_args = Some(objects::magic_method_args(method, args, span));
+            return Some(sig.clone());
+        }
+        None
+    });
+    let args_to_emit = magic_args.as_deref().unwrap_or(args);
+    let emitted_args =
+        objects::emit_pushed_method_args(args_to_emit, sig.as_ref(), emitter, ctx, data);
     objects::emit_method_call_with_saved_receiver_below_args(
         class_name,
-        method,
+        dispatch_method,
         &emitted_args.arg_types,
         emitted_args.source_temp_bytes,
         emitter,

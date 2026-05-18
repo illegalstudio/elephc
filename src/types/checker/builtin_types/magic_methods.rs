@@ -31,6 +31,14 @@ pub(crate) fn patch_magic_method_signatures(checker: &mut Checker) {
                 param.1 = PhpType::Mixed;
             }
         }
+        if let Some(sig) = class_info.methods.get_mut("__call") {
+            if let Some(param) = sig.params.get_mut(0) {
+                param.1 = PhpType::Str;
+            }
+            if let Some(param) = sig.params.get_mut(1) {
+                param.1 = PhpType::Array(Box::new(PhpType::Never));
+            }
+        }
     }
 }
 
@@ -123,6 +131,43 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                         errors.push(CompileError::new(
                             method.span,
                             &format!("Magic method must take 2 arguments: {}::__set", class_name),
+                        ));
+                    }
+                }
+                "__call" => {
+                    if method.is_static {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!("Magic method must be non-static: {}::__call", class_name),
+                        ));
+                        continue;
+                    }
+                    if method.visibility != Visibility::Public {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!("Magic method must be public: {}::__call", class_name),
+                        ));
+                        continue;
+                    }
+                    if method.params.len() != 2 || method.variadic.is_some() {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!("Magic method must take 2 arguments: {}::__call", class_name),
+                        ));
+                    }
+                }
+                "__invoke" => {
+                    if method.is_static {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!("Magic method must be non-static: {}::__invoke", class_name),
+                        ));
+                        continue;
+                    }
+                    if method.visibility != Visibility::Public {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!("Magic method must be public: {}::__invoke", class_name),
                         ));
                     }
                 }

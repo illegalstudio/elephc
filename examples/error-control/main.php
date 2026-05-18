@@ -1,5 +1,8 @@
 <?php
 
+@file_get_contents("missing.txt");
+echo "continued after suppressed expression statement\n";
+
 echo @file_get_contents("missing.txt");
 echo "after missing file\n";
 

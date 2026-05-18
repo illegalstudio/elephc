@@ -317,7 +317,7 @@ Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[
 
 ## System routines
 
-**Source:** `src/codegen/runtime/system/` (33 files)
+**Source:** `src/codegen/runtime/system/` (34 files)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -398,7 +398,7 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 
 ### Regex routines
 
-**Files:** `system/preg_strip.rs`, `system/pcre_to_posix.rs`, `system/preg_match.rs`, `system/preg_match_all.rs`, `system/preg_replace.rs`, `system/preg_split.rs`
+**Files:** `system/preg_strip.rs`, `system/pcre_to_posix.rs`, `system/preg_match.rs`, `system/preg_match_all.rs`, `system/preg_replace.rs`, `system/preg_replace_callback.rs`, `system/preg_split.rs`
 
 All regex routines use **POSIX extended regular expressions** via libc's `regcomp()`, `regexec()`, and `regfree()`. Shared helpers (`__rt_preg_strip` and `__rt_pcre_to_posix`) strip PHP-style delimiters and translate common PCRE shorthands before passing the pattern to the POSIX API.
 
@@ -407,6 +407,7 @@ All regex routines use **POSIX extended regular expressions** via libc's `regcom
 | `__rt_preg_match` | Test if a regex matches the subject string. Compiles the pattern, executes once, frees | pattern + subject strings | `x0` = 1 (match) or 0 (no match) |
 | `__rt_preg_match_all` | Count all non-overlapping matches by repeatedly executing the regex with advancing offsets | pattern + subject strings | `x0` = match count |
 | `__rt_preg_replace` | Replace all regex matches with a replacement string. Builds the result incrementally in the concat buffer and expands `$0`..`$9` / `\0`..`\9` from the `regexec()` capture vector | pattern + replacement + subject | `x1`/`x2` = result string |
+| `__rt_preg_replace_callback` | Replace all regex matches by building an indexed `$matches` string array, invoking the callback, and appending the callback string result while preserving concat-buffer state across callback prologues | pattern + callback + subject | `x1`/`x2` = result string |
 | `__rt_preg_split` | Split the subject string at regex match boundaries. Returns a string array of the non-matching segments | pattern + subject strings | `x0` = array pointer |
 
 ## I/O routines

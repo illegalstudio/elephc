@@ -96,6 +96,26 @@ of the delegation. v1 only delegates to function calls returning
 expressions in `yield from` are not yet supported. Invalid non-generator
 delegates are rejected at type-check time.
 
+Like PHP, `yield from` also evaluates to the delegated generator's
+terminal `return` value, so the outer generator can capture and yield or
+return it after delegation finishes:
+
+```php
+<?php
+function inner() {
+    yield 1;
+    return 42;
+}
+
+function outer() {
+    $ret = yield from inner();
+    yield $ret;
+}
+
+foreach (outer() as $v) { echo $v . " "; }
+// Prints: 1 42
+```
+
 ## Generator closures
 
 Anonymous functions that contain `yield` also return `Generator`

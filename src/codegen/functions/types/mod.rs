@@ -254,6 +254,19 @@ pub(super) fn infer_local_type(
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => PhpType::Callable,
         ExprKind::ClosureCall { var, .. } => {
             if let Some(c) = ctx {
+                if let Some(class_name) = c
+                    .variables
+                    .get(var)
+                    .and_then(|info| singular_object_class(&info.static_ty))
+                {
+                    if let Some(sig) = c
+                        .classes
+                        .get(class_name)
+                        .and_then(|class_info| class_info.methods.get("__invoke"))
+                    {
+                        return sig.return_type.clone();
+                    }
+                }
                 if let Some(sig) = c.closure_sigs.get(var) {
                     return sig.return_type.clone();
                 }
@@ -262,6 +275,16 @@ pub(super) fn infer_local_type(
         }
         ExprKind::ExprCall { callee, .. } => {
             if let Some(c) = ctx {
+                let callee_ty = infer_local_type(callee, sig, Some(c));
+                if let Some(class_name) = singular_object_class(&callee_ty) {
+                    if let Some(sig) = c
+                        .classes
+                        .get(class_name)
+                        .and_then(|class_info| class_info.methods.get("__invoke"))
+                    {
+                        return sig.return_type.clone();
+                    }
+                }
                 match &callee.kind {
                     ExprKind::Variable(var_name) => {
                         if let Some(sig) = c.closure_sigs.get(var_name) {

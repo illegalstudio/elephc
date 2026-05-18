@@ -129,6 +129,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             is_arrow,
             is_static,
             captures,
+            capture_refs,
         } => {
             pass.enter_closure(span);
             let new_params = params
@@ -147,6 +148,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
                 is_arrow,
                 is_static,
                 captures,
+                capture_refs,
             }
         }
         ExprKind::NamedArg { name, value } => ExprKind::NamedArg {

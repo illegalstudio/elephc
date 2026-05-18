@@ -15,7 +15,7 @@ mod indexed;
 pub(super) use access::{
     emit_array_access, emit_array_access_with_loaded_base, emit_buffer_new, emit_match_expr,
 };
-pub(super) use assoc::emit_assoc_array_literal;
+pub(crate) use assoc::{emit_assoc_array_literal, emit_empty_assoc_array_literal};
 pub(super) use indexed::emit_array_literal;
 pub(crate) use access::{
     emit_array_access_offset_exists, emit_array_access_offset_set,

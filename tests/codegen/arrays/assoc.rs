@@ -58,6 +58,50 @@ echo $m["key"];
 }
 
 #[test]
+fn test_assoc_array_dynamic_string_key_assignment_loop_counts() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 5; $i++) {
+    $a["k" . $i] = $i;
+}
+echo count($a) . ":" . $a["k0"] . ":" . $a["k4"];
+"#,
+    );
+    assert_eq!(out, "5:0:4");
+}
+
+#[test]
+fn test_assoc_array_dynamic_string_key_assignment_inside_function() {
+    let out = compile_and_run(
+        r#"<?php
+function build_map(int $n): array {
+    $a = [];
+    for ($i = 0; $i < $n; $i++) {
+        $a["k" . $i] = $i;
+    }
+    return $a;
+}
+$a = build_map(5);
+echo count($a) . ":" . $a["k0"] . ":" . $a["k4"];
+"#,
+    );
+    assert_eq!(out, "5:0:4");
+}
+
+#[test]
+fn test_assoc_array_dynamic_string_key_after_indexed_literal_preserves_int_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10, 20];
+$a["k" . 2] = 30;
+echo count($a) . ":" . $a[0] . ":" . $a[1] . ":" . $a["k2"];
+"#,
+    );
+    assert_eq!(out, "3:10:20:30");
+}
+
+#[test]
 fn test_assoc_array_integer_and_numeric_string_keys() {
     let out = compile_and_run(
         r#"<?php

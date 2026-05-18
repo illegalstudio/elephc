@@ -73,9 +73,11 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
 
         "intval" | "floatval" | "boolval" | "gettype" | "is_bool" | "is_null"
         | "is_float" | "is_int" | "is_iterable" | "is_string" | "is_numeric"
-        | "empty" | "isset" | "unset" | "var_dump" | "print_r" => {
+        | "empty" | "var_dump" | "print_r" => {
             Some(fixed(&["value"]))
         }
+        "isset" => Some(variadic(&["var"], "vars")),
+        "unset" => Some(variadic(&["var"], "vars")),
         "settype" => {
             let mut sig = fixed(&["var", "type"]);
             sig.ref_params[0] = true;
@@ -249,6 +251,7 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             vec![int_lit(512), int_lit(0)],
         )),
         "preg_match" | "preg_match_all" => Some(fixed(&["pattern", "subject"])),
+        "preg_replace_callback" => Some(fixed(&["pattern", "callback", "subject"])),
         "preg_replace" => Some(fixed(&["pattern", "replacement", "subject"])),
         "preg_split" => Some(fixed(&["pattern", "subject"])),
 
@@ -521,6 +524,11 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             name,
             &[PhpType::Str, PhpType::Int, PhpType::Int],
             PhpType::Bool,
+        )),
+        "preg_replace_callback" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str, PhpType::Callable, PhpType::Str],
+            PhpType::Str,
         )),
         _ => None,
     }

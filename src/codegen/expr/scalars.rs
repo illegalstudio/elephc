@@ -35,7 +35,8 @@ pub(super) fn emit_string_literal(
     emitter: &mut Emitter,
     data: &mut DataSection,
 ) -> PhpType {
-    let (label, len) = data.add_string(value.as_bytes());
+    let bytes = crate::string_bytes::literal_bytes(value);
+    let (label, len) = data.add_string(&bytes);
     let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
     emitter.comment(&format!("load string \"{}\"", value.escape_default()));
     abi::emit_symbol_address(emitter, ptr_reg, &label);

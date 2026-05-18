@@ -17,7 +17,7 @@ use crate::names::{
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, EnumInfo, FunctionSig, InterfaceInfo, PhpType};
 
-use super::instanceof::escaped_ascii;
+use super::instanceof::{escaped_ascii, escaped_bytes};
 
 /// Emit the user-dependent data section — globals, statics, class metadata.
 /// This changes per program and cannot be cached.
@@ -349,12 +349,13 @@ pub(crate) fn emit_runtime_data_user(
                             crate::types::AttrArgValue::Str(value) => {
                                 let label = format!("_attr_arg_str_{}", arg_str_id);
                                 arg_str_id += 1;
+                                let bytes = crate::string_bytes::literal_bytes(value);
                                 out.push_str(&format!(".globl {0}\n{0}:\n", label));
                                 out.push_str(&format!(
                                     "    .ascii \"{}\"\n",
-                                    escaped_ascii(value)
+                                    escaped_bytes(&bytes)
                                 ));
-                                arg_rows.push((1u64, label, value.len() as u64));
+                                arg_rows.push((1u64, label, bytes.len() as u64));
                             }
                             crate::types::AttrArgValue::Int(value) => {
                                 arg_rows.push((0u64, format!("{}", *value as u64), 0u64));

@@ -147,6 +147,7 @@ pub(super) fn resolve_expr(
             is_arrow,
             is_static,
             captures,
+            capture_refs,
         } => ExprKind::Closure {
             params: resolve_params(params, current_namespace, imports, symbols),
             variadic: variadic.clone(),
@@ -158,6 +159,7 @@ pub(super) fn resolve_expr(
             is_arrow: *is_arrow,
             is_static: *is_static,
             captures: captures.clone(),
+            capture_refs: capture_refs.clone(),
         },
         ExprKind::Spread(inner) => {
             ExprKind::Spread(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
@@ -235,7 +237,7 @@ pub(super) fn resolve_expr(
         },
         ExprKind::MethodCall { object, method, args } => ExprKind::MethodCall {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
-            method: php_symbol_key(method),
+            method: method.clone(),
             args: args
                 .iter()
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
@@ -243,7 +245,7 @@ pub(super) fn resolve_expr(
         },
         ExprKind::NullsafeMethodCall { object, method, args } => ExprKind::NullsafeMethodCall {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
-            method: php_symbol_key(method),
+            method: method.clone(),
             args: args
                 .iter()
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))

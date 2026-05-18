@@ -407,6 +407,8 @@ Pure and backed enums. `->value`, `::from()`, `::tryFrom()`, `::cases()`. Only `
 - `__toString()` — string coercion
 - `__get($name)` — reading undefined property
 - `__set($name, $value)` — writing undefined property
+- `__invoke(...$args)` — calling an object directly
+- `__call($name, $args)` — intercepting missing instance methods
 
 ## Attributes
 

@@ -23,6 +23,22 @@ fn test_mixed_string_index_on_assoc() {
     assert_eq!(out, "Alice/30");
 }
 
+// Regression for issue #179: assoc-mode json_decode must apply PHP array-key
+// coercion to JSON object keys, so integer-form strings and integer access hit
+// the same entry while non-integer strings such as leading-zero keys stay
+// string-keyed.
+#[test]
+fn test_mixed_assoc_numeric_json_object_keys_coerce_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+            $json = "{\"1\":\"one\",\"2\":\"two\",\"01\":\"leading\",\"-1\":\"neg\",\"name\":\"test\"}";
+            $a = json_decode($json, true);
+            echo $a["1"] . "/" . $a[1] . "/" . $a["01"] . "/" . $a["-1"] . "/" . $a[-1] . "/" . $a["name"];
+        "#,
+    );
+    assert_eq!(out, "one/one/leading/neg/neg/test");
+}
+
 // Integer-keyed access on a Mixed indexed array.
 #[test]
 fn test_mixed_int_index_on_indexed() {

@@ -23,7 +23,7 @@ use super::super::emit::Emitter;
 use super::scalars;
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::parser::ast::{Expr, InstanceOfTarget, StaticReceiver};
+use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, StaticReceiver};
 use crate::types::PhpType;
 
 pub(crate) fn emit_new_object(
@@ -429,6 +429,13 @@ pub(crate) fn push_magic_property_name_arg(
     crate::codegen::abi::emit_symbol_address(emitter, ptr_reg, &label); // materialize the magic-property name string address for the active target ABI
     crate::codegen::abi::emit_load_int_immediate(emitter, len_reg, len as i64); // materialize the magic-property name length for the active target ABI
     crate::codegen::abi::emit_push_reg_pair(emitter, ptr_reg, len_reg); // push the magic-property name argument pair onto the temporary call stack
+}
+
+pub(super) fn magic_method_args(method: &str, args: &[Expr], span: crate::span::Span) -> Vec<Expr> {
+    vec![
+        Expr::new(ExprKind::StringLiteral(method.to_string()), span),
+        Expr::new(ExprKind::ArrayLiteral(args.to_vec()), span),
+    ]
 }
 
 pub(super) fn emit_method_call(

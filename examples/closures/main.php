@@ -63,6 +63,15 @@ echo "multiply(5) with factor=3: ";
 echo $multiply(5);
 echo "\n";
 
+// Capturing by reference for recursive anonymous functions
+$factorial = null;
+$factorial = function($n) use (&$factorial) {
+    return $n <= 1 ? 1 : $n * $factorial($n - 1);
+};
+echo "factorial(5) = ";
+echo $factorial(5);
+echo "\n";
+
 // Captured closures as callback values
 $scaled = array_map($multiply, [2, 4, 6]);
 echo "scaled values: ";

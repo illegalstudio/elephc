@@ -25,6 +25,7 @@ mod resolver;
 mod runtime_cache;
 mod source_map;
 mod span;
+mod string_bytes;
 mod termination;
 mod timings;
 mod types;

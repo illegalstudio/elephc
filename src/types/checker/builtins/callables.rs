@@ -15,6 +15,8 @@ use crate::types::{PhpType, TypeEnv};
 use super::canonical_builtin_function_name;
 use super::super::Checker;
 
+mod preg_replace_callback;
+
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
 fn validate_call_user_func_array_ref_args(
@@ -137,6 +139,7 @@ pub(super) fn check_builtin(
     env: &TypeEnv,
 ) -> BuiltinResult {
     match name {
+        "preg_replace_callback" => preg_replace_callback::check(checker, args, span, env),
         "array_map" => {
             if args.len() != 2 {
                 return Err(CompileError::new(span, "array_map() takes exactly 2 arguments"));

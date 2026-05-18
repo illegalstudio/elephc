@@ -1,13 +1,14 @@
 //! Purpose:
 //! Normalizes PHP array key types from literal expressions and inferred value types.
-//! Captures PHP integer-string key coercion for list and associative array typing.
+//! Captures PHP integer-string key coercion plus literal string-offset parsing.
 //!
 //! Called from:
 //! - `crate::types::checker::inference`
 //! - `crate::types::checker::builtins`
+//! - `crate::codegen::expr::arrays::access::string_offset`
 //!
 //! Key details:
-//! - Key normalization must match PHP because it affects array shape merging and mixed associative-array values.
+//! - Key and offset normalization must match PHP because it affects array shapes and string access.
 
 use crate::parser::ast::{Expr, ExprKind};
 
@@ -78,4 +79,21 @@ pub(crate) fn is_php_integer_array_key(value: &str) -> bool {
         "9223372036854775807"
     };
     digits.len() < limit.len() || (digits.len() == limit.len() && digits <= limit.as_bytes())
+}
+
+pub(crate) fn parse_php_string_offset_literal(value: &str) -> Option<i64> {
+    let trimmed = value.trim_matches(|ch: char| ch.is_ascii_whitespace());
+    if trimmed.is_empty() {
+        return None;
+    }
+    let first = trimmed.as_bytes()[0];
+    let digits = if first == b'+' || first == b'-' {
+        &trimmed[1..]
+    } else {
+        trimmed
+    };
+    if digits.is_empty() || !digits.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    trimmed.parse::<i64>().ok()
 }

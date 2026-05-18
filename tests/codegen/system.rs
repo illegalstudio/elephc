@@ -933,6 +933,75 @@ fn test_preg_replace_no_match() {
 }
 
 #[test]
+fn test_preg_replace_callback_matches_array() {
+    let out = compile_and_run(
+        r#"<?php
+$result = preg_replace_callback(
+    "/(\d+)/",
+    function($matches) {
+        return "[" . $matches[0] . "]";
+    },
+    "price: 123 and 456"
+);
+echo $result;
+"#,
+    );
+    assert_eq!(out, "price: [123] and [456]");
+}
+
+#[test]
+fn test_preg_replace_callback_capture_groups() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_replace_callback(
+    "/([a-z]+)-([0-9]+)/",
+    function($matches) {
+        return $matches[1] . ":" . $matches[2];
+    },
+    "id-42 and item-7"
+);
+"#,
+    );
+    assert_eq!(out, "id:42 and item:7");
+}
+
+#[test]
+fn test_preg_replace_callback_closure_capture_by_value() {
+    let out = compile_and_run(
+        r#"<?php
+$prefix = "n:";
+echo preg_replace_callback(
+    "/([0-9]+)/",
+    function($matches) use ($prefix) {
+        return $prefix . $matches[1];
+    },
+    "a1 b22"
+);
+"#,
+    );
+    assert_eq!(out, "an:1 bn:22");
+}
+
+#[test]
+fn test_preg_replace_callback_closure_capture_by_ref() {
+    let out = compile_and_run(
+        r#"<?php
+$count = 0;
+$result = preg_replace_callback(
+    "/[0-9]+/",
+    function($matches) use (&$count) {
+        $count = $count + 1;
+        return "[" . $count . ":" . $matches[0] . "]";
+    },
+    "a1 b22"
+);
+echo $result . "|" . $count;
+"#,
+    );
+    assert_eq!(out, "a[1:1] b[2:22]|2");
+}
+
+#[test]
 fn test_preg_split_simple() {
     let out = compile_and_run(
         r#"<?php

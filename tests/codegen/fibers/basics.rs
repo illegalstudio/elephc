@@ -119,6 +119,22 @@ $f->resume(99);
 }
 
 #[test]
+fn test_fiber_resume_delivers_nested_array_to_suspend() {
+    let out = compile_and_run(
+        r#"<?php
+$f = new Fiber(function(): void {
+    $arr = ["b" => [10, 20, 30]];
+    $x = Fiber::suspend($arr);
+    echo $x["b"][1];
+});
+$a = $f->start();
+$f->resume(["b" => [99, 77]]);
+"#,
+    );
+    assert_eq!(out, "77");
+}
+
+#[test]
 fn test_fiber_full_suspend_resume_cycle() {
     // Mixed-tagged values flow through `transfer_value`. We echo each
     // received Mixed payload directly without arithmetic so the test does
@@ -210,4 +226,3 @@ echo "iters=" . $i;
     );
     assert_eq!(out, "iters=50");
 }
-

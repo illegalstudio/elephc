@@ -124,4 +124,31 @@ $greet();
     assert_eq!(out, "Hello World");
 }
 
+#[test]
+fn test_closure_use_by_ref_recursive_self_call() {
+    let out = compile_and_run(
+        r#"<?php
+$g = null;
+$g = function ($n) use (&$g) {
+    return $n <= 1 ? 1 : $n * $g($n - 1);
+};
+echo $g(5);
+"#,
+    );
+    assert_eq!(out, "120");
+}
+
+#[test]
+fn test_closure_use_by_ref_mutates_outer_variable() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+$f = function() use (&$x) { $x = 2; };
+$f();
+echo $x;
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
 // === Memory management regression tests ===

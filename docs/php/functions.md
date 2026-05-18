@@ -94,6 +94,18 @@ $multiply = function(int $x) use ($factor): int {
 echo $multiply(5); // 15
 ```
 
+Use `&` in the capture list when the closure must share and mutate the outer
+variable, including recursive anonymous functions:
+
+```php
+<?php
+$factorial = null;
+$factorial = function($n) use (&$factorial) {
+    return $n <= 1 ? 1 : $n * $factorial($n - 1);
+};
+echo $factorial(5); // 120
+```
+
 Captured closures can also be used as callback values:
 
 ```php
@@ -252,6 +264,17 @@ function show($a, $b = 99, ...$rest) {
 show(...[10]);                    // 10:99:0
 show(...[10, 20, 30]);            // 10:20:1
 show(...[10, "b" => 20]);         // 10:20:0
+```
+
+## echo
+
+`echo` is a PHP language construct statement. It writes each operand to stdout
+using PHP scalar output rules and accepts PHP-compatible comma-separated
+operands:
+
+```php
+<?php
+echo "Hello", ", ", "World!\n";
 ```
 
 ## print

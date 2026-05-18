@@ -53,6 +53,12 @@ echo "\n--- Interpolation ---\n";
 $name = "PHP";
 echo "Hello $name!\n";
 
+// Escape sequences
+echo "\n--- Escapes ---\n";
+$binary = "A\x00B";
+echo "hex/octal/unicode: " . "\x41\101\u{1F600}" . "\n";
+echo "null byte length: " . strlen($binary) . ", ord: " . ord($binary[1]) . "\n";
+
 // Formatting
 echo "\n--- Formatting ---\n";
 echo sprintf("Name: %s, Age: %d", "Alice", 30) . "\n";

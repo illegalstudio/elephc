@@ -65,6 +65,27 @@ foreach (outer() as $v) { echo $v; echo " "; }
 }
 
 #[test]
+fn test_generator_yield_from_return_value_can_be_captured_and_yielded() {
+    let out = compile_and_run(
+        r#"<?php
+function inner() {
+    yield 1;
+    return 42;
+}
+function outer() {
+    $ret = yield from inner();
+    yield $ret;
+}
+foreach (outer() as $v) {
+    echo $v;
+    echo "\n";
+}
+"#,
+    );
+    assert_eq!(out, "1\n42\n");
+}
+
+#[test]
 fn test_generator_yield_from_call_releases_inner_generator_after_completion() {
     let baseline = compile_and_run_with_heap_debug(
         r#"<?php

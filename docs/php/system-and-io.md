@@ -132,9 +132,10 @@ Encoding rules for objects:
 | `preg_match()` | `preg_match($pattern, $subject): int` | Test regex match (1 or 0) |
 | `preg_match_all()` | `preg_match_all($pattern, $subject): int` | Count all non-overlapping matches |
 | `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string` | Replace all regex matches; `$0`..`$9` and `\0`..`\9` replacement backreferences expand captured groups |
+| `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): string` | Replace all regex matches with the callback return value; callback receives `array<string>` matches |
 | `preg_split()` | `preg_split($pattern, $subject): array` | Split string by regex |
 
-Uses POSIX extended regex with common PCRE shorthand translation (`\s`, `\d`, `\w`). Replacement backreferences `$0`..`$9` and `\0`..`\9` are expanded by `preg_replace()`. Lookahead, lookbehind, non-greedy quantifiers, and the `$matches` output parameter for `preg_match()` are not supported.
+Uses POSIX extended regex with common PCRE shorthand translation (`\s`, `\d`, `\w`). Replacement backreferences `$0`..`$9` and `\0`..`\9` are expanded by `preg_replace()`. `preg_replace_callback()` passes `$matches[0]` as the full match and `$matches[1]`..`$matches[9]` as supported capture groups. Lookahead, lookbehind, non-greedy quantifiers, and the `$matches` output parameter for `preg_match()` are not supported.
 
 ## File I/O
 

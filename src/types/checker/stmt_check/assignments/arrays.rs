@@ -36,7 +36,30 @@ pub(super) fn check_array_assign(
         ));
     }
     if let PhpType::Array(elem_ty) = &arr_ty {
-        if **elem_ty != val_ty {
+        let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
+        if !matches!(normalized_idx_ty, PhpType::Int) {
+            let merged_key = if matches!(elem_ty.as_ref(), PhpType::Never) {
+                normalized_idx_ty
+            } else {
+                merge_array_key_types(PhpType::Int, normalized_idx_ty)
+            };
+            let merged_value = if matches!(elem_ty.as_ref(), PhpType::Never) {
+                val_ty
+            } else if elem_ty.as_ref() == &val_ty {
+                *elem_ty.clone()
+            } else {
+                checker
+                    .merge_array_element_type(elem_ty, &val_ty)
+                    .unwrap_or(PhpType::Mixed)
+            };
+            env.insert(
+                array.to_string(),
+                PhpType::AssocArray {
+                    key: Box::new(merged_key),
+                    value: Box::new(merged_value),
+                },
+            );
+        } else if **elem_ty != val_ty {
             let merged_ty = checker
                 .merge_array_element_type(elem_ty, &val_ty)
                 .unwrap_or(PhpType::Mixed);

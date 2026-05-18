@@ -209,6 +209,7 @@ pub(super) fn resolve_expr(
             is_arrow,
             is_static,
             captures,
+            capture_refs,
         } => ExprKind::Closure {
             params: resolve_params(params, base_dir, declared_once, include_chain, state, function_variants)?,
             variadic,
@@ -224,6 +225,7 @@ pub(super) fn resolve_expr(
             is_arrow,
             is_static,
             captures,
+            capture_refs,
         },
         ExprKind::NamedArg { name, value } => ExprKind::NamedArg {
             name,

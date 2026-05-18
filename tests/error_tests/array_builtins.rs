@@ -152,7 +152,7 @@ fn test_error_rsort_wrong_args() {
 
 #[test]
 fn test_error_isset_wrong_args() {
-    expect_error("<?php isset();", "isset() takes exactly 1 argument");
+    expect_error("<?php isset();", "isset() takes at least 1 argument");
 }
 
 #[test]

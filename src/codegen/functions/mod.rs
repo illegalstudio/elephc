@@ -100,7 +100,7 @@ pub fn emit_closure(
     data: &mut DataSection,
     label: &str,
     sig: &FunctionSig,
-    hidden_params: &[(String, PhpType)],
+    hidden_params: &[(String, PhpType, bool)],
     body: &[crate::parser::ast::Stmt],
     current_class: Option<&str>,
     all_functions: &HashMap<String, FunctionSig>,
@@ -275,7 +275,7 @@ fn emit_function_with_label_and_class(
     label: &str,
     epilogue_label: &str,
     sig: &FunctionSig,
-    hidden_params: &[(String, PhpType)],
+    hidden_params: &[(String, PhpType, bool)],
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
@@ -313,8 +313,13 @@ fn emit_function_with_label_and_class(
         let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
         allocate_incoming_param(&mut ctx, pname, pty, is_ref);
     }
-    for (pname, pty) in hidden_params {
-        allocate_incoming_param(&mut ctx, pname, pty, false);
+    for (pname, pty, is_ref) in hidden_params {
+        allocate_incoming_param(&mut ctx, pname, pty, *is_ref);
+        if *is_ref && matches!(pty, PhpType::Callable) {
+            ctx.closure_sigs.insert(pname.clone(), sig.clone());
+            ctx.closure_captures
+                .insert(pname.clone(), hidden_params.to_vec());
+        }
     }
 
     collect_local_vars(body, &mut ctx, sig);
@@ -353,7 +358,7 @@ fn emit_function_with_label_and_class(
             &mut incoming_args,
         );
     }
-    for (pname, pty) in hidden_params {
+    for (pname, pty, is_ref) in hidden_params {
         let var = ctx
             .variables
             .get(pname)
@@ -364,7 +369,7 @@ fn emit_function_with_label_and_class(
             pname,
             pty,
             offset,
-            false,
+            *is_ref,
             &mut incoming_args,
         );
     }
@@ -372,8 +377,8 @@ fn emit_function_with_label_and_class(
     let param_names: HashSet<String> = sig
         .params
         .iter()
-        .chain(hidden_params.iter())
         .map(|(n, _)| n.clone())
+        .chain(hidden_params.iter().map(|(n, _, _)| n.clone()))
         .collect();
     for (name, var) in &ctx.variables {
         if param_names.contains(name) {

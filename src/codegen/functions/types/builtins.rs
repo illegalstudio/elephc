@@ -32,7 +32,7 @@ pub(super) fn infer_function_call_type(
         | "base64_decode" | "bin2hex" | "hex2bin" | "md5" | "sha1" | "hash" | "gettype"
         | "strstr" | "readline" | "date"
         | "json_last_error_msg" | "php_uname" | "phpversion"
-        | "tempnam" | "getcwd" | "shell_exec" => PhpType::Str,
+        | "tempnam" | "getcwd" | "shell_exec" | "preg_replace_callback" => PhpType::Str,
         "json_decode" => PhpType::Mixed,
         "array_keys" => {
             let arr_ty = args

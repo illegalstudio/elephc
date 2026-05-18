@@ -31,14 +31,8 @@ impl Checker {
         let rt = self.infer_type(right, env)?;
         match op {
             BinOp::Pow => {
-                let lt_ok = matches!(
-                    lt,
-                    PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                ) || self.is_union_with_mixed_int_dispatch(&lt);
-                let rt_ok = matches!(
-                    rt,
-                    PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                ) || self.is_union_with_mixed_int_dispatch(&rt);
+                let lt_ok = is_numeric_operand_type(self, &lt);
+                let rt_ok = is_numeric_operand_type(self, &rt);
                 if !lt_ok || !rt_ok {
                     return Err(CompileError::new(
                         expr.span,
@@ -51,35 +45,25 @@ impl Checker {
                 if is_array_like_type(&lt) || is_array_like_type(&rt) {
                     return self.infer_array_union_type(&lt, &rt, left, right, expr);
                 }
-                let lt_ok = matches!(
-                    lt,
-                    PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                ) || self.is_union_with_mixed_int_dispatch(&lt);
-                let rt_ok = matches!(
-                    rt,
-                    PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                ) || self.is_union_with_mixed_int_dispatch(&rt);
+                let lt_ok = is_numeric_operand_type(self, &lt);
+                let rt_ok = is_numeric_operand_type(self, &rt);
                 if !lt_ok || !rt_ok {
                     return Err(CompileError::new(
                         expr.span,
                         "Arithmetic operators require numeric operands",
                     ));
                 }
-                if lt == PhpType::Float || rt == PhpType::Float {
+                if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt) {
+                    Ok(PhpType::Mixed)
+                } else if lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
                 } else {
                     Ok(PhpType::Int)
                 }
             }
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                let lt_ok = matches!(
-                    lt,
-                    PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                ) || self.is_union_with_mixed_int_dispatch(&lt);
-                let rt_ok = matches!(
-                    rt,
-                    PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                ) || self.is_union_with_mixed_int_dispatch(&rt);
+                let lt_ok = is_numeric_operand_type(self, &lt);
+                let rt_ok = is_numeric_operand_type(self, &rt);
                 if !lt_ok || !rt_ok {
                     return Err(CompileError::new(
                         expr.span,
@@ -89,6 +73,10 @@ impl Checker {
                 // Division always returns float (PHP compat: 10/3 → 3.333...)
                 if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
+                } else if matches!(op, BinOp::Sub | BinOp::Mul)
+                    && (uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt))
+                {
+                    Ok(PhpType::Mixed)
                 } else {
                     Ok(PhpType::Int)
                 }
@@ -104,14 +92,8 @@ impl Checker {
                 Ok(PhpType::Bool)
             }
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
-                let lt_ok = matches!(
-                    lt,
-                    PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                ) || self.is_union_with_mixed_int_dispatch(&lt);
-                let rt_ok = matches!(
-                    rt,
-                    PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                ) || self.is_union_with_mixed_int_dispatch(&rt);
+                let lt_ok = is_numeric_operand_type(self, &lt);
+                let rt_ok = is_numeric_operand_type(self, &rt);
                 if !lt_ok || !rt_ok {
                     return Err(CompileError::new(
                         expr.span,
@@ -127,10 +109,8 @@ impl Checker {
             BinOp::Concat => Ok(PhpType::Str),
             BinOp::And | BinOp::Or | BinOp::Xor => Ok(PhpType::Bool),
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight => {
-                let lt_ok = matches!(lt, PhpType::Int | PhpType::Bool | PhpType::Void)
-                    || self.is_union_with_mixed_int_dispatch(&lt);
-                let rt_ok = matches!(rt, PhpType::Int | PhpType::Bool | PhpType::Void)
-                    || self.is_union_with_mixed_int_dispatch(&rt);
+                let lt_ok = is_integer_operand_type(self, &lt);
+                let rt_ok = is_integer_operand_type(self, &rt);
                 if !lt_ok || !rt_ok {
                     return Err(CompileError::new(
                         expr.span,
@@ -140,14 +120,8 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             BinOp::Spaceship => {
-                let lt_ok = matches!(
-                    lt,
-                    PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                ) || self.is_union_with_mixed_int_dispatch(&lt);
-                let rt_ok = matches!(
-                    rt,
-                    PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                ) || self.is_union_with_mixed_int_dispatch(&rt);
+                let lt_ok = is_numeric_operand_type(self, &lt);
+                let rt_ok = is_numeric_operand_type(self, &rt);
                 if !lt_ok || !rt_ok {
                     return Err(CompileError::new(
                         expr.span,
@@ -296,6 +270,7 @@ impl Checker {
         return_type: &Option<TypeExpr>,
         body: &[Stmt],
         captures: &[String],
+        capture_refs: &[String],
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
@@ -306,11 +281,12 @@ impl Checker {
             expr.span,
             env,
         )?;
-        let closure_ref_params: Vec<String> = params
+        let mut closure_ref_params: Vec<String> = params
             .iter()
             .filter(|(_, _, _, is_ref)| *is_ref)
             .map(|(name, _, _, _)| name.clone())
             .collect();
+        closure_ref_params.extend(capture_refs.iter().cloned());
         self.with_local_storage_context(closure_ref_params, |checker| {
             for stmt in body {
                 checker.check_stmt(stmt, &mut closure_sig.env)?;
@@ -332,6 +308,21 @@ impl Checker {
             CompileError::new(expr.span, &format!("Undefined variable: ${}", var))
         })?;
         if var_ty != PhpType::Callable {
+            if let Some(class_name) = self.invokable_class_for_type(&var_ty) {
+                if self
+                    .classes
+                    .get(&class_name)
+                    .is_some_and(|class_info| class_info.methods.contains_key("__invoke"))
+                {
+                    return self.infer_method_call_on_class_type(
+                        &class_name,
+                        "__invoke",
+                        args,
+                        expr,
+                        env,
+                    );
+                }
+            }
             return Err(CompileError::new(
                 expr.span,
                 &format!("Cannot call ${} — not a callable (got {:?})", var, var_ty),
@@ -388,6 +379,21 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let callee_ty = self.infer_type(callee, env)?;
+        if let Some(class_name) = self.invokable_class_for_type(&callee_ty) {
+            if self
+                .classes
+                .get(&class_name)
+                .is_some_and(|class_info| class_info.methods.contains_key("__invoke"))
+            {
+                return self.infer_method_call_on_class_type(
+                    &class_name,
+                    "__invoke",
+                    args,
+                    expr,
+                    env,
+                );
+            }
+        }
         let nullable_callable =
             Self::is_nullable_callable_from_nullsafe_chain(callee, &callee_ty);
         if callee_ty != PhpType::Callable && !nullable_callable {
@@ -479,6 +485,32 @@ impl Checker {
             _ => {}
         }
         Ok(self.nullable_callable_result(PhpType::Int, nullable_callable)) // fallback for unknown callables
+    }
+
+    fn invokable_class_for_type(&self, ty: &PhpType) -> Option<String> {
+        match ty {
+            PhpType::Object(class_name) => Some(class_name.clone()),
+            PhpType::Union(members) => {
+                let mut class_name = None;
+                for member in members {
+                    match member {
+                        PhpType::Void => {}
+                        PhpType::Object(candidate) => {
+                            if class_name
+                                .as_ref()
+                                .is_some_and(|existing: &String| existing != candidate)
+                            {
+                                return None;
+                            }
+                            class_name = Some(candidate.clone());
+                        }
+                        _ => return None,
+                    }
+                }
+                class_name
+            }
+            _ => None,
+        }
     }
 
     fn nullable_callable_result(&self, ret_ty: PhpType, nullable_callable: bool) -> PhpType {
@@ -704,6 +736,24 @@ fn expr_contains_nullsafe_member(expr: &Expr) -> bool {
 
 fn is_array_like_type(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+}
+
+fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Mixed
+    ) || checker.is_union_with_mixed_int_dispatch(ty)
+}
+
+fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Mixed
+    ) || checker.is_union_with_mixed_int_dispatch(ty)
+}
+
+fn uses_mixed_numeric_dispatch(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Mixed | PhpType::Union(_))
 }
 
 fn is_empty_indexed_array_literal(expr: &Expr) -> bool {

@@ -112,6 +112,49 @@ echo $m->answer;
     assert_eq!(out, "answer:99|answer");
 }
 
+#[test]
+fn test_magic_invoke_handles_variable_object_call() {
+    let out = compile_and_run(
+        r#"<?php
+class CallableObj {
+    public function __invoke($x) { return $x * 2; }
+}
+$obj = new CallableObj();
+echo $obj(21);
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_magic_invoke_handles_loaded_object_expr_call() {
+    let out = compile_and_run(
+        r#"<?php
+class CallableObj {
+    public function __invoke($x) { return $x * 2; }
+}
+echo (new CallableObj())(21);
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_magic_call_handles_missing_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Proxy {
+    public function __call($method, $args) {
+        return "called:" . $method . ":" . implode(",", $args);
+    }
+}
+$p = new Proxy();
+echo $p->doSomething(1, 2, 3);
+"#,
+    );
+    assert_eq!(out, "called:doSomething:1,2,3");
+}
+
 // =============================================================================
 // Non-class regression edge cases
 // =============================================================================

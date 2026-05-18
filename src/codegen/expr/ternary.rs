@@ -15,7 +15,7 @@ use crate::codegen::{abi, functions};
 use crate::parser::ast::Expr;
 use crate::types::{FunctionSig, PhpType};
 
-use super::{coerce_to_string, coerce_to_truthiness, emit_expr};
+use super::{coerce_result_to_type, coerce_to_string, coerce_to_truthiness, emit_expr};
 
 pub(super) fn emit_ternary(
     condition: &Expr,
@@ -38,12 +38,12 @@ pub(super) fn emit_ternary(
     let result_ty = infer_branch_result_type(then_expr, else_expr, ctx);
 
     let then_ty = emit_expr(then_expr, emitter, ctx, data);
-    coerce_branch_result(emitter, ctx, data, &then_ty, &result_ty);
+    coerce_branch_result(emitter, ctx, data, then_expr, &then_ty, &result_ty);
     abi::emit_jump(emitter, &end_label);                                        // skip else branch after evaluating then-expr
 
     emitter.label(&else_label);
     let else_ty = emit_expr(else_expr, emitter, ctx, data);
-    coerce_branch_result(emitter, ctx, data, &else_ty, &result_ty);
+    coerce_branch_result(emitter, ctx, data, else_expr, &else_ty, &result_ty);
 
     emitter.label(&end_label);
     result_ty
@@ -69,13 +69,13 @@ pub(super) fn emit_short_ternary(
     abi::emit_branch_if_int_result_zero(emitter, &default_label);
 
     pop_saved_result_value(emitter, &value_ty);
-    coerce_branch_result(emitter, ctx, data, &value_ty, &result_ty);
+    coerce_branch_result(emitter, ctx, data, value, &value_ty, &result_ty);
     abi::emit_jump(emitter, &end_label);                                        // skip fallback after restoring truthy left value
 
     emitter.label(&default_label);
     discard_saved_result_value(emitter, &value_ty);
     let default_ty = emit_expr(default, emitter, ctx, data);
-    coerce_branch_result(emitter, ctx, data, &default_ty, &result_ty);
+    coerce_branch_result(emitter, ctx, data, default, &default_ty, &result_ty);
 
     emitter.label(&end_label);
     result_ty
@@ -111,6 +111,7 @@ fn coerce_branch_result(
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
+    branch_expr: &Expr,
     branch_ty: &PhpType,
     result_ty: &PhpType,
 ) {
@@ -123,6 +124,23 @@ fn coerce_branch_result(
         coerce_to_string(emitter, ctx, data, branch_ty);
     } else if *result_ty == PhpType::Float && *branch_ty == PhpType::Int {
         abi::emit_int_result_to_float_result(emitter);                          // convert int to float for unified result type
+    } else if crate::codegen::expr::can_coerce_result_to_type(branch_ty, result_ty) {
+        let release_mixed_after_coerce = !matches!(result_ty, PhpType::Mixed | PhpType::Union(_))
+            && crate::codegen::stmt::helpers::should_release_owned_mixed_after_coerce(
+                branch_expr,
+                branch_ty,
+                result_ty,
+            );
+        if release_mixed_after_coerce {
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
+        }
+        coerce_result_to_type(emitter, ctx, data, branch_ty, result_ty);
+        if release_mixed_after_coerce {
+            crate::codegen::stmt::helpers::release_preserved_mixed_after_coercion(
+                emitter,
+                result_ty,
+            );
+        }
     }
 }
 

@@ -23,7 +23,7 @@ mod warnings;
 
 pub(crate) use array_keys::{
     array_key_type_from_value_type, is_php_integer_array_key, merge_array_key_types,
-    normalized_array_key_type,
+    normalized_array_key_type, parse_php_string_offset_literal,
 };
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};

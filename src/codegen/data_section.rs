@@ -87,7 +87,7 @@ impl DataSection {
                     b'\\' => out.push_str("\\\\"),
                     b'"' => out.push_str("\\\""),
                     0x20..=0x7e => out.push(b as char),
-                    _ => out.push_str(&format!("\\x{:02x}", b)),
+                    _ => out.push_str(&format!("\\{:03o}", b)),
                 }
             }
             out.push_str("\"\n");
@@ -112,5 +112,16 @@ mod tests {
 
         assert!(asm.contains(".p2align 3\n"));
         assert!(!asm.contains(".align 3\n"));
+    }
+
+    #[test]
+    fn test_non_printable_string_bytes_use_bounded_octal_escapes() {
+        let mut data = DataSection::new();
+        data.add_string(b"a\0b");
+
+        let asm = data.emit();
+
+        assert!(asm.contains(r#".ascii "a\000b""#));
+        assert!(!asm.contains(r#"\x00b"#));
     }
 }

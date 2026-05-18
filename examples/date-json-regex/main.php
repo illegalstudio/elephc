@@ -53,6 +53,11 @@ echo "Cleaned: " . $cleaned . "\n";
 $name = preg_replace("/([a-z]+) ([a-z]+)/", '$2, $1', "ada lovelace");
 echo "Name swap: " . $name . "\n";
 
+$tagged = preg_replace_callback("/(\d+)/", function($matches) {
+    return "[" . $matches[0] . "]";
+}, "order 42, item 7");
+echo "Callback replace: " . $tagged . "\n";
+
 // Split
 $parts = preg_split("/[,;]+/", "one,two;;three,four");
 echo "Parts: " . count($parts) . "\n";

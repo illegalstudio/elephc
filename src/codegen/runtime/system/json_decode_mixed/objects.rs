@@ -31,7 +31,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     //   [sp + 24] = hash_ptr
     //   [sp + 32] = key_start (saved across the recursive key decode)
     //   [sp + 40] = key Mixed* (saved across the recursive value decode)
-    //   [sp + 48] = value_start
+    //   [sp + 48] = value_start / value Mixed* during insertion
     //   [sp + 56] = after_comma flag
     //   [sp + 64] = saved x29
     //   [sp + 72] = saved x30
@@ -197,12 +197,17 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     // Insert (key, value) into the hash.
     //   __rt_hash_set: x0=hash, x1=key_lo, x2=key_hi, x3=value_lo,
     //                  x4=value_hi, x5=value_tag → returns x0=updated hash
-    emitter.instruction("mov x9, x0");                                          // park value Mixed* in a non-arg reg
+    emitter.instruction("str x0, [sp, #48]");                                   // park value Mixed* while the key may be normalized
     emitter.instruction("ldr x10, [sp, #40]");                                  // key Mixed*
     emitter.instruction("ldr x1, [x10, #8]");                                   // key_lo = ptr (offset 8 in Mixed cell)
     emitter.instruction("ldr x2, [x10, #16]");                                  // key_hi = len (offset 16)
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_json_decode_assoc");
+    emitter.instruction("ldr x9, [x9]");                                        // load the assoc flag to choose array-key versus property-name semantics
+    emitter.instruction("cbz x9, __rt_json_decode_object_real_key_ready");      // stdClass mode keeps numeric-looking property names as strings
+    emitter.instruction("bl __rt_hash_normalize_key");                          // normalize integer-string JSON object keys for assoc-array mode
+    emitter.label("__rt_json_decode_object_real_key_ready");
     emitter.instruction("ldr x0, [sp, #24]");                                   // hash ptr
-    emitter.instruction("mov x3, x9");                                          // value_lo = Mixed*
+    emitter.instruction("ldr x3, [sp, #48]");                                   // value_lo = Mixed*
     emitter.instruction("mov x4, #0");                                          // value_hi
     emitter.instruction("mov x5, #7");                                          // value_tag = boxed mixed
     emitter.instruction("bl __rt_hash_set");                                    // call the hash set helper
@@ -284,7 +289,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     //   [rbp - 32] = hash_ptr
     //   [rbp - 40] = key_start
     //   [rbp - 48] = key Mixed*
-    //   [rbp - 56] = value_start
+    //   [rbp - 56] = value_start / value Mixed* during insertion
     //   [rbp - 64] = after_comma flag
     emitter.instruction("push rbp");                                            // preserve or restore JSON decoder scratch state
     emitter.instruction("mov rbp, rsp");                                        // load or prepare JSON decoder state
@@ -450,11 +455,18 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_decode_object_real_propagate_x");         // recursion already recorded the JSON error
 
     // hash_set on x86_64: rdi=hash, rsi=key_lo, rdx=key_hi, rcx=value_lo,
-    // r8=value_hi, r9=value_tag → returns rax=updated hash.
-    emitter.instruction("mov rcx, rax");                                        // value_lo = value Mixed*
+    // r8=value_hi, r9=value_tag -> returns rax=updated hash.
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // park value Mixed* while the key may be normalized
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // key Mixed*
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // key_lo = key ptr
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // key_hi = key len
+    emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                        // key_lo = key pointer for the normalizer ABI
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // key_hi = key length for the normalizer ABI
+    emitter.instruction("mov r10, QWORD PTR [rip + _json_decode_assoc]");       // load the assoc flag to choose array-key versus property-name semantics
+    emitter.instruction("test r10, r10");                                       // determine whether this object becomes an assoc array
+    emitter.instruction("je __rt_json_decode_object_real_key_ready_x");         // stdClass mode keeps numeric-looking property names as strings
+    emitter.instruction("call __rt_hash_normalize_key");                        // normalize integer-string JSON object keys for assoc-array mode
+    emitter.label("__rt_json_decode_object_real_key_ready_x");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // value_lo = value Mixed*
+    emitter.instruction("mov rsi, rax");                                        // key_lo = normalized key low word
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // hash ptr
     emitter.instruction("xor r8, r8");                                          // value_hi
     emitter.instruction("mov r9, 7");                                           // value_tag = boxed mixed

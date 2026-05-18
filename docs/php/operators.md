@@ -68,6 +68,7 @@ PHP's error-control operator `@` suppresses runtime warnings for exactly one exp
 
 ```php
 <?php
+@file_get_contents("missing.txt");
 $value = @file_get_contents("missing.txt");
 echo "still running";
 ```

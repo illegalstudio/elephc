@@ -30,6 +30,7 @@ sidebar:
 | `buffer<T>`      | elephc extension | Fixed-size contiguous storage for POD scalars, pointers, or packed records. See [Buffers](../beyond-php/buffers.md).   |
 | `packed class`   | elephc extension | Flat POD record type with compile-time field offsets. See [Packed Classes](../beyond-php/packed-classes.md).           |
 
+Integer-form numeric literals keep the `int` type only while they fit in PHP's signed 64-bit range. Larger decimal, hexadecimal, octal, or binary literals are promoted to `float`, matching PHP on 64-bit builds.
 
 ### Never
 
@@ -154,7 +155,7 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `intval()`      | `intval($val): int`          | Converts to integer            |
 | `gettype()`     | `gettype($val): string`      | Returns type name              |
 | `empty()`       | `empty($val): bool`          | Returns true if value is falsy |
-| `unset()`       | `unset($var): void`          | Sets variable to null          |
+| `unset()`       | `unset($var, ...$vars): void` | Sets one or more variables to null |
 | `settype()`     | `settype($var, $type): bool` | Changes variable type in place |
 
 

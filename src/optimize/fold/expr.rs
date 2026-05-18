@@ -227,6 +227,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             is_arrow,
             is_static,
             captures,
+            capture_refs,
         } => ExprKind::Closure {
             params: fold_params(params),
             variadic,
@@ -235,6 +236,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             is_arrow,
             is_static,
             captures,
+            capture_refs,
         },
         ExprKind::NamedArg { name, value } => ExprKind::NamedArg {
             name,

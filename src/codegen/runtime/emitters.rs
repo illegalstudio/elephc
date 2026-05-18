@@ -127,6 +127,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     system::emit_preg_match(emitter);
     system::emit_preg_match_all(emitter);
     system::emit_preg_replace(emitter);
+    system::emit_preg_replace_callback(emitter);
     system::emit_preg_split(emitter);
     system::emit_match_unhandled(emitter);
     system::emit_enum_from_fail(emitter);

@@ -13,8 +13,15 @@ Support escape sequences:
 <?php
 echo "Hello\n";      // newline
 echo "Tab\there";    // tab
+echo "Return\r";     // carriage return
+echo "Vert\v";       // vertical tab
+echo "Esc\e";        // escape byte
+echo "Form\f";       // form feed
 echo "Quote: \"";    // escaped quote
 echo "Backslash: \\"; // backslash
+echo "\x41";         // hex byte: A
+echo "\101";         // octal byte: A
+echo "\u{1F600}";    // Unicode codepoint: 😀
 ```
 
 ## Single-quoted strings
@@ -133,11 +140,13 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `preg_match()` | `preg_match($pattern, $subject): int` | Test if regex matches (1 or 0). Uses POSIX extended regex. |
 | `preg_match_all()` | `preg_match_all($pattern, $subject): int` | Count all non-overlapping matches |
 | `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string` | Replace all regex matches; supports `$0`..`$9` and `\0`..`\9` replacement backreferences |
+| `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): string` | Replace all regex matches with the callback return value; callback receives `array<string>` matches |
 | `preg_split()` | `preg_split($pattern, $subject): array` | Split string by regex pattern |
 
 ### Regex limitations
 
 - Uses POSIX extended regex via libc, with translation of common PCRE shorthands (`\s`, `\d`, `\w`)
 - `preg_replace()` expands `$0`..`$9` and `\0`..`\9` to captured groups; unmatched optional groups expand to an empty string
+- `preg_replace_callback()` passes `$matches[0]` as the full match and `$matches[1]`..`$matches[9]` as supported capture groups
 - Lookahead, lookbehind, non-greedy quantifiers are not supported
 - `preg_match()` does not support `$matches` capture parameter

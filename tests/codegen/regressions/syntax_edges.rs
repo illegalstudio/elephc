@@ -44,6 +44,16 @@ if (true) echo "yes";
 }
 
 #[test]
+fn test_multi_argument_echo() {
+    let out = compile_and_run(
+        r#"<?php
+echo "A", "B", 3, "\n";
+"#,
+    );
+    assert_eq!(out, "AB3\n");
+}
+
+#[test]
 fn test_braceless_if_else() {
     let out = compile_and_run(
         r#"<?php
