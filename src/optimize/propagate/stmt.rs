@@ -153,8 +153,9 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             array,
             key_var,
             value_var,
+            value_by_ref,
             body,
-        } => propagate_foreach_stmt(array, key_var, value_var, body, span, env),
+        } => propagate_foreach_stmt(array, key_var, value_var, value_by_ref, body, span, env),
         StmtKind::Switch {
             subject,
             cases,

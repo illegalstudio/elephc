@@ -181,6 +181,43 @@ fn test_foreach_int() {
 }
 
 #[test]
+fn test_foreach_value_by_reference_mutates_indexed_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3];
+foreach ($a as &$v) {
+    $v *= 2;
+}
+foreach ($a as $x) {
+    echo $x;
+}
+"#,
+    );
+    assert_eq!(out, "246");
+}
+
+#[test]
+fn test_foreach_value_by_reference_splits_cow_indexed_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2];
+$b = $a;
+foreach ($b as &$v) {
+    $v *= 3;
+}
+foreach ($a as $x) {
+    echo $x;
+}
+echo "|";
+foreach ($b as $x) {
+    echo $x;
+}
+"#,
+    );
+    assert_eq!(out, "12|36");
+}
+
+#[test]
 fn test_foreach_string() {
     let out = compile_and_run(r#"<?php $a = ["a", "b", "c"]; foreach ($a as $v) { echo $v; }"#);
     assert_eq!(out, "abc");

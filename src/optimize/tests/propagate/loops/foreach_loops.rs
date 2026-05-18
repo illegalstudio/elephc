@@ -26,6 +26,7 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_foreach_loop() {
                 ),
                 key_var: Some("k".to_string()),
                 value_var: "value".to_string(),
+                value_by_ref: false,
                 body: vec![Stmt::echo(Expr::var("value"))],
             },
             Span::dummy(),

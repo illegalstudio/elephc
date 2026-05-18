@@ -43,12 +43,13 @@ pub(super) fn emit_foreach_stmt(
     array: &Expr,
     key_var: &Option<String>,
     value_var: &str,
+    value_by_ref: bool,
     body: &[Stmt],
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
 ) {
-    foreach::emit_foreach_stmt(array, key_var, value_var, body, emitter, ctx, data)
+    foreach::emit_foreach_stmt(array, key_var, value_var, value_by_ref, body, emitter, ctx, data)
 }
 
 pub(super) fn emit_do_while_stmt(

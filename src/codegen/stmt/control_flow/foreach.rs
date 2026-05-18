@@ -12,7 +12,7 @@ mod assoc;
 mod indexed;
 mod iterator;
 
-use crate::codegen::context::Context;
+use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
@@ -24,6 +24,7 @@ pub(super) fn emit_foreach_stmt(
     array: &Expr,
     key_var: &Option<String>,
     value_var: &str,
+    value_by_ref: bool,
     body: &[Stmt],
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -41,12 +42,16 @@ pub(super) fn emit_foreach_stmt(
         _ => None,
     };
     let arr_ty = emit_expr(array, emitter, ctx, data);
+    if value_by_ref {
+        ensure_unique_by_ref_source(receiver_var, &arr_ty, emitter, ctx);
+    }
 
     match &arr_ty {
         PhpType::AssocArray { key, value } => {
             assoc::emit_assoc_foreach(
                 key_var,
                 value_var,
+                value_by_ref,
                 body,
                 &loop_start,
                 &loop_end,
@@ -130,6 +135,7 @@ pub(super) fn emit_foreach_stmt(
             assoc::emit_assoc_foreach(
                 key_var,
                 value_var,
+                value_by_ref,
                 body,
                 &hash_start,
                 &hash_end,
@@ -147,6 +153,7 @@ pub(super) fn emit_foreach_stmt(
             indexed::emit_indexed_foreach_runtime_mixed(
                 key_var,
                 value_var,
+                value_by_ref,
                 body,
                 &indexed_start,
                 &indexed_end,
@@ -203,6 +210,7 @@ pub(super) fn emit_foreach_stmt(
             assoc::emit_assoc_foreach(
                 key_var,
                 value_var,
+                value_by_ref,
                 body,
                 &hash_start,
                 &hash_end,
@@ -220,6 +228,7 @@ pub(super) fn emit_foreach_stmt(
             indexed::emit_indexed_foreach_runtime_mixed(
                 key_var,
                 value_var,
+                value_by_ref,
                 body,
                 &indexed_start,
                 &indexed_end,
@@ -238,6 +247,7 @@ pub(super) fn emit_foreach_stmt(
             indexed::emit_indexed_foreach(
                 key_var,
                 value_var,
+                value_by_ref,
                 body,
                 &loop_start,
                 &loop_end,
@@ -260,6 +270,86 @@ fn push_mixed_payload_lo(emitter: &mut Emitter) {
             abi::emit_push_reg(emitter, "rdi");                                 // preserve the unboxed mixed payload pointer while testing its runtime tag
         }
     }
+}
+
+fn ensure_unique_by_ref_source(
+    receiver_var: Option<&str>,
+    arr_ty: &PhpType,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    let helper = match arr_ty {
+        PhpType::Array(_) => "__rt_array_ensure_unique",
+        PhpType::AssocArray { .. } => "__rt_hash_ensure_unique",
+        _ => return,
+    };
+
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("bl {}", helper));                     // split shared foreach source before binding by-reference values
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rdi, rax");                                // pass the foreach source pointer to the uniqueness helper
+            emitter.instruction(&format!("call {}", helper));                   // split shared foreach source before binding by-reference values
+        }
+    }
+
+    let Some(name) = receiver_var else {
+        return;
+    };
+    if ctx.ref_params.contains(name) {
+        let Some(var) = ctx.variables.get(name) else {
+            return;
+        };
+        let pointer_reg = abi::symbol_scratch_reg(emitter);
+        abi::load_at_offset(emitter, pointer_reg, var.stack_offset);            // load referenced foreach source slot address
+        abi::emit_store_to_address(
+            emitter,
+            abi::int_result_reg(emitter),
+            pointer_reg,
+            0,
+        );                                                                      // store the unique source pointer through the reference
+        return;
+    }
+    if ctx.extern_globals.contains_key(name) {
+        super::super::emit_extern_global_store(emitter, name, arr_ty);
+        return;
+    }
+    if ctx.global_vars.contains(name) || (ctx.in_main && ctx.all_global_var_names.contains(name)) {
+        let label = format!("_gvar_{}", name);
+        abi::emit_store_reg_to_symbol(emitter, abi::int_result_reg(emitter), &label, 0);
+        return;
+    }
+    if let Some(var) = ctx.variables.get(name) {
+        abi::store_at_offset(emitter, abi::int_result_reg(emitter), var.stack_offset);
+        ctx.update_var_type_and_ownership(
+            name,
+            arr_ty.clone(),
+            HeapOwnership::local_owner_for_type(arr_ty),
+        );
+    }
+}
+
+pub(super) fn bind_foreach_value_ref(
+    value_var: &str,
+    value_addr_reg: &str,
+    value_ty: &PhpType,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    let Some(var) = ctx.variables.get(value_var) else {
+        emitter.comment(&format!("WARNING: undefined foreach value variable ${}", value_var));
+        return;
+    };
+    let offset = var.stack_offset;
+    abi::store_at_offset_scratch(emitter, value_addr_reg, offset, abi::temp_int_reg(emitter.target));
+    ctx.ref_params.insert(value_var.to_string());
+    ctx.update_var_type_static_and_ownership(
+        value_var,
+        value_ty.codegen_repr(),
+        value_ty.clone(),
+        HeapOwnership::borrowed_alias_for_type(value_ty),
+    );
 }
 
 fn branch_on_mixed_iterable_tag(

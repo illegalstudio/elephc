@@ -93,11 +93,13 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             array,
             key_var,
             value_var,
+            value_by_ref,
             body,
         } => StmtKind::Foreach {
             array: fold_expr(array),
             key_var,
             value_var,
+            value_by_ref,
             body: fold_block(body),
         },
         StmtKind::Switch {

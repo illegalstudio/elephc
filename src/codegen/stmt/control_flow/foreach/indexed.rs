@@ -19,6 +19,7 @@ use crate::types::PhpType;
 pub(crate) fn emit_indexed_foreach(
     key_var: &Option<String>,
     value_var: &str,
+    value_by_ref: bool,
     body: &[Stmt],
     loop_start: &str,
     loop_end: &str,
@@ -32,6 +33,7 @@ pub(crate) fn emit_indexed_foreach(
         emit_indexed_foreach_linux_x86_64(
             key_var,
             value_var,
+            value_by_ref,
             body,
             loop_start,
             loop_end,
@@ -74,33 +76,37 @@ pub(crate) fn emit_indexed_foreach(
         }
     };
     let val_offset = val_var.stack_offset;
-    match elem_ty {
-        PhpType::Int => {
-            emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
-            emitter.instruction("ldr x0, [x9, x0, lsl #3]");                    // load int at data[index] (8 bytes per element)
-            crate::codegen::abi::store_at_offset(emitter, "x0", val_offset);
+    if value_by_ref {
+        bind_indexed_value_ref_aarch64(value_var, val_offset, elem_ty, emitter, ctx);
+    } else {
+        match elem_ty {
+            PhpType::Int => {
+                emitter.instruction("add x9, x9, #24");                         // skip 24-byte array header to reach data
+                emitter.instruction("ldr x0, [x9, x0, lsl #3]");                // load int at data[index] (8 bytes per element)
+                crate::codegen::abi::store_at_offset(emitter, "x0", val_offset);
+            }
+            PhpType::Str => {
+                emitter.instruction("lsl x10, x0, #4");                         // multiply index by 16 (string slot size)
+                emitter.instruction("add x9, x9, x10");                         // offset to the string slot in data region
+                emitter.instruction("add x9, x9, #24");                         // skip 24-byte array header
+                emitter.instruction("ldr x1, [x9]");                            // load string pointer from slot
+                emitter.instruction("ldr x2, [x9, #8]");                        // load string length from slot+8
+                crate::codegen::abi::store_at_offset(emitter, "x1", val_offset);
+                crate::codegen::abi::store_at_offset(emitter, "x2", val_offset - 8);
+            }
+            PhpType::Mixed | PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+                emitter.instruction("add x9, x9, #24");                         // skip 24-byte array header to reach data
+                emitter.instruction("ldr x0, [x9, x0, lsl #3]");                // load nested array/object pointer at index
+                crate::codegen::abi::store_at_offset(emitter, "x0", val_offset);
+            }
+            _ => {}
         }
-        PhpType::Str => {
-            emitter.instruction("lsl x10, x0, #4");                             // multiply index by 16 (string slot size)
-            emitter.instruction("add x9, x9, x10");                             // offset to the string slot in data region
-            emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header
-            emitter.instruction("ldr x1, [x9]");                                // load string pointer from slot
-            emitter.instruction("ldr x2, [x9, #8]");                            // load string length from slot+8
-            crate::codegen::abi::store_at_offset(emitter, "x1", val_offset);
-            crate::codegen::abi::store_at_offset(emitter, "x2", val_offset - 8);
-        }
-        PhpType::Mixed | PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-            emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
-            emitter.instruction("ldr x0, [x9, x0, lsl #3]");                    // load nested array/object pointer at index
-            crate::codegen::abi::store_at_offset(emitter, "x0", val_offset);
-        }
-        _ => {}
+        ctx.update_var_type_and_ownership(
+            value_var,
+            elem_ty.clone(),
+            HeapOwnership::borrowed_alias_for_type(elem_ty),
+        );
     }
-    ctx.update_var_type_and_ownership(
-        value_var,
-        elem_ty.clone(),
-        HeapOwnership::borrowed_alias_for_type(elem_ty),
-    );
 
     ctx.loop_stack.push(LoopLabels {
         continue_label: loop_cont.to_string(),
@@ -124,6 +130,7 @@ pub(crate) fn emit_indexed_foreach(
 pub(crate) fn emit_indexed_foreach_runtime_mixed(
     key_var: &Option<String>,
     value_var: &str,
+    value_by_ref: bool,
     body: &[Stmt],
     loop_start: &str,
     loop_end: &str,
@@ -136,6 +143,7 @@ pub(crate) fn emit_indexed_foreach_runtime_mixed(
         emit_indexed_foreach_runtime_mixed_linux_x86_64(
             key_var,
             value_var,
+            value_by_ref,
             body,
             loop_start,
             loop_end,
@@ -171,6 +179,9 @@ pub(crate) fn emit_indexed_foreach_runtime_mixed(
         }
     }
 
+    if value_by_ref {
+        emitter.comment("WARNING: by-reference foreach over runtime-typed indexed iterable is unsupported");
+    }
     let val_var = match ctx.variables.get(value_var) {
         Some(v) => v,
         None => {
@@ -240,6 +251,7 @@ pub(crate) fn emit_indexed_foreach_runtime_mixed(
 fn emit_indexed_foreach_linux_x86_64(
     key_var: &Option<String>,
     value_var: &str,
+    value_by_ref: bool,
     body: &[Stmt],
     loop_start: &str,
     loop_end: &str,
@@ -280,39 +292,43 @@ fn emit_indexed_foreach_linux_x86_64(
         }
     };
     let val_offset = val_var.stack_offset;
-    match elem_ty {
-        PhpType::Int | PhpType::Bool => {
-            emitter.instruction("add r11, 24");                                 // skip the indexed-array header to reach the scalar payload base address
-            emitter.instruction("mov rax, QWORD PTR [r11 + rax * 8]");          // load the current scalar foreach payload from the indexed-array data region
-            crate::codegen::abi::store_at_offset(emitter, "rax", val_offset);
+    if value_by_ref {
+        bind_indexed_value_ref_x86_64(value_var, val_offset, elem_ty, emitter, ctx);
+    } else {
+        match elem_ty {
+            PhpType::Int | PhpType::Bool => {
+                emitter.instruction("add r11, 24");                             // skip the indexed-array header to reach the scalar payload base address
+                emitter.instruction("mov rax, QWORD PTR [r11 + rax * 8]");      // load the current scalar foreach payload from the indexed-array data region
+                crate::codegen::abi::store_at_offset(emitter, "rax", val_offset);
+            }
+            PhpType::Float => {
+                emitter.instruction("add r11, 24");                             // skip the indexed-array header to reach the floating-point payload base address
+                emitter.instruction("movsd xmm0, QWORD PTR [r11 + rax * 8]");   // load the current floating-point foreach payload from the indexed-array data region
+                crate::codegen::abi::store_at_offset(emitter, "xmm0", val_offset);
+            }
+            PhpType::Str => {
+                emitter.instruction("mov r10, rax");                            // copy the current foreach loop index before scaling it to the 16-byte string slot size
+                emitter.instruction("shl r10, 4");                              // scale the foreach loop index by the 16-byte string slot size
+                emitter.instruction("add r11, r10");                            // advance from the indexed-array base to the selected string slot
+                emitter.instruction("add r11, 24");                             // skip the indexed-array header to reach the selected string slot payload
+                emitter.instruction("mov rax, QWORD PTR [r11]");                // load the current foreach string pointer from the selected string slot
+                emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");            // load the current foreach string length from the selected string slot
+                crate::codegen::abi::store_at_offset(emitter, "rax", val_offset);
+                crate::codegen::abi::store_at_offset(emitter, "rdx", val_offset - 8);
+            }
+            PhpType::Mixed | PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+                emitter.instruction("add r11, 24");                             // skip the indexed-array header to reach the pointer payload base address
+                emitter.instruction("mov rax, QWORD PTR [r11 + rax * 8]");      // load the current pointer-like foreach payload from the indexed-array data region
+                crate::codegen::abi::store_at_offset(emitter, "rax", val_offset);
+            }
+            _ => {}
         }
-        PhpType::Float => {
-            emitter.instruction("add r11, 24");                                 // skip the indexed-array header to reach the floating-point payload base address
-            emitter.instruction("movsd xmm0, QWORD PTR [r11 + rax * 8]");       // load the current floating-point foreach payload from the indexed-array data region
-            crate::codegen::abi::store_at_offset(emitter, "xmm0", val_offset);
-        }
-        PhpType::Str => {
-            emitter.instruction("mov r10, rax");                                // copy the current foreach loop index before scaling it to the 16-byte string slot size
-            emitter.instruction("shl r10, 4");                                  // scale the foreach loop index by the 16-byte string slot size
-            emitter.instruction("add r11, r10");                                // advance from the indexed-array base to the selected string slot
-            emitter.instruction("add r11, 24");                                 // skip the indexed-array header to reach the selected string slot payload
-            emitter.instruction("mov rax, QWORD PTR [r11]");                    // load the current foreach string pointer from the selected string slot
-            emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");                // load the current foreach string length from the selected string slot
-            crate::codegen::abi::store_at_offset(emitter, "rax", val_offset);
-            crate::codegen::abi::store_at_offset(emitter, "rdx", val_offset - 8);
-        }
-        PhpType::Mixed | PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-            emitter.instruction("add r11, 24");                                 // skip the indexed-array header to reach the pointer payload base address
-            emitter.instruction("mov rax, QWORD PTR [r11 + rax * 8]");          // load the current pointer-like foreach payload from the indexed-array data region
-            crate::codegen::abi::store_at_offset(emitter, "rax", val_offset);
-        }
-        _ => {}
+        ctx.update_var_type_and_ownership(
+            value_var,
+            elem_ty.clone(),
+            HeapOwnership::borrowed_alias_for_type(elem_ty),
+        );
     }
-    ctx.update_var_type_and_ownership(
-        value_var,
-        elem_ty.clone(),
-        HeapOwnership::borrowed_alias_for_type(elem_ty),
-    );
 
     ctx.loop_stack.push(LoopLabels {
         continue_label: loop_cont.to_string(),
@@ -336,6 +352,7 @@ fn emit_indexed_foreach_linux_x86_64(
 fn emit_indexed_foreach_runtime_mixed_linux_x86_64(
     key_var: &Option<String>,
     value_var: &str,
+    value_by_ref: bool,
     body: &[Stmt],
     loop_start: &str,
     loop_end: &str,
@@ -369,6 +386,9 @@ fn emit_indexed_foreach_runtime_mixed_linux_x86_64(
         }
     }
 
+    if value_by_ref {
+        emitter.comment("WARNING: by-reference foreach over runtime-typed indexed iterable is unsupported");
+    }
     let val_var = match ctx.variables.get(value_var) {
         Some(v) => v,
         None => {
@@ -470,4 +490,39 @@ fn store_runtime_mixed_index_key_x86_64(
     crate::codegen::abi::store_at_offset_scratch(emitter, "rax", offset, "r10");
     abi::emit_pop_reg(emitter, "rax");                                          // restore the current index for the indexed-array value load
     ctx.update_var_type_and_ownership(name, PhpType::Mixed, HeapOwnership::Owned);
+}
+
+fn bind_indexed_value_ref_aarch64(
+    value_var: &str,
+    _val_offset: usize,
+    elem_ty: &PhpType,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    if matches!(elem_ty, PhpType::Str) {
+        emitter.instruction("lsl x10, x0, #4");                                 // scale the foreach index to the 16-byte string slot width
+    } else {
+        emitter.instruction("lsl x10, x0, #3");                                 // scale the foreach index to the 8-byte payload slot width
+    }
+    emitter.instruction("add x9, x9, #24");                                     // skip the indexed-array header to reach payload storage
+    emitter.instruction("add x9, x9, x10");                                     // compute the address of the current indexed-array element
+    super::bind_foreach_value_ref(value_var, "x9", elem_ty, emitter, ctx);
+}
+
+fn bind_indexed_value_ref_x86_64(
+    value_var: &str,
+    _val_offset: usize,
+    elem_ty: &PhpType,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    emitter.instruction("mov r10, rax");                                        // copy the foreach index before scaling it into a byte offset
+    if matches!(elem_ty, PhpType::Str) {
+        emitter.instruction("shl r10, 4");                                      // scale the foreach index to the 16-byte string slot width
+    } else {
+        emitter.instruction("shl r10, 3");                                      // scale the foreach index to the 8-byte payload slot width
+    }
+    emitter.instruction("add r11, 24");                                         // skip the indexed-array header to reach payload storage
+    emitter.instruction("add r11, r10");                                        // compute the address of the current indexed-array element
+    super::bind_foreach_value_ref(value_var, "r11", elem_ty, emitter, ctx);
 }

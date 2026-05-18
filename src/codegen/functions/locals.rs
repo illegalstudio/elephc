@@ -8,7 +8,7 @@
 //! Key details:
 //! - Any lowering path that introduces storage must be represented here before stack offsets are assigned.
 
-use crate::codegen::context::Context;
+use crate::codegen::context::{Context, HeapOwnership};
 use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, StmtKind};
 use crate::types::{FunctionSig, PhpType};
 use super::types::{codegen_declared_type, codegen_static_type, infer_local_type};
@@ -111,6 +111,7 @@ pub fn collect_local_vars(
             }
             StmtKind::Foreach {
                 value_var,
+                value_by_ref,
                 body,
                 array,
                 key_var,
@@ -134,7 +135,21 @@ pub fn collect_local_vars(
                         PhpType::Iterable | PhpType::Object(_) => PhpType::Mixed,
                         _ => PhpType::Int,
                     };
-                    ctx.alloc_var_with_static_type(value_var, elem_ty.codegen_repr(), elem_ty);
+                    if *value_by_ref {
+                        ctx.alloc_var_with_static_type(
+                            value_var,
+                            PhpType::Int,
+                            elem_ty.clone(),
+                        );
+                        ctx.update_var_type_static_and_ownership(
+                            value_var,
+                            elem_ty.codegen_repr(),
+                            elem_ty.clone(),
+                            HeapOwnership::borrowed_alias_for_type(&elem_ty),
+                        );
+                    } else {
+                        ctx.alloc_var_with_static_type(value_var, elem_ty.codegen_repr(), elem_ty);
+                    }
                 }
                 collect_local_vars(body, ctx, sig);
             }

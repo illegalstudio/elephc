@@ -25,6 +25,7 @@ impl Checker {
                 array,
                 key_var,
                 value_var,
+                value_by_ref,
                 body,
             } => {
                 let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
@@ -66,6 +67,17 @@ impl Checker {
                     return Err(CompileError::new(
                         stmt.span,
                         "foreach requires an array, iterable, or an object implementing Iterator/IteratorAggregate",
+                    ));
+                }
+                if *value_by_ref
+                    && !matches!(
+                        arr_ty,
+                        PhpType::Array(_) | PhpType::AssocArray { .. }
+                    )
+                {
+                    return Err(CompileError::new(
+                        stmt.span,
+                        "by-reference foreach requires an array value",
                     ));
                 }
                 let errors = self.check_break_continue_target_body(body, env);

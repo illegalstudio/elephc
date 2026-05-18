@@ -76,11 +76,13 @@ pub(super) fn resolve_regular_stmt(
             array,
             key_var,
             value_var,
+            value_by_ref,
             body,
         } => StmtKind::Foreach {
             array: ctx.expr(array),
             key_var: key_var.clone(),
             value_var: value_var.clone(),
+            value_by_ref: *value_by_ref,
             body: ctx.stmt_list(body)?,
         },
         StmtKind::Switch {

@@ -279,6 +279,22 @@ foreach ($m as $k => $v) {
 }
 
 #[test]
+fn test_assoc_foreach_value_by_reference_mutates_values() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["a" => 1, "b" => 2];
+foreach ($m as $k => &$v) {
+    $v += 10;
+}
+foreach ($m as $k => $x) {
+    echo $k . "=" . $x . ";";
+}
+"#,
+    );
+    assert_eq!(out, "a=11;b=12;");
+}
+
+#[test]
 fn test_assoc_foreach_mixed_integer_and_string_keys() {
     let out = compile_and_run(
         r#"<?php

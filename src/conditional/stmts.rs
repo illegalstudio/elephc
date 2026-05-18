@@ -110,11 +110,13 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             array,
             key_var,
             value_var,
+            value_by_ref,
             body,
         } => StmtKind::Foreach {
             array: rewrite_expr(array, defines),
             key_var,
             value_var,
+            value_by_ref,
             body: apply_stmts(body, defines),
         },
         StmtKind::Switch {

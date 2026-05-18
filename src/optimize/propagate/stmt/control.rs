@@ -129,11 +129,17 @@ pub(super) fn propagate_foreach_stmt(
     array: Expr,
     key_var: Option<String>,
     value_var: String,
+    value_by_ref: bool,
     body: Vec<Stmt>,
     span: crate::span::Span,
     env: ConstantEnv,
 ) -> (Stmt, ConstantEnv) {
-    let loop_env = safe_foreach_env(&env, &array, key_var.as_deref(), &value_var, &body);
+    let mut loop_env = safe_foreach_env(&env, &array, key_var.as_deref(), &value_var, &body);
+    if value_by_ref {
+        if let ExprKind::Variable(array_name) = &array.kind {
+            loop_env.remove(array_name);
+        }
+    }
     let array = propagate_expr(array, &env);
     let (body, _) = propagate_block(body, loop_env.clone());
     (
@@ -142,6 +148,7 @@ pub(super) fn propagate_foreach_stmt(
                 array,
                 key_var,
                 value_var,
+                value_by_ref,
                 body,
             },
             span,

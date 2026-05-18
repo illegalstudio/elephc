@@ -114,9 +114,15 @@ pub(crate) fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
             array,
             key_var,
             value_var,
+            value_by_ref,
             body,
         } => {
             let mut writes = expr_local_writes(array)?;
+            if *value_by_ref {
+                if let ExprKind::Variable(array_name) = &array.kind {
+                    writes.insert(array_name.clone());
+                }
+            }
             writes.insert(value_var.clone());
             if let Some(key_var) = key_var {
                 writes.insert(key_var.clone());

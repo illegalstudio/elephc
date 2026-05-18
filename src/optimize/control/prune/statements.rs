@@ -126,12 +126,14 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             array,
             key_var,
             value_var,
+            value_by_ref,
             body,
         } => vec![Stmt {
             kind: StmtKind::Foreach {
                 array: prune_expr(array),
                 key_var,
                 value_var,
+                value_by_ref,
                 body: prune_block(body),
             },
             span,

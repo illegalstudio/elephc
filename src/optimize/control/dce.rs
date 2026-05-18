@@ -346,12 +346,14 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             array,
             key_var,
             value_var,
+            value_by_ref,
             body,
         } => vec![Stmt {
             kind: StmtKind::Foreach {
                 array: prune_expr(array),
                 key_var,
                 value_var,
+                value_by_ref,
                 body: dce_block_with_guards(body, guards.clone()),
             },
             span,

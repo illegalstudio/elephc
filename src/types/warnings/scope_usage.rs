@@ -188,6 +188,7 @@ pub(super) fn collect_scope_reads(
                 key_var,
                 value_var,
                 body,
+                ..
             } => {
                 collect_expr_reads(array, scope, warnings);
                 if let Some(name) = key_var {

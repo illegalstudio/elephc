@@ -302,6 +302,14 @@ fn test_error_switch_missing_paren() {
 }
 
 #[test]
+fn test_error_foreach_key_by_reference() {
+    expect_error(
+        "<?php foreach ($a as &$k => $v) {}",
+        "Key element cannot be a reference in foreach",
+    );
+}
+
+#[test]
 fn test_error_match_missing_paren() {
     expect_error("<?php $x = match $x {};", "Expected '(' after 'match'");
 }

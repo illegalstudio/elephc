@@ -213,7 +213,13 @@ pub(super) fn resolve_stmts(
                     stmt.span,
                 ));
             }
-            StmtKind::Foreach { array, key_var, value_var, body } => {
+            StmtKind::Foreach {
+                array,
+                key_var,
+                value_var,
+                value_by_ref,
+                body,
+            } => {
                 let body = resolve_isolated(
                     body.clone(),
                     base_dir,
@@ -227,6 +233,7 @@ pub(super) fn resolve_stmts(
                         array: array.clone(),
                         key_var: key_var.clone(),
                         value_var: value_var.clone(),
+                        value_by_ref: *value_by_ref,
                         body,
                     },
                     stmt.span,
