@@ -31,6 +31,24 @@ fn test_string_escape_sequences() {
 }
 
 #[test]
+fn test_double_quoted_php_escape_sequences() {
+    let t = tokens(r#"<?php "a\r\v\e\f\x41\101\u{1F600}\0""#);
+    assert_eq!(
+        t[1],
+        Token::StringLiteral("a\r\u{0b}\u{1b}\u{0c}AA😀\0".into())
+    );
+}
+
+#[test]
+fn test_double_quoted_escape_digit_bounds_and_fallbacks() {
+    let t = tokens(r#"<?php "\x414\1234\09\xG\u0041\'""#);
+    assert_eq!(
+        t[1],
+        Token::StringLiteral("A4S4\09\\xG\\u0041\\'".into())
+    );
+}
+
+#[test]
 fn test_integer_literal() {
     let t = tokens("<?php 42");
     assert_eq!(t[1], Token::IntLiteral(42));

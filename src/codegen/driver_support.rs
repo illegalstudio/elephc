@@ -118,7 +118,8 @@ pub(super) fn emit_enum_singleton_initializers(
                         abi::emit_store_zero_to_address(emitter, object_reg, 16); // clear the metadata/high word for the int property
                     }
                     crate::types::EnumCaseValue::Str(value) => {
-                        let (label, len) = data.add_string(value.as_bytes());
+                        let bytes = crate::string_bytes::literal_bytes(value);
+                        let (label, len) = data.add_string(&bytes);
                         abi::emit_symbol_address(emitter, temp_reg, &label);    // materialize the enum string backing literal address
                         abi::emit_store_to_address(emitter, temp_reg, object_reg, 8); // store the string backing pointer in the first property slot
                         abi::emit_load_int_immediate(emitter, temp_reg, len as i64); // materialize the enum string backing length
