@@ -235,7 +235,7 @@ pub(super) fn resolve_expr(
         },
         ExprKind::MethodCall { object, method, args } => ExprKind::MethodCall {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
-            method: php_symbol_key(method),
+            method: method.clone(),
             args: args
                 .iter()
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
@@ -243,7 +243,7 @@ pub(super) fn resolve_expr(
         },
         ExprKind::NullsafeMethodCall { object, method, args } => ExprKind::NullsafeMethodCall {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
-            method: php_symbol_key(method),
+            method: method.clone(),
             args: args
                 .iter()
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))

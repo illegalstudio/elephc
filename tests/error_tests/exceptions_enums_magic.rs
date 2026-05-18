@@ -141,6 +141,30 @@ fn test_error_magic_set_must_take_two_arguments() {
 }
 
 #[test]
+fn test_error_magic_call_must_take_two_arguments() {
+    expect_error(
+        "<?php class Proxy { public function __call($name) { return 1; } }",
+        "Magic method must take 2 arguments: Proxy::__call",
+    );
+}
+
+#[test]
+fn test_error_magic_call_must_be_public() {
+    expect_error(
+        "<?php class Proxy { private function __call($name, $args) { return 1; } }",
+        "Magic method must be public: Proxy::__call",
+    );
+}
+
+#[test]
+fn test_error_magic_invoke_must_be_public() {
+    expect_error(
+        "<?php class Handler { private function __invoke($value) { return $value; } }",
+        "Magic method must be public: Handler::__invoke",
+    );
+}
+
+#[test]
 fn test_error_catch_requires_defined_class() {
     expect_error(
         "<?php try { echo 1; } catch (MissingException $e) { echo 2; }",

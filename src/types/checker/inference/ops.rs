@@ -332,6 +332,21 @@ impl Checker {
             CompileError::new(expr.span, &format!("Undefined variable: ${}", var))
         })?;
         if var_ty != PhpType::Callable {
+            if let Some(class_name) = self.invokable_class_for_type(&var_ty) {
+                if self
+                    .classes
+                    .get(&class_name)
+                    .is_some_and(|class_info| class_info.methods.contains_key("__invoke"))
+                {
+                    return self.infer_method_call_on_class_type(
+                        &class_name,
+                        "__invoke",
+                        args,
+                        expr,
+                        env,
+                    );
+                }
+            }
             return Err(CompileError::new(
                 expr.span,
                 &format!("Cannot call ${} — not a callable (got {:?})", var, var_ty),
@@ -388,6 +403,21 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let callee_ty = self.infer_type(callee, env)?;
+        if let Some(class_name) = self.invokable_class_for_type(&callee_ty) {
+            if self
+                .classes
+                .get(&class_name)
+                .is_some_and(|class_info| class_info.methods.contains_key("__invoke"))
+            {
+                return self.infer_method_call_on_class_type(
+                    &class_name,
+                    "__invoke",
+                    args,
+                    expr,
+                    env,
+                );
+            }
+        }
         let nullable_callable =
             Self::is_nullable_callable_from_nullsafe_chain(callee, &callee_ty);
         if callee_ty != PhpType::Callable && !nullable_callable {
@@ -479,6 +509,32 @@ impl Checker {
             _ => {}
         }
         Ok(self.nullable_callable_result(PhpType::Int, nullable_callable)) // fallback for unknown callables
+    }
+
+    fn invokable_class_for_type(&self, ty: &PhpType) -> Option<String> {
+        match ty {
+            PhpType::Object(class_name) => Some(class_name.clone()),
+            PhpType::Union(members) => {
+                let mut class_name = None;
+                for member in members {
+                    match member {
+                        PhpType::Void => {}
+                        PhpType::Object(candidate) => {
+                            if class_name
+                                .as_ref()
+                                .is_some_and(|existing: &String| existing != candidate)
+                            {
+                                return None;
+                            }
+                            class_name = Some(candidate.clone());
+                        }
+                        _ => return None,
+                    }
+                }
+                class_name
+            }
+            _ => None,
+        }
     }
 
     fn nullable_callable_result(&self, ret_ty: PhpType, nullable_callable: bool) -> PhpType {

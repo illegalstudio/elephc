@@ -9,6 +9,7 @@
 //! - Results must agree with `crate::types` so local slots and runtime value shapes are selected correctly.
 
 use crate::codegen::context::Context;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, StaticReceiver};
 use crate::types::{FunctionSig, PhpType};
 
@@ -164,7 +165,11 @@ pub(super) fn infer_method_call_type(
         let obj_ty = infer_local_type(object, sig, Some(c));
         if let Some(cn) = singular_object_class(&obj_ty) {
             if let Some(ci) = c.classes.get(cn) {
-                if let Some(msig) = ci.methods.get(method) {
+                let method_key = php_symbol_key(method);
+                if let Some(msig) = ci.methods.get(&method_key) {
+                    return msig.return_type.clone();
+                }
+                if let Some(msig) = ci.methods.get("__call") {
                     return msig.return_type.clone();
                 }
             }
@@ -182,7 +187,15 @@ pub(super) fn infer_nullsafe_method_call_type(
     if let Some(c) = ctx {
         if let Some((cn, nullable)) = nullsafe_context_class(object, sig, c) {
             if let Some(ci) = c.classes.get(&cn) {
-                if let Some(msig) = ci.methods.get(method) {
+                let method_key = php_symbol_key(method);
+                if let Some(msig) = ci.methods.get(&method_key) {
+                    return if nullable {
+                        merge_union_members(vec![msig.return_type.clone(), PhpType::Void])
+                    } else {
+                        msig.return_type.clone()
+                    };
+                }
+                if let Some(msig) = ci.methods.get("__call") {
                     return if nullable {
                         merge_union_members(vec![msig.return_type.clone(), PhpType::Void])
                     } else {

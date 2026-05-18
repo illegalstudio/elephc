@@ -230,6 +230,24 @@ pub(super) fn emit_closure_call(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
+    if let Some(class_name) = ctx
+        .variables
+        .get(var)
+        .and_then(|info| functions::singular_object_class(&info.static_ty))
+        .map(str::to_string)
+    {
+        if ctx
+            .classes
+            .get(&class_name)
+            .is_some_and(|class_info| class_info.methods.contains_key("__invoke"))
+        {
+            let object = Expr::new(ExprKind::Variable(var.to_string()), Span::dummy());
+            return crate::codegen::expr::objects::emit_method_call(
+                &object, "__invoke", args_exprs, emitter, ctx, data,
+            );
+        }
+    }
+
     // First-class callable short-circuit: when the variable was last bound to a
     // first-class callable, calling it as `$cb(args)` reaches the target directly
     // instead of going through the closure wrapper.

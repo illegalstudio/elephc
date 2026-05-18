@@ -19,12 +19,54 @@ use super::args;
 pub(super) fn emit_loaded_expr_call(
     callee: &Expr,
     args_exprs: &[Expr],
-    _loaded_callee_ty: &PhpType,
+    loaded_callee_ty: &PhpType,
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
     emitter.comment("call loaded expression result");
+    if let Some(class_name) =
+        crate::codegen::functions::singular_object_class(loaded_callee_ty).map(str::to_string)
+    {
+        if ctx
+            .classes
+            .get(&class_name)
+            .is_some_and(|class_info| class_info.methods.contains_key("__invoke"))
+        {
+            if matches!(loaded_callee_ty.codegen_repr(), PhpType::Mixed) {
+                crate::codegen::expr::objects::emit_unbox_mixed_object_or_fatal(
+                    b"Fatal error: Value of type null is not callable\n",
+                    emitter,
+                    ctx,
+                    data,
+                );
+            }
+            crate::codegen::abi::emit_push_reg(
+                emitter,
+                crate::codegen::abi::int_result_reg(emitter),
+            ); // save the loaded invokable object below later method arguments
+            let sig = ctx
+                .classes
+                .get(&class_name)
+                .and_then(|class_info| class_info.methods.get("__invoke"))
+                .cloned();
+            let emitted_args = crate::codegen::expr::objects::emit_pushed_method_args(
+                args_exprs,
+                sig.as_ref(),
+                emitter,
+                ctx,
+                data,
+            );
+            return crate::codegen::expr::objects::emit_method_call_with_saved_receiver_below_args(
+                &class_name,
+                "__invoke",
+                &emitted_args.arg_types,
+                emitted_args.source_temp_bytes,
+                emitter,
+                ctx,
+            );
+        }
+    }
     let save_concat_before_args =
         emitter.target.arch == crate::codegen::platform::Arch::X86_64;
     if save_concat_before_args {
