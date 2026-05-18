@@ -300,6 +300,66 @@ fn test_isset() {
 }
 
 #[test]
+fn test_isset_multiple_arguments_requires_all_non_null() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 1;
+$b = null;
+echo isset($a, $b) ? "yes\n" : "no\n";
+"#,
+    );
+    assert_eq!(out, "no\n");
+}
+
+#[test]
+fn test_isset_multiple_arguments_short_circuits() {
+    let out = compile_and_run(
+        r#"<?php
+function mark(): int {
+    echo "bad";
+    return 0;
+}
+$a = null;
+$items = [1];
+echo isset($a, $items[mark()]) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "no");
+}
+
+#[test]
+fn test_isset_array_element_empty_string_and_missing_key() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [""];
+echo isset($items[0]);
+echo isset($items[1]);
+$mixed = [null, 0];
+echo isset($mixed[0]);
+echo isset($mixed[1]);
+$map = ["name" => ""];
+echo isset($map["name"]);
+echo isset($map["missing"]);
+"#,
+    );
+    assert_eq!(out, "100110");
+}
+
+#[test]
+fn test_unset_multiple_variables() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 1;
+$b = 2;
+unset($a, $b);
+echo isset($a) ? "a\n" : "na\n";
+echo isset($b) ? "b\n" : "nb\n";
+"#,
+    );
+    assert_eq!(out, "na\nnb\n");
+}
+
+#[test]
 fn test_isset_string_offset_respects_bounds() {
     let out = compile_and_run(
         r#"<?php

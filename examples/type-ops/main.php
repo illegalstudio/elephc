@@ -28,9 +28,10 @@ echo "empty(false) = " . empty(false) . "\n";
 // unset
 echo "\n--- unset ---\n";
 $x = 42;
-echo "before unset: " . $x . "\n";
-unset($x);
-echo "after unset, is_null: " . is_null($x) . "\n";
+$z = 7;
+echo "before unset: " . $x . ", " . $z . "\n";
+unset($x, $z);
+echo "after unset, is_null: " . is_null($x) . ", " . is_null($z) . "\n";
 
 // settype
 echo "\n--- settype ---\n";

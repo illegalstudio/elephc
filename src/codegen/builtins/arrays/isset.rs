@@ -26,92 +26,147 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("isset()");
-    if let ExprKind::ArrayAccess { array, index } = &args[0].kind {
-        if emit_array_access_isset(&args[0], array, index, emitter, ctx, data) {
-            return Some(PhpType::Int);
+    if args.is_empty() {
+        emit_bool_result(false, emitter);
+        return Some(PhpType::Int);
+    }
+
+    let false_label = ctx.next_label("isset_false");
+    let done_label = ctx.next_label("isset_done");
+    for (idx, arg) in args.iter().enumerate() {
+        emit_isset_arg(arg, emitter, ctx, data);
+        if idx + 1 < args.len() {
+            abi::emit_branch_if_int_result_zero(emitter, &false_label);
         }
     }
 
-    let ty = emit_expr(&args[0], emitter, ctx, data);
-    emit_not_null_result(&ty, emitter);
+    if args.len() > 1 {
+        abi::emit_jump(emitter, &done_label);
+        emitter.label(&false_label);
+        emit_bool_result(false, emitter);
+        emitter.label(&done_label);
+    }
 
     Some(PhpType::Int)
 }
 
-fn emit_array_access_isset(
-    access: &Expr,
-    array: &Expr,
-    index: &Expr,
+fn emit_isset_arg(
+    arg: &Expr,
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
-) -> bool {
-    let array_ty = crate::codegen::functions::infer_contextual_type(array, ctx);
-    if crate::codegen::expr::arrays::type_is_array_access_object(&array_ty, ctx) {
-        crate::codegen::expr::arrays::emit_array_access_offset_exists(
-            array, index, emitter, ctx, data,
-        );
-        return true;
+) {
+    if let ExprKind::ArrayAccess { array, index } = &arg.kind {
+        let array_ty = crate::codegen::functions::infer_contextual_type(array, ctx);
+        if crate::codegen::expr::arrays::type_is_array_access_object(&array_ty, ctx) {
+            crate::codegen::expr::arrays::emit_array_access_offset_exists(
+                array, index, emitter, ctx, data,
+            );
+            return;
+        }
+
+        match &array_ty {
+            PhpType::Str => {
+                emit_expr(arg, emitter, ctx, data);
+                emit_string_offset_isset_result(emitter);
+                return;
+            }
+            PhpType::Array(elem_ty) => {
+                emit_indexed_array_isset(array, index, elem_ty, emitter, ctx, data);
+                return;
+            }
+            PhpType::AssocArray { value, .. } => {
+                emit_assoc_array_isset(array, index, value, emitter, ctx, data);
+                return;
+            }
+            PhpType::Mixed => {
+                emit_expr(arg, emitter, ctx, data);
+                emit_mixed_result_not_null(emitter);
+                return;
+            }
+            _ => {}
+        }
     }
 
-    match array_ty.codegen_repr() {
-        PhpType::Str => {
-            emit_expr(access, emitter, ctx, data);
-            emit_string_offset_isset_result(emitter);
-            true
-        }
-        PhpType::Array(elem_ty) => match elem_ty.codegen_repr() {
-            PhpType::Mixed => false,
-            PhpType::Void => {
-                emit_array_and_index_then_false(array, index, emitter, ctx, data);
-                true
-            }
-            _ => {
-                emit_indexed_offset_exists(array, index, emitter, ctx, data);
-                true
-            }
-        },
-        PhpType::AssocArray { value, .. } => match value.codegen_repr() {
-            PhpType::Mixed => false,
-            PhpType::Void => {
-                emit_array_and_index_then_false(array, index, emitter, ctx, data);
-                true
-            }
-            _ => {
-                emit_assoc_offset_exists(array, index, emitter, ctx, data);
-                true
-            }
-        },
-        _ => false,
+    let ty = emit_expr(arg, emitter, ctx, data);
+    emit_loaded_result_isset(&ty, emitter);
+}
+
+fn emit_loaded_result_isset(ty: &PhpType, emitter: &mut Emitter) {
+    match ty.codegen_repr() {
+        PhpType::Void | PhpType::Never => emit_bool_result(false, emitter),
+        PhpType::Mixed => emit_mixed_result_not_null(emitter),
+        PhpType::Int | PhpType::Bool => emit_scalar_result_not_null(emitter),
+        _ => emit_bool_result(true, emitter),
     }
 }
 
-fn emit_indexed_offset_exists(
+fn emit_indexed_array_isset(
     array: &Expr,
     index: &Expr,
+    elem_ty: &PhpType,
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
 ) {
     emit_expr(array, emitter, ctx, data);
-    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                 // preserve the indexed-array pointer while evaluating the offset expression
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the indexed array pointer while evaluating the index expression
     emit_expr(index, emitter, ctx, data);
+    let array_reg = abi::symbol_scratch_reg(emitter);
+    let len_reg = abi::secondary_scratch_reg(emitter);
+    let result_reg = abi::int_result_reg(emitter);
+    let false_label = ctx.next_label("isset_array_false");
+    let done_label = ctx.next_label("isset_array_done");
+    abi::emit_pop_reg(emitter, array_reg);                                      // restore the indexed array pointer for the bounds probe
+
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x1, x0");                                  // move the offset into the indexed-array key-exists helper argument
-            abi::emit_pop_reg(emitter, "x0");                                   // restore the indexed-array pointer into the helper receiver argument
+            emitter.instruction(&format!("cmp {}, #0", result_reg));            // reject negative indexes as missing array elements
+            emitter.instruction(&format!("b.lt {}", false_label));              // return false when the requested index is negative
+            abi::emit_load_from_address(emitter, len_reg, array_reg, 0);
+            emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg));   // compare the requested index against the array length
+            emitter.instruction(&format!("b.ge {}", false_label));              // return false when the requested index is out of bounds
         }
         Arch::X86_64 => {
-            emitter.instruction("mov rsi, rax");                                // move the offset into the indexed-array key-exists helper argument
-            abi::emit_pop_reg(emitter, "rdi");                                  // restore the indexed-array pointer into the helper receiver argument
+            emitter.instruction(&format!("cmp {}, 0", result_reg));             // reject negative indexes as missing array elements
+            emitter.instruction(&format!("jl {}", false_label));                // return false when the requested index is negative
+            abi::emit_load_from_address(emitter, len_reg, array_reg, 0);
+            emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg));   // compare the requested index against the array length
+            emitter.instruction(&format!("jge {}", false_label));               // return false when the requested index is out of bounds
         }
     }
-    abi::emit_call_label(emitter, "__rt_array_key_exists");                    // return whether the indexed offset lies inside array bounds
+
+    match elem_ty.codegen_repr() {
+        PhpType::Void | PhpType::Never => emit_bool_result(false, emitter),
+        PhpType::Mixed => {
+            load_indexed_array_element_pointer(array_reg, result_reg, emitter);
+            emit_mixed_result_not_null(emitter);
+        }
+        _ => emit_bool_result(true, emitter),
+    }
+    abi::emit_jump(emitter, &done_label);
+    emitter.label(&false_label);
+    emit_bool_result(false, emitter);
+    emitter.label(&done_label);
 }
 
-fn emit_assoc_offset_exists(
+fn load_indexed_array_element_pointer(array_reg: &str, index_reg: &str, emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed array header to reach element storage
+            emitter.instruction(&format!("ldr x0, [{}, {}, lsl #3]", array_reg, index_reg)); // load the boxed Mixed element pointer for null inspection
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed array header to reach element storage
+            emitter.instruction(&format!("mov rax, QWORD PTR [{} + {} * 8]", array_reg, index_reg)); // load the boxed Mixed element pointer for null inspection
+        }
+    }
+}
+
+fn emit_assoc_array_isset(
     array: &Expr,
     index: &Expr,
+    _value_ty: &PhpType,
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
@@ -124,81 +179,38 @@ fn emit_assoc_offset_exists(
     match emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_pop_reg_pair(emitter, "x1", "x2");                       // restore the normalized key into hash-get argument registers
-            abi::emit_pop_reg(emitter, "x0");                                   // restore the hash-table pointer into the hash-get receiver argument
+            abi::emit_pop_reg(emitter, "x0");                                  // restore the hash-table pointer into the hash-get receiver argument
         }
         Arch::X86_64 => {
             abi::emit_pop_reg_pair(emitter, "rsi", "rdx");                     // restore the normalized key into hash-get argument registers
-            abi::emit_pop_reg(emitter, "rdi");                                  // restore the hash-table pointer into the hash-get receiver argument
+            abi::emit_pop_reg(emitter, "rdi");                                 // restore the hash-table pointer into the hash-get receiver argument
         }
     }
-    abi::emit_call_label(emitter, "__rt_hash_get");                            // return the hash lookup found flag for non-null typed values
+    abi::emit_call_label(emitter, "__rt_hash_get");                            // return the hash lookup found flag plus borrowed payload metadata
+    emit_hash_found_and_not_null(emitter, ctx);
 }
 
-fn emit_array_and_index_then_false(
-    array: &Expr,
-    index: &Expr,
-    emitter: &mut Emitter,
-    ctx: &mut Context,
-    data: &mut DataSection,
-) {
-    emit_expr(array, emitter, ctx, data);
-    emit_expr(index, emitter, ctx, data);
+fn emit_hash_found_and_not_null(emitter: &mut Emitter, ctx: &mut Context) {
+    let false_label = ctx.next_label("isset_hash_false");
+    let done_label = ctx.next_label("isset_hash_done");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #0");                                  // null-only offsets are never set
+            emitter.instruction(&format!("cbz x0, {}", false_label));           // return false when the associative lookup misses
+            emitter.instruction("cmp x3, #8");                                  // runtime tag 8 means the stored value is PHP null
+            emitter.instruction(&format!("b.eq {}", false_label));              // return false when the stored value is null
         }
         Arch::X86_64 => {
-            emitter.instruction("xor eax, eax");                                // null-only offsets are never set
+            emitter.instruction("test rax, rax");                               // check whether the associative lookup found a matching key
+            emitter.instruction(&format!("je {}", false_label));                // return false when the associative lookup misses
+            emitter.instruction("cmp rcx, 8");                                  // runtime tag 8 means the stored value is PHP null
+            emitter.instruction(&format!("je {}", false_label));                // return false when the stored value is null
         }
     }
-}
-
-fn emit_not_null_result(ty: &PhpType, emitter: &mut Emitter) {
-    match ty.codegen_repr() {
-        PhpType::Void => match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction("mov x0, #0");                              // null values are not set
-            }
-            Arch::X86_64 => {
-                emitter.instruction("xor eax, eax");                            // null values are not set
-            }
-        },
-        PhpType::Mixed => {
-            abi::emit_call_label(emitter, "__rt_mixed_unbox");                  // inspect the boxed value before applying PHP isset null semantics
-            match emitter.target.arch {
-                Arch::AArch64 => {
-                    emitter.instruction("cmp x0, #8");                          // runtime tag 8 is PHP null
-                    emitter.instruction("cset x0, ne");                         // isset is true only when the boxed payload is not null
-                }
-                Arch::X86_64 => {
-                    emitter.instruction("cmp rax, 8");                          // runtime tag 8 is PHP null
-                    emitter.instruction("setne al");                            // set the boolean byte when the boxed payload is not null
-                    emitter.instruction("movzx rax, al");                       // widen the isset result into the canonical integer register
-                }
-            }
-        }
-        PhpType::Int | PhpType::Bool => match emitter.target.arch {
-            Arch::AArch64 => {
-                abi::emit_load_int_immediate(emitter, "x9", NULL_SENTINEL);
-                emitter.instruction("cmp x0, x9");                              // compare the scalar result against the shared null sentinel
-                emitter.instruction("cset x0, ne");                             // isset is true only when the scalar result is not null
-            }
-            Arch::X86_64 => {
-                abi::emit_load_int_immediate(emitter, "r10", NULL_SENTINEL);
-                emitter.instruction("cmp rax, r10");                            // compare the scalar result against the shared null sentinel
-                emitter.instruction("setne al");                                // set the boolean byte when the scalar result is not null
-                emitter.instruction("movzx rax, al");                           // widen the isset result into the canonical integer register
-            }
-        },
-        _ => match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction("mov x0, #1");                              // non-nullable compiled values are set
-            }
-            Arch::X86_64 => {
-                emitter.instruction("mov rax, 1");                              // non-nullable compiled values are set
-            }
-        },
-    }
+    emit_bool_result(true, emitter);
+    abi::emit_jump(emitter, &done_label);
+    emitter.label(&false_label);
+    emit_bool_result(false, emitter);
+    emitter.label(&done_label);
 }
 
 fn emit_string_offset_isset_result(emitter: &mut Emitter) {
@@ -212,6 +224,48 @@ fn emit_string_offset_isset_result(emitter: &mut Emitter) {
             emitter.instruction(&format!("cmp {}, 0", len_reg));                // check whether string offset access produced a character
             emitter.instruction("setne al");                                    // return true only when the string offset is in bounds
             emitter.instruction("movzx eax, al");                               // widen the boolean byte into the canonical integer result
+        }
+    }
+}
+
+fn emit_mixed_result_not_null(emitter: &mut Emitter) {
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // inspect the boxed Mixed payload tag for PHP null
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #8");                                  // runtime tag 8 means the Mixed payload is PHP null
+            emitter.instruction("cset x0, ne");                                 // return true only when the Mixed payload is not null
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 8");                                  // runtime tag 8 means the Mixed payload is PHP null
+            emitter.instruction("setne al");                                    // set the low result byte when the Mixed payload is not null
+            emitter.instruction("movzx rax, al");                               // widen the Mixed null-check result into the integer result register
+        }
+    }
+}
+
+fn emit_scalar_result_not_null(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(emitter, "x9", NULL_SENTINEL);
+            emitter.instruction("cmp x0, x9");                                  // compare the scalar result against the shared null sentinel
+            emitter.instruction("cset x0, ne");                                 // return true only when the scalar result is not null
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(emitter, "r10", NULL_SENTINEL);
+            emitter.instruction("cmp rax, r10");                                // compare the scalar result against the shared null sentinel
+            emitter.instruction("setne al");                                    // set the low result byte when the scalar result is not null
+            emitter.instruction("movzx rax, al");                               // widen the scalar null-check result into the integer result register
+        }
+    }
+}
+
+fn emit_bool_result(value: bool, emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(if value { "mov x0, #1" } else { "mov x0, #0" }); // materialize the isset boolean result on AArch64
+        }
+        Arch::X86_64 => {
+            emitter.instruction(if value { "mov rax, 1" } else { "xor eax, eax" }); // materialize the isset boolean result on x86_64
         }
     }
 }

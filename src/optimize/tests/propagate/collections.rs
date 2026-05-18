@@ -118,3 +118,32 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_unset() {
         Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
     );
 }
+
+#[test]
+fn test_propagate_constants_invalidates_multiple_unset_targets() {
+    let program = vec![
+        Stmt::assign("base", Expr::int_lit(2)),
+        Stmt::assign("tmp", Expr::int_lit(9)),
+        Stmt::assign("other", Expr::int_lit(10)),
+        Stmt::new(
+            StmtKind::ExprStmt(Expr::new(
+                ExprKind::FunctionCall {
+                    name: "unset".into(),
+                    args: vec![Expr::var("tmp"), Expr::var("other")],
+                },
+                Span::dummy(),
+            )),
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::var("tmp")),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(propagated[4], Stmt::echo(Expr::var("tmp")));
+    assert_eq!(
+        propagated[5],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}

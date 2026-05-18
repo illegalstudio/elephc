@@ -360,9 +360,7 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
         | ExprKind::PostIncrement(name)
         | ExprKind::PreDecrement(name)
         | ExprKind::PostDecrement(name) => Some(HashSet::from([name.clone()])),
-        ExprKind::FunctionCall { name, args } if name == "unset" && args.len() == 1 => {
-            unset_target_name(expr).map(|name| HashSet::from([name]))
-        }
+        ExprKind::FunctionCall { name, .. } if name == "unset" => unset_target_names(expr),
         ExprKind::FunctionCall { .. }
         | ExprKind::ClosureCall { .. }
         | ExprKind::ExprCall { .. }
@@ -421,13 +419,19 @@ pub(crate) fn merge_write_sets<const N: usize>(sets: [HashSet<String>; N]) -> Op
     Some(merged)
 }
 
-pub(crate) fn unset_target_name(expr: &Expr) -> Option<String> {
+pub(crate) fn unset_target_names(expr: &Expr) -> Option<HashSet<String>> {
     match &expr.kind {
-        ExprKind::FunctionCall { name, args } if name == "unset" && args.len() == 1 => {
-            match &args[0].kind {
-                ExprKind::Variable(name) => Some(name.clone()),
-                _ => None,
+        ExprKind::FunctionCall { name, args } if name == "unset" => {
+            let mut names = HashSet::new();
+            for arg in args {
+                match &arg.kind {
+                    ExprKind::Variable(name) => {
+                        names.insert(name.clone());
+                    }
+                    _ => return None,
+                }
             }
+            Some(names)
         }
         _ => None,
     }

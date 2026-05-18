@@ -123,10 +123,12 @@ pub(super) fn check_builtin(
             }))
         }
         "isset" => {
-            if args.len() != 1 {
-                return Err(CompileError::new(span, "isset() takes exactly 1 argument"));
+            if args.is_empty() {
+                return Err(CompileError::new(span, "isset() takes at least 1 argument"));
             }
-            checker.infer_type(&args[0], env)?;
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
             Ok(Some(PhpType::Int))
         }
         "array_push" => {
