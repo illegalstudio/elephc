@@ -39,6 +39,22 @@ fn test_error_string_offset_assignment_is_not_supported() {
 }
 
 #[test]
+fn test_error_by_reference_foreach_rejects_iterable_type() {
+    expect_error(
+        "<?php function f(iterable $items) { foreach ($items as &$value) {} }",
+        "by-reference foreach requires an array value",
+    );
+}
+
+#[test]
+fn test_error_by_reference_foreach_rejects_iterator_object_type() {
+    expect_error(
+        "<?php function f(Iterator $items) { foreach ($items as &$value) {} }",
+        "by-reference foreach requires an array value",
+    );
+}
+
+#[test]
 fn test_error_union_typed_local_rejects_invalid_initializer() {
     expect_error("<?php int|string $value = 1.5;", "cannot initialize $value");
 }

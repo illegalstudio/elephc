@@ -295,6 +295,40 @@ foreach ($m as $k => $x) {
 }
 
 #[test]
+fn test_assoc_foreach_value_by_reference_reuse_value_name_in_next_loop() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["a" => 1, "b" => 2];
+foreach ($m as $k => &$v) {
+    $v += 10;
+}
+foreach ($m as $k => $v) {
+    echo $k . "=" . $v . ";";
+}
+"#,
+    );
+    assert_eq!(out, "a=11;b=12;");
+}
+
+#[test]
+fn test_assoc_foreach_value_by_reference_post_assignment_does_not_mutate_array() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["a" => 1, "b" => 2];
+foreach ($m as &$v) {
+    $v += 10;
+}
+$v = 99;
+foreach ($m as $k => $x) {
+    echo $k . "=" . $x . ";";
+}
+echo "|" . $v;
+"#,
+    );
+    assert_eq!(out, "a=11;b=12;|99");
+}
+
+#[test]
 fn test_assoc_foreach_mixed_integer_and_string_keys() {
     let out = compile_and_run(
         r#"<?php

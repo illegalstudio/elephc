@@ -20,6 +20,7 @@ pub(crate) fn emit_indexed_foreach(
     key_var: &Option<String>,
     value_var: &str,
     value_by_ref: bool,
+    value_was_ref: bool,
     body: &[Stmt],
     loop_start: &str,
     loop_end: &str,
@@ -34,6 +35,7 @@ pub(crate) fn emit_indexed_foreach(
             key_var,
             value_var,
             value_by_ref,
+            value_was_ref,
             body,
             loop_start,
             loop_end,
@@ -46,6 +48,19 @@ pub(crate) fn emit_indexed_foreach(
         return;
     }
 
+    let saved_ref_offset = if value_by_ref && value_was_ref {
+        super::push_saved_foreach_ref(value_var, emitter, ctx);
+        Some(64)
+    } else {
+        None
+    };
+    let ref_flag_offset = if value_by_ref {
+        emitter.instruction("str xzr, [sp, #-16]!");                            // reserve and clear the by-reference foreach bound flag
+        Some(48)
+    } else {
+        None
+    };
+    let stack_size = 48 + if value_by_ref { 16 } else { 0 } + if saved_ref_offset.is_some() { 16 } else { 0 };
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
     emitter.instruction("ldr x9, [x0]");                                        // load array length from first field of array struct
     emitter.instruction("str x9, [sp, #-16]!");                                 // push array length onto stack
@@ -77,6 +92,10 @@ pub(crate) fn emit_indexed_foreach(
     };
     let val_offset = val_var.stack_offset;
     if value_by_ref {
+        super::mark_foreach_value_ref_bound(
+            ref_flag_offset.expect("missing foreach ref flag"),
+            emitter,
+        );
         bind_indexed_value_ref_aarch64(value_var, val_offset, elem_ty, emitter, ctx);
     } else {
         match elem_ty {
@@ -111,7 +130,7 @@ pub(crate) fn emit_indexed_foreach(
     ctx.loop_stack.push(LoopLabels {
         continue_label: loop_cont.to_string(),
         break_label: loop_end.to_string(),
-        sp_adjust: 48,
+        sp_adjust: stack_size,
     });
     for s in body {
         emit_stmt(s, emitter, ctx, data);
@@ -124,13 +143,27 @@ pub(crate) fn emit_indexed_foreach(
     emitter.instruction("str x0, [sp]");                                        // write updated index back to stack
     emitter.instruction(&format!("b {}", loop_start));                          // jump back to loop condition check
     emitter.label(loop_end);
-    emitter.instruction("add sp, sp, #48");                                     // deallocate 48 bytes (3 x 16-byte slots) from stack
+    if let Some(flag_offset) = ref_flag_offset {
+        super::finish_foreach_value_ref(
+            value_var,
+            elem_ty,
+            value_was_ref,
+            flag_offset,
+            saved_ref_offset,
+            emitter,
+            ctx,
+        );
+        emitter.instruction(&format!("add sp, sp, #{}", stack_size));           // deallocate foreach loop stack slots and scoped reference state
+    } else {
+        emitter.instruction("add sp, sp, #48");                                 // deallocate 48 bytes (3 x 16-byte slots) from stack
+    }
 }
 
 pub(crate) fn emit_indexed_foreach_runtime_mixed(
     key_var: &Option<String>,
     value_var: &str,
     value_by_ref: bool,
+    value_was_ref: bool,
     body: &[Stmt],
     loop_start: &str,
     loop_end: &str,
@@ -144,6 +177,7 @@ pub(crate) fn emit_indexed_foreach_runtime_mixed(
             key_var,
             value_var,
             value_by_ref,
+            value_was_ref,
             body,
             loop_start,
             loop_end,
@@ -180,7 +214,7 @@ pub(crate) fn emit_indexed_foreach_runtime_mixed(
     }
 
     if value_by_ref {
-        emitter.comment("WARNING: by-reference foreach over runtime-typed indexed iterable is unsupported");
+        abi::emit_call_label(emitter, "__rt_iterable_unsupported_kind");        // reject by-reference foreach over runtime-typed indexed iterables
     }
     let val_var = match ctx.variables.get(value_var) {
         Some(v) => v,
@@ -252,6 +286,7 @@ fn emit_indexed_foreach_linux_x86_64(
     key_var: &Option<String>,
     value_var: &str,
     value_by_ref: bool,
+    value_was_ref: bool,
     body: &[Stmt],
     loop_start: &str,
     loop_end: &str,
@@ -261,6 +296,20 @@ fn emit_indexed_foreach_linux_x86_64(
     ctx: &mut Context,
     data: &mut DataSection,
 ) {
+    let saved_ref_offset = if value_by_ref && value_was_ref {
+        super::push_saved_foreach_ref(value_var, emitter, ctx);
+        Some(80)
+    } else {
+        None
+    };
+    let ref_flag_offset = if value_by_ref {
+        emitter.instruction("sub rsp, 16");                                     // reserve stack space for the by-reference foreach bound flag
+        emitter.instruction("mov QWORD PTR [rsp], 0");                          // clear the by-reference foreach bound flag
+        Some(48)
+    } else {
+        None
+    };
+    let stack_size = 48 + if value_by_ref { 16 } else { 0 } + if saved_ref_offset.is_some() { 16 } else { 0 };
     crate::codegen::abi::emit_push_reg(emitter, "rax");                              // preserve the indexed-array pointer across the foreach loop state setup
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the indexed-array logical length before entering the foreach loop
     crate::codegen::abi::emit_push_reg(emitter, "r10");                              // preserve the indexed-array logical length in a dedicated foreach loop stack slot
@@ -293,6 +342,10 @@ fn emit_indexed_foreach_linux_x86_64(
     };
     let val_offset = val_var.stack_offset;
     if value_by_ref {
+        super::mark_foreach_value_ref_bound(
+            ref_flag_offset.expect("missing foreach ref flag"),
+            emitter,
+        );
         bind_indexed_value_ref_x86_64(value_var, val_offset, elem_ty, emitter, ctx);
     } else {
         match elem_ty {
@@ -333,7 +386,7 @@ fn emit_indexed_foreach_linux_x86_64(
     ctx.loop_stack.push(LoopLabels {
         continue_label: loop_cont.to_string(),
         break_label: loop_end.to_string(),
-        sp_adjust: 48,
+        sp_adjust: stack_size,
     });
     for s in body {
         emit_stmt(s, emitter, ctx, data);
@@ -346,13 +399,27 @@ fn emit_indexed_foreach_linux_x86_64(
     emitter.instruction("mov QWORD PTR [rsp], rax");                            // persist the updated foreach loop index for the next iteration
     emitter.instruction(&format!("jmp {}", loop_start));                        // jump back to the indexed-array foreach loop condition
     emitter.label(loop_end);
-    emitter.instruction("add rsp, 48");                                         // release the foreach loop index, length, and array-pointer temporary stack slots
+    if let Some(flag_offset) = ref_flag_offset {
+        super::finish_foreach_value_ref(
+            value_var,
+            elem_ty,
+            value_was_ref,
+            flag_offset,
+            saved_ref_offset,
+            emitter,
+            ctx,
+        );
+        emitter.instruction(&format!("add rsp, {}", stack_size));               // release indexed foreach loop stack slots and scoped reference state
+    } else {
+        emitter.instruction("add rsp, 48");                                     // release the foreach loop index, length, and array-pointer temporary stack slots
+    }
 }
 
 fn emit_indexed_foreach_runtime_mixed_linux_x86_64(
     key_var: &Option<String>,
     value_var: &str,
     value_by_ref: bool,
+    _value_was_ref: bool,
     body: &[Stmt],
     loop_start: &str,
     loop_end: &str,
@@ -387,7 +454,7 @@ fn emit_indexed_foreach_runtime_mixed_linux_x86_64(
     }
 
     if value_by_ref {
-        emitter.comment("WARNING: by-reference foreach over runtime-typed indexed iterable is unsupported");
+        abi::emit_call_label(emitter, "__rt_iterable_unsupported_kind");        // reject by-reference foreach over runtime-typed indexed iterables
     }
     let val_var = match ctx.variables.get(value_var) {
         Some(v) => v,

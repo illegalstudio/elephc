@@ -197,6 +197,77 @@ foreach ($a as $x) {
 }
 
 #[test]
+fn test_foreach_value_by_reference_reuse_value_name_in_next_loop() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3];
+foreach ($a as $k => &$v) {
+    $v *= 2;
+}
+foreach ($a as $k => $v) {
+    echo $k . "=" . $v . ";";
+}
+"#,
+    );
+    assert_eq!(out, "0=2;1=4;2=6;");
+}
+
+#[test]
+fn test_foreach_value_by_reference_post_assignment_does_not_mutate_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3];
+foreach ($a as &$v) {
+    $v += 10;
+}
+$v = 99;
+foreach ($a as $x) {
+    echo $x;
+}
+echo "|" . $v;
+"#,
+    );
+    assert_eq!(out, "111213|99");
+}
+
+#[test]
+fn test_foreach_value_by_reference_empty_loop_preserves_existing_value() {
+    let out = compile_and_run(
+        r#"<?php
+$v = 7;
+$a = [1];
+array_pop($a);
+foreach ($a as &$v) {
+    $v = 9;
+}
+echo $v;
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_foreach_value_by_reference_restores_existing_reference_param() {
+    let out = compile_and_run(
+        r#"<?php
+function update(&$v) {
+    $a = [1];
+    foreach ($a as &$v) {
+        $v = 2;
+    }
+    $v = 9;
+    echo $a[0] . "|" . $v;
+}
+
+$x = 5;
+update($x);
+echo "|" . $x;
+"#,
+    );
+    assert_eq!(out, "2|9|9");
+}
+
+#[test]
 fn test_foreach_value_by_reference_splits_cow_indexed_array() {
     let out = compile_and_run(
         r#"<?php
