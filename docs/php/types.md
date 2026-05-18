@@ -154,7 +154,7 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `intval()`      | `intval($val): int`          | Converts to integer            |
 | `gettype()`     | `gettype($val): string`      | Returns type name              |
 | `empty()`       | `empty($val): bool`          | Returns true if value is falsy |
-| `unset()`       | `unset($var): void`          | Sets variable to null          |
+| `unset()`       | `unset($var, ...$vars): void` | Sets one or more variables to null |
 | `settype()`     | `settype($var, $type): bool` | Changes variable type in place |
 
 
