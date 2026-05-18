@@ -30,3 +30,42 @@ class ProductPrinter extends BasePrinter {
 
 $printer = new ProductPrinter();
 $printer->printLine();
+
+class OneSlotMap implements ArrayAccess {
+    private string $value = "";
+
+    public function offsetExists(mixed $offset): bool {
+        if ((string)$offset === "") {
+            return false;
+        }
+        return $this->value !== "";
+    }
+
+    public function offsetGet(mixed $offset): mixed {
+        if ((string)$offset === "") {
+            return "";
+        }
+        return $this->value;
+    }
+
+    public function offsetSet(mixed $offset, mixed $value): void {
+        if ((string)$offset === "") {
+            return;
+        }
+        $this->value = (string)$value;
+    }
+
+    public function offsetUnset(mixed $offset): void {
+        if ((string)$offset === "") {
+            return;
+        }
+        $this->value = "";
+    }
+}
+
+$map = new OneSlotMap();
+$map["sku"] = "A-42";
+echo $map["sku"] . "\n";
+echo isset($map["sku"]) . "\n";
+unset($map["sku"]);
+echo isset($map["sku"]) . "\n";

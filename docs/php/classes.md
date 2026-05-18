@@ -82,9 +82,12 @@ The compiler injects the following interfaces, available without any
 | `Throwable` | `getMessage(): string` |
 
 `count($obj)` automatically dispatches to `Countable::count()` when
-`$obj` is an instance of a class implementing `Countable`. The
-`$obj[$key]` subscript syntax for `ArrayAccess` implementers is not yet
-implemented; call the methods directly (`$obj->offsetGet($key)`).
+`$obj` is an instance of a class implementing `Countable`.
+
+Classes implementing `ArrayAccess` can use PHP subscript syntax:
+`$obj[$key]` dispatches to `offsetGet()`, `$obj[$key] = $value` dispatches to
+`offsetSet()`, `isset($obj[$key])` dispatches to `offsetExists()`, and
+`unset($obj[$key])` dispatches to `offsetUnset()`.
 
 `Serializable` is intentionally not provided: it is deprecated since
 PHP 8.1. Use `__serialize` / `__unserialize` magic methods instead

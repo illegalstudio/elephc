@@ -116,7 +116,7 @@ echo $product->label();
 #[test]
 fn test_example_interfaces_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/interfaces/main.php"));
-    assert_eq!(out, "WIDGET\n");
+    assert_eq!(out, "WIDGET\nA-42\n1\n0\n");
 }
 
 #[test]

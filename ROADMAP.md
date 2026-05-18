@@ -487,7 +487,7 @@ Close the small dispatch, lvalue, and runtime correctness gaps that should not
 be carried through a backend migration.
 
 - [ ] `Throwable`-via-interface `getMessage()` dispatch fix (pre-existing): catching by `Throwable` and calling `getMessage()` on the typed binding returns garbage instead of the message string
-- [ ] `$obj[$k]` subscript syntax for `ArrayAccess` implementers (read, write, `isset`, `unset` paths), including `Mixed`-boxing for offsets and values
+- [x] `$obj[$k]` subscript syntax for `ArrayAccess` implementers (read, write, `isset`, `unset` paths), including `Mixed`-boxing for offsets and values
 - [ ] `IntrinsicCall` foundation for runtime-managed SPL/core objects when direct method interception is still the cleanest implementation path
 
 ## v0.23.x — SPL containers and iterator runway
