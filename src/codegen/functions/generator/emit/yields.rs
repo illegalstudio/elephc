@@ -95,10 +95,11 @@ pub(super) fn emit_yield_from_generator(
     emitter: &mut Emitter,
     source: &YieldFromSource,
     state_idx: u32,
+    result_local: Option<usize>,
     ctx: &mut ResumeCtx,
 ) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_yield_from_generator_x86_64(emitter, source, state_idx, ctx);
+        emit_yield_from_generator_x86_64(emitter, source, state_idx, result_local, ctx);
         return;
     }
 
@@ -141,11 +142,11 @@ pub(super) fn emit_yield_from_generator(
     // alive.
     emit_replace_mixed_slot(emitter, gen_frame::OFF_LAST_VALUE, |em| {
         em.instruction(&format!("ldr x0, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); // x0 = inner gen ptr
-        em.instruction("bl __rt_gen_current");                              // x0 = owned boxed Mixed pointer for the inner's current value
+        em.instruction("bl __rt_gen_current");                                  // x0 = owned boxed Mixed pointer for the inner's current value
     });
     emit_replace_mixed_slot(emitter, gen_frame::OFF_LAST_KEY, |em| {
         em.instruction(&format!("ldr x0, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); // x0 = inner gen ptr
-        em.instruction("bl __rt_gen_key");                                  // x0 = owned boxed Mixed pointer for the inner's current key
+        em.instruction("bl __rt_gen_key");                                      // x0 = owned boxed Mixed pointer for the inner's current key
     });
 
     // -- bump state_idx and yield back to the outer caller --
@@ -159,6 +160,9 @@ pub(super) fn emit_yield_from_generator(
     emitter.instruction(&format!("b {}", loop_lbl));                            // loop back to re-check valid()
 
     emitter.label(&end_lbl);
+    if let Some(idx) = result_local {
+        emit_store_yield_from_return(emitter, idx);
+    }
     if owns_delegated_iter {
         emitter.instruction(&format!("ldr x0, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); // load the owned inner generator before clearing delegation state
         emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); // clear delegated_iter so future yields don't re-enter the loop
@@ -173,6 +177,7 @@ fn emit_yield_from_generator_x86_64(
     emitter: &mut Emitter,
     source: &YieldFromSource,
     state_idx: u32,
+    result_local: Option<usize>,
     ctx: &mut ResumeCtx,
 ) {
     let loop_lbl = ctx.fresh_label("yield_from_loop");
@@ -221,6 +226,9 @@ fn emit_yield_from_generator_x86_64(
     emitter.instruction(&format!("jmp {}", loop_lbl));                          // loop back to re-check valid()
 
     emitter.label(&end_lbl);
+    if let Some(idx) = result_local {
+        emit_store_yield_from_return(emitter, idx);
+    }
     if owns_delegated_iter {
         emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", gen_frame::OFF_DELEGATED_ITER)); // load the owned inner generator before clearing delegation state
         emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_DELEGATED_ITER)); // clear delegated_iter so future yields do not re-enter
@@ -228,6 +236,20 @@ fn emit_yield_from_generator_x86_64(
     } else {
         emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_DELEGATED_ITER)); // clear borrowed delegated_iter without releasing the local owner
     }
+}
+
+fn emit_store_yield_from_return(emitter: &mut Emitter, local_idx: usize) {
+    let off = slot_offset(local_idx);
+    emit_replace_mixed_slot(emitter, off, |em| match em.target.arch {
+        Arch::AArch64 => {
+            em.instruction(&format!("ldr x0, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); // load the completed inner generator before reading its return value
+            em.instruction("bl __rt_gen_get_return");                           // x0 = owned boxed Mixed pointer for the delegated return value
+        }
+        Arch::X86_64 => {
+            em.instruction(&format!("mov rdi, QWORD PTR [r12 + {}]", gen_frame::OFF_DELEGATED_ITER)); // load the completed inner generator before reading its return value
+            em.instruction("call __rt_gen_get_return");                         // rax = owned boxed Mixed pointer for the delegated return value
+        }
+    });
 }
 
 /// After the resume label of a `YieldAssign` whose LHS is an Int slot,
