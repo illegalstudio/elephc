@@ -103,7 +103,7 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 
 | Variant | Example |
 |---|---|
-| `Echo(Expr)` | `echo $x;` |
+| `Echo(Expr)` | `echo $x;`; multi-argument `echo $a, $b;` lowers to a `Synthetic` sequence of `Echo` statements |
 | `Assign { name, value }` | `$x = 42;` |
 | `If { condition, then_body, elseif_clauses, else_body }` | `if (...) { } elseif (...) { } else { }` |
 | `While { condition, body }` | `while (...) { }` |
@@ -421,7 +421,7 @@ Statement parsing is simpler — after `parse()` has peeled off top-level `exter
 
 | Current token | Parse as |
 |---|---|
-| `Echo` | `Echo` statement — parse expression, expect `;` |
+| `Echo` | `Echo` statement — parse one or more comma-separated expressions, expect `;` |
 | `Print` | Expression statement — parse `Print(...)`, expect `;` |
 | `Throw` | `Throw` statement — parse one expression, expect `;` |
 | `IfDef` | Build-time conditional statement |

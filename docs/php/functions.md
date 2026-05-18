@@ -266,6 +266,17 @@ show(...[10, 20, 30]);            // 10:20:1
 show(...[10, "b" => 20]);         // 10:20:0
 ```
 
+## echo
+
+`echo` is a PHP language construct statement. It writes each operand to stdout
+using PHP scalar output rules and accepts PHP-compatible comma-separated
+operands:
+
+```php
+<?php
+echo "Hello", ", ", "World!\n";
+```
+
 ## print
 
 `print` is a PHP language construct expression. It writes its operand to stdout

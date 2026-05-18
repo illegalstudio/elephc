@@ -52,11 +52,31 @@ pub(super) fn parse_include(
     ))
 }
 
-pub(super) fn parse_echo(tokens: &[(Token, Span)], pos: &mut usize, span: Span) -> Result<Stmt, CompileError> {
+pub(super) fn parse_echo(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
     *pos += 1;
-    let expr = parse_expr(tokens, pos)?;
+    let mut echoed = Vec::new();
+
+    loop {
+        let expr = parse_expr(tokens, pos)?;
+        echoed.push(Stmt::new(StmtKind::Echo(expr), span));
+        if !matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Comma)) {
+            break;
+        }
+        *pos += 1;
+    }
+
     expect_semicolon(tokens, pos)?;
-    Ok(Stmt::new(StmtKind::Echo(expr), span))
+    // Preserve the single-expression AST shape and reuse the existing
+    // statement sequence wrapper for PHP's multi-argument echo syntax.
+    if echoed.len() == 1 {
+        Ok(echoed.remove(0))
+    } else {
+        Ok(Stmt::new(StmtKind::Synthetic(echoed), span))
+    }
 }
 
 pub(super) fn parse_expr_stmt(

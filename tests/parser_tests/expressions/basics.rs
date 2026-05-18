@@ -65,6 +65,30 @@ fn test_error_control_has_unary_precedence() {
 }
 
 #[test]
+fn test_parse_multi_argument_echo_lowers_to_synthetic_echoes() {
+    let stmts = parse_source("<?php echo \"A\", 2, $x;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Synthetic(echoes) => {
+            assert_eq!(echoes.len(), 3);
+            assert!(matches!(
+                &echoes[0].kind,
+                StmtKind::Echo(expr) if expr.kind == ExprKind::StringLiteral("A".into())
+            ));
+            assert!(matches!(
+                &echoes[1].kind,
+                StmtKind::Echo(expr) if expr.kind == ExprKind::IntLiteral(2)
+            ));
+            assert!(matches!(
+                &echoes[2].kind,
+                StmtKind::Echo(expr) if expr.kind == ExprKind::Variable("x".into())
+            ));
+        }
+        other => panic!("expected synthetic echo lowering, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_ifdef_statement() {
     let stmts = parse_source("<?php ifdef DEBUG { echo 1; }");
     assert_eq!(

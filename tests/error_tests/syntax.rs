@@ -220,6 +220,11 @@ fn test_error_print_requires_operand() {
 }
 
 #[test]
+fn test_error_echo_trailing_comma_requires_argument() {
+    expect_error("<?php echo \"A\",;", "Unexpected token");
+}
+
+#[test]
 fn test_error_break_level_must_be_positive() {
     expect_error("<?php while (1) { break 0; }", "accepts only positive integers");
 }
