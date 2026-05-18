@@ -287,11 +287,13 @@ pub(super) fn resolve_stmt_exprs(
             array,
             key_var,
             value_var,
+            value_by_ref,
             body,
         } => StmtKind::Foreach {
             array: resolve_expr(array, base_dir, declared_once, include_chain, state, function_variants)?,
             key_var,
             value_var,
+            value_by_ref,
             body,
         },
         StmtKind::Switch {

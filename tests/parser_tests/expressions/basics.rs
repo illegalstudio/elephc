@@ -29,6 +29,25 @@ fn test_parse_error_control_expression() {
 }
 
 #[test]
+fn test_parse_error_control_expression_statement() {
+    let stmts = parse_source("<?php @file_get_contents(\"missing.txt\");");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::ErrorSuppress(inner) => match &inner.kind {
+                ExprKind::FunctionCall { name, args } => {
+                    assert_eq!(name.as_str(), "file_get_contents");
+                    assert_eq!(args.len(), 1);
+                }
+                other => panic!("expected suppressed function call, got {:?}", other),
+            },
+            other => panic!("expected error suppression, got {:?}", other),
+        },
+        other => panic!("expected expression statement, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_error_control_has_unary_precedence() {
     let stmts = parse_source("<?php echo @$x + 1;");
     assert_eq!(stmts.len(), 1);
@@ -42,6 +61,30 @@ fn test_error_control_has_unary_precedence() {
             other => panic!("expected binary add, got {:?}", other),
         },
         other => panic!("expected echo, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_multi_argument_echo_lowers_to_synthetic_echoes() {
+    let stmts = parse_source("<?php echo \"A\", 2, $x;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Synthetic(echoes) => {
+            assert_eq!(echoes.len(), 3);
+            assert!(matches!(
+                &echoes[0].kind,
+                StmtKind::Echo(expr) if expr.kind == ExprKind::StringLiteral("A".into())
+            ));
+            assert!(matches!(
+                &echoes[1].kind,
+                StmtKind::Echo(expr) if expr.kind == ExprKind::IntLiteral(2)
+            ));
+            assert!(matches!(
+                &echoes[2].kind,
+                StmtKind::Echo(expr) if expr.kind == ExprKind::Variable("x".into())
+            ));
+        }
+        other => panic!("expected synthetic echo lowering, got {:?}", other),
     }
 }
 

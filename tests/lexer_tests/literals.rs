@@ -9,6 +9,20 @@
 
 use super::*;
 
+fn assert_float_literal(source: &str, expected: f64) {
+    let t = tokens(source);
+    match &t[1] {
+        Token::FloatLiteral(value) => {
+            let tolerance = expected.abs() * f64::EPSILON;
+            assert!(
+                (*value - expected).abs() <= tolerance,
+                "expected {expected}, got {value}"
+            );
+        }
+        other => panic!("expected float literal, got {other:?}"),
+    }
+}
+
 #[test]
 fn test_echo_string() {
     let t = tokens("<?php echo \"hello\";");
@@ -31,9 +45,41 @@ fn test_string_escape_sequences() {
 }
 
 #[test]
+fn test_double_quoted_php_escape_sequences() {
+    let t = tokens(r#"<?php "a\r\v\e\f\x41\101\u{1F600}\0""#);
+    assert_eq!(
+        t[1],
+        Token::StringLiteral("a\r\u{0b}\u{1b}\u{0c}AA😀\0".into())
+    );
+}
+
+#[test]
+fn test_double_quoted_escape_digit_bounds_and_fallbacks() {
+    let t = tokens(r#"<?php "\x414\1234\09\xG\u0041\'""#);
+    assert_eq!(
+        t[1],
+        Token::StringLiteral("A4S4\09\\xG\\u0041\\'".into())
+    );
+}
+
+#[test]
 fn test_integer_literal() {
     let t = tokens("<?php 42");
     assert_eq!(t[1], Token::IntLiteral(42));
+}
+
+#[test]
+fn test_max_decimal_integer_literal_stays_int() {
+    let t = tokens("<?php 9223372036854775807;");
+    assert_eq!(t[1], Token::IntLiteral(i64::MAX));
+}
+
+#[test]
+fn test_decimal_integer_overflow_promotes_to_float() {
+    assert_float_literal(
+        "<?php 9223372036854775808;",
+        9_223_372_036_854_775_808.0,
+    );
 }
 
 #[test]
@@ -133,6 +179,14 @@ fn test_hex_literal_zero() {
     assert_eq!(t[1], Token::IntLiteral(0));
 }
 
+#[test]
+fn test_hex_integer_overflow_promotes_to_float() {
+    assert_float_literal(
+        "<?php 0xFFFFFFFFFFFFFFFF;",
+        18_446_744_073_709_551_616.0,
+    );
+}
+
 // --- Octal integer literals ---
 
 #[test]
@@ -163,6 +217,22 @@ fn test_legacy_octal_literal() {
 fn test_legacy_octal_literal_with_separator() {
     let t = tokens("<?php 0_777;");
     assert_eq!(t[1], Token::IntLiteral(511));
+}
+
+#[test]
+fn test_explicit_octal_integer_overflow_promotes_to_float() {
+    assert_float_literal(
+        "<?php 0o1777777777777777777777;",
+        18_446_744_073_709_551_616.0,
+    );
+}
+
+#[test]
+fn test_legacy_octal_integer_overflow_promotes_to_float() {
+    assert_float_literal(
+        "<?php 01777777777777777777777;",
+        18_446_744_073_709_551_616.0,
+    );
 }
 
 #[test]
@@ -207,6 +277,14 @@ fn test_binary_literal_one() {
 fn test_binary_literal_eight_bits() {
     let t = tokens("<?php 0b11111111;");
     assert_eq!(t[1], Token::IntLiteral(255));
+}
+
+#[test]
+fn test_binary_integer_overflow_promotes_to_float() {
+    assert_float_literal(
+        "<?php 0b1111111111111111111111111111111111111111111111111111111111111111;",
+        18_446_744_073_709_551_616.0,
+    );
 }
 
 // --- Numeric separators ---

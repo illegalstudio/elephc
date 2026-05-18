@@ -297,7 +297,7 @@ src/
 │   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (74 files)
 │   │   ├── pointers/          ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ... (12 files)
 │   │   ├── spl/               spl_autoload_*, spl_classes, spl_object_id/hash (1 file)
-│   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, attribute reflection, ... (30 files)
+│   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, attribute reflection, ... (31 files)
 │   │
 │   └── runtime/               Runtime routines and target-specific emission helpers
 │       ├── mod.rs             Emits all runtime functions into assembly
@@ -312,7 +312,7 @@ src/
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current helpers (5 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, mktime, strtotime, match_unhandled, enum_from_fail, json_encode_*, json_decode, preg_*, ... (33 files)
+│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, mktime, strtotime, match_unhandled, enum_from_fail, json_encode_*, json_decode, preg_*, ... (34 files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ... (5 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline, public API helpers (4 files)
 │       ├── objects/           stdClass, Mixed property/index access, JSON stdClass encoding helpers (3 files)

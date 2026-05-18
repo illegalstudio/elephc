@@ -14,6 +14,27 @@ use super::super::super::emit::Emitter;
 use super::super::super::{abi, platform::Arch};
 use super::super::{emit_expr, retain_borrowed_heap_arg, Expr, PhpType};
 
+pub(crate) fn emit_empty_assoc_array_literal(
+    key_ty: PhpType,
+    value_ty: PhpType,
+    emitter: &mut Emitter,
+) -> PhpType {
+    emitter.comment("empty assoc array literal");
+    let capacity_reg = abi::int_arg_reg_name(emitter.target, 0);
+    let value_tag_reg = abi::int_arg_reg_name(emitter.target, 1);
+    abi::emit_load_int_immediate(emitter, capacity_reg, 16);
+    abi::emit_load_int_immediate(
+        emitter,
+        value_tag_reg,
+        super::super::super::runtime_value_tag(&value_ty.codegen_repr()) as i64,
+    );
+    abi::emit_call_label(emitter, "__rt_hash_new");
+    PhpType::AssocArray {
+        key: Box::new(key_ty),
+        value: Box::new(value_ty),
+    }
+}
+
 pub(crate) fn emit_assoc_array_literal(
     pairs: &[(Expr, Expr)],
     emitter: &mut Emitter,

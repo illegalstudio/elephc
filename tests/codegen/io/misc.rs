@@ -23,6 +23,19 @@ echo "after";
 }
 
 #[test]
+fn test_error_control_expression_statement_suppresses_runtime_warning() {
+    let out = compile_and_run_capture(
+        r#"<?php
+@file_get_contents("missing.txt");
+echo "continued";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "continued");
+    assert_eq!(out.stderr, "");
+}
+
+#[test]
 fn test_readline() {
     let out = compile_and_run_with_stdin(
         r#"<?php

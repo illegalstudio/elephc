@@ -149,9 +149,18 @@ impl Checker {
                 self.infer_type_with_assignment_effects(inner, env)?;
                 self.infer_type(expr, env)
             }
-            ExprKind::FunctionCall { args, .. }
-            | ExprKind::NewObject { args, .. }
-            | ExprKind::StaticMethodCall { args, .. } => {
+            ExprKind::FunctionCall { name, args } => {
+                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                let builtin_name = name.trim_start_matches('\\');
+                for (idx, arg) in expanded_args.iter().enumerate() {
+                    if builtin_name.eq_ignore_ascii_case("preg_replace_callback") && idx == 1 {
+                        continue;
+                    }
+                    self.infer_type_with_assignment_effects(arg, env)?;
+                }
+                self.infer_type(expr, env)
+            }
+            ExprKind::NewObject { args, .. } | ExprKind::StaticMethodCall { args, .. } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;

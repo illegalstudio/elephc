@@ -27,7 +27,7 @@ pub(super) fn local_slot_ownership_after_store(ty: &PhpType) -> HeapOwnership {
     HeapOwnership::local_owner_for_type(ty)
 }
 
-pub(super) fn release_preserved_mixed_after_coercion(emitter: &mut Emitter, target_ty: &PhpType) {
+pub(crate) fn release_preserved_mixed_after_coercion(emitter: &mut Emitter, target_ty: &PhpType) {
     match target_ty.codegen_repr() {
         PhpType::Float => {
             abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));
@@ -60,7 +60,7 @@ pub(super) fn release_preserved_mixed_after_coercion(emitter: &mut Emitter, targ
     }
 }
 
-pub(super) fn should_release_owned_mixed_after_coerce(
+pub(crate) fn should_release_owned_mixed_after_coerce(
     value: &Expr,
     source_ty: &PhpType,
     target_ty: &PhpType,

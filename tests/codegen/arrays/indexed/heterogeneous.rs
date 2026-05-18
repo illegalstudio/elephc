@@ -72,6 +72,17 @@ foreach ($items as $value) {
 }
 
 #[test]
+fn test_heterogeneous_indexed_array_nested_typed_array_access() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [[10, 20], 30];
+echo $items[0][0] . "|" . $items[0][1] . "|" . $items[1];
+"#,
+    );
+    assert_eq!(out, "10|20|30");
+}
+
+#[test]
 fn test_heterogeneous_indexed_array_push_builtin() {
     let out = compile_and_run(
         r#"<?php

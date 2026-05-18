@@ -58,6 +58,50 @@ echo $m["key"];
 }
 
 #[test]
+fn test_assoc_array_dynamic_string_key_assignment_loop_counts() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 5; $i++) {
+    $a["k" . $i] = $i;
+}
+echo count($a) . ":" . $a["k0"] . ":" . $a["k4"];
+"#,
+    );
+    assert_eq!(out, "5:0:4");
+}
+
+#[test]
+fn test_assoc_array_dynamic_string_key_assignment_inside_function() {
+    let out = compile_and_run(
+        r#"<?php
+function build_map(int $n): array {
+    $a = [];
+    for ($i = 0; $i < $n; $i++) {
+        $a["k" . $i] = $i;
+    }
+    return $a;
+}
+$a = build_map(5);
+echo count($a) . ":" . $a["k0"] . ":" . $a["k4"];
+"#,
+    );
+    assert_eq!(out, "5:0:4");
+}
+
+#[test]
+fn test_assoc_array_dynamic_string_key_after_indexed_literal_preserves_int_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10, 20];
+$a["k" . 2] = 30;
+echo count($a) . ":" . $a[0] . ":" . $a[1] . ":" . $a["k2"];
+"#,
+    );
+    assert_eq!(out, "3:10:20:30");
+}
+
+#[test]
 fn test_assoc_array_integer_and_numeric_string_keys() {
     let out = compile_and_run(
         r#"<?php
@@ -276,6 +320,56 @@ foreach ($m as $k => $v) {
 "#,
     );
     assert_eq!(out, "a=1 b=2 ");
+}
+
+#[test]
+fn test_assoc_foreach_value_by_reference_mutates_values() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["a" => 1, "b" => 2];
+foreach ($m as $k => &$v) {
+    $v += 10;
+}
+foreach ($m as $k => $x) {
+    echo $k . "=" . $x . ";";
+}
+"#,
+    );
+    assert_eq!(out, "a=11;b=12;");
+}
+
+#[test]
+fn test_assoc_foreach_value_by_reference_reuse_value_name_in_next_loop() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["a" => 1, "b" => 2];
+foreach ($m as $k => &$v) {
+    $v += 10;
+}
+foreach ($m as $k => $v) {
+    echo $k . "=" . $v . ";";
+}
+"#,
+    );
+    assert_eq!(out, "a=11;b=12;");
+}
+
+#[test]
+fn test_assoc_foreach_value_by_reference_post_assignment_does_not_mutate_array() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["a" => 1, "b" => 2];
+foreach ($m as &$v) {
+    $v += 10;
+}
+$v = 99;
+foreach ($m as $k => $x) {
+    echo $k . "=" . $x . ";";
+}
+echo "|" . $v;
+"#,
+    );
+    assert_eq!(out, "a=11;b=12;|99");
 }
 
 #[test]

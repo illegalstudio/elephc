@@ -361,7 +361,12 @@ fn emit_new_fiber(
     //    later $f->start(...) only writes to the leading slots and leaves the
     //    captured values intact.
     let capture_info = args.first().and_then(|callable_expr| match &callable_expr.kind {
-        ExprKind::Closure { params, captures, .. } if !captures.is_empty() => {
+        ExprKind::Closure {
+            params,
+            captures,
+            capture_refs,
+            ..
+        } if !captures.is_empty() => {
             // Compute the closure's user-param register footprint so capture
             // cursors start past whatever the closure's own parameters consume.
             // Floats land in d-regs, strings consume two int regs, everything
@@ -391,12 +396,21 @@ fn emit_new_fiber(
                 user_int_regs,
                 user_float_regs,
                 captures.clone(),
+                capture_refs.clone(),
             ))
         }
         _ => None,
     });
 
-    if let Some((span, user_param_count, user_int_regs, user_float_regs, captures)) = capture_info {
+    if let Some((
+        span,
+        user_param_count,
+        user_int_regs,
+        user_float_regs,
+        captures,
+        capture_refs,
+    )) = capture_info
+    {
         emit_fiber_capture_preload(
             emitter,
             ctx,
@@ -405,6 +419,7 @@ fn emit_new_fiber(
             user_int_regs,
             user_float_regs,
             &captures,
+            &capture_refs,
             span,
         );
     }
@@ -425,6 +440,7 @@ fn emit_fiber_capture_preload(
     user_int_regs: usize,
     user_float_regs: usize,
     captures: &[String],
+    capture_refs: &[String],
     span: crate::span::Span,
 ) {
     let max_int_slots = crate::codegen::runtime::FIBER_START_ARGS_MAX as usize;
@@ -437,7 +453,7 @@ fn emit_fiber_capture_preload(
     let mut int_slot = user_int_regs;
     let mut float_slot = user_float_regs;
     for capture_name in captures {
-        let var_expr = Expr::new(ExprKind::Variable(capture_name.clone()), span);
+        let by_ref = capture_refs.iter().any(|name| name == capture_name);
         // The closure's body reads each capture through a local variable slot
         // whose declared type matches whatever PhpType the variable held in the
         // surrounding scope. Passing the raw register footprint (no Mixed
@@ -446,7 +462,24 @@ fn emit_fiber_capture_preload(
         //   * single-register int-like types (int, bool, object, callable,
         //     mixed) ride in start_args[int_slot]
         //   * strings ride as ptr+len across start_args[int_slot..int_slot+2]
-        let actual_ty = emit_expr(&var_expr, emitter, ctx, data);
+        let actual_ty = if by_ref {
+            if !crate::codegen::expr::calls::args::emit_ref_arg_variable_address(
+                capture_name,
+                "fiber capture ref",
+                emitter,
+                ctx,
+            ) {
+                emitter.comment(&format!(
+                    "WARNING: Fiber capture {} dropped — variable not found",
+                    capture_name
+                ));
+                continue;
+            }
+            PhpType::Int
+        } else {
+            let var_expr = Expr::new(ExprKind::Variable(capture_name.clone()), span);
+            emit_expr(&var_expr, emitter, ctx, data)
+        };
         if matches!(actual_ty, PhpType::Float) {
             if float_slot >= max_float_slots {
                 emitter.comment(&format!(

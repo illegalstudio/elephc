@@ -13,7 +13,8 @@ use crate::codegen::platform::Arch;
 
 /// hash_iter_next: iterate over hash table entries in insertion order.
 /// Input:  x0=hash_table_ptr, x1=cursor (start with 0)
-/// Output: x0=next_cursor (or -1 if done), x1=key_ptr, x2=key_len, x3=value_lo, x4=value_hi, x5=value_tag
+/// Output: x0=next_cursor (or -1 if done), x1=key_ptr, x2=key_len, x3=value_lo,
+/// x4=value_hi, x5=value_tag, x6=value_addr for by-reference foreach binding.
 pub fn emit_hash_iter(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_iter_linux_x86_64(emitter);
@@ -66,6 +67,7 @@ pub fn emit_hash_iter(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [x8, #24]");                                   // x3 = value_lo
     emitter.instruction("ldr x4, [x8, #32]");                                   // x4 = value_hi
     emitter.instruction("ldr x5, [x8, #40]");                                   // x5 = value_tag
+    emitter.instruction("add x6, x8, #24");                                     // return the current entry value address for by-reference foreach binding
     emitter.instruction("ret");                                                 // return the current entry payload
 
     // -- no more entries --
@@ -116,6 +118,7 @@ fn emit_hash_iter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [r11 + 24]");                       // return the low payload word for the current hash entry value
     emitter.instruction("mov r8, QWORD PTR [r11 + 32]");                        // return the high payload word for the current hash entry value
     emitter.instruction("mov r9, QWORD PTR [r11 + 40]");                        // return the runtime value tag that describes the current hash entry payload
+    emitter.instruction("lea r10, [r11 + 24]");                                 // return the current entry value address for by-reference foreach binding
     emitter.instruction("ret");                                                 // return the current insertion-order entry payload to the caller
 
     emitter.label("__rt_hash_iter_end");

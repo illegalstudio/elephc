@@ -119,6 +119,16 @@ pub fn parse_foreach(
     let array = parse_expr(tokens, pos)?;
     expect_token(tokens, pos, &Token::As, "Expected 'as' in foreach")?;
 
+    let first_by_ref = if matches!(
+        tokens.get(*pos).map(|(token, _)| token),
+        Some(Token::Ampersand)
+    ) {
+        *pos += 1;
+        true
+    } else {
+        false
+    };
+
     let first_var = match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Variable(n)) => n.clone(),
         _ => return Err(CompileError::new(span, "Expected variable after 'as'")),
@@ -126,16 +136,32 @@ pub fn parse_foreach(
     *pos += 1;
 
     // Check for => (foreach $arr as $key => $value)
-    let (key_var, value_var) = if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
+    let (key_var, value_var, value_by_ref) =
+        if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
+        if first_by_ref {
+            return Err(CompileError::new(
+                span,
+                "Key element cannot be a reference in foreach",
+            ));
+        }
         *pos += 1;
+        let value_by_ref = if matches!(
+            tokens.get(*pos).map(|(token, _)| token),
+            Some(Token::Ampersand)
+        ) {
+            *pos += 1;
+            true
+        } else {
+            false
+        };
         let val_var = match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Variable(n)) => n.clone(),
             _ => return Err(CompileError::new(span, "Expected variable after '=>'")),
         };
         *pos += 1;
-        (Some(first_var), val_var)
+        (Some(first_var), val_var, value_by_ref)
     } else {
-        (None, first_var)
+        (None, first_var, first_by_ref)
     };
 
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
@@ -146,6 +172,7 @@ pub fn parse_foreach(
             array,
             key_var,
             value_var,
+            value_by_ref,
             body,
         },
         span,

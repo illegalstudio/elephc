@@ -102,6 +102,7 @@ pub enum ExprKind {
         is_arrow: bool,
         is_static: bool,
         captures: Vec<String>,
+        capture_refs: Vec<String>,
     },
     NamedArg {
         name: String,

@@ -139,7 +139,8 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
             emitter.instruction("mov x2, xzr");                                 // boolean mixed payloads do not use the high word
         }
         AttrArgValue::Str(value) => {
-            let (sym, len) = data.add_string(value.as_bytes());
+            let bytes = crate::string_bytes::literal_bytes(value);
+            let (sym, len) = data.add_string(&bytes);
             emitter.instruction("mov x0, #1");                                  // runtime tag 1 = string payload
             abi::emit_symbol_address(emitter, "x1", &sym);                      // x1 = string data address
             emitter.instruction(&format!("mov x2, #{}", len));                  // x2 = string length
@@ -167,7 +168,8 @@ fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Dat
             emitter.instruction("xor rsi, rsi");                                // boolean mixed payloads do not use the high word
         }
         AttrArgValue::Str(value) => {
-            let (sym, len) = data.add_string(value.as_bytes());
+            let bytes = crate::string_bytes::literal_bytes(value);
+            let (sym, len) = data.add_string(&bytes);
             emitter.instruction("mov rax, 1");                                  // runtime tag 1 = string payload
             abi::emit_symbol_address(emitter, "rdi", &sym);                     // rdi = string data address
             emitter.instruction(&format!("mov rsi, {}", len));                  // rsi = string length

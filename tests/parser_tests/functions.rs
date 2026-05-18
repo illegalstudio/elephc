@@ -117,6 +117,33 @@ fn test_parse_closure_return_type_after_use() {
 }
 
 #[test]
+fn test_parse_closure_use_by_reference_capture() {
+    let stmts =
+        parse_source("<?php $g = function(int $n) use (&$g): int { return $g($n - 1); };");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        if let ExprKind::Closure {
+            params,
+            captures,
+            capture_refs,
+            return_type,
+            ..
+        } = &value.kind
+        {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].0, "n");
+            assert_eq!(captures, &["g".to_string()]);
+            assert_eq!(capture_refs, &["g".to_string()]);
+            assert_eq!(return_type.as_ref(), Some(&TypeExpr::Int));
+        } else {
+            panic!("expected Closure");
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+#[test]
 fn test_parse_arrow_function() {
     let stmts = parse_source("<?php $fn = fn($x) => $x * 2;");
     assert_eq!(stmts.len(), 1);

@@ -260,6 +260,34 @@ fn test_float_in_condition() {
     assert_eq!(out, "yes");
 }
 
+// --- Large integer literal promotion ---
+
+#[test]
+fn test_max_integer_literal_stays_integer() {
+    let out = compile_and_run(
+        "<?php echo gettype(9223372036854775807) . \"|\" . gettype(0x7FFFFFFFFFFFFFFF);",
+    );
+    assert_eq!(out, "integer|integer");
+}
+
+#[test]
+fn test_large_decimal_integer_literal_promotes_to_float() {
+    let out = compile_and_run("<?php echo gettype(9223372036854775808);");
+    assert_eq!(out, "double");
+}
+
+#[test]
+fn test_large_radix_integer_literals_promote_to_float() {
+    let out = compile_and_run(
+        "<?php
+        echo gettype(0xFFFFFFFFFFFFFFFF) . \"|\";
+        echo gettype(0b1111111111111111111111111111111111111111111111111111111111111111) . \"|\";
+        echo gettype(01777777777777777777777);
+        ",
+    );
+    assert_eq!(out, "double|double|double");
+}
+
 // --- Octal integer literals ---
 
 #[test]

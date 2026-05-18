@@ -51,7 +51,7 @@ fn test_error_empty_wrong_args() {
 
 #[test]
 fn test_error_unset_wrong_args() {
-    expect_error("<?php unset();", "unset() takes exactly 1 argument");
+    expect_error("<?php unset();", "unset() takes at least 1 argument");
 }
 
 #[test]

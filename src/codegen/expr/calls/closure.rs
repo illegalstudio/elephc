@@ -22,7 +22,7 @@ use super::args;
 fn infer_closure_return_type(
     body: &[Stmt],
     sig: &FunctionSig,
-    capture_types: &[(String, PhpType)],
+    capture_types: &[(String, PhpType, bool)],
 ) -> PhpType {
     if crate::types::checker::yield_validation::body_contains_yield(body) {
         return PhpType::Object("Generator".to_string());
@@ -109,7 +109,7 @@ fn infer_closure_return_type(
     }
 
     let mut capture_ctx = Context::new();
-    for (name, ty) in capture_types {
+    for (name, ty, _) in capture_types {
         capture_ctx.alloc_var_with_static_type(name, ty.codegen_repr(), ty.clone());
     }
 
@@ -133,20 +133,22 @@ pub(super) fn emit_closure(
     return_type: &Option<TypeExpr>,
     body: &[Stmt],
     captures: &[String],
+    capture_refs: &[String],
     emitter: &mut Emitter,
     ctx: &mut Context,
     _data: &mut DataSection,
 ) -> PhpType {
     let closure_label = ctx.next_label("closure");
 
-    let mut capture_types: Vec<(String, PhpType)> = Vec::new();
+    let mut capture_types: Vec<(String, PhpType, bool)> = Vec::new();
     for cap_name in captures {
         let ty = ctx
             .variables
             .get(cap_name)
             .map(|v| v.ty.clone())
             .unwrap_or(PhpType::Int);
-        capture_types.push((cap_name.clone(), ty));
+        let by_ref = capture_refs.iter().any(|name| name == cap_name);
+        capture_types.push((cap_name.clone(), ty, by_ref));
     }
 
     let mut param_types: Vec<(String, PhpType)> = params
@@ -230,6 +232,24 @@ pub(super) fn emit_closure_call(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
+    if let Some(class_name) = ctx
+        .variables
+        .get(var)
+        .and_then(|info| functions::singular_object_class(&info.static_ty))
+        .map(str::to_string)
+    {
+        if ctx
+            .classes
+            .get(&class_name)
+            .is_some_and(|class_info| class_info.methods.contains_key("__invoke"))
+        {
+            let object = Expr::new(ExprKind::Variable(var.to_string()), Span::dummy());
+            return crate::codegen::expr::objects::emit_method_call(
+                &object, "__invoke", args_exprs, emitter, ctx, data,
+            );
+        }
+    }
+
     // First-class callable short-circuit: when the variable was last bound to a
     // first-class callable, calling it as `$cb(args)` reaches the target directly
     // instead of going through the closure wrapper.
@@ -316,7 +336,7 @@ pub(super) fn emit_closure_call(
         regular_param_count,
         "closure ref arg",
         true,
-        false,
+        true,
         emitter,
         ctx,
         data,
@@ -354,22 +374,35 @@ pub(super) fn emit_closure_call(
         }
     }
 
-    for (cap_name, cap_ty) in &captures {
+    for (cap_name, cap_ty, by_ref) in &captures {
         emitter.comment(&format!("push captured ${}", cap_name));
-        let cap_info = match ctx.variables.get(cap_name) {
-            Some(v) => v,
-            None => {
+        if *by_ref {
+            if !args::emit_ref_arg_variable_address(cap_name, "closure capture ref", emitter, ctx)
+            {
                 emitter.comment(&format!(
                     "WARNING: captured variable ${} not found",
                     cap_name
                 ));
                 continue;
             }
-        };
-        let cap_offset = cap_info.stack_offset;
-        crate::codegen::abi::emit_load(emitter, cap_ty, cap_offset);
-        super::args::push_arg_value(emitter, cap_ty);
-        arg_types.push(cap_ty.clone());
+            super::args::push_arg_value(emitter, &PhpType::Int);
+            arg_types.push(PhpType::Int);
+        } else {
+            let cap_info = match ctx.variables.get(cap_name) {
+                Some(v) => v,
+                None => {
+                    emitter.comment(&format!(
+                        "WARNING: captured variable ${} not found",
+                        cap_name
+                    ));
+                    continue;
+                }
+            };
+            let cap_offset = cap_info.stack_offset;
+            crate::codegen::abi::emit_load(emitter, cap_ty, cap_offset);
+            super::args::push_arg_value(emitter, cap_ty);
+            arg_types.push(cap_ty.clone());
+        }
     }
     let var_info = match ctx.variables.get(var) {
         Some(v) => v,
@@ -384,7 +417,12 @@ pub(super) fn emit_closure_call(
     };
     let var_offset = var_info.stack_offset;
     let call_reg = crate::codegen::abi::nested_call_reg(emitter);
-    crate::codegen::abi::load_at_offset(emitter, call_reg, var_offset);         // load the closure function address into the nested-call scratch register
+    if ctx.ref_params.contains(var) {
+        crate::codegen::abi::load_at_offset(emitter, call_reg, var_offset);     // load the by-reference callable slot address into the nested-call scratch register
+        crate::codegen::abi::emit_load_from_address(emitter, call_reg, call_reg, 0);
+    } else {
+        crate::codegen::abi::load_at_offset(emitter, call_reg, var_offset);     // load the closure function address into the nested-call scratch register
+    }
     crate::codegen::abi::emit_push_reg(emitter, call_reg);
 
     let assignments =

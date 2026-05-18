@@ -83,7 +83,8 @@ pub(super) fn classify_mixed_expr(
         return Some(MixedSource::Null);
     }
     if let ExprKind::StringLiteral(s) = expr {
-        let (label, len) = data.add_string(s.as_bytes());
+        let bytes = crate::string_bytes::literal_bytes(s);
+        let (label, len) = data.add_string(&bytes);
         return Some(MixedSource::Str { label, len });
     }
     if let ExprKind::ArrayLiteral(items) = expr {
@@ -225,6 +226,10 @@ fn infer_slot_type(
         // the unbox path stores the sent int into the slot. Mixed-typed
         // sends are deferred to a later iteration.
         ExprKind::Yield { .. } => Some(SlotType::Int),
+        // `yield from` evaluates to the delegated generator's return
+        // value. Store that boxed result in a Mixed slot so it remains
+        // available after the delegation completes.
+        ExprKind::YieldFrom(_) => Some(SlotType::Mixed),
         _ => None,
     }
 }
@@ -286,6 +291,12 @@ fn build_node(
                     state_idx,
                 });
             }
+            if let ExprKind::YieldFrom(inner) = &value.kind {
+                if types.get(idx).copied() != Some(SlotType::Mixed) {
+                    return None;
+                }
+                return build_yield_from_node(inner, Some(idx), slots, types, num, data);
+            }
             // Otherwise: dispatch on the slot's type.
             match types.get(idx).copied() {
                 Some(SlotType::Int) => {
@@ -301,52 +312,7 @@ fn build_node(
         }
         StmtKind::ExprStmt(expr) => match &expr.kind {
             ExprKind::YieldFrom(inner) => {
-                if let ExprKind::ArrayLiteral(items) = &inner.kind {
-                    let mut stmts = Vec::new();
-                    for item in items {
-                        let value = classify_mixed_expr(&item.kind, slots, types, data)?;
-                        let state = num.next();
-                        stmts.push(ResumeNode::Yield(YieldEntry { key: None, value }, state));
-                    }
-                    return Some(ResumeNode::Block { stmts });
-                }
-                if let ExprKind::FunctionCall { name, args } = &inner.kind {
-                    if args.len() > 8 {
-                        return None;
-                    }
-                    let mut arg_sources = Vec::with_capacity(args.len());
-                    for arg in args {
-                        arg_sources.push(classify_int_expr(&arg.kind, slots, types)?);
-                    }
-                    let state_idx = num.next();
-                    return Some(ResumeNode::YieldFromGenerator {
-                        source: YieldFromSource::Call {
-                            fn_name: name.as_str().to_string(),
-                            args: arg_sources,
-                        },
-                        state_idx,
-                    });
-                }
-                if let ExprKind::Variable(name) = &inner.kind {
-                    // `yield from $local` — the slot holds either a raw
-                    // Generator pointer (Int-typed slot) or a boxed
-                    // Mixed cell wrapping an Object payload (Mixed slot).
-                    if let Some(idx) = slot_idx_of_type(name, slots, types, SlotType::Int) {
-                        let state_idx = num.next();
-                        return Some(ResumeNode::YieldFromGenerator {
-                            source: YieldFromSource::IntSlot(idx),
-                            state_idx,
-                        });
-                    }
-                    if let Some(idx) = slot_idx_of_type(name, slots, types, SlotType::Mixed) {
-                        let state_idx = num.next();
-                        return Some(ResumeNode::YieldFromGenerator {
-                            source: YieldFromSource::MixedSlot(idx),
-                            state_idx,
-                        });
-                    }
-                }
-                None
+                build_yield_from_node(inner, None, slots, types, num, data)
             }
             ExprKind::Yield { key, value } => {
                 let value = match value.as_deref() {
@@ -458,6 +424,68 @@ fn build_node(
         }
         _ => None,
     }
+}
+
+fn build_yield_from_node(
+    inner: &Expr,
+    result_local: Option<usize>,
+    slots: &[String],
+    types: &[SlotType],
+    num: &mut StateNumberer,
+    data: &mut DataSection,
+) -> Option<ResumeNode> {
+    if let ExprKind::ArrayLiteral(items) = &inner.kind {
+        let mut stmts = Vec::new();
+        for item in items {
+            let value = classify_mixed_expr(&item.kind, slots, types, data)?;
+            let state = num.next();
+            stmts.push(ResumeNode::Yield(YieldEntry { key: None, value }, state));
+        }
+        if let Some(idx) = result_local {
+            stmts.push(ResumeNode::Stmt(BodyStmt::AssignMixed(idx, MixedSource::Null)));
+        }
+        return Some(ResumeNode::Block { stmts });
+    }
+    if let ExprKind::FunctionCall { name, args } = &inner.kind {
+        if args.len() > 8 {
+            return None;
+        }
+        let mut arg_sources = Vec::with_capacity(args.len());
+        for arg in args {
+            arg_sources.push(classify_int_expr(&arg.kind, slots, types)?);
+        }
+        let state_idx = num.next();
+        return Some(ResumeNode::YieldFromGenerator {
+            source: YieldFromSource::Call {
+                fn_name: name.as_str().to_string(),
+                args: arg_sources,
+            },
+            state_idx,
+            result_local,
+        });
+    }
+    if let ExprKind::Variable(name) = &inner.kind {
+        // `yield from $local` — the slot holds either a raw Generator
+        // pointer (Int-typed slot) or a boxed Mixed cell wrapping an
+        // Object payload (Mixed slot).
+        if let Some(idx) = slot_idx_of_type(name, slots, types, SlotType::Int) {
+            let state_idx = num.next();
+            return Some(ResumeNode::YieldFromGenerator {
+                source: YieldFromSource::IntSlot(idx),
+                state_idx,
+                result_local,
+            });
+        }
+        if let Some(idx) = slot_idx_of_type(name, slots, types, SlotType::Mixed) {
+            let state_idx = num.next();
+            return Some(ResumeNode::YieldFromGenerator {
+                source: YieldFromSource::MixedSlot(idx),
+                state_idx,
+                result_local,
+            });
+        }
+    }
+    None
 }
 
 fn build_else_chain(

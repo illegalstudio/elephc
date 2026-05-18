@@ -611,10 +611,11 @@ So the behavior is slice-like, but it does not call `substr()` or a dedicated ru
 
 ```php
 echo $x;
+echo "a", "b";
 $status = print $x;
 ```
 
-1. Evaluate expression → result in registers
+1. Evaluate each `echo` expression in source order → result in registers
 2. Check for null/false (skip printing if so — matches PHP behavior where `echo false` prints nothing)
 3. Call `emit_write_stdout()` from the [ABI module](#the-abi-module)
 

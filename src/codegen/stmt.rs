@@ -11,7 +11,7 @@
 mod assignments;
 mod arrays;
 mod control_flow;
-mod helpers;
+pub(crate) mod helpers;
 mod includes;
 mod io;
 mod null_coalesce_assign;
@@ -142,9 +142,19 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             array,
             key_var,
             value_var,
+            value_by_ref,
             body,
         } => {
-            control_flow::emit_foreach_stmt(array, key_var, value_var, body, emitter, ctx, data);
+            control_flow::emit_foreach_stmt(
+                array,
+                key_var,
+                value_var,
+                *value_by_ref,
+                body,
+                emitter,
+                ctx,
+                data,
+            );
         }
         StmtKind::DoWhile { body, condition } => {
             control_flow::emit_do_while_stmt(body, condition, emitter, ctx, data);

@@ -9,7 +9,8 @@
 //! - Object inference depends on flattened class metadata, visibility, inheritance, and declared property types.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, StaticReceiver};
+use crate::names::php_symbol_key;
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::Checker;
@@ -64,7 +65,7 @@ impl Checker {
         }
     }
 
-    fn infer_method_call_on_class_type(
+    pub(crate) fn infer_method_call_on_class_type(
         &mut self,
         class_name: &str,
         method: &str,
@@ -72,9 +73,12 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        let method_key = php_symbol_key(method);
         let mut normalized_args = args.to_vec();
+        let mut magic_return_ty = None;
+        let mut magic_original_args = None;
         if let Some(class_info) = self.classes.get(class_name) {
-            if let Some(sig) = class_info.methods.get(method) {
+            if let Some(sig) = class_info.methods.get(&method_key) {
                 if let Some(reason) = sig.deprecation.clone() {
                     let message = if reason.is_empty() {
                         format!("Call to deprecated method: {}::{}()", class_name, method)
@@ -87,10 +91,10 @@ impl Checker {
                     self.warnings
                         .push(crate::errors::CompileWarning::new(expr.span, &message));
                 }
-                if let Some(visibility) = class_info.method_visibilities.get(method) {
+                if let Some(visibility) = class_info.method_visibilities.get(&method_key) {
                     let declaring_class = class_info
                         .method_declaring_classes
-                        .get(method)
+                        .get(&method_key)
                         .map(String::as_str)
                         .unwrap_or(class_name);
                     if !self.can_access_member(declaring_class, visibility) {
@@ -106,8 +110,12 @@ impl Checker {
                     }
                 }
                 let declared_flags =
-                    Self::declared_method_param_flags(class_info, method, false);
-                let effective_sig = Self::callable_sig_for_declared_params(sig, &declared_flags);
+                    Self::declared_method_param_flags(class_info, &method_key, false);
+                let mut effective_sig =
+                    Self::callable_sig_for_declared_params(sig, &declared_flags);
+                if method_key == "__call" {
+                    Self::relax_magic_call_validation_sig(&mut effective_sig);
+                }
                 normalized_args = self.normalize_named_call_args(
                     &effective_sig,
                     args,
@@ -121,12 +129,40 @@ impl Checker {
                     env,
                     &format!("Method {}::{}", class_name, method),
                 )?;
+            } else if let Some(sig) = class_info.methods.get("__call") {
+                let magic_args = Self::magic_call_args(method, args, expr.span);
+                let declared_flags =
+                    Self::declared_method_param_flags(class_info, "__call", false);
+                let mut effective_sig =
+                    Self::callable_sig_for_declared_params(sig, &declared_flags);
+                Self::relax_magic_call_validation_sig(&mut effective_sig);
+                normalized_args = self.normalize_named_call_args(
+                    &effective_sig,
+                    &magic_args,
+                    expr.span,
+                    &format!("Method {}::__call", class_name),
+                )?;
+                self.check_known_callable_call(
+                    &effective_sig,
+                    &normalized_args,
+                    expr.span,
+                    env,
+                    &format!("Method {}::__call", class_name),
+                )?;
+                magic_return_ty = Some(effective_sig.return_type.clone());
+                magic_original_args = Some(args.to_vec());
             } else {
                 return Err(CompileError::new(
                     expr.span,
                     &format!("Undefined method: {}::{}", class_name, method),
                 ));
             }
+        }
+        if let Some(return_ty) = magic_return_ty {
+            if let Some(args) = magic_original_args {
+                self.specialize_magic_call_signature(class_name, &args, env)?;
+            }
+            return Ok(return_ty);
         }
         let mut arg_types = Vec::new();
         for arg in &normalized_args {
@@ -136,16 +172,16 @@ impl Checker {
         let impl_class_name = self
             .classes
             .get(class_name)
-            .and_then(|class_info| class_info.method_impl_classes.get(method))
+            .and_then(|class_info| class_info.method_impl_classes.get(&method_key))
             .cloned()
             .unwrap_or_else(|| class_name.to_string());
         let declared_flags = self
             .classes
             .get(&impl_class_name)
-            .map(|class_info| Self::declared_method_param_flags(class_info, method, false))
+            .map(|class_info| Self::declared_method_param_flags(class_info, &method_key, false))
             .unwrap_or_default();
         if let Some(class_info) = self.classes.get_mut(&impl_class_name) {
-            if let Some(sig) = class_info.methods.get_mut(method) {
+            if let Some(sig) = class_info.methods.get_mut(&method_key) {
                 let regular_param_count = if sig.variadic.is_some() {
                     sig.params.len().saturating_sub(1)
                 } else {
@@ -174,6 +210,87 @@ impl Checker {
             }
         }
         Ok(PhpType::Int)
+    }
+
+    fn magic_call_args(method: &str, args: &[Expr], span: crate::span::Span) -> Vec<Expr> {
+        vec![
+            Expr::new(ExprKind::StringLiteral(method.to_string()), span),
+            Expr::new(ExprKind::ArrayLiteral(args.to_vec()), span),
+        ]
+    }
+
+    fn specialize_magic_call_signature(
+        &mut self,
+        class_name: &str,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        let mut elem_ty = PhpType::Never;
+        for arg in args {
+            let arg_ty = self.infer_type(arg, env)?;
+            elem_ty = Self::merge_magic_call_arg_type(elem_ty, arg_ty);
+        }
+        let args_array_ty = PhpType::Array(Box::new(elem_ty.clone()));
+        let impl_class_name = self
+            .classes
+            .get(class_name)
+            .and_then(|class_info| class_info.method_impl_classes.get("__call"))
+            .cloned()
+            .unwrap_or_else(|| class_name.to_string());
+        let declared_flags = self
+            .classes
+            .get(&impl_class_name)
+            .map(|class_info| Self::declared_method_param_flags(class_info, "__call", false))
+            .unwrap_or_default();
+        if let Some(sig) = self
+            .classes
+            .get_mut(&impl_class_name)
+            .and_then(|class_info| class_info.methods.get_mut("__call"))
+        {
+            if !sig.params.is_empty() {
+                sig.params[0].1 = PhpType::Str;
+            }
+            if sig.params.len() > 1 {
+                let declared_array_param = declared_flags.get(1).copied().unwrap_or(false);
+                sig.params[1].1 = match &sig.params[1].1 {
+                    PhpType::Array(existing)
+                        if declared_array_param
+                            && matches!(existing.as_ref(), PhpType::Mixed)
+                            && !matches!(elem_ty, PhpType::Mixed) =>
+                    {
+                        args_array_ty
+                    }
+                    PhpType::Array(existing) => PhpType::Array(Box::new(
+                        Self::merge_magic_call_arg_type(*existing.clone(), elem_ty.clone()),
+                    )),
+                    PhpType::Int => args_array_ty,
+                    _ => sig.params[1].1.clone(),
+                };
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_magic_call_arg_type(left: PhpType, right: PhpType) -> PhpType {
+        if left == right {
+            return left;
+        }
+        if matches!(left, PhpType::Never) {
+            return right;
+        }
+        if matches!(right, PhpType::Never) {
+            return left;
+        }
+        PhpType::Mixed
+    }
+
+    fn relax_magic_call_validation_sig(sig: &mut crate::types::FunctionSig) {
+        if let Some(param) = sig.params.get_mut(0) {
+            param.1 = PhpType::Str;
+        }
+        if let Some(param) = sig.params.get_mut(1) {
+            param.1 = PhpType::Array(Box::new(PhpType::Mixed));
+        }
     }
 
     pub(crate) fn infer_static_method_call_type(

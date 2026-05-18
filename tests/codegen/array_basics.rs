@@ -55,6 +55,14 @@ fn test_string_indexing_with_variable_offset() {
 }
 
 #[test]
+fn test_string_indexing_accepts_numeric_string_offsets() {
+    let out = compile_and_run(
+        r#"<?php $s = "abcd"; echo $s["0"]; echo $s["01"]; echo $s["+2"]; echo $s[" -1 "]; echo "\n"; echo isset($s["3"]) ? "y" : "n"; echo isset($s["4"]) ? "y\n" : "n\n";"#,
+    );
+    assert_eq!(out, "abcd\nyn\n");
+}
+
+#[test]
 fn test_string_indexing_empty_string_returns_empty_string() {
     let out = compile_and_run(r#"<?php $s = ""; $i = 0; echo "[" . $s[$i] . "]";"#);
     assert_eq!(out, "[]");
@@ -181,6 +189,114 @@ fn test_foreach_int() {
 }
 
 #[test]
+fn test_foreach_value_by_reference_mutates_indexed_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3];
+foreach ($a as &$v) {
+    $v *= 2;
+}
+foreach ($a as $x) {
+    echo $x;
+}
+"#,
+    );
+    assert_eq!(out, "246");
+}
+
+#[test]
+fn test_foreach_value_by_reference_reuse_value_name_in_next_loop() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3];
+foreach ($a as $k => &$v) {
+    $v *= 2;
+}
+foreach ($a as $k => $v) {
+    echo $k . "=" . $v . ";";
+}
+"#,
+    );
+    assert_eq!(out, "0=2;1=4;2=6;");
+}
+
+#[test]
+fn test_foreach_value_by_reference_post_assignment_does_not_mutate_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3];
+foreach ($a as &$v) {
+    $v += 10;
+}
+$v = 99;
+foreach ($a as $x) {
+    echo $x;
+}
+echo "|" . $v;
+"#,
+    );
+    assert_eq!(out, "111213|99");
+}
+
+#[test]
+fn test_foreach_value_by_reference_empty_loop_preserves_existing_value() {
+    let out = compile_and_run(
+        r#"<?php
+$v = 7;
+$a = [1];
+array_pop($a);
+foreach ($a as &$v) {
+    $v = 9;
+}
+echo $v;
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_foreach_value_by_reference_restores_existing_reference_param() {
+    let out = compile_and_run(
+        r#"<?php
+function update(&$v) {
+    $a = [1];
+    foreach ($a as &$v) {
+        $v = 2;
+    }
+    $v = 9;
+    echo $a[0] . "|" . $v;
+}
+
+$x = 5;
+update($x);
+echo "|" . $x;
+"#,
+    );
+    assert_eq!(out, "2|9|9");
+}
+
+#[test]
+fn test_foreach_value_by_reference_splits_cow_indexed_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2];
+$b = $a;
+foreach ($b as &$v) {
+    $v *= 3;
+}
+foreach ($a as $x) {
+    echo $x;
+}
+echo "|";
+foreach ($b as $x) {
+    echo $x;
+}
+"#,
+    );
+    assert_eq!(out, "12|36");
+}
+
+#[test]
 fn test_foreach_string() {
     let out = compile_and_run(r#"<?php $a = ["a", "b", "c"]; foreach ($a as $v) { echo $v; }"#);
     assert_eq!(out, "abc");
@@ -289,6 +405,98 @@ fn test_array_keys() {
 fn test_isset() {
     let out = compile_and_run("<?php $x = 42; echo isset($x);");
     assert_eq!(out, "1");
+}
+
+#[test]
+fn test_isset_multiple_arguments_requires_all_non_null() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 1;
+$b = null;
+echo isset($a, $b) ? "yes\n" : "no\n";
+"#,
+    );
+    assert_eq!(out, "no\n");
+}
+
+#[test]
+fn test_isset_multiple_arguments_short_circuits() {
+    let out = compile_and_run(
+        r#"<?php
+function mark(): int {
+    echo "bad";
+    return 0;
+}
+$a = null;
+$items = [1];
+echo isset($a, $items[mark()]) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "no");
+}
+
+#[test]
+fn test_isset_array_element_empty_string_and_missing_key() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [""];
+echo isset($items[0]);
+echo isset($items[1]);
+$mixed = [null, 0];
+echo isset($mixed[0]);
+echo isset($mixed[1]);
+$map = ["name" => ""];
+echo isset($map["name"]);
+echo isset($map["missing"]);
+"#,
+    );
+    assert_eq!(out, "100110");
+}
+
+#[test]
+fn test_unset_multiple_variables() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 1;
+$b = 2;
+unset($a, $b);
+echo isset($a) ? "a\n" : "na\n";
+echo isset($b) ? "b\n" : "nb\n";
+"#,
+    );
+    assert_eq!(out, "na\nnb\n");
+}
+
+#[test]
+fn test_isset_string_offset_respects_bounds() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "abc";
+echo isset($s[0]) ? "y\n" : "n\n";
+echo isset($s[3]) ? "y\n" : "n\n";
+echo isset($s[-1]) ? "y\n" : "n\n";
+echo isset($s[-4]) ? "y\n" : "n\n";
+"#,
+    );
+    assert_eq!(out, "y\nn\ny\nn\n");
+}
+
+#[test]
+fn test_isset_array_offset_respects_bounds_for_non_scalar_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x"];
+echo isset($a[0]) ? "y\n" : "n\n";
+echo isset($a[1]) ? "y\n" : "n\n";
+"#,
+    );
+    assert_eq!(out, "y\nn\n");
+}
+
+#[test]
+fn test_isset_null_variable_is_false() {
+    let out = compile_and_run("<?php $x = null; $y = 0; echo isset($x); echo isset($y);");
+    assert_eq!(out, "01");
 }
 
 #[test]

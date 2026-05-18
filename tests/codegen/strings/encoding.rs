@@ -22,6 +22,35 @@ fn test_ord_empty_string() {
 }
 
 #[test]
+fn test_double_quoted_control_escape_ord_values() {
+    let out = compile_and_run(
+        r#"<?php echo ord("\r") . "," . ord("\v") . "," . ord("\e") . "," . ord("\f");"#,
+    );
+    assert_eq!(out, "13,11,27,12");
+}
+
+#[test]
+fn test_double_quoted_hex_octal_unicode_and_null_escapes() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "a\x00b";
+echo "\x41\101\u{1F600}:" . strlen($s) . ":" . ord($s[1]);
+"#,
+    );
+    assert_eq!(out, "AA😀:3:0");
+}
+
+#[test]
+fn test_double_quoted_high_byte_escapes_remain_single_php_bytes() {
+    let out = compile_and_run(
+        r#"<?php
+echo ord("\xFF") . ":" . ord("\777") . ":" . bin2hex("\xC3\xA9") . ":" . bin2hex("\u{D800}") . ":" . bin2hex("\u{E000}");
+"#,
+    );
+    assert_eq!(out, "255:255:c3a9:eda080:ee8080");
+}
+
+#[test]
 fn test_chr() {
     let out = compile_and_run("<?php echo chr(65);");
     assert_eq!(out, "A");

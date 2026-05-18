@@ -67,7 +67,16 @@ $map = ["name" => "Alice", "age" => "30"];
 foreach ($map as $key => $value) {
     echo "$key = $value\n";
 }
+
+// By-reference value binding mutates the source array element.
+$nums = [1, 2, 3];
+foreach ($nums as &$value) {
+    $value *= 2;
+}
 ```
+
+Use `foreach ($arr as $key => &$value)` when both the key and a mutable
+element reference are needed. The key itself cannot be bound by reference.
 
 `foreach` also accepts any object that implements the built-in `Iterator`
 interface (`current`, `key`, `next`, `valid`, `rewind`) or the

@@ -74,21 +74,28 @@ pub(super) fn check_assign(
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
     let null_coalesce_default = null_coalesce_assignment_default(name, value);
-    let ty = if let Some(default) = null_coalesce_default {
-        if let Some(existing) = env.get(name).cloned() {
-            let default_ty = if existing == PhpType::Void {
-                checker.infer_type_with_assignment_effects(default, env)?
-            } else {
-                let mut default_env = env.clone();
-                checker.infer_type_with_assignment_effects(default, &mut default_env)?
-            };
-            null_coalesce_assignment_type(checker, name, &existing, &default_ty, default, span)?
-        } else {
-            checker.infer_type_with_assignment_effects(value, env)?
-        }
+    let saved_self_ref_ty = if env.contains_key(name) && closure_captures_name_by_ref(value, name) {
+        Some(env.insert(name.to_string(), PhpType::Callable))
     } else {
-        checker.infer_type_with_assignment_effects(value, env)?
+        None
     };
+    let ty_result: Result<PhpType, CompileError> = (|| {
+        if let Some(default) = null_coalesce_default {
+            if let Some(existing) = env.get(name).cloned() {
+                let default_ty = if existing == PhpType::Void {
+                    checker.infer_type_with_assignment_effects(default, env)?
+                } else {
+                    let mut default_env = env.clone();
+                    checker.infer_type_with_assignment_effects(default, &mut default_env)?
+                };
+                null_coalesce_assignment_type(checker, name, &existing, &default_ty, default, span)
+            } else {
+                checker.infer_type_with_assignment_effects(value, env)
+            }
+        } else {
+            checker.infer_type_with_assignment_effects(value, env)
+        }
+    })();
     let callable_source = if let Some(default) = null_coalesce_default {
         if matches!(env.get(name), Some(existing) if *existing == PhpType::Void) {
             default
@@ -98,8 +105,35 @@ pub(super) fn check_assign(
     } else {
         value
     };
-    update_callable_assignment_metadata(checker, name, callable_source, &ty, env)?;
+    let metadata_result = match &ty_result {
+        Ok(ty) => update_callable_assignment_metadata(checker, name, callable_source, ty, env),
+        Err(_) => Ok(()),
+    };
+    if let Some(previous) = saved_self_ref_ty {
+        match previous {
+            Some(previous_ty) => {
+                env.insert(name.to_string(), previous_ty);
+            }
+            None => {
+                env.remove(name);
+            }
+        }
+    }
+    let ty = ty_result?;
+    metadata_result?;
     merge_local_assignment_type(checker, name, &ty, span, env)
+}
+
+fn closure_captures_name_by_ref(value: &Expr, name: &str) -> bool {
+    matches!(
+        &value.kind,
+        ExprKind::Closure {
+            captures,
+            capture_refs,
+            ..
+        } if captures.iter().any(|capture| capture == name)
+            && capture_refs.iter().any(|capture| capture == name)
+    )
 }
 
 impl Checker {
@@ -130,13 +164,19 @@ fn update_callable_assignment_metadata(
                 .closure_return_types
                 .insert(name.to_string(), sig.return_type.clone());
             checker.callable_sigs.insert(name.to_string(), sig);
-            if let ExprKind::Closure { captures, .. } = &callable_source.kind {
+            if let ExprKind::Closure {
+                captures,
+                capture_refs,
+                ..
+            } = &callable_source.kind
+            {
                 let capture_types = captures
                     .iter()
                     .map(|capture| {
                         (
                             capture.clone(),
                             env.get(capture).cloned().unwrap_or(PhpType::Mixed),
+                            capture_refs.iter().any(|ref_capture| ref_capture == capture),
                         )
                     })
                     .collect();

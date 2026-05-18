@@ -128,3 +128,26 @@ echo $g->current();
     );
     assert_eq!(out, "first alpha second gamma");
 }
+
+#[test]
+fn test_generator_send_value_supports_mixed_arithmetic() {
+    let out = compile_and_run(
+        r#"<?php
+function gen() {
+    $a = yield 10;
+    $b = yield $a * 2;
+    return $a + $b;
+}
+
+$g = gen();
+echo $g->current();
+echo "|";
+echo $g->send(5);
+echo "|";
+echo is_null($g->send(7)) ? "null" : "not-null";
+echo "|";
+echo $g->getReturn();
+"#,
+    );
+    assert_eq!(out, "10|10|null|12");
+}

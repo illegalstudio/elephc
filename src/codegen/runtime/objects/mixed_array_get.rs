@@ -62,13 +62,43 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_mixed_array_get_null");                      // branch on the current JSON decoder condition
     emitter.instruction("cmp x12, x9");                                         // index >= length → null
     emitter.instruction("b.ge __rt_mixed_array_get_null");                      // branch on the current JSON decoder condition
-    // Indexed arrays of mixed contents store boxed Mixed pointers as
-    // 8-byte slots starting at offset 24 (24-byte header). The decode
-    // runtime creates these arrays with elem_size=8 and tag=mixed for
-    // entries.
+    emitter.instruction("ldr x13, [x10, #-8]");                                 // load packed indexed-array kind metadata
+    emitter.instruction("ubfx x13, x13, #8, #7");                               // extract the runtime element value_type tag
     emitter.instruction("add x10, x10, #24");                                   // skip the 24-byte array header to reach the contiguous payload
-    emitter.instruction("ldr x0, [x10, x12, lsl #3]");                          // load slot at base + index*8 (Mixed* per slot)
+    emitter.instruction("cmp x13, #7");                                         // are indexed slots already boxed Mixed pointers?
+    emitter.instruction("b.eq __rt_mixed_array_get_indexed_boxed");             // boxed slots can be returned directly
+    emitter.instruction("cmp x13, #1");                                         // do indexed slots contain string pointer/length pairs?
+    emitter.instruction("b.eq __rt_mixed_array_get_indexed_string");            // string slots need a 16-byte load before boxing
+    emitter.instruction("cmp x13, #8");                                         // do indexed slots represent null payloads?
+    emitter.instruction("b.eq __rt_mixed_array_get_indexed_null");              // null slots have no payload to read
+    emitter.instruction("ldr x1, [x10, x12, lsl #3]");                          // load scalar or pointer payload from the typed indexed slot
+    emitter.instruction("mov x2, #0");                                          // typed indexed slots use one payload word except strings
+    emitter.instruction("mov x0, x13");                                         // x0 = runtime value_type tag for the boxed result
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the typed indexed-array element into a Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
+    emitter.label("__rt_mixed_array_get_indexed_boxed");
+    emitter.instruction("ldr x0, [x10, x12, lsl #3]");                          // load the boxed Mixed pointer from the indexed slot
     emitter.instruction("cbz x0, __rt_mixed_array_get_null");                   // empty slot → null Mixed
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
+    emitter.label("__rt_mixed_array_get_indexed_string");
+    emitter.instruction("lsl x12, x12, #4");                                    // convert the element index to a 16-byte string slot offset
+    emitter.instruction("add x10, x10, x12");                                   // x10 = address of the selected string slot
+    emitter.instruction("ldr x1, [x10]");                                       // load string pointer from the selected slot
+    emitter.instruction("ldr x2, [x10, #8]");                                   // load string length from the selected slot
+    emitter.instruction("mov x0, #1");                                          // x0 = string runtime value_type tag
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the string indexed-array element into a Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
+    emitter.label("__rt_mixed_array_get_indexed_null");
+    emitter.instruction("mov x0, #8");                                          // x0 = null runtime value_type tag
+    emitter.instruction("mov x1, #0");                                          // value_lo = 0 for null
+    emitter.instruction("mov x2, #0");                                          // value_hi = 0 for null
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the null indexed-array element into a Mixed cell
     emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
@@ -163,16 +193,51 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // load key_hi
     emitter.instruction("cmp r11, -1");                                         // int-key sentinel?
     emitter.instruction("jne __rt_mixed_array_get_null");                       // string key on indexed array → null
-    emitter.instruction("mov r12, QWORD PTR [rbp - 16]");                       // r12 = key_lo (int index)
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // r8 = key_lo (int index)
     emitter.instruction("mov r9, QWORD PTR [r10]");                             // r9 = array length
-    emitter.instruction("cmp r12, 0");                                          // negative index → null
+    emitter.instruction("cmp r8, 0");                                           // negative index → null
     emitter.instruction("jl __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
-    emitter.instruction("cmp r12, r9");                                         // index >= length → null
+    emitter.instruction("cmp r8, r9");                                          // index >= length → null
     emitter.instruction("jge __rt_mixed_array_get_null");                       // branch on the current JSON decoder condition
+    emitter.instruction("mov r9, QWORD PTR [r10 - 8]");                         // load packed indexed-array kind metadata
+    emitter.instruction("shr r9, 8");                                           // shift the runtime element value_type tag into the low bits
+    emitter.instruction("and r9, 0x7f");                                        // remove the persistent COW flag from the extracted tag
     emitter.instruction("lea r10, [r10 + 24]");                                 // skip the 24-byte array header to reach the contiguous payload
-    emitter.instruction("mov rax, QWORD PTR [r10 + r12 * 8]");                  // load slot at base + index*8 (Mixed* per slot)
+    emitter.instruction("cmp r9, 7");                                           // are indexed slots already boxed Mixed pointers?
+    emitter.instruction("je __rt_mixed_array_get_indexed_boxed");               // boxed slots can be returned directly
+    emitter.instruction("cmp r9, 1");                                           // do indexed slots contain string pointer/length pairs?
+    emitter.instruction("je __rt_mixed_array_get_indexed_string");              // string slots need a 16-byte load before boxing
+    emitter.instruction("cmp r9, 8");                                           // do indexed slots represent null payloads?
+    emitter.instruction("je __rt_mixed_array_get_indexed_null");                // null slots have no payload to read
+    emitter.instruction("mov rax, r9");                                         // rax = runtime value_type tag for mixed_from_value
+    emitter.instruction("mov rdi, QWORD PTR [r10 + r8 * 8]");                   // rdi = scalar or pointer payload from the typed indexed slot
+    emitter.instruction("xor esi, esi");                                        // typed indexed slots use one payload word except strings
+    emitter.instruction("call __rt_mixed_from_value");                          // box the typed indexed-array element into a Mixed cell
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return Mixed* in rax
+    emitter.label("__rt_mixed_array_get_indexed_boxed");
+    emitter.instruction("mov rax, QWORD PTR [r10 + r8 * 8]");                   // load the boxed Mixed pointer from the indexed slot
     emitter.instruction("test rax, rax");                                       // empty slot → null
     emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return Mixed* in rax
+    emitter.label("__rt_mixed_array_get_indexed_string");
+    emitter.instruction("shl r8, 4");                                           // convert the element index to a 16-byte string slot offset
+    emitter.instruction("add r10, r8");                                         // r10 = address of the selected string slot
+    emitter.instruction("mov rax, 1");                                          // rax = string runtime value_type tag
+    emitter.instruction("mov rdi, QWORD PTR [r10]");                            // rdi = selected string pointer
+    emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // rsi = selected string length
+    emitter.instruction("call __rt_mixed_from_value");                          // box the string indexed-array element into a Mixed cell
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return Mixed* in rax
+    emitter.label("__rt_mixed_array_get_indexed_null");
+    emitter.instruction("mov rax, 8");                                          // rax = null runtime value_type tag
+    emitter.instruction("mov rdi, 0");                                          // value_lo = 0 for null
+    emitter.instruction("mov rsi, 0");                                          // value_hi = 0 for null
+    emitter.instruction("call __rt_mixed_from_value");                          // box the null indexed-array element into a Mixed cell
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax

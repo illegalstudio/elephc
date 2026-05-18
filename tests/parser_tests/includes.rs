@@ -33,6 +33,24 @@ fn test_include_parses() {
 }
 
 #[test]
+fn test_error_suppressed_include_parses() {
+    let stmts = parse_source("<?php @include 'file.php';");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Include {
+        path,
+        once,
+        required,
+    } = &stmts[0].kind
+    {
+        assert_path_string_literal(path, "file.php");
+        assert!(!once);
+        assert!(!required);
+    } else {
+        panic!("expected Include");
+    }
+}
+
+#[test]
 fn test_require_parses() {
     let stmts = parse_source("<?php require 'file.php';");
     if let StmtKind::Include {

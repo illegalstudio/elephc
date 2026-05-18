@@ -76,8 +76,8 @@ pub struct DeferredClosure {
     pub params: Vec<String>,
     pub body: Vec<Stmt>,
     pub sig: FunctionSig,
-    pub captures: Vec<(String, PhpType)>,
-    pub hidden_params: Vec<(String, PhpType)>,
+    pub captures: Vec<(String, PhpType, bool)>,
+    pub hidden_params: Vec<(String, PhpType, bool)>,
     pub current_class: Option<String>,
     /// `true` when the wrapper body must be emitted because the runtime can
     /// invoke it. Real closures default to `true` (the only way to call them is
@@ -129,8 +129,8 @@ pub struct Context {
     pub all_static_vars: HashMap<(String, String), PhpType>,
     /// Closure signatures keyed by variable name, for resolving defaults at call sites.
     pub closure_sigs: HashMap<String, FunctionSig>,
-    /// Captured variables per closure variable name: maps $fn -> [(capture_name, type)].
-    pub closure_captures: HashMap<String, Vec<(String, PhpType)>>,
+    /// Captured variables per closure variable name: maps $fn -> [(capture_name, type, by_ref)].
+    pub closure_captures: HashMap<String, Vec<(String, PhpType, bool)>>,
     /// First-class callable target stored in a variable, mirroring the Checker's
     /// `first_class_callable_targets` so call sites can short-circuit to a direct
     /// function/method/static-method call instead of going through the closure

@@ -54,7 +54,7 @@ pub(crate) fn emit_generator_closure(
     data: &mut DataSection,
     label: &str,
     sig: &FunctionSig,
-    hidden_params: &[(String, PhpType)],
+    hidden_params: &[(String, PhpType, bool)],
     body: &[Stmt],
     classes: Option<&HashMap<String, ClassInfo>>,
 ) {
@@ -66,7 +66,7 @@ fn emit_generator_with_label(
     data: &mut DataSection,
     wrapper_label: &str,
     sig: &FunctionSig,
-    hidden_params: &[(String, PhpType)],
+    hidden_params: &[(String, PhpType, bool)],
     body: &[Stmt],
     classes: Option<&HashMap<String, ClassInfo>>,
 ) {
@@ -77,7 +77,11 @@ fn emit_generator_with_label(
         .unwrap_or(0);
 
     let mut frame_params = sig.params.clone();
-    frame_params.extend_from_slice(hidden_params);
+    frame_params.extend(
+        hidden_params
+            .iter()
+            .map(|(name, ty, _)| (name.clone(), ty.clone())),
+    );
 
     // v1 only carries one-register scalar/object parameters into the generator frame.
     let int_param_limit = match emitter.target.arch {

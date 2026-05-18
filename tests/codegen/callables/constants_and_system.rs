@@ -182,6 +182,14 @@ fn test_list_unpack_nested_patterns() {
 }
 
 #[test]
+fn test_list_unpack_nested_pattern_from_heterogeneous_array() {
+    let out = compile_and_run(
+        "<?php\n[[$a, $b], $c] = [[10, 20], 30];\necho $a . \":\" . $b . \":\" . $c;\necho \"\\n\";\n",
+    );
+    assert_eq!(out, "10:20:30\n");
+}
+
+#[test]
 fn test_list_unpack_associative_keys() {
     let out = compile_and_run(
         "<?php\n[\"name\" => $name, \"id\" => $id] = [\"id\" => 7, \"name\" => \"Ada\"];\necho $id . \":\" . $name;\n",

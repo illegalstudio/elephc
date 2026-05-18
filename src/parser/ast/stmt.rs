@@ -113,6 +113,7 @@ pub enum StmtKind {
         array: Expr,
         key_var: Option<String>,
         value_var: String,
+        value_by_ref: bool,
         body: Vec<Stmt>,
     },
     Switch {

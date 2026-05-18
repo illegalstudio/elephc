@@ -9,7 +9,7 @@
 //! - Local writes must release replaced heap values only when the frame owns the previous value.
 
 use super::super::super::abi;
-use super::super::super::context::Context;
+use super::super::super::context::{Context, HeapOwnership};
 use super::super::super::data_section::DataSection;
 use super::super::super::emit::Emitter;
 use super::super::super::expr::{coerce_result_to_type, emit_expr};
@@ -38,13 +38,21 @@ pub(crate) fn emit_assign_stmt(
 
     emitter.blank();
     emitter.comment(&format!("${} = ...", name));
-    let static_ty = ctx
-        .variables
-        .get(name)
-        .map(|var| var.static_ty.clone())
-        .filter(|ty| matches!(ty, PhpType::Union(_)))
-        .unwrap_or_else(|| functions::infer_contextual_type(value, ctx));
-    let mut ty = emit_expr(value, emitter, ctx, data);
+    let saved_self_ref_var = prepare_self_ref_closure_capture(name, value, ctx);
+    let target_static_ty = ctx.variables.get(name).map(|var| var.static_ty.clone());
+    let assoc_array_target = assoc_array_literal_target_type(value, target_static_ty.as_ref());
+    let static_ty = assoc_array_target.clone().unwrap_or_else(|| {
+        target_static_ty
+            .clone()
+            .filter(|ty| matches!(ty, PhpType::Union(_)))
+            .unwrap_or_else(|| functions::infer_contextual_type(value, ctx))
+    });
+    let mut ty = if let Some(target_ty) = assoc_array_target {
+        emit_indexed_literal_as_assoc_target(value, &target_ty, emitter, ctx, data)
+    } else {
+        emit_expr(value, emitter, ctx, data)
+    };
+    restore_self_ref_closure_capture(name, saved_self_ref_var, ctx);
     let dest_needs_mixed_box = ctx.variables.get(name).is_some_and(|var| {
         !ctx.ref_params.contains(name)
             && matches!(var.ty, PhpType::Mixed)
@@ -280,6 +288,103 @@ pub(crate) fn emit_assign_stmt(
             );
         }
     }
+}
+
+fn prepare_self_ref_closure_capture(
+    name: &str,
+    value: &Expr,
+    ctx: &mut Context,
+) -> Option<(PhpType, PhpType, HeapOwnership, bool)> {
+    if !closure_captures_name_by_ref(value, name) {
+        return None;
+    }
+    let var = ctx.variables.get_mut(name)?;
+    let saved = (
+        var.ty.clone(),
+        var.static_ty.clone(),
+        var.ownership,
+        var.epilogue_cleanup_safe,
+    );
+    var.ty = PhpType::Callable;
+    var.static_ty = PhpType::Callable;
+    var.ownership = HeapOwnership::NonHeap;
+    Some(saved)
+}
+
+fn restore_self_ref_closure_capture(
+    name: &str,
+    saved: Option<(PhpType, PhpType, HeapOwnership, bool)>,
+    ctx: &mut Context,
+) {
+    let Some((ty, static_ty, ownership, epilogue_cleanup_safe)) = saved else {
+        return;
+    };
+    if let Some(var) = ctx.variables.get_mut(name) {
+        var.ty = ty;
+        var.static_ty = static_ty;
+        var.ownership = ownership;
+        var.epilogue_cleanup_safe = epilogue_cleanup_safe;
+    }
+}
+
+fn closure_captures_name_by_ref(value: &Expr, name: &str) -> bool {
+    matches!(
+        &value.kind,
+        ExprKind::Closure {
+            captures,
+            capture_refs,
+            ..
+        } if captures.iter().any(|capture| capture == name)
+            && capture_refs.iter().any(|capture| capture == name)
+    )
+}
+
+fn assoc_array_literal_target_type(value: &Expr, target_ty: Option<&PhpType>) -> Option<PhpType> {
+    if !matches!(value.kind, ExprKind::ArrayLiteral(_)) {
+        return None;
+    }
+    match target_ty {
+        Some(PhpType::AssocArray { .. }) => target_ty.cloned(),
+        _ => None,
+    }
+}
+
+fn emit_indexed_literal_as_assoc_target(
+    value: &Expr,
+    target_ty: &PhpType,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let ExprKind::ArrayLiteral(elems) = &value.kind else {
+        unreachable!("assoc target literal lowering only accepts indexed array literals");
+    };
+    let PhpType::AssocArray {
+        key: target_key_ty,
+        value: target_value_ty,
+    } = target_ty
+    else {
+        unreachable!("assoc target literal lowering requires an associative array target");
+    };
+    if elems.is_empty() {
+        return crate::codegen::expr::arrays::emit_empty_assoc_array_literal(
+            *target_key_ty.clone(),
+            *target_value_ty.clone(),
+            emitter,
+        );
+    }
+
+    let pairs: Vec<(Expr, Expr)> = elems
+        .iter()
+        .enumerate()
+        .map(|(idx, elem)| {
+            (
+                Expr::new(ExprKind::IntLiteral(idx as i64), elem.span),
+                elem.clone(),
+            )
+        })
+        .collect();
+    crate::codegen::expr::arrays::emit_assoc_array_literal(&pairs, emitter, ctx, data)
 }
 
 /// Returns the callable target to store in `ctx.first_class_callable_targets` so

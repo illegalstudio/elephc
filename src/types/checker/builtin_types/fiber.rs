@@ -9,6 +9,7 @@
 //! Key details:
 //! - Dummy AST members carry type contracts only; runtime behavior is implemented elsewhere.
 
+use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, Expr, ExprKind, Stmt, StmtKind, Visibility};
 use crate::types::PhpType;
 
@@ -179,13 +180,13 @@ pub(crate) fn patch_builtin_fiber_signatures(checker: &mut Checker) {
         return;
     };
 
-    if let Some(sig) = class_info.methods.get_mut("__construct") {
+    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__construct")) {
         if let Some(param) = sig.params.get_mut(0) {
             param.1 = PhpType::Callable;
         }
         sig.return_type = PhpType::Void;
     }
-    if let Some(sig) = class_info.methods.get_mut("start") {
+    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("start")) {
         // Allow up to 7 Mixed arguments to be forwarded to the fiber's closure
         // — that exhausts the AArch64 integer arg registers available after
         // $this. Each slot has a `null` default so $f->start() with no args
@@ -203,33 +204,33 @@ pub(crate) fn patch_builtin_fiber_signatures(checker: &mut Checker) {
         sig.declared_params = vec![false; 7];
         sig.return_type = PhpType::Mixed;
     }
-    if let Some(sig) = class_info.methods.get_mut("resume") {
+    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("resume")) {
         if let Some(param) = sig.params.get_mut(0) {
             param.1 = PhpType::Mixed;
         }
         sig.return_type = PhpType::Mixed;
     }
-    if let Some(sig) = class_info.methods.get_mut("throw") {
+    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("throw")) {
         if let Some(param) = sig.params.get_mut(0) {
             param.1 = throwable_ty.clone();
         }
         sig.return_type = PhpType::Mixed;
     }
-    if let Some(sig) = class_info.methods.get_mut("getReturn") {
+    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getReturn")) {
         sig.return_type = PhpType::Mixed;
     }
     for predicate in ["isStarted", "isSuspended", "isRunning", "isTerminated"] {
-        if let Some(sig) = class_info.methods.get_mut(predicate) {
+        if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(predicate)) {
             sig.return_type = PhpType::Bool;
         }
     }
-    if let Some(sig) = class_info.methods.get_mut("suspend") {
+    if let Some(sig) = class_info.static_methods.get_mut(&php_symbol_key("suspend")) {
         if let Some(param) = sig.params.get_mut(0) {
             param.1 = PhpType::Mixed;
         }
         sig.return_type = PhpType::Mixed;
     }
-    if let Some(sig) = class_info.methods.get_mut("getCurrent") {
+    if let Some(sig) = class_info.static_methods.get_mut(&php_symbol_key("getCurrent")) {
         sig.return_type = PhpType::Mixed;
     }
 }

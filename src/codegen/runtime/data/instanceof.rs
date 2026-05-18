@@ -82,8 +82,12 @@ pub(super) fn emit_instanceof_target_lookup_data(
 }
 
 pub(super) fn escaped_ascii(value: &str) -> String {
+    escaped_bytes(value.as_bytes())
+}
+
+pub(super) fn escaped_bytes(bytes: &[u8]) -> String {
     let mut escaped = String::new();
-    for byte in value.bytes() {
+    for &byte in bytes {
         match byte {
             b'\n' => escaped.push_str("\\n"),
             b'\t' => escaped.push_str("\\t"),

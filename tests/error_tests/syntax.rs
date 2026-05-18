@@ -20,6 +20,14 @@ fn test_error_unterminated_string() {
 }
 
 #[test]
+fn test_error_invalid_unicode_string_escape() {
+    expect_error(
+        r#"<?php echo "\u{110000}";"#,
+        "Invalid UTF-8 codepoint escape sequence",
+    );
+}
+
+#[test]
 fn test_error_empty_variable() {
     expect_error("<?php $;", "Expected variable name");
 }
@@ -212,6 +220,11 @@ fn test_error_print_requires_operand() {
 }
 
 #[test]
+fn test_error_echo_trailing_comma_requires_argument() {
+    expect_error("<?php echo \"A\",;", "Unexpected token");
+}
+
+#[test]
 fn test_error_break_level_must_be_positive() {
     expect_error("<?php while (1) { break 0; }", "accepts only positive integers");
 }
@@ -299,6 +312,14 @@ fn test_error_missing_while_paren() {
 #[test]
 fn test_error_switch_missing_paren() {
     expect_error("<?php switch $x {}", "Expected '(' after 'switch'");
+}
+
+#[test]
+fn test_error_foreach_key_by_reference() {
+    expect_error(
+        "<?php foreach ($a as &$k => $v) {}",
+        "Key element cannot be a reference in foreach",
+    );
 }
 
 #[test]

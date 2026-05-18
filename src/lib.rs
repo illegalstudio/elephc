@@ -20,5 +20,6 @@ pub mod optimize;
 pub mod parser;
 pub mod resolver;
 pub mod span;
+mod string_bytes;
 pub mod termination;
 pub mod types;

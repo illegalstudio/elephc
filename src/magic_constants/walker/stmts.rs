@@ -180,11 +180,13 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             array,
             key_var,
             value_var,
+            value_by_ref,
             body,
         } => StmtKind::Foreach {
             array: walk_expr(array, pass),
             key_var,
             value_var,
+            value_by_ref,
             body: walk_program(body, pass),
         },
         StmtKind::Switch {

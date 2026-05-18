@@ -12,6 +12,7 @@ mod buffer;
 mod indexed;
 mod match_expr;
 mod object;
+mod string_offset;
 
 pub(crate) use buffer::emit_buffer_new;
 pub(crate) use indexed::{emit_array_access, emit_array_access_with_loaded_base};

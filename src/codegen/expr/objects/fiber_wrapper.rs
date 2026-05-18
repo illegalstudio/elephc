@@ -10,7 +10,7 @@
 
 use crate::codegen::context::{Context, DeferredFiberWrapper};
 use crate::parser::ast::{Expr, ExprKind};
-use crate::types::fibers;
+use crate::types::{fibers, PhpType};
 
 pub(super) fn prepare_fiber_wrapper(callable_expr: &Expr, ctx: &mut Context) -> Option<String> {
     let (mut sig, visible_param_count, hidden_arg_types) = match &callable_expr.kind {
@@ -32,7 +32,7 @@ pub(super) fn prepare_fiber_wrapper(callable_expr: &Expr, ctx: &mut Context) -> 
                 deferred
                     .hidden_params
                     .iter()
-                    .map(|(_, ty)| ty.clone())
+                    .map(hidden_capture_arg_type)
                     .collect(),
             )
         }
@@ -48,7 +48,7 @@ pub(super) fn prepare_fiber_wrapper(callable_expr: &Expr, ctx: &mut Context) -> 
                 deferred
                     .hidden_params
                     .iter()
-                    .map(|(_, ty)| ty.clone())
+                    .map(hidden_capture_arg_type)
                     .collect(),
             )
         }
@@ -59,7 +59,7 @@ pub(super) fn prepare_fiber_wrapper(callable_expr: &Expr, ctx: &mut Context) -> 
             let visible_param_count = sig.params.len();
             let mut hidden_arg_types = captures
                 .iter()
-                .map(|(_, ty)| ty.clone())
+                .map(hidden_capture_arg_type)
                 .collect::<Vec<_>>();
             if let Some(deferred) = ctx.deferred_closures.iter_mut().rev().find(|deferred| {
                 deferred.sig.params == sig.params && deferred.captures == captures
@@ -75,7 +75,7 @@ pub(super) fn prepare_fiber_wrapper(callable_expr: &Expr, ctx: &mut Context) -> 
                 hidden_arg_types = deferred
                     .hidden_params
                     .iter()
-                    .map(|(_, ty)| ty.clone())
+                    .map(hidden_capture_arg_type)
                     .collect();
                 sig = deferred.sig.clone();
             } else {
@@ -98,4 +98,12 @@ pub(super) fn prepare_fiber_wrapper(callable_expr: &Expr, ctx: &mut Context) -> 
         hidden_arg_types,
     });
     Some(label)
+}
+
+fn hidden_capture_arg_type((_, ty, by_ref): &(String, PhpType, bool)) -> PhpType {
+    if *by_ref {
+        PhpType::Int
+    } else {
+        ty.clone()
+    }
 }

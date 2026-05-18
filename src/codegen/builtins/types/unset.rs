@@ -23,7 +23,19 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("unset()");
-    if let crate::parser::ast::ExprKind::ArrayAccess { array, index } = &args[0].kind {
+    for arg in args {
+        emit_unset_arg(arg, emitter, ctx, data);
+    }
+    Some(PhpType::Void)
+}
+
+fn emit_unset_arg(
+    arg: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    if let crate::parser::ast::ExprKind::ArrayAccess { array, index } = &arg.kind {
         if crate::codegen::expr::arrays::type_is_array_access_object(
             &crate::codegen::functions::infer_contextual_type(array, ctx),
             ctx,
@@ -31,11 +43,11 @@ pub fn emit(
             crate::codegen::expr::arrays::emit_array_access_offset_unset(
                 array, index, emitter, ctx, data,
             );
-            return Some(PhpType::Void);
+            return;
         }
     }
 
-    if let crate::parser::ast::ExprKind::Variable(name) = &args[0].kind {
+    if let crate::parser::ast::ExprKind::Variable(name) = &arg.kind {
         let var = ctx.variables.get(name).expect("undefined variable");
         let offset = var.stack_offset;
         let old_ty = var.ty.clone();
@@ -60,5 +72,4 @@ pub fn emit(
         abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset);     // store the null sentinel back into the variable slot
         ctx.update_var_type_and_ownership(name, PhpType::Void, HeapOwnership::NonHeap);
     }
-    Some(PhpType::Void)
 }

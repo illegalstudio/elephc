@@ -28,6 +28,7 @@ mod php_uname;
 mod phpversion;
 mod preg_match;
 mod preg_match_all;
+mod preg_replace_callback;
 mod preg_replace;
 mod preg_split;
 mod putenv;
@@ -80,6 +81,7 @@ pub fn emit(
         "json_validate" => json_validate::emit(name, args, emitter, ctx, data),
         "preg_match" => preg_match::emit(name, args, emitter, ctx, data),
         "preg_match_all" => preg_match_all::emit(name, args, emitter, ctx, data),
+        "preg_replace_callback" => preg_replace_callback::emit(name, args, emitter, ctx, data),
         "preg_replace" => preg_replace::emit(name, args, emitter, ctx, data),
         "preg_split" => preg_split::emit(name, args, emitter, ctx, data),
         _ => None,

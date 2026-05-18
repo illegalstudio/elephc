@@ -61,12 +61,15 @@ pub(super) enum ResumeNode {
         default: Vec<ResumeNode>,
     },
     /// `yield from <expr>` — runtime delegation. `source` describes how
-    /// to materialise the inner Generator pointer in `x0`. The single
-    /// state index is reused on every resume call so successive `next()`
-    /// invocations advance the inner generator one step at a time.
+    /// to materialise the inner Generator pointer. The single state index
+    /// is reused on every resume call so successive `next()` invocations
+    /// advance the inner generator one step at a time. `result_local`
+    /// captures the delegated generator's terminal return value for
+    /// `$local = yield from ...`.
     YieldFromGenerator {
         source: YieldFromSource,
         state_idx: u32,
+        result_local: Option<usize>,
     },
     /// `return <expr>;` inside a generator body — boxes the value into
     /// the frame's `return_value` slot and terminates the generator.

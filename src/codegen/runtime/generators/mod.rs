@@ -62,8 +62,25 @@ fn emit_gen_current(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_current ---");
     emitter.label_global("__rt_gen_current");
-    emitter.instruction(&format!("ldr x0, [x0, #{}]", f::OFF_LAST_VALUE));      // load the boxed Mixed pointer for the most-recent yield value
-    emitter.instruction("b __rt_incref");                                       // tail-call incref so the caller owns a fresh refcount on the cell
+    emitter.instruction("sub sp, sp, #32");                                     // reserve a helper frame while an initial current() may resume the generator
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across the resume call
+    emitter.instruction("str x19, [sp, #0]");                                   // preserve caller's x19 before caching the generator frame
+    emitter.instruction("add x29, sp, #16");                                    // establish the helper frame pointer
+    emitter.instruction("mov x19, x0");                                         // x19 = generator frame pointer
+    emitter.instruction(&format!("ldr w1, [x19, #{}]", f::OFF_FLAGS));          // load generator flags
+    emitter.instruction(&format!("tbnz w1, #0, __rt_gen_current_load"));        // skip auto-rewind once the generator has already started
+    emitter.instruction(&format!("orr w1, w1, #{}", f::FLAG_REWOUND));          // mark current() as the first rewind/start operation
+    emitter.instruction(&format!("str w1, [x19, #{}]", f::OFF_FLAGS));          // persist the rewound flag before entering user code
+    emitter.instruction(&format!("ldr x9, [x19, #{}]", f::OFF_RESUME_FN));      // load the resume function pointer
+    emitter.instruction("mov x0, x19");                                         // pass the generator frame to the resume function
+    emitter.instruction("blr x9");                                              // run until the first yield so current() matches PHP's lazy start
+    emitter.label("__rt_gen_current_load");
+    emitter.instruction(&format!("ldr x0, [x19, #{}]", f::OFF_LAST_VALUE));     // load the boxed Mixed pointer for the most-recent yield value
+    emitter.instruction("bl __rt_incref");                                      // incref so the caller owns a fresh refcount on the cell
+    emitter.instruction("ldr x19, [sp, #0]");                                   // restore caller's x19
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the owned Mixed pointer from current()
 }
 
 fn emit_gen_key(emitter: &mut Emitter) {
@@ -162,8 +179,25 @@ fn emit_gen_current_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_current ---");
     emitter.label_global("__rt_gen_current");
-    emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", f::OFF_LAST_VALUE)); // load the boxed Mixed pointer for the most-recent yield value
-    emitter.instruction("jmp __rt_incref");                                     // tail-call incref so the caller owns a fresh refcount on the cell
+    emitter.instruction("push rbp");                                            // preserve caller frame pointer while current() may resume user code
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame
+    emitter.instruction("push r12");                                            // preserve r12 before caching the generator frame
+    emitter.instruction("sub rsp, 8");                                          // keep the stack 16-byte aligned across nested calls
+    emitter.instruction("mov r12, rdi");                                        // r12 = generator frame pointer
+    emitter.instruction(&format!("mov r10d, DWORD PTR [r12 + {}]", f::OFF_FLAGS)); // load generator flags
+    emitter.instruction("test r10d, 1");                                        // has the generator already been rewound/started?
+    emitter.instruction("jnz __rt_gen_current_load");                           // skip auto-rewind when current() is not the first operation
+    emitter.instruction(&format!("or r10d, {}", f::FLAG_REWOUND));              // mark current() as the first rewind/start operation
+    emitter.instruction(&format!("mov DWORD PTR [r12 + {}], r10d", f::OFF_FLAGS)); // persist the rewound flag before entering user code
+    emitter.instruction("mov rdi, r12");                                        // pass the generator frame to the resume function
+    emitter.instruction(&format!("call QWORD PTR [r12 + {}]", f::OFF_RESUME_FN)); // run until the first yield so current() matches PHP's lazy start
+    emitter.label("__rt_gen_current_load");
+    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", f::OFF_LAST_VALUE)); // load the boxed Mixed pointer for the most-recent yield value
+    emitter.instruction("call __rt_incref");                                    // incref so the caller owns a fresh refcount on the cell
+    emitter.instruction("add rsp, 8");                                          // release the alignment pad
+    emitter.instruction("pop r12");                                             // restore caller's r12
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return the owned Mixed pointer from current()
 }
 
 fn emit_gen_key_x86_64(emitter: &mut Emitter) {

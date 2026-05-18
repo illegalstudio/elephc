@@ -11,6 +11,7 @@
 use super::super::cursor::Cursor;
 use super::super::token::Token;
 use crate::errors::CompileError;
+use std::num::IntErrorKind;
 
 /// Collect digits according to `is_digit`, allowing a single `_` between digits
 /// (PHP 7.4+ numeric separator). The helper never consumes a leading or trailing
@@ -54,6 +55,46 @@ fn validate_no_trailing_alnum(cursor: &Cursor, base_label: &str) -> Result<(), C
     Ok(())
 }
 
+fn radix_digits_to_float(digits: &str, radix: u32) -> f64 {
+    let radix_float = radix as f64;
+    let mut value = 0.0;
+    for ch in digits.chars() {
+        let digit = ch
+            .to_digit(radix)
+            .expect("scanner should only pass valid radix digits") as f64;
+        value = value * radix_float + digit;
+    }
+    value
+}
+
+fn parse_radix_int_or_float(
+    cursor: &Cursor,
+    digits: &str,
+    radix: u32,
+    invalid_message: &str,
+) -> Result<Token, CompileError> {
+    match i64::from_str_radix(digits, radix) {
+        Ok(value) => Ok(Token::IntLiteral(value)),
+        Err(err) if matches!(err.kind(), IntErrorKind::PosOverflow) => {
+            Ok(Token::FloatLiteral(radix_digits_to_float(digits, radix)))
+        }
+        Err(_) => Err(CompileError::new(cursor.span(), invalid_message)),
+    }
+}
+
+fn parse_decimal_int_or_float(cursor: &Cursor, digits: &str) -> Result<Token, CompileError> {
+    match digits.parse::<i64>() {
+        Ok(value) => Ok(Token::IntLiteral(value)),
+        Err(err) if matches!(err.kind(), IntErrorKind::PosOverflow) => {
+            let value = digits
+                .parse::<f64>()
+                .map_err(|_| CompileError::new(cursor.span(), "Invalid integer literal"))?;
+            Ok(Token::FloatLiteral(value))
+        }
+        Err(_) => Err(CompileError::new(cursor.span(), "Invalid integer literal")),
+    }
+}
+
 pub(in crate::lexer) fn scan_number(cursor: &mut Cursor) -> Result<Token, CompileError> {
     if cursor.peek() == Some('0') {
         let remaining = cursor.remaining();
@@ -71,9 +112,7 @@ pub(in crate::lexer) fn scan_number(cursor: &mut Cursor) -> Result<Token, Compil
                     ));
                 }
                 validate_no_trailing_alnum(cursor, "hex")?;
-                let value = i64::from_str_radix(&hex_str, 16)
-                    .map_err(|_| CompileError::new(cursor.span(), "Invalid hex literal"))?;
-                return Ok(Token::IntLiteral(value));
+                return parse_radix_int_or_float(cursor, &hex_str, 16, "Invalid hex literal");
             }
 
             if prefix == b'o' || prefix == b'O' {
@@ -87,9 +126,7 @@ pub(in crate::lexer) fn scan_number(cursor: &mut Cursor) -> Result<Token, Compil
                     ));
                 }
                 validate_no_trailing_alnum(cursor, "octal")?;
-                let value = i64::from_str_radix(&octal_str, 8)
-                    .map_err(|_| CompileError::new(cursor.span(), "Invalid octal literal"))?;
-                return Ok(Token::IntLiteral(value));
+                return parse_radix_int_or_float(cursor, &octal_str, 8, "Invalid octal literal");
             }
 
             if prefix == b'b' || prefix == b'B' {
@@ -103,9 +140,7 @@ pub(in crate::lexer) fn scan_number(cursor: &mut Cursor) -> Result<Token, Compil
                     ));
                 }
                 validate_no_trailing_alnum(cursor, "binary")?;
-                let value = i64::from_str_radix(&bin_str, 2)
-                    .map_err(|_| CompileError::new(cursor.span(), "Invalid binary literal"))?;
-                return Ok(Token::IntLiteral(value));
+                return parse_radix_int_or_float(cursor, &bin_str, 2, "Invalid binary literal");
             }
         }
     }
@@ -149,16 +184,10 @@ pub(in crate::lexer) fn scan_number(cursor: &mut Cursor) -> Result<Token, Compil
         if is_legacy_octal { "octal" } else { "decimal" },
     )?;
     if is_legacy_octal {
-        let value = i64::from_str_radix(&num_str, 8)
-            .map_err(|_| CompileError::new(cursor.span(), "Invalid octal literal"))?;
-        return Ok(Token::IntLiteral(value));
+        return parse_radix_int_or_float(cursor, &num_str, 8, "Invalid octal literal");
     }
 
-    let value: i64 = num_str
-        .parse()
-        .map_err(|_| CompileError::new(cursor.span(), "Invalid integer literal"))?;
-
-    Ok(Token::IntLiteral(value))
+    parse_decimal_int_or_float(cursor, &num_str)
 }
 
 /// Scan a float literal starting with `.` (e.g., `.5`, `.123`)

@@ -123,11 +123,15 @@ fn test_parse_foreach_key_value() {
     let stmts = parse_source("<?php foreach ($a as $k => $v) {}");
     assert_eq!(stmts.len(), 1);
     if let StmtKind::Foreach {
-        key_var, value_var, ..
+        key_var,
+        value_var,
+        value_by_ref,
+        ..
     } = &stmts[0].kind
     {
         assert_eq!(key_var, &Some("k".to_string()));
         assert_eq!(value_var, "v");
+        assert!(!value_by_ref);
     } else {
         panic!("expected Foreach");
     }
@@ -138,11 +142,53 @@ fn test_parse_foreach_value_only() {
     let stmts = parse_source("<?php foreach ($a as $value) {}");
     assert_eq!(stmts.len(), 1);
     if let StmtKind::Foreach {
-        key_var, value_var, ..
+        key_var,
+        value_var,
+        value_by_ref,
+        ..
     } = &stmts[0].kind
     {
         assert_eq!(key_var, &None);
         assert_eq!(value_var, "value");
+        assert!(!value_by_ref);
+    } else {
+        panic!("expected Foreach");
+    }
+}
+
+#[test]
+fn test_parse_foreach_value_by_ref() {
+    let stmts = parse_source("<?php foreach ($a as &$value) {}");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Foreach {
+        key_var,
+        value_var,
+        value_by_ref,
+        ..
+    } = &stmts[0].kind
+    {
+        assert_eq!(key_var, &None);
+        assert_eq!(value_var, "value");
+        assert!(value_by_ref);
+    } else {
+        panic!("expected Foreach");
+    }
+}
+
+#[test]
+fn test_parse_foreach_key_value_by_ref() {
+    let stmts = parse_source("<?php foreach ($a as $key => &$value) {}");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Foreach {
+        key_var,
+        value_var,
+        value_by_ref,
+        ..
+    } = &stmts[0].kind
+    {
+        assert_eq!(key_var, &Some("key".to_string()));
+        assert_eq!(value_var, "value");
+        assert!(value_by_ref);
     } else {
         panic!("expected Foreach");
     }

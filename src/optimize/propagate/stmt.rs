@@ -153,8 +153,9 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             array,
             key_var,
             value_var,
+            value_by_ref,
             body,
-        } => propagate_foreach_stmt(array, key_var, value_var, body, span, env),
+        } => propagate_foreach_stmt(array, key_var, value_var, value_by_ref, body, span, env),
         StmtKind::Switch {
             subject,
             cases,
@@ -188,9 +189,11 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
         StmtKind::Continue(levels) => (Stmt::new(StmtKind::Continue(levels), span), env),
         StmtKind::ExprStmt(expr) => {
             let expr = propagate_expr(expr, &env);
-            let next_env = if let Some(name) = unset_target_name(&expr) {
+            let next_env = if let Some(names) = unset_target_names(&expr) {
                 let mut next_env = env;
-                next_env.remove(&name);
+                for name in names {
+                    next_env.remove(&name);
+                }
                 next_env
             } else if expr_effect(&expr).has_side_effects {
                 HashMap::new()
