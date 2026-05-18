@@ -1,18 +1,18 @@
 # Roadmap
 
-## Direction to 1.0
+## Direction for upcoming 0.x releases
 
-The remaining pre-1.0 work is intentionally focused on PHP parity and release
-stability. Product expansion tracks such as shared libraries, WebAssembly, and
-the PHP extension bridge are useful, but they are no longer part of the 1.0
-definition.
+The roadmap stays in the 0.x series while the compiler, runtime, and product
+shape are still moving. Current work is focused on PHP parity, backend
+foundations, and concrete product tracks without a major-version release gate.
 
 Current direction:
 
-- Finish the PHP-visible compatibility gaps that are already well-bounded.
+- Finish the well-bounded PHP-visible compatibility gaps before backend replacement.
 - Keep completed historical items in their original version sections.
-- Move optimizer work behind concrete benchmark or release-candidate needs.
-- Treat new targets and distribution formats as post-1.0 product tracks.
+- Move optimizer work behind EIR, benchmark evidence, and real-world validation.
+- Treat shared libraries, the PHP extension bridge, and WebAssembly as later 0.x product tracks.
+- Leave the major-version discussion for the final future-perspective section.
 
 ## v0.1.x — Usable CLI compiler (done)
 
@@ -458,7 +458,6 @@ PHP-compatible Standard PHP Library coverage, rolled out in phases.
 - [x] Phase 1 — built-in interfaces: `Traversable`, `Iterator` (extends `Traversable`), `IteratorAggregate` (extends `Traversable`), `OuterIterator`, `RecursiveIterator`, `SeekableIterator`, `Countable`, `ArrayAccess`, `SplObserver`, `SplSubject`, `Stringable`, `JsonSerializable`
 - [x] Phase 2 — `count($obj)` redirects to `Countable::count()`
 - [x] Phase 3 — SPL exception hierarchy: `LogicException`, `BadFunctionCallException`, `BadMethodCallException`, `DomainException`, `InvalidArgumentException`, `LengthException`, `OutOfRangeException`, `RuntimeException`, `OutOfBoundsException`, `OverflowException`, `RangeException`, `UnderflowException`, `UnexpectedValueException`
-- [ ] `$obj[$k]` subscript syntax for `ArrayAccess` implementers (read, write, `isset`, `unset` paths) — defers `Mixed`-boxing work
 - [x] Static autoload — composer.json `autoload.psr-4` driven, includes `vendor/<vendor>/<package>/composer.json`. Replaces runtime autoload by inlining every reachable PSR-4 class at compile time
 - [x] `spl_autoload_*` stubs — `register`/`unregister` return `true`, `functions` returns `[]`, `extensions` returns `".inc,.php"`, `call` and `spl_autoload` are no-ops. Defensive code that calls these at boot compiles unchanged
 - [x] Closure-aware `spl_autoload_register` — the closure body is evaluated symbolically at compile time. Supports `__DIR__ . '/' . str_replace('\\', '/', $name) . '.php'` style autoloaders, intermediate variable assignments, and `if (file_exists(...))` guards. `spl_autoload_unregister` removes matching rules; `spl_autoload_call("App\\Foo")` with a literal name forces compile-time autoload of that class
@@ -479,14 +478,29 @@ PHP-compatible Standard PHP Library coverage, rolled out in phases.
 - [x] `get_class` / `get_parent_class` resolve via the argument's static type at compile time
 - [x] `is_a` / `is_subclass_of` with literal class arg fold at compile time, walking parent chain and implemented interfaces
 - [x] Compile-time warning when a `spl_autoload_register` closure is rejected (use captures, multi-param, variadic) — explains why the autoloader silently became a no-op
-- [ ] Phase 4 — `IntrinsicCall` foundation + `SplDoublyLinkedList`, `SplStack`, `SplQueue`, `SplFixedArray`
-- [ ] Phase 5 — iterator decorators (`ArrayIterator`, `ArrayObject`, `IteratorIterator`, `LimitIterator`, `NoRewindIterator`, `InfiniteIterator`, `EmptyIterator`, `AppendIterator`, `MultipleIterator`, `CallbackFilterIterator`, `FilterIterator`, `CachingIterator`, `RecursiveArrayIterator`, `RecursiveCallbackFilterIterator`, `RecursiveFilterIterator`, `RecursiveIteratorIterator`, `ParentIterator`); functions `iterator_to_array`, `iterator_count`, `iterator_apply`, `class_implements`, `class_parents`, `class_uses`
-- [ ] Phase 6 — `SplHeap`, `SplMaxHeap`, `SplMinHeap`, `SplPriorityQueue`, `SplObjectStorage`; `spl_object_id`, `spl_object_hash`, `spl_classes`; `spl_autoload_*` decision and per-instance handle finalization
-- [ ] Phase 7 — `RegexIterator`, `RecursiveRegexIterator`
-- [ ] Phase 8 — file/directory iterators: `SplFileInfo`, `SplFileObject`, `SplTempFileObject`, `DirectoryIterator`, `FilesystemIterator`, `GlobIterator`, `RecursiveDirectoryIterator`, `RecursiveCachingIterator`
-- [ ] `Throwable`-via-interface `getMessage()` dispatch fix (pre-existing): catching by `Throwable` and calling `getMessage()` on the typed binding returns garbage instead of the message string
 
 `Serializable` is intentionally not implemented — it has been deprecated since PHP 8.1.
+
+## v0.22.x — Core parity cleanup before EIR
+
+Close the small dispatch, lvalue, and runtime correctness gaps that should not
+be carried through a backend migration.
+
+- [ ] `Throwable`-via-interface `getMessage()` dispatch fix (pre-existing): catching by `Throwable` and calling `getMessage()` on the typed binding returns garbage instead of the message string
+- [ ] `$obj[$k]` subscript syntax for `ArrayAccess` implementers (read, write, `isset`, `unset` paths), including `Mixed`-boxing for offsets and values
+- [ ] `IntrinsicCall` foundation for runtime-managed SPL/core objects when direct method interception is still the cleanest implementation path
+
+## v0.23.x — SPL containers and iterator runway
+
+Continue SPL coverage on the 0.x path, but do not let broad library coverage
+block the EIR migration unless it exposes core dispatch, ownership, or lvalue
+gaps that must be fixed first.
+
+- [ ] Phase 4 — `SplDoublyLinkedList`, `SplStack`, `SplQueue`, `SplFixedArray`
+- [ ] Phase 5 — iterator decorators (`ArrayIterator`, `ArrayObject`, `IteratorIterator`, `LimitIterator`, `NoRewindIterator`, `InfiniteIterator`, `EmptyIterator`, `AppendIterator`, `MultipleIterator`, `CallbackFilterIterator`, `FilterIterator`, `CachingIterator`, `RecursiveArrayIterator`, `RecursiveCallbackFilterIterator`, `RecursiveFilterIterator`, `RecursiveIteratorIterator`, `ParentIterator`); functions `iterator_to_array`, `iterator_count`, `iterator_apply`, `class_implements`, `class_parents`, `class_uses`
+- [ ] Phase 6 — `SplHeap`, `SplMaxHeap`, `SplMinHeap`, `SplPriorityQueue`, `SplObjectStorage`, and per-instance handle finalization
+- [ ] Phase 7 — `RegexIterator`, `RecursiveRegexIterator`
+- [ ] Phase 8 — file/directory iterators: `SplFileInfo`, `SplFileObject`, `SplTempFileObject`, `DirectoryIterator`, `FilesystemIterator`, `GlobIterator`, `RecursiveDirectoryIterator`, `RecursiveCachingIterator`
 
 ## v0.24.x — EIR introduction and register allocation
 
@@ -533,14 +547,11 @@ Expected outcome: additional 10–20% performance gain on loop-heavy and
 call-heavy benchmarks; cumulative ≥30% improvement vs end-of-v0.23
 baseline.
 
-## v0.26.x — Performance closure, legacy cleanup, and release stabilization
+## v0.26.x — Performance closure, legacy cleanup, and 0.x stabilization
 
 Optimization work should now be driven by benchmarks, generated assembly size,
-and release-candidate validation rather than by speculative pass work.
+and 0.x validation rather than by speculative pass work.
 
-- [ ] Remove legacy AST → ASM backend (`src/codegen/expr/`, `stmt/`, `class_methods.rs`, `functions/`, related modules)
-- [ ] Rename `src/codegen_ir/` to `src/codegen/`
-- [ ] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
 - [ ] Source maps v2 — richer mappings for functions / expressions / labels and a more stable machine-readable schema for external tooling
 - [ ] Memory-model-aware propagation for heap-backed locals and targeted runtime invalidations beyond `unset($var)` and the currently modeled local writes
 - [ ] Purity / may-throw v2 for dynamic instance dispatch, richer property/array reads, and less pessimistic builtin modeling (feeds the EIR effects table)
@@ -553,28 +564,18 @@ and release-candidate validation rather than by speculative pass work.
 - [ ] Tail-call optimization — direct tail self- and mutual-recursion lowering on top of EIR (`Br` to function entry with parameter rebinding)
 - [ ] Performance within 2x of C -O0 on compute benchmarks
 - [ ] Real-world CLI tools compiled as validation
+- [ ] Keep the legacy AST → ASM backend available as a fallback through validation; remove it only after the IR backend passes real-world validation
+- [ ] Rename `src/codegen_ir/` to `src/codegen/`
+- [ ] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [ ] Installation / packaging documentation for the supported host platforms
 
-## v1.0.x — Stabilization and release gate
+## Later 0.x product tracks
 
-- [x] `--emit-asm`, `--check` flags
-- [x] Full test coverage (>500 focused checks across lexer/parser/codegen/error suites)
-- [x] Documentation: language subset spec, architecture guide
-- [x] CI/CD with release binaries
-- [x] PHP case-insensitive symbol parity for keywords, built-in/user function calls, class/interface/trait names, and method lookup while preserving PHP's case-sensitive variables, object properties, string array keys, and user constants
-- [ ] Freeze the documented language/runtime contract for the supported target matrix
-- [ ] Run a dedicated release-candidate stabilization pass across compiler, runtime, docs, and examples
-- [ ] Ship 1.0 once the pre-1.0 roadmap is reduced to true post-1.0 work only
+These are valuable product directions that build on the stabilized 0.x compiler
+and runtime foundation.
 
----
-
-## Post-1.0 product tracks
-
-These are valuable directions, but they should build on a frozen 1.0 language
-and runtime contract instead of competing with PHP parity work before 1.0.
-
-## v1.1.x — Shared and static libraries (C ABI)
+## v0.27.x — Shared and static libraries (C ABI)
 
 - [ ] `--lib` flag, export PHP functions as C-callable symbols
 - [ ] `--export` flag for symbol selection
@@ -586,14 +587,7 @@ and runtime contract instead of competing with PHP parity work before 1.0.
 - [ ] `pkg-config` generation
 - [ ] FFI documentation for C, Rust, Python, Go
 
-## v1.2.x — WebAssembly target
-
-- [ ] WASM codegen backend
-- [ ] `.wat` / `.wasm` emission
-- [ ] WASI support for I/O
-- [ ] NPM package generation
-
-## v1.3.x — PHP extension bridge (experimental)
+## v0.28.x — PHP extension bridge (experimental)
 
 - [ ] `zval` pack/unpack routines (convert elephc values ↔ PHP `zval` structs)
 - [ ] Link against PHP extension `.so` / `.dylib` shared libraries
@@ -602,11 +596,18 @@ and runtime contract instead of competing with PHP parity work before 1.0.
 - [ ] `--ext` flag to specify extension libraries at compile time
 - [ ] Documentation: how to bridge a PHP extension
 
+## v0.29.x — WebAssembly target
+
+- [ ] WASM codegen backend
+- [ ] `.wat` / `.wasm` emission
+- [ ] WASI support for I/O
+- [ ] NPM package generation
+
 ## Deferred ideas
 
-Features that are feasible but intentionally not on the pre-1.0 path. They are
+Features that are feasible but intentionally not on the active 0.x path. They are
 either product-specific, very high complexity, or better justified by concrete
-post-1.0 use cases.
+future use cases.
 
 | Feature | Complexity | Notes |
 |---|---|---|
@@ -628,3 +629,13 @@ Features that are fundamentally incompatible with a static ahead-of-time compile
 | `extract()` | Creates new variables from array keys at runtime. A static compiler must know all variables before execution — it cannot allocate stack slots on the fly. |
 | `$$var` (variable variables) | Requires a runtime symbol table to resolve variable names dynamically. Incompatible with static stack-based variable allocation. |
 | `eval()` | Requires a full interpreter/compiler at runtime. Fundamentally impossible in an AOT compiler. |
+
+## Future 1.0 perspective
+
+1.0 is not an active planning gate for the current roadmap. Revisit it only
+after the 0.x compiler/runtime contracts have settled through real-world use.
+
+- [ ] Freeze the documented language/runtime contract for the supported target matrix
+- [ ] Decide which 0.x product tracks belong inside the first stable contract and which remain experimental
+- [ ] Run a dedicated stabilization pass across compiler, runtime, docs, examples, and packaging
+- [ ] Ship 1.0 from a proven 0.x baseline
