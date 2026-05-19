@@ -286,6 +286,10 @@ fn emit_property_segment(
             return SegmentOutcome::always_null();
         }
         let Some(class_name) = singular_receiver_class(&receiver_ty, current_ty) else {
+            if matches!(current_ty.codegen_repr(), PhpType::Mixed) {
+                let ty = objects::emit_mixed_property_access(property, emitter, ctx, data);
+                return SegmentOutcome::normal(ty, false);
+            }
             emitter.comment("WARNING: nullsafe property access on non-object");
             abi::emit_jump(emitter, null_label);
             return SegmentOutcome::always_null();
@@ -303,6 +307,10 @@ fn emit_property_segment(
     }
 
     let Some(class_name) = singular_receiver_class(&receiver_ty, current_ty) else {
+        if matches!(current_ty.codegen_repr(), PhpType::Mixed) {
+            let ty = objects::emit_mixed_property_access(property, emitter, ctx, data);
+            return SegmentOutcome::normal(ty, false);
+        }
         emitter.comment("WARNING: property access on non-object");
         return SegmentOutcome::normal(functions::infer_contextual_type(expr, ctx), false);
     };

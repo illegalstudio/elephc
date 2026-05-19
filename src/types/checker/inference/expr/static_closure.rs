@@ -243,6 +243,11 @@ fn expr_must_not_use_this(expr: &Expr, span: Span) -> Result<(), CompileError> {
         }
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => expr_must_not_use_this(object, span),
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            expr_must_not_use_this(object, span)?;
+            expr_must_not_use_this(property, span)
+        }
         ExprKind::NamedArg { value, .. } => expr_must_not_use_this(value, span),
         ExprKind::BufferNew { len, .. } => expr_must_not_use_this(len, span),
         ExprKind::FirstClassCallable(target) => callable_target_must_not_use_this(target, span),

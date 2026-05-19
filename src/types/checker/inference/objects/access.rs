@@ -9,7 +9,7 @@
 //! - Object inference depends on flattened class metadata, visibility, inheritance, and declared property types.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, StaticReceiver};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::Checker;
@@ -88,6 +88,9 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        if matches!(obj_ty, PhpType::Mixed) {
+            return Ok(PhpType::Mixed);
+        }
         let Some((class_name, nullable)) =
             self.nullsafe_object_receiver(&obj_ty, expr, "property access")?
         else {
@@ -98,6 +101,48 @@ impl Checker {
             Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]))
         } else {
             Ok(property_ty)
+        }
+    }
+
+    pub(crate) fn infer_dynamic_property_access_type(
+        &mut self,
+        object: &Expr,
+        property: &Expr,
+        expr: &Expr,
+        env: &TypeEnv,
+        nullsafe: bool,
+    ) -> Result<PhpType, CompileError> {
+        let obj_ty = self.infer_type(object, env)?;
+        if nullsafe && matches!(obj_ty, PhpType::Void) {
+            return Ok(PhpType::Void);
+        }
+
+        let property_ty = self.infer_type(property, env)?;
+        if !matches!(property_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
+            return Err(CompileError::new(
+                property.span,
+                "Dynamic property name must be string or integer",
+            ));
+        }
+
+        if let ExprKind::StringLiteral(name) = &property.kind {
+            return if nullsafe {
+                self.infer_nullsafe_property_access_type(object, name, expr, env)
+            } else {
+                self.infer_property_access_type(object, name, expr, env)
+            };
+        }
+
+        match obj_ty {
+            PhpType::Object(_) | PhpType::Union(_) | PhpType::Mixed => Ok(PhpType::Mixed),
+            _ if nullsafe => {
+                self.nullsafe_object_receiver(&obj_ty, expr, "property access")?;
+                Ok(PhpType::Mixed)
+            }
+            _ => Err(CompileError::new(
+                expr.span,
+                "Property access requires an object or typed pointer",
+            )),
         }
     }
 

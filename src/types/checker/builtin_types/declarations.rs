@@ -50,6 +50,7 @@ pub(crate) fn inject_builtin_throwables(
 ) -> Result<(), CompileError> {
     for builtin_name in [
         "Throwable",
+        "Error",
         "Exception",
         "RuntimeException",
         "JsonException",
@@ -79,6 +80,28 @@ pub(crate) fn inject_builtin_throwables(
             properties: Vec::new(),
             methods: vec![builtin_throwable_get_message_method()],
             span: crate::span::Span::dummy(),
+            constants: Vec::new(),
+        },
+    );
+    class_map.insert(
+        "Error".to_string(),
+        FlattenedClass {
+            name: "Error".to_string(),
+            extends: None,
+            implements: vec!["Throwable".to_string()],
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: vec![
+                builtin_exception_message_property(),
+                builtin_exception_code_property(),
+            ],
+            methods: vec![
+                builtin_exception_constructor_method(),
+                builtin_exception_get_message_method(),
+                builtin_exception_get_code_method(),
+            ],
+            attributes: Vec::new(),
             constants: Vec::new(),
         },
     );
@@ -159,13 +182,12 @@ pub(crate) fn inject_builtin_throwables(
         },
     );
 
-    // FiberError: extends the standard Exception so catch(Exception) and
-    // catch(FiberError) both behave per PHP semantics.
+    // FiberError: PHP models fiber state errors under Error, not Exception.
     class_map.insert(
         "FiberError".to_string(),
         FlattenedClass {
             name: "FiberError".to_string(),
-            extends: Some("Exception".to_string()),
+            extends: Some("Error".to_string()),
             implements: Vec::new(),
             is_abstract: false,
             is_final: false,

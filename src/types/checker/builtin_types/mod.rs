@@ -1,6 +1,6 @@
 //! Purpose:
 //! Wires synthetic builtin class and interface declarations into checker setup.
-//! Exposes patching and validation hooks for PHP runtime types such as Throwable, Exception, and Fiber.
+//! Exposes patching and validation hooks for PHP runtime types such as Throwable, Error, Exception, and Fiber.
 //!
 //! Called from:
 //! - `crate::types::checker::driver::init`

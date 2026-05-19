@@ -51,6 +51,66 @@ echo Child::VERSION;
 }
 
 #[test]
+fn test_class_constant_expression_can_reference_self_constant() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    const A = 1;
+    const B = self::A + 2;
+}
+echo Box::B;
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_inherited_class_constant_expression_keeps_lexical_self() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    const A = 1;
+    const B = self::A + 2;
+}
+class Child extends Base {
+    const A = 10;
+}
+echo Child::B;
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_class_constant_expression_can_reference_parent_constant() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    const A = 1;
+}
+class Child extends Base {
+    const B = parent::A + 2;
+}
+echo Child::B;
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_class_constant_expression_can_use_self_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    const NAME = self::class;
+}
+echo Box::NAME;
+"#,
+    );
+    assert_eq!(out, "Box");
+}
+
+#[test]
 fn test_class_constant_self_access_inside_method() {
     let out = compile_and_run(
         r#"<?php

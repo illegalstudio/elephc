@@ -126,9 +126,17 @@ pub enum ExprKind {
         object: Box<Expr>,
         property: String,
     },
+    DynamicPropertyAccess {
+        object: Box<Expr>,
+        property: Box<Expr>,
+    },
     NullsafePropertyAccess {
         object: Box<Expr>,
         property: String,
+    },
+    NullsafeDynamicPropertyAccess {
+        object: Box<Expr>,
+        property: Box<Expr>,
     },
     StaticPropertyAccess {
         receiver: StaticReceiver,

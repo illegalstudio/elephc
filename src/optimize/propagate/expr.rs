@@ -182,10 +182,22 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             object: Box::new(propagate_expr(*object, env)),
             property,
         },
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            ExprKind::DynamicPropertyAccess {
+                object: Box::new(propagate_expr(*object, env)),
+                property: Box::new(propagate_expr(*property, env)),
+            }
+        }
         ExprKind::NullsafePropertyAccess { object, property } => {
             ExprKind::NullsafePropertyAccess {
                 object: Box::new(propagate_expr(*object, env)),
                 property,
+            }
+        }
+        ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            ExprKind::NullsafeDynamicPropertyAccess {
+                object: Box::new(propagate_expr(*object, env)),
+                property: Box::new(propagate_expr(*property, env)),
             }
         }
         ExprKind::StaticPropertyAccess { receiver, property } => {

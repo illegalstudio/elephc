@@ -60,6 +60,23 @@ catch (FiberError $e) { echo $e->getMessage(); }
 }
 
 #[test]
+fn test_fiber_error_on_get_return_is_caught_by_error() {
+    let out = compile_and_run(
+        r#"<?php
+$f = new Fiber(function(): void {});
+try {
+    $f->getReturn();
+} catch (Error $e) {
+    echo "error";
+} catch (Exception $e) {
+    echo "exception";
+}
+"#,
+    );
+    assert_eq!(out, "error");
+}
+
+#[test]
 fn test_fiber_error_on_throw_not_suspended() {
     let out = compile_and_run(
         r#"<?php
@@ -114,4 +131,3 @@ echo "after-start";
     );
     assert_eq!(out, "fiber-caught;after-start");
 }
-

@@ -415,6 +415,11 @@ fn collect_assignment_expr_vars(expr: &Expr, ctx: &mut Context, sig: &FunctionSi
         | ExprKind::NullsafePropertyAccess { object, .. } => {
             collect_assignment_expr_vars(object, ctx, sig);
         }
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            collect_assignment_expr_vars(object, ctx, sig);
+            collect_assignment_expr_vars(property, ctx, sig);
+        }
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             collect_assignment_expr_vars(object, ctx, sig);

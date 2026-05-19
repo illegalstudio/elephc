@@ -177,6 +177,14 @@ fn test_error_parent_class_without_parent() {
 }
 
 #[test]
+fn test_error_static_constant_reference_in_class_constant_expression() {
+    expect_error(
+        "<?php class C { const A = 1; const B = static::A + 1; } echo C::B;",
+        "Cannot use static:: in class constant expression",
+    );
+}
+
+#[test]
 fn test_error_new_static_validates_child_constructor() {
     expect_error(
         "<?php class Base { public static function make(): Base { return new static(); } } class Child extends Base { public function __construct(string $name) {} } echo Child::make();",

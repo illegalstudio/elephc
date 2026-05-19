@@ -15,6 +15,8 @@ use crate::parser::ast::{Expr, Visibility};
 use crate::types::traits::FlattenedClass;
 use crate::types::{ClassInfo, FunctionSig, PhpType, PropertyHookContract};
 
+use super::constants::resolve_lexical_class_constant_value;
+
 #[derive(Default)]
 pub(super) struct ClassBuildState {
     pub(super) allow_dynamic_properties: bool,
@@ -90,8 +92,13 @@ impl ClassBuildState {
             constants: class
                 .constants
                 .iter()
-                .map(|c| (c.name.clone(), c.value.clone()))
-                .collect(),
+                .map(|c| {
+                    Ok((
+                        c.name.clone(),
+                        resolve_lexical_class_constant_value(&c.value, class)?,
+                    ))
+                })
+                .collect::<Result<HashMap<_, _>, CompileError>>()?,
             attribute_names: collect_attribute_names(&class.attributes),
             attribute_args,
             method_attribute_names: self.method_attribute_names,

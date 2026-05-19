@@ -299,11 +299,14 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
                 collect_required_class_names_in_expr(arg, names);
             }
         }
-        ExprKind::PropertyAccess { object, .. } => {
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::NullsafePropertyAccess { object, .. } => {
             collect_required_class_names_in_expr(object, names);
         }
-        ExprKind::NullsafePropertyAccess { object, .. } => {
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
             collect_required_class_names_in_expr(object, names);
+            collect_required_class_names_in_expr(property, names);
         }
         ExprKind::StaticPropertyAccess { receiver, .. } => {
             if let crate::parser::ast::StaticReceiver::Named(name) = receiver {

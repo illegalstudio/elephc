@@ -17,6 +17,7 @@ const BUILTIN_CLASS_LIKE_SYMBOLS: &[&str] = &[
     "ArrayAccess",
     "Countable",
     "Throwable",
+    "Error",
     "Exception",
     "Iterator",
     "IteratorAggregate",

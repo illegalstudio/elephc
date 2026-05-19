@@ -192,7 +192,13 @@ pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
             sig.return_type = PhpType::Str;
         }
     }
-    for class_name in ["Exception", "RuntimeException", "JsonException"] {
+    for class_name in [
+        "Error",
+        "Exception",
+        "RuntimeException",
+        "JsonException",
+        "FiberError",
+    ] {
         if let Some(class_info) = checker.classes.get_mut(class_name) {
             if let Some(sig) = class_info.methods.get_mut("__construct") {
                 if let Some(param) = sig.params.get_mut(0) {

@@ -16,7 +16,9 @@ pub(crate) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {
         ExprKind::Variable(_)
         | ExprKind::ArrayAccess { .. }
         | ExprKind::PropertyAccess { .. }
+        | ExprKind::DynamicPropertyAccess { .. }
         | ExprKind::NullsafePropertyAccess { .. }
+        | ExprKind::NullsafeDynamicPropertyAccess { .. }
         | ExprKind::StaticPropertyAccess { .. }
         | ExprKind::This => HeapOwnership::Borrowed,
         ExprKind::Spread(inner)

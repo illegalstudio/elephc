@@ -332,9 +332,11 @@ pub(super) fn infer_local_type(
         ExprKind::PropertyAccess { object, property } => {
             infer_property_access_type(object, property, sig, ctx)
         }
+        ExprKind::DynamicPropertyAccess { .. } => PhpType::Mixed,
         ExprKind::NullsafePropertyAccess { object, property } => {
             infer_nullsafe_property_access_type(object, property, sig, ctx)
         }
+        ExprKind::NullsafeDynamicPropertyAccess { .. } => PhpType::Mixed,
         ExprKind::StaticPropertyAccess { receiver, property } => {
             infer_static_property_access_type(receiver, property, ctx)
         }

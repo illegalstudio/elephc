@@ -75,7 +75,7 @@ fn emit_object_hash(
 
 /// Materialise the SPL class/interface registry as an indexed string
 /// array. Names mirror what we ship today (10 SPL/core interfaces +
-/// `Throwable` and `Exception` plus the 13 SPL exception subclasses);
+/// `Throwable`, `Error`, and `Exception` plus the 13 SPL exception subclasses);
 /// upcoming phases (data structures, iterator decorators, file iterators)
 /// will extend this list as their classes land.
 fn emit_classes(emitter: &mut Emitter, data: &mut DataSection) -> PhpType {
@@ -132,6 +132,7 @@ const SPL_CLASS_NAMES: &[&str] = &[
     "BadMethodCallException",
     "Countable",
     "DomainException",
+    "Error",
     "Exception",
     "InvalidArgumentException",
     "Iterator",

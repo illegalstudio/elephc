@@ -354,7 +354,13 @@ fn collect_x86_emitted_class_names(
     // descriptors in the user-asm tables, the catch-time inheritance
     // walk in __rt_exception_matches sees a -1 parent for the thrown
     // class and reports no match.
-    for builtin in ["Throwable", "Exception", "RuntimeException", "JsonException"] {
+    for builtin in [
+        "Throwable",
+        "Error",
+        "Exception",
+        "RuntimeException",
+        "JsonException",
+    ] {
         names.insert(builtin.to_string());
     }
     for builtin in [

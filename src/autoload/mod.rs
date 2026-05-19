@@ -34,6 +34,7 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "BadMethodCallException",
     "Countable",
     "DomainException",
+    "Error",
     "Exception",
     "Fiber",
     "FiberError",

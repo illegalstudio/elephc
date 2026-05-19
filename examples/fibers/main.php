@@ -114,9 +114,9 @@ $f_inc->start();        // 5 + 1 = 6
 $f_dbl->start();        // 6 * 2 = 12
 echo "shared counter ended at " . $shared->value . "\n";
 
-// 8) FiberError is a regular Exception subclass — catch it like any other.
+// 8) FiberError is an Error subclass — catch it directly or through Error.
 try {
     throw new FiberError("manual");
-} catch (FiberError $e) {
+} catch (Error $e) {
     echo "caught FiberError\n";
 }

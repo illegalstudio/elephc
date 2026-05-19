@@ -121,17 +121,19 @@ echo $f->isTerminated() ? "T" : "t";
 }
 
 #[test]
-fn test_fiber_error_subclasses_exception() {
+fn test_fiber_error_subclasses_error() {
     let out = compile_and_run(
         r#"<?php
 try {
     throw new FiberError("nope");
 } catch (Exception $e) {
-    echo "caught";
+    echo "exception";
+} catch (Error $e) {
+    echo "error";
 }
 "#,
     );
-    assert_eq!(out, "caught");
+    assert_eq!(out, "error");
 }
 
 #[test]

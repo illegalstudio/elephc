@@ -219,13 +219,13 @@ try {
 
 Supported subset:
 
-- built-in `Exception` class and `Throwable` interface are available without declaring them
-- `Exception` provides `$message`, `__construct($message = "")`, and `getMessage()`
+- built-in `Error` and `Exception` classes and the `Throwable` interface are available without declaring them
+- `Error` and `Exception` provide `$message`, `$code`, `__construct($message = "", $code = 0)`, `getMessage()`, and `getCode()`
 - the SPL exception hierarchy is built-in: `LogicException`, `BadFunctionCallException`, `BadMethodCallException`, `DomainException`, `InvalidArgumentException`, `LengthException`, `OutOfRangeException`, `RuntimeException`, `OutOfBoundsException`, `OverflowException`, `RangeException`, `UnderflowException`, `UnexpectedValueException`. Each is a marker subclass that inherits the constructor, `$message`, and `getMessage()` from `Exception`. Catch a specific type (`InvalidArgumentException`), an intermediate parent (`LogicException`), or the root (`Exception`/`Throwable`)
 - `throw <expr>;` where `<expr>` has an object type implementing `Throwable`
 - `throw <expr>` can also be used inside expressions such as `??` and ternaries
 - `catch (ClassName $e)` and `catch (TypeA | TypeB $e)` for multi-catch
-- `catch (Exception)` without binding the exception variable
+- `catch (Exception)`, `catch (Error)`, or another throwable type without binding the exception variable
 - catch types must extend or implement `Throwable`
 - multiple `catch` clauses
 - `try { ... } finally { ... }`

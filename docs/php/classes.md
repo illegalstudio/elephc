@@ -312,6 +312,8 @@ Use `?->` when a receiver may be `null`:
 echo $user?->profile?->name ?? "anonymous";
 echo $user?->profile?->label() ?? "missing";
 echo $user?->profile->address?->city ?? "unknown";
+$segment = "profile";
+echo $user?->{$segment}?->name ?? "anonymous";
 ```
 
 When a nullsafe receiver is `null`, elephc skips the rest of that postfix chain and returns `null`. This matches PHP for mixed chains such as `$user?->profile->address`: the ordinary `->address` segment is skipped when `$user` is `null`, but still warns or fatals normally if `$user` is non-null and `profile` itself is `null`. Method arguments, array indexes, and callable arguments on the skipped branch are not evaluated.
@@ -588,6 +590,7 @@ Limitations today:
 class Math {
     const PI = 314;
     public const E = 271;
+    const TAU = self::PI * 2;
 }
 echo Math::PI;        // 314
 echo self::PI;        // inside Math methods
@@ -600,12 +603,12 @@ class Bound implements Limits {
 }
 ```
 
-Class constants (PHP 7.1+ visibility, PHP 8.1+ `final`) live on classes, interfaces, and traits. They are inherited from parents and implemented interfaces (transitively). At codegen time elephc inlines the constant's literal value at every access site — there is no runtime lookup, and recursive constant references (`const FOO = self::BAR + 1`) are not yet supported. Attributes on class constants are accepted and stored in the AST.
+Class constants (PHP 7.1+ visibility, PHP 8.1+ `final`) live on classes, interfaces, and traits. They are inherited from parents and implemented interfaces (transitively). At codegen time elephc inlines the constant's foldable value at every access site — there is no runtime lookup. Class constant expressions may reference other class constants through `ClassName::CONST`, `self::CONST`, or `parent::CONST`; `self::class` and `parent::class` are also accepted. `self::` and `parent::` are early-bound to the declaring class, matching PHP. `static::CONST` is rejected in class constant expressions because PHP does not allow late-static binding in compile-time constants. Attributes on class constants are accepted and stored in the AST.
 
 ## Limitations
 - `readonly static` properties are rejected to match PHP. Static properties in a `readonly class` are still mutable.
 - Property hook bodies are not implemented; elephc supports hook contracts only.
 - Shadowing a private parent property with a same-named child property is not yet supported (PHP gives them separate slots; elephc uses one slot per name)
-- Class constants must be literal-or-foldable expressions; `self::OTHER + 1` style recursive references are not supported.
+- Class constants must be literal-or-foldable expressions; cyclic constant references are not supported.
 - Anonymous classes (`new class { ... }`) are not yet supported.
 - Class attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported `ReflectionClass`/`ReflectionMethod`/`ReflectionProperty::getAttributes()` APIs; parameter reflection is not yet available. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to parameters (refactor of param representation and stack-trace infrastructure pending).

@@ -25,7 +25,7 @@ elephc supports Fibers on the supported native target matrix: macOS ARM64, Linux
 | `Fiber::suspend` | `static suspend(mixed $value = null): mixed` | (Called from inside a fiber.) Yield the value to the resumer and pause; resumes with the value the next `resume()` delivers. |
 | `Fiber::getCurrent` | `static getCurrent(): ?Fiber` | The currently executing fiber, or null when called from the main thread. Internally this is represented as a boxed `mixed` value. |
 
-`FiberError` is currently modeled as an `Exception` subclass in elephc — `catch (Exception $e)` and `catch (FiberError $e)` both apply. PHP models `FiberError` under `Error`, so this hierarchy is a known compatibility difference.
+`FiberError` is modeled as an `Error` subclass, matching PHP. `catch (FiberError $e)`, `catch (Error $e)`, and `catch (Throwable $e)` all apply; `catch (Exception $e)` does not.
 
 ## Lifecycle states
 
@@ -99,6 +99,5 @@ These are current implementation limits, not PHP design rules:
 | Callback targets must be statically known | `new Fiber(...)` accepts closures, variables holding known closures/callables, and known first-class callables. Arbitrary runtime callable values, such as unknown strings or dynamically computed callbacks, are rejected. |
 | Mixed arithmetic still needs explicit casts | Values transferred by `start()`, `resume()`, `Fiber::suspend()`, and `getReturn()` are boxed `mixed` cells. Echo, comparison, `gettype()`, `instanceof`, and typed callback parameters handle them, but arithmetic on an untyped value received from `Fiber::suspend()` may not auto-unbox. Cast explicitly before computing, for example `(int)$value + 10`. |
 | `Fiber::getCurrent()` has imprecise internal typing | PHP exposes `?Fiber`; elephc currently represents the result as boxed `mixed` internally. Runtime checks such as `instanceof Fiber` work, but type inference is less precise than PHP's signature. |
-| `FiberError` hierarchy differs from PHP | elephc currently models `FiberError` as an `Exception` subclass. PHP models it under `Error`. |
 | Stack size is fixed | Each Fiber gets a 256 KiB usable stack plus a 16 KiB guard page. There is no user-facing stack-size configuration. Stack overflow faults through the guard page rather than raising a catchable PHP exception. |
 | Cooperative only | Fibers do not provide parallel execution, preemption, timers, or an event loop. Scheduling is entirely explicit through `start()`, `resume()`, `suspend()`, and `throw()`. |

@@ -208,6 +208,10 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         ExprKind::Closure { body, .. } => body_has_dynamic_instanceof(body),
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => expr_has_dynamic_instanceof(object),
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            expr_has_dynamic_instanceof(object) || expr_has_dynamic_instanceof(property)
+        }
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_has_dynamic_instanceof(object) || args.iter().any(expr_has_dynamic_instanceof)

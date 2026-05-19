@@ -189,6 +189,14 @@ fn test_error_cannot_redeclare_builtin_exception_type() {
 }
 
 #[test]
+fn test_error_cannot_redeclare_builtin_error_type() {
+    expect_error(
+        "<?php class Error {}",
+        "Cannot redeclare built-in type: Error",
+    );
+}
+
+#[test]
 fn test_error_cannot_instantiate_throwable_interface() {
     expect_error(
         "<?php $e = new Throwable();",

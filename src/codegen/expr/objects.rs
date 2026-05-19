@@ -36,6 +36,35 @@ pub(crate) fn emit_new_object(
     allocation::emit_new_object(class_name, args, emitter, ctx, data)
 }
 
+pub(crate) fn emit_dynamic_property_access(
+    object: &Expr,
+    property: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    access::emit_dynamic_property_access(object, property, false, emitter, ctx, data)
+}
+
+pub(crate) fn emit_nullsafe_dynamic_property_access(
+    object: &Expr,
+    property: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    access::emit_dynamic_property_access(object, property, true, emitter, ctx, data)
+}
+
+pub(crate) fn emit_mixed_property_access(
+    property: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    access::emit_mixed_property_access(property, emitter, ctx, data)
+}
+
 /// Resolve a non-late-bound `StaticReceiver` to a concrete class FQN at codegen time.
 /// Returns `None` if the receiver cannot be resolved (no enclosing class for
 /// `Self_`, or no parent for `Parent`). `Static` is intentionally not handled

@@ -1147,16 +1147,19 @@ fn test_spl_classes_returns_known_set() {
         r#"<?php
 $names = spl_classes();
 $found_exception = false;
+$found_error = false;
 $found_logic = false;
 foreach ($names as $n) {
     if ($n === "Exception") $found_exception = true;
+    if ($n === "Error") $found_error = true;
     if ($n === "LogicException") $found_logic = true;
 }
 echo $found_exception ? "e" : "-";
+echo $found_error ? "r" : "-";
 echo $found_logic ? "l" : "-";
 "#,
     );
-    assert_eq!(out, "el");
+    assert_eq!(out, "erl");
 }
 
 #[test]

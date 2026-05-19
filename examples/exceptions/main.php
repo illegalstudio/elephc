@@ -17,3 +17,9 @@ try {
 } finally {
     echo "cleanup complete" . PHP_EOL;
 }
+
+try {
+    throw new Error("core error");
+} catch (Error $e) {
+    echo "caught Error: " . $e->getMessage() . PHP_EOL;
+}

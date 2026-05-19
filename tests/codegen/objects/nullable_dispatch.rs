@@ -80,6 +80,43 @@ if ($b->h instanceof Holder) {
 }
 
 #[test]
+fn test_nullsafe_dynamic_property_chain_reads_declared_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public ?Box $next = null;
+    public int $v;
+    public function __construct(int $v) { $this->v = $v; }
+}
+$name = "next";
+$a = new Box(1);
+$a->next = new Box(2);
+echo $a?->{$name}?->v;
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn test_nullsafe_dynamic_property_skips_name_expression_on_null_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+function property_name(): string {
+    echo "name-evaluated";
+    return "next";
+}
+class Box {
+    public ?Box $next = null;
+    public int $v = 1;
+}
+$a = null;
+echo $a?->{property_name()}?->v ?? "fallback";
+"#,
+    );
+    assert_eq!(out, "fallback");
+}
+
+#[test]
 fn test_nullable_object_method_call_returns_correct_string_length() {
     // Regression for the bug where a method call on a `?Foo` receiver
     // returned the boxed-mixed tag word instead of the method's return

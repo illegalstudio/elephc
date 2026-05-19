@@ -2,6 +2,9 @@
 // Classes — constructors, methods, properties
 
 class Counter {
+    const STEP = 1;
+    const TRIPLE_STEP = self::STEP * 3;
+
     public $count;
 
     public function __construct() {
@@ -9,7 +12,7 @@ class Counter {
     }
 
     public function inc() {
-        $this->count += 1;
+        $this->count += self::STEP;
     }
 
     public function dec() {
@@ -35,6 +38,7 @@ $c->inc();
 $c->inc();
 $c->inc();
 $c->show();
+echo "Triple step: " . Counter::TRIPLE_STEP . "\n";
 
 $c->dec();
 $c->show();

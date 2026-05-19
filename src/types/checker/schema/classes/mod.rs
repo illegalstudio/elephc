@@ -15,6 +15,7 @@ use crate::names::php_symbol_key;
 use crate::types::traits::FlattenedClass;
 use crate::types::ClassInfo;
 
+mod constants;
 mod interfaces;
 mod methods;
 mod properties;
