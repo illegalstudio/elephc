@@ -130,6 +130,12 @@ pub fn run(
     Ok(program)
 }
 
+/// Lower any top-level literal `class_alias()` calls left after another
+/// expansion pass, such as resolver includes or autoloaded files.
+pub fn collect_aliases(program: Program) -> Program {
+    alias::collect_aliases(program)
+}
+
 fn seed_builtin_declared_fqns(declared: &mut HashSet<String>) {
     for name in BUILTIN_CLASS_LIKE_NAMES {
         declared.insert((*name).to_string());
@@ -165,6 +171,7 @@ fn load_autoloaded_file(path: &Path, base_dir: &Path) -> Result<Program, Compile
     let parsed = crate::parser::parse(&tokens).map_err(|e| e.with_file(file_label.clone()))?;
     let parsed = crate::magic_constants::substitute_file_and_scope_constants(parsed, path);
     let resolved = crate::resolver::resolve(parsed, path.parent().unwrap_or(base_dir))?;
+    let resolved = alias::collect_aliases(resolved);
     let canonicalized: Vec<Stmt> = crate::name_resolver::resolve(resolved)?;
     // name_resolver has already flattened namespace nodes and canonicalized
     // declarations, so we splice the statements directly into the top-level

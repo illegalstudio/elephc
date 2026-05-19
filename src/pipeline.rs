@@ -101,6 +101,7 @@ pub(crate) fn compile(config: CliConfig) {
             process::exit(1);
         }
     };
+    let ast = autoload::collect_aliases(ast);
     timings.record_since("resolve", phase_started);
 
     let phase_started = Instant::now();

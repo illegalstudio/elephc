@@ -144,6 +144,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let define_set = HashSet::new();
     let ast = elephc::conditional::apply(ast, &define_set);
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
+    let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
@@ -212,6 +213,7 @@ pub(crate) fn compile_and_run_files_with_defines(
     let (autoload_registry, ast) = elephc::autoload::Registry::build(base_dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
+    let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::autoload::run(resolved, base_dir, &autoload_registry)
         .expect("autoload failed");
@@ -288,6 +290,7 @@ pub(crate) fn compile_files_fails_with_defines(
             defines.iter().map(|define| (*define).to_string()).collect();
         let ast = elephc::conditional::apply(ast, &define_set);
         let resolved = elephc::resolver::resolve(ast, base_dir)?;
+        let resolved = elephc::autoload::collect_aliases(resolved);
         let resolved = elephc::name_resolver::resolve(resolved)?;
         let resolved = elephc::optimize::fold_constants(resolved);
         elephc::types::check_with_target(&resolved, target())?;
@@ -310,6 +313,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let synthetic_main = dir.join("test.php");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
+    let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -409,6 +413,7 @@ pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBu
     let synthetic_main = dir.join("test.php");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
+    let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");

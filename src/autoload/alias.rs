@@ -4,9 +4,11 @@
 //!
 //! Called from:
 //! - `crate::autoload::registry::Registry::build()`
+//! - `crate::autoload::collect_aliases()` after include/autoload expansion
 //!
 //! Key details:
 //! - Runtime-dynamic alias calls are left in the program and rejected by the checker.
+//! - Resolver-created include wrappers still count as top-level for included-file aliases.
 //! - The alias is a subclass, not a true PHP runtime alias, so identity checks differ in documented cases.
 
 use crate::names::{Name, NameKind};
@@ -19,18 +21,54 @@ use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
 /// rejected by the checker.
 pub fn collect_aliases(program: Program) -> Program {
     let mut alias_decls: Vec<Stmt> = Vec::new();
-    let mut cleaned: Program = program
-        .into_iter()
-        .filter_map(|stmt| match extract_class_alias(&stmt) {
-            Some((orig, alias)) => {
-                alias_decls.push(synthesise_alias_decl(&orig, &alias, stmt.span));
-                None
-            }
-            None => Some(stmt),
-        })
-        .collect();
+    let mut cleaned = collect_aliases_in_top_level(program, &mut alias_decls);
     cleaned.extend(alias_decls);
     cleaned
+}
+
+fn collect_aliases_in_top_level(program: Program, alias_decls: &mut Vec<Stmt>) -> Program {
+    program
+        .into_iter()
+        .filter_map(|stmt| collect_aliases_in_stmt(stmt, alias_decls))
+        .collect()
+}
+
+fn collect_aliases_in_stmt(stmt: Stmt, alias_decls: &mut Vec<Stmt>) -> Option<Stmt> {
+    if let Some((orig, alias)) = extract_class_alias(&stmt) {
+        alias_decls.push(synthesise_alias_decl(&orig, &alias, stmt.span));
+        return None;
+    }
+
+    let span = stmt.span;
+    let attributes = stmt.attributes;
+    match stmt.kind {
+        StmtKind::NamespaceBlock { name, body } => Some(Stmt {
+            kind: StmtKind::NamespaceBlock {
+                name,
+                body: collect_aliases_in_top_level(body, alias_decls),
+            },
+            span,
+            attributes,
+        }),
+        StmtKind::IncludeOnceGuard { label, body } => Some(Stmt {
+            kind: StmtKind::IncludeOnceGuard {
+                label,
+                body: collect_aliases_in_top_level(body, alias_decls),
+            },
+            span,
+            attributes,
+        }),
+        StmtKind::Synthetic(body) => Some(Stmt {
+            kind: StmtKind::Synthetic(collect_aliases_in_top_level(body, alias_decls)),
+            span,
+            attributes,
+        }),
+        kind => Some(Stmt {
+            kind,
+            span,
+            attributes,
+        }),
+    }
 }
 
 fn extract_class_alias(stmt: &Stmt) -> Option<(String, String)> {

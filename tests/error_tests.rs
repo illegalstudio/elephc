@@ -28,6 +28,7 @@ fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> 
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
     let ast = elephc::conditional::apply(ast, &define_set);
+    let ast = elephc::autoload::collect_aliases(ast);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
     types::check(&ast).map_err(|e| e.message.clone())?;
@@ -37,6 +38,7 @@ fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> 
 fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::errors::CompileError> {
     let tokens = tokenize(src).map_err(|e| elephc::errors::CompileError::new(e.span, &e.message))?;
     let ast = parse(&tokens)?;
+    let ast = elephc::autoload::collect_aliases(ast);
     let ast = elephc::name_resolver::resolve(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
     types::check(&ast)

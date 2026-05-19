@@ -1,5 +1,5 @@
 //! Purpose:
-//! Integration or regression tests for end-to-end codegen coverage of type-related builtins, includes discovery, including include declaration discovery inside function, include graph declaration discovery inside function, and discovered function body resolves nested include.
+//! Integration or regression tests for end-to-end codegen coverage of type-related builtins, includes discovery, including include declaration discovery inside function, include graph declaration discovery inside function, class aliases from includes, and discovered function body resolves nested include.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -133,6 +133,39 @@ class Box implements Labelled {
         "main.php",
     );
     assert_eq!(out, "boxed");
+}
+
+#[test]
+fn test_require_once_discovers_top_level_class_alias() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+require_once __DIR__ . "/class_alias_lib.php";
+echo class_exists("AliasInsideInclude") ? "yes" : "no";
+echo "\n";
+$x = new AliasInsideInclude();
+echo $x->ok();
+echo "\n";
+"#,
+            ),
+            (
+                "class_alias_lib.php",
+                r#"<?php
+class OriginalInsideInclude {
+    public function ok() {
+        return "ok";
+    }
+}
+
+class_alias("OriginalInsideInclude", "AliasInsideInclude");
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "yes\nok\n");
 }
 
 #[test]
@@ -293,4 +326,3 @@ echo branch_value();
     );
     assert_eq!(out, "ok");
 }
-
