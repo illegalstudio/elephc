@@ -51,6 +51,7 @@ pub(super) fn push_final_call_args_from_sources(
             }) => push_prefix_array_element_arg(
                 prefix_temp_idx,
                 element_idx,
+                sig.params.get(idx).map(|(name, _)| name.as_str()),
                 default.as_ref(),
                 target_ty,
                 source_temp_types,

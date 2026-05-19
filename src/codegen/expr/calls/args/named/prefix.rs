@@ -15,9 +15,9 @@ use crate::types::{PhpType};
 
 use super::temps::source_temp_offset;
 use super::super::{
-    array_element_stride, emit_array_length_bounds_check, emit_named_spread_length_abort,
-    load_array_element_to_result, push_expr_arg, push_loaded_array_element_arg,
-    spread_source_elem_ty,
+    array_element_stride, emit_array_length_bounds_check, emit_hash_lookup_for_param_or_index,
+    emit_named_spread_length_abort, load_array_element_to_result, push_expr_arg,
+    push_loaded_array_element_arg, push_loaded_hash_value_arg, spread_source_elem_ty,
 };
 
 pub(super) fn emit_prefix_array_length_check(
@@ -53,6 +53,7 @@ pub(super) fn emit_prefix_array_length_check(
 pub(super) fn push_prefix_array_element_arg(
     prefix_temp_idx: usize,
     element_idx: usize,
+    param_name: Option<&str>,
     default: Option<&Expr>,
     target_ty: Option<&PhpType>,
     source_temp_types: &[PhpType],
@@ -61,6 +62,21 @@ pub(super) fn push_prefix_array_element_arg(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
+    if matches!(source_temp_types[prefix_temp_idx], PhpType::AssocArray { .. }) {
+        return push_assoc_prefix_array_element_arg(
+            prefix_temp_idx,
+            element_idx,
+            param_name,
+            default,
+            target_ty,
+            source_temp_types,
+            final_pushed_bytes,
+            emitter,
+            ctx,
+            data,
+        );
+    }
+
     if let Some(default) = default {
         let use_default = ctx.next_label("named_prefix_default");
         let done = ctx.next_label("named_prefix_done");
@@ -157,4 +173,52 @@ fn push_existing_prefix_array_element_arg(
     }
     load_array_element_to_result(emitter, &source_elem_ty, array_data_reg, element_idx * elem_stride);
     push_loaded_array_element_arg(&source_elem_ty, target_ty, emitter, ctx, data)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_assoc_prefix_array_element_arg(
+    prefix_temp_idx: usize,
+    element_idx: usize,
+    param_name: Option<&str>,
+    default: Option<&Expr>,
+    target_ty: Option<&PhpType>,
+    source_temp_types: &[PhpType],
+    final_pushed_bytes: usize,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let PhpType::AssocArray { value, .. } = &source_temp_types[prefix_temp_idx] else {
+        unreachable!("assoc prefix helper requires an associative spread prefix");
+    };
+    let source_elem_ty = *value.clone();
+    let prefix_offset = source_temp_offset(source_temp_types, prefix_temp_idx, final_pushed_bytes);
+    let hash_reg = match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => "x20",
+        crate::codegen::platform::Arch::X86_64 => "r12",
+    };
+    abi::emit_load_temporary_stack_slot(emitter, hash_reg, prefix_offset);
+    emit_hash_lookup_for_param_or_index(hash_reg, param_name, element_idx, emitter, ctx, data);
+
+    if let Some(default) = default {
+        let use_default = ctx.next_label("named_assoc_prefix_default");
+        let done = ctx.next_label("named_assoc_prefix_done");
+        abi::emit_branch_if_int_result_zero(emitter, &use_default);
+        let loaded_ty = push_loaded_hash_value_arg(&source_elem_ty, target_ty, emitter, ctx, data);
+        abi::emit_jump(emitter, &done);
+        emitter.label(&use_default);
+        let default_ty = push_expr_arg(default, target_ty, emitter, ctx, data);
+        emitter.label(&done);
+        return super::super::super::super::widen_codegen_type(&loaded_ty, &default_ty);
+    }
+
+    let missing = ctx.next_label("named_assoc_prefix_missing");
+    let done = ctx.next_label("named_assoc_prefix_done");
+    abi::emit_branch_if_int_result_zero(emitter, &missing);
+    let loaded_ty = push_loaded_hash_value_arg(&source_elem_ty, target_ty, emitter, ctx, data);
+    abi::emit_jump(emitter, &done);
+    emitter.label(&missing);
+    emit_named_spread_length_abort(emitter, data);
+    emitter.label(&done);
+    loaded_ty
 }

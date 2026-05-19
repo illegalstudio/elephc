@@ -152,6 +152,34 @@ echo str_repeat(...["string" => "ha", "times" => 3]);
 }
 
 #[test]
+fn test_assoc_spread_variable_maps_string_keys_to_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+function show($a, $b, $c = 0) {
+    echo $a . ":" . $b . ":" . $c;
+}
+$args = ["b" => 2, "a" => 1];
+show(...$args, c: 3);
+"#,
+    );
+    assert_eq!(out, "1:2:3");
+}
+
+#[test]
+fn test_assoc_spread_variable_without_explicit_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+function show($a, $b) {
+    echo $a . ":" . $b;
+}
+$args = ["b" => 20, "a" => 10];
+show(...$args);
+"#,
+    );
+    assert_eq!(out, "10:20");
+}
+
+#[test]
 fn test_named_arguments_after_spread_rejects_short_spread() {
     let err = compile_and_run_expect_failure(
         r#"<?php

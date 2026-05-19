@@ -14,8 +14,8 @@ use crate::parser::ast::Expr;
 use crate::types::{FunctionSig, PhpType};
 
 use super::array_elements::{
-    array_element_stride, load_array_element_to_result, push_loaded_array_element_arg,
-    spread_source_elem_ty,
+    array_element_stride, emit_hash_lookup_for_param_or_index, load_array_element_to_result,
+    push_loaded_array_element_arg, push_loaded_hash_value_arg, spread_source_elem_ty,
 };
 use super::common::{declared_target_ty, push_expr_arg};
 use super::variadic::variadic_container_elem_ty;
@@ -63,17 +63,34 @@ pub(crate) fn emit_spread_into_named_params(
         let default = sig
             .and_then(|sig| sig.defaults.get(spread_at_index + idx))
             .and_then(|default| default.as_ref());
-        let pushed_ty = push_spread_element_or_default_arg(
-            array_base_reg,
-            idx,
-            elem_stride,
-            &source_elem_ty,
-            default,
-            target_ty,
-            emitter,
-            ctx,
-            data,
-        );
+        let pushed_ty = if matches!(spread_ty, PhpType::AssocArray { .. }) {
+            let param_name = sig
+                .and_then(|sig| sig.params.get(spread_at_index + idx))
+                .map(|(name, _)| name.as_str());
+            push_assoc_spread_element_or_default_arg(
+                array_base_reg,
+                param_name,
+                idx,
+                &source_elem_ty,
+                default,
+                target_ty,
+                emitter,
+                ctx,
+                data,
+            )
+        } else {
+            push_spread_element_or_default_arg(
+                array_base_reg,
+                idx,
+                elem_stride,
+                &source_elem_ty,
+                default,
+                target_ty,
+                emitter,
+                ctx,
+                data,
+            )
+        };
         arg_types.push(pushed_ty);
     }
 }
@@ -168,6 +185,51 @@ fn push_spread_element_or_default_arg(
         24 + element_idx * elem_stride,
     );
     push_loaded_array_element_arg(source_elem_ty, target_ty, emitter, ctx, data)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_assoc_spread_element_or_default_arg(
+    hash_base_reg: &str,
+    param_name: Option<&str>,
+    element_idx: usize,
+    source_elem_ty: &PhpType,
+    default: Option<&Expr>,
+    target_ty: Option<&PhpType>,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment("lookup associative spread argument");
+    emit_hash_lookup_for_param_or_index(
+        hash_base_reg,
+        param_name,
+        element_idx,
+        emitter,
+        ctx,
+        data,
+    );
+
+    if let Some(default) = default {
+        let use_default = ctx.next_label("assoc_spread_default");
+        let done = ctx.next_label("assoc_spread_done");
+        abi::emit_branch_if_int_result_zero(emitter, &use_default);
+        let loaded_ty = push_loaded_hash_value_arg(source_elem_ty, target_ty, emitter, ctx, data);
+        abi::emit_jump(emitter, &done);
+        emitter.label(&use_default);
+        let default_ty = push_expr_arg(default, target_ty, emitter, ctx, data);
+        emitter.label(&done);
+        return super::super::super::widen_codegen_type(&loaded_ty, &default_ty);
+    }
+
+    let missing = ctx.next_label("assoc_spread_missing");
+    let done = ctx.next_label("assoc_spread_done");
+    abi::emit_branch_if_int_result_zero(emitter, &missing);
+    let loaded_ty = push_loaded_hash_value_arg(source_elem_ty, target_ty, emitter, ctx, data);
+    abi::emit_jump(emitter, &done);
+    emitter.label(&missing);
+    emit_spread_too_few_args_abort(emitter, data);
+    emitter.label(&done);
+    loaded_ty
 }
 
 fn emit_branch_if_spread_element_missing(

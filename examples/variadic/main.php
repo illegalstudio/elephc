@@ -31,6 +31,13 @@ log_message("ERROR", "Connection", "refused");
 $numbers = [5, 10, 15, 20];
 echo "sum(...[5,10,15,20]) = " . sum(...$numbers) . "\n";
 
+function labeled_pair($left, $right) {
+    echo "pair: " . $left . ":" . $right . "\n";
+}
+
+$named = ["right" => "R", "left" => "L"];
+labeled_pair(...$named);
+
 // Spread in array literals: merge arrays
 $first = [1, 2, 3];
 $second = [4, 5, 6];

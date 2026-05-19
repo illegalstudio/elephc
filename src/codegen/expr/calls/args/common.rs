@@ -251,7 +251,10 @@ fn should_release_owned_mixed_after_arg_coerce(
             ))
 }
 
-fn release_preserved_mixed_after_arg_coercion(emitter: &mut Emitter, target_ty: &PhpType) {
+pub(super) fn release_preserved_mixed_after_arg_coercion(
+    emitter: &mut Emitter,
+    target_ty: &PhpType,
+) {
     match target_ty.codegen_repr() {
         PhpType::Float => {
             abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));

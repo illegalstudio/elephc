@@ -40,7 +40,7 @@ function repeat(string $label, int $count): string {
 - Named arguments are supported for known-signature calls: user-defined functions, methods, closures, built-ins, and extern functions
 - Argument expressions are evaluated in PHP source order, then codegen normalizes the resulting values into ABI parameter order
 - Named arguments can follow spread arguments, as in `foo(...$args, suffix: "!")`; positional arguments cannot follow either named arguments or spread arguments
-- Static associative-array unpacking maps string keys to named arguments (`foo(...["name" => "Ada"])`) and keeps numeric keys positional. Duplicate static string keys use PHP's last-wins behavior before argument planning.
+- Associative-array unpacking maps string keys to named arguments (`foo(...["name" => "Ada"])`) and keeps numeric keys positional. Duplicate static string keys use PHP's last-wins behavior before argument planning.
 - A positional spread into a variadic function fills regular parameters first; only excess spread elements are collected into the variadic parameter. If a spread is too short to fill required parameters, the call fails instead of reading beyond the array payload.
 - User-defined variadic functions collect unknown named arguments into the variadic parameter using string keys
 - Built-in variadic functions reject unknown named arguments, matching PHP's internal-function behavior
@@ -252,8 +252,8 @@ $c = [...$a, ...$b]; // [1, 2, 3, 4]
 ```
 
 Call unpacking follows PHP's parameter mapping. Spread values fill regular
-positional parameters before any variadic tail is built, and static
-associative-array spreads treat string keys as named arguments:
+positional parameters before any variadic tail is built, and associative-array
+spreads treat string keys as named arguments:
 
 ```php
 <?php
@@ -264,6 +264,9 @@ function show($a, $b = 99, ...$rest) {
 show(...[10]);                    // 10:99:0
 show(...[10, 20, 30]);            // 10:20:1
 show(...[10, "b" => 20]);         // 10:20:0
+
+$args = ["b" => 20, "a" => 10];
+show(...$args);                   // 10:20:0
 ```
 
 ## echo

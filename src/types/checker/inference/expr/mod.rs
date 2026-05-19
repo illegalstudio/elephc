@@ -424,6 +424,7 @@ impl Checker {
                 let ty = self.infer_type(inner, env)?;
                 match ty {
                     PhpType::Array(elem_ty) => Ok(*elem_ty),
+                    PhpType::AssocArray { value, .. } => Ok(*value),
                     _ => Err(CompileError::new(
                         expr.span,
                         "Spread operator requires an array",

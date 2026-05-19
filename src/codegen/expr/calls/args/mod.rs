@@ -22,7 +22,8 @@ use crate::types::call_args::SpreadBoundsCheck;
 use crate::types::PhpType;
 
 pub(crate) use array_elements::{
-    array_element_stride, load_array_element_to_result, push_loaded_array_element_arg,
+    array_element_stride, emit_hash_lookup_for_param_or_index, load_array_element_to_result,
+    push_loaded_array_element_arg, push_loaded_hash_value_arg,
 };
 pub(crate) use common::{
     coerce_current_value_to_target, declared_target_ty, emit_ref_arg_variable_address,

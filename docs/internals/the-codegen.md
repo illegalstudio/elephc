@@ -462,7 +462,7 @@ my_func($a, $b, $c)
 4. `bl _fn_my_func` — branch with link (saves return address)
 5. Result is in `x0`/`d0`/`x1`+`x2` depending on return type
 
-Named-argument calls split evaluation order from ABI order. `src/codegen/expr/calls/args.rs` evaluates source arguments left-to-right, stores any out-of-order values in temporary slots, validates spread prefixes after later named expressions have run, then materializes the final parameter list in ABI order. Spread prefixes before named arguments are evaluated once; multiple prefix spreads are combined before runtime length/overwrite checks, and too-short spreads for required parameters fail instead of reading beyond the array payload. Built-in and extern named calls use the same source-order pre-evaluation step before their normalized positional emitters run; mutating built-ins mark their target parameter as ref-like so pre-evaluation does not redirect writes into a temporary. Extern calls preserve PHP source evaluation order first and only then load C ABI registers.
+Named-argument calls split evaluation order from ABI order. `src/codegen/expr/calls/args.rs` evaluates source arguments left-to-right, stores any out-of-order values in temporary slots, validates spread prefixes after later named expressions have run, then materializes the final parameter list in ABI order. Spread prefixes before named arguments are evaluated once; multiple prefix spreads are combined before runtime length/overwrite checks, and too-short spreads for required parameters fail instead of reading beyond the array payload. Runtime associative-array spreads look up string keys by parameter name and fall back to numeric keys for positional slots. Built-in and extern named calls use the same source-order pre-evaluation step before their normalized positional emitters run; mutating built-ins mark their target parameter as ref-like so pre-evaluation does not redirect writes into a temporary. Extern calls preserve PHP source evaluation order first and only then load C ABI registers.
 
 ## Closure codegen
 
@@ -1088,7 +1088,7 @@ sum(...$arr);  // spread
 2. Uses the shared helpers in `src/codegen/expr/calls/args.rs` to prepare normalized/defaulted argument lists, lower pass-by-reference slots, handle spread-into-named parameters, and build the trailing variadic array when needed
 3. Passes the array pointer as the last argument register
 
-**Spread operator** (`...$arr`): When calling a function with `...$arr`, the array is unpacked into positional parameters. For `function f($a, ...$rest)`, `f(...[1, 2, 3])` passes `1` to `$a` and collects `[2, 3]` into `$rest`. Static associative-array spreads map string keys to named arguments, keep numeric keys positional, and collapse duplicate static string keys to the last value before planning. In array literals, the spread operator uses `__rt_array_merge_into` to append all elements from the spread array into the target array.
+**Spread operator** (`...$arr`): When calling a function with `...$arr`, the array is unpacked into positional parameters. For `function f($a, ...$rest)`, `f(...[1, 2, 3])` passes `1` to `$a` and collects `[2, 3]` into `$rest`. Associative-array spreads map string keys to named arguments, keep numeric keys positional, and collapse duplicate static string keys to the last value before planning. In array literals, the spread operator uses `__rt_array_merge_into` to append all elements from the spread array into the target array.
 
 ### Default parameter values
 
