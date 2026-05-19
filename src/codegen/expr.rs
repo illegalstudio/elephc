@@ -216,8 +216,14 @@ pub fn emit_expr(
         ExprKind::PropertyAccess { object, property } => {
             objects::emit_property_access(object, property, emitter, ctx, data)
         }
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            objects::emit_dynamic_property_access(object, property, emitter, ctx, data)
+        }
         ExprKind::NullsafePropertyAccess { object, property } => {
             objects::emit_nullsafe_property_access(object, property, emitter, ctx, data)
+        }
+        ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            objects::emit_nullsafe_dynamic_property_access(object, property, emitter, ctx, data)
         }
         ExprKind::StaticPropertyAccess { receiver, property } => {
             objects::emit_static_property_access(receiver, property, emitter, ctx, data)

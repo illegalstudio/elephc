@@ -353,6 +353,11 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         }
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => visit_expr(object, st),
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            visit_expr(object, st);
+            visit_expr(property, st);
+        }
         ExprKind::NamedArg { value, .. } => visit_expr(value, st),
         ExprKind::BufferNew { len, .. } => visit_expr(len, st),
         // Leaves

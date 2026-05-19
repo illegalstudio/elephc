@@ -111,6 +111,10 @@ pub(super) fn infer_nullsafe_property_access_type(
     ctx: Option<&Context>,
 ) -> PhpType {
     if let Some(c) = ctx {
+        let obj_ty = infer_local_type(object, sig, Some(c));
+        if matches!(obj_ty, PhpType::Mixed) {
+            return PhpType::Mixed;
+        }
         if let Some((cn, nullable)) = nullsafe_context_class(object, sig, c) {
             if let Some(ci) = c.classes.get(&cn) {
                 if let Some((_, ty)) = ci.properties.iter().find(|(n, _)| n == property) {

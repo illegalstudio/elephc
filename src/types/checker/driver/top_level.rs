@@ -118,6 +118,11 @@ impl Checker {
             | ExprKind::ErrorSuppress(object)
             | ExprKind::Print(object)
             | ExprKind::Throw(object) => Self::expr_contains_method_call(object),
+            ExprKind::DynamicPropertyAccess { object, property }
+            | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+                Self::expr_contains_method_call(object)
+                    || Self::expr_contains_method_call(property)
+            }
             ExprKind::ArrayAccess { array, index } => {
                 Self::expr_contains_method_call(array) || Self::expr_contains_method_call(index)
             }

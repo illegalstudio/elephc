@@ -198,6 +198,10 @@ fn expr_has_includes(expr: &Expr) -> bool {
         }
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => expr_has_includes(object),
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            expr_has_includes(object) || expr_has_includes(property)
+        }
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_has_includes(object) || args.iter().any(expr_has_includes)

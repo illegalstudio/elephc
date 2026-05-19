@@ -198,6 +198,10 @@ fn expr_contains_yield(expr: &Expr) -> bool {
         }
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => expr_contains_yield(object),
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            expr_contains_yield(object) || expr_contains_yield(property)
+        }
         ExprKind::NamedArg { value, .. } => expr_contains_yield(value),
         ExprKind::BufferNew { len, .. } => expr_contains_yield(len),
         _ => false,

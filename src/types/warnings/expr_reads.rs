@@ -161,6 +161,11 @@ pub(super) fn collect_expr_reads(
         | ExprKind::NullsafePropertyAccess { object, .. } => {
             collect_expr_reads(object, scope, warnings)
         }
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            collect_expr_reads(object, scope, warnings);
+            collect_expr_reads(property, scope, warnings);
+        }
         ExprKind::StaticPropertyAccess { .. } => {},
         ExprKind::BufferNew { len, .. } => collect_expr_reads(len, scope, warnings),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {}

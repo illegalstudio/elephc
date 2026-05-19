@@ -25,6 +25,21 @@ fn test_parse_nullsafe_property_access() {
 }
 
 #[test]
+fn test_parse_nullsafe_dynamic_property_access() {
+    let stmts = parse_source("<?php echo $obj?->{$name};");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+                assert!(matches!(object.kind, ExprKind::Variable(ref name) if name == "obj"));
+                assert!(matches!(property.kind, ExprKind::Variable(ref name) if name == "name"));
+            }
+            other => panic!("Expected NullsafeDynamicPropertyAccess, got {:?}", other),
+        },
+        other => panic!("Expected Echo, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_nullsafe_method_call() {
     let stmts = parse_source("<?php $obj?->run(1, 2);");
     match &stmts[0].kind {

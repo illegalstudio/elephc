@@ -269,6 +269,26 @@ pub(super) fn resolve_expr(
             )?),
             property,
         },
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            ExprKind::DynamicPropertyAccess {
+                object: Box::new(resolve_expr(
+                    *object,
+                    base_dir,
+                    declared_once,
+                    include_chain,
+                    state,
+                    function_variants,
+                )?),
+                property: Box::new(resolve_expr(
+                    *property,
+                    base_dir,
+                    declared_once,
+                    include_chain,
+                    state,
+                    function_variants,
+                )?),
+            }
+        }
         ExprKind::NullsafePropertyAccess { object, property } => {
             ExprKind::NullsafePropertyAccess {
                 object: Box::new(resolve_expr(
@@ -280,6 +300,26 @@ pub(super) fn resolve_expr(
                     function_variants,
                 )?),
                 property,
+            }
+        }
+        ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            ExprKind::NullsafeDynamicPropertyAccess {
+                object: Box::new(resolve_expr(
+                    *object,
+                    base_dir,
+                    declared_once,
+                    include_chain,
+                    state,
+                    function_variants,
+                )?),
+                property: Box::new(resolve_expr(
+                    *property,
+                    base_dir,
+                    declared_once,
+                    include_chain,
+                    state,
+                    function_variants,
+                )?),
             }
         }
         ExprKind::MethodCall { object, method, args } => ExprKind::MethodCall {
