@@ -212,6 +212,22 @@ Floats are stored as their raw 64-bit IEEE 754 bit patterns (`.quad` directive).
 | `Buffer` / `Packed` | `x0` (heap pointer) |
 | `Union` | `x0` (same as Mixed — boxed runtime-tagged payload) |
 
+### Expression AST dispatch coverage
+
+The expression dispatcher is intentionally thin. It routes each `ExprKind`
+variant into one of the focused lowering paths below:
+
+| Variants | Lowering path |
+|---|---|
+| `StringLiteral`, `IntLiteral`, `FloatLiteral`, `BoolLiteral`, `Null`, `Negate`, `Not`, `BitNot`, `Cast`, `Print`, `ErrorSuppress` | Scalar, coercion, stdout, and diagnostics helpers |
+| `Variable`, `This`, `PreIncrement`, `PostIncrement`, `PreDecrement`, `PostDecrement`, `Assignment` | Variable load/store and assignment-expression helpers |
+| `BinaryOp`, `InstanceOf`, `NullCoalesce`, `Pipe`, `Ternary`, `ShortTernary`, `Throw` | Operator, comparison, call-pipe, branch, and exception-aware expression helpers |
+| `ArrayLiteral`, `ArrayLiteralAssoc`, `ArrayAccess`, `Spread`, `Match` | Indexed-array, associative-array, unpacking, string-indexing, and match-expression helpers |
+| `FunctionCall`, `NamedArg`, `ClosureCall`, `ExprCall`, `Closure`, `FirstClassCallable` | Shared call-argument planner, closure wrappers, and callable dispatch helpers |
+| `ConstRef`, `ClassConstant`, `ScopedConstantAccess`, `MagicConstant` | Compile-time constant and class-constant loading. `MagicConstant` should already be lowered by the frontend before codegen. |
+| `NewObject`, `NewScopedObject`, `PropertyAccess`, `DynamicPropertyAccess`, `NullsafePropertyAccess`, `NullsafeDynamicPropertyAccess`, `StaticPropertyAccess`, `MethodCall`, `NullsafeMethodCall`, `StaticMethodCall` | Object allocation, property/member access, nullsafe chain lowering, vtable dispatch, and late-static-binding helpers |
+| `PtrCast`, `BufferNew`, `Yield`, `YieldFrom` | Pointer/buffer extensions and generator state-machine lowering |
+
 ### Literals
 
 ```php
@@ -606,6 +622,22 @@ So the behavior is slice-like, but it does not call `substr()` or a dedicated ru
 **Files:** `src/codegen/stmt.rs`, `src/codegen/stmt/`
 
 `emit_stmt()` is similarly split across focused helpers under `stmt/`: assignment/storage logic, array statements, include-once guards, and control-flow lowering (`branching`, `foreach`, `loops`) now live outside the thin top-level dispatcher. `stmt/includes.rs` emits the `.comm` flag and branch sequence used by resolver-generated `IncludeOnceMark` and `IncludeOnceGuard` nodes, plus the active-variant store used when an include point loads a hidden function implementation. Small shared statement-side policies such as borrowed-result retention, local-slot ownership updates, static-init guards, and indexed-array metadata stamping now sit in `stmt/helpers.rs` instead of bloating `stmt.rs` itself. Storage lowering is now split too: `stmt/storage.rs` is just a boundary, with `storage/locals.rs` handling ordinary global/static symbol access and `storage/extern_globals.rs` owning extern-global load/store conventions. Assignment lowering is also split one level deeper: `stmt/assignments/locals.rs` handles plain local/global/ref writes, while `stmt/assignments/properties.rs` now orchestrates property writes across `properties/target.rs`, `magic_set.rs`, and `storage.rs`. Array-index writes follow the same pattern now: `stmt/arrays/assign.rs` is just a dispatcher, while `stmt/arrays/assign/buffer.rs` and `assoc.rs` isolate the non-indexed-container paths, and `stmt/arrays/assign/indexed.rs` now orchestrates the indexed-array write across `indexed/prepare.rs`, `normalize.rs`, `store.rs`, and `extend.rs`. Branching lowering now follows that same shape too: `stmt/control_flow/branching.rs` is just a boundary, while `branching/if_stmt.rs` and `branching/switch_stmt.rs` own the distinct lowering paths. Exception lowering follows the same structure: `stmt/control_flow/exceptions.rs` orchestrates the high-level try/catch/finally flow, while `exceptions/handlers.rs`, `catches.rs`, and `finally.rs` own the lower-level handler stack, catch matching, and pending-action/finally dispatch mechanics. Loop lowering is split too: `stmt/control_flow/loops.rs` is now just a boundary, with `loops/iterative.rs` handling `for`/`while`/`do...while` and `loops/exits.rs` owning `break`/`continue`/`return`. `foreach` lowering now follows the same pattern: `stmt/control_flow/foreach.rs` dispatches between `foreach/indexed.rs`, `foreach/assoc.rs`, and `foreach/iterator.rs` for arrays, hashes, `Iterator`, `IteratorAggregate`, and object-backed `iterable` values.
+
+### Statement AST dispatch coverage
+
+The statement dispatcher maps `StmtKind` variants to storage, control-flow,
+declaration, include, or extension paths:
+
+| Variants | Lowering path |
+|---|---|
+| `Echo`, `ExprStmt`, `Throw`, `Synthetic` | Direct statement helpers, expression dispatch, exception throw, or already-lowered statement sequences |
+| `Assign`, `TypedAssign`, `ArrayAssign`, `NestedArrayAssign`, `ArrayPush`, `ListUnpack`, `PropertyAssign`, `StaticPropertyAssign`, `PropertyArrayPush`, `PropertyArrayAssign`, `StaticPropertyArrayPush`, `StaticPropertyArrayAssign` | Local/global/static storage, array storage, destructuring, and property storage helpers |
+| `If`, `IfDef`, `While`, `DoWhile`, `For`, `Foreach`, `Switch`, `Try`, `Break`, `Continue`, `Return` | Branching, compile-time conditional lowering, loops, foreach dispatch, switch lowering, exception/finally control flow, loop exits, and return epilogues |
+| `Include`, `IncludeOnceMark`, `IncludeOnceGuard`, `FunctionVariantGroup`, `FunctionVariantMark` | Resolver-produced include guards and include-loaded function variant activation |
+| `NamespaceDecl`, `NamespaceBlock`, `UseDecl`, `ConstDecl` | Mostly frontend/name-resolution artifacts; constants remain available through the codegen context |
+| `FunctionDecl`, `ClassDecl`, `EnumDecl`, `InterfaceDecl`, `TraitDecl`, `PackedClassDecl` | Deferred function/method emission and metadata-driven class, enum, interface, trait, and packed-record setup |
+| `Global`, `StaticVar` | Symbol-backed local aliases and per-function static storage |
+| `ExternFunctionDecl`, `ExternClassDecl`, `ExternGlobalDecl` | Registration-only at statement emission; expression/call lowering uses the collected FFI metadata |
 
 ### Echo and print
 

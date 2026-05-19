@@ -73,7 +73,7 @@ Things that have a value:
 | `ShortTernary { value, default }` | `$a ?: $fallback` | PHP short ternary / Elvis form. Codegen evaluates `value` once, returns it if truthy, otherwise returns `default`. |
 | `ErrorSuppress(Expr)` | `@file_get_contents("missing.txt")` | PHP error-control prefix expression. Codegen wraps the operand in a runtime warning-suppression scope. |
 | `Cast { target, expr }` | `(int)$x` | |
-| `Closure { params, variadic, return_type, body, is_arrow, is_static, captures }` | `function(int $x = 1) use ($y): string { ... }`, `fn(int $x): int => $x * 2`, or `static function(): int { ... }` | Anonymous function / arrow function. Params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` — name, declared type, default, is_ref. `variadic` is an optional parameter name. `return_type` stores the optional declared closure / arrow return `TypeExpr`. `captures` is `Vec<String>` — variables captured via an explicit `use (...)` clause. Arrow functions are still represented as `Closure`, parse with `is_arrow = true`, and do not carry explicit `use (...)` captures in the AST. `is_static` is set when the closure is prefixed with the `static` keyword (PHP `static function () {}` / `static fn () => …`); the type checker rejects any reference to `$this` inside a static closure. |
+| `Closure { params, variadic, return_type, body, is_arrow, is_static, captures, capture_refs }` | `function(int $x = 1) use ($y, &$z): string { ... }`, `fn(int $x): int => $x * 2`, or `static function(): int { ... }` | Anonymous function / arrow function. Params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` - name, declared type, default, is_ref. `variadic` is an optional parameter name. `return_type` stores the optional declared closure / arrow return `TypeExpr`. `captures` stores by-value captures and `capture_refs` stores `use (&$var)` captures. Arrow functions are still represented as `Closure`, parse with `is_arrow = true`, and do not carry explicit `use (...)` captures in the AST. `is_static` is set when the closure is prefixed with the `static` keyword (PHP `static function () {}` / `static fn () => ...`); the type checker rejects any reference to `$this` inside a static closure. |
 | `NamedArg { name, value }` | `foo(name: "Alice")` | Named call argument. The parser preserves source order; later phases validate names against the declared parameter list and normalize known-signature calls for ABI lowering. |
 | `ClosureCall { var, args }` | `$fn(1, 2)` | Calling a closure stored in a variable |
 | `ExprCall { callee, args }` | `$arr[0](1, 2)` | Calling the result of an expression (e.g., array access returning a callable) |
@@ -82,7 +82,9 @@ Things that have a value:
 | `NewObject { class_name, args }` | `new Point(1, 2)`, `new App\Model\User()` | Object instantiation |
 | `NewScopedObject { receiver, args }` | `new self()`, `new static()`, `new parent()` | Object instantiation against a static receiver. Distinct from `NewObject` (which carries a fixed `Name`) so codegen can honour late static binding for `static`. |
 | `PropertyAccess { object, property }` | `$p->x` | Property access via `->` |
+| `DynamicPropertyAccess { object, property }` | `$p->{$name}` | Dynamic property access where the property name is an expression. Dynamic method calls are intentionally rejected. |
 | `NullsafePropertyAccess { object, property }` | `$p?->x` | Nullsafe property access via `?->` |
+| `NullsafeDynamicPropertyAccess { object, property }` | `$p?->{$name}` | Nullsafe dynamic property access. If the receiver is null, the property expression and the rest of the chain are skipped. |
 | `StaticPropertyAccess { receiver, property }` | `Point::$count`, `self::$count`, `parent::$count`, `static::$count` | Class-scoped property access via `::`, where `receiver` is a named class, `Self_`, `Static`, or `Parent` |
 | `MethodCall { object, method, args }` | `$p->move(1, 2)` | Instance method call |
 | `NullsafeMethodCall { object, method, args }` | `$p?->move(1, 2)` | Nullsafe instance method call; PHP rejects `?->method(...)` closure creation, so elephc reports `Cannot combine nullsafe operator with Closure creation` for that form |
@@ -109,9 +111,10 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 | `While { condition, body }` | `while (...) { }` |
 | `DoWhile { body, condition }` | `do { } while (...);` |
 | `For { init, condition, update, body }` | `for (...; ...; ...) { }` — `init`, `condition`, and `update` are all optional, so `for (;;) { }` is valid |
-| `Foreach { array, key_var, value_var, body }` | `foreach ($arr as $v) { }` or `foreach ($arr as $k => $v) { }` |
+| `Foreach { array, key_var, value_var, value_by_ref, body }` | `foreach ($arr as $v) { }`, `foreach ($arr as $k => $v) { }`, or `foreach ($arr as &$v) { }` |
 | `Switch { subject, cases, default }` | `switch ($x) { case 1: ...; default: ... }` |
 | `ArrayAssign { array, index, value }` | `$arr[0] = 5;` |
+| `NestedArrayAssign { target, value }` | `$arr[0][1] = 5;`, `$obj->items[0] = 5;` |
 | `ArrayPush { array, value }` | `$arr[] = 5;` |
 | `TypedAssign { type_expr, name, value }` | `int $x = 42;`, `buffer<int> $xs = buffer_new<int>(8);` |
 | `FunctionDecl { name, params, variadic, return_type, body }` | `function foo(int $a, &$b, string $c = "x"): string { }` — params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` where the tuple stores name, declared type, default value, and `is_ref` (pass by reference). `variadic` is `Option<String>` for variadic parameters (`...$args`) and `return_type` is an optional declared `TypeExpr` |
