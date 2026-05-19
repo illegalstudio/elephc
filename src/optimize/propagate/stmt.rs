@@ -140,6 +140,14 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
                 next_env,
             )
         }
+        StmtKind::NestedArrayAssign { target, value } => {
+            let target = propagate_expr(target, &env);
+            let value = propagate_expr(value, &env);
+            (
+                Stmt::new(StmtKind::NestedArrayAssign { target, value }, span),
+                HashMap::new(),
+            )
+        }
         StmtKind::ArrayPush { array, value } => {
             let value = propagate_expr(value, &env);
             let mut next_env = env_after_expr_side_effects(env, &[&value]);

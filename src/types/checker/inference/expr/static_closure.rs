@@ -39,6 +39,10 @@ fn stmt_must_not_use_this(stmt: &Stmt, span: Span) -> Result<(), CompileError> {
             expr_must_not_use_this(index, span)?;
             expr_must_not_use_this(value, span)
         }
+        StmtKind::NestedArrayAssign { target, value } => {
+            expr_must_not_use_this(target, span)?;
+            expr_must_not_use_this(value, span)
+        }
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_must_not_use_this(object, span)?;

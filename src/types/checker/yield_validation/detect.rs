@@ -110,6 +110,9 @@ fn stmt_contains_yield(stmt: &Stmt) -> bool {
         StmtKind::ArrayAssign { index, value, .. } => {
             expr_contains_yield(index) || expr_contains_yield(value)
         }
+        StmtKind::NestedArrayAssign { target, value } => {
+            expr_contains_yield(target) || expr_contains_yield(value)
+        }
         StmtKind::ArrayPush { value, .. } => expr_contains_yield(value),
         StmtKind::Return(opt) => opt.as_ref().map(expr_contains_yield).unwrap_or(false),
         StmtKind::Include { path, .. } => expr_contains_yield(path),

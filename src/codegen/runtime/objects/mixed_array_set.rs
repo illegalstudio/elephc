@@ -1,6 +1,6 @@
 //! Purpose:
 //! Emits the `__rt_mixed_array_set` runtime helper for writes into boxed Mixed arrays.
-//! Mutates JSON-decoded indexed-array payloads reached through Mixed cells.
+//! Mutates JSON-decoded indexed-array and hash payloads reached through Mixed cells.
 //!
 //! Called from:
 //! - `crate::codegen::runtime::objects::emit_mixed_array_set()`.
@@ -37,7 +37,11 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_mixed_array_set_drop");                   // non-existent Mixed targets cannot be mutated
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed payload tag
     emitter.instruction("cmp x9, #4");                                          // is the Mixed payload an indexed array?
-    emitter.instruction("b.ne __rt_mixed_array_set_drop");                      // only indexed-array payloads are mutated here
+    emitter.instruction("b.eq __rt_mixed_array_set_indexed");                   // route indexed arrays to slot-based mutation
+    emitter.instruction("cmp x9, #5");                                          // is the Mixed payload an associative array?
+    emitter.instruction("b.eq __rt_mixed_array_set_assoc");                     // route hash arrays to key-based mutation
+    emitter.instruction("b __rt_mixed_array_set_drop");                         // non-array Mixed payloads cannot be mutated here
+    emitter.label("__rt_mixed_array_set_indexed");
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the indexed-array pointer from the Mixed payload
     emitter.instruction("cbz x10, __rt_mixed_array_set_drop");                  // null array payloads cannot be mutated
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload key_hi
@@ -122,6 +126,20 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x12, [x10]");                                      // store the extended logical length
     emitter.instruction("b __rt_mixed_array_set_done");                         // finish after extending the array
 
+    emitter.label("__rt_mixed_array_set_assoc");
+    emitter.instruction("ldr x10, [x0, #8]");                                   // load the associative-array hash pointer from the Mixed payload
+    emitter.instruction("cbz x10, __rt_mixed_array_set_drop");                  // null hash payloads cannot be mutated
+    emitter.instruction("mov x0, x10");                                         // pass the current hash table to the hash-set helper
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the normalized key low word
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload the normalized key high word
+    emitter.instruction("ldr x3, [sp, #24]");                                   // reload the boxed Mixed value pointer
+    emitter.instruction("mov x4, xzr");                                         // boxed Mixed hash values only use the low payload word
+    emitter.instruction("mov x5, #7");                                          // runtime value tag 7 = boxed Mixed
+    emitter.instruction("bl __rt_hash_set");                                    // insert or update the hash entry, preserving PHP key semantics
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the owning Mixed cell after hash mutation
+    emitter.instruction("str x0, [x10, #8]");                                   // publish the possibly-reallocated hash table back to the Mixed cell
+    emitter.instruction("b __rt_mixed_array_set_done");                         // finish after mutating the associative array
+
     emitter.label("__rt_mixed_array_set_drop");
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the unused boxed value
     emitter.instruction("bl __rt_decref_mixed");                                // release the boxed value when the write cannot be applied
@@ -149,7 +167,11 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_set_drop");                        // drop the value when the target is null
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed payload tag
     emitter.instruction("cmp r10, 4");                                          // is the Mixed payload an indexed array?
-    emitter.instruction("jne __rt_mixed_array_set_drop");                       // only indexed-array payloads are mutated here
+    emitter.instruction("je __rt_mixed_array_set_indexed");                     // route indexed arrays to slot-based mutation
+    emitter.instruction("cmp r10, 5");                                          // is the Mixed payload an associative array?
+    emitter.instruction("je __rt_mixed_array_set_assoc");                       // route hash arrays to key-based mutation
+    emitter.instruction("jmp __rt_mixed_array_set_drop");                       // non-array Mixed payloads cannot be mutated here
+    emitter.label("__rt_mixed_array_set_indexed");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the indexed-array pointer from the Mixed payload
     emitter.instruction("test r10, r10");                                       // null array payloads cannot be mutated
     emitter.instruction("je __rt_mixed_array_set_drop");                        // drop the value when the array payload is absent
@@ -229,6 +251,21 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r8, [r9 + 1]");                                    // compute the new logical length
     emitter.instruction("mov QWORD PTR [r10], r8");                             // store the extended logical length
     emitter.instruction("jmp __rt_mixed_array_set_done");                       // finish after extending the array
+
+    emitter.label("__rt_mixed_array_set_assoc");
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the associative-array hash pointer from the Mixed payload
+    emitter.instruction("test r10, r10");                                       // null hash payloads cannot be mutated
+    emitter.instruction("je __rt_mixed_array_set_drop");                        // drop the value when the hash payload is absent
+    emitter.instruction("mov rdi, r10");                                        // pass the current hash table to the hash-set helper
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the normalized key low word
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the normalized key high word
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the boxed Mixed value pointer
+    emitter.instruction("xor r8, r8");                                          // boxed Mixed hash values only use the low payload word
+    emitter.instruction("mov r9, 7");                                           // runtime value tag 7 = boxed Mixed
+    emitter.instruction("call __rt_hash_set");                                  // insert or update the hash entry, preserving PHP key semantics
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning Mixed cell after hash mutation
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish the possibly-reallocated hash table back to the Mixed cell
+    emitter.instruction("jmp __rt_mixed_array_set_done");                       // finish after mutating the associative array
 
     emitter.label("__rt_mixed_array_set_drop");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the unused boxed value

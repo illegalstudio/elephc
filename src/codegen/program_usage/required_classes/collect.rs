@@ -148,6 +148,10 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
                 collect_required_class_names_in_expr(index, names);
                 collect_required_class_names_in_expr(value, names);
             }
+            StmtKind::NestedArrayAssign { target, value } => {
+                collect_required_class_names_in_expr(target, names);
+                collect_required_class_names_in_expr(value, names);
+            }
             StmtKind::ArrayPush { value, .. }
             | StmtKind::Return(Some(value))
             | StmtKind::ListUnpack { value, .. }

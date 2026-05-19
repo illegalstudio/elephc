@@ -143,6 +143,10 @@ pub(super) fn resolve_regular_stmt(
             index: ctx.expr(index),
             value: ctx.expr(value),
         },
+        StmtKind::NestedArrayAssign { target, value } => StmtKind::NestedArrayAssign {
+            target: ctx.expr(target),
+            value: ctx.expr(value),
+        },
         StmtKind::ArrayPush { array, value } => StmtKind::ArrayPush {
             array: array.clone(),
             value: ctx.expr(value),

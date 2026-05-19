@@ -28,6 +28,16 @@ pub(crate) fn emit_array_assign_stmt(
     assign::emit_array_assign_stmt(array, index, value, emitter, ctx, data)
 }
 
+pub(crate) fn emit_nested_array_assign_stmt(
+    target: &Expr,
+    value: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    assign::emit_nested_array_assign_stmt(target, value, emitter, ctx, data)
+}
+
 pub(super) fn emit_array_push_stmt(
     array: &str,
     value: &Expr,

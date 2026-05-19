@@ -9,7 +9,7 @@
 //! - Assignment checking must distinguish value writes, by-reference mutation, nullable access, and declared property contracts.
 
 use crate::errors::CompileError;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{merge_array_key_types, normalized_array_key_type, PhpType, TypeEnv};
 
@@ -117,6 +117,38 @@ pub(super) fn check_array_assign(
         }
     }
     Ok(())
+}
+
+pub(super) fn check_nested_array_assign(
+    checker: &mut Checker,
+    target: &Expr,
+    value: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let ExprKind::ArrayAccess { array, index } = &target.kind else {
+        return Err(CompileError::new(span, "Invalid assignment target"));
+    };
+
+    let arr_ty = checker.infer_type_with_assignment_effects(array, env)?;
+    checker.infer_type_with_assignment_effects(index, env)?;
+    checker.infer_type_with_assignment_effects(value, env)?;
+    match arr_ty {
+        PhpType::Mixed => Ok(()),
+        PhpType::Str => Err(CompileError::new(
+            span,
+            "String offset assignment is not supported",
+        )),
+        PhpType::Object(class_name)
+            if checker.object_type_implements_interface(&class_name, "ArrayAccess") =>
+        {
+            Ok(())
+        }
+        _ => Err(CompileError::new(
+            span,
+            "Nested array assignment requires a Mixed or ArrayAccess target",
+        )),
+    }
 }
 
 pub(super) fn check_array_push(

@@ -230,6 +230,10 @@ pub(crate) fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
             writes.insert(array.clone());
             Some(writes)
         }
+        StmtKind::NestedArrayAssign { target, value } => merge_write_sets([
+            expr_local_writes(target)?,
+            expr_local_writes(value)?,
+        ]),
         StmtKind::ArrayPush { array, value } => {
             let mut writes = expr_local_writes(value)?;
             writes.insert(array.clone());

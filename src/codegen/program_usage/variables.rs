@@ -30,6 +30,9 @@ fn stmt_uses_variable(stmt: &Stmt, needle: &str) -> bool {
                 || expr_uses_variable(index, needle)
                 || expr_uses_variable(value, needle)
         }
+        StmtKind::NestedArrayAssign { target, value } => {
+            expr_uses_variable(target, needle) || expr_uses_variable(value, needle)
+        }
         StmtKind::ArrayPush { array, value } => {
             array == needle || expr_uses_variable(value, needle)
         }

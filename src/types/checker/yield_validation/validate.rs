@@ -190,6 +190,10 @@ fn visit_stmt(stmt: &Stmt, st: &mut State) {
             visit_expr(index, st);
             visit_expr(value, st);
         }
+        StmtKind::NestedArrayAssign { target, value } => {
+            visit_expr(target, st);
+            visit_expr(value, st);
+        }
         StmtKind::ArrayPush { value, .. } => visit_expr(value, st),
         StmtKind::Return(opt) => {
             if let Some(e) = opt {

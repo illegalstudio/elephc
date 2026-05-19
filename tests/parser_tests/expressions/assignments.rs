@@ -83,6 +83,24 @@ fn test_parse_effectful_array_compound_assignment_uses_synthetic_temporary() {
 }
 
 #[test]
+fn test_parse_nested_array_assignment_target() {
+    let stmts = parse_source("<?php $data[\"a\"][0][\"b\"] = \"changed\";");
+    match &stmts[0].kind {
+        StmtKind::NestedArrayAssign { target, value } => {
+            assert!(matches!(value.kind, ExprKind::StringLiteral(ref text) if text == "changed"));
+            match &target.kind {
+                ExprKind::ArrayAccess { array, index } => {
+                    assert!(matches!(index.kind, ExprKind::StringLiteral(ref key) if key == "b"));
+                    assert!(matches!(array.kind, ExprKind::ArrayAccess { .. }));
+                }
+                other => panic!("Expected nested ArrayAccess target, got {:?}", other),
+            }
+        }
+        other => panic!("Expected NestedArrayAssign, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_nullable_typed_assign() {
     let stmts = parse_source("<?php ?int $value = null;");
     match &stmts[0].kind {

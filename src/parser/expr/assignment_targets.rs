@@ -28,12 +28,17 @@ pub(super) fn is_assignment_expression_target(expr: &Expr) -> bool {
         ExprKind::Variable(_)
         | ExprKind::PropertyAccess { .. }
         | ExprKind::StaticPropertyAccess { .. } => true,
-        ExprKind::ArrayAccess { array, .. } => matches!(
-            &array.kind,
-            ExprKind::Variable(_)
-                | ExprKind::PropertyAccess { .. }
-                | ExprKind::StaticPropertyAccess { .. }
-        ),
+        ExprKind::ArrayAccess { array, .. } => is_array_assignment_base(array),
+        _ => false,
+    }
+}
+
+fn is_array_assignment_base(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_)
+        | ExprKind::PropertyAccess { .. }
+        | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::ArrayAccess { array, .. } => is_array_assignment_base(array),
         _ => false,
     }
 }
@@ -93,6 +98,10 @@ impl AssignmentExpressionLowerer {
                         },
                         array_span,
                     ),
+                    other @ Expr {
+                        kind: ExprKind::ArrayAccess { .. },
+                        ..
+                    } => self.stabilize_receiver(other, rhs),
                     other => other,
                 };
                 Expr::new(

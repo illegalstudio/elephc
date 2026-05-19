@@ -122,6 +122,10 @@ pub(super) fn collect_scope_reads(
                 collect_expr_reads(index, scope, warnings);
                 collect_expr_reads(value, scope, warnings);
             }
+            StmtKind::NestedArrayAssign { target, value } => {
+                collect_expr_reads(target, scope, warnings);
+                collect_expr_reads(value, scope, warnings);
+            }
             StmtKind::ArrayPush { array, value } => {
                 scope.read(array);
                 collect_expr_reads(value, scope, warnings);

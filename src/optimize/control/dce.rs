@@ -238,6 +238,14 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             span,
             attributes: Vec::new(),
         }],
+        StmtKind::NestedArrayAssign { target, value } => vec![Stmt {
+            kind: StmtKind::NestedArrayAssign {
+                target: prune_expr(target),
+                value: prune_expr(value),
+            },
+            span,
+            attributes: Vec::new(),
+        }],
         StmtKind::ArrayPush { array, value } => vec![Stmt {
             kind: StmtKind::ArrayPush {
                 array,

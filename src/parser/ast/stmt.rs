@@ -100,6 +100,10 @@ pub enum StmtKind {
         index: Expr,
         value: Expr,
     },
+    NestedArrayAssign {
+        target: Expr,
+        value: Expr,
+    },
     ArrayPush {
         array: String,
         value: Expr,

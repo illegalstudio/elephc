@@ -79,7 +79,10 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
                     index: *index,
                     value,
                 },
-                _ => return Err(CompileError::new(span, "Invalid assignment target")),
+                _ => StmtKind::NestedArrayAssign {
+                    target: Expr::new(ExprKind::ArrayAccess { array, index }, span),
+                    value,
+                },
             }
         }
         ExprKind::PropertyAccess { object, property } => StmtKind::PropertyAssign {
@@ -144,7 +147,10 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
                     value,
                 }
             }
-            _ => return Err(CompileError::new(span, "Invalid assignment target")),
+            _ => StmtKind::NestedArrayAssign {
+                target: Expr::new(ExprKind::ArrayAccess { array, index }, span),
+                value,
+            },
         },
         ExprKind::StaticPropertyAccess { receiver, property } => StmtKind::StaticPropertyAssign {
             receiver,
@@ -287,7 +293,14 @@ fn lower_effectful_postfix_assignment(
                     value,
                 }
             }
-            _ => return Err(CompileError::new(span, "Invalid assignment target")),
+            _ => {
+                let target = lowerer.stabilize_array_target(Expr::new(
+                    ExprKind::ArrayAccess { array, index },
+                    span,
+                ));
+                let value = assignment_value(target.clone(), op, rhs, span);
+                StmtKind::NestedArrayAssign { target, value }
+            }
         },
         ExprKind::PropertyAccess { object, property } => {
             let object = Box::new(lowerer.stabilize(*object));
@@ -342,7 +355,14 @@ fn lower_effectful_static_assignment(
                     value,
                 }
             }
-            _ => return Err(CompileError::new(span, "Invalid assignment target")),
+            _ => {
+                let target = lowerer.stabilize_array_target(Expr::new(
+                    ExprKind::ArrayAccess { array, index },
+                    span,
+                ));
+                let value = assignment_value(target.clone(), op, rhs, span);
+                StmtKind::NestedArrayAssign { target, value }
+            }
         },
         ExprKind::StaticPropertyAccess { receiver, property } => {
             let target = Expr::new(
@@ -396,6 +416,42 @@ impl EffectfulTargetLowerer {
             self.span,
         ));
         Expr::new(ExprKind::Variable(name), self.span)
+    }
+
+    fn stabilize_array_target(&mut self, expr: Expr) -> Expr {
+        let span = expr.span;
+        match expr.kind {
+            ExprKind::ArrayAccess { array, index } => Expr::new(
+                ExprKind::ArrayAccess {
+                    array: Box::new(self.stabilize_array_base(*array)),
+                    index: Box::new(self.stabilize(*index)),
+                },
+                span,
+            ),
+            _ => self.stabilize(expr),
+        }
+    }
+
+    fn stabilize_array_base(&mut self, expr: Expr) -> Expr {
+        let span = expr.span;
+        match expr.kind {
+            ExprKind::ArrayAccess { array, index } => Expr::new(
+                ExprKind::ArrayAccess {
+                    array: Box::new(self.stabilize_array_base(*array)),
+                    index: Box::new(self.stabilize(*index)),
+                },
+                span,
+            ),
+            ExprKind::PropertyAccess { object, property } => Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(self.stabilize_array_base(*object)),
+                    property,
+                },
+                span,
+            ),
+            ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => expr,
+            _ => self.stabilize(expr),
+        }
     }
 
     fn finish(mut self, final_stmt: StmtKind) -> Stmt {

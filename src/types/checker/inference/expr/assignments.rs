@@ -54,7 +54,10 @@ impl Checker {
                         value: value.clone(),
                     }
                 }
-                _ => return Err(CompileError::new(span, "Invalid assignment target")),
+                _ => StmtKind::NestedArrayAssign {
+                    target: target.clone(),
+                    value: value.clone(),
+                },
             },
             ExprKind::PropertyAccess { object, property } => StmtKind::PropertyAssign {
                 object: object.clone(),

@@ -161,7 +161,9 @@ fn emit_non_local_assignment_write(
                 );
             }
             _ => {
-                emitter.comment("WARNING: assignment expression target is not supported in codegen");
+                super::super::stmt::emit_nested_array_assign_stmt(
+                    target, value, emitter, ctx, data,
+                );
             }
         },
         ExprKind::PropertyAccess { object, property } => {

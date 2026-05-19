@@ -33,7 +33,7 @@ pub(crate) use null_coalesce_assign::{
     null_coalesce_static_property_array_target,
     null_coalesce_static_property_target,
 };
-pub(crate) use arrays::emit_array_assign_stmt;
+pub(crate) use arrays::{emit_array_assign_stmt, emit_nested_array_assign_stmt};
 pub(crate) use assignments::{
     emit_assign_stmt,
     emit_dynamic_property_get,
@@ -134,6 +134,9 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             value,
         } => {
             arrays::emit_array_assign_stmt(array, index, value, emitter, ctx, data);
+        }
+        StmtKind::NestedArrayAssign { target, value } => {
+            arrays::emit_nested_array_assign_stmt(target, value, emitter, ctx, data);
         }
         StmtKind::ArrayPush { array, value } => {
             arrays::emit_array_push_stmt(array, value, emitter, ctx, data);

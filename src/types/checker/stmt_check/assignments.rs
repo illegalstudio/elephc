@@ -35,6 +35,9 @@ impl Checker {
                 index,
                 value,
             } => arrays::check_array_assign(self, array, index, value, stmt.span, env),
+            StmtKind::NestedArrayAssign { target, value } => {
+                arrays::check_nested_array_assign(self, target, value, stmt.span, env)
+            }
             StmtKind::ArrayPush { array, value } => {
                 arrays::check_array_push(self, array, value, stmt.span, env)
             }

@@ -73,6 +73,9 @@ impl Checker {
             StmtKind::ArrayAssign { index, value, .. } => {
                 Self::expr_contains_method_call(index) || Self::expr_contains_method_call(value)
             }
+            StmtKind::NestedArrayAssign { target, value } => {
+                Self::expr_contains_method_call(target) || Self::expr_contains_method_call(value)
+            }
             StmtKind::ArrayPush { value, .. } => Self::expr_contains_method_call(value),
             StmtKind::StaticPropertyAssign { value, .. }
             | StmtKind::StaticPropertyArrayPush { value, .. } => {

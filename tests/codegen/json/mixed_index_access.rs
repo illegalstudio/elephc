@@ -64,6 +64,18 @@ fn test_mixed_chained_access() {
     assert_eq!(out, "Alice,Bob");
 }
 
+#[test]
+fn test_mixed_chained_assoc_array_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+            $data = json_decode("{\"a\":[{\"b\":\"old\"}]}", true);
+            $data["a"][0]["b"] = "changed";
+            echo json_encode($data);
+        "#,
+    );
+    assert_eq!(out, "{\"a\":[{\"b\":\"changed\"}]}");
+}
+
 // stdClass receiver via array bracket access — PHP allows it for objects
 // with public properties accessed by string key (e.g. ArrayAccess interface
 // is the strict path; for stdClass elephc emulates the friendly idiom).

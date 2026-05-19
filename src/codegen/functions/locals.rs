@@ -225,6 +225,10 @@ pub fn collect_local_vars(
                 collect_assignment_expr_vars(value, ctx, sig);
                 refine_local_array_type_for_keyed_write(array, index, value, ctx, sig);
             }
+            StmtKind::NestedArrayAssign { target, value } => {
+                collect_assignment_expr_vars(target, ctx, sig);
+                collect_assignment_expr_vars(value, ctx, sig);
+            }
             StmtKind::PropertyArrayAssign { index, value, .. }
             | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
                 collect_assignment_expr_vars(index, ctx, sig);

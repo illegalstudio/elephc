@@ -318,6 +318,10 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
             collect_refs_expr(value, out);
             collect_refs_expr(index, out);
         }
+        StmtKind::NestedArrayAssign { target, value } => {
+            collect_refs_expr(target, out);
+            collect_refs_expr(value, out);
+        }
         StmtKind::ArrayPush { value, .. } => collect_refs_expr(value, out),
         StmtKind::ListUnpack { value, .. } => collect_refs_expr(value, out),
         StmtKind::TypedAssign { type_expr, value, .. } => {
