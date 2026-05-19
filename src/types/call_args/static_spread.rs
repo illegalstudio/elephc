@@ -11,6 +11,19 @@
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExpandedArgOrigin {
+    Source,
+    StaticAssocPositional,
+    StaticAssocNamed,
+    StaticTailPositional,
+}
+
+pub(crate) struct ExpandedStaticSpreadArgs {
+    pub(crate) args: Vec<Expr>,
+    pub(crate) origins: Vec<ExpandedArgOrigin>,
+}
+
 pub(crate) fn has_named_args(args: &[Expr]) -> bool {
     args.iter().any(|arg| match &arg.kind {
         ExprKind::NamedArg { .. } => true,
@@ -20,21 +33,33 @@ pub(crate) fn has_named_args(args: &[Expr]) -> bool {
 }
 
 pub(crate) fn expand_static_assoc_spread_args(args: &[Expr]) -> Vec<Expr> {
-    let mut expanded = Vec::with_capacity(args.len());
-    let mut changed = false;
+    expand_static_assoc_spread_args_with_origins(args).args
+}
+
+pub(crate) fn expand_static_assoc_spread_args_with_origins(
+    args: &[Expr],
+) -> ExpandedStaticSpreadArgs {
+    let mut expanded_args = Vec::with_capacity(args.len());
+    let mut origins = Vec::with_capacity(args.len());
 
     for arg in args {
         if let ExprKind::Spread(inner) = &arg.kind {
             if let Some(mut spread_args) = expand_static_spread(inner, arg.span) {
-                changed = true;
-                expanded.append(&mut spread_args);
+                for (arg, origin) in spread_args.drain(..) {
+                    expanded_args.push(arg);
+                    origins.push(origin);
+                }
                 continue;
             }
         }
-        expanded.push(arg.clone());
+        expanded_args.push(arg.clone());
+        origins.push(ExpandedArgOrigin::Source);
     }
 
-    if changed { expanded } else { args.to_vec() }
+    ExpandedStaticSpreadArgs {
+        args: expanded_args,
+        origins,
+    }
 }
 
 fn static_assoc_spread_has_named_args(expr: &Expr) -> bool {
@@ -46,21 +71,27 @@ fn static_assoc_spread_has_named_args(expr: &Expr) -> bool {
     })
 }
 
-fn expand_static_spread(expr: &Expr, spread_span: Span) -> Option<Vec<Expr>> {
+fn expand_static_spread(
+    expr: &Expr,
+    spread_span: Span,
+) -> Option<Vec<(Expr, ExpandedArgOrigin)>> {
     match &expr.kind {
         ExprKind::ArrayLiteralAssoc(pairs) => expand_static_assoc_spread(pairs, spread_span),
         _ => None,
     }
 }
 
-fn expand_static_assoc_spread(pairs: &[(Expr, Expr)], spread_span: Span) -> Option<Vec<Expr>> {
+fn expand_static_assoc_spread(
+    pairs: &[(Expr, Expr)],
+    spread_span: Span,
+) -> Option<Vec<(Expr, ExpandedArgOrigin)>> {
     let mut positional_args = Vec::new();
     let mut named_args: Vec<(String, Expr)> = Vec::new();
     for (key, value) in pairs {
         match static_assoc_spread_key(key)? {
-            StaticAssocSpreadKey::Positional => positional_args.push(Expr::new(
-                value.kind.clone(),
-                spread_span,
+            StaticAssocSpreadKey::Positional => positional_args.push((
+                Expr::new(value.kind.clone(), spread_span),
+                ExpandedArgOrigin::StaticAssocPositional,
             )),
             StaticAssocSpreadKey::Named(name) => {
                 if let Some((_, existing_value)) = named_args
@@ -76,12 +107,15 @@ fn expand_static_assoc_spread(pairs: &[(Expr, Expr)], spread_span: Span) -> Opti
     }
     let mut args = positional_args;
     args.extend(named_args.into_iter().map(|(name, value)| {
-        Expr::new(
-            ExprKind::NamedArg {
-                name,
-                value: Box::new(value),
-            },
-            spread_span,
+        (
+            Expr::new(
+                ExprKind::NamedArg {
+                    name,
+                    value: Box::new(value),
+                },
+                spread_span,
+            ),
+            ExpandedArgOrigin::StaticAssocNamed,
         )
     }));
     Some(args)

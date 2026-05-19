@@ -11,7 +11,6 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::{context::Context, data_section::DataSection};
 use crate::parser::ast::{Expr, ExprKind};
-use crate::types::call_args;
 use crate::types::{FunctionSig, PhpType};
 
 use super::common::{
@@ -35,8 +34,6 @@ pub(crate) fn emit_pushed_call_args(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> EmittedCallArgs {
-    let expanded_args = call_args::expand_static_assoc_spread_args(args_exprs);
-    let args_exprs = expanded_args.as_slice();
     let has_named = has_named_args(args_exprs);
 
     if let Some(sig) = sig {

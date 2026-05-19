@@ -70,3 +70,32 @@ show(...[1], extra: 4);
     );
     assert_eq!(out, "head=1;extra=4;");
 }
+
+#[test]
+fn test_static_assoc_spread_named_then_positional_spread_variadic_tail() {
+    let out = compile_and_run(
+        r#"<?php
+function stamp_triplet($a, $b, $c = 30) {
+    echo $a;
+    echo ",";
+    echo $b;
+    echo ",";
+    echo $c;
+    echo "\n";
+}
+
+function sum_variadic($head, ...$rest) {
+    $total = $head;
+    foreach ($rest as $v) {
+        $total += $v;
+    }
+    echo $total;
+    echo "\n";
+}
+
+stamp_triplet(...["b" => 2, "a" => 1], c: 3);
+sum_variadic(...["head" => 10], ...[20, 30]);
+"#,
+    );
+    assert_eq!(out, "1,2,3\n60\n");
+}

@@ -18,7 +18,9 @@ use super::plan::{
     CallArgPlan, CallArgPlanError, PlannedRegularArg, PlannedSourceValue, PlannedVariadicArg,
     SpreadBoundsCheck,
 };
-use super::static_spread::expand_static_assoc_spread_args;
+use super::static_spread::{
+    expand_static_assoc_spread_args_with_origins, ExpandedArgOrigin,
+};
 
 pub(crate) fn plan_call_args(
     sig: &FunctionSig,
@@ -45,7 +47,14 @@ pub(crate) fn plan_call_args_with_regular_param_count(
     trim_trailing_defaults: bool,
     allow_unknown_named_variadic: bool,
 ) -> Result<CallArgPlan, CallArgPlanError> {
-    let source_args = expand_static_assoc_spread_args(args);
+    let expanded = expand_static_assoc_spread_args_with_origins(args);
+    let assoc_spread_sources = vec![false; expanded.args.len()];
+    let (source_args, source_origins, assoc_spread_sources) =
+        expand_static_tail_spreads_after_unpack_named(
+            expanded.args,
+            expanded.origins,
+            assoc_spread_sources,
+        );
     let first_named_pos = source_args
         .iter()
         .position(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }));
@@ -72,7 +81,8 @@ pub(crate) fn plan_call_args_with_regular_param_count(
         trim_trailing_defaults,
         allow_unknown_named_variadic,
         first_named_pos,
-        &[],
+        &source_origins,
+        &assoc_spread_sources,
     )
 }
 
@@ -85,7 +95,16 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
     allow_unknown_named_variadic: bool,
     assoc_spread_sources: &[bool],
 ) -> Result<CallArgPlan, CallArgPlanError> {
-    let source_args = expand_static_assoc_spread_args(args);
+    let expanded = expand_static_assoc_spread_args_with_origins(args);
+    let expanded_assoc_spread_sources = (0..expanded.args.len())
+        .map(|idx| assoc_spread_sources.get(idx).copied().unwrap_or(false))
+        .collect();
+    let (source_args, source_origins, assoc_spread_sources) =
+        expand_static_tail_spreads_after_unpack_named(
+            expanded.args,
+            expanded.origins,
+            expanded_assoc_spread_sources,
+        );
     let first_named_pos = source_args
         .iter()
         .position(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }));
@@ -112,7 +131,8 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
         trim_trailing_defaults,
         allow_unknown_named_variadic,
         first_named_pos,
-        assoc_spread_sources,
+        &source_origins,
+        &assoc_spread_sources,
     )
 }
 
@@ -137,6 +157,7 @@ fn plan_named_call_args(
     trim_trailing_defaults: bool,
     allow_unknown_named_variadic: bool,
     first_named_pos: Option<usize>,
+    source_origins: &[ExpandedArgOrigin],
     assoc_spread_sources: &[bool],
 ) -> Result<CallArgPlan, CallArgPlanError> {
     let mut named_values: Vec<Option<NamedValue>> = vec![None; regular_param_count];
@@ -148,9 +169,14 @@ fn plan_named_call_args(
     let mut seen_spread = false;
 
     for (source_index, arg) in source_args.iter().enumerate() {
+        let origin = source_origins
+            .get(source_index)
+            .copied()
+            .unwrap_or(ExpandedArgOrigin::Source);
         match &arg.kind {
             ExprKind::NamedArg { name, value } => {
                 seen_named = true;
+                let is_static_assoc_named = origin == ExpandedArgOrigin::StaticAssocNamed;
                 match named_tracker.assign(
                     sig,
                     regular_param_count,
@@ -170,6 +196,9 @@ fn plan_named_call_args(
                             param_idx,
                             expr,
                         });
+                        if is_static_assoc_named {
+                            prefix_args.push(PrefixSourceArg::StaticNamedCursor { param_idx });
+                        }
                     }
                     Ok(NamedParamMatch::Variadic) => {
                         let expr = (**value).clone();
@@ -213,10 +242,12 @@ fn plan_named_call_args(
                 });
             }
             _ => {
-                if seen_named {
+                let is_static_tail_positional =
+                    origin == ExpandedArgOrigin::StaticTailPositional;
+                if seen_named && !is_static_tail_positional {
                     return Err(CallArgPlanError::PositionalAfterNamed { span: arg.span });
                 }
-                if seen_spread {
+                if seen_spread && !is_static_tail_positional {
                     return Err(CallArgPlanError::PositionalAfterSpread { span: arg.span });
                 }
                 prefix_args.push(PrefixSourceArg::Positional {
@@ -321,6 +352,9 @@ fn plan_named_call_args(
                     positional_idx += 1;
                 }
             }
+            PrefixSourceArg::StaticNamedCursor { param_idx } => {
+                positional_idx = positional_idx.max(param_idx + 1);
+            }
         }
     }
 
@@ -412,6 +446,9 @@ enum PrefixSourceArg {
         span: Span,
         is_assoc_named_provider: bool,
     },
+    StaticNamedCursor {
+        param_idx: usize,
+    },
 }
 
 fn dynamic_named_prefix_expr(prefix_args: &[PrefixSourceArg], _call_span: Span) -> Option<Expr> {
@@ -426,4 +463,61 @@ fn dynamic_named_prefix_expr(prefix_args: &[PrefixSourceArg], _call_span: Span) 
 
 fn same_span(left: Span, right: Span) -> bool {
     left.line == right.line && left.col == right.col
+}
+
+fn expand_static_tail_spreads_after_unpack_named(
+    args: Vec<Expr>,
+    origins: Vec<ExpandedArgOrigin>,
+    assoc_spread_sources: Vec<bool>,
+) -> (Vec<Expr>, Vec<ExpandedArgOrigin>, Vec<bool>) {
+    let mut expanded_args = Vec::with_capacity(args.len());
+    let mut expanded_origins = Vec::with_capacity(origins.len());
+    let mut expanded_assoc_sources = Vec::with_capacity(assoc_spread_sources.len());
+    let mut seen_static_unpack_named = false;
+    let mut seen_direct_named = false;
+
+    for (idx, arg) in args.into_iter().enumerate() {
+        let origin = origins.get(idx).copied().unwrap_or(ExpandedArgOrigin::Source);
+        let assoc_source = assoc_spread_sources.get(idx).copied().unwrap_or(false);
+
+        match &arg.kind {
+            ExprKind::NamedArg { .. } => {
+                if origin == ExpandedArgOrigin::StaticAssocNamed {
+                    seen_static_unpack_named = true;
+                } else {
+                    seen_direct_named = true;
+                }
+            }
+            ExprKind::Spread(inner) if seen_static_unpack_named && !seen_direct_named => {
+                if let Some(elements) = static_positional_tail_elements(inner) {
+                    for element in elements {
+                        expanded_args.push(element);
+                        expanded_origins.push(ExpandedArgOrigin::StaticTailPositional);
+                        expanded_assoc_sources.push(false);
+                    }
+                    continue;
+                }
+            }
+            _ => {}
+        }
+
+        expanded_args.push(arg);
+        expanded_origins.push(origin);
+        expanded_assoc_sources.push(assoc_source);
+    }
+
+    (expanded_args, expanded_origins, expanded_assoc_sources)
+}
+
+fn static_positional_tail_elements(expr: &Expr) -> Option<Vec<Expr>> {
+    let ExprKind::ArrayLiteral(elements) = &expr.kind else {
+        return None;
+    };
+    if elements
+        .iter()
+        .any(|element| matches!(element.kind, ExprKind::Spread(_)))
+    {
+        return None;
+    }
+    Some(elements.clone())
 }
