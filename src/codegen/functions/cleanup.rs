@@ -13,6 +13,8 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::types::PhpType;
 
+use super::super::abi;
+
 pub(super) fn preserve_return_registers(emitter: &mut Emitter, ctx: &Context, return_ty: &PhpType) {
     let return_offset = ctx
         .pending_return_value_offset
@@ -29,6 +31,7 @@ pub(super) fn restore_return_registers(emitter: &mut Emitter, ctx: &Context, ret
 
 pub(super) fn epilogue_has_side_effects(ctx: &Context) -> bool {
     !ctx.static_vars.is_empty()
+        || !ctx.local_ref_cell_flags.is_empty()
         || ctx.variables.iter().any(|(name, var)| {
             !ctx.global_vars.contains(name)
                 && !ctx.static_vars.contains(name)
@@ -39,7 +42,19 @@ pub(super) fn epilogue_has_side_effects(ctx: &Context) -> bool {
         })
 }
 
-pub(crate) fn emit_owned_local_epilogue_cleanup(emitter: &mut Emitter, ctx: &Context) {
+pub(crate) fn emit_local_ref_cell_flag_zero_init(emitter: &mut Emitter, ctx: &Context) {
+    let mut offsets: Vec<_> = ctx.local_ref_cell_flags.values().copied().collect();
+    offsets.sort_unstable();
+    for offset in offsets {
+        abi::emit_store_zero_to_local_slot(emitter, offset);                   // clear the owned local reference-cell flag at function entry
+    }
+}
+
+pub(crate) fn emit_owned_local_epilogue_cleanup(
+    emitter: &mut Emitter,
+    ctx: &Context,
+    label_scope: &str,
+) {
     let mut cleanup_vars: Vec<_> = ctx
         .variables
         .iter()
@@ -78,6 +93,48 @@ pub(crate) fn emit_owned_local_epilogue_cleanup(emitter: &mut Emitter, ctx: &Con
             }
             _ => {}
         }
+    }
+    emit_local_ref_cell_epilogue_cleanup(emitter, ctx, label_scope);
+}
+
+fn emit_local_ref_cell_epilogue_cleanup(
+    emitter: &mut Emitter,
+    ctx: &Context,
+    label_scope: &str,
+) {
+    let mut cleanup_cells: Vec<_> = ctx
+        .local_ref_cell_flags
+        .iter()
+        .filter_map(|(name, flag_offset)| {
+            ctx.variables
+                .get(name)
+                .map(|var| (name.as_str(), *flag_offset, var.stack_offset, var.ty.clone()))
+        })
+        .collect();
+    cleanup_cells.sort_by_key(|(_, flag_offset, _, _)| *flag_offset);
+
+    for (idx, (name, flag_offset, slot_offset, value_ty)) in cleanup_cells.into_iter().enumerate()
+    {
+        let done = format!("{}_local_ref_cell_cleanup_done_{}", label_scope, idx);
+        emitter.comment(&format!("epilogue cleanup local ref cell ${}", name));
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                abi::load_at_offset_scratch(emitter, "x10", flag_offset, "x11");
+                emitter.instruction(&format!("cbz x10, {}", done));             // skip cleanup when the reference variable is bound to borrowed storage
+                abi::load_at_offset_scratch(emitter, "x9", slot_offset, "x11");
+                abi::emit_release_local_ref_cell(emitter, "x9", &value_ty);
+                abi::emit_store_zero_to_local_slot(emitter, flag_offset);       // mark the owned reference cell as released
+            }
+            Arch::X86_64 => {
+                abi::load_at_offset_scratch(emitter, "r10", flag_offset, "r11");
+                emitter.instruction(&format!("test r10, r10"));                 // check whether this reference variable owns a local cell
+                emitter.instruction(&format!("je {}", done));                   // skip cleanup when the reference variable is bound to borrowed storage
+                abi::load_at_offset_scratch(emitter, "r11", slot_offset, "r10");
+                abi::emit_release_local_ref_cell(emitter, "r11", &value_ty);
+                abi::emit_store_zero_to_local_slot(emitter, flag_offset);       // mark the owned reference cell as released
+            }
+        }
+        emitter.label(&done);
     }
 }
 
@@ -126,7 +183,7 @@ pub(super) fn emit_frame_cleanup_callback(emitter: &mut Emitter, ctx: &Context, 
         emitter,
         super::super::abi::int_arg_reg_name(emitter.target, 0),
     );
-    emit_owned_local_epilogue_cleanup(emitter, ctx);
+    emit_owned_local_epilogue_cleanup(emitter, ctx, cleanup_label);
     super::super::abi::emit_cleanup_callback_epilogue(emitter);
     emitter.blank();
 }

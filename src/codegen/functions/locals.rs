@@ -153,6 +153,9 @@ pub fn collect_local_vars(
                         ctx.alloc_var_with_static_type(value_var, elem_ty.codegen_repr(), elem_ty);
                     }
                 }
+                if *value_by_ref && !ctx.ref_params.contains(value_var) {
+                    ctx.ensure_local_ref_cell_flag(value_var);
+                }
                 collect_local_vars(body, ctx, sig);
             }
             StmtKind::Switch { cases, default, .. } => {

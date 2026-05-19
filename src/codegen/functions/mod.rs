@@ -388,6 +388,7 @@ fn emit_function_with_label_and_class(
             super::abi::emit_store_zero_to_local_slot(emitter, var.stack_offset); // zero-init to prevent stale ptr free
         }
     }
+    self::cleanup::emit_local_ref_cell_flag_zero_init(emitter, &ctx);
     emit_activation_record_push(emitter, &ctx, &cleanup_label);
 
     for s in body {
@@ -419,7 +420,7 @@ fn emit_function_with_label_and_class(
     }
 
     emit_activation_record_pop(emitter, &ctx);
-    self::cleanup::emit_owned_local_epilogue_cleanup(emitter, &ctx);
+    self::cleanup::emit_owned_local_epilogue_cleanup(emitter, &ctx, epilogue_label);
 
     if needs_return_preserve {
         restore_return_registers(emitter, &ctx, &sig.return_type);
@@ -487,7 +488,9 @@ fn emit_function_with_label_and_class(
     }
 }
 
-pub(crate) use self::cleanup::emit_owned_local_epilogue_cleanup;
+pub(crate) use self::cleanup::{
+    emit_local_ref_cell_flag_zero_init, emit_owned_local_epilogue_cleanup,
+};
 
 fn emit_never_implicit_return_abort(emitter: &mut Emitter, data: &mut DataSection) {
     let (message_label, message_len) =

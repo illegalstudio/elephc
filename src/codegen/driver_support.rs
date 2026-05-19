@@ -303,7 +303,7 @@ pub(super) fn emit_main_cleanup_callback(
 ) {
     emitter.label(cleanup_label);
     abi::emit_cleanup_callback_prologue(emitter, abi::int_arg_reg_name(emitter.target, 0));
-    functions::emit_owned_local_epilogue_cleanup(emitter, ctx);
+    functions::emit_owned_local_epilogue_cleanup(emitter, ctx, cleanup_label);
     abi::emit_cleanup_callback_epilogue(emitter);
     emitter.blank();
 }

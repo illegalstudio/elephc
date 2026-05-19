@@ -87,6 +87,7 @@ pub(super) fn emit_main_and_finalize(
     let frame_size = align16(ctx.stack_offset + 16);
     emit_main_prologue(&mut emitter, &mut ctx, frame_size, heap_debug, uses_argc, uses_argv);
     zero_initialize_main_locals(&mut emitter, &ctx, uses_argc, uses_argv);
+    functions::emit_local_ref_cell_flag_zero_init(&mut emitter, &ctx);
     emit_main_activation_record_push(&mut emitter, &ctx, &main_cleanup_label);
     emit_enum_singleton_initializers(&mut emitter, &mut data, &ctx);
     emit_static_property_initializers(&mut emitter, &mut data, &mut ctx);
@@ -286,7 +287,7 @@ fn emit_main_epilogue(
 ) {
     emitter.blank();
     emitter.comment("epilogue + exit(0)");
-    functions::emit_owned_local_epilogue_cleanup(emitter, ctx);
+    functions::emit_owned_local_epilogue_cleanup(emitter, ctx, "main_epilogue");
     emit_main_activation_record_pop(emitter, ctx);
     abi::emit_frame_restore(emitter, frame_size);
     if gc_stats {

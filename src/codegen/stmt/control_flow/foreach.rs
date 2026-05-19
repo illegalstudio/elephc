@@ -20,6 +20,10 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::{Expr, ExprKind, Stmt};
 use crate::types::PhpType;
 
+pub(super) struct ForeachRefFallback {
+    value_ty: PhpType,
+}
+
 pub(super) fn emit_foreach_stmt(
     array: &Expr,
     key_var: &Option<String>,
@@ -369,13 +373,13 @@ pub(super) fn prepare_foreach_value_ref_slot(
     value_ty: &PhpType,
     emitter: &mut Emitter,
     ctx: &mut Context,
-) {
+) -> Option<ForeachRefFallback> {
     if ctx.ref_params.contains(value_var) {
-        return;
+        return None;
     }
     let Some(var) = ctx.variables.get(value_var) else {
         emitter.comment(&format!("WARNING: undefined foreach value variable ${}", value_var));
-        return;
+        return None;
     };
     let slot_offset = var.stack_offset;
     let current_ty = var.ty.clone();
@@ -392,6 +396,16 @@ pub(super) fn prepare_foreach_value_ref_slot(
         slot_offset,
         abi::temp_int_reg(emitter.target),
     );
+    if let Some(flag_offset) = ctx.local_ref_cell_flags.get(value_var).copied() {
+        let flag_reg = abi::temp_int_reg(emitter.target);
+        abi::emit_load_int_immediate(emitter, flag_reg, 1);
+        abi::store_at_offset_scratch(
+            emitter,
+            flag_reg,
+            flag_offset,
+            abi::secondary_scratch_reg(emitter),
+        );
+    }
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the foreach source pointer for loop setup
 
     ctx.ref_params.insert(value_var.to_string());
@@ -401,6 +415,7 @@ pub(super) fn prepare_foreach_value_ref_slot(
         value_ty.clone(),
         HeapOwnership::borrowed_alias_for_type(value_ty),
     );
+    Some(ForeachRefFallback { value_ty: current_ty })
 }
 
 fn copy_local_value_to_ref_cell(
@@ -496,6 +511,48 @@ pub(super) fn store_foreach_value_from_regs(
             abi::store_at_offset_scratch(emitter, low_reg, direct_offset, abi::temp_int_reg(emitter.target));
         }
     }
+}
+
+pub(super) fn release_foreach_value_ref_cell_before_rebind(
+    value_var: &str,
+    fallback: Option<&ForeachRefFallback>,
+    address_reg: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    let Some(flag_offset) = ctx.local_ref_cell_flags.get(value_var).copied() else {
+        return;
+    };
+    let Some(var) = ctx.variables.get(value_var) else {
+        emitter.comment(&format!("WARNING: undefined foreach value variable ${}", value_var));
+        return;
+    };
+    let slot_offset = var.stack_offset;
+    let value_ty = fallback
+        .map(|fallback| fallback.value_ty.clone())
+        .unwrap_or_else(|| var.ty.clone());
+    let restore = ctx.next_label("foreach_ref_cell_restore");
+
+    abi::emit_push_reg(emitter, address_reg);                                   // preserve the new foreach alias target while releasing any owned local ref cell
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset_scratch(emitter, "x10", flag_offset, "x11");
+            emitter.instruction(&format!("cbz x10, {}", restore));              // skip release when the loop variable already aliases borrowed storage
+            abi::load_at_offset_scratch(emitter, "x9", slot_offset, "x11");
+            abi::emit_release_local_ref_cell(emitter, "x9", &value_ty);
+            abi::emit_store_zero_to_local_slot(emitter, flag_offset);           // record that the loop variable no longer owns a local ref cell
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset_scratch(emitter, "r10", flag_offset, "r11");
+            emitter.instruction(&format!("test r10, r10"));                     // check whether this loop variable owns a local reference cell
+            emitter.instruction(&format!("je {}", restore));                    // skip release when the loop variable already aliases borrowed storage
+            abi::load_at_offset_scratch(emitter, "r11", slot_offset, "r10");
+            abi::emit_release_local_ref_cell(emitter, "r11", &value_ty);
+            abi::emit_store_zero_to_local_slot(emitter, flag_offset);           // record that the loop variable no longer owns a local ref cell
+        }
+    }
+    emitter.label(&restore);
+    abi::emit_pop_reg(emitter, address_reg);                                    // restore the new foreach alias target for binding
 }
 
 pub(super) fn mark_foreach_value_ref_bound(flag_offset: usize, emitter: &mut Emitter) {

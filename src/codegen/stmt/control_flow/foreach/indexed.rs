@@ -48,9 +48,11 @@ pub(crate) fn emit_indexed_foreach(
         return;
     }
 
-    if value_by_ref && !value_was_ref {
-        super::prepare_foreach_value_ref_slot(value_var, elem_ty, emitter, ctx);
-    }
+    let ref_fallback = if value_by_ref && !value_was_ref {
+        super::prepare_foreach_value_ref_slot(value_var, elem_ty, emitter, ctx)
+    } else {
+        None
+    };
     let saved_ref_offset = None;
     let ref_flag_offset = if value_by_ref {
         emitter.instruction("str xzr, [sp, #-16]!");                            // reserve and clear the by-reference foreach bound flag
@@ -90,11 +92,14 @@ pub(crate) fn emit_indexed_foreach(
     };
     let val_offset = val_var.stack_offset;
     if value_by_ref {
-        super::mark_foreach_value_ref_bound(
+        bind_indexed_value_ref_aarch64(
+            value_var,
+            elem_ty,
+            ref_fallback.as_ref(),
             ref_flag_offset.expect("missing foreach ref flag"),
             emitter,
+            ctx,
         );
-        bind_indexed_value_ref_aarch64(value_var, val_offset, elem_ty, emitter, ctx);
     } else {
         match elem_ty {
             PhpType::Int | PhpType::Bool => {
@@ -330,9 +335,11 @@ fn emit_indexed_foreach_linux_x86_64(
     ctx: &mut Context,
     data: &mut DataSection,
 ) {
-    if value_by_ref && !value_was_ref {
-        super::prepare_foreach_value_ref_slot(value_var, elem_ty, emitter, ctx);
-    }
+    let ref_fallback = if value_by_ref && !value_was_ref {
+        super::prepare_foreach_value_ref_slot(value_var, elem_ty, emitter, ctx)
+    } else {
+        None
+    };
     let saved_ref_offset = None;
     let ref_flag_offset = if value_by_ref {
         emitter.instruction("sub rsp, 16");                                     // reserve stack space for the by-reference foreach bound flag
@@ -374,11 +381,14 @@ fn emit_indexed_foreach_linux_x86_64(
     };
     let val_offset = val_var.stack_offset;
     if value_by_ref {
-        super::mark_foreach_value_ref_bound(
+        bind_indexed_value_ref_x86_64(
+            value_var,
+            elem_ty,
+            ref_fallback.as_ref(),
             ref_flag_offset.expect("missing foreach ref flag"),
             emitter,
+            ctx,
         );
-        bind_indexed_value_ref_x86_64(value_var, val_offset, elem_ty, emitter, ctx);
     } else {
         match elem_ty {
             PhpType::Int | PhpType::Bool => {
@@ -624,8 +634,9 @@ fn store_runtime_mixed_index_key_x86_64(
 
 fn bind_indexed_value_ref_aarch64(
     value_var: &str,
-    _val_offset: usize,
     elem_ty: &PhpType,
+    fallback: Option<&super::ForeachRefFallback>,
+    ref_flag_offset: usize,
     emitter: &mut Emitter,
     ctx: &mut Context,
 ) {
@@ -636,13 +647,22 @@ fn bind_indexed_value_ref_aarch64(
     }
     emitter.instruction("add x9, x9, #24");                                     // skip the indexed-array header to reach payload storage
     emitter.instruction("add x9, x9, x10");                                     // compute the address of the current indexed-array element
+    super::release_foreach_value_ref_cell_before_rebind(
+        value_var,
+        fallback,
+        "x9",
+        emitter,
+        ctx,
+    );
+    super::mark_foreach_value_ref_bound(ref_flag_offset, emitter);
     super::bind_foreach_value_ref(value_var, "x9", elem_ty, emitter, ctx);
 }
 
 fn bind_indexed_value_ref_x86_64(
     value_var: &str,
-    _val_offset: usize,
     elem_ty: &PhpType,
+    fallback: Option<&super::ForeachRefFallback>,
+    ref_flag_offset: usize,
     emitter: &mut Emitter,
     ctx: &mut Context,
 ) {
@@ -654,5 +674,13 @@ fn bind_indexed_value_ref_x86_64(
     }
     emitter.instruction("add r11, 24");                                         // skip the indexed-array header to reach payload storage
     emitter.instruction("add r11, r10");                                        // compute the address of the current indexed-array element
+    super::release_foreach_value_ref_cell_before_rebind(
+        value_var,
+        fallback,
+        "r11",
+        emitter,
+        ctx,
+    );
+    super::mark_foreach_value_ref_bound(ref_flag_offset, emitter);
     super::bind_foreach_value_ref(value_var, "r11", elem_ty, emitter, ctx);
 }

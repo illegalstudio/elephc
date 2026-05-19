@@ -121,6 +121,10 @@ pub struct Context {
     pub static_vars: HashSet<String>,
     /// Reference parameters in the current function — stores their address, not value.
     pub ref_params: HashSet<String>,
+    /// Hidden flags for compiler-created local reference cells.
+    /// A non-zero flag means the variable's reference slot owns a 16-byte heap cell
+    /// instead of borrowing storage from a caller, global, or array element.
+    pub local_ref_cell_flags: HashMap<String, usize>,
     /// Whether we're in the main scope (not inside a function).
     pub in_main: bool,
     /// Set of all variable names that are used globally across the program.
@@ -222,6 +226,7 @@ impl Context {
             global_vars: HashSet::new(),
             static_vars: HashSet::new(),
             ref_params: HashSet::new(),
+            local_ref_cell_flags: HashMap::new(),
             in_main: false,
             all_global_var_names: HashSet::new(),
             all_static_vars: HashMap::new(),
@@ -281,6 +286,16 @@ impl Context {
     pub fn alloc_hidden_slot(&mut self, size: usize) -> usize {
         self.stack_offset += size;
         self.stack_offset
+    }
+
+    pub fn ensure_local_ref_cell_flag(&mut self, name: &str) -> usize {
+        if let Some(offset) = self.local_ref_cell_flags.get(name) {
+            return *offset;
+        }
+        let offset = self.alloc_hidden_slot(8);
+        self.local_ref_cell_flags
+            .insert(name.to_string(), offset);
+        offset
     }
 
     pub fn set_var_ownership(&mut self, name: &str, ownership: HeapOwnership) {

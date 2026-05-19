@@ -50,9 +50,11 @@ pub(crate) fn emit_assoc_foreach(
         return;
     }
 
-    if value_by_ref && !value_was_ref {
-        super::prepare_foreach_value_ref_slot(value_var, val_ty, emitter, ctx);
-    }
+    let ref_fallback = if value_by_ref && !value_was_ref {
+        super::prepare_foreach_value_ref_slot(value_var, val_ty, emitter, ctx)
+    } else {
+        None
+    };
     let saved_ref_offset = None;
     let ref_flag_offset = if value_by_ref {
         emitter.instruction("str xzr, [sp, #-16]!");                            // reserve and clear the by-reference foreach bound flag
@@ -72,10 +74,6 @@ pub(crate) fn emit_assoc_foreach(
     emitter.instruction(&format!("b.eq {}", loop_end));                         // exit if done
     emitter.instruction("str x0, [sp]");                                        // store next iterator cursor
     if value_by_ref {
-        super::mark_foreach_value_ref_bound(
-            ref_flag_offset.expect("missing foreach ref flag"),
-            emitter,
-        );
         emitter.instruction("str x6, [sp, #-16]!");                             // preserve current hash value address while storing the optional key
     }
 
@@ -99,6 +97,17 @@ pub(crate) fn emit_assoc_foreach(
 
     if value_by_ref {
         emitter.instruction("ldr x6, [sp], #16");                               // restore current hash value address after optional key storage
+        super::release_foreach_value_ref_cell_before_rebind(
+            value_var,
+            ref_fallback.as_ref(),
+            "x6",
+            emitter,
+            ctx,
+        );
+        super::mark_foreach_value_ref_bound(
+            ref_flag_offset.expect("missing foreach ref flag"),
+            emitter,
+        );
         super::bind_foreach_value_ref(value_var, "x6", val_ty, emitter, ctx);
     } else {
         let val_var_info = match ctx.variables.get(value_var) {
@@ -228,9 +237,11 @@ fn emit_assoc_foreach_linux_x86_64(
     ctx: &mut Context,
     data: &mut DataSection,
 ) {
-    if value_by_ref && !value_was_ref {
-        super::prepare_foreach_value_ref_slot(value_var, val_ty, emitter, ctx);
-    }
+    let ref_fallback = if value_by_ref && !value_was_ref {
+        super::prepare_foreach_value_ref_slot(value_var, val_ty, emitter, ctx)
+    } else {
+        None
+    };
     let saved_ref_offset = None;
     let ref_flag_offset = if value_by_ref {
         emitter.instruction("sub rsp, 16");                                     // reserve stack space for the by-reference foreach bound flag
@@ -252,10 +263,6 @@ fn emit_assoc_foreach_linux_x86_64(
     emitter.instruction(&format!("je {}", loop_end));                           // stop the foreach loop once the associative-array iterator is exhausted
     emitter.instruction("mov QWORD PTR [rsp], rax");                            // save the updated associative-array iterator cursor for the next loop step
     if value_by_ref {
-        super::mark_foreach_value_ref_bound(
-            ref_flag_offset.expect("missing foreach ref flag"),
-            emitter,
-        );
         crate::codegen::abi::emit_push_reg(emitter, "r10");                     // preserve current hash value address while storing the optional key
     }
 
@@ -279,6 +286,17 @@ fn emit_assoc_foreach_linux_x86_64(
 
     if value_by_ref {
         crate::codegen::abi::emit_pop_reg(emitter, "r10");                      // restore current hash value address after optional key storage
+        super::release_foreach_value_ref_cell_before_rebind(
+            value_var,
+            ref_fallback.as_ref(),
+            "r10",
+            emitter,
+            ctx,
+        );
+        super::mark_foreach_value_ref_bound(
+            ref_flag_offset.expect("missing foreach ref flag"),
+            emitter,
+        );
         super::bind_foreach_value_ref(value_var, "r10", val_ty, emitter, ctx);
     } else {
         let val_var_info = match ctx.variables.get(value_var) {

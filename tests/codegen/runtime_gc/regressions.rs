@@ -547,3 +547,46 @@ echo count($b);
         out.stderr
     );
 }
+
+#[test]
+fn test_regression_foreach_by_ref_non_empty_does_not_leak_local_ref_cell() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$items = [1, 2, 3];
+foreach ($items as &$value) {
+    $value = $value + 10;
+}
+$value = 99;
+echo $items[2];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "99");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+#[test]
+fn test_regression_foreach_by_ref_empty_releases_local_ref_cell_at_exit() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$value = 7;
+$items = [1];
+array_pop($items);
+foreach ($items as &$value) {
+    $value = 1;
+}
+echo $value;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "7");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

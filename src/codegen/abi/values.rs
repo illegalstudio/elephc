@@ -13,7 +13,7 @@ use crate::codegen::platform::Arch;
 use crate::types::PhpType;
 
 use super::calls::{emit_call_label, emit_pop_reg, emit_push_reg};
-use super::frame::{load_at_offset, store_at_offset};
+use super::frame::{emit_load_from_address, load_at_offset, store_at_offset};
 use super::registers::{float_result_reg, int_result_reg, string_result_regs};
 
 pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
@@ -84,6 +84,23 @@ pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
         }
         _ => {}
     }
+}
+
+pub fn emit_release_local_ref_cell(emitter: &mut Emitter, cell_reg: &str, value_ty: &PhpType) {
+    emit_push_reg(emitter, cell_reg);                                           // preserve the owned reference cell pointer while releasing its payload
+    match value_ty.codegen_repr() {
+        PhpType::Str => {
+            emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
+            emit_call_label(emitter, "__rt_heap_free_safe");                   // release the owned string payload stored inside the local reference cell
+        }
+        ty if ty.is_refcounted() => {
+            emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
+            emit_decref_if_refcounted(emitter, &ty);
+        }
+        _ => {}
+    }
+    emit_pop_reg(emitter, int_result_reg(emitter));                             // restore the owned reference cell pointer for heap release
+    emit_call_label(emitter, "__rt_heap_free");                                // release the local reference cell itself
 }
 
 pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
