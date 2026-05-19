@@ -18,7 +18,7 @@ use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
-use super::super::emit_expr;
+use super::super::{coerce_result_to_type, emit_expr};
 
 pub(super) fn emit_property_access(
     object: &Expr,
@@ -49,7 +49,7 @@ pub(super) fn emit_property_access(
             return emit_loaded_object_property_access(class_name, property, emitter, ctx, data);
         }
         PhpType::Mixed => {
-            return emit_mixed_property_access(property, emitter, data);
+            return emit_mixed_property_access(property, emitter, ctx, data);
         }
         PhpType::Pointer(Some(class_name)) if ctx.extern_classes.contains_key(class_name) => {
             let class_info = match ctx.extern_classes.get(class_name).cloned() {
@@ -187,7 +187,7 @@ fn emit_stdclass_property_access(
     emitter: &mut Emitter,
     data: &mut DataSection,
 ) -> PhpType {
-    emit_dynamic_property_access(
+    emit_named_dynamic_property_access(
         property,
         emitter,
         data,
@@ -202,21 +202,60 @@ fn emit_stdclass_property_access(
 /// stdClass instance, and routes to `__rt_stdclass_get`. Other payloads
 /// return Mixed(null), matching PHP's "property access on non-object"
 /// warning behaviour for the most common idiom (`json_decode($json)->name`).
-fn emit_mixed_property_access(
+pub(super) fn emit_mixed_property_access(
     property: &str,
     emitter: &mut Emitter,
+    ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
-    emit_dynamic_property_access(
-        property,
-        emitter,
-        data,
-        "mixed",
-        "__rt_mixed_property_get",
-    )
+    let candidates = declared_property_candidates(property, ctx);
+    if candidates.is_empty() {
+        return emit_named_dynamic_property_access(
+            property,
+            emitter,
+            data,
+            "mixed",
+            "__rt_mixed_property_get",
+        );
+    }
+
+    emitter.comment(&format!("mixed->{}  (class-id dispatch)", property));
+    let null_label = ctx.next_label("mixed_prop_null");
+    let done_label = ctx.next_label("mixed_prop_done");
+    let stdclass_label = ctx.next_label("mixed_prop_stdclass");
+    let match_labels: Vec<String> = candidates
+        .iter()
+        .map(|(class_name, _, _)| {
+            ctx.next_label(&format!("mixed_prop_{}", label_fragment(class_name)))
+        })
+        .collect();
+
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // inspect the boxed receiver before reading a declared property
+    emit_object_payload_or_null_branch(&null_label, emitter);
+    emit_branch_to_declared_property_candidates(&candidates, &match_labels, emitter);
+    emit_branch_to_stdclass_fallback(&stdclass_label, emitter);
+    abi::emit_jump(emitter, &null_label);                                      // unknown object class falls through to the null result path
+
+    for ((class_name, prop_ty, _), label) in candidates.into_iter().zip(match_labels) {
+        emitter.label(&label);
+        let loaded_ty = emit_loaded_object_property_access(&class_name, property, emitter, ctx, data);
+        box_dynamic_property_result(&loaded_ty, emitter);
+        abi::emit_jump(emitter, &done_label);                                  // finish the mixed property read after boxing the declared slot value
+        let _ = prop_ty;
+    }
+
+    emitter.label(&stdclass_label);
+    emit_static_stdclass_get_from_loaded_object(property, emitter, data);
+    abi::emit_jump(emitter, &done_label);                                      // finish after stdClass hash lookup
+
+    emitter.label(&null_label);
+    super::emit_boxed_null(emitter);
+
+    emitter.label(&done_label);
+    PhpType::Mixed
 }
 
-fn emit_dynamic_property_access(
+fn emit_named_dynamic_property_access(
     property: &str,
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -239,6 +278,278 @@ fn emit_dynamic_property_access(
         }
     }
     PhpType::Mixed
+}
+
+pub(super) fn emit_dynamic_property_access(
+    object: &Expr,
+    property: &Expr,
+    nullsafe: bool,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let static_obj_ty = functions::infer_contextual_type(object, ctx);
+    let static_class = functions::singular_object_class(&static_obj_ty)
+        .map(|name| name.to_string());
+    let obj_ty = emit_expr(object, emitter, ctx, data);
+
+    if nullsafe && matches!(obj_ty.codegen_repr(), PhpType::Void) {
+        super::emit_boxed_null(emitter);
+        return PhpType::Mixed;
+    }
+
+    let null_label = nullsafe.then(|| ctx.next_label("dynamic_prop_null"));
+    let done_label = nullsafe.then(|| ctx.next_label("dynamic_prop_done"));
+    if nullsafe && matches!(obj_ty.codegen_repr(), PhpType::Mixed) {
+        super::emit_unbox_mixed_object_or_null_branch(
+            null_label
+                .as_deref()
+                .expect("nullsafe dynamic access must have a null label"),
+            emitter,
+        );
+    }
+
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                 // preserve the receiver while the dynamic property-name expression is evaluated
+    let property_ty = emit_expr(property, emitter, ctx, data);
+    if property_ty != PhpType::Str {
+        coerce_result_to_type(emitter, ctx, data, &property_ty, &PhpType::Str);
+    }
+    let (name_ptr_reg, name_len_reg) = abi::string_result_regs(emitter);
+    abi::emit_push_reg_pair(emitter, name_ptr_reg, name_len_reg);              // preserve the evaluated property name for each runtime-name comparison
+
+    if let Some(class_name) = static_class
+        .or_else(|| match &obj_ty {
+            PhpType::Object(class_name) => Some(class_name.clone()),
+            _ => None,
+        })
+    {
+        emit_dynamic_declared_property_lookup(&class_name, emitter, ctx, data);
+    } else {
+        emit_runtime_dynamic_property_get_from_saved_receiver(
+            "__rt_mixed_property_get",
+            emitter,
+        );
+    }
+
+    if let (Some(null_label), Some(done_label)) = (null_label, done_label) {
+        abi::emit_jump(emitter, &done_label);                                  // skip the nullsafe null branch after a real dynamic-property lookup
+        emitter.label(&null_label);
+        super::emit_boxed_null(emitter);
+        emitter.label(&done_label);
+    }
+
+    PhpType::Mixed
+}
+
+fn emit_dynamic_declared_property_lookup(
+    class_name: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+        emit_runtime_dynamic_property_get_from_saved_receiver("__rt_stdclass_get", emitter);
+        return;
+    }
+
+    let Some(class_info) = ctx.classes.get(class_name).cloned() else {
+        emit_dynamic_property_miss(emitter);
+        return;
+    };
+    let done_label = ctx.next_label("dyn_prop_done");
+    let miss_label = ctx.next_label("dyn_prop_miss");
+    let candidates: Vec<(String, PhpType)> = class_info
+        .properties
+        .iter()
+        .map(|(name, ty)| (name.clone(), ty.clone()))
+        .collect();
+    let match_labels: Vec<String> = candidates
+        .iter()
+        .map(|(name, _)| ctx.next_label(&format!("dyn_prop_{}", label_fragment(name))))
+        .collect();
+
+    for ((property_name, _), label) in candidates.iter().zip(match_labels.iter()) {
+        emit_branch_if_dynamic_name_matches(property_name, label, emitter, data);
+    }
+    abi::emit_jump(emitter, &miss_label);                                      // no declared property name matched the evaluated dynamic name
+
+    for ((property_name, _), label) in candidates.into_iter().zip(match_labels) {
+        emitter.label(&label);
+        abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);
+        let loaded_ty =
+            emit_loaded_object_property_access(class_name, &property_name, emitter, ctx, data);
+        box_dynamic_property_result(&loaded_ty, emitter);
+        abi::emit_release_temporary_stack(emitter, 32);
+        abi::emit_jump(emitter, &done_label);                                  // finish after loading the matching declared property
+    }
+
+    emitter.label(&miss_label);
+    emit_dynamic_property_miss(emitter);
+    emitter.label(&done_label);
+}
+
+fn emit_dynamic_property_miss(emitter: &mut Emitter) {
+    abi::emit_release_temporary_stack(emitter, 32);
+    super::emit_boxed_null(emitter);
+}
+
+fn emit_runtime_dynamic_property_get_from_saved_receiver(
+    runtime_symbol: &str,
+    emitter: &mut Emitter,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "x0", 16);
+            abi::emit_load_temporary_stack_slot(emitter, "x1", 0);
+            abi::emit_load_temporary_stack_slot(emitter, "x2", 8);
+            emitter.instruction(&format!("bl {}", runtime_symbol));             // read the runtime-named property through the object helper
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "rdi", 16);
+            abi::emit_load_temporary_stack_slot(emitter, "rsi", 0);
+            abi::emit_load_temporary_stack_slot(emitter, "rdx", 8);
+            emitter.instruction(&format!("call {}", runtime_symbol));           // read the runtime-named property through the object helper
+        }
+    }
+    abi::emit_release_temporary_stack(emitter, 32);
+}
+
+fn emit_branch_if_dynamic_name_matches(
+    property: &str,
+    target_label: &str,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    let (label, len) = data.add_string(property.as_bytes());
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "x1", 0);
+            abi::emit_load_temporary_stack_slot(emitter, "x2", 8);
+            abi::emit_symbol_address(emitter, "x3", &label);
+            abi::emit_load_int_immediate(emitter, "x4", len as i64);
+            emitter.instruction("bl __rt_str_eq");                              // compare the evaluated property name against a declared property name
+            emitter.instruction(&format!("cbnz x0, {}", target_label));         // dispatch to the declared property load when the names match
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(emitter, "rdi", 0);
+            abi::emit_load_temporary_stack_slot(emitter, "rsi", 8);
+            abi::emit_symbol_address(emitter, "rdx", &label);
+            abi::emit_load_int_immediate(emitter, "rcx", len as i64);
+            emitter.instruction("call __rt_str_eq");                            // compare the evaluated property name against a declared property name
+            emitter.instruction("test rax, rax");                               // check whether the runtime string comparison matched
+            emitter.instruction(&format!("jne {}", target_label));              // dispatch to the declared property load when the names match
+        }
+    }
+}
+
+fn box_dynamic_property_result(result_ty: &PhpType, emitter: &mut Emitter) {
+    if !matches!(result_ty.codegen_repr(), PhpType::Mixed) {
+        crate::codegen::emit_box_current_value_as_mixed(emitter, result_ty);
+    }
+}
+
+fn declared_property_candidates(
+    property: &str,
+    ctx: &Context,
+) -> Vec<(String, PhpType, u64)> {
+    let mut candidates: Vec<(String, PhpType, u64)> = ctx
+        .classes
+        .iter()
+        .filter_map(|(class_name, class_info)| {
+            class_info
+                .properties
+                .iter()
+                .find(|(name, _)| name == property)
+                .map(|(_, ty)| (class_name.clone(), ty.clone(), class_info.class_id))
+        })
+        .collect();
+    candidates.sort_by_key(|(_, _, class_id)| *class_id);
+    candidates
+}
+
+fn emit_object_payload_or_null_branch(null_label: &str, emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #6");                                  // runtime tag 6 means the mixed payload is an object
+            emitter.instruction(&format!("b.ne {}", null_label));               // non-object mixed receivers read as null for property dispatch
+            emitter.instruction("mov x0, x1");                                  // promote the unboxed object pointer into the normal result register
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 6");                                  // runtime tag 6 means the mixed payload is an object
+            emitter.instruction(&format!("jne {}", null_label));                // non-object mixed receivers read as null for property dispatch
+            emitter.instruction("mov rax, rdi");                                // promote the unboxed object pointer into the normal result register
+        }
+    }
+}
+
+fn emit_branch_to_declared_property_candidates(
+    candidates: &[(String, PhpType, u64)],
+    match_labels: &[String],
+    emitter: &mut Emitter,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x9, [x0]");                                // load the receiver class id for declared-property dispatch
+            for ((_, _, class_id), label) in candidates.iter().zip(match_labels) {
+                abi::emit_load_int_immediate(emitter, "x10", *class_id as i64);
+                emitter.instruction("cmp x9, x10");                             // compare the receiver class id against a class that declares the property
+                emitter.instruction(&format!("b.eq {}", label));                // jump to the matching declared-property load
+            }
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r11, QWORD PTR [rax]");                    // load the receiver class id for declared-property dispatch
+            for ((_, _, class_id), label) in candidates.iter().zip(match_labels) {
+                abi::emit_load_int_immediate(emitter, "r10", *class_id as i64);
+                emitter.instruction("cmp r11, r10");                            // compare the receiver class id against a class that declares the property
+                emitter.instruction(&format!("je {}", label));                  // jump to the matching declared-property load
+            }
+        }
+    }
+}
+
+fn emit_branch_to_stdclass_fallback(label: &str, emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x10, [x0]");                               // reload the receiver class id before the stdClass fallback check
+            abi::emit_symbol_address(emitter, "x11", "_stdclass_class_id");
+            emitter.instruction("ldr x11, [x11]");                              // load the compile-time stdClass class id sentinel
+            emitter.instruction("cmp x10, x11");                                // check whether the object uses stdClass dynamic storage
+            emitter.instruction(&format!("b.eq {}", label));                    // route stdClass property reads through the hash-backed helper
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r10, QWORD PTR [rax]");                    // reload the receiver class id before the stdClass fallback check
+            emitter.instruction("mov r11, QWORD PTR [rip + _stdclass_class_id]"); // load the compile-time stdClass class id sentinel
+            emitter.instruction("cmp r10, r11");                                // check whether the object uses stdClass dynamic storage
+            emitter.instruction(&format!("je {}", label));                      // route stdClass property reads through the hash-backed helper
+        }
+    }
+}
+
+fn emit_static_stdclass_get_from_loaded_object(
+    property: &str,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    let (label, len) = data.add_string(property.as_bytes());
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x1", &label);
+            abi::emit_load_int_immediate(emitter, "x2", len as i64);
+            emitter.instruction("bl __rt_stdclass_get");                        // read the static property name from stdClass dynamic storage
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rdi, rax");                                // pass the unboxed stdClass object pointer as the first helper argument
+            abi::emit_symbol_address(emitter, "rsi", &label);
+            abi::emit_load_int_immediate(emitter, "rdx", len as i64);
+            emitter.instruction("call __rt_stdclass_get");                      // read the static property name from stdClass dynamic storage
+        }
+    }
+}
+
+fn label_fragment(name: &str) -> String {
+    name.chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect()
 }
 
 pub(super) fn emit_nullable_object_property_access(

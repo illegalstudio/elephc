@@ -139,6 +139,11 @@ pub(super) fn discover_expr(
         | ExprKind::NullsafePropertyAccess { object, .. } => {
             discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
         }
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_expr(property, base_dir, loaded_paths, include_chain, state, output)?;
+        }
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;

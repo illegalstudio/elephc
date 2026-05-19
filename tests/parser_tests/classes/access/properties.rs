@@ -25,6 +25,21 @@ fn test_parse_property_access() {
 }
 
 #[test]
+fn test_parse_dynamic_property_access() {
+    let stmts = parse_source("<?php echo $obj->{$name};");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::DynamicPropertyAccess { object, property } => {
+                assert!(matches!(object.kind, ExprKind::Variable(ref name) if name == "obj"));
+                assert!(matches!(property.kind, ExprKind::Variable(ref name) if name == "name"));
+            }
+            other => panic!("Expected DynamicPropertyAccess, got {:?}", other),
+        },
+        other => panic!("Expected Echo, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_property_array_access() {
     let stmts = parse_source("<?php echo $obj->items[0];");
     match &stmts[0].kind {

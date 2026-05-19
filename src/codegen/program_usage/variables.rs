@@ -262,6 +262,10 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         }
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => expr_uses_variable(object, needle),
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            expr_uses_variable(object, needle) || expr_uses_variable(property, needle)
+        }
         ExprKind::StaticPropertyAccess { .. } => false,
         ExprKind::MethodCall { object, args, .. } => {
             expr_uses_variable(object, needle)

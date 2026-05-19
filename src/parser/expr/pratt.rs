@@ -56,50 +56,33 @@ pub(super) fn parse_expr_bp(
                 let arrow_span = tokens[*pos].1;
                 let nullsafe = tokens[*pos].0 == Token::QuestionArrow;
                 *pos += 1;
-                let member_name = match tokens.get(*pos).map(|(token, _)| token) {
-                    Some(Token::Identifier(name)) => {
-                        let name = name.clone();
-                        *pos += 1;
-                        name
-                    }
-                    // PHP 7+ allows reserved keywords as method/property names after `->`.
-                    // Whitelist the keywords known to appear as method names in built-in
-                    // and library APIs (e.g. `Fiber::throw`, `Generator::throw`).
-                    Some(Token::Throw) => {
-                        *pos += 1;
-                        "throw".to_string()
-                    }
-                    Some(Token::Yield) => {
-                        *pos += 1;
-                        "yield".to_string()
-                    }
-                    Some(Token::Match) => {
-                        *pos += 1;
-                        "match".to_string()
-                    }
-                    Some(Token::Print) => {
-                        *pos += 1;
-                        "print".to_string()
-                    }
-                    Some(Token::Echo) => {
-                        *pos += 1;
-                        "echo".to_string()
-                    }
-                    Some(Token::Return) => {
-                        *pos += 1;
-                        "return".to_string()
-                    }
-                    _ => {
-                        return Err(CompileError::new(
-                            arrow_span,
+                let member = match parse_object_member(tokens, pos, arrow_span, nullsafe)? {
+                    ObjectMember::Named(member_name) => member_name,
+                    ObjectMember::Dynamic(property) => {
+                        if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+                            return Err(CompileError::new(
+                                arrow_span,
+                                "Dynamic method calls are not supported yet",
+                            ));
+                        }
+                        lhs = Expr::new(
                             if nullsafe {
-                                "Expected property or method name after '?->'"
+                                ExprKind::NullsafeDynamicPropertyAccess {
+                                    object: Box::new(lhs),
+                                    property: Box::new(property),
+                                }
                             } else {
-                                "Expected property or method name after '->'"
+                                ExprKind::DynamicPropertyAccess {
+                                    object: Box::new(lhs),
+                                    property: Box::new(property),
+                                }
                             },
-                        ))
+                            arrow_span,
+                        );
+                        continue;
                     }
                 };
+                let member_name = member;
                 if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                     *pos += 1;
                     if parse_first_class_callable_parens(tokens, pos)? {
@@ -385,6 +368,69 @@ fn starts_unparenthesized_arrow_function(tokens: &[(Token, Span)], pos: usize) -
     matches!(tokens.get(pos).map(|(token, _)| token), Some(Token::Fn))
         || (matches!(tokens.get(pos).map(|(token, _)| token), Some(Token::Static))
             && matches!(tokens.get(pos + 1).map(|(token, _)| token), Some(Token::Fn)))
+}
+
+enum ObjectMember {
+    Named(String),
+    Dynamic(Expr),
+}
+
+fn parse_object_member(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    arrow_span: Span,
+    nullsafe: bool,
+) -> Result<ObjectMember, CompileError> {
+    match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::Identifier(name)) => {
+            let name = name.clone();
+            *pos += 1;
+            Ok(ObjectMember::Named(name))
+        }
+        Some(Token::LBrace) => {
+            *pos += 1;
+            let property = parse_expr(tokens, pos)?;
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::RBrace {
+                return Err(CompileError::new(arrow_span, "Expected '}'"));
+            }
+            *pos += 1;
+            Ok(ObjectMember::Dynamic(property))
+        }
+        // PHP 7+ allows reserved keywords as method/property names after `->`.
+        // Keep the whitelist to the keywords already accepted by static property parsing.
+        Some(Token::Throw) => {
+            *pos += 1;
+            Ok(ObjectMember::Named("throw".to_string()))
+        }
+        Some(Token::Yield) => {
+            *pos += 1;
+            Ok(ObjectMember::Named("yield".to_string()))
+        }
+        Some(Token::Match) => {
+            *pos += 1;
+            Ok(ObjectMember::Named("match".to_string()))
+        }
+        Some(Token::Print) => {
+            *pos += 1;
+            Ok(ObjectMember::Named("print".to_string()))
+        }
+        Some(Token::Echo) => {
+            *pos += 1;
+            Ok(ObjectMember::Named("echo".to_string()))
+        }
+        Some(Token::Return) => {
+            *pos += 1;
+            Ok(ObjectMember::Named("return".to_string()))
+        }
+        _ => Err(CompileError::new(
+            arrow_span,
+            if nullsafe {
+                "Expected property or method name after '?->'"
+            } else {
+                "Expected property or method name after '->'"
+            },
+        )),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

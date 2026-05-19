@@ -277,6 +277,10 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::NamedArg { value, .. } => expr_effect(value),
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => expr_effect(object),
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            expr_effect(object).combine(expr_effect(property))
+        }
         ExprKind::StaticPropertyAccess { .. } => Effect::PURE,
         ExprKind::FirstClassCallable(target) => callable_target_effect(target),
         ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),

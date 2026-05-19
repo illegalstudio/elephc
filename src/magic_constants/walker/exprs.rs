@@ -172,10 +172,22 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             object: Box::new(walk_expr(*object, pass)),
             property,
         },
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            ExprKind::DynamicPropertyAccess {
+                object: Box::new(walk_expr(*object, pass)),
+                property: Box::new(walk_expr(*property, pass)),
+            }
+        }
         ExprKind::NullsafePropertyAccess { object, property } => {
             ExprKind::NullsafePropertyAccess {
                 object: Box::new(walk_expr(*object, pass)),
                 property,
+            }
+        }
+        ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            ExprKind::NullsafeDynamicPropertyAccess {
+                object: Box::new(walk_expr(*object, pass)),
+                property: Box::new(walk_expr(*property, pass)),
             }
         }
         ExprKind::MethodCall {

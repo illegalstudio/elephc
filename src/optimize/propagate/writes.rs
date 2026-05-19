@@ -380,6 +380,11 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
         | ExprKind::YieldFrom(_) => None,
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => expr_local_writes(object),
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => merge_write_sets([
+            expr_local_writes(object)?,
+            expr_local_writes(property)?,
+        ]),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => Some(HashSet::new()),
     }
 }
@@ -409,6 +414,11 @@ fn collect_assignment_target_writes(
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => {
             writes.extend(expr_local_writes(object)?);
+        }
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            writes.extend(expr_local_writes(object)?);
+            writes.extend(expr_local_writes(property)?);
         }
         _ => {
             writes.extend(expr_local_writes(target)?);

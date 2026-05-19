@@ -235,6 +235,11 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::NullsafeMethodCall { object, .. } => {
             collect_assignment_target_dependencies(object, dependencies);
         }
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            collect_assignment_target_dependencies(object, dependencies);
+            collect_assignment_target_dependencies(property, dependencies);
+        }
         ExprKind::BinaryOp { left, right, .. } => {
             collect_assignment_target_dependencies(left, dependencies);
             collect_assignment_target_dependencies(right, dependencies);
@@ -427,6 +432,11 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         | ExprKind::NullsafePropertyAccess { object, .. } => {
             expr_may_write_dependency(object, dependencies)
         }
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            expr_may_write_dependency(object, dependencies)
+                || expr_may_write_dependency(property, dependencies)
+        }
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_may_write_dependency(object, dependencies)
@@ -606,6 +616,10 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => {
             expr_contains_equivalent(object, needle)
+        }
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            expr_contains_equivalent(object, needle) || expr_contains_equivalent(property, needle)
         }
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {

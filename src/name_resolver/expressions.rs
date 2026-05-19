@@ -200,10 +200,22 @@ pub(super) fn resolve_expr(
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
             property: property.clone(),
         },
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            ExprKind::DynamicPropertyAccess {
+                object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
+                property: Box::new(resolve_expr(property, current_namespace, imports, symbols)),
+            }
+        }
         ExprKind::NullsafePropertyAccess { object, property } => {
             ExprKind::NullsafePropertyAccess {
                 object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
                 property: property.clone(),
+            }
+        }
+        ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            ExprKind::NullsafeDynamicPropertyAccess {
+                object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
+                property: Box::new(resolve_expr(property, current_namespace, imports, symbols)),
             }
         }
         ExprKind::StaticPropertyAccess { receiver, property } => ExprKind::StaticPropertyAccess {

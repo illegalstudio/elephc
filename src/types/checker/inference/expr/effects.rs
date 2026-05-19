@@ -191,6 +191,12 @@ impl Checker {
                 self.infer_type_with_assignment_effects(object, env)?;
                 self.infer_type(expr, env)
             }
+            ExprKind::DynamicPropertyAccess { object, property }
+            | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+                self.infer_type_with_assignment_effects(object, env)?;
+                self.infer_type_with_assignment_effects(property, env)?;
+                self.infer_type(expr, env)
+            }
             ExprKind::MethodCall { object, args, .. }
             | ExprKind::NullsafeMethodCall { object, args, .. } => {
                 self.infer_type_with_assignment_effects(object, env)?;

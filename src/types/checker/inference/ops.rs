@@ -724,10 +724,12 @@ impl Checker {
 
 fn expr_contains_nullsafe_member(expr: &Expr) -> bool {
     match &expr.kind {
-        ExprKind::NullsafePropertyAccess { .. } | ExprKind::NullsafeMethodCall { .. } => true,
-        ExprKind::PropertyAccess { object, .. } | ExprKind::MethodCall { object, .. } => {
-            expr_contains_nullsafe_member(object)
-        }
+        ExprKind::NullsafePropertyAccess { .. }
+        | ExprKind::NullsafeDynamicPropertyAccess { .. }
+        | ExprKind::NullsafeMethodCall { .. } => true,
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::DynamicPropertyAccess { object, .. }
+        | ExprKind::MethodCall { object, .. } => expr_contains_nullsafe_member(object),
         ExprKind::ArrayAccess { array, .. } => expr_contains_nullsafe_member(array),
         ExprKind::ExprCall { callee, .. } => expr_contains_nullsafe_member(callee),
         _ => false,

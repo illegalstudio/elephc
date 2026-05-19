@@ -158,10 +158,22 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
             object: Box::new(rewrite_expr(*object, defines)),
             property,
         },
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            ExprKind::DynamicPropertyAccess {
+                object: Box::new(rewrite_expr(*object, defines)),
+                property: Box::new(rewrite_expr(*property, defines)),
+            }
+        }
         ExprKind::NullsafePropertyAccess { object, property } => {
             ExprKind::NullsafePropertyAccess {
                 object: Box::new(rewrite_expr(*object, defines)),
                 property,
+            }
+        }
+        ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            ExprKind::NullsafeDynamicPropertyAccess {
+                object: Box::new(rewrite_expr(*object, defines)),
+                property: Box::new(rewrite_expr(*property, defines)),
             }
         }
         ExprKind::StaticPropertyAccess { receiver, property } => {

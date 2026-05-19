@@ -152,10 +152,22 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             object: Box::new(prune_expr(*object)),
             property,
         },
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            ExprKind::DynamicPropertyAccess {
+                object: Box::new(prune_expr(*object)),
+                property: Box::new(prune_expr(*property)),
+            }
+        }
         ExprKind::NullsafePropertyAccess { object, property } => {
             ExprKind::NullsafePropertyAccess {
                 object: Box::new(prune_expr(*object)),
                 property,
+            }
+        }
+        ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            ExprKind::NullsafeDynamicPropertyAccess {
+                object: Box::new(prune_expr(*object)),
+                property: Box::new(prune_expr(*property)),
             }
         }
         ExprKind::StaticPropertyAccess { receiver, property } => {
