@@ -18,6 +18,7 @@ use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use crate::parser::ast::{Expr, Stmt};
 use crate::parser::ast::CatchClause;
+use crate::span::Span;
 
 pub(super) fn emit_if_stmt(
     condition: &Expr,
@@ -45,11 +46,22 @@ pub(super) fn emit_foreach_stmt(
     value_var: &str,
     value_by_ref: bool,
     body: &[Stmt],
+    span: Span,
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
 ) {
-    foreach::emit_foreach_stmt(array, key_var, value_var, value_by_ref, body, emitter, ctx, data)
+    foreach::emit_foreach_stmt(
+        array,
+        key_var,
+        value_var,
+        value_by_ref,
+        body,
+        span,
+        emitter,
+        ctx,
+        data,
+    )
 }
 
 pub(super) fn emit_do_while_stmt(

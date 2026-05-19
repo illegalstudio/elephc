@@ -43,7 +43,11 @@ pub(super) fn epilogue_has_side_effects(ctx: &Context) -> bool {
 }
 
 pub(crate) fn emit_local_ref_cell_flag_zero_init(emitter: &mut Emitter, ctx: &Context) {
-    let mut offsets: Vec<_> = ctx.local_ref_cell_flags.values().copied().collect();
+    let mut offsets: Vec<_> = ctx
+        .local_ref_cell_flags
+        .values()
+        .map(|flag| flag.offset)
+        .collect();
     offsets.sort_unstable();
     for offset in offsets {
         abi::emit_store_zero_to_local_slot(emitter, offset);                   // clear the owned local reference-cell flag at function entry
@@ -104,11 +108,18 @@ fn emit_local_ref_cell_epilogue_cleanup(
 ) {
     let mut cleanup_cells: Vec<_> = ctx
         .local_ref_cell_flags
-        .iter()
-        .filter_map(|(name, flag_offset)| {
+        .values()
+        .filter_map(|flag| {
             ctx.variables
-                .get(name)
-                .map(|var| (name.as_str(), *flag_offset, var.stack_offset, var.ty.clone()))
+                .get(&flag.variable)
+                .map(|var| {
+                    (
+                        flag.variable.as_str(),
+                        flag.offset,
+                        var.stack_offset,
+                        flag.value_ty.clone().unwrap_or_else(|| var.ty.clone()),
+                    )
+                })
         })
         .collect();
     cleanup_cells.sort_by_key(|(_, flag_offset, _, _)| *flag_offset);

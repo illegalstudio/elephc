@@ -21,6 +21,7 @@ pub(crate) fn emit_indexed_foreach(
     value_var: &str,
     value_by_ref: bool,
     value_was_ref: bool,
+    local_ref_cell_flag_key: Option<&str>,
     body: &[Stmt],
     loop_start: &str,
     loop_end: &str,
@@ -36,6 +37,7 @@ pub(crate) fn emit_indexed_foreach(
             value_var,
             value_by_ref,
             value_was_ref,
+            local_ref_cell_flag_key,
             body,
             loop_start,
             loop_end,
@@ -49,7 +51,9 @@ pub(crate) fn emit_indexed_foreach(
     }
 
     let ref_fallback = if value_by_ref && !value_was_ref {
-        super::prepare_foreach_value_ref_slot(value_var, elem_ty, emitter, ctx)
+        local_ref_cell_flag_key.and_then(|flag_key| {
+            super::prepare_foreach_value_ref_slot(value_var, elem_ty, flag_key, emitter, ctx)
+        })
     } else {
         None
     };
@@ -203,6 +207,7 @@ pub(crate) fn emit_indexed_foreach_runtime_mixed(
     value_var: &str,
     value_by_ref: bool,
     value_was_ref: bool,
+    local_ref_cell_flag_key: Option<&str>,
     body: &[Stmt],
     loop_start: &str,
     loop_end: &str,
@@ -217,6 +222,7 @@ pub(crate) fn emit_indexed_foreach_runtime_mixed(
             value_var,
             value_by_ref,
             value_was_ref,
+            local_ref_cell_flag_key,
             body,
             loop_start,
             loop_end,
@@ -326,6 +332,7 @@ fn emit_indexed_foreach_linux_x86_64(
     value_var: &str,
     value_by_ref: bool,
     value_was_ref: bool,
+    local_ref_cell_flag_key: Option<&str>,
     body: &[Stmt],
     loop_start: &str,
     loop_end: &str,
@@ -336,7 +343,9 @@ fn emit_indexed_foreach_linux_x86_64(
     data: &mut DataSection,
 ) {
     let ref_fallback = if value_by_ref && !value_was_ref {
-        super::prepare_foreach_value_ref_slot(value_var, elem_ty, emitter, ctx)
+        local_ref_cell_flag_key.and_then(|flag_key| {
+            super::prepare_foreach_value_ref_slot(value_var, elem_ty, flag_key, emitter, ctx)
+        })
     } else {
         None
     };
@@ -493,6 +502,7 @@ fn emit_indexed_foreach_runtime_mixed_linux_x86_64(
     value_var: &str,
     value_by_ref: bool,
     _value_was_ref: bool,
+    _local_ref_cell_flag_key: Option<&str>,
     body: &[Stmt],
     loop_start: &str,
     loop_end: &str,

@@ -590,3 +590,40 @@ echo $value;
         out.stderr
     );
 }
+
+#[test]
+fn test_regression_foreach_by_ref_reused_name_releases_prior_fallback_type() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function run() {
+    $value = "held";
+    $first = [1];
+    array_pop($first);
+    foreach ($first as &$value) {
+        $value = 1;
+    }
+
+    $second = [10, 20];
+    foreach ($second as &$value) {
+        $value += 100;
+    }
+
+    $value = 999;
+    echo $second[0];
+    echo "|";
+    echo $second[1];
+    echo "|";
+    echo $value;
+}
+
+run();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "110|999|999");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

@@ -154,7 +154,9 @@ pub fn collect_local_vars(
                     }
                 }
                 if *value_by_ref && !ctx.ref_params.contains(value_var) {
-                    ctx.ensure_local_ref_cell_flag(value_var);
+                    let flag_key =
+                        Context::foreach_local_ref_cell_flag_key(value_var, stmt.span);
+                    ctx.ensure_local_ref_cell_flag(flag_key, value_var);
                 }
                 collect_local_vars(body, ctx, sig);
             }

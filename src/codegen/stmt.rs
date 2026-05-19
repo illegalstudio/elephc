@@ -154,6 +154,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                 value_var,
                 *value_by_ref,
                 body,
+                stmt.span,
                 emitter,
                 ctx,
                 data,

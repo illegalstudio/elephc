@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::parser::ast::{CallableTarget, ExprKind, Stmt};
+use crate::span::Span;
 use crate::types::{
     ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
     PackedClassInfo, PhpType,
@@ -124,7 +125,7 @@ pub struct Context {
     /// Hidden flags for compiler-created local reference cells.
     /// A non-zero flag means the variable's reference slot owns a 16-byte heap cell
     /// instead of borrowing storage from a caller, global, or array element.
-    pub local_ref_cell_flags: HashMap<String, usize>,
+    pub local_ref_cell_flags: HashMap<String, LocalRefCellFlag>,
     /// Whether we're in the main scope (not inside a function).
     pub in_main: bool,
     /// Set of all variable names that are used globally across the program.
@@ -189,6 +190,12 @@ pub struct VarInfo {
     pub stack_offset: usize,
     pub ownership: HeapOwnership,
     pub epilogue_cleanup_safe: bool,
+}
+
+pub struct LocalRefCellFlag {
+    pub variable: String,
+    pub offset: usize,
+    pub value_ty: Option<PhpType>,
 }
 
 pub struct LoopLabels {
@@ -288,14 +295,30 @@ impl Context {
         self.stack_offset
     }
 
-    pub fn ensure_local_ref_cell_flag(&mut self, name: &str) -> usize {
-        if let Some(offset) = self.local_ref_cell_flags.get(name) {
-            return *offset;
+    pub fn foreach_local_ref_cell_flag_key(name: &str, span: Span) -> String {
+        format!("{}:{}:{}", name, span.line, span.col)
+    }
+
+    pub fn ensure_local_ref_cell_flag(&mut self, key: String, name: &str) -> usize {
+        if let Some(flag) = self.local_ref_cell_flags.get(&key) {
+            return flag.offset;
         }
         let offset = self.alloc_hidden_slot(8);
-        self.local_ref_cell_flags
-            .insert(name.to_string(), offset);
+        self.local_ref_cell_flags.insert(
+            key,
+            LocalRefCellFlag {
+                variable: name.to_string(),
+                offset,
+                value_ty: None,
+            },
+        );
         offset
+    }
+
+    pub fn set_local_ref_cell_flag_type(&mut self, key: &str, value_ty: PhpType) {
+        if let Some(flag) = self.local_ref_cell_flags.get_mut(key) {
+            flag.value_ty = Some(value_ty);
+        }
     }
 
     pub fn set_var_ownership(&mut self, name: &str, ownership: HeapOwnership) {
