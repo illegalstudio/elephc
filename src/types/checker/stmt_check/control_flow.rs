@@ -69,15 +69,10 @@ impl Checker {
                         "foreach requires an array, iterable, or an object implementing Iterator/IteratorAggregate",
                     ));
                 }
-                if *value_by_ref
-                    && !matches!(
-                        arr_ty,
-                        PhpType::Array(_) | PhpType::AssocArray { .. }
-                    )
-                {
+                if *value_by_ref && matches!(arr_ty, PhpType::Object(_) | PhpType::Iterable) {
                     return Err(CompileError::new(
                         stmt.span,
-                        "by-reference foreach requires an array value",
+                        "by-reference foreach over Iterator/IteratorAggregate objects or iterable-typed values is not supported; use an array source or remove &",
                     ));
                 }
                 let errors = self.check_break_continue_target_body(body, env);

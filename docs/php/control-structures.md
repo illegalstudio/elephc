@@ -77,6 +77,10 @@ foreach ($nums as &$value) {
 
 Use `foreach ($arr as $key => &$value)` when both the key and a mutable
 element reference are needed. The key itself cannot be bound by reference.
+By-reference value binding is currently supported only for array sources;
+`foreach ($iterator as &$value)` over `Iterator`, `IteratorAggregate`, or
+`iterable`-typed values is rejected at compile time. Use an array source or
+iterate by value when consuming Traversable objects.
 
 `foreach` also accepts any object that implements the built-in `Iterator`
 interface (`current`, `key`, `next`, `valid`, `rewind`) or the

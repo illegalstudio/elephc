@@ -70,12 +70,15 @@ pub(super) fn emit_foreach_stmt(
             );
         }
         PhpType::Object(class_name) => {
+            debug_assert!(
+                !value_by_ref,
+                "type checker must reject by-reference foreach over Iterator/IteratorAggregate objects"
+            );
             iterator::emit_iterator_foreach(
                 class_name,
                 receiver_var,
                 key_var,
                 value_var,
-                value_by_ref,
                 body,
                 &loop_start,
                 &loop_end,

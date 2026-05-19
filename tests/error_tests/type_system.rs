@@ -42,7 +42,7 @@ fn test_error_string_offset_assignment_is_not_supported() {
 fn test_error_by_reference_foreach_rejects_iterable_type() {
     expect_error(
         "<?php function f(iterable $items) { foreach ($items as &$value) {} }",
-        "by-reference foreach requires an array value",
+        "by-reference foreach over Iterator/IteratorAggregate objects",
     );
 }
 
@@ -50,7 +50,46 @@ fn test_error_by_reference_foreach_rejects_iterable_type() {
 fn test_error_by_reference_foreach_rejects_iterator_object_type() {
     expect_error(
         "<?php function f(Iterator $items) { foreach ($items as &$value) {} }",
-        "by-reference foreach requires an array value",
+        "by-reference foreach over Iterator/IteratorAggregate objects",
+    );
+}
+
+#[test]
+fn test_error_by_reference_foreach_rejects_concrete_iterator_object() {
+    expect_error(
+        r#"<?php
+class Counter implements Iterator {
+    private int $i = 0;
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 3; }
+    public function current(): mixed { return $this->i; }
+    public function key(): mixed { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+foreach (new Counter() as &$value) {}
+"#,
+        "by-reference foreach over Iterator/IteratorAggregate objects",
+    );
+}
+
+#[test]
+fn test_error_by_reference_foreach_rejects_iterator_aggregate_object() {
+    expect_error(
+        r#"<?php
+class Counter implements Iterator {
+    private int $i = 0;
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 3; }
+    public function current(): mixed { return $this->i; }
+    public function key(): mixed { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+class Counters implements IteratorAggregate {
+    public function getIterator(): Traversable { return new Counter(); }
+}
+foreach (new Counters() as &$value) {}
+"#,
+        "by-reference foreach over Iterator/IteratorAggregate objects",
     );
 }
 
