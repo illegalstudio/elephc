@@ -31,6 +31,17 @@ pub fn emit(
     let (glue_ptr_reg, glue_len_reg) = abi::string_result_regs(emitter);
     abi::emit_push_reg_pair(emitter, glue_ptr_reg, glue_len_reg);               // preserve the glue string while evaluating the indexed array argument
     let arr_ty = emit_expr(&args[1], emitter, ctx, data);
+    if matches!(arr_ty, PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(emitter, "__rt_mixed_unbox");                      // unwrap a mixed array argument before passing its payload to implode
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("mov x0, x1");                              // use the unboxed indexed-array payload as the implode array argument
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rax, rdi");                            // use the unboxed indexed-array payload as the implode array argument
+            }
+        }
+    }
     // -- save array pointer, restore glue --
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the indexed array pointer while restoring the glue string for the runtime call
 

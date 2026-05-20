@@ -216,6 +216,26 @@ fn test_nested_by_ref_foreach_unset_inner_lifetime_reset() {
 }
 
 #[test]
+fn test_mixed_by_ref_foreach_cow_split_preserves_aliases() {
+    let out = compile_and_run(
+        "<?php
+        function mutate(mixed $x): mixed {
+            foreach ($x as &$v) {
+                $v .= '!';
+            }
+            unset($v);
+            return $x;
+        }
+        $a = ['a', 'b'];
+        $b = $a;
+        $c = mutate($b);
+        echo implode(',', $a) . '|' . implode(',', $b) . '|' . implode(',', $c);
+        ",
+    );
+    assert_eq!(out, "a,b|a,b|a!,b!");
+}
+
+#[test]
 fn test_foreach_over_iterable_iterator_object() {
     let out = compile_and_run(
         r#"<?php
