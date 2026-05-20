@@ -353,9 +353,15 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "spl_object_id" | "spl_object_hash" => Some(fixed(&["object"])),
 
         "ptr" => Some(fixed(&["value"])),
-        "ptr_is_null" | "ptr_get" | "ptr_read8" | "ptr_read32" => Some(fixed(&["pointer"])),
+        "ptr_is_null" | "ptr_get" | "ptr_read8" | "ptr_read16" | "ptr_read32" => {
+            Some(fixed(&["pointer"]))
+        }
+        "ptr_read_string" => Some(fixed(&["pointer", "length"])),
         "ptr_offset" => Some(fixed(&["pointer", "offset"])),
-        "ptr_set" | "ptr_write8" | "ptr_write32" => Some(fixed(&["pointer", "value"])),
+        "ptr_set" | "ptr_write8" | "ptr_write16" | "ptr_write32" => {
+            Some(fixed(&["pointer", "value"]))
+        }
+        "ptr_write_string" => Some(fixed(&["pointer", "string"])),
         "ptr_sizeof" => Some(fixed(&["type"])),
         "buffer_new" => Some(fixed(&["length"])),
         "buffer_len" | "buffer_free" => Some(fixed(&["buffer"])),
@@ -571,6 +577,26 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             name,
             &[PhpType::Str, PhpType::Callable, PhpType::Str],
             PhpType::Str,
+        )),
+        "ptr_read16" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Pointer(None)],
+            PhpType::Int,
+        )),
+        "ptr_write16" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Pointer(None), PhpType::Int],
+            PhpType::Void,
+        )),
+        "ptr_read_string" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Pointer(None), PhpType::Int],
+            PhpType::Str,
+        )),
+        "ptr_write_string" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Pointer(None), PhpType::Str],
+            PhpType::Int,
         )),
         _ => None,
     }

@@ -131,4 +131,7 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
     // and write the shared `_json_last_error` runtime symbol, so the
     // optimizer must treat them as side-effecting to avoid DCE-ing an
     // encode/decode call right before a json_last_error() observation.
+    // Pointer memory helpers such as ptr_read16(), ptr_write16(),
+    // ptr_read_string(), and ptr_write_string() are also intentionally absent:
+    // raw memory reads/writes and null/length fatals must remain observable.
 }

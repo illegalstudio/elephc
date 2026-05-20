@@ -32,7 +32,8 @@ pub(super) fn infer_function_call_type(
         | "base64_decode" | "bin2hex" | "hex2bin" | "md5" | "sha1" | "hash" | "gettype"
         | "strstr" | "readline" | "date"
         | "json_last_error_msg" | "php_uname" | "phpversion"
-        | "tempnam" | "getcwd" | "shell_exec" | "preg_replace_callback" => PhpType::Str,
+        | "tempnam" | "getcwd" | "shell_exec" | "preg_replace_callback"
+        | "ptr_read_string" => PhpType::Str,
         "json_decode" => PhpType::Mixed,
         "array_keys" => {
             let arr_ty = args
@@ -205,7 +206,9 @@ pub(super) fn infer_function_call_type(
                 PhpType::Pointer(None)
             }
         }
-        "ptr_get" | "ptr_read8" | "ptr_read32" | "ptr_sizeof" => PhpType::Int,
+        "ptr_get" | "ptr_read8" | "ptr_read16" | "ptr_read32" | "ptr_sizeof"
+        | "ptr_write_string" => PhpType::Int,
+        "ptr_set" | "ptr_write8" | "ptr_write16" | "ptr_write32" => PhpType::Void,
         "class_attribute_names" => PhpType::Array(Box::new(PhpType::Str)),
         "class_attribute_args" => PhpType::Array(Box::new(PhpType::Mixed)),
         "class_get_attributes" => PhpType::Array(Box::new(PhpType::Object(

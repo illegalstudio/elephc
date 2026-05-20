@@ -311,6 +311,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     pointers::emit_ptr_check_nonnull(emitter);
     pointers::emit_str_to_cstr(emitter);
     pointers::emit_cstr_to_str(emitter);
+    pointers::emit_ptr_read_string(emitter);
+    pointers::emit_ptr_write_string(emitter);
 
     // Fiber runtime functions (cooperative coroutines)
     fibers::emit_fiber_alloc_stack(emitter);

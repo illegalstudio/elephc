@@ -249,6 +249,8 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     pointers::emit_ptr_check_nonnull(emitter);
     pointers::emit_str_to_cstr(emitter);
     pointers::emit_cstr_to_str(emitter);
+    pointers::emit_ptr_read_string(emitter);
+    pointers::emit_ptr_write_string(emitter);
     exceptions::emit_exception_cleanup_frames(emitter);
     exceptions::emit_dynamic_instanceof(emitter);
     exceptions::emit_exception_matches(emitter);
@@ -444,6 +446,8 @@ mod tests {
         assert!(asm.contains("__rt_ptr_check_nonnull:\n"));
         assert!(asm.contains("__rt_str_to_cstr:\n"));
         assert!(asm.contains("__rt_cstr_to_str:\n"));
+        assert!(asm.contains("__rt_ptr_read_string:\n"));
+        assert!(asm.contains("__rt_ptr_write_string:\n"));
         assert!(asm.contains("__rt_fopen:\n"));
         assert!(asm.contains("__rt_fgets:\n"));
         assert!(asm.contains("__rt_feof:\n"));

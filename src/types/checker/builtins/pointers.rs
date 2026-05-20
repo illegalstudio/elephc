@@ -73,7 +73,7 @@ pub(super) fn check_builtin(
             }
             Ok(Some(ptr_ty))
         }
-        "ptr_get" | "ptr_read8" | "ptr_read32" => {
+        "ptr_get" | "ptr_read8" | "ptr_read16" | "ptr_read32" => {
             if args.len() != 1 {
                 return Err(CompileError::new(
                     span,
@@ -83,6 +83,24 @@ pub(super) fn check_builtin(
             let ptr_ty = checker.infer_type(&args[0], env)?;
             checker.ensure_pointer_type(&ptr_ty, span, &format!("{}()", name))?;
             Ok(Some(PhpType::Int))
+        }
+        "ptr_read_string" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    "ptr_read_string() takes exactly 2 arguments",
+                ));
+            }
+            let ptr_ty = checker.infer_type(&args[0], env)?;
+            checker.ensure_pointer_type(&ptr_ty, span, "ptr_read_string()")?;
+            let len_ty = checker.infer_type(&args[1], env)?;
+            if len_ty != PhpType::Int {
+                return Err(CompileError::new(
+                    span,
+                    "ptr_read_string() length must be int",
+                ));
+            }
+            Ok(Some(PhpType::Str))
         }
         "ptr_set" => {
             if args.len() != 2 {
@@ -94,7 +112,7 @@ pub(super) fn check_builtin(
             checker.ensure_word_pointer_value(&value_ty, span)?;
             Ok(Some(PhpType::Void))
         }
-        "ptr_write8" | "ptr_write32" => {
+        "ptr_write8" | "ptr_write16" | "ptr_write32" => {
             if args.len() != 2 {
                 return Err(CompileError::new(
                     span,
@@ -111,6 +129,24 @@ pub(super) fn check_builtin(
                 ));
             }
             Ok(Some(PhpType::Void))
+        }
+        "ptr_write_string" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    "ptr_write_string() takes exactly 2 arguments",
+                ));
+            }
+            let ptr_ty = checker.infer_type(&args[0], env)?;
+            checker.ensure_pointer_type(&ptr_ty, span, "ptr_write_string()")?;
+            let str_ty = checker.infer_type(&args[1], env)?;
+            if str_ty != PhpType::Str {
+                return Err(CompileError::new(
+                    span,
+                    "ptr_write_string() string argument must be string",
+                ));
+            }
+            Ok(Some(PhpType::Int))
         }
         "ptr_sizeof" => {
             if args.len() != 1 {
