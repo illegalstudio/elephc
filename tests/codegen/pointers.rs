@@ -300,6 +300,151 @@ free($buf);
 }
 
 #[test]
+fn test_ptr_read16_and_write16() {
+    let out = compile_and_run(
+        r#"<?php
+extern function malloc(int $size): ptr;
+extern function free(ptr $p): void;
+
+$buf = malloc(2);
+ptr_write16($buf, 4660);
+echo ptr_read16($buf);
+free($buf);
+"#,
+    );
+    assert_eq!(out, "4660");
+}
+
+#[test]
+fn test_ptr_read16_little_endian_from_malloc_block() {
+    let out = compile_and_run(
+        r#"<?php
+extern function malloc(int $size): ptr;
+extern function free(ptr $p): void;
+
+$buf = malloc(2);
+ptr_write8($buf, 0x34);
+ptr_write8(ptr_offset($buf, 1), 0x12);
+echo ptr_read16($buf);
+free($buf);
+"#,
+    );
+    assert_eq!(out, "4660");
+}
+
+#[test]
+fn test_ptr_write16_truncates_and_ptr_read16_zero_extends() {
+    let out = compile_and_run(
+        r#"<?php
+extern function malloc(int $size): ptr;
+extern function free(ptr $p): void;
+
+$buf = malloc(2);
+ptr_write16($buf, 0x1FFFF);
+echo ptr_read16($buf);
+free($buf);
+"#,
+    );
+    assert_eq!(out, "65535");
+}
+
+#[test]
+fn test_ptr_write_string_and_read_string_roundtrip() {
+    let out = compile_and_run(
+        r#"<?php
+extern function malloc(int $size): ptr;
+extern function free(ptr $p): void;
+
+$buf = malloc(16);
+$written = ptr_write_string($buf, "GET /");
+$s = ptr_read_string($buf, $written);
+echo $written . ":" . $s;
+free($buf);
+"#,
+    );
+    assert_eq!(out, "5:GET /");
+}
+
+#[test]
+fn test_ptr_read_string_from_malloc_block() {
+    let out = compile_and_run(
+        r#"<?php
+extern function malloc(int $size): ptr;
+extern function free(ptr $p): void;
+
+$buf = malloc(4);
+ptr_write8($buf, 72);
+ptr_write8(ptr_offset($buf, 1), 84);
+ptr_write8(ptr_offset($buf, 2), 84);
+ptr_write8(ptr_offset($buf, 3), 80);
+echo ptr_read_string($buf, 4);
+free($buf);
+"#,
+    );
+    assert_eq!(out, "HTTP");
+}
+
+#[test]
+fn test_ptr_read_string_zero_length() {
+    let out = compile_and_run(
+        r#"<?php
+extern function malloc(int $size): ptr;
+extern function free(ptr $p): void;
+
+$buf = malloc(1);
+echo strlen(ptr_read_string($buf, 0));
+free($buf);
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_ptr_string_copy_preserves_internal_null_byte() {
+    let out = compile_and_run(
+        r#"<?php
+extern function malloc(int $size): ptr;
+extern function free(ptr $p): void;
+
+$buf = malloc(3);
+ptr_write_string($buf, "A\0B");
+$s = ptr_read_string($buf, 3);
+echo strlen($s) . ":" . ord($s[1]) . ":" . ord($s[2]);
+free($buf);
+"#,
+    );
+    assert_eq!(out, "3:0:66");
+}
+
+#[test]
+fn test_function_exists_recognizes_new_pointer_builtins_case_insensitively() {
+    let out = compile_and_run(
+        r#"<?php
+echo function_exists("PTR_READ16") ? "1" : "0";
+echo function_exists("ptr_write16") ? "1" : "0";
+echo function_exists("ptr_read_string") ? "1" : "0";
+echo function_exists("PTR_WRITE_STRING") ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "1111");
+}
+
+#[test]
+fn test_ptr_read_string_negative_length_reports_runtime_error() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+extern function malloc(int $size): ptr;
+extern function free(ptr $p): void;
+
+$buf = malloc(1);
+echo ptr_read_string($buf, -1);
+free($buf);
+"#,
+    );
+    assert!(err.contains("Fatal error: ptr_read_string() length must be non-negative"));
+}
+
+#[test]
 fn test_ptr_null_dereference_reports_runtime_error() {
     let err = compile_and_run_expect_failure(
         r#"<?php

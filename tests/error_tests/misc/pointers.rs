@@ -86,6 +86,22 @@ fn test_error_ptr_read8_requires_pointer() {
 }
 
 #[test]
+fn test_error_ptr_read16_wrong_args() {
+    expect_error(
+        "<?php ptr_read16();",
+        "ptr_read16() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_ptr_read16_requires_pointer() {
+    expect_error(
+        "<?php ptr_read16(123);",
+        "ptr_read16() requires a pointer argument",
+    );
+}
+
+#[test]
 fn test_error_ptr_read32_requires_pointer() {
     expect_error(
         "<?php ptr_read32(123);",
@@ -118,10 +134,82 @@ fn test_error_ptr_write8_requires_int_value() {
 }
 
 #[test]
+fn test_error_ptr_write16_wrong_args() {
+    expect_error(
+        "<?php $p = ptr_null(); ptr_write16($p);",
+        "ptr_write16() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_ptr_write16_requires_pointer() {
+    expect_error(
+        "<?php ptr_write16(123, 1);",
+        "ptr_write16() requires a pointer argument",
+    );
+}
+
+#[test]
+fn test_error_ptr_write16_requires_int_value() {
+    expect_error(
+        "<?php $p = ptr_null(); ptr_write16($p, \"hello\");",
+        "ptr_write16() value must be int",
+    );
+}
+
+#[test]
 fn test_error_ptr_write32_requires_int_value() {
     expect_error(
         "<?php $p = ptr_null(); ptr_write32($p, \"hello\");",
         "ptr_write32() value must be int",
+    );
+}
+
+#[test]
+fn test_error_ptr_read_string_wrong_args() {
+    expect_error(
+        "<?php $p = ptr_null(); ptr_read_string($p);",
+        "ptr_read_string() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_ptr_read_string_requires_pointer() {
+    expect_error(
+        "<?php ptr_read_string(123, 4);",
+        "ptr_read_string() requires a pointer argument",
+    );
+}
+
+#[test]
+fn test_error_ptr_read_string_requires_int_length() {
+    expect_error(
+        "<?php $p = ptr_null(); ptr_read_string($p, \"4\");",
+        "ptr_read_string() length must be int",
+    );
+}
+
+#[test]
+fn test_error_ptr_write_string_wrong_args() {
+    expect_error(
+        "<?php $p = ptr_null(); ptr_write_string($p);",
+        "ptr_write_string() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_ptr_write_string_requires_pointer() {
+    expect_error(
+        "<?php ptr_write_string(123, \"hi\");",
+        "ptr_write_string() requires a pointer argument",
+    );
+}
+
+#[test]
+fn test_error_ptr_write_string_requires_string_value() {
+    expect_error(
+        "<?php $p = ptr_null(); ptr_write_string($p, 123);",
+        "ptr_write_string() string argument must be string",
     );
 }
 

@@ -92,7 +92,7 @@ fn test_parse_ptr_cast() {
 
 #[test]
 fn test_parse_ptr_builtins_as_function_calls() {
-    let stmts = parse_source("<?php ptr_null(); ptr($x); ptr_is_null($p); ptr_get($p); ptr_set($p, 1); ptr_offset($p, 8); ptr_sizeof(\"int\");");
+    let stmts = parse_source("<?php ptr_null(); ptr($x); ptr_is_null($p); ptr_get($p); ptr_set($p, 1); ptr_offset($p, 8); ptr_sizeof(\"int\"); ptr_read16($p); ptr_write16($p, 1); ptr_read_string($p, 4); ptr_write_string($p, \"hi\");");
     // All should parse as FunctionCall
     for stmt in &stmts {
         match &stmt.kind {
