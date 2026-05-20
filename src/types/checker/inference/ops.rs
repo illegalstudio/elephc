@@ -344,8 +344,16 @@ impl Checker {
                     &format!("callable ${}", var),
                 );
             }
+            let specialized_sig = self.specialize_callable_var_sig_from_args(
+                var,
+                sig,
+                args,
+                expr.span,
+                env,
+                &format!("callable ${}", var),
+            )?;
             return self.check_known_callable_call(
-                &sig,
+                &specialized_sig,
                 args,
                 expr.span,
                 env,
@@ -431,8 +439,16 @@ impl Checker {
                         )?;
                         return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
                     }
+                    let specialized_sig = self.specialize_callable_var_sig_from_args(
+                        var_name,
+                        sig,
+                        args,
+                        expr.span,
+                        env,
+                        &format!("callable ${}", var_name),
+                    )?;
                     let ret_ty = self.check_known_callable_call(
-                        &sig,
+                        &specialized_sig,
                         args,
                         expr.span,
                         env,
@@ -710,6 +726,47 @@ impl Checker {
             ));
         }
         self.check_known_callable_call(sig, args, span, env, callee_desc)
+    }
+
+    fn specialize_callable_var_sig_from_args(
+        &mut self,
+        var: &str,
+        mut sig: FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<FunctionSig, CompileError> {
+        let normalized_args = self.normalize_named_call_args(&sig, args, span, callee_desc, env)?;
+        let regular_param_count = crate::types::call_args::regular_param_count(&sig);
+        let mut changed = false;
+        let mut param_idx = 0usize;
+        for arg in &normalized_args {
+            let actual_ty = self.infer_type(arg, env)?;
+            if matches!(arg.kind, ExprKind::Spread(_)) {
+                continue;
+            }
+            if param_idx < regular_param_count
+                && !sig
+                    .declared_params
+                    .get(param_idx)
+                    .copied()
+                    .unwrap_or(false)
+                && !sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                && sig.params[param_idx].1 == PhpType::Mixed
+                && actual_ty != PhpType::Never
+            {
+                sig.params[param_idx].1 = actual_ty;
+                changed = true;
+            }
+            param_idx += 1;
+        }
+        if changed {
+            self.closure_return_types
+                .insert(var.to_string(), sig.return_type.clone());
+            self.callable_sigs.insert(var.to_string(), sig.clone());
+        }
+        Ok(sig)
     }
 
     fn is_nullable_callable_from_nullsafe_chain(callee: &Expr, callee_ty: &PhpType) -> bool {

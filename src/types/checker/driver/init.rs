@@ -48,6 +48,7 @@ impl Checker {
             constants,
             closure_return_types: HashMap::new(),
             callable_sigs: HashMap::new(),
+            callable_param_sigs: HashMap::new(),
             callable_captures: HashMap::new(),
             first_class_callable_targets: HashMap::new(),
             interfaces: HashMap::new(),

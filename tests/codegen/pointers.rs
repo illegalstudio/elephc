@@ -300,6 +300,58 @@ free($buf);
 }
 
 #[test]
+fn test_ptr_argument_to_user_method_preserves_pointer_value() {
+    let out = compile_and_run(
+        r#"<?php
+extern "System" {
+    function malloc(int $size): ptr;
+    function free(ptr $p): void;
+}
+class Writer {
+    public function run(): void {
+        $mem = malloc(64);
+        $this->write($mem, 999);
+        echo ptr_read32($mem);
+        free($mem);
+    }
+    public function write(ptr $p, int $value): void {
+        ptr_write32($p, $value);
+    }
+}
+$writer = new Writer();
+$writer->run();
+"#,
+    );
+    assert_eq!(out, "999");
+}
+
+#[test]
+fn test_ptr_offset_computed_local_before_write32() {
+    let out = compile_and_run(
+        r#"<?php
+extern "System" {
+    function malloc(int $size): ptr;
+    function free(ptr $p): void;
+    function memset(ptr $dest, int $byte, int $count): ptr;
+}
+
+function fill(ptr $p, int $slot): void {
+    $base = $slot * 8;
+    $cell = ptr_offset($p, $base);
+    ptr_write32($cell, 1);
+}
+
+$m = malloc(64);
+memset($m, 0, 64);
+fill($m, 0);
+echo ptr_read32($m);
+free($m);
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+#[test]
 fn test_ptr_read16_and_write16() {
     let out = compile_and_run(
         r#"<?php

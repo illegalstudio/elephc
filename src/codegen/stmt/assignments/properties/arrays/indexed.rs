@@ -15,6 +15,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::{coerce_result_to_type, emit_expr};
 use crate::codegen::platform::Arch;
+use crate::codegen::runtime_value_tag;
 use crate::codegen::stmt::helpers;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
@@ -87,6 +88,18 @@ pub(crate) fn emit_property_array_assign_stmt(
     };
     if target.is_reference {
         emitter.comment("WARNING: array assignment through reference properties is not supported yet");
+        return;
+    }
+    if let PhpType::AssocArray { value: elem_ty, .. } = &target.prop_ty {
+        emit_property_assoc_array_assign_stmt(
+            &target,
+            index,
+            value,
+            *elem_ty.clone(),
+            emitter,
+            ctx,
+            data,
+        );
         return;
     }
     let elem_ty = match &target.prop_ty {
@@ -180,6 +193,94 @@ pub(crate) fn emit_property_array_assign_stmt(
             emitter.instruction("add rsp, 48");                                 // drop the preserved object pointer, array pointer, and index after completing the property-backed indexed write
         }
     }
+}
+
+fn emit_property_assoc_array_assign_stmt(
+    target: &target::PropertyAssignTarget,
+    index: &Expr,
+    value: &Expr,
+    elem_ty: PhpType,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    if target.needs_deref {
+        abi::emit_call_label(emitter, "__rt_ptr_check_nonnull");
+        emitter.comment(&format!(
+            "assign into extern field {} at offset {}",
+            target.class_name, target.offset
+        ));
+    }
+
+    let object_reg = abi::symbol_scratch_reg(emitter);
+    let table_reg = abi::int_result_reg(emitter);
+    emitter.instruction(&format!("mov {}, {}", object_reg, table_reg));         // preserve the owning object pointer while the hash key and value are evaluated
+    abi::emit_load_from_address(emitter, table_reg, object_reg, target.offset); // load the property-backed hash table pointer
+    abi::emit_push_reg(emitter, object_reg);                                    // preserve the owning object pointer until the updated hash is ready
+    abi::emit_push_reg(emitter, table_reg);                                     // preserve the hash table pointer while computing the normalized key
+    crate::codegen::emit_normalized_hash_key(index, emitter, ctx, data);
+    let (key_ptr_reg, key_len_reg) = abi::string_result_regs(emitter);
+    abi::emit_push_reg_pair(emitter, key_ptr_reg, key_len_reg);                 // preserve the normalized key while evaluating the assigned value
+
+    let mut val_ty = emit_expr(value, emitter, ctx, data);
+    if matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
+        && !matches!(elem_ty, PhpType::Mixed | PhpType::Union(_))
+        && crate::codegen::expr::can_coerce_result_to_type(&val_ty, &elem_ty)
+    {
+        coerce_result_to_type(emitter, ctx, data, &val_ty, &elem_ty);
+        val_ty = elem_ty.clone();
+    }
+    let boxed_iterable =
+        crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut val_ty);
+    if !boxed_iterable {
+        helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
+    }
+
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            let (val_lo, val_hi) = match &val_ty {
+                PhpType::Int | PhpType::Bool => ("x0", "xzr"),
+                PhpType::Str => {
+                    abi::emit_call_label(emitter, "__rt_str_persist");          // persist the inserted string value before handing ownership to the hash table
+                    ("x1", "x2")
+                }
+                PhpType::Float => {
+                    emitter.instruction("fmov x9, d0");                         // move the float payload bits into an integer register for the hash runtime ABI
+                    ("x9", "xzr")
+                }
+                _ => ("x0", "xzr"),
+            };
+            emitter.instruction(&format!("mov x3, {}", val_lo));                // place the low payload word into the hash-set helper value register
+            emitter.instruction(&format!("mov x4, {}", val_hi));                // place the high payload word into the hash-set helper value register
+            emitter.instruction(&format!("mov x5, #{}", runtime_value_tag(&val_ty))); // materialize the runtime value tag for the inserted hash payload
+            abi::emit_pop_reg_pair(emitter, "x1", "x2");                       // restore the normalized key into the hash-set helper argument registers
+            abi::emit_pop_reg(emitter, "x0");                                   // restore the property-backed hash table pointer
+        }
+        Arch::X86_64 => {
+            match &val_ty {
+                PhpType::Str => {
+                    abi::emit_call_label(emitter, "__rt_str_persist");          // persist the inserted string value before handing ownership to the hash table
+                    emitter.instruction("mov rcx, rax");                        // place the owned string pointer into the SysV hash-set helper low-payload register
+                    emitter.instruction("mov r8, rdx");                         // place the owned string length into the SysV hash-set helper high-payload register
+                }
+                PhpType::Float => {
+                    emitter.instruction("movq rcx, xmm0");                      // move the float payload bits into the SysV hash-set helper low-payload register
+                    emitter.instruction("xor r8, r8");                          // float hash payloads only use the low payload word
+                }
+                _ => {
+                    emitter.instruction("mov rcx, rax");                        // place the scalar or pointer payload into the SysV hash-set helper low-payload register
+                    emitter.instruction("xor r8, r8");                          // scalar or pointer hash payloads only use the low payload word
+                }
+            }
+            abi::emit_load_int_immediate(emitter, "r9", runtime_value_tag(&val_ty) as i64); // materialize the runtime value tag for the inserted hash payload
+            abi::emit_pop_reg_pair(emitter, "rsi", "rdx");                     // restore the normalized key into the SysV hash-set helper registers
+            abi::emit_pop_reg(emitter, "rdi");                                  // restore the property-backed hash table pointer
+        }
+    }
+
+    abi::emit_call_label(emitter, "__rt_hash_set");                             // insert or update the property-backed associative-array entry
+    abi::emit_pop_reg(emitter, object_reg);                                     // restore the owning object pointer after hash insertion
+    abi::emit_store_to_address(emitter, table_reg, object_reg, target.offset);  // publish the possibly-reallocated hash pointer back to the property slot
 }
 
 fn emit_mixed_property_array_assign_stmt(

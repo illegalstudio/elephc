@@ -50,6 +50,7 @@ pub fn emit_function(
     sig: &FunctionSig,
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
+    callable_param_sigs: &HashMap<(String, String), FunctionSig>,
     function_variant_groups: &HashSet<String>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
@@ -78,9 +79,11 @@ pub fn emit_function(
         data,
         &label,
         &epilogue_label,
+        name,
         sig,
         body,
         all_functions,
+        callable_param_sigs,
         function_variant_groups,
         constants,
         all_global_var_names,
@@ -130,16 +133,19 @@ pub fn emit_closure(
     let epilogue_label = format!("{}_epilogue", label);
     let empty_globals = HashSet::new();
     let empty_statics = HashMap::new();
+    let empty_callable_param_sigs = HashMap::new();
     let closure_class_name = current_class.unwrap_or("");
     emit_function_with_label_and_class(
         emitter,
         data,
         label,
         &epilogue_label,
+        None,
         sig,
         hidden_params,
         body,
         all_functions,
+        &empty_callable_param_sigs,
         function_variant_groups,
         constants,
         &empty_globals,
@@ -163,6 +169,7 @@ pub fn emit_method(
     sig: &FunctionSig,
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
+    callable_param_sigs: &HashMap<(String, String), FunctionSig>,
     function_variant_groups: &HashSet<String>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     interfaces: &HashMap<String, InterfaceInfo>,
@@ -181,10 +188,12 @@ pub fn emit_method(
         data,
         label,
         epilogue_label,
+        Some(label),
         sig,
         &[],
         body,
         all_functions,
+        callable_param_sigs,
         function_variant_groups,
         constants,
         &empty_globals,
@@ -205,9 +214,11 @@ fn emit_function_with_label(
     data: &mut DataSection,
     label: &str,
     epilogue_label: &str,
+    callable_param_scope: &str,
     sig: &FunctionSig,
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
+    callable_param_sigs: &HashMap<(String, String), FunctionSig>,
     function_variant_groups: &HashSet<String>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
@@ -226,10 +237,12 @@ fn emit_function_with_label(
         data,
         label,
         epilogue_label,
+        Some(callable_param_scope),
         sig,
         &[],
         body,
         all_functions,
+        callable_param_sigs,
         function_variant_groups,
         constants,
         all_global_var_names,
@@ -268,16 +281,36 @@ fn allocate_incoming_param(ctx: &mut Context, pname: &str, pty: &PhpType, is_ref
     }
 }
 
+fn seed_callable_param_sigs(ctx: &mut Context, scope: Option<&str>, sig: &FunctionSig) {
+    let Some(scope) = scope else {
+        return;
+    };
+    for (pname, pty) in &sig.params {
+        if pty != &PhpType::Callable {
+            continue;
+        }
+        if let Some(callable_sig) = ctx
+            .callable_param_sigs
+            .get(&(scope.to_string(), pname.clone()))
+            .cloned()
+        {
+            ctx.closure_sigs.insert(pname.clone(), callable_sig);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit_function_with_label_and_class(
     emitter: &mut Emitter,
     data: &mut DataSection,
     label: &str,
     epilogue_label: &str,
+    callable_param_scope: Option<&str>,
     sig: &FunctionSig,
     hidden_params: &[(String, PhpType, bool)],
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
+    callable_param_sigs: &HashMap<(String, String), FunctionSig>,
     function_variant_groups: &HashSet<String>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
@@ -294,6 +327,7 @@ fn emit_function_with_label_and_class(
     ctx.return_label = Some(epilogue_label.to_string());
     ctx.return_type = sig.return_type.clone();
     ctx.functions = all_functions.clone();
+    ctx.callable_param_sigs = callable_param_sigs.clone();
     ctx.function_variant_groups = function_variant_groups.clone();
     ctx.constants = constants.clone();
     ctx.all_global_var_names = all_global_var_names.clone();
@@ -313,6 +347,7 @@ fn emit_function_with_label_and_class(
         let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
         allocate_incoming_param(&mut ctx, pname, pty, is_ref);
     }
+    seed_callable_param_sigs(&mut ctx, callable_param_scope, sig);
     for (pname, pty, is_ref) in hidden_params {
         allocate_incoming_param(&mut ctx, pname, pty, *is_ref);
         if *is_ref && matches!(pty, PhpType::Callable) {

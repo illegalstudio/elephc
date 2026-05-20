@@ -219,6 +219,34 @@ echo "after=" . $d->value;
 }
 
 #[test]
+fn test_fiber_capture_object_survives_terminated_slot_reset() {
+    let out = compile_and_run(
+        r#"<?php
+class Slot {
+    public $fiber;
+    public function init(): void {
+        $self = $this;
+        $this->fiber = new Fiber(function() use ($self): void {
+            echo "x";
+        });
+    }
+    public function reset(): void {
+        $this->fiber = null;
+    }
+}
+$s = new Slot();
+$s->init();
+$s->fiber->start();
+$s->reset();
+$s->init();
+$s->fiber->start();
+echo "|done";
+"#,
+    );
+    assert_eq!(out, "xx|done");
+}
+
+#[test]
 fn test_fiber_closure_capture_array() {
     let out = compile_and_run(
         r#"<?php
@@ -294,4 +322,3 @@ $outer->start();
     );
     assert_eq!(out, "inner=100");
 }
-

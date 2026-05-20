@@ -51,13 +51,7 @@ pub(super) fn emit_assoc_array_assign(
     }
     let boxed_iterable =
         crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut val_ty);
-    if !boxed_iterable
-        && matches!(target.elem_ty, PhpType::Mixed)
-        && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
-    {
-        super::super::super::super::emit_box_current_value_as_mixed(emitter, &val_ty);
-        val_ty = PhpType::Mixed;
-    } else if !boxed_iterable {
+    if !boxed_iterable {
         super::super::super::helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
     }
 

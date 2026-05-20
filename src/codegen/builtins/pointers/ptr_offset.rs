@@ -29,7 +29,8 @@ pub fn emit(
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the base pointer while the byte-offset expression is evaluated
 
     // -- evaluate byte offset --
-    emit_expr(&args[1], emitter, ctx, data);
+    let offset_ty = emit_expr(&args[1], emitter, ctx, data);
+    super::coerce_current_result_to_int_arg(&args[1], &offset_ty, emitter, ctx, data);
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x1, x0");                                  // copy the byte offset into a scratch integer register on AArch64

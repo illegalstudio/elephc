@@ -187,6 +187,7 @@ pub(crate) fn compile(config: CliConfig) {
         &ast,
         &check_result.global_env,
         &check_result.functions,
+        &check_result.callable_param_sigs,
         &check_result.interfaces,
         &check_result.classes,
         &check_result.enums,

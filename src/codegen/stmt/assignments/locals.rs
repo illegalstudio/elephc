@@ -270,6 +270,36 @@ pub(crate) fn emit_assign_stmt(
                 ctx.variable_fcc_label.remove(name);
             }
         }
+        ExprKind::ArrayAccess { array, .. } if ty == PhpType::Callable => {
+            if let ExprKind::Variable(src_name) = &array.kind {
+                if let Some(sig) = ctx.closure_sigs.get(src_name).cloned() {
+                    ctx.closure_sigs.insert(name.to_string(), sig);
+                } else {
+                    ctx.closure_sigs.remove(name);
+                }
+                if let Some(captures) = ctx.closure_captures.get(src_name).cloned() {
+                    ctx.closure_captures.insert(name.to_string(), captures);
+                } else {
+                    ctx.closure_captures.remove(name);
+                }
+                if let Some(target) = ctx.first_class_callable_targets.get(src_name).cloned() {
+                    ctx.first_class_callable_targets
+                        .insert(name.to_string(), target);
+                } else {
+                    ctx.first_class_callable_targets.remove(name);
+                }
+                if let Some(label) = ctx.variable_fcc_label.get(src_name).cloned() {
+                    ctx.variable_fcc_label.insert(name.to_string(), label);
+                } else {
+                    ctx.variable_fcc_label.remove(name);
+                }
+            } else {
+                ctx.closure_sigs.remove(name);
+                ctx.closure_captures.remove(name);
+                ctx.first_class_callable_targets.remove(name);
+                ctx.variable_fcc_label.remove(name);
+            }
+        }
         _ => {
             ctx.closure_sigs.remove(name);
             ctx.closure_captures.remove(name);

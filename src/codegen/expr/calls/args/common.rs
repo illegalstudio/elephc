@@ -251,7 +251,7 @@ fn should_release_owned_mixed_after_arg_coerce(
             ))
 }
 
-pub(super) fn release_preserved_mixed_after_arg_coercion(
+pub(crate) fn release_preserved_mixed_after_arg_coercion(
     emitter: &mut Emitter,
     target_ty: &PhpType,
 ) {

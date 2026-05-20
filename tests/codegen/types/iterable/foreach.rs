@@ -194,6 +194,87 @@ fn test_foreach_by_ref_over_mixed_assoc_array_updates_source() {
 }
 
 #[test]
+fn test_nested_by_ref_foreach_unset_inner_lifetime_reset() {
+    let out = compile_and_run(
+        "<?php
+        $a = [1, 2, 3];
+        foreach ($a as &$v) {
+            foreach ($a as &$inner) {
+                $inner += 10;
+                break;
+            }
+            unset($inner);
+            $v *= 2;
+        }
+        unset($v);
+        foreach ($a as $x) {
+            echo $x . ',';
+        }
+        ",
+    );
+    assert_eq!(out, "42,4,6,");
+}
+
+#[test]
+fn test_mixed_by_ref_foreach_cow_split_preserves_aliases() {
+    let out = compile_and_run(
+        "<?php
+        function mutate(mixed $x): mixed {
+            foreach ($x as &$v) {
+                $v .= '!';
+            }
+            unset($v);
+            return $x;
+        }
+        $a = ['a', 'b'];
+        $b = $a;
+        $c = mutate($b);
+        echo implode(',', $a) . '|' . implode(',', $b) . '|' . implode(',', $c);
+        ",
+    );
+    assert_eq!(out, "a,b|a,b|a!,b!");
+}
+
+#[test]
+fn test_by_ref_foreach_nested_json_decode_assoc_payloads() {
+    let out = compile_and_run(
+        r#"<?php
+        $data = json_decode('{"rows":[{"n":1},{"n":2}]}', true);
+        foreach ($data["rows"] as &$row) {
+            $row["n"] = $row["n"] + 100;
+        }
+        unset($row);
+        echo $data["rows"][0]["n"] . "|" . $data["rows"][1]["n"];
+        "#,
+    );
+    assert_eq!(out, "101|102");
+}
+
+#[test]
+fn test_mixed_foreach_fatal_preserves_prior_side_effects() {
+    let out = compile_and_run_capture(
+        "<?php
+        function side(): mixed {
+            echo 'S';
+            return 42;
+        }
+        $x = side();
+        foreach ($x as $v) {
+            echo $v;
+        }
+        ",
+    );
+    assert!(!out.success, "program unexpectedly succeeded");
+    assert_eq!(out.stdout, "S");
+    assert!(
+        out.stderr
+            .contains("Fatal error: foreach over iterable with unsupported kind"),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
 fn test_foreach_over_iterable_iterator_object() {
     let out = compile_and_run(
         r#"<?php
@@ -253,6 +334,32 @@ dump(new Values());
 "#,
     );
     assert_eq!(out, "012");
+}
+
+#[test]
+fn test_iterator_aggregate_get_iterator_side_effect_runs_once() {
+    let out = compile_and_run(
+        r#"<?php
+class It implements Iterator {
+    private int $i = 0;
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): mixed { return $this->i; }
+    public function key(): mixed { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+class Bag implements IteratorAggregate {
+    public function getIterator(): Iterator {
+        echo "G";
+        return new It();
+    }
+}
+foreach (new Bag() as $k => $v) {
+    echo $k . $v;
+}
+"#,
+    );
+    assert_eq!(out, "G0011");
 }
 
 #[test]

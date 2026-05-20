@@ -151,7 +151,7 @@ impl Checker {
     }
 }
 
-fn update_callable_assignment_metadata(
+pub(super) fn update_callable_assignment_metadata(
     checker: &mut Checker,
     name: &str,
     callable_source: &Expr,
@@ -189,6 +189,16 @@ fn update_callable_assignment_metadata(
                 } else {
                     checker.callable_captures.remove(name);
                 }
+            } else if let ExprKind::ArrayAccess { array, .. } = &callable_source.kind {
+                if let ExprKind::Variable(src_name) = &array.kind {
+                    if let Some(captures) = checker.callable_captures.get(src_name).cloned() {
+                        checker.callable_captures.insert(name.to_string(), captures);
+                    } else {
+                        checker.callable_captures.remove(name);
+                    }
+                } else {
+                    checker.callable_captures.remove(name);
+                }
             } else {
                 checker.callable_captures.remove(name);
             }
@@ -201,6 +211,20 @@ fn update_callable_assignment_metadata(
                     checker
                         .first_class_callable_targets
                         .insert(name.to_string(), target);
+                } else {
+                    checker.first_class_callable_targets.remove(name);
+                }
+            } else if let ExprKind::ArrayAccess { array, .. } = &callable_source.kind {
+                if let ExprKind::Variable(src_name) = &array.kind {
+                    if let Some(target) =
+                        checker.first_class_callable_targets.get(src_name).cloned()
+                    {
+                        checker
+                            .first_class_callable_targets
+                            .insert(name.to_string(), target);
+                    } else {
+                        checker.first_class_callable_targets.remove(name);
+                    }
                 } else {
                     checker.first_class_callable_targets.remove(name);
                 }

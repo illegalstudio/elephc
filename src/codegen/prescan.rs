@@ -103,40 +103,50 @@ pub(super) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
-    for stmt in program {
+    collect_constant_decls(program, &mut constants);
+    constants
+}
+
+fn collect_constant_decls(
+    stmts: &[Stmt],
+    constants: &mut HashMap<String, (ExprKind, PhpType)>,
+) {
+    for stmt in stmts {
         match &stmt.kind {
             StmtKind::ConstDecl { name, value } => {
-                let ty = match &value.kind {
-                    ExprKind::IntLiteral(_) => PhpType::Int,
-                    ExprKind::FloatLiteral(_) => PhpType::Float,
-                    ExprKind::StringLiteral(_) => PhpType::Str,
-                    ExprKind::BoolLiteral(_) => PhpType::Bool,
-                    _ => PhpType::Int,
-                };
-                constants.entry(name.clone()).or_insert((value.kind.clone(), ty));
+                constants
+                    .entry(name.clone())
+                    .or_insert((value.kind.clone(), constant_expr_type(&value.kind)));
             }
             StmtKind::ExprStmt(expr) => {
                 if let ExprKind::FunctionCall { name, args } = &expr.kind {
                     if name.as_str() == "define" && args.len() == 2 {
                         if let ExprKind::StringLiteral(const_name) = &args[0].kind {
-                            let ty = match &args[1].kind {
-                                ExprKind::IntLiteral(_) => PhpType::Int,
-                                ExprKind::FloatLiteral(_) => PhpType::Float,
-                                ExprKind::StringLiteral(_) => PhpType::Str,
-                                ExprKind::BoolLiteral(_) => PhpType::Bool,
-                                _ => PhpType::Int,
-                            };
-                            constants
-                                .entry(const_name.clone())
-                                .or_insert((args[1].kind.clone(), ty));
+                            constants.entry(const_name.clone()).or_insert((
+                                args[1].kind.clone(),
+                                constant_expr_type(&args[1].kind),
+                            ));
                         }
                     }
                 }
             }
+            StmtKind::IncludeOnceGuard { body, .. } | StmtKind::Synthetic(body) => {
+                collect_constant_decls(body, constants);
+            }
             _ => {}
         }
     }
-    constants
+}
+
+fn constant_expr_type(kind: &ExprKind) -> PhpType {
+    match kind {
+        ExprKind::IntLiteral(_) => PhpType::Int,
+        ExprKind::FloatLiteral(_) => PhpType::Float,
+        ExprKind::StringLiteral(_) => PhpType::Str,
+        ExprKind::BoolLiteral(_) => PhpType::Bool,
+        ExprKind::Null => PhpType::Void,
+        _ => PhpType::Int,
+    }
 }
 
 pub(super) fn collect_global_var_names(program: &Program) -> HashSet<String> {

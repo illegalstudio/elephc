@@ -24,6 +24,7 @@ use super::{
 pub struct CheckResult {
     pub global_env: TypeEnv,
     pub functions: HashMap<String, FunctionSig>,
+    pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
     pub interfaces: HashMap<String, InterfaceInfo>,
     pub classes: HashMap<String, ClassInfo>,
     pub enums: HashMap<String, EnumInfo>,

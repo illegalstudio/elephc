@@ -24,9 +24,11 @@ mod ptr_write32;
 mod ptr_write8;
 mod ptr_write_string;
 
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::expr::{can_coerce_result_to_type, coerce_result_to_type};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -55,4 +57,31 @@ pub fn emit(
         "ptr_sizeof" => ptr_sizeof::emit(name, args, emitter, ctx, data),
         _ => None,
     }
+}
+
+pub(super) fn coerce_current_result_to_int_arg(
+    arg: &Expr,
+    source_ty: &PhpType,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    if !can_coerce_result_to_type(source_ty, &PhpType::Int) {
+        return source_ty.clone();
+    }
+    if crate::codegen::stmt::helpers::should_release_owned_mixed_after_coerce(
+        arg,
+        source_ty,
+        &PhpType::Int,
+    ) {
+        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));              // preserve the boxed Mixed value so it can be released after integer coercion
+        coerce_result_to_type(emitter, ctx, data, source_ty, &PhpType::Int);
+        crate::codegen::stmt::helpers::release_preserved_mixed_after_coercion(
+            emitter,
+            &PhpType::Int,
+        );
+    } else {
+        coerce_result_to_type(emitter, ctx, data, source_ty, &PhpType::Int);
+    }
+    PhpType::Int
 }

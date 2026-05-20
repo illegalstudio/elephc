@@ -159,6 +159,23 @@ foreach (gen() as $v) {
 }
 
 #[test]
+fn test_generator_foreach_can_reuse_receiver_variable() {
+    let out = compile_and_run(
+        r#"<?php
+function gen() {
+    yield 10;
+    yield 20;
+}
+$g = gen();
+foreach ($g as $g) {
+    echo $g . ",";
+}
+"#,
+    );
+    assert_eq!(out, "10,20,");
+}
+
+#[test]
 fn test_generator_yields_with_explicit_int_keys() {
     let out = compile_and_run(
         r#"<?php

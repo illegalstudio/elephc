@@ -16,6 +16,7 @@ use crate::types::PhpType;
 use super::super::super::{
     restore_concat_offset_after_nested_call, save_concat_offset_before_nested_call,
 };
+use super::vtable::generator_runtime_label_for;
 
 pub(crate) fn emit_dispatch_interface_method(
     interface_name: &str,
@@ -50,6 +51,11 @@ pub(crate) fn emit_dispatch_interface_method(
     let missing = ctx.next_label("interface_dispatch_missing");
 
     save_concat_offset_before_nested_call(emitter, ctx);
+    if interface_name == "Iterator" {
+        if let Some(rt_label) = generator_runtime_label_for(method) {
+            emit_generator_interface_fast_path(rt_label, &done, emitter, ctx);
+        }
+    }
     match emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => {
             emitter.instruction("ldr x10, [x0]");                               // load the receiver object's runtime class id without consuming x0
@@ -118,4 +124,33 @@ pub(crate) fn emit_dispatch_interface_method(
     restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
 
     ret_ty
+}
+
+fn emit_generator_interface_fast_path(
+    rt_label: &str,
+    done: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    let not_generator = ctx.next_label("interface_dispatch_not_generator");
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            emitter.instruction("ldr x10, [x0]");                               // load the receiver class id before checking for the built-in Generator
+            abi::emit_load_symbol_to_reg(emitter, "x11", "_generator_class_id", 0);
+            emitter.instruction("cmp x10, x11");                                // compare the receiver class id with the built-in Generator class id
+            emitter.instruction(&format!("b.ne {}", not_generator));            // fall back to interface dispatch for non-Generator iterators
+            abi::emit_call_label(emitter, rt_label);                            // call the Generator runtime helper instead of the synthetic stub
+            emitter.instruction(&format!("b {}", done));                        // skip the generic interface-vtable dispatch path
+            emitter.label(&not_generator);
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            emitter.instruction("mov r10, QWORD PTR [rdi]");                    // load the receiver class id before checking for the built-in Generator
+            abi::emit_load_symbol_to_reg(emitter, "r11", "_generator_class_id", 0);
+            emitter.instruction("cmp r10, r11");                                // compare the receiver class id with the built-in Generator class id
+            emitter.instruction(&format!("jne {}", not_generator));             // fall back to interface dispatch for non-Generator iterators
+            abi::emit_call_label(emitter, rt_label);                            // call the Generator runtime helper instead of the synthetic stub
+            emitter.instruction(&format!("jmp {}", done));                      // skip the generic interface-vtable dispatch path
+            emitter.label(&not_generator);
+        }
+    }
 }

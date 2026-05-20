@@ -12,8 +12,8 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::names::function_symbol;
-use crate::parser::ast::Expr;
-use crate::types::PhpType;
+use crate::parser::ast::{Expr, ExprKind};
+use crate::types::{FunctionSig, PhpType};
 
 use super::args;
 
@@ -33,6 +33,9 @@ pub(super) fn emit_function_call(
     }
 
     let sig = ctx.functions.get(name).cloned();
+    if let Some(sig) = sig.as_ref() {
+        specialize_callable_arguments(name, args_exprs, sig, ctx);
+    }
     let emitted_args = args::emit_pushed_call_args(
         args_exprs,
         sig.as_ref(),
@@ -71,4 +74,77 @@ pub(super) fn emit_function_call(
     }
 
     ret_ty
+}
+
+fn specialize_callable_arguments(
+    function_name: &str,
+    args_exprs: &[Expr],
+    sig: &FunctionSig,
+    ctx: &mut Context,
+) {
+    let mut positional_idx = 0usize;
+    for arg in args_exprs {
+        let (param_idx, value) = match &arg.kind {
+            ExprKind::NamedArg { name, value } => {
+                let Some(param_idx) = sig
+                    .params
+                    .iter()
+                    .position(|(param_name, _)| param_name == name)
+                else {
+                    continue;
+                };
+                (param_idx, value.as_ref())
+            }
+            ExprKind::Spread(_) => {
+                continue;
+            }
+            _ => {
+                let param_idx = positional_idx;
+                positional_idx += 1;
+                (param_idx, arg)
+            }
+        };
+        let Some((param_name, param_ty)) = sig.params.get(param_idx) else {
+            continue;
+        };
+        if param_ty != &PhpType::Callable {
+            continue;
+        }
+        if let Some(callable_sig) = ctx
+            .callable_param_sigs
+            .get(&(function_name.to_string(), param_name.clone()))
+            .cloned()
+        {
+            specialize_callable_expr(value, &callable_sig, ctx);
+        }
+    }
+}
+
+fn specialize_callable_expr(expr: &Expr, callable_sig: &FunctionSig, ctx: &mut Context) {
+    match &expr.kind {
+        ExprKind::Variable(name) => specialize_callable_var(name, callable_sig, ctx),
+        ExprKind::ArrayAccess { array, .. } => {
+            if let ExprKind::Variable(name) = &array.kind {
+                specialize_callable_var(name, callable_sig, ctx);
+            }
+        }
+        ExprKind::Assignment { value, .. } => specialize_callable_expr(value, callable_sig, ctx),
+        _ => {}
+    }
+}
+
+fn specialize_callable_var(name: &str, callable_sig: &FunctionSig, ctx: &mut Context) {
+    let previous_sig = ctx
+        .closure_sigs
+        .insert(name.to_string(), callable_sig.clone());
+    let Some(previous_sig) = previous_sig else {
+        return;
+    };
+    let captures = ctx.closure_captures.get(name).cloned().unwrap_or_default();
+    for deferred in ctx.deferred_closures.iter_mut().rev() {
+        if deferred.sig.params == previous_sig.params && deferred.captures == captures {
+            deferred.sig = callable_sig.clone();
+            break;
+        }
+    }
 }

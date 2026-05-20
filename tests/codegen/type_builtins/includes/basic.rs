@@ -101,6 +101,31 @@ echo double(5);
 }
 
 #[test]
+fn test_require_once_const_visible_inside_included_function() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+require_once 'lib.php';
+echo LIB_CONST;
+echo from_func();
+"#,
+            ),
+            (
+                "lib.php",
+                r#"<?php
+const LIB_CONST = 42;
+function from_func() { return LIB_CONST; }
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "4242");
+}
+
+#[test]
 fn test_include_once_skipped_branch_does_not_claim_file() {
     let out = compile_and_run_files(
         &[
@@ -266,4 +291,3 @@ include_once 'piece.php';
     );
     assert_eq!(out, "piece");
 }
-

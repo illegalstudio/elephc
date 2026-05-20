@@ -48,6 +48,26 @@ free($buf);
 }
 
 #[test]
+fn test_ffi_memset_accepts_arithmetic_count_argument() {
+    let out = compile_and_run(
+        r#"<?php
+extern "System" {
+    function malloc(int $size): ptr;
+    function free(ptr $p): void;
+    function memset(ptr $dest, int $byte, int $count): ptr;
+}
+
+$buf = malloc(4);
+$active = 1;
+memset($buf, 65, $active + 1);
+echo ptr_read8($buf) . "," . ptr_read8(ptr_offset($buf, 1)) . "," . ptr_read8(ptr_offset($buf, 2));
+free($buf);
+"#,
+    );
+    assert_eq!(out, "65,65,0");
+}
+
+#[test]
 fn test_ffi_memcpy_copies_raw_buffer() {
     let out = compile_and_run(
         r#"<?php

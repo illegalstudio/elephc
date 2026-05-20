@@ -134,6 +134,8 @@ pub struct Context {
     pub all_static_vars: HashMap<(String, String), PhpType>,
     /// Closure signatures keyed by variable name, for resolving defaults at call sites.
     pub closure_sigs: HashMap<String, FunctionSig>,
+    /// Callable signatures inferred for user-function callable parameters.
+    pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
     /// Captured variables per closure variable name: maps $fn -> [(capture_name, type, by_ref)].
     pub closure_captures: HashMap<String, Vec<(String, PhpType, bool)>>,
     /// First-class callable target stored in a variable, mirroring the Checker's
@@ -238,6 +240,7 @@ impl Context {
             all_global_var_names: HashSet::new(),
             all_static_vars: HashMap::new(),
             closure_sigs: HashMap::new(),
+            callable_param_sigs: HashMap::new(),
             closure_captures: HashMap::new(),
             first_class_callable_targets: HashMap::new(),
             variable_fcc_label: HashMap::new(),

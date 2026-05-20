@@ -65,6 +65,31 @@ echo $result;
     assert_eq!(out, "test");
 }
 
+#[test]
+fn test_closure_via_array_element_local_preserves_signature() {
+    let out = compile_and_run(
+        r#"<?php
+$arr = [];
+$arr[] = function($n) { return "v" . $n; };
+$f = $arr[0];
+echo $f("2");
+"#,
+    );
+    assert_eq!(out, "v2");
+}
+
+#[test]
+fn test_closure_via_function_parameter_preserves_signature() {
+    let out = compile_and_run(
+        r#"<?php
+$ok = function($n) { return "v" . $n; };
+function call_it($fn) { return $fn("4"); }
+echo call_it($ok);
+"#,
+    );
+    assert_eq!(out, "v4");
+}
+
 // --- First-class callable variable short-circuit (PHP 8.5 pipe opt) ---
 
 #[test]
@@ -345,6 +370,33 @@ echo $cb(9);
 "#,
     );
     assert_eq!(out, "18");
+}
+
+#[test]
+fn test_closure_fetched_from_object_property_through_method_runs() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public $cb;
+
+    public function __construct($cb) {
+        $this->cb = $cb;
+    }
+
+    public function fetch() {
+        return $this->cb;
+    }
+}
+
+function invoke($cb, $x) {
+    return $cb($x);
+}
+
+$b = new Box(function($x) { return $x + 7; });
+echo invoke($b->fetch(), 5);
+"#,
+    );
+    assert_eq!(out, "12");
 }
 
 #[test]

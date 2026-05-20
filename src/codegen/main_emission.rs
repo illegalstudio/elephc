@@ -35,6 +35,7 @@ pub(super) fn emit_main_and_finalize(
     program: &Program,
     global_env: &TypeEnv,
     functions: &HashMap<String, FunctionSig>,
+    callable_param_sigs: &HashMap<(String, String), FunctionSig>,
     function_variant_groups: &HashSet<String>,
     interfaces: &HashMap<String, InterfaceInfo>,
     traits: &HashSet<String>,
@@ -53,6 +54,7 @@ pub(super) fn emit_main_and_finalize(
 ) -> String {
     let mut ctx = build_main_context(
         functions,
+        callable_param_sigs,
         function_variant_groups,
         interfaces,
         traits,
@@ -121,6 +123,7 @@ pub(super) fn emit_main_and_finalize(
 #[allow(clippy::too_many_arguments)]
 fn build_main_context(
     functions: &HashMap<String, FunctionSig>,
+    callable_param_sigs: &HashMap<(String, String), FunctionSig>,
     function_variant_groups: &HashSet<String>,
     interfaces: &HashMap<String, InterfaceInfo>,
     traits: &HashSet<String>,
@@ -136,6 +139,7 @@ fn build_main_context(
 ) -> Context {
     let mut ctx = Context::new();
     ctx.functions = functions.clone();
+    ctx.callable_param_sigs = callable_param_sigs.clone();
     ctx.function_variant_groups = function_variant_groups.clone();
     ctx.constants = global_constants.clone();
     ctx.in_main = true;

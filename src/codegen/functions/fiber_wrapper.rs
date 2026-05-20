@@ -91,8 +91,29 @@ fn spill_wrapper_args(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper, arg
                 let src_offset = runtime::FIBER_START_ARGS_OFFSET + (int_capture_slot as i32) * 8;
                 emitter.instruction(&format!("ldr x9, [x19, #{}]", src_offset)); // load the captured scalar/pointer payload from the Fiber int slot file
                 emitter.instruction(&format!("str x9, [sp, #{}]", slot_offset)); // spill the captured payload for the final closure call
+                retain_refcounted_capture_for_closure_frame(emitter, ty, "x9");
                 int_capture_slot += 1;
             }
+        }
+    }
+}
+
+fn retain_refcounted_capture_for_closure_frame(
+    emitter: &mut Emitter,
+    ty: &PhpType,
+    value_reg: &str,
+) {
+    if !ty.is_refcounted() {
+        return;
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov x0, {}", value_reg));             // pass the captured heap value to the retain helper
+            emitter.instruction("bl __rt_incref");                              // retain it for the closure frame's normal parameter cleanup
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rax, {}", value_reg));            // pass the captured heap value to the retain helper
+            emitter.instruction("call __rt_incref");                            // retain it for the closure frame's normal parameter cleanup
         }
     }
 }
@@ -271,6 +292,7 @@ fn spill_wrapper_args_x86_64(
                 let src_offset = runtime::FIBER_START_ARGS_OFFSET + (int_capture_slot as i32) * 8;
                 emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", src_offset)); // load the captured scalar/pointer payload from the Fiber int slot file
                 abi::store_at_offset(emitter, "r10", slot_offset);
+                retain_refcounted_capture_for_closure_frame(emitter, ty, "r10");
                 int_capture_slot += 1;
             }
         }

@@ -10,12 +10,13 @@
 
 use crate::codegen::abi;
 use crate::codegen::context::Context;
+use crate::codegen::context::HeapOwnership;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
+use crate::codegen::expr::{can_coerce_result_to_type, coerce_result_to_type, emit_expr};
 use crate::codegen::platform::Arch;
 use crate::names::function_symbol;
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{FunctionSig, PhpType};
 
@@ -213,7 +214,7 @@ fn preevaluate_extern_args(
             .get(i)
             .map(|(_, t)| t.clone())
             .unwrap_or(PhpType::Int);
-        let actual_ty = if param_ty == PhpType::Callable {
+        let mut actual_ty = if param_ty == PhpType::Callable {
             match &arg.kind {
                 ExprKind::StringLiteral(func_name) => {
                     let label = function_symbol(func_name);
@@ -227,12 +228,44 @@ fn preevaluate_extern_args(
         } else {
             emit_expr(arg, emitter, ctx, data)
         };
+        if can_coerce_result_to_type(&actual_ty, &param_ty) {
+            if should_release_owned_mixed_after_extern_arg_coerce(arg, &actual_ty, &param_ty) {
+                abi::emit_push_reg(emitter, abi::int_result_reg(emitter));      // preserve the owned Mixed argument while coercing it to the extern parameter type
+                coerce_result_to_type(emitter, ctx, data, &actual_ty, &param_ty);
+                crate::codegen::expr::calls::args::release_preserved_mixed_after_arg_coercion(
+                    emitter,
+                    &param_ty,
+                );
+            } else {
+                coerce_result_to_type(emitter, ctx, data, &actual_ty, &param_ty);
+            }
+            actual_ty = param_ty.codegen_repr();
+        }
         if !matches!(actual_ty, PhpType::Void | PhpType::Never) {
             abi::emit_push_result_value(emitter, &actual_ty);
         }
         source_temp_types.push(actual_ty);
     }
     source_temp_types
+}
+
+fn should_release_owned_mixed_after_extern_arg_coerce(
+    arg: &Expr,
+    source_ty: &PhpType,
+    target_ty: &PhpType,
+) -> bool {
+    let source_repr = source_ty.codegen_repr();
+    let target_repr = target_ty.codegen_repr();
+    matches!(source_repr, PhpType::Mixed | PhpType::Union(_))
+        && !matches!(target_repr, PhpType::Mixed | PhpType::Union(_))
+        && (crate::codegen::expr::expr_result_heap_ownership(arg) == HeapOwnership::Owned
+            || matches!(
+                arg.kind,
+                ExprKind::BinaryOp {
+                    op: BinOp::Add | BinOp::Sub | BinOp::Mul,
+                    ..
+                }
+            ))
 }
 
 fn temp_slot_size(ty: &PhpType) -> usize {

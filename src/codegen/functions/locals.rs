@@ -11,7 +11,8 @@
 use crate::codegen::context::{Context, HeapOwnership};
 use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, StmtKind};
 use crate::types::{
-    merge_array_key_types, normalized_array_key_type, FunctionSig, PhpType,
+    merge_array_key_types, normalized_array_key_type, static_array_key_forces_hash_storage,
+    FunctionSig, PhpType,
 };
 use super::types::{codegen_declared_type, codegen_static_type, infer_local_type};
 
@@ -272,7 +273,11 @@ fn refine_local_array_type_for_keyed_write(
 
     let index_ty = infer_local_type(index, sig, Some(ctx));
     let normalized_key_ty = normalized_array_key_type(index, index_ty);
-    if matches!(normalized_key_ty, PhpType::Int) {
+    let force_hash_for_empty_array = matches!(existing_elem_ty.as_ref(), PhpType::Never)
+        && static_array_key_forces_hash_storage(index);
+    if matches!(normalized_key_ty, PhpType::Int)
+        && !force_hash_for_empty_array
+    {
         return;
     }
 

@@ -40,14 +40,20 @@ impl Checker {
         errors: &[CompileError],
     ) -> bool {
         !errors.is_empty()
-            && Self::stmt_contains_method_call(stmt)
-            && errors.iter().all(|error| {
-                matches!(
-                    error.message.as_str(),
-                    "Cannot index non-array"
-                        | "Property access requires an object or typed pointer"
-                )
-            })
+            && (Self::stmt_contains_method_call(stmt)
+                || Self::stmt_contains_property_access(stmt))
+            && errors
+                .iter()
+                .all(|error| Self::is_suppressible_initial_top_level_error(&error.message))
+    }
+
+    fn is_suppressible_initial_top_level_error(message: &str) -> bool {
+        matches!(
+            message,
+            "Array index must be integer"
+                | "Cannot index non-array"
+                | "Property access requires an object or typed pointer"
+        ) || (message.starts_with("Cannot call $") && message.contains("not a callable"))
     }
 
     fn seed_global_env(&self) -> TypeEnv {
@@ -231,6 +237,176 @@ impl Checker {
             ExprKind::MagicConstant(_) => {
                 unreachable!("MagicConstant must be lowered before type checking")
             }
+        }
+    }
+
+    fn stmt_contains_property_access(stmt: &Stmt) -> bool {
+        match &stmt.kind {
+            StmtKind::Synthetic(stmts) => stmts.iter().any(Self::stmt_contains_property_access),
+            StmtKind::ExprStmt(expr)
+            | StmtKind::Echo(expr)
+            | StmtKind::Return(Some(expr)) => Self::expr_contains_property_access(expr),
+            StmtKind::Assign { value, .. }
+            | StmtKind::TypedAssign { value, .. }
+            | StmtKind::ConstDecl { value, .. }
+            | StmtKind::ListUnpack { value, .. } => Self::expr_contains_property_access(value),
+            StmtKind::ArrayAssign { index, value, .. } => {
+                Self::expr_contains_property_access(index)
+                    || Self::expr_contains_property_access(value)
+            }
+            StmtKind::NestedArrayAssign { target, value } => {
+                Self::expr_contains_property_access(target)
+                    || Self::expr_contains_property_access(value)
+            }
+            StmtKind::ArrayPush { value, .. } => Self::expr_contains_property_access(value),
+            StmtKind::StaticPropertyAssign { value, .. }
+            | StmtKind::StaticPropertyArrayPush { value, .. } => {
+                Self::expr_contains_property_access(value)
+            }
+            StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+                Self::expr_contains_property_access(index)
+                    || Self::expr_contains_property_access(value)
+            }
+            StmtKind::PropertyAssign { .. } | StmtKind::PropertyArrayPush { .. } => true,
+            StmtKind::PropertyArrayAssign {
+                ..
+            } => true,
+            _ => false,
+        }
+    }
+
+    fn expr_contains_property_access(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::PropertyAccess { .. }
+            | ExprKind::NullsafePropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
+            | ExprKind::NullsafeDynamicPropertyAccess { .. } => true,
+            ExprKind::MethodCall { object, args, .. }
+            | ExprKind::NullsafeMethodCall { object, args, .. } => {
+                Self::expr_contains_property_access(object)
+                    || args.iter().any(Self::expr_contains_property_access)
+            }
+            ExprKind::ArrayAccess { array, index } => {
+                Self::expr_contains_property_access(array)
+                    || Self::expr_contains_property_access(index)
+            }
+            ExprKind::BinaryOp { left, right, .. } => {
+                Self::expr_contains_property_access(left)
+                    || Self::expr_contains_property_access(right)
+            }
+            ExprKind::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                Self::expr_contains_property_access(condition)
+                    || Self::expr_contains_property_access(then_expr)
+                    || Self::expr_contains_property_access(else_expr)
+            }
+            ExprKind::ShortTernary { value, default }
+            | ExprKind::NullCoalesce { value, default } => {
+                Self::expr_contains_property_access(value)
+                    || Self::expr_contains_property_access(default)
+            }
+            ExprKind::Pipe { value, callable } => {
+                Self::expr_contains_property_access(value)
+                    || Self::expr_contains_property_access(callable)
+            }
+            ExprKind::Assignment {
+                target,
+                value,
+                result_target,
+                prelude,
+                ..
+            } => {
+                Self::expr_contains_property_access(target)
+                    || Self::expr_contains_property_access(value)
+                    || result_target
+                        .as_deref()
+                        .is_some_and(Self::expr_contains_property_access)
+                    || prelude.iter().any(Self::stmt_contains_property_access)
+            }
+            ExprKind::FunctionCall { args, .. }
+            | ExprKind::ClosureCall { args, .. }
+            | ExprKind::ExprCall { args, .. }
+            | ExprKind::StaticMethodCall { args, .. }
+            | ExprKind::NewObject { args, .. }
+            | ExprKind::NewScopedObject { args, .. } => {
+                args.iter().any(Self::expr_contains_property_access)
+            }
+            ExprKind::Match {
+                subject,
+                arms,
+                default,
+            } => {
+                Self::expr_contains_property_access(subject)
+                    || arms.iter().any(|(conditions, result)| {
+                        conditions
+                            .iter()
+                            .any(Self::expr_contains_property_access)
+                            || Self::expr_contains_property_access(result)
+                    })
+                    || default
+                        .as_ref()
+                        .is_some_and(|expr| Self::expr_contains_property_access(expr))
+            }
+            ExprKind::ArrayLiteral(items) => {
+                items.iter().any(Self::expr_contains_property_access)
+            }
+            ExprKind::ArrayLiteralAssoc(items) => items.iter().any(|(key, value)| {
+                Self::expr_contains_property_access(key)
+                    || Self::expr_contains_property_access(value)
+            }),
+            ExprKind::InstanceOf { value, target } => {
+                Self::expr_contains_property_access(value)
+                    || Self::instanceof_target_contains_property_access(target)
+            }
+            ExprKind::Negate(inner)
+            | ExprKind::Not(inner)
+            | ExprKind::BitNot(inner)
+            | ExprKind::Spread(inner)
+            | ExprKind::ErrorSuppress(inner)
+            | ExprKind::Print(inner)
+            | ExprKind::Throw(inner)
+            | ExprKind::Cast { expr: inner, .. }
+            | ExprKind::PtrCast { expr: inner, .. }
+            | ExprKind::NamedArg { value: inner, .. }
+            | ExprKind::YieldFrom(inner) => Self::expr_contains_property_access(inner),
+            ExprKind::Yield { key, value } => {
+                key.as_ref()
+                    .is_some_and(|expr| Self::expr_contains_property_access(expr))
+                    || value
+                        .as_ref()
+                        .is_some_and(|expr| Self::expr_contains_property_access(expr))
+            }
+            ExprKind::Closure { .. }
+            | ExprKind::FirstClassCallable(_)
+            | ExprKind::StaticPropertyAccess { .. }
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::Null
+            | ExprKind::StringLiteral(_)
+            | ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::Variable(_)
+            | ExprKind::PreIncrement(_)
+            | ExprKind::PostIncrement(_)
+            | ExprKind::PreDecrement(_)
+            | ExprKind::PostDecrement(_)
+            | ExprKind::ConstRef(_)
+            | ExprKind::This
+            | ExprKind::BufferNew { .. }
+            | ExprKind::ClassConstant { .. }
+            | ExprKind::ScopedConstantAccess { .. } => false,
+            ExprKind::MagicConstant(_) => {
+                unreachable!("MagicConstant must be lowered before type checking")
+            }
+        }
+    }
+
+    fn instanceof_target_contains_property_access(target: &InstanceOfTarget) -> bool {
+        match target {
+            InstanceOfTarget::Name(_) => false,
+            InstanceOfTarget::Expr(expr) => Self::expr_contains_property_access(expr),
         }
     }
 

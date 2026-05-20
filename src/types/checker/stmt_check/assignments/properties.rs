@@ -11,7 +11,10 @@
 use crate::errors::CompileError;
 use crate::parser::ast::Expr;
 use crate::span::Span;
-use crate::types::{PhpType, TypeEnv};
+use crate::types::{
+    merge_array_key_types, normalized_array_key_type, static_array_key_forces_hash_storage,
+    PhpType, TypeEnv,
+};
 
 use super::super::super::Checker;
 use super::properties_null_coalesce::null_coalesce_property_keeps_non_null;
@@ -100,9 +103,10 @@ pub(super) fn check_property_array_assign(
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
+    let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     if matches!(obj_ty, PhpType::Mixed) {
-        if idx_ty != PhpType::Int {
+        if !is_php_array_key_type(&normalized_idx_ty) {
             return Err(CompileError::new(span, "Array index must be integer"));
         }
         return Ok(());
@@ -116,7 +120,7 @@ pub(super) fn check_property_array_assign(
                     return Ok(());
                 }
             }
-            if idx_ty != PhpType::Int {
+            if !is_php_array_key_type(&normalized_idx_ty) {
                 return Err(CompileError::new(span, "Array index must be integer"));
             }
 
@@ -126,6 +130,8 @@ pub(super) fn check_property_array_assign(
                 property_has_declared_type,
                 class_name,
                 property,
+                index,
+                &normalized_idx_ty,
                 &val_ty,
                 span,
             )?;
@@ -147,7 +153,7 @@ pub(super) fn check_property_array_assign(
                 "Array index assignment",
             )?;
 
-            if idx_ty != PhpType::Int {
+            if !matches!(normalized_idx_ty, PhpType::Int) {
                 return Err(CompileError::new(span, "Array index must be integer"));
             }
 
@@ -408,11 +414,33 @@ fn updated_array_property_assign_type(
     property_has_declared_type: bool,
     class_name: &str,
     property: &str,
+    index: &Expr,
+    normalized_idx_ty: &PhpType,
     val_ty: &PhpType,
     span: Span,
 ) -> Result<PhpType, CompileError> {
     match prop_ty {
         PhpType::Array(elem_ty) => {
+            if !matches!(normalized_idx_ty, PhpType::Int)
+                || (matches!(elem_ty.as_ref(), PhpType::Never)
+                    && static_array_key_forces_hash_storage(index))
+            {
+                if property_has_declared_type {
+                    checker.require_compatible_arg_type(
+                        elem_ty.as_ref(),
+                        val_ty,
+                        span,
+                        &format!("Property {}::${}[]", class_name, property),
+                    )?;
+                }
+                return Ok(assoc_property_type_after_keyed_write(
+                    checker,
+                    elem_ty,
+                    property_has_declared_type,
+                    normalized_idx_ty,
+                    val_ty,
+                ));
+            }
             if property_has_declared_type {
                 checker.require_compatible_arg_type(
                     elem_ty.as_ref(),
@@ -430,6 +458,31 @@ fn updated_array_property_assign_type(
                 Ok(PhpType::Array(Box::new(merged_ty)))
             }
         }
+        PhpType::AssocArray {
+            key,
+            value: existing_value,
+        } => {
+            if property_has_declared_type {
+                checker.require_compatible_arg_type(
+                    existing_value.as_ref(),
+                    val_ty,
+                    span,
+                    &format!("Property {}::${}[]", class_name, property),
+                )?;
+            }
+            let merged_key = merge_array_key_types(*key.clone(), normalized_idx_ty.clone());
+            let merged_value = if property_has_declared_type || existing_value.as_ref() == val_ty {
+                *existing_value.clone()
+            } else {
+                checker
+                    .merge_array_element_type(existing_value, val_ty)
+                    .unwrap_or(PhpType::Mixed)
+            };
+            Ok(PhpType::AssocArray {
+                key: Box::new(merged_key),
+                value: Box::new(merged_value),
+            })
+        }
         other => Err(CompileError::new(
             span,
             &format!(
@@ -437,6 +490,44 @@ fn updated_array_property_assign_type(
                 other
             ),
         )),
+    }
+}
+
+fn is_php_array_key_type(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Int | PhpType::Str | PhpType::Mixed)
+}
+
+fn assoc_property_type_after_keyed_write(
+    checker: &Checker,
+    elem_ty: &PhpType,
+    property_has_declared_type: bool,
+    normalized_idx_ty: &PhpType,
+    val_ty: &PhpType,
+) -> PhpType {
+    if property_has_declared_type && matches!(elem_ty, PhpType::Mixed) {
+        return PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        };
+    }
+
+    let merged_key = if matches!(elem_ty, PhpType::Never) {
+        normalized_idx_ty.clone()
+    } else {
+        merge_array_key_types(PhpType::Int, normalized_idx_ty.clone())
+    };
+    let merged_value = if matches!(elem_ty, PhpType::Never) {
+        val_ty.clone()
+    } else if elem_ty == val_ty {
+        elem_ty.clone()
+    } else {
+        checker
+            .merge_array_element_type(elem_ty, val_ty)
+            .unwrap_or(PhpType::Mixed)
+    };
+    PhpType::AssocArray {
+        key: Box::new(merged_key),
+        value: Box::new(merged_value),
     }
 }
 
@@ -448,16 +539,29 @@ fn update_object_property_type(
     updated_prop_ty: PhpType,
 ) {
     if let Some(class_info) = checker.classes.get_mut(class_name) {
-        if !property_has_declared_type {
-            if let Some(prop) = class_info
-                .properties
-                .iter_mut()
-                .find(|(name, _)| name == property)
+        if let Some(prop) = class_info
+            .properties
+            .iter_mut()
+            .find(|(name, _)| name == property)
+        {
+            if !property_has_declared_type
+                || declared_generic_array_can_use_assoc_storage(&prop.1, &updated_prop_ty)
             {
                 prop.1 = updated_prop_ty;
             }
         }
     }
+}
+
+fn declared_generic_array_can_use_assoc_storage(current: &PhpType, updated: &PhpType) -> bool {
+    matches!(
+        (current, updated),
+        (
+            PhpType::Array(elem_ty),
+            PhpType::AssocArray { key: _, value }
+        ) if matches!(elem_ty.as_ref(), PhpType::Mixed)
+            && matches!(value.as_ref(), PhpType::Mixed)
+    )
 }
 
 fn resolve_pointer_field_type(

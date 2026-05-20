@@ -27,7 +27,8 @@ pub fn emit(
     emit_expr(&args[0], emitter, ctx, data);
     abi::emit_call_label(emitter, "__rt_ptr_check_nonnull");                    // abort with a fatal error on null pointer dereference before writing to memory
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the target pointer while the value expression is evaluated
-    emit_expr(&args[1], emitter, ctx, data);
+    let value_ty = emit_expr(&args[1], emitter, ctx, data);
+    super::coerce_current_result_to_int_arg(&args[1], &value_ty, emitter, ctx, data);
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov w1, w0");                                  // keep only the low 16 bits of the integer value in a scratch AArch64 register

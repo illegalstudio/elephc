@@ -208,6 +208,13 @@ impl Checker {
                 .resolve_first_class_callable_sig(target, expr.span, env)
                 .map(Some),
             ExprKind::Variable(var_name) => Ok(self.callable_sigs.get(var_name).cloned()),
+            ExprKind::ArrayAccess { array, .. } => {
+                if let ExprKind::Variable(array_name) = &array.kind {
+                    Ok(self.callable_sigs.get(array_name).cloned())
+                } else {
+                    Ok(None)
+                }
+            }
             ExprKind::Assignment { value, .. } => self.resolve_expr_callable_sig(value, env),
             ExprKind::Ternary {
                 then_expr,

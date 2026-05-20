@@ -93,7 +93,12 @@ pub(crate) fn emit_property_assign_stmt(
         return;
     }
 
-    let mut val_ty = emit_expr(value, emitter, ctx, data);
+    let mut val_ty = if let Some(target_ty) = declared_target_ty.as_ref() {
+        emit_indexed_literal_as_assoc_property_target(value, target_ty, emitter, ctx, data)
+            .unwrap_or_else(|| emit_expr(value, emitter, ctx, data))
+    } else {
+        emit_expr(value, emitter, ctx, data)
+    };
     let boxed_to_mixed = declared_target_ty.as_ref().is_some_and(|target_ty| {
         matches!(target_ty, PhpType::Mixed | PhpType::Union(_))
             && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
@@ -165,6 +170,46 @@ pub(crate) fn emit_property_assign_stmt(
     }
 
     storage::store_property_value(emitter, object_reg, &val_ty, target.offset);
+}
+
+fn emit_indexed_literal_as_assoc_property_target(
+    value: &Expr,
+    target_ty: &PhpType,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    let ExprKind::ArrayLiteral(elems) = &value.kind else {
+        return None;
+    };
+    let PhpType::AssocArray {
+        key: target_key_ty,
+        value: target_value_ty,
+    } = target_ty
+    else {
+        return None;
+    };
+    if elems.is_empty() {
+        return Some(crate::codegen::expr::arrays::emit_empty_assoc_array_literal(
+            *target_key_ty.clone(),
+            *target_value_ty.clone(),
+            emitter,
+        ));
+    }
+
+    let pairs: Vec<(Expr, Expr)> = elems
+        .iter()
+        .enumerate()
+        .map(|(idx, elem)| {
+            (
+                Expr::new(ExprKind::IntLiteral(idx as i64), elem.span),
+                elem.clone(),
+            )
+        })
+        .collect();
+    Some(crate::codegen::expr::arrays::emit_assoc_array_literal(
+        &pairs, emitter, ctx, data,
+    ))
 }
 
 fn is_stdclass_receiver(object: &Expr, ctx: &Context) -> bool {

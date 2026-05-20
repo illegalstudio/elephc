@@ -14,7 +14,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::{emit_expr, expr_result_heap_ownership};
 use crate::codegen::platform::Arch;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 pub(super) fn emit_array_push_stmt(
@@ -73,6 +73,7 @@ pub(super) fn emit_array_push_stmt(
     } else if matches!(effective_elem_ty, PhpType::Mixed) && matches!(val_ty, PhpType::Union(_)) {
         val_ty = PhpType::Mixed;
     }
+    update_callable_array_metadata(array, value, &val_ty, ctx);
     let release_after_refcounted_push = boxed_value_for_mixed
         || boxed_iterable
         || (source_owned
@@ -188,6 +189,7 @@ fn emit_array_push_stmt_linux_x86_64(
     } else if matches!(effective_elem_ty, PhpType::Mixed) && matches!(val_ty, PhpType::Union(_)) {
         val_ty = PhpType::Mixed;
     }
+    update_callable_array_metadata(array, value, &val_ty, ctx);
     let release_after_refcounted_push = boxed_value_for_mixed
         || boxed_iterable
         || (source_owned
@@ -282,4 +284,72 @@ fn effective_indexed_push_type(existing: &PhpType, value: &PhpType, ctx: &Contex
     } else {
         PhpType::Mixed
     }
+}
+
+fn update_callable_array_metadata(
+    array: &str,
+    value: &Expr,
+    val_ty: &PhpType,
+    ctx: &mut Context,
+) {
+    if val_ty != &PhpType::Callable {
+        clear_callable_array_metadata(array, ctx);
+        return;
+    }
+    match &value.kind {
+        ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => {
+            if let Some(deferred) = ctx.deferred_closures.last() {
+                ctx.closure_sigs
+                    .insert(array.to_string(), deferred.sig.clone());
+                if deferred.captures.is_empty() {
+                    ctx.closure_captures.remove(array);
+                } else {
+                    ctx.closure_captures
+                        .insert(array.to_string(), deferred.captures.clone());
+                }
+            }
+            ctx.first_class_callable_targets.remove(array);
+            ctx.variable_fcc_label.remove(array);
+        }
+        ExprKind::Variable(src_name) => copy_callable_metadata(array, src_name, ctx),
+        ExprKind::ArrayAccess { array: source, .. } => {
+            if let ExprKind::Variable(src_name) = &source.kind {
+                copy_callable_metadata(array, src_name, ctx);
+            } else {
+                clear_callable_array_metadata(array, ctx);
+            }
+        }
+        _ => clear_callable_array_metadata(array, ctx),
+    }
+}
+
+fn copy_callable_metadata(dest: &str, src: &str, ctx: &mut Context) {
+    if let Some(sig) = ctx.closure_sigs.get(src).cloned() {
+        ctx.closure_sigs.insert(dest.to_string(), sig);
+    } else {
+        ctx.closure_sigs.remove(dest);
+    }
+    if let Some(captures) = ctx.closure_captures.get(src).cloned() {
+        ctx.closure_captures.insert(dest.to_string(), captures);
+    } else {
+        ctx.closure_captures.remove(dest);
+    }
+    if let Some(target) = ctx.first_class_callable_targets.get(src).cloned() {
+        ctx.first_class_callable_targets
+            .insert(dest.to_string(), target);
+    } else {
+        ctx.first_class_callable_targets.remove(dest);
+    }
+    if let Some(label) = ctx.variable_fcc_label.get(src).cloned() {
+        ctx.variable_fcc_label.insert(dest.to_string(), label);
+    } else {
+        ctx.variable_fcc_label.remove(dest);
+    }
+}
+
+fn clear_callable_array_metadata(array: &str, ctx: &mut Context) {
+    ctx.closure_sigs.remove(array);
+    ctx.closure_captures.remove(array);
+    ctx.first_class_callable_targets.remove(array);
+    ctx.variable_fcc_label.remove(array);
 }

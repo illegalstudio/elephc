@@ -11,7 +11,10 @@
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
-use crate::types::{merge_array_key_types, normalized_array_key_type, PhpType, TypeEnv};
+use crate::types::{
+    merge_array_key_types, normalized_array_key_type, static_array_key_forces_hash_storage,
+    PhpType, TypeEnv,
+};
 
 use super::super::super::Checker;
 
@@ -29,6 +32,7 @@ pub(super) fn check_array_assign(
         .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
+    super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
     if arr_ty == PhpType::Str {
         return Err(CompileError::new(
             span,
@@ -37,7 +41,10 @@ pub(super) fn check_array_assign(
     }
     if let PhpType::Array(elem_ty) = &arr_ty {
         let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
-        if !matches!(normalized_idx_ty, PhpType::Int) {
+        if !matches!(normalized_idx_ty, PhpType::Int)
+            || (matches!(elem_ty.as_ref(), PhpType::Never)
+                && static_array_key_forces_hash_storage(index))
+        {
             let merged_key = if matches!(elem_ty.as_ref(), PhpType::Never) {
                 normalized_idx_ty
             } else {
@@ -163,6 +170,7 @@ pub(super) fn check_array_push(
         .cloned()
         .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
+    super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
     if let PhpType::Array(elem_ty) = &arr_ty {
         if **elem_ty != val_ty {
             let merged_ty = checker

@@ -79,7 +79,7 @@ pub(crate) fn emit_dispatch_instance_method(
 /// arms below are the lowercase forms of `current`, `getReturn`, etc.
 /// Returns `None` for methods elephc doesn't intercept (so dispatch falls
 /// back to the regular vtable path).
-fn generator_runtime_label_for(method: &str) -> Option<&'static str> {
+pub(super) fn generator_runtime_label_for(method: &str) -> Option<&'static str> {
     match method {
         "current" => Some("__rt_gen_current"),
         "key" => Some("__rt_gen_key"),

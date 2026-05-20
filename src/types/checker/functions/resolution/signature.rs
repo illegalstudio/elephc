@@ -26,6 +26,36 @@ impl Checker {
         for (pname, pty) in &param_types {
             local_env.insert(pname.clone(), pty.clone());
         }
+        let function_key = name.to_string();
+        let callable_param_names: Vec<String> = param_types
+            .iter()
+            .filter(|(_, pty)| pty == &PhpType::Callable)
+            .map(|(pname, _)| pname.clone())
+            .collect();
+        let saved_callable_metadata: Vec<_> = callable_param_names
+            .iter()
+            .map(|pname| {
+                (
+                    pname.clone(),
+                    self.callable_sigs.get(pname).cloned(),
+                    self.closure_return_types.get(pname).cloned(),
+                )
+            })
+            .collect();
+        for pname in &callable_param_names {
+            if let Some(sig) = self
+                .callable_param_sigs
+                .get(&(function_key.clone(), pname.clone()))
+                .cloned()
+            {
+                self.closure_return_types
+                    .insert(pname.clone(), sig.return_type.clone());
+                self.callable_sigs.insert(pname.clone(), sig);
+            } else {
+                self.closure_return_types.remove(pname);
+                self.callable_sigs.remove(pname);
+            }
+        }
 
         let provisional_sig = FunctionSig {
             params: param_types.clone(),
@@ -63,6 +93,24 @@ impl Checker {
             }
             Ok(())
         })?;
+        for pname in &callable_param_names {
+            if let Some(sig) = self.callable_sigs.get(pname).cloned() {
+                self.callable_param_sigs
+                    .insert((function_key.clone(), pname.clone()), sig);
+            }
+        }
+        for (pname, saved_sig, saved_return) in saved_callable_metadata {
+            if let Some(sig) = saved_sig {
+                self.callable_sigs.insert(pname.clone(), sig);
+            } else {
+                self.callable_sigs.remove(&pname);
+            }
+            if let Some(return_ty) = saved_return {
+                self.closure_return_types.insert(pname, return_ty);
+            } else {
+                self.closure_return_types.remove(&pname);
+            }
+        }
         if !errors.is_empty() {
             return Err(CompileError::from_many(errors));
         }

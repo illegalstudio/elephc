@@ -72,6 +72,19 @@ echo count($a) . ":" . $a["k0"] . ":" . $a["k4"];
 }
 
 #[test]
+fn test_assoc_array_mixed_assignment_access_preserves_scalar_payloads() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a["Host"] = "example.com";
+$a["Port"] = 80;
+echo $a["Host"] . "|" . $a["Port"];
+"#,
+    );
+    assert_eq!(out, "example.com|80");
+}
+
+#[test]
 fn test_assoc_array_dynamic_string_key_assignment_inside_function() {
     let out = compile_and_run(
         r#"<?php
@@ -148,6 +161,22 @@ echo count($m) . ":" . $m[1] . ":" . $m["01"];
 "#,
     );
     assert_eq!(out, "2:right:leading");
+}
+
+#[test]
+fn test_sparse_integer_key_assignment_uses_php_array_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[3] = "x";
+$a[5] = "y";
+echo count($a) . "|";
+foreach ($a as $k => $v) {
+    echo $k . "=" . $v . ";";
+}
+"#,
+    );
+    assert_eq!(out, "2|3=x;5=y;");
 }
 
 #[test]
