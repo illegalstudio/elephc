@@ -151,6 +151,22 @@ echo count($m) . ":" . $m[1] . ":" . $m["01"];
 }
 
 #[test]
+fn test_sparse_integer_key_assignment_uses_php_array_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[3] = "x";
+$a[5] = "y";
+echo count($a) . "|";
+foreach ($a as $k => $v) {
+    echo $k . "=" . $v . ";";
+}
+"#,
+    );
+    assert_eq!(out, "2|3=x;5=y;");
+}
+
+#[test]
 fn test_assoc_array_union_keeps_left_duplicate_keys() {
     let out = compile_and_run(
         r#"<?php

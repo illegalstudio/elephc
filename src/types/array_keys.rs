@@ -34,6 +34,14 @@ pub(crate) fn normalized_array_key_type(expr: &Expr, raw_ty: PhpType) -> PhpType
     }
 }
 
+pub(crate) fn static_array_key_forces_hash_storage(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => *value != 0,
+        ExprKind::StringLiteral(value) => is_php_integer_array_key(value) && value != "0",
+        _ => false,
+    }
+}
+
 pub(crate) fn merge_array_key_types(left: PhpType, right: PhpType) -> PhpType {
     if left == right {
         left

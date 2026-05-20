@@ -11,7 +11,10 @@
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
-use crate::types::{merge_array_key_types, normalized_array_key_type, PhpType, TypeEnv};
+use crate::types::{
+    merge_array_key_types, normalized_array_key_type, static_array_key_forces_hash_storage,
+    PhpType, TypeEnv,
+};
 
 use super::super::super::Checker;
 
@@ -37,7 +40,10 @@ pub(super) fn check_array_assign(
     }
     if let PhpType::Array(elem_ty) = &arr_ty {
         let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
-        if !matches!(normalized_idx_ty, PhpType::Int) {
+        if !matches!(normalized_idx_ty, PhpType::Int)
+            || (matches!(elem_ty.as_ref(), PhpType::Never)
+                && static_array_key_forces_hash_storage(index))
+        {
             let merged_key = if matches!(elem_ty.as_ref(), PhpType::Never) {
                 normalized_idx_ty
             } else {
