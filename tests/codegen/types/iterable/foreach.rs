@@ -251,6 +251,30 @@ fn test_by_ref_foreach_nested_json_decode_assoc_payloads() {
 }
 
 #[test]
+fn test_mixed_foreach_fatal_preserves_prior_side_effects() {
+    let out = compile_and_run_capture(
+        "<?php
+        function side(): mixed {
+            echo 'S';
+            return 42;
+        }
+        $x = side();
+        foreach ($x as $v) {
+            echo $v;
+        }
+        ",
+    );
+    assert!(!out.success, "program unexpectedly succeeded");
+    assert_eq!(out.stdout, "S");
+    assert!(
+        out.stderr
+            .contains("Fatal error: foreach over iterable with unsupported kind"),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
 fn test_foreach_over_iterable_iterator_object() {
     let out = compile_and_run(
         r#"<?php
