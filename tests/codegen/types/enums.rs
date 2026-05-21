@@ -148,3 +148,45 @@ fn test_nullable_enum_typed_local_accepts_try_from_result() {
     );
     assert_eq!(out, "null|red");
 }
+
+#[test]
+fn test_namespaced_enum_cases_resolve_inside_namespace_and_imports() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Showcases\Doom\App;
+
+enum RenderMode {
+    case Map2D;
+    case World3D;
+    case Split;
+}
+
+class Config {
+    public static function defaultMode() {
+        return RenderMode::Split;
+    }
+}
+
+namespace Showcases\Doom\Render;
+
+use Showcases\Doom\App\RenderMode;
+
+class Renderer {
+    public static function isSplit($mode): bool {
+        return $mode === RenderMode::Split;
+    }
+}
+
+namespace Showcases\Doom;
+
+use Showcases\Doom\App\Config;
+use Showcases\Doom\App\RenderMode;
+use Showcases\Doom\Render\Renderer;
+
+echo Config::defaultMode() === RenderMode::Split ? "local" : "bad";
+echo "|";
+echo Renderer::isSplit(RenderMode::Split) ? "import" : "bad";
+"#,
+    );
+    assert_eq!(out, "local|import");
+}

@@ -26,8 +26,8 @@ use crate::codegen::stmt;
 use crate::names::{function_epilogue_symbol, function_symbol};
 use crate::parser::ast::ExprKind;
 use crate::types::{
-    ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo,
-    PhpType,
+    ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
+    PackedClassInfo, PhpType,
 };
 
 use self::cleanup::{
@@ -58,6 +58,7 @@ pub fn emit_function(
     interfaces: &HashMap<String, InterfaceInfo>,
     traits: &HashSet<String>,
     classes: Option<&HashMap<String, ClassInfo>>,
+    enums: &HashMap<String, EnumInfo>,
     packed_classes: &HashMap<String, PackedClassInfo>,
     extern_functions: &HashMap<String, ExternFunctionSig>,
     extern_classes: &HashMap<String, ExternClassInfo>,
@@ -91,6 +92,7 @@ pub fn emit_function(
         interfaces,
         traits,
         classes,
+        enums,
         packed_classes,
         extern_functions,
         extern_classes,
@@ -112,6 +114,7 @@ pub fn emit_closure(
     interfaces: &HashMap<String, InterfaceInfo>,
     traits: &HashSet<String>,
     classes: &HashMap<String, ClassInfo>,
+    enums: &HashMap<String, EnumInfo>,
     packed_classes: &HashMap<String, PackedClassInfo>,
     extern_functions: &HashMap<String, ExternFunctionSig>,
     extern_classes: &HashMap<String, ExternClassInfo>,
@@ -153,6 +156,7 @@ pub fn emit_closure(
         interfaces,
         traits,
         Some((classes, closure_class_name)),
+        enums,
         packed_classes,
         extern_functions,
         extern_classes,
@@ -175,6 +179,7 @@ pub fn emit_method(
     interfaces: &HashMap<String, InterfaceInfo>,
     traits: &HashSet<String>,
     classes: &HashMap<String, ClassInfo>,
+    enums: &HashMap<String, EnumInfo>,
     packed_classes: &HashMap<String, PackedClassInfo>,
     class_name: &str,
     extern_functions: &HashMap<String, ExternFunctionSig>,
@@ -201,6 +206,7 @@ pub fn emit_method(
         interfaces,
         traits,
         Some((classes, class_name)),
+        enums,
         packed_classes,
         extern_functions,
         extern_classes,
@@ -226,6 +232,7 @@ fn emit_function_with_label(
     interfaces: &HashMap<String, InterfaceInfo>,
     traits: &HashSet<String>,
     classes: Option<&HashMap<String, ClassInfo>>,
+    enums: &HashMap<String, EnumInfo>,
     packed_classes: &HashMap<String, PackedClassInfo>,
     extern_functions: &HashMap<String, ExternFunctionSig>,
     extern_classes: &HashMap<String, ExternClassInfo>,
@@ -250,6 +257,7 @@ fn emit_function_with_label(
         interfaces,
         traits,
         class_ctx,
+        enums,
         packed_classes,
         extern_functions,
         extern_classes,
@@ -318,6 +326,7 @@ fn emit_function_with_label_and_class(
     interfaces: &HashMap<String, InterfaceInfo>,
     traits: &HashSet<String>,
     class_context: Option<(&HashMap<String, ClassInfo>, &str)>,
+    enums: &HashMap<String, EnumInfo>,
     packed_classes: &HashMap<String, PackedClassInfo>,
     extern_functions: &HashMap<String, ExternFunctionSig>,
     extern_classes: &HashMap<String, ExternClassInfo>,
@@ -334,6 +343,7 @@ fn emit_function_with_label_and_class(
     ctx.all_static_vars = all_static_vars.clone();
     ctx.interfaces = interfaces.clone();
     ctx.traits = traits.clone();
+    ctx.enums = enums.clone();
     ctx.packed_classes = packed_classes.clone();
     ctx.extern_functions = extern_functions.clone();
     ctx.extern_classes = extern_classes.clone();
@@ -490,6 +500,7 @@ fn emit_function_with_label_and_class(
                     interfaces,
                     &ctx.traits,
                     classes,
+                    &ctx.enums,
                     packed_classes,
                     extern_functions,
                     extern_classes,

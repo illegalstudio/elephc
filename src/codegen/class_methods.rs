@@ -16,8 +16,8 @@ use crate::codegen::functions;
 use crate::names::{method_symbol, php_symbol_key, static_method_symbol, Name};
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{
-    AttrArgValue, ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
-    PackedClassInfo, PhpType,
+    AttrArgValue, ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig,
+    InterfaceInfo, PackedClassInfo, PhpType,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -33,6 +33,7 @@ pub(super) fn emit_class_methods(
     interfaces: &HashMap<String, InterfaceInfo>,
     traits: &HashSet<String>,
     classes: &HashMap<String, ClassInfo>,
+    enums: &HashMap<String, EnumInfo>,
     packed_classes: &HashMap<String, PackedClassInfo>,
     extern_functions: &HashMap<String, ExternFunctionSig>,
     extern_classes: &HashMap<String, ExternClassInfo>,
@@ -69,6 +70,7 @@ pub(super) fn emit_class_methods(
             interfaces,
             traits,
             classes,
+            enums,
             packed_classes,
             class_name,
             extern_functions,
