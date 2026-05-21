@@ -78,7 +78,8 @@ impl Checker {
                         "by-reference foreach over Iterator/IteratorAggregate objects or iterable-typed values is not supported; use an array source or remove &",
                     ));
                 }
-                let errors = self.check_break_continue_target_body(body, env);
+                let mut body_env = env.clone();
+                let errors = self.check_break_continue_target_body(body, &mut body_env);
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -119,26 +120,21 @@ impl Checker {
             } => {
                 self.infer_type_with_assignment_effects(condition, env)?;
                 let mut errors = Vec::new();
-                for s in then_body {
-                    if let Err(error) = self.check_stmt(s, env) {
-                        errors.extend(error.flatten());
-                    }
-                }
+
+                let mut then_env = env.clone();
+                errors.extend(self.check_body(then_body, &mut then_env));
+
                 for (cond, body) in elseif_clauses {
                     self.infer_type_with_assignment_effects(cond, env)?;
-                    for s in body {
-                        if let Err(error) = self.check_stmt(s, env) {
-                            errors.extend(error.flatten());
-                        }
-                    }
+                    let mut elseif_env = env.clone();
+                    errors.extend(self.check_body(body, &mut elseif_env));
                 }
+
                 if let Some(body) = else_body {
-                    for s in body {
-                        if let Err(error) = self.check_stmt(s, env) {
-                            errors.extend(error.flatten());
-                        }
-                    }
+                    let mut else_env = env.clone();
+                    errors.extend(self.check_body(body, &mut else_env));
                 }
+
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -156,7 +152,8 @@ impl Checker {
             }
             StmtKind::While { condition, body } => {
                 self.infer_type_with_assignment_effects(condition, env)?;
-                let errors = self.check_break_continue_target_body(body, env);
+                let mut body_env = env.clone();
+                let errors = self.check_break_continue_target_body(body, &mut body_env);
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -178,7 +175,8 @@ impl Checker {
                 if let Some(s) = update {
                     self.check_stmt(s, env)?;
                 }
-                let errors = self.check_break_continue_target_body(body, env);
+                let mut body_env = env.clone();
+                let errors = self.check_break_continue_target_body(body, &mut body_env);
                 if errors.is_empty() {
                     Ok(())
                 } else {

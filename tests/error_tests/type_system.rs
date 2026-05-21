@@ -103,6 +103,30 @@ fn test_error_undefined_variable() {
     expect_error("<?php echo $x;", "Undefined variable: $x");
 }
 
+
+#[test]
+fn test_error_if_branch_assignment_is_not_definite() {
+    expect_error(
+        "<?php if (0) { $s = \"secret\"; } echo $s;",
+        "Undefined variable: $s",
+    );
+}
+
+#[test]
+fn test_error_while_body_assignment_is_not_definite() {
+    expect_error(
+        "<?php while (0) { $s = \"secret\"; } echo $s;",
+        "Undefined variable: $s",
+    );
+}
+
+#[test]
+fn test_error_for_body_assignment_is_not_definite() {
+    expect_error(
+        "<?php for (; 0; ) { $s = \"secret\"; } echo $s;",
+        "Undefined variable: $s",
+    );
+}
 #[test]
 fn test_error_type_mismatch_reassign() {
     expect_error("<?php $x = 42; $x = \"hello\";", "cannot reassign $x");
