@@ -21,3 +21,5 @@ pub(crate) const PHP_UNAME_MODE_VALUE_MSG: &str =
     "Fatal error: php_uname(): Argument #1 ($mode) must be one of \"a\", \"m\", \"n\", \"r\", \"s\", or \"v\"\n";
 pub(crate) const DIRNAME_LEVELS_MSG: &str =
     "Fatal error: dirname(): Argument #2 ($levels) must be greater than or equal to 1\n";
+pub(crate) const STR_REPEAT_TIMES_MSG: &str =
+    "Fatal error: str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n";

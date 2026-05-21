@@ -58,6 +58,27 @@ fn test_str_repeat() {
 }
 
 #[test]
+fn test_str_repeat_large_heap_backed_result() {
+    let out = compile_and_run(
+        r#"<?php
+echo strlen(str_repeat("ab", 32769));
+echo ",";
+$s = str_repeat("ab", 33000);
+echo strlen($s);
+"#,
+    );
+    assert_eq!(out, "65538,66000");
+}
+
+#[test]
+fn test_str_repeat_negative_count_reports_runtime_error() {
+    let err = compile_and_run_expect_failure(r#"<?php echo str_repeat("ab", -1);"#);
+    assert!(err.contains(
+        "Fatal error: str_repeat(): Argument #2 ($times) must be greater than or equal to 0"
+    ));
+}
+
+#[test]
 fn test_strrev() {
     let out = compile_and_run(r#"<?php echo strrev("Hello");"#);
     assert_eq!(out, "olleH");

@@ -8,7 +8,10 @@
 //! Key details:
 //! - Fixed symbols are cached across compilations, so only target-independent runtime data belongs here.
 
-use super::{DIRNAME_LEVELS_MSG, PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG};
+use super::{
+    DIRNAME_LEVELS_MSG, PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG,
+    STR_REPEAT_TIMES_MSG,
+};
 use super::super::system;
 use crate::types::checker::builtins::supported_builtin_function_names;
 
@@ -61,6 +64,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".globl _static_prop_private_access_msg\n_static_prop_private_access_msg:\n    .ascii \"Fatal error: Cannot access private static property\\n\"\n");
     out.push_str(".globl _ptr_null_err_msg\n_ptr_null_err_msg:\n    .ascii \"Fatal error: null pointer dereference\\n\"\n");
     out.push_str(".globl _ptr_read_string_len_err_msg\n_ptr_read_string_len_err_msg:\n    .ascii \"Fatal error: ptr_read_string() length must be non-negative\\n\"\n");
+    out.push_str(&format!(
+        ".globl _str_repeat_times_msg\n_str_repeat_times_msg:\n    .ascii {:?}\n",
+        STR_REPEAT_TIMES_MSG
+    ));
     out.push_str(".globl _uncaught_exc_msg\n_uncaught_exc_msg:\n    .ascii \"Fatal error: uncaught exception\\n\"\n");
     out.push_str(".globl _instanceof_target_type_msg\n_instanceof_target_type_msg:\n    .ascii \"Fatal error: Class name must be a valid object or a string\\n\"\n");
     out.push_str(".globl _diag_file_get_contents_failed_msg\n_diag_file_get_contents_failed_msg:\n    .ascii \"Warning: file_get_contents(): Failed to open stream\\n\"\n");
