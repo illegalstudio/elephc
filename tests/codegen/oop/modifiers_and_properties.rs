@@ -223,6 +223,57 @@ echo WithoutDefault::$value;
 }
 
 #[test]
+fn test_untyped_null_property_default_is_strictly_null() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public $x = null; }
+$a = new A();
+var_dump($a->x);
+echo is_null($a->x) ? "y" : "n", "\n";
+echo ($a->x === null) ? "y" : "n", "\n";
+echo ($a->x !== null) ? "y" : "n", "\n";
+echo ($a->x == null) ? "y" : "n", "\n";
+"#,
+    );
+    assert_eq!(out, "NULL\ny\ny\nn\ny\n");
+}
+
+#[test]
+fn test_untyped_static_null_property_default_is_strictly_null() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public static $x = null; }
+var_dump(A::$x);
+echo is_null(A::$x) ? "y" : "n", "\n";
+echo (A::$x === null) ? "y" : "n", "\n";
+echo (A::$x !== null) ? "y" : "n", "\n";
+echo (A::$x == null) ? "y" : "n", "\n";
+"#,
+    );
+    assert_eq!(out, "NULL\ny\ny\nn\ny\n");
+}
+
+#[test]
+fn test_untyped_property_assignment_to_null_is_strictly_null() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    public $x = 1;
+    public static $y = 1;
+}
+$a = new A();
+$a->x = null;
+A::$y = null;
+echo is_null($a->x) ? "y" : "n", "\n";
+echo ($a->x === null) ? "y" : "n", "\n";
+echo is_null(A::$y) ? "y" : "n", "\n";
+echo (A::$y === null) ? "y" : "n", "\n";
+"#,
+    );
+    assert_eq!(out, "y\ny\ny\ny\n");
+}
+
+#[test]
 fn test_readonly_class_static_property_is_mutable() {
     let out = compile_and_run(
         r#"<?php

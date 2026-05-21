@@ -25,6 +25,7 @@ use super::super::{
 };
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
+const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 
 pub(super) fn emit_new_object(
     class_name: &str,
@@ -242,7 +243,13 @@ pub(super) fn emit_new_object_core(
                     abi::emit_store_to_address(emitter, ptr_reg, object_reg, offset);
                     abi::emit_store_to_address(emitter, len_reg, object_reg, offset + 8);
                 }
-                PhpType::Void | PhpType::Never => {}
+                PhpType::Void => {
+                    let null_reg = abi::temp_int_reg(emitter.target);
+                    abi::emit_load_int_immediate(emitter, null_reg, NULL_SENTINEL);
+                    abi::emit_store_to_address(emitter, null_reg, object_reg, offset);
+                    abi::emit_store_zero_to_address(emitter, object_reg, offset + 8);
+                }
+                PhpType::Never => {}
             }
         }
     }
