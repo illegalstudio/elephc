@@ -78,6 +78,16 @@ fn test_keyword_insteadof() {
 }
 
 #[test]
+fn test_keyword_extends() {
+    assert_eq!(tokens("<?php extends")[1], Token::Extends);
+}
+
+#[test]
+fn test_keyword_parent() {
+    assert_eq!(tokens("<?php parent")[1], Token::Parent);
+}
+
+#[test]
 fn test_lex_class_keyword() {
     let t = tokens("<?php class Point { public $x; private $y; public readonly $id; } $p = new Point();");
     assert!(t.contains(&Token::Class));

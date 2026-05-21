@@ -90,6 +90,21 @@ fn test_increment_decrement() {
 }
 
 #[test]
+fn test_array_subscript_brackets() {
+    let t = tokens("<?php $a[0];");
+    assert_eq!(
+        t[1..6],
+        [
+            Token::Variable("a".into()),
+            Token::LBracket,
+            Token::IntLiteral(0),
+            Token::RBracket,
+            Token::Semicolon,
+        ]
+    );
+}
+
+#[test]
 fn test_assignment_statement() {
     let t = tokens("<?php $x = 42;");
     assert_eq!(

@@ -162,4 +162,40 @@ fn test_shift_higher_than_comparison() {
     assert_eq!(stmts, vec![expected]);
 }
 
+// --- Unary operators ---
+
+#[test]
+fn test_increment_decrement_parses() {
+    let pre_inc = parse_source("<?php echo ++$i;");
+    assert_eq!(echoed_expr(&pre_inc), &ExprKind::PreIncrement("i".into()));
+    let post_inc = parse_source("<?php echo $i++;");
+    assert_eq!(echoed_expr(&post_inc), &ExprKind::PostIncrement("i".into()));
+    let pre_dec = parse_source("<?php echo --$i;");
+    assert_eq!(echoed_expr(&pre_dec), &ExprKind::PreDecrement("i".into()));
+    let post_dec = parse_source("<?php echo $i--;");
+    assert_eq!(echoed_expr(&post_dec), &ExprKind::PostDecrement("i".into()));
+}
+
+#[test]
+fn test_bitwise_not_parses() {
+    let stmts = parse_source("<?php echo ~$x;");
+    assert_eq!(
+        echoed_expr(&stmts),
+        &ExprKind::BitNot(Box::new(Expr::var("x")))
+    );
+}
+
+#[test]
+fn test_expr_call_parses() {
+    // `$arr[0]()` calls the result of an array access — an ExprCall node.
+    let stmts = parse_source("<?php echo $arr[0]();");
+    match echoed_expr(&stmts) {
+        ExprKind::ExprCall { callee, args } => {
+            assert!(matches!(callee.kind, ExprKind::ArrayAccess { .. }));
+            assert!(args.is_empty());
+        }
+        other => panic!("expected ExprCall, got {:?}", other),
+    }
+}
+
 // --- Null coalescing precedence ---
