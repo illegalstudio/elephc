@@ -109,8 +109,8 @@ pub(crate) fn emit_reflection_attribute_array(
             emitter.instruction("bl __rt_array_new");                           // x0 = freshly allocated array pointer
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov rax, {}", attr_names.len().max(1))); // initial capacity (>=1)
-            emitter.instruction("mov rdx, 8");                                  // element stride: one heap pointer per slot
+            emitter.instruction(&format!("mov rdi, {}", attr_names.len().max(1))); // initial capacity (>=1)
+            emitter.instruction("mov rsi, 8");                                  // element stride: one heap pointer per slot
             emitter.instruction("call __rt_array_new");                         // rax = array pointer
         }
     }
@@ -161,8 +161,8 @@ pub(crate) fn emit_reflection_attribute_array(
                 emitter.instruction("bl __rt_array_push_int");                  // append the object handle to the result array
             }
             Arch::X86_64 => {
-                emitter.instruction("pop rsi");                                 // pop the populated ReflectionAttribute pointer into the value-arg register
-                emitter.instruction("pop rax");                                 // pop the result array pointer into the array-arg register
+                abi::emit_pop_reg(emitter, "rsi");                              // pop the populated ReflectionAttribute pointer into the value-arg register
+                abi::emit_pop_reg(emitter, "rdi");                              // pop the result array pointer into the array-arg register
                 emitter.instruction("call __rt_array_push_int");                // append the object handle to the result array
             }
         }
@@ -240,8 +240,8 @@ fn emit_set_args_property(
             emitter.instruction("bl __rt_array_new");                           // x0 = freshly allocated args array
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov rax, {}", attr_arg_list.len().max(1))); // initial capacity (>=1)
-            emitter.instruction("mov rdx, 8");                                  // element stride: one boxed mixed-cell pointer per slot
+            emitter.instruction(&format!("mov rdi, {}", attr_arg_list.len().max(1))); // initial capacity (>=1)
+            emitter.instruction("mov rsi, 8");                                  // element stride: one boxed mixed-cell pointer per slot
             emitter.instruction("call __rt_array_new");                         // rax = freshly allocated args array
         }
     }
@@ -262,7 +262,7 @@ fn emit_set_args_property(
                 abi::emit_push_reg(emitter, result_reg);                        // save the args array pointer
                 emit_box_arg_x86_64(arg, emitter, data);                        // rax = boxed mixed-cell pointer
                 emitter.instruction("mov rsi, rax");                            // rsi = mixed-cell pointer
-                emitter.instruction("mov rax, QWORD PTR [rsp]");                // rax = args array pointer
+                emitter.instruction("mov rdi, QWORD PTR [rsp]");                // rdi = args array pointer
                 emitter.instruction("call __rt_array_push_int");                // rax = updated args array pointer
                 abi::emit_release_temporary_stack(emitter, 16);                 // drop the saved args-array slot
             }

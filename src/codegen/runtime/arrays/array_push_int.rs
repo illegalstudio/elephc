@@ -32,6 +32,21 @@ pub fn emit_array_push_int(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_array_ensure_unique");                         // split shared arrays before the append path mutates storage
     emitter.instruction("ldr x1, [sp, #0]");                                    // restore the appended value after ensure_unique
 
+    // -- specialize freshly empty arrays to pointer-sized scalar slots --
+    emitter.instruction("ldr x9, [x0]");                                        // x9 = current array length before first-write specialization
+    emitter.instruction("cbnz x9, __rt_array_push_int_shape_ready");            // existing arrays already have their element shape fixed
+    emitter.instruction("mov x10, #8");                                         // scalar/refcounted append slots are pointer-sized
+    emitter.instruction("str x10, [x0, #16]");                                  // elem_size = 8 before any future grow copies live slots
+    emitter.instruction("ldr x10, [x0, #-8]");                                  // load packed array metadata to clear only legacy string tagging
+    emitter.instruction("lsr x11, x10, #8");                                    // move the value_type tag into the low bits
+    emitter.instruction("and x11, x11, #0x7f");                                 // ignore the persistent COW flag while checking the value_type
+    emitter.instruction("cmp x11, #1");                                         // is this still the empty-array string fallback tag?
+    emitter.instruction("b.ne __rt_array_push_int_shape_ready");                // preserve refcounted tags pre-stamped by array_push_refcounted
+    emitter.instruction("mov x12, #0x80ff");                                    // keep indexed-array kind and persistent COW metadata only
+    emitter.instruction("and x10, x10, x12");                                   // clear the stale string value_type tag for scalar arrays
+    emitter.instruction("str x10, [x0, #-8]");                                  // publish scalar metadata before the first append
+    emitter.label("__rt_array_push_int_shape_ready");
+
     // -- check capacity before pushing --
     emitter.instruction("ldr x9, [x0]");                                        // x9 = current array length
     emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = array capacity
@@ -75,6 +90,20 @@ fn emit_array_push_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_ensure_unique");                       // split shared indexed arrays before appending a new scalar slot
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the unique indexed-array pointer across the optional growth helper call
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the indexed-array logical length before checking the append capacity
+    emitter.instruction("test r10, r10");                                       // is this the first append into a freshly empty indexed array?
+    emitter.instruction("jnz __rt_array_push_int_shape_ready");                 // existing arrays already have their element shape fixed
+    emitter.instruction("mov QWORD PTR [rax + 16], 8");                         // elem_size = 8 before any future growth copies live scalar slots
+    emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // load packed metadata so only a legacy string tag is cleared
+    emitter.instruction("mov r8, r11");                                         // copy metadata before isolating the value_type tag
+    emitter.instruction("shr r8, 8");                                           // move the value_type tag into the low bits
+    emitter.instruction("and r8, 0x7f");                                        // ignore the persistent COW flag while checking the value_type
+    emitter.instruction("cmp r8, 1");                                           // is this still the empty-array string fallback tag?
+    emitter.instruction("jne __rt_array_push_int_shape_ready");                 // preserve refcounted tags pre-stamped by array_push_refcounted
+    emitter.instruction("mov r8, 0xffffffff000080ff");                          // preserve heap marker, indexed-array kind, and persistent COW metadata
+    emitter.instruction("and r11, r8");                                         // clear the stale string value_type tag for scalar arrays
+    emitter.instruction("mov QWORD PTR [rax - 8], r11");                        // publish scalar metadata before the first append
+    emitter.label("__rt_array_push_int_shape_ready");
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // reload the indexed-array logical length after shape specialization
     emitter.instruction("mov r11, QWORD PTR [rax + 8]");                        // load the indexed-array capacity before deciding between the fast path and growth
     emitter.instruction("cmp r10, r11");                                        // is the indexed array already full at the current logical length?
     emitter.instruction("jae __rt_array_push_int_grow");                        // grow the indexed array when the new element would exceed the current capacity

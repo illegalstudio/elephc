@@ -24,6 +24,17 @@ fn test_function_call_string() {
 }
 
 #[test]
+fn test_function_returned_concat_survives_outer_concat() {
+    let out = compile_and_run(
+        r#"<?php
+function label($name) { return "[" . $name . "]"; }
+echo label("title") . "|" . label("slug");
+"#,
+    );
+    assert_eq!(out, "[title]|[slug]");
+}
+
+#[test]
 fn test_function_void() {
     let out = compile_and_run("<?php function say() { echo \"hi\"; return; } say();");
     assert_eq!(out, "hi");

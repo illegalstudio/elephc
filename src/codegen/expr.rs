@@ -32,7 +32,10 @@ use crate::types::PhpType;
 
 pub(crate) use helpers::{can_coerce_result_to_type, coerce_result_to_type};
 pub(crate) use objects::{emit_method_call_with_pushed_args, push_magic_property_name_arg};
-pub(crate) use ownership::{expr_result_heap_ownership, string_result_is_owned_call_temp};
+pub(crate) use ownership::{
+    expr_result_heap_ownership, string_result_is_owned_call_temp,
+    string_result_uses_transient_concat_buffer,
+};
 pub use coerce::{coerce_null_to_zero, coerce_to_string, coerce_to_truthiness};
 use helpers::{retain_borrowed_heap_arg, widen_codegen_type};
 

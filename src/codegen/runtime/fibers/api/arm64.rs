@@ -213,6 +213,8 @@ pub(super) fn emit_start(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fiber_start_return_ready");                     // skip the yielded-value load after boxing PHP null
     emitter.label("__rt_fiber_start_return_yield");
     emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // x0 = fiber->transfer_value.lo (suspend yield value)
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because ownership moves to the caller
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale yielded payload
     emitter.label("__rt_fiber_start_return_ready");
 
     // -- epilogue --
@@ -280,6 +282,8 @@ pub(super) fn emit_resume(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fiber_resume_return_ready");                    // skip the yielded-value load after boxing PHP null
     emitter.label("__rt_fiber_resume_return_yield");
     emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // x0 = fiber->transfer_value.lo (next yield value)
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because ownership moves to the caller
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale yielded payload
     emitter.label("__rt_fiber_resume_return_ready");
 
     emitter.instruction("ldr x19, [sp]");                                       // restore caller's x19
@@ -339,6 +343,8 @@ pub(super) fn emit_suspend(emitter: &mut Emitter) {
 
     emitter.label("__rt_fiber_suspend_no_throw");
     emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // x0 = fiber->transfer_value.lo (the value the resumer passed)
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because the fiber body now owns the resume value
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale resume payload
 
     emitter.label("__rt_fiber_suspend_done");
     emitter.instruction("ldr x19, [sp]");                                       // restore caller's x19
@@ -406,6 +412,8 @@ pub(super) fn emit_throw(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fiber_throw_return_ready");                     // skip the yielded-value load after boxing PHP null
     emitter.label("__rt_fiber_throw_return_yield");
     emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // x0 = fiber->transfer_value.lo (next yield value)
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because ownership moves to the caller
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale yielded payload
     emitter.label("__rt_fiber_throw_return_ready");
 
     emitter.instruction("ldr x19, [sp]");                                       // restore caller's x19
@@ -456,6 +464,7 @@ pub(super) fn emit_get_return(emitter: &mut Emitter) {
 
     emitter.label("__rt_fiber_get_return_state_ok");
     emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // x0 = fiber->transfer_value.lo (the closure's return value)
+    emitter.instruction("bl __rt_incref");                                      // retain the return Mixed so the caller owns it independently of the Fiber
     emitter.instruction("b __rt_fiber_get_return_done");                        // skip the NULL-receiver fallback once the return value is loaded
 
     emitter.label("__rt_fiber_get_return_null");
