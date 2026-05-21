@@ -69,7 +69,7 @@ impl Checker {
                 &format!("Function '{}'", name),
                 caller_env,
             )?;
-            if self.respecialize_resolved_function_callable_params_if_needed(
+            if self.respecialize_resolved_function_params_if_needed(
                 name,
                 &normalized_args,
                 caller_env,
@@ -91,8 +91,22 @@ impl Checker {
         }
 
         if self.function_variant_groups.contains_key(name) {
-            self.ensure_function_variant_group_signature(name, span)?;
-            return self.check_function_call(name, args, span, caller_env);
+            let ensure_error = self
+                .ensure_function_variant_group_signature(name, span)
+                .err();
+            if let Some(error) = ensure_error.as_ref() {
+                if !self.functions.contains_key(name) {
+                    return Err(error.clone());
+                }
+            }
+            let provisional_sig = self.functions.get(name).cloned();
+            let result = self.check_function_call(name, args, span, caller_env);
+            if let Some(error) = ensure_error {
+                if provisional_sig == self.functions.get(name).cloned() {
+                    return Err(error);
+                }
+            }
+            return result;
         }
 
         let decl = self

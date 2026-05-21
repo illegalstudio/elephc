@@ -258,3 +258,56 @@ fn test_define_inside_function_can_feed_include_in_same_function() {
     );
     assert_eq!(out, "innerafter");
 }
+
+#[test]
+fn test_include_function_variant_specializes_untyped_array_param_from_call() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire 'lib.php';\n$items = load_items();\n$items = append_item($items, \"c\");\necho count($items) . ':' . $items[2];\n",
+            ),
+            (
+                "lib.php",
+                "<?php\nfunction load_items() {\n    return [\"a\", \"b\"];\n}\n\nfunction append_item($items, $value) {\n    if (count($items) > 0) {\n        $items[] = $value;\n    }\n    return $items;\n}\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "3:c");
+}
+
+#[test]
+fn test_include_function_variant_specializes_untyped_string_param_from_call() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire 'lib.php';\necho describe_text(trim(\" hello \"));\n",
+            ),
+            (
+                "lib.php",
+                "<?php\nfunction describe_text($input) {\n    if (strlen($input) === 0) {\n        return \"empty\";\n    }\n    return \"len=\" . strlen($input);\n}\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "len=5");
+}
+
+#[test]
+fn test_include_function_variant_keeps_error_when_call_does_not_respecialize() {
+    assert!(compile_files_fails(
+        &[
+            (
+                "main.php",
+                "<?php\nrequire 'lib.php';\necho describe_text(123);\n",
+            ),
+            (
+                "lib.php",
+                "<?php\nfunction describe_text($input) {\n    return strlen($input);\n}\n",
+            ),
+        ],
+        "main.php",
+    ));
+}

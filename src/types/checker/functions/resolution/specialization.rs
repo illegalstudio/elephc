@@ -10,68 +10,87 @@
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
-use crate::types::{PhpType, TypeEnv};
+use crate::types::{FunctionSig, PhpType, TypeEnv};
 
-use super::super::super::Checker;
+use super::super::super::{Checker, FnDecl};
 
 impl Checker {
-    pub(crate) fn respecialize_resolved_function_callable_params_if_needed(
+    pub(crate) fn respecialize_resolved_function_params_if_needed(
         &mut self,
         name: &str,
         args: &[Expr],
         caller_env: &TypeEnv,
     ) -> Result<bool, CompileError> {
-        let Some(decl) = self.fn_decls.get(name).cloned() else {
-            return Ok(false);
-        };
         let Some(stored_sig) = self.functions.get(name).cloned() else {
             return Ok(false);
         };
 
-        let regular_param_count = crate::types::call_args::regular_param_count(&stored_sig);
-        let mut param_types = stored_sig.params.clone();
-        let mut changed = false;
-        let mut seen_idx = 0usize;
+        let Some(param_types) =
+            self.respecialized_param_types_for_call(name, &stored_sig, args, caller_env)?
+        else {
+            return Ok(false);
+        };
 
-        for arg in args {
-            let actual_ty = self.infer_type(arg, caller_env)?;
-            if matches!(arg.kind, ExprKind::Spread(_)) {
-                continue;
-            }
-            if seen_idx < regular_param_count && actual_ty == PhpType::Callable {
-                if let Some((param_name, _)) = param_types.get(seen_idx) {
-                    if let Some(sig) = self.resolve_expr_callable_sig(arg, caller_env)? {
-                        let key = (name.to_string(), param_name.clone());
-                        if self.callable_param_sigs.get(&key) != Some(&sig) {
-                            self.callable_param_sigs.insert(key, sig);
-                            changed = true;
-                        }
-                    }
-                }
-            }
-            // Untyped callable params can be resolved as the `Int` fallback
-            // before method/property flow has stabilized; recheck them once
-            // a later pass sees the callable argument.
-            if seen_idx < regular_param_count
-                && !stored_sig
-                    .declared_params
-                    .get(seen_idx)
-                    .copied()
-                    .unwrap_or(false)
-                && param_types[seen_idx].1 == PhpType::Int
-                && actual_ty == PhpType::Callable
-            {
-                param_types[seen_idx].1 = actual_ty;
-                changed = true;
-            }
-            seen_idx += 1;
-        }
-
-        if changed {
+        if let Some(decl) = self.fn_decls.get(name).cloned() {
             self.resolve_function_signature(name, &decl, param_types)?;
+            return Ok(true);
         }
 
-        Ok(changed)
+        let Some(variants) = self.function_variant_groups.get(name).cloned() else {
+            return Ok(false);
+        };
+
+        for variant in &variants {
+            let decl = self.fn_decls.get(variant).cloned().ok_or_else(|| {
+                CompileError::new(
+                    crate::span::Span::dummy(),
+                    &format!(
+                        "Compiler error: function variant '{}' for '{}' has no declaration",
+                        variant, name
+                    ),
+                )
+            })?;
+            let variant_param_types = param_types_for_decl(&decl, &param_types);
+            self.resolve_function_signature(variant, &decl, variant_param_types)?;
+        }
+
+        let first_variant = variants.first().ok_or_else(|| {
+            CompileError::new(
+                crate::span::Span::dummy(),
+                &format!("Function '{}' has no variants", name),
+            )
+        })?;
+        let first_sig = self.functions.get(first_variant).cloned().ok_or_else(|| {
+            CompileError::new(
+                crate::span::Span::dummy(),
+                &format!(
+                    "Compiler error: function variant '{}' for '{}' has no signature",
+                    first_variant, name
+                ),
+            )
+        })?;
+        for variant in variants.iter().skip(1) {
+            let sig = self.functions.get(variant).cloned().ok_or_else(|| {
+                CompileError::new(
+                    crate::span::Span::dummy(),
+                    &format!(
+                        "Compiler error: function variant '{}' for '{}' has no signature",
+                        variant, name
+                    ),
+                )
+            })?;
+            if sig != first_sig {
+                return Err(CompileError::new(
+                    crate::span::Span::dummy(),
+                    &format!(
+                        "Function variants for '{}' must have identical signatures",
+                        name
+                    ),
+                ));
+            }
+        }
+        self.functions.insert(name.to_string(), first_sig);
+        Ok(true)
     }
 
     pub(crate) fn specialize_untyped_function_params(
@@ -127,4 +146,71 @@ impl Checker {
         }
         Ok(())
     }
+
+    fn respecialized_param_types_for_call(
+        &mut self,
+        name: &str,
+        stored_sig: &FunctionSig,
+        args: &[Expr],
+        caller_env: &TypeEnv,
+    ) -> Result<Option<Vec<(String, PhpType)>>, CompileError> {
+        let regular_param_count = crate::types::call_args::regular_param_count(stored_sig);
+        let mut param_types = stored_sig.params.clone();
+        let mut changed = false;
+        let mut seen_idx = 0usize;
+
+        for arg in args {
+            let actual_ty = self.infer_type(arg, caller_env)?;
+            if matches!(arg.kind, ExprKind::Spread(_)) {
+                continue;
+            }
+            if seen_idx < regular_param_count && actual_ty == PhpType::Callable {
+                if let Some((param_name, _)) = param_types.get(seen_idx) {
+                    if let Some(sig) = self.resolve_expr_callable_sig(arg, caller_env)? {
+                        let key = (name.to_string(), param_name.clone());
+                        if self.callable_param_sigs.get(&key) != Some(&sig) {
+                            self.callable_param_sigs.insert(key, sig);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if seen_idx < regular_param_count
+                && !stored_sig
+                    .declared_params
+                    .get(seen_idx)
+                    .copied()
+                    .unwrap_or(false)
+                && param_types[seen_idx].1 == PhpType::Int
+                && actual_ty != PhpType::Int
+            {
+                param_types[seen_idx].1 = actual_ty;
+                changed = true;
+            }
+            seen_idx += 1;
+        }
+
+        Ok(changed.then_some(param_types))
+    }
+}
+
+fn param_types_for_decl(
+    decl: &FnDecl,
+    param_types: &[(String, PhpType)],
+) -> Vec<(String, PhpType)> {
+    param_types
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, (_, ty))| {
+            if let Some(name) = decl.params.get(idx) {
+                Some((name.clone(), ty.clone()))
+            } else if idx == decl.params.len() {
+                decl.variadic
+                    .as_ref()
+                    .map(|name| (name.clone(), ty.clone()))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
