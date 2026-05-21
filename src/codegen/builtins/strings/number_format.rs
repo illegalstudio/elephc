@@ -12,7 +12,6 @@ use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
 use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
@@ -25,17 +24,12 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("number_format()");
-    let t0 = emit_expr(&args[0], emitter, ctx, data);
     // -- prepare the numeric value as a float --
-    if t0 != PhpType::Float {
-        abi::emit_int_result_to_float_result(emitter);                          // convert the scalar number_format() input into the floating-point result register for the active target ABI
-    }
-    abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));          // preserve the floating number_format() input while the formatting options are evaluated
+    super::args::push_float_arg(&args[0], emitter, ctx, data);
 
     // -- prepare decimals argument --
     if args.len() >= 2 {
-        emit_expr(&args[1], emitter, ctx, data);
-        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));              // preserve the requested decimal count while the separator arguments are evaluated
+        super::args::push_int_arg(&args[1], emitter, ctx, data);
     } else {
         match emitter.target.arch {
             Arch::X86_64 => {
@@ -50,7 +44,7 @@ pub fn emit(
 
     // -- prepare decimal point character --
     if args.len() >= 3 {
-        emit_expr(&args[2], emitter, ctx, data);
+        super::args::emit_string_arg(&args[2], emitter, ctx, data);
         match emitter.target.arch {
             Arch::X86_64 => {
                 emitter.instruction("movzx eax, BYTE PTR [rax]");               // load the first byte of the decimal-separator string into the x86_64 integer result register
@@ -74,7 +68,7 @@ pub fn emit(
 
     // -- prepare thousands separator character --
     if args.len() >= 4 {
-        emit_expr(&args[3], emitter, ctx, data);
+        super::args::emit_string_arg(&args[3], emitter, ctx, data);
         match emitter.target.arch {
             Arch::X86_64 => {
                 let use_zero = ctx.next_label("nf_use_zero");

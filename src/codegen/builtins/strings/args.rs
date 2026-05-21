@@ -8,11 +8,13 @@
 //! Key details:
 //! - Helpers must preserve temporary ownership while leaving string results in the ABI registers expected by callers.
 
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::{coerce_to_string, emit_expr};
 use crate::parser::ast::Expr;
+use crate::types::PhpType;
 
 pub(super) fn emit_string_arg(
     arg: &Expr,
@@ -22,6 +24,47 @@ pub(super) fn emit_string_arg(
 ) {
     let ty = emit_expr(arg, emitter, ctx, data);
     coerce_to_string(emitter, ctx, data, &ty);
+}
+
+pub(super) fn push_int_arg(
+    arg: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    crate::codegen::expr::calls::args::push_expr_arg(
+        arg,
+        Some(&PhpType::Int),
+        emitter,
+        ctx,
+        data,
+    )
+}
+
+pub(super) fn emit_int_arg(
+    arg: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let ty = push_int_arg(arg, emitter, ctx, data);
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
+    ty
+}
+
+pub(super) fn push_float_arg(
+    arg: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    crate::codegen::expr::calls::args::push_expr_arg(
+        arg,
+        Some(&PhpType::Float),
+        emitter,
+        ctx,
+        data,
+    )
 }
 
 #[cfg(test)]

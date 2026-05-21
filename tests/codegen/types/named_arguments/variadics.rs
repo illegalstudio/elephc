@@ -99,3 +99,42 @@ sum_variadic(...["head" => 10], ...[20, 30]);
     );
     assert_eq!(out, "1,2,3\n60\n");
 }
+
+#[test]
+fn test_multiple_positional_spreads_continue_into_variadic_tail() {
+    let out = compile_and_run(
+        r#"<?php
+function f($a, $b = 20, ...$rest) {
+    echo $a . ":" . $b . ":" . json_encode($rest);
+}
+f(...[10], ...[7, 30]);
+"#,
+    );
+    assert_eq!(out, "10:7:[30]");
+}
+
+#[test]
+fn test_assoc_spread_extra_after_positional_spread_keeps_variadic_key() {
+    let out = compile_and_run(
+        r#"<?php
+function f($a, $b = 20, ...$rest) {
+    echo $a . ":" . $b . ":" . json_encode($rest);
+}
+f(...[10], ...["b" => 7, "x" => 30]);
+"#,
+    );
+    assert_eq!(out, "10:7:{\"x\":30}");
+}
+
+#[test]
+fn test_assoc_spread_extras_after_positional_spread_keep_variadic_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function f($a, $b = 20, ...$rest) {
+    echo $a . ":" . $b . ":" . json_encode($rest);
+}
+f(...[10], ...["b" => 7, "x" => 30, "y" => 40]);
+"#,
+    );
+    assert_eq!(out, "10:7:{\"x\":30,\"y\":40}");
+}

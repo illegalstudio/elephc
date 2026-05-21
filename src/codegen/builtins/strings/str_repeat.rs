@@ -28,7 +28,7 @@ pub fn emit(
     // -- save string, evaluate repeat count --
     let (str_ptr_reg, str_len_reg) = abi::string_result_regs(emitter);
     abi::emit_push_reg_pair(emitter, str_ptr_reg, str_len_reg);                 // preserve the source string while the repeat-count expression is evaluated
-    emit_expr(&args[1], emitter, ctx, data);
+    super::args::emit_int_arg(&args[1], emitter, ctx, data);
 
     match emitter.target.arch {
         Arch::AArch64 => {

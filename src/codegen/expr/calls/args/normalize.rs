@@ -294,19 +294,38 @@ pub(crate) fn prepare_call_args(
 
     let mut regular_args = Vec::new();
     let mut variadic_args = Vec::new();
-    let mut spread_arg = None;
+    let mut spread_segments = Vec::new();
+    let mut first_spread_span = None;
     let mut spread_at_index = 0usize;
 
     for (idx, arg) in args_exprs.iter().enumerate() {
         if let ExprKind::Spread(inner) = &arg.kind {
-            spread_arg = Some((**inner).clone());
-            spread_at_index = regular_args.len();
+            if spread_segments.is_empty() {
+                spread_at_index = regular_args.len();
+                first_spread_span = Some(arg.span);
+            }
+            spread_segments.push(Expr::new(
+                ExprKind::Spread(Box::new((**inner).clone())),
+                arg.span,
+            ));
         } else if is_variadic && idx >= regular_param_count {
             variadic_args.push(arg.clone());
         } else {
             regular_args.push(arg.clone());
         }
     }
+
+    let spread_arg = match spread_segments.len() {
+        0 => None,
+        1 => match spread_segments.pop().map(|segment| segment.kind) {
+            Some(ExprKind::Spread(inner)) => Some(*inner),
+            _ => unreachable!("spread segment must keep its spread wrapper"),
+        },
+        _ => Some(Expr::new(
+            ExprKind::ArrayLiteral(spread_segments),
+            first_spread_span.unwrap_or_else(Span::dummy),
+        )),
+    };
 
     let spread_into_named = spread_arg.is_some() && spread_at_index < regular_param_count;
     let mut all_args = regular_args;

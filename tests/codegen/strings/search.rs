@@ -28,6 +28,26 @@ fn test_substr_negative_offset() {
 }
 
 #[test]
+fn test_substr_coerces_mixed_numeric_offset_from_function_return_add() {
+    let out = compile_and_run(
+        r#"<?php
+function get_index(string $s): int {
+    $p = strpos($s, "?");
+    return intval($p);
+}
+function slice_after(string $s): string {
+    $o = get_index($s);
+    $p = $o + 1;
+    return substr($s, $p);
+}
+echo slice_after("/hello?name=elephc"), "\n";
+echo substr("/hello?name=elephc", get_index("/hello?name=elephc") + 1), "\n";
+"#,
+    );
+    assert_eq!(out, "name=elephc\nname=elephc\n");
+}
+
+#[test]
 fn test_strpos_found() {
     let out = compile_and_run(r#"<?php echo strpos("Hello World", "World");"#);
     assert_eq!(out, "6");

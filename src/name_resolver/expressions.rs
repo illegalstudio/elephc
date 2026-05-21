@@ -235,6 +235,15 @@ pub(super) fn resolve_expr(
                 _ => receiver.clone(),
             },
         },
+        ExprKind::ScopedConstantAccess { receiver, name } => ExprKind::ScopedConstantAccess {
+            receiver: match receiver {
+                StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
+                    resolve_special_or_class_name(name, current_namespace, imports, symbols),
+                )),
+                _ => receiver.clone(),
+            },
+            name: name.clone(),
+        },
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver: match receiver {
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(

@@ -117,6 +117,9 @@ pub fn emit(
             // x0 = hash table pointer
             abi::emit_call_label(emitter, "__rt_json_encode_assoc");            // encode the associative array to JSON using the active target ABI
         }
+        PhpType::Iterable => {
+            emit_json_encode_iterable(emitter, ctx);
+        }
         PhpType::Object(class_name) => {
             if crate::types::checker::builtin_stdclass::is_stdclass(&class_name) {
                 // stdClass has no static descriptor; encode the dynamic
@@ -148,6 +151,58 @@ pub fn emit(
     box_json_encode_result(emitter, ctx);
 
     Some(PhpType::Mixed)
+}
+
+fn emit_json_encode_iterable(emitter: &mut Emitter, ctx: &mut Context) {
+    let indexed_case = ctx.next_label("json_encode_iter_indexed");
+    let assoc_case = ctx.next_label("json_encode_iter_assoc");
+    let object_case = ctx.next_label("json_encode_iter_object");
+    let null_case = ctx.next_label("json_encode_iter_null");
+    let done = ctx.next_label("json_encode_iter_done");
+
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve iterable pointer while probing its heap kind
+    abi::emit_call_label(emitter, "__rt_heap_kind");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #2");                                  // check whether the iterable is backed by an indexed array
+            emitter.instruction(&format!("b.eq {}", indexed_case));             // encode indexed-array iterables with the array encoder
+            emitter.instruction("cmp x0, #3");                                  // check whether the iterable is backed by a hash table
+            emitter.instruction(&format!("b.eq {}", assoc_case));               // encode hash-backed iterables with the associative encoder
+            emitter.instruction("cmp x0, #4");                                  // check whether the iterable is backed by an object
+            emitter.instruction(&format!("b.eq {}", object_case));              // encode object-backed iterables with the object encoder
+            emitter.instruction(&format!("b {}", null_case));                   // unknown iterable heap kinds encode as JSON null
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 2");                                  // check whether the iterable is backed by an indexed array
+            emitter.instruction(&format!("je {}", indexed_case));               // encode indexed-array iterables with the array encoder
+            emitter.instruction("cmp rax, 3");                                  // check whether the iterable is backed by a hash table
+            emitter.instruction(&format!("je {}", assoc_case));                 // encode hash-backed iterables with the associative encoder
+            emitter.instruction("cmp rax, 4");                                  // check whether the iterable is backed by an object
+            emitter.instruction(&format!("je {}", object_case));                // encode object-backed iterables with the object encoder
+            emitter.instruction(&format!("jmp {}", null_case));                 // unknown iterable heap kinds encode as JSON null
+        }
+    }
+
+    emitter.label(&indexed_case);
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the iterable array pointer for JSON encoding
+    abi::emit_call_label(emitter, "__rt_json_encode_array_dynamic");
+    abi::emit_jump(emitter, &done);
+
+    emitter.label(&assoc_case);
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the iterable hash pointer for JSON encoding
+    abi::emit_call_label(emitter, "__rt_json_encode_assoc");
+    abi::emit_jump(emitter, &done);
+
+    emitter.label(&object_case);
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the iterable object pointer for JSON encoding
+    abi::emit_call_label(emitter, "__rt_json_encode_object");
+    abi::emit_jump(emitter, &done);
+
+    emitter.label(&null_case);
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // discard the unknown iterable pointer before encoding null
+    abi::emit_call_label(emitter, "__rt_json_encode_null");
+
+    emitter.label(&done);
 }
 
 fn persist_string_result_if_needed(ty: &PhpType, emitter: &mut Emitter) {

@@ -19,7 +19,9 @@ use super::registers::{
     float_result_reg, int_result_reg, is_float_register, secondary_scratch_reg,
     string_result_regs, symbol_scratch_reg, tertiary_scratch_reg,
 };
-use super::values::emit_decref_if_refcounted;
+use super::values::{emit_decref_if_refcounted, emit_load_int_immediate};
+
+const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 
 pub fn emit_store_local_slot_to_symbol(
     emitter: &mut Emitter,
@@ -41,7 +43,10 @@ pub fn emit_store_local_slot_to_symbol(
             emit_store_reg_to_symbol(emitter, local_reg, symbol, 0);                    // store the local string pointer into symbol storage
             emit_store_reg_to_symbol(emitter, local_hi_reg, symbol, 8);                 // store the local string length into symbol storage
         }
-        PhpType::Void => {}
+        PhpType::Void => {
+            load_at_offset_scratch(emitter, local_reg, offset, symbol_reg);             // load the local null sentinel from its frame slot
+            emit_store_reg_to_symbol(emitter, local_reg, symbol, 0);                    // store the local null sentinel into symbol storage
+        }
         _ => {
             load_at_offset_scratch(emitter, local_reg, offset, symbol_reg);             // load the local scalar or pointer-like value from its frame slot
             emit_store_reg_to_symbol(emitter, local_reg, symbol, 0);                    // store the local scalar or pointer-like value into symbol storage
@@ -69,7 +74,10 @@ pub fn emit_load_symbol_to_local_slot(
             store_at_offset_scratch(emitter, ptr_reg, offset, local_reg);               // write the loaded string pointer into the local frame slot
             store_at_offset_scratch(emitter, len_reg, offset - 8, local_hi_reg);        // write the loaded string length into the paired local frame slot
         }
-        PhpType::Void => {}
+        PhpType::Void => {
+            emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);       // load the null sentinel from symbol storage
+            store_at_offset_scratch(emitter, int_result_reg(emitter), offset, local_reg); // write the loaded null sentinel into the local frame slot
+        }
         _ => {
             emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);       // load the scalar or pointer-like value from symbol storage
             store_at_offset_scratch(emitter, int_result_reg(emitter), offset, local_reg); // write the loaded scalar or pointer-like value into the local frame slot
@@ -220,7 +228,9 @@ pub fn emit_load_symbol_to_result(emitter: &mut Emitter, symbol: &str, ty: &PhpT
             emit_load_symbol_to_reg(emitter, ptr_reg, symbol, 0);                       // load the string pointer from symbol storage into the result register pair
             emit_load_symbol_to_reg(emitter, len_reg, symbol, 8);                       // load the string length from symbol storage into the result register pair
         }
-        PhpType::Void => {}
+        PhpType::Void => {
+            emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);       // load the null sentinel from symbol storage into the result register
+        }
         _ => {
             emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);       // load the scalar or pointer-like payload from symbol storage into the result register
         }
@@ -288,7 +298,11 @@ pub fn emit_store_result_to_symbol(
             emit_store_reg_to_symbol(emitter, ptr_reg, symbol, 0);                      // store the string pointer result into symbol storage
             emit_store_reg_to_symbol(emitter, len_reg, symbol, 8);                      // store the string length result into symbol storage
         }
-        PhpType::Void => {}
+        PhpType::Void => {
+            let null_reg = secondary_scratch_reg(emitter);
+            emit_load_int_immediate(emitter, null_reg, NULL_SENTINEL);
+            emit_store_reg_to_symbol(emitter, null_reg, symbol, 0);                     // store the null sentinel result into symbol storage
+        }
         _ => {
             emit_store_reg_to_symbol(emitter, int_result_reg(emitter), symbol, 0);      // store the scalar or pointer-like result into symbol storage
         }

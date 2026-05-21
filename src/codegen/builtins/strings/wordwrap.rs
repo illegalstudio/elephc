@@ -29,7 +29,7 @@ pub fn emit(
         Arch::AArch64 => {
             emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the input string while evaluating the width and optional break string
             if args.len() >= 2 {
-                emit_expr(&args[1], emitter, ctx, data);
+                super::args::emit_int_arg(&args[1], emitter, ctx, data);
                 emitter.instruction("mov x3, x0");                              // move the requested wrap width into the scalar runtime argument register
             } else {
                 emitter.instruction("mov x3, #75");                             // default to the PHP wordwrap() width of 75 when omitted
@@ -48,7 +48,7 @@ pub fn emit(
         Arch::X86_64 => {
             abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // preserve the input string while evaluating the width and optional break string
             if args.len() >= 2 {
-                emit_expr(&args[1], emitter, ctx, data);
+                super::args::emit_int_arg(&args[1], emitter, ctx, data);
                 emitter.instruction("mov rdi, rax");                            // move the requested wrap width into the scalar x86_64 runtime argument register
             } else {
                 emitter.instruction("mov rdi, 75");                             // default to the PHP wordwrap() width of 75 when omitted

@@ -29,7 +29,7 @@ pub fn emit(
         Arch::AArch64 => {
             emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the source string while evaluating the optional chunk-length expression
             if args.len() >= 2 {
-                emit_expr(&args[1], emitter, ctx, data);
+                super::args::emit_int_arg(&args[1], emitter, ctx, data);
                 emitter.instruction("mov x3, x0");                              // move the requested chunk length into the AArch64 helper argument register
             } else {
                 emitter.instruction("mov x3, #1");                              // default to one-byte chunks when str_split() omits the chunk length
@@ -39,7 +39,7 @@ pub fn emit(
         Arch::X86_64 => {
             abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // preserve the source string while evaluating the optional chunk-length expression
             if args.len() >= 2 {
-                emit_expr(&args[1], emitter, ctx, data);
+                super::args::emit_int_arg(&args[1], emitter, ctx, data);
                 emitter.instruction("mov rdi, rax");                            // move the requested chunk length into the extra x86_64 helper argument register
             } else {
                 emitter.instruction("mov rdi, 1");                              // default to one-byte chunks when str_split() omits the chunk length

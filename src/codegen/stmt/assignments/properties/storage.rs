@@ -12,6 +12,8 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::types::PhpType;
 
+const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
+
 pub(super) fn release_previous_property_value(
     emitter: &mut Emitter,
     object_reg: &str,
@@ -88,7 +90,12 @@ pub(super) fn store_property_value(emitter: &mut Emitter, object_reg: &str, val_
             abi::emit_store_to_address(emitter, ptr_reg, object_reg, offset);
             abi::emit_store_to_address(emitter, len_reg, object_reg, offset + 8);
         }
-        PhpType::Void | PhpType::Never => {
+        PhpType::Void => {
+            abi::emit_load_int_immediate(emitter, temp_reg, NULL_SENTINEL);
+            abi::emit_store_to_address(emitter, temp_reg, object_reg, offset);
+            abi::emit_store_zero_to_address(emitter, object_reg, offset + 8);
+        }
+        PhpType::Never => {
             abi::emit_store_zero_to_address(emitter, object_reg, offset);
             abi::emit_store_zero_to_address(emitter, object_reg, offset + 8);
         }
@@ -194,7 +201,11 @@ pub(super) fn store_referenced_value(
             abi::emit_store_to_address(emitter, ptr_reg, pointer_reg, 0);
             abi::emit_store_to_address(emitter, len_reg, pointer_reg, 8);
         }
-        PhpType::Void | PhpType::Never => {
+        PhpType::Void => {
+            abi::emit_load_int_immediate(emitter, temp_reg, NULL_SENTINEL);
+            abi::emit_store_to_address(emitter, temp_reg, pointer_reg, 0);
+        }
+        PhpType::Never => {
             abi::emit_store_zero_to_address(emitter, pointer_reg, 0);
         }
     }

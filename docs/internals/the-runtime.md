@@ -135,7 +135,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_strrev` | Reverse string | `x1`/`x2` | `x1`/`x2` |
 | `__rt_strpos` | Find substring | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
 | `__rt_strrpos` | Find last occurrence | `x1`/`x2` + `x3`/`x4` | `x0` |
-| `__rt_str_repeat` | Repeat N times | `x1`/`x2` + `x0` (count) | `x1`/`x2` |
+| `__rt_str_repeat` | Repeat N times with heap fallback for large results | `x1`/`x2` + count | `x1`/`x2` |
 | `__rt_str_replace` | Replace all occurrences | search + replace + subject | `x1`/`x2` |
 | `__rt_explode` | Split by delimiter | delimiter + string | `x0` (array ptr) |
 | `__rt_implode` | Join string array with glue | glue + array | `x1`/`x2` |

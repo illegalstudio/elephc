@@ -11,7 +11,6 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
 use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
@@ -31,10 +30,9 @@ pub fn emit(
         Arch::AArch64 => {
             // -- save string and evaluate offset --
             emitter.instruction("stp x1, x2, [sp, #-16]!");                     // push string ptr and length onto stack
-            emit_expr(&args[1], emitter, ctx, data);
-            emitter.instruction("str x0, [sp, #-16]!");                         // push offset value onto stack
+            super::args::push_int_arg(&args[1], emitter, ctx, data);
             if args.len() >= 3 {
-                emit_expr(&args[2], emitter, ctx, data);
+                super::args::emit_int_arg(&args[2], emitter, ctx, data);
                 emitter.instruction("mov x3, x0");                              // move length argument to x3
             } else {
                 emitter.instruction("mov x3, #-1");                             // set sentinel -1: use all remaining characters
@@ -67,10 +65,9 @@ pub fn emit(
         Arch::X86_64 => {
             // -- save string and evaluate offset --
             abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // push string ptr and length onto the temporary stack
-            emit_expr(&args[1], emitter, ctx, data);
-            abi::emit_push_reg(emitter, "rax");                                 // push offset value onto the temporary stack
+            super::args::push_int_arg(&args[1], emitter, ctx, data);
             if args.len() >= 3 {
-                emit_expr(&args[2], emitter, ctx, data);
+                super::args::emit_int_arg(&args[2], emitter, ctx, data);
                 emitter.instruction("mov rcx, rax");                            // move the optional length argument into the x86_64 scratch register
             } else {
                 abi::emit_load_int_immediate(emitter, "rcx", -1);               // set sentinel -1 so the helper keeps the full tail when the length is omitted
