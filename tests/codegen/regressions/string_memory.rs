@@ -99,6 +99,22 @@ echo $a . $b;
 }
 
 #[test]
+fn test_echo_concat_chain_releases_intermediate_strings() {
+    // Regression for per-statement concat temporaries: each nested concat only needs
+    // a persisted left operand until the next concat has copied it.
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+for ($i = 0; $i < 1200; $i++) {
+    echo "a" . $i . "b" . $i . "c" . $i . "\n";
+}
+echo "done";
+"#,
+        65_536,
+    );
+    assert!(out.ends_with("done"));
+}
+
+#[test]
 fn test_unset_frees_string() {
     let out = compile_and_run(
         r#"<?php

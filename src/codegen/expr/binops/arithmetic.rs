@@ -344,7 +344,8 @@ pub(super) fn emit_concat_binop(
 ) -> PhpType {
     let left_ty = emit_expr(left, emitter, ctx, data);
     coerce_to_string(emitter, ctx, data, &left_ty);
-    if expr_result_heap_ownership(left) == HeapOwnership::NonHeap {
+    let persisted_left = expr_result_heap_ownership(left) == HeapOwnership::NonHeap;
+    if persisted_left {
         abi::emit_call_label(emitter, "__rt_str_persist");
     }
     let (left_ptr_reg, left_len_reg) = abi::string_result_regs(emitter);
@@ -363,8 +364,31 @@ pub(super) fn emit_concat_binop(
             abi::emit_pop_reg_pair(emitter, "rax", "rdx");
         }
     }
+    if persisted_left {
+        emit_preserve_concat_left_for_cleanup(emitter);
+    }
     abi::emit_call_label(emitter, "__rt_concat");
+    if persisted_left {
+        emit_release_preserved_concat_left(emitter);
+    }
     PhpType::Str
+}
+
+fn emit_preserve_concat_left_for_cleanup(emitter: &mut Emitter) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+    abi::emit_push_reg_pair(emitter, ptr_reg, len_reg);
+}
+
+fn emit_release_preserved_concat_left(emitter: &mut Emitter) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+
+    // Keep the concat result live while freeing the persisted left operand that
+    // __rt_concat has already copied into the result buffer.
+    abi::emit_push_reg_pair(emitter, ptr_reg, len_reg);
+    abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
+    abi::emit_release_temporary_stack(emitter, 16);
 }
 
 pub(super) fn emit_bitwise_binop(
