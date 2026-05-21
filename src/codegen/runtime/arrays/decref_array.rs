@@ -90,6 +90,16 @@ fn emit_decref_array_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rax, rax");                                       // skip null array pointers so non-values do not participate in refcount traffic
     emitter.instruction("jz __rt_decref_array_skip");                           // null array pointers need no heap refcount update
+    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    emitter.instruction("lea r10, [r10 + 16]");                                 // first valid user payload begins after the initial heap header
+    emitter.instruction("cmp rax, r10");                                        // reject null sentinels, scalar values, and static pointers before reading a heap header
+    emitter.instruction("jb __rt_decref_array_skip");                           // non-heap values below the managed heap do not own indexed-array storage
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_heap_off");
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the current x86_64 heap bump extent before deriving the live heap end
+    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    emitter.instruction("add r11, r10");                                        // compute the managed heap end address from the base and live offset
+    emitter.instruction("cmp rax, r11");                                        // is the candidate array pointer outside the live heap window?
+    emitter.instruction("jae __rt_decref_array_skip");                          // pointers above the live heap end are not refcounted arrays
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
     emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that the payload is owned by the x86_64 heap wrapper before mutating refcount state

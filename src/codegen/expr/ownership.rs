@@ -9,7 +9,8 @@
 //! - Ownership answers must stay conservative to avoid leaks, double frees, and borrowed-value releases.
 
 use crate::codegen::context::{Context, HeapOwnership};
-use crate::parser::ast::{BinOp, Expr, ExprKind};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind};
+use crate::types::PhpType;
 
 pub(crate) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {
     match &expr.kind {
@@ -68,6 +69,22 @@ pub(crate) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {
     }
 }
 
+pub(crate) fn string_result_uses_transient_concat_buffer(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::BinaryOp {
+            op: BinOp::Concat, ..
+        } => true,
+        ExprKind::Spread(inner)
+        | ExprKind::PtrCast { expr: inner, .. }
+        | ExprKind::ErrorSuppress(inner) => string_result_uses_transient_concat_buffer(inner),
+        ExprKind::Cast {
+            target: CastType::String,
+            expr: inner,
+        } => string_result_uses_transient_concat_buffer(inner),
+        _ => false,
+    }
+}
+
 pub(crate) fn string_result_is_owned_call_temp(value: &Expr, ctx: &Context) -> bool {
     match &value.kind {
         ExprKind::FunctionCall { name, .. } => {
@@ -82,10 +99,38 @@ pub(crate) fn string_result_is_owned_call_temp(value: &Expr, ctx: &Context) -> b
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::ClosureCall { .. }
         | ExprKind::ExprCall { .. } => true,
+        ExprKind::Cast {
+            target: CastType::String,
+            expr,
+        } => string_result_is_owned_call_temp(expr, ctx),
+        ExprKind::Variable(name) => ctx
+            .variables
+            .get(name)
+            .is_some_and(|var| {
+                type_has_tostring(&var.ty, ctx) || type_has_tostring(&var.static_ty, ctx)
+            }),
+        ExprKind::This => ctx
+            .current_class
+            .as_deref()
+            .is_some_and(|class_name| class_has_tostring(ctx, class_name)),
+        ExprKind::NewObject { class_name, .. } => class_has_tostring(ctx, class_name.as_str()),
         _ => false,
     }
 }
 
 fn builtin_returns_owned_string(name: &str) -> bool {
     matches!(name, "ptr_read_string")
+}
+
+fn type_has_tostring(ty: &PhpType, ctx: &Context) -> bool {
+    match ty.codegen_repr() {
+        PhpType::Object(class_name) => class_has_tostring(ctx, &class_name),
+        _ => false,
+    }
+}
+
+fn class_has_tostring(ctx: &Context, class_name: &str) -> bool {
+    ctx.classes
+        .get(class_name)
+        .is_some_and(|class_info| class_info.methods.contains_key("__tostring"))
 }

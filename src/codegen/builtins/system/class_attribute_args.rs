@@ -76,8 +76,8 @@ pub fn emit(
             emitter.instruction("bl __rt_array_new");                           // x0 = freshly allocated array pointer
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov rax, {}", attr_args.len().max(1))); // initial capacity (≥1)
-            emitter.instruction("mov rdx, 8");                                  // element stride: one heap pointer per slot
+            emitter.instruction(&format!("mov rdi, {}", attr_args.len().max(1))); // initial capacity (≥1)
+            emitter.instruction("mov rsi, 8");                                  // element stride: one heap pointer per slot
             emitter.instruction("call __rt_array_new");                         // rax = array pointer
         }
     }
@@ -107,7 +107,7 @@ pub fn emit(
                 abi::emit_push_reg(emitter, result_reg);                        // save the array pointer across the boxing helper call
                 emit_box_arg_x86_64(arg, emitter, data);                        // rax = boxed mixed-cell pointer for this arg
                 emitter.instruction("mov rsi, rax");                            // rsi = mixed-cell pointer (push helper's value arg)
-                emitter.instruction("mov rax, QWORD PTR [rsp]");                // rax = array pointer (push helper's array arg)
+                emitter.instruction("mov rdi, QWORD PTR [rsp]");                // rdi = array pointer (push helper's array arg)
                 emitter.instruction("call __rt_array_push_int");                // rax = updated array pointer
                 abi::emit_release_temporary_stack(emitter, 16);                 // drop the saved slot now that the helper returned the up-to-date pointer
             }

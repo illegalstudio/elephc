@@ -34,6 +34,20 @@ pub fn emit_array_push_str(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_array_ensure_unique");                         // split shared arrays before persisting/appending a new string slot
     emitter.instruction("str x0, [sp, #0]");                                    // save the unique array pointer
 
+    // -- specialize freshly empty arrays to 16-byte string slots --
+    emitter.instruction("ldr x9, [x0]");                                        // x9 = current array length before first-write specialization
+    emitter.instruction("cbnz x9, __rt_array_push_str_shape_ready");            // existing arrays already have their element shape fixed
+    emitter.instruction("mov x10, #16");                                        // string append slots carry pointer and length
+    emitter.instruction("str x10, [x0, #16]");                                  // elem_size = 16 before any future grow copies live string slots
+    emitter.instruction("ldr x10, [x0, #-8]");                                  // load packed array metadata for value_type stamping
+    emitter.instruction("mov x11, #0x80ff");                                    // keep indexed-array kind and persistent COW metadata only
+    emitter.instruction("and x10, x10, x11");                                   // clear any stale first-write value_type tag
+    emitter.instruction("mov x11, #1");                                         // value_type 1 = string payload slots
+    emitter.instruction("lsl x11, x11, #8");                                    // move string value_type into the packed kind-word byte lane
+    emitter.instruction("orr x10, x10, x11");                                   // combine stable metadata with the string value_type tag
+    emitter.instruction("str x10, [x0, #-8]");                                  // publish string metadata before the first append
+    emitter.label("__rt_array_push_str_shape_ready");
+
     // -- persist string to heap before pushing --
     emitter.instruction("ldp x1, x2, [sp, #8]");                                // restore the incoming string ptr/len after ensure_unique
     emitter.instruction("bl __rt_str_persist");                                 // copy string to heap, x1=heap_ptr, x2=len
@@ -83,6 +97,16 @@ fn emit_array_push_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the incoming string length across uniqueness and persistence helper calls
     emitter.instruction("call __rt_array_ensure_unique");                       // split shared indexed arrays before appending a new owned string slot
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the unique indexed-array pointer across string persistence and optional growth
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load length before first-write string shape specialization
+    emitter.instruction("test r10, r10");                                       // is this the first append into a freshly empty indexed array?
+    emitter.instruction("jnz __rt_array_push_str_shape_ready");                 // existing arrays already have their element shape fixed
+    emitter.instruction("mov QWORD PTR [rax + 16], 16");                        // elem_size = 16 before any future growth copies live string slots
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load packed indexed-array metadata for value_type stamping
+    emitter.instruction("mov r11, 0xffffffff000080ff");                         // preserve heap marker, indexed-array kind, and persistent COW metadata
+    emitter.instruction("and r10, r11");                                        // clear any stale first-write value_type tag
+    emitter.instruction("or r10, 0x100");                                       // value_type 1 = string payload slots
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // publish string metadata before the first append
+    emitter.label("__rt_array_push_str_shape_ready");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // move the incoming string pointer into the x86_64 string-persist input register
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // move the incoming string length into the x86_64 string-persist length register
     emitter.instruction("call __rt_str_persist");                               // duplicate the appended string into owned heap storage before storing it in the indexed array

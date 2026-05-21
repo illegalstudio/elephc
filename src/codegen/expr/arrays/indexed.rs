@@ -117,7 +117,7 @@ fn emit_array_literal_linux_x86_64(
 ) -> PhpType {
     if elems.is_empty() {
         abi::emit_load_int_immediate(emitter, "rdi", 4);                        // initial capacity: four slots for a still-unspecialized empty array
-        abi::emit_load_int_immediate(emitter, "rsi", 8);                        // default empty-array slots use pointer-sized cells until a write specializes them
+        abi::emit_load_int_immediate(emitter, "rsi", 16);                       // default empty-array slots are wide enough for strings until first write specializes them
         abi::emit_call_label(emitter, "__rt_array_new");                        // allocate the empty indexed array through the shared runtime helper
         return PhpType::Array(Box::new(PhpType::Never));
     }

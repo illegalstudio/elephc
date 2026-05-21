@@ -39,6 +39,9 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save hash_table_ptr
     emitter.instruction("str x1, [sp, #8]");                                    // save key_ptr
     emitter.instruction("str x2, [sp, #16]");                                   // save key_len
+    emitter.instruction("cbz x0, __rt_hash_get_not_found");                     // null tables cannot contain the requested key
+    emitter.instruction("ldr x5, [x0, #8]");                                    // load capacity before hashing to avoid division by zero on empty tables
+    emitter.instruction("cbz x5, __rt_hash_get_not_found");                     // zero-capacity tables cannot contain the requested key
 
     // -- hash the key --
     emitter.instruction("bl __rt_hash_key_hash");                               // compute the typed key hash, result in x0
@@ -135,6 +138,11 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash-table pointer across helper calls and probe iterations
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the key pointer across helper calls and probe iterations
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the key length across helper calls and probe iterations
+    emitter.instruction("test rdi, rdi");                                       // null tables cannot contain the requested key
+    emitter.instruction("jz __rt_hash_get_not_found");                          // return a miss before reading a null table header
+    emitter.instruction("mov r11, QWORD PTR [rdi + 8]");                        // load capacity before hashing to avoid division by zero on empty tables
+    emitter.instruction("test r11, r11");                                       // zero capacity means there are no live entries to probe
+    emitter.instruction("jz __rt_hash_get_not_found");                          // return a miss for empty hash tables
     emitter.instruction("mov rdi, rsi");                                        // pass the lookup key low word to the typed hash helper
     emitter.instruction("mov rsi, rdx");                                        // pass the lookup key high word to the typed hash helper
     emitter.instruction("call __rt_hash_key_hash");                             // compute the 64-bit hash for the normalized lookup key

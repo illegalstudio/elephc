@@ -188,13 +188,13 @@ pub(crate) fn emit_dynamic_property_get(
             emitter.instruction(&format!("mov rdi, QWORD PTR [{} + {}]", object_reg, dyn_slot_offset)); // rdi = hashtable pointer from the receiver slot
             abi::emit_symbol_address(emitter, "rsi", &label);                    // rsi = property-name string address
             emitter.instruction(&format!("mov rdx, {}", key_len));              // rdx = property-name length
-            emitter.instruction("call __rt_hash_get");                          // rax = found flag; r12=value_lo, r13=value_hi, r14=value_tag
+            emitter.instruction("call __rt_hash_get");                          // rax = found flag; rdi=value_lo, rsi=value_hi, rcx=value_tag
             let miss_label = ctx.next_label("dyn_get_miss");
             let done_label = ctx.next_label("dyn_get_done");
             emitter.instruction("test rax, rax");                               // check the hash_get found flag
             emitter.instruction(&format!("je {}", miss_label));                 // missing entries route to the null-return path
-            // Found: r12 holds the Mixed cell pointer.
-            emitter.instruction("mov rax, r12");                                // result = mixed cell pointer
+            // Found: rdi holds the Mixed cell pointer.
+            emitter.instruction("mov rax, rdi");                                // result = mixed cell pointer
             emitter.instruction(&format!("jmp {}", done_label));                // skip the null-return path
             emitter.label(&miss_label);
             emitter.instruction("mov rdi, 9223372036854775806");                // null sentinel low word for boxed Mixed null
