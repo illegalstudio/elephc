@@ -459,7 +459,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_str_persist");                               // duplicate the caller prefix into a heap-owned buffer
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // remember the heap-owned prefix pointer for the post-call restore
     emitter.label("__rt_json_obj_jsonserialize_invoke_x");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the receiver object pointer for the method call
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the receiver object pointer as the SysV $this argument
     emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // reload the saved jsonSerialize method target
     emitter.instruction("call rdx");                                            // invoke jsonSerialize on the receiver and capture the boxed mixed result
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // park the boxed mixed return value across the prefix-restore loop

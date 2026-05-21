@@ -11,7 +11,10 @@
 use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::{coerce_result_to_type, emit_expr, expr_result_heap_ownership};
+use crate::codegen::expr::{
+    coerce_result_to_type, emit_expr, expr_result_heap_ownership,
+    string_result_is_owned_call_temp, string_result_uses_transient_concat_buffer,
+};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -36,8 +39,14 @@ pub(crate) fn emit_return_stmt(
     if let Some(e) = expr {
         let ty = emit_expr(e, emitter, ctx, data);
         super::super::super::helpers::retain_borrowed_heap_result(emitter, e, &ty);
-        if matches!(ty, PhpType::Str) && expr_result_heap_ownership(e) != HeapOwnership::Owned {
-            crate::codegen::abi::emit_call_label(emitter, "__rt_str_persist");   // persist borrowed string before locals are freed
+        if matches!(ty, PhpType::Str)
+            && (expr_result_heap_ownership(e) != HeapOwnership::Owned
+                || string_result_uses_transient_concat_buffer(e))
+        {
+            persist_string_return_result(
+                emitter,
+                string_result_is_owned_call_temp(e, ctx),
+            );
         }
         let target_ty = ctx.return_type.clone();
         if crate::codegen::expr::can_coerce_result_to_type(&ty, &target_ty) {
@@ -73,6 +82,26 @@ pub(crate) fn emit_return_stmt(
             crate::codegen::abi::emit_jump(emitter, label);                      // branch to function epilogue for stack cleanup and ret
         }
     }
+}
+
+fn persist_string_return_result(emitter: &mut Emitter, release_original: bool) {
+    if !release_original {
+        crate::codegen::abi::emit_call_label(emitter, "__rt_str_persist");       // persist borrowed or concat-buffer string before locals are freed
+        return;
+    }
+
+    let (ptr_reg, len_reg) = crate::codegen::abi::string_result_regs(emitter);
+    crate::codegen::abi::emit_push_reg(emitter, ptr_reg);                        // preserve owned string-call temporary while copying the return value
+    crate::codegen::abi::emit_call_label(emitter, "__rt_str_persist");           // copy the returned string into storage owned by the caller
+    crate::codegen::abi::emit_push_reg_pair(emitter, ptr_reg, len_reg);          // keep the persisted return string live while freeing the original
+    crate::codegen::abi::emit_load_temporary_stack_slot(
+        emitter,
+        crate::codegen::abi::int_result_reg(emitter),
+        16,
+    );
+    crate::codegen::abi::emit_call_label(emitter, "__rt_heap_free_safe");        // release the pre-persist owned call result when it came from heap storage
+    crate::codegen::abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);           // restore the persisted return string result
+    crate::codegen::abi::emit_release_temporary_stack(emitter, 16);              // discard the saved original string pointer
 }
 
 pub(crate) fn emit_continue_stmt(levels: usize, emitter: &mut Emitter, ctx: &Context) {

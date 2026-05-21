@@ -75,9 +75,6 @@ pub(crate) fn emit_owned_local_epilogue_cleanup(
     for (name, var) in cleanup_vars {
         match &var.ty {
             PhpType::Str => {
-                if emitter.target.arch == Arch::X86_64 {
-                    continue;
-                }
                 emitter.comment(&format!("epilogue cleanup ${}", name));
                 super::super::abi::load_at_offset(
                     emitter,

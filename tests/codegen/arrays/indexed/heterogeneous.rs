@@ -140,3 +140,25 @@ unset($items);
     let (allocs, frees) = parse_gc_stats(&out.stderr);
     assert_eq!(allocs - baseline_allocs, frees - baseline_frees);
 }
+
+#[test]
+fn test_empty_array_int_pushes_do_not_retain_string_shape() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 20; $i++) {
+    $seed = [];
+    $seed[] = str_repeat("x", 32);
+    unset($seed);
+
+    $poll_map = [];
+    for ($j = 0; $j < 64; $j++) {
+        $poll_map[] = $j;
+    }
+    unset($poll_map);
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+}

@@ -55,8 +55,8 @@ pub fn emit(
             emitter.instruction("bl __rt_array_new");                           // x0 = freshly allocated array pointer
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov rax, {}", names.len().max(1)));   // initial capacity (≥1)
-            emitter.instruction("mov rdx, 16");                                 // element stride: ptr (8 B) + len (8 B)
+            emitter.instruction(&format!("mov rdi, {}", names.len().max(1)));   // initial capacity (≥1)
+            emitter.instruction("mov rsi, 16");                                 // element stride: ptr (8 B) + len (8 B)
             emitter.instruction("call __rt_array_new");                         // rax = array pointer
         }
     }
@@ -77,7 +77,7 @@ pub fn emit(
                 abi::emit_push_reg(emitter, result_reg);                        // save the array pointer across the push helper call
                 abi::emit_symbol_address(emitter, "rsi", &sym);                 // rsi = attribute name string address (System V arg 1 for str ptr)
                 emitter.instruction(&format!("mov rdx, {}", len));              // rdx = attribute name length (System V arg 2)
-                emitter.instruction("mov rax, QWORD PTR [rsp]");                // rax = current array pointer (caller-saved register / SysV first int arg slot for our helper)
+                emitter.instruction("mov rdi, QWORD PTR [rsp]");                // rdi = current array pointer for the push helper
                 emitter.instruction("call __rt_array_push_str");                // rax = updated array pointer
                 abi::emit_release_temporary_stack(emitter, 16);                 // drop the saved slot now that the helper returned the up-to-date pointer
             }

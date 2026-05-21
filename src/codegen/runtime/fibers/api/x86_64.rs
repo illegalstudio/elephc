@@ -158,6 +158,8 @@ pub(super) fn emit_start_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fiber_start_return_ready");                   // skip the yielded-value load after boxing PHP null
     emitter.label("__rt_fiber_start_return_yield");
     emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", FIBER_TRANSFER_VALUE_OFFSET)); // rax = fiber->transfer_value.lo
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because ownership moves to the caller
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale yielded payload
     emitter.label("__rt_fiber_start_return_ready");
     emitter.instruction("add rsp, 8");                                          // drop the alignment pad
     emitter.instruction("pop r12");                                             // restore caller's r12
@@ -196,6 +198,8 @@ pub(super) fn emit_resume_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fiber_resume_return_ready");                  // skip the yielded-value load after boxing PHP null
     emitter.label("__rt_fiber_resume_return_yield");
     emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", FIBER_TRANSFER_VALUE_OFFSET)); // rax = fiber->transfer_value.lo
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because ownership moves to the caller
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale yielded payload
     emitter.label("__rt_fiber_resume_return_ready");
     emitter.instruction("pop r13");                                             // restore caller's r13
     emitter.instruction("pop r12");                                             // restore caller's r12
@@ -233,6 +237,8 @@ pub(super) fn emit_suspend_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_throw_current");                             // unwind into the active try/catch on the fiber stack
     emitter.label("__rt_fiber_suspend_no_throw");
     emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", FIBER_TRANSFER_VALUE_OFFSET)); // rax = value delivered by resume()
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because the fiber body now owns the resume value
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale resume payload
     emitter.instruction("pop r13");                                             // restore caller's r13
     emitter.instruction("pop r12");                                             // restore caller's r12
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -270,6 +276,8 @@ pub(super) fn emit_throw_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fiber_throw_return_ready");                   // skip the yielded-value load after boxing PHP null
     emitter.label("__rt_fiber_throw_return_yield");
     emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", FIBER_TRANSFER_VALUE_OFFSET)); // rax = fiber->transfer_value.lo
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because ownership moves to the caller
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale yielded payload
     emitter.label("__rt_fiber_throw_return_ready");
     emitter.instruction("pop r13");                                             // restore caller's r13
     emitter.instruction("pop r12");                                             // restore caller's r12
@@ -315,6 +323,7 @@ pub(super) fn emit_get_return_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_fiber_throw_state_error");                   // raise FiberError; this call does not return
     emitter.label("__rt_fiber_get_return_state_ok");
     emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", FIBER_TRANSFER_VALUE_OFFSET)); // rax = fiber->transfer_value.lo
+    emitter.instruction("call __rt_incref");                                    // retain the return Mixed so the caller owns it independently of the Fiber
     emitter.instruction("jmp __rt_fiber_get_return_done");                      // skip the NULL-receiver fallback once the value is loaded
     emitter.label("__rt_fiber_get_return_null");
     emitter.instruction("xor eax, eax");                                        // safe default when a NULL receiver bypassed type checking

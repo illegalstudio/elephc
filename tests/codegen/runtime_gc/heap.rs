@@ -458,3 +458,93 @@ fn test_heap_kind_tags_raw_array_hash_and_string() {
     let out = compile_harness_and_run("<?php", 65_536, harness);
     assert_eq!(out, "0231");
 }
+
+#[test]
+fn test_heap_free_safe_ignores_non_heap_pointers() {
+    let harness = match target().arch {
+        Arch::AArch64 => {
+            r#"    mov x0, #0
+    bl __rt_heap_free_safe
+    adrp x0, _concat_buf@PAGE
+    add x0, x0, _concat_buf@PAGEOFF
+    bl __rt_heap_free_safe
+    movz x0, #0xfffe
+    movk x0, #0xffff, lsl #16
+    movk x0, #0xffff, lsl #32
+    movk x0, #0x7fff, lsl #48
+    bl __rt_heap_free_safe
+    mov x0, #1
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80"#
+        }
+        Arch::X86_64 => {
+            r#"    xor rax, rax
+    call __rt_heap_free_safe
+    lea rax, [rip + _concat_buf]
+    call __rt_heap_free_safe
+    mov rax, 9223372036854775806
+    call __rt_heap_free_safe
+    mov eax, 1
+    call __rt_itoa
+    mov rsi, rax
+    mov edi, 1
+    mov eax, 1
+    syscall"#
+        }
+    };
+    let out = compile_harness_and_run("<?php", 65_536, harness);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_direct_decref_helpers_ignore_null_sentinel() {
+    let harness = match target().arch {
+        Arch::AArch64 => {
+            r#"    movz x0, #0xfffe
+    movk x0, #0xffff, lsl #16
+    movk x0, #0xffff, lsl #32
+    movk x0, #0x7fff, lsl #48
+    bl __rt_decref_array
+    movz x0, #0xfffe
+    movk x0, #0xffff, lsl #16
+    movk x0, #0xffff, lsl #32
+    movk x0, #0x7fff, lsl #48
+    bl __rt_decref_hash
+    movz x0, #0xfffe
+    movk x0, #0xffff, lsl #16
+    movk x0, #0xffff, lsl #32
+    movk x0, #0x7fff, lsl #48
+    bl __rt_decref_object
+    movz x0, #0xfffe
+    movk x0, #0xffff, lsl #16
+    movk x0, #0xffff, lsl #32
+    movk x0, #0x7fff, lsl #48
+    bl __rt_decref_mixed
+    mov x0, #1
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80"#
+        }
+        Arch::X86_64 => {
+            r#"    mov rax, 9223372036854775806
+    call __rt_decref_array
+    mov rax, 9223372036854775806
+    call __rt_decref_hash
+    mov rax, 9223372036854775806
+    call __rt_decref_object
+    mov rax, 9223372036854775806
+    call __rt_decref_mixed
+    mov eax, 1
+    call __rt_itoa
+    mov rsi, rax
+    mov edi, 1
+    mov eax, 1
+    syscall"#
+        }
+    };
+    let out = compile_harness_and_run("<?php", 65_536, harness);
+    assert_eq!(out, "1");
+}

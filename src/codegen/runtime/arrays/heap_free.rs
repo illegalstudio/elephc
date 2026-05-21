@@ -479,5 +479,19 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: heap_free_safe ---");
     emitter.label_global("__rt_heap_free_safe");
-    emitter.instruction("jmp __rt_heap_free");                                  // reuse the same guarded x86_64 release path for the safe helper variant
+    emitter.instruction("test rax, rax");                                       // skip null pointers before any heap-header reads
+    emitter.instruction("jz __rt_heap_free_safe_skip");                         // null payloads do not own heap storage
+    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    emitter.instruction("lea r10, [r10 + 16]");                                 // first valid user payload begins after the initial heap header
+    emitter.instruction("cmp rax, r10");                                        // is the candidate pointer below the first heap payload?
+    emitter.instruction("jb __rt_heap_free_safe_skip");                         // yes, it is a static/foreign pointer and must be ignored
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_heap_off");
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the current heap bump offset before deriving the live heap end
+    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    emitter.instruction("add r11, r10");                                        // r11 = heap base + live heap offset
+    emitter.instruction("cmp rax, r11");                                        // is the candidate pointer at or beyond the live heap end?
+    emitter.instruction("jae __rt_heap_free_safe_skip");                        // yes, it is not a currently live heap payload
+    emitter.instruction("jmp __rt_heap_free");                                  // delegate in-range candidates to the normal free path
+    emitter.label("__rt_heap_free_safe_skip");
+    emitter.instruction("ret");                                                 // return without touching foreign/static storage
 }

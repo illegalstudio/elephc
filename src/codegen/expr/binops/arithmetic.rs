@@ -17,7 +17,8 @@ use super::target::{
 };
 use super::super::{
     coerce_null_to_zero, coerce_to_string, coerce_to_truthiness, emit_expr,
-    expr_result_heap_ownership, string_result_is_owned_call_temp, BinOp, Expr, PhpType,
+    expr_result_heap_ownership, string_result_is_owned_call_temp,
+    string_result_uses_transient_concat_buffer, BinOp, Expr, PhpType,
 };
 use crate::codegen::context::HeapOwnership;
 
@@ -363,7 +364,8 @@ pub(super) fn emit_concat_binop(
 ) -> PhpType {
     let left_ty = emit_expr(left, emitter, ctx, data);
     coerce_to_string(emitter, ctx, data, &left_ty);
-    let persisted_left = expr_result_heap_ownership(left) == HeapOwnership::NonHeap;
+    let persisted_left = expr_result_heap_ownership(left) == HeapOwnership::NonHeap
+        || string_result_uses_transient_concat_buffer(left);
     let release_left = persisted_left || string_result_is_owned_call_temp(left, ctx);
     if persisted_left {
         abi::emit_call_label(emitter, "__rt_str_persist");

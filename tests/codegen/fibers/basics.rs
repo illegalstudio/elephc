@@ -332,3 +332,68 @@ echo "done";
     assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
     assert_eq!(out.stdout, "done");
 }
+
+#[test]
+fn test_discarded_suspend_value_is_not_released_again_with_fiber() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Slot {
+    public $fiber = null;
+
+    public function cycle(): void {
+        $this->fiber = new Fiber(function(): void {
+            Fiber::suspend("yielded");
+        });
+        $this->fiber->start();
+        $this->fiber = null;
+    }
+}
+
+$s = new Slot();
+for ($i = 0; $i < 20; $i++) {
+    $s->cycle();
+}
+unset($s);
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+}
+
+#[test]
+fn test_resume_value_is_not_released_again_with_fiber() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 20; $i++) {
+    $f = new Fiber(function(): void {
+        $value = Fiber::suspend("ready");
+        echo $value === "resume" ? "" : "bad";
+    });
+    $f->start();
+    $f->resume("resume");
+    unset($f);
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+}
+
+#[test]
+fn test_fiber_get_return_result_survives_fiber_release() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$f = new Fiber(function(): mixed {
+    return "ret";
+});
+$f->start();
+$value = $f->getReturn();
+unset($f);
+echo $value;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ret");
+}
