@@ -12,6 +12,7 @@ pub(crate) mod builtins;
 mod builtin_interfaces;
 mod builtin_iterators;
 mod builtin_json;
+mod builtin_spl_classes;
 mod builtin_spl_exceptions;
 pub(crate) mod builtin_stdclass;
 mod builtin_types;

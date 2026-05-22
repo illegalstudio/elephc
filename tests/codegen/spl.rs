@@ -10,6 +10,8 @@
 
 #[path = "spl/autoload.rs"]
 mod autoload;
+#[path = "spl/classes.rs"]
+mod classes;
 #[path = "spl/interfaces.rs"]
 mod interfaces;
 #[path = "spl/intrinsics.rs"]

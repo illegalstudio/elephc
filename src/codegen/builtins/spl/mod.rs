@@ -74,10 +74,10 @@ fn emit_object_hash(
 }
 
 /// Materialise the SPL class/interface registry as an indexed string
-/// array. Names mirror what we ship today (10 SPL/core interfaces +
-/// `Throwable`, `Error`, and `Exception` plus the 13 SPL exception subclasses);
-/// upcoming phases (data structures, iterator decorators, file iterators)
-/// will extend this list as their classes land.
+/// array. Names mirror what we ship today (SPL/core interfaces, Throwable
+/// types, SPL exceptions, and the Phase 4 container metadata shells);
+/// upcoming phases (iterator decorators, heaps, file iterators) will extend
+/// this list as their classes land.
 fn emit_classes(emitter: &mut Emitter, data: &mut DataSection) -> PhpType {
     let names = SPL_CLASS_NAMES;
     emitter.comment("spl_classes() — AOT snapshot of shipped SPL types");
@@ -125,7 +125,8 @@ fn emit_classes(emitter: &mut Emitter, data: &mut DataSection) -> PhpType {
 }
 
 /// The static set of SPL/core type names shipped today. Stays in sync
-/// with `inject_builtin_interfaces` and `inject_builtin_spl_exceptions`.
+/// with `inject_builtin_interfaces`, `inject_builtin_spl_exceptions`, and
+/// `inject_builtin_spl_classes`.
 const SPL_CLASS_NAMES: &[&str] = &[
     "ArrayAccess",
     "BadFunctionCallException",
@@ -148,7 +149,11 @@ const SPL_CLASS_NAMES: &[&str] = &[
     "RecursiveIterator",
     "RuntimeException",
     "SeekableIterator",
+    "SplDoublyLinkedList",
+    "SplFixedArray",
     "SplObserver",
+    "SplQueue",
+    "SplStack",
     "SplSubject",
     "Stringable",
     "Throwable",

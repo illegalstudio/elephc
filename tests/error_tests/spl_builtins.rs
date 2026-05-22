@@ -112,3 +112,19 @@ fn test_error_spl_object_hash_rejects_mixed() {
         "spl_object_hash() argument must be an object",
     );
 }
+
+#[test]
+fn test_error_spl_doubly_linked_list_cannot_be_redeclared() {
+    expect_error(
+        "<?php class SplDoublyLinkedList {}",
+        "Cannot redeclare built-in SPL class: SplDoublyLinkedList",
+    );
+}
+
+#[test]
+fn test_error_spl_fixed_array_cannot_be_redeclared() {
+    expect_error(
+        "<?php class SplFixedArray {}",
+        "Cannot redeclare built-in SPL class: SplFixedArray",
+    );
+}

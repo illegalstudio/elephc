@@ -26,6 +26,7 @@ use super::builtin_interfaces::{
 };
 use super::builtin_iterators::{inject_builtin_iterators, patch_builtin_generator_signatures};
 use super::builtin_json::{inject_builtin_json_interfaces, patch_builtin_json_signatures};
+use super::builtin_spl_classes::inject_builtin_spl_classes;
 use super::builtin_spl_exceptions::inject_builtin_spl_exceptions;
 use super::builtin_stdclass::inject_builtin_stdclass;
 use super::schema::{
@@ -126,6 +127,9 @@ pub(super) fn check_types_impl(
         errors.extend(error.flatten());
     }
     if let Err(error) = inject_builtin_json_interfaces(&mut interface_map, &mut class_map) {
+        errors.extend(error.flatten());
+    }
+    if let Err(error) = inject_builtin_spl_classes(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }
     if let Err(error) = inject_builtin_stdclass(&mut class_map) {
