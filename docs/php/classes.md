@@ -99,10 +99,11 @@ PHP 8.1. Use `__serialize` / `__unserialize` magic methods instead
 
 ### Built-in SPL containers
 
-The Phase 4 SPL container classes are registered as built-in classes:
-`SplDoublyLinkedList`, `SplStack`, `SplQueue`, and `SplFixedArray`.
-They participate in `class_exists()`, `get_declared_classes()`,
-`spl_classes()`, `instanceof`, inherited class constants, and interface checks.
+The Phase 4 SPL container classes are runtime-backed built-ins:
+`SplDoublyLinkedList`, `SplStack`, `SplQueue`, and `SplFixedArray`. They
+participate in `class_exists()`, `get_declared_classes()`, `spl_classes()`,
+`instanceof`, inherited class constants, interface checks, `foreach`, and
+`ArrayAccess` where PHP expects it.
 
 | Class | Parent | Interfaces |
 |---|---|---|
@@ -111,41 +112,8 @@ They participate in `class_exists()`, `get_declared_classes()`,
 | `SplQueue` | `SplDoublyLinkedList` | inherited from parent |
 | `SplFixedArray` | — | `ArrayAccess`, `Countable`, `JsonSerializable` |
 
-`SplDoublyLinkedList`, `SplStack`, and `SplQueue` have runtime-backed storage
-for `push()`, `pop()`, `shift()`, `unshift()`, `add()`, `top()`, `bottom()`,
-`count()`, `isEmpty()`, `setIteratorMode()`, `getIteratorMode()`, `Iterator`,
-and `ArrayAccess` operations. Values are stored as `mixed`, so heterogeneous
-lists are supported. `IT_MODE_FIFO`, `IT_MODE_LIFO`, and `IT_MODE_DELETE` are
-honored during iteration.
-
-`SplFixedArray` has runtime-backed fixed-size storage for `__construct()`,
-`count()`, `getSize()`, `setSize()`, `offsetExists()`, `offsetGet()`,
-`offsetSet()`, `offsetUnset()`, `toArray()`, and `jsonSerialize()`.
-IteratorAggregate support is intentionally deferred until `ArrayIterator`
-lands, so `getIterator()` is not exposed yet.
-
-Serialization/debug methods such as `serialize()`, `unserialize()`,
-`__serialize()`, `__unserialize()`, and `__debugInfo()` are not exposed until
-their PHP-compatible backing lands; code should fail at compile time instead
-of returning metadata-shell dummy values.
-
-```php
-<?php
-$list = new SplDoublyLinkedList();
-$list->push("a");
-$list->push(2);
-$list[] = "c";
-
-foreach ($list as $index => $value) {
-    echo $index;
-    echo ":";
-    echo $value;
-    echo "\n";
-}
-```
-
-Serialization hooks for `SplFixedArray` are also not exposed until they have
-PHP-compatible backing.
+See [SPL](spl.md) for the supported method surface, iterator modes, examples,
+and current compatibility gaps.
 
 ## Type checks with instanceof
 ```php

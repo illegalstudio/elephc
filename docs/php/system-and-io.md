@@ -2,7 +2,7 @@
 title: "System & I/O"
 description: "System functions, file I/O, date/time, JSON, and debugging utilities."
 sidebar:
-  order: 10
+  order: 11
 ---
 
 ## System functions

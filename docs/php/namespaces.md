@@ -2,7 +2,7 @@
 title: "Namespaces"
 description: "Namespace declarations, use imports, name resolution, include/require."
 sidebar:
-  order: 9
+  order: 10
 ---
 
 ## Declaring a namespace
