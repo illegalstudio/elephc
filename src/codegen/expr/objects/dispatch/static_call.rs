@@ -12,12 +12,13 @@ use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::intrinsics::IntrinsicCall;
 use crate::names::{method_symbol, static_method_symbol};
 use crate::parser::ast::{Expr, StaticReceiver};
 use crate::types::PhpType;
 
 use super::enums::emit_enum_static_method_call;
-use super::fiber::emit_fiber_static_method_dispatch;
+use super::intrinsic::emit_static_intrinsic_call;
 use super::prep::{compute_register_assignments, eval_and_push_args, pop_args_to_registers};
 use super::super::super::{
     restore_concat_offset_after_nested_call, restore_concat_offset_after_owned_string_call,
@@ -103,8 +104,8 @@ pub(in crate::codegen::expr::objects) fn emit_static_method_call(
     if ctx.enums.contains_key(&class_name) {
         return emit_enum_static_method_call(&class_name, method, args, emitter, ctx, data);
     }
-    if class_name == "Fiber" {
-        return emit_fiber_static_method_dispatch(method, args, emitter, ctx, data);
+    if let Some(intrinsic) = IntrinsicCall::static_method(&class_name, method) {
+        return emit_static_intrinsic_call(intrinsic, args, emitter, ctx, data);
     }
     emitter.comment(&format!("{}::{}()", class_name, method));
 

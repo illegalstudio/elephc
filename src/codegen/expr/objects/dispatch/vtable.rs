@@ -11,13 +11,15 @@
 use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::emit::Emitter;
+use crate::intrinsics::IntrinsicCall;
 use crate::types::PhpType;
 
-use super::prep::resolve_instance_method_dispatch;
 use super::super::super::{
     restore_concat_offset_after_nested_call, restore_concat_offset_after_owned_string_call,
     save_concat_offset_before_nested_call,
 };
+use super::intrinsic::emit_instance_intrinsic_with_loaded_args;
+use super::prep::resolve_instance_method_dispatch;
 
 pub(crate) fn emit_dispatch_instance_method(
     class_name: &str,
@@ -25,20 +27,12 @@ pub(crate) fn emit_dispatch_instance_method(
     emitter: &mut Emitter,
     ctx: &mut Context,
 ) -> PhpType {
+    if let Some(intrinsic) = IntrinsicCall::instance_method(class_name, method) {
+        return emit_instance_intrinsic_with_loaded_args(intrinsic, &[], 0, emitter, ctx);
+    }
+
     let (ret_ty, slot, direct_private_label) =
         resolve_instance_method_dispatch(ctx, class_name, method);
-
-    // Generator's Iterator surface and send/throw/getReturn are intrinsics —
-    // call directly into the runtime helpers instead of going through the
-    // user-PHP stub bodies that the type system synthesised for the class.
-    if class_name == "Generator" {
-        if let Some(rt_label) = generator_runtime_label_for(method) {
-            save_concat_offset_before_nested_call(emitter, ctx);
-            abi::emit_call_label(emitter, rt_label);                            // direct call into the generator runtime helper
-            restore_concat_offset_after_user_call(emitter, ctx, &ret_ty);
-            return ret_ty;
-        }
-    }
 
     save_concat_offset_before_nested_call(emitter, ctx);
     if let Some(slot) = slot {
@@ -79,25 +73,5 @@ fn restore_concat_offset_after_user_call(emitter: &mut Emitter, ctx: &Context, r
         restore_concat_offset_after_owned_string_call(emitter, ctx);
     } else {
         restore_concat_offset_after_nested_call(emitter, ctx, ret_ty);
-    }
-}
-
-/// Map a Generator-class method name to the corresponding runtime helper
-/// symbol. The name resolver lowercases all method tokens before they
-/// reach codegen (PHP class methods are case-insensitive), so the match
-/// arms below are the lowercase forms of `current`, `getReturn`, etc.
-/// Returns `None` for methods elephc doesn't intercept (so dispatch falls
-/// back to the regular vtable path).
-pub(super) fn generator_runtime_label_for(method: &str) -> Option<&'static str> {
-    match method {
-        "current" => Some("__rt_gen_current"),
-        "key" => Some("__rt_gen_key"),
-        "next" => Some("__rt_gen_next"),
-        "valid" => Some("__rt_gen_valid"),
-        "rewind" => Some("__rt_gen_rewind"),
-        "send" => Some("__rt_gen_send"),
-        "throw" => Some("__rt_gen_throw"),
-        "getreturn" => Some("__rt_gen_get_return"),
-        _ => None,
     }
 }

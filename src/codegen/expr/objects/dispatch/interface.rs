@@ -11,13 +11,13 @@
 use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::emit::Emitter;
+use crate::intrinsics::IntrinsicCall;
 use crate::types::PhpType;
 
 use super::super::super::{
     restore_concat_offset_after_nested_call, restore_concat_offset_after_owned_string_call,
     save_concat_offset_before_nested_call,
 };
-use super::vtable::generator_runtime_label_for;
 
 pub(crate) fn emit_dispatch_interface_method(
     interface_name: &str,
@@ -53,7 +53,9 @@ pub(crate) fn emit_dispatch_interface_method(
 
     save_concat_offset_before_nested_call(emitter, ctx);
     if interface_name == "Iterator" {
-        if let Some(rt_label) = generator_runtime_label_for(method) {
+        if let Some(rt_label) = IntrinsicCall::instance_method("Generator", method)
+            .and_then(|intrinsic| intrinsic.runtime_helper())
+        {
             emit_generator_interface_fast_path(rt_label, &done, emitter, ctx);
         }
     }

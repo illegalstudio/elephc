@@ -5,7 +5,7 @@ sidebar:
   order: 7
 ---
 
-**Source:** `src/codegen/` — `mod.rs`, `driver_support.rs`, `main_emission.rs`, `class_methods.rs`, `function_variants.rs`, `interface_wrappers.rs`, `callables.rs`, `reflection.rs`, `prescan.rs`, `program_usage.rs`, `program_usage/`, `expr.rs`, `expr/`, `stmt.rs`, `stmt/`, `functions/`, `builtins/`, `runtime/`, `ffi.rs`, `abi/`, `platform/`, `context.rs`, `data_section.rs`, `emit.rs`
+**Source:** `src/codegen/` — `mod.rs`, `driver_support.rs`, `main_emission.rs`, `class_methods.rs`, `function_variants.rs`, `interface_wrappers.rs`, `callables.rs`, `reflection.rs`, `prescan.rs`, `program_usage.rs`, `program_usage/`, `expr.rs`, `expr/`, `stmt.rs`, `stmt/`, `functions/`, `builtins/`, `runtime/`, `ffi.rs`, `abi/`, `platform/`, `context.rs`, `data_section.rs`, `emit.rs`; intrinsic method registry: `src/intrinsics.rs`
 
 The code generator (codegen) is the heart of the compiler. It takes the checked AST after the optimizer's local simplification passes and produces native assembly text for the selected target — the actual instructions the CPU will execute.
 
@@ -229,6 +229,12 @@ variant into one of the focused lowering paths below:
 | `ConstRef`, `ClassConstant`, `ScopedConstantAccess`, `MagicConstant` | Compile-time constant and class-constant loading. `MagicConstant` should already be lowered by the frontend before codegen. |
 | `NewObject`, `NewScopedObject`, `PropertyAccess`, `DynamicPropertyAccess`, `NullsafePropertyAccess`, `NullsafeDynamicPropertyAccess`, `StaticPropertyAccess`, `MethodCall`, `NullsafeMethodCall`, `StaticMethodCall` | Object allocation, property/member access, nullsafe chain lowering, vtable dispatch, and late-static-binding helpers |
 | `PtrCast`, `BufferNew`, `Yield`, `YieldFrom` | Pointer/buffer extensions and generator state-machine lowering |
+
+### Intrinsic Calls
+
+Most method calls use the normal class metadata path: receiver evaluation, argument materialization, vtable or direct-method target selection, then a call to the emitted PHP method body. A small set of runtime-managed core objects cannot use the synthetic PHP stubs as their real implementation. For those, `src/intrinsics.rs` records an `IntrinsicCall` entry keyed by PHP class and method name, and `src/codegen/expr/objects/dispatch/intrinsic.rs` emits the direct runtime-helper call after the normal receiver and argument setup has already run.
+
+Current intrinsic call sites cover `Fiber` instance/static APIs and the runtime-backed `Generator` method surface. User classes with the same method names are not affected because the lookup includes the resolved class name.
 
 ### Literals
 

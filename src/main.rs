@@ -13,6 +13,7 @@ mod cli;
 mod codegen;
 mod conditional;
 mod errors;
+mod intrinsics;
 mod linker;
 mod lexer;
 mod magic_constants;
