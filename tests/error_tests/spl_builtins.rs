@@ -146,10 +146,10 @@ fn test_error_iterator_count_rejects_non_traversable() {
 }
 
 #[test]
-fn test_error_iterator_to_array_rejects_dynamic_preserve_keys() {
+fn test_error_iterator_to_array_rejects_array_preserve_keys() {
     expect_error(
-        "<?php $preserve = false; iterator_to_array([1, 2], $preserve);",
-        "iterator_to_array() preserve_keys must be a boolean literal",
+        "<?php $preserve = []; iterator_to_array([1, 2], $preserve);",
+        "iterator_to_array() preserve_keys must be bool-compatible scalar",
     );
 }
 

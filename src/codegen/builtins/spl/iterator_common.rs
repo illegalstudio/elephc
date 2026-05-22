@@ -26,11 +26,34 @@ pub(super) fn iterator_object_name(ty: &PhpType) -> Option<&str> {
     }
 }
 
-pub(super) fn preserve_keys_arg(args: &[Expr]) -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PreserveKeysArg {
+    Static(bool),
+    Dynamic,
+}
+
+pub(super) fn preserve_keys_arg(args: &[Expr]) -> PreserveKeysArg {
     match args.get(1).map(|arg| &arg.kind) {
-        Some(ExprKind::BoolLiteral(value)) => *value,
-        Some(ExprKind::IntLiteral(value)) => *value != 0,
-        _ => true,
+        Some(kind) => static_truthiness(kind)
+            .map(PreserveKeysArg::Static)
+            .unwrap_or(PreserveKeysArg::Dynamic),
+        None => PreserveKeysArg::Static(true),
+    }
+}
+
+fn static_truthiness(kind: &ExprKind) -> Option<bool> {
+    match kind {
+        ExprKind::BoolLiteral(value) => Some(*value),
+        ExprKind::IntLiteral(value) => Some(*value != 0),
+        ExprKind::FloatLiteral(value) => Some(*value != 0.0),
+        ExprKind::StringLiteral(value) => Some(!value.is_empty() && value != "0"),
+        ExprKind::Null => Some(false),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => Some(*value != 0),
+            ExprKind::FloatLiteral(value) => Some(*value != 0.0),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

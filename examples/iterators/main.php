@@ -93,8 +93,8 @@ function print_any(iterable $items): void {
     echo "\n";
 }
 
-function print_reindexed(iterable $items): void {
-    $values = iterator_to_array($items, false);
+function print_reindexed(iterable $items, bool $preserve): void {
+    $values = iterator_to_array($items, $preserve);
     foreach ($values as $key => $value) {
         echo $key;
         echo "=";
@@ -111,7 +111,8 @@ echo "iterable parameter from IteratorAggregate:\n";
 print_any(new RangeFactory(4, 7));
 
 echo "iterator_to_array from iterable parameter:\n";
-print_reindexed(["a" => 10, "b" => 20]);
+$preserveKeys = false;
+print_reindexed(["a" => 10, "b" => 20], $preserveKeys);
 
 echo is_iterable(new Range(0, 1, 1)) ? "iterator is iterable\n" : "not iterable\n";
 echo is_iterable(new RangeFactory(0, 1)) ? "aggregate is iterable\n" : "not iterable\n";

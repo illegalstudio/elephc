@@ -33,6 +33,9 @@ pub(super) fn check_builtin(
                 PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => {
                     Ok(Some(PhpType::Int))
                 }
+                PhpType::Union(members) if members.iter().all(union_member_is_countable_array) => {
+                    Ok(Some(PhpType::Int))
+                }
                 PhpType::Object(class_name) => {
                     if checker.class_implements_interface(class_name, "Countable") {
                         Ok(Some(PhpType::Int))
@@ -452,4 +455,11 @@ pub(super) fn check_builtin(
         }
         _ => Ok(None),
     }
+}
+
+fn union_member_is_countable_array(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+    )
 }

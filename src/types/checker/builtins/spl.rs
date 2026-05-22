@@ -160,16 +160,15 @@ pub(super) fn check_builtin(
             let source_ty =
                 check_iterator_source(checker, &args[0], span, env, "iterator_to_array()")?;
             let preserve_keys = if let Some(arg) = args.get(1) {
-                static_preserve_keys(arg).ok_or_else(|| {
-                    CompileError::new(
-                        arg.span,
-                        "iterator_to_array() preserve_keys must be a boolean literal",
-                    )
-                })?
+                check_iterator_to_array_preserve_keys(checker, arg, env)?
             } else {
-                true
+                Some(true)
             };
-            Ok(Some(iterator_to_array_return_type(&source_ty, preserve_keys)))
+            Ok(Some(iterator_to_array_return_type(
+                checker,
+                &source_ty,
+                preserve_keys,
+            )))
         }
         "iterator_apply" => {
             if args.len() < 2 || args.len() > 3 {
@@ -254,15 +253,63 @@ fn traversable_object_supported(checker: &Checker, name: &str) -> bool {
         || checker.object_type_implements_interface(name, "IteratorAggregate")
 }
 
+fn check_iterator_to_array_preserve_keys(
+    checker: &mut Checker,
+    arg: &Expr,
+    env: &TypeEnv,
+) -> Result<Option<bool>, CompileError> {
+    if let Some(value) = static_preserve_keys(arg) {
+        return Ok(Some(value));
+    }
+    let ty = checker.infer_type(arg, env)?;
+    if preserve_keys_type_supported(&ty) {
+        return Ok(None);
+    }
+    Err(CompileError::new(
+        arg.span,
+        "iterator_to_array() preserve_keys must be bool-compatible scalar",
+    ))
+}
+
+fn preserve_keys_type_supported(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Void => true,
+        PhpType::Union(members) => members.iter().all(preserve_keys_type_supported),
+        _ => false,
+    }
+}
+
 fn static_preserve_keys(expr: &Expr) -> Option<bool> {
     match &expr.kind {
         ExprKind::BoolLiteral(value) => Some(*value),
         ExprKind::IntLiteral(value) => Some(*value != 0),
+        ExprKind::FloatLiteral(value) => Some(*value != 0.0),
+        ExprKind::StringLiteral(value) => Some(!value.is_empty() && value != "0"),
+        ExprKind::Null => Some(false),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => Some(*value != 0),
+            ExprKind::FloatLiteral(value) => Some(*value != 0.0),
+            _ => None,
+        },
         _ => None,
     }
 }
 
-fn iterator_to_array_return_type(source_ty: &PhpType, preserve_keys: bool) -> PhpType {
+fn iterator_to_array_return_type(
+    checker: &Checker,
+    source_ty: &PhpType,
+    preserve_keys: Option<bool>,
+) -> PhpType {
+    match preserve_keys {
+        Some(value) => iterator_to_array_static_return_type(source_ty, value),
+        None => checker.normalize_union_type(vec![
+            iterator_to_array_static_return_type(source_ty, true),
+            iterator_to_array_static_return_type(source_ty, false),
+        ]),
+    }
+}
+
+fn iterator_to_array_static_return_type(source_ty: &PhpType, preserve_keys: bool) -> PhpType {
     match source_ty {
         PhpType::Array(elem_ty) => PhpType::Array(elem_ty.clone()),
         PhpType::AssocArray { key, value } if preserve_keys => PhpType::AssocArray {

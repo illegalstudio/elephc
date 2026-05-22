@@ -56,6 +56,11 @@ pub(crate) fn emit_loaded_values(
             }
         }
         abi::emit_call_label(emitter, "__rt_array_new");                        // allocate the result values array with exact associative-array capacity
+        crate::codegen::expr::arrays::emit_array_value_type_stamp(
+            emitter,
+            abi::int_result_reg(emitter),
+            &val_ty,
+        );
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));              // preserve the result values array pointer across associative-array iteration
 
         // -- push iteration index onto stack --

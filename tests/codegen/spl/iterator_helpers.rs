@@ -172,6 +172,42 @@ dump_preserved(new Range());
 }
 
 #[test]
+fn test_iterator_to_array_accepts_dynamic_preserve_keys() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i + 5; }
+    public function key(): string { return "k" . $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+function dump(iterable $items, bool $preserve): void {
+    $copy = iterator_to_array($items, $preserve);
+    echo count($copy);
+    echo ":";
+    foreach ($copy as $k => $v) {
+        echo $k;
+        echo "=";
+        echo $v;
+        echo " ";
+    }
+}
+dump(["a" => 10, "b" => 20], true);
+echo "|";
+dump(["a" => 10, "b" => 20], false);
+echo "|";
+dump(new Range(), true);
+echo "|";
+dump(new Range(), false);
+"#,
+    );
+    assert_eq!(out, "2:a=10 b=20 |2:0=10 1=20 |2:k0=5 k1=6 |2:0=5 1=6 ");
+}
+
+#[test]
 fn test_iterator_to_array_without_preserving_keys() {
     let out = compile_and_run(
         r#"<?php
