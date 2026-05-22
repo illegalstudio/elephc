@@ -235,7 +235,9 @@ fn emit_callback_invocation(
         if save_concat_before_args {
             crate::codegen::expr::save_concat_offset_before_nested_call(emitter, ctx);
         }
-        let sig = sig.expect("iterator_apply(): dynamic args require a callable signature");
+        let sig = sig.expect(
+            "iterator_apply(): dynamic args require a statically known callable signature",
+        );
         let dynamic_ret_ty = call_user_func_array::emit_loaded_array_callback_call(
             LoadedArraySource::TemporaryStackSlot(*args_offset),
             arg_array_ty,

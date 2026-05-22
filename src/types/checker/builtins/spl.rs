@@ -17,6 +17,9 @@ use super::super::Checker;
 
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
+const ITERATOR_APPLY_UNKNOWN_STATIC_CALLBACK_SIG: &str =
+    "iterator_apply() callback must have a statically known callable signature";
+
 pub(super) fn check_builtin(
     checker: &mut Checker,
     name: &str,
@@ -180,13 +183,12 @@ pub(super) fn check_builtin(
             check_iterator_apply_source(checker, &args[0], span, env)?;
             match iterator_apply_callback_args(checker, args.get(2), span, env)? {
                 IteratorApplyArgs::Static(callback_args) => {
-                    super::callables::check_callback_builtin_call(
+                    check_iterator_apply_static_callback(
                         checker,
                         &args[1],
                         callback_args,
                         span,
                         env,
-                        "iterator_apply() callback",
                     )?;
                 }
                 IteratorApplyArgs::Dynamic => {
@@ -434,8 +436,38 @@ fn check_iterator_apply_dynamic_callback(
 
     Err(CompileError::new(
         callback.span,
-        "iterator_apply() callback must have a statically known callable signature",
+        "iterator_apply() dynamic args require a statically known callable signature",
     ))
+}
+
+fn check_iterator_apply_static_callback(
+    checker: &mut Checker,
+    callback: &Expr,
+    callback_args: &[Expr],
+    span: crate::span::Span,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    match super::callables::check_callback_builtin_call(
+        checker,
+        callback,
+        callback_args,
+        span,
+        env,
+        "iterator_apply() callback",
+    ) {
+        Ok(_) => Ok(()),
+        Err(error) if error.message == ITERATOR_APPLY_UNKNOWN_STATIC_CALLBACK_SIG => {
+            let callback_ty = checker.infer_type(callback, env)?;
+            if callback_ty != PhpType::Callable {
+                return Err(error);
+            }
+            for arg in callback_args {
+                checker.infer_type(arg, env)?;
+            }
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn reject_dynamic_ref_args(

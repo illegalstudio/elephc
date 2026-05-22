@@ -140,3 +140,15 @@ echo "iterator_apply callback count:\n";
 $labels = ["*"];
 echo iterator_apply(new Range(0, 3, 1), "iterator_tick", $labels);
 echo "\n";
+
+function make_iterator_labeler(): callable {
+    return function(string $label): bool {
+        echo $label;
+        return true;
+    };
+}
+
+echo "iterator_apply returned callable:\n";
+$labeler = make_iterator_labeler();
+echo iterator_apply(new Range(0, 2, 1), $labeler, ["?"]);
+echo "\n";
