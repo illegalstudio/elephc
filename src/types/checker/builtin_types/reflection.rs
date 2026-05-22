@@ -69,6 +69,7 @@ pub(crate) fn inject_builtin_reflection(
             ],
             attributes: Vec::new(),
             constants: Vec::new(),
+            used_traits: Vec::new(),
         },
     );
     class_map.insert(
@@ -269,6 +270,7 @@ fn builtin_reflection_owner_class(
         ],
         attributes: Vec::new(),
         constants: Vec::new(),
+        used_traits: Vec::new(),
     }
 }
 

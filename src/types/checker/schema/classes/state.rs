@@ -105,6 +105,7 @@ impl ClassBuildState {
             method_attribute_args: self.method_attribute_args,
             property_attribute_names: self.property_attribute_names,
             property_attribute_args: self.property_attribute_args,
+            used_traits: class.used_traits.clone(),
             properties: self.prop_types,
             property_offsets: self.property_offsets,
             property_declaring_classes: self.property_declaring_classes,

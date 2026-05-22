@@ -42,6 +42,7 @@ thread_local! {
     static DECLARED_CLASS_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static DECLARED_INTERFACE_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static DECLARED_TRAIT_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static DECLARED_TRAIT_USES: RefCell<HashMap<String, Vec<String>>> = RefCell::new(HashMap::new());
 }
 
 pub fn set_autoload_rule_count(n: usize) {
@@ -68,6 +69,19 @@ pub(crate) fn declared_interface_names() -> Vec<String> {
 
 pub(crate) fn declared_trait_names() -> Vec<String> {
     DECLARED_TRAIT_NAMES.with(|names| names.borrow().clone())
+}
+
+pub(crate) fn declared_trait_uses(name: &str) -> Vec<String> {
+    let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    DECLARED_TRAIT_USES.with(|uses| {
+        uses.borrow()
+            .iter()
+            .find(|(candidate, _)| {
+                crate::names::php_symbol_key(candidate.trim_start_matches('\\')) == key
+            })
+            .map(|(_, traits)| traits.clone())
+            .unwrap_or_default()
+    })
 }
 
 use crate::parser::ast::{Program, StmtKind};
@@ -125,6 +139,7 @@ pub fn generate_user_asm(
     let all_static_vars = collect_static_vars(program, global_env);
     let declared_trait_order = collect_declared_trait_names(program);
     let declared_traits: HashSet<String> = declared_trait_order.iter().cloned().collect();
+    DECLARED_TRAIT_USES.with(|uses| *uses.borrow_mut() = collect_declared_trait_uses(program));
     set_declared_name_order(
         collect_declared_class_names(program, classes),
         collect_declared_interface_names(program, interfaces),
@@ -301,6 +316,35 @@ fn collect_declared_trait_names(program: &Program) -> Vec<String> {
         }
     }
     names
+}
+
+fn collect_declared_trait_uses(program: &Program) -> HashMap<String, Vec<String>> {
+    let mut uses = HashMap::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::TraitDecl {
+                name, trait_uses, ..
+            } => {
+                uses.insert(
+                    name.clone(),
+                    trait_uses
+                        .iter()
+                        .flat_map(|use_decl| {
+                            use_decl
+                                .trait_names
+                                .iter()
+                                .map(|trait_name| trait_name.as_str().to_string())
+                        })
+                        .collect(),
+                );
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                uses.extend(collect_declared_trait_uses(body));
+            }
+            _ => {}
+        }
+    }
+    uses
 }
 
 fn collect_program_declared_names<T>(

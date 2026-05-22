@@ -273,6 +273,7 @@ pub(crate) fn build_enum_info(
             method_attribute_args: HashMap::new(),
             property_attribute_names: HashMap::new(),
             property_attribute_args: HashMap::new(),
+            used_traits: Vec::new(),
             properties,
             property_offsets,
             property_declaring_classes,

@@ -57,6 +57,7 @@ pub(crate) fn inject_builtin_spl_classes(
             methods: spl_doubly_linked_list_methods(),
             attributes: Vec::new(),
             constants: spl_doubly_linked_list_constants(),
+            used_traits: Vec::new(),
         },
     );
 
@@ -73,6 +74,7 @@ pub(crate) fn inject_builtin_spl_classes(
             methods: Vec::new(),
             attributes: Vec::new(),
             constants: Vec::new(),
+            used_traits: Vec::new(),
         },
     );
 
@@ -92,6 +94,7 @@ pub(crate) fn inject_builtin_spl_classes(
             ],
             attributes: Vec::new(),
             constants: Vec::new(),
+            used_traits: Vec::new(),
         },
     );
 
@@ -112,6 +115,7 @@ pub(crate) fn inject_builtin_spl_classes(
             methods: spl_fixed_array_methods(),
             attributes: Vec::new(),
             constants: Vec::new(),
+            used_traits: Vec::new(),
         },
     );
 

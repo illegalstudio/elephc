@@ -33,6 +33,7 @@ pub struct FlattenedClass {
     pub methods: Vec<ClassMethod>,
     pub attributes: Vec<crate::parser::ast::AttributeGroup>,
     pub constants: Vec<ClassConst>,
+    pub used_traits: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -182,6 +183,15 @@ pub fn flatten_classes(program: &Program) -> (Vec<FlattenedClass>, Vec<CompileEr
                 methods: merged_methods,
                 attributes: stmt.attributes.clone(),
                 constants: constants.clone(),
+                used_traits: trait_uses
+                    .iter()
+                    .flat_map(|use_decl| {
+                        use_decl
+                            .trait_names
+                            .iter()
+                            .map(|name| name.as_str().to_string())
+                    })
+                    .collect(),
             });
         }
     }

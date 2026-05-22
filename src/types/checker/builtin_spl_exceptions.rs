@@ -67,6 +67,7 @@ pub(crate) fn inject_builtin_spl_exceptions(
                 methods: Vec::new(),
                 attributes: Vec::new(),
                 constants: Vec::new(),
+                used_traits: Vec::new(),
             },
         );
     }

@@ -11,6 +11,7 @@
 mod boolval;
 mod class_alias;
 mod class_exists;
+mod class_relations;
 mod empty;
 mod floatval;
 mod get_class;
@@ -65,6 +66,9 @@ pub fn emit(
         "class_alias" => class_alias::emit(name, args, emitter, ctx, data),
         "class_exists" | "interface_exists" | "trait_exists" | "enum_exists" => {
             class_exists::emit(name, args, emitter, ctx, data)
+        }
+        "class_implements" | "class_parents" | "class_uses" => {
+            class_relations::emit(name, args, emitter, ctx, data)
         }
         "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
             get_declared::emit(name, args, emitter, ctx, data)

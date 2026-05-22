@@ -214,6 +214,10 @@ pub(super) fn infer_function_call_type(
         "class_get_attributes" => PhpType::Array(Box::new(PhpType::Object(
             "ReflectionAttribute".to_string(),
         ))),
+        "class_implements" | "class_parents" | "class_uses" => PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Str),
+        },
         _ => {
             if let Some(c) = ctx {
                 if let Some(fn_sig) = c.functions.get(name) {

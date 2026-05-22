@@ -98,6 +98,11 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         )),
         "trait_exists" => Some(optional(&["trait", "autoload"], 1, vec![bool_lit(true)])),
         "enum_exists" => Some(optional(&["enum", "autoload"], 1, vec![bool_lit(true)])),
+        "class_implements" | "class_parents" | "class_uses" => Some(optional(
+            &["object_or_class", "autoload"],
+            1,
+            vec![bool_lit(true)],
+        )),
         "get_class" => Some(optional(&["object"], 0, vec![null_lit()])),
         "get_parent_class" => Some(optional(&["object_or_class"], 0, vec![null_lit()])),
         "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {

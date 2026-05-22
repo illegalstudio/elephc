@@ -62,6 +62,7 @@ pub(crate) fn inject_builtin_iterators(
             ],
             attributes: Vec::new(),
             constants: Vec::new(),
+            used_traits: Vec::new(),
         },
     );
 

@@ -557,6 +557,45 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Bool))
         }
+        "class_implements" | "class_parents" | "class_uses" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes 1 or 2 arguments", name),
+                ));
+            }
+            let first_ty = checker.infer_type(&args[0], env)?;
+            if !matches!(first_ty, PhpType::Object(_))
+                && !matches!(args[0].kind, ExprKind::StringLiteral(_))
+            {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "{}() first argument must be an object or string literal in AOT mode",
+                        name
+                    ),
+                ));
+            }
+            if let Some(autoload_arg) = args.get(1) {
+                checker.infer_type(autoload_arg, env)?;
+                if !matches!(
+                    autoload_arg.kind,
+                    ExprKind::BoolLiteral(_) | ExprKind::IntLiteral(_)
+                ) {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "{}() autoload argument must be a literal bool or int in AOT mode",
+                            name
+                        ),
+                    ));
+                }
+            }
+            Ok(Some(PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Str),
+            }))
+        }
         "get_class" => {
             if args.len() > 1 {
                 return Err(CompileError::new(
