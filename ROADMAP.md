@@ -489,7 +489,7 @@ be carried through a backend migration.
 - [ ] `Throwable`-via-interface `getMessage()` dispatch fix (pre-existing): catching by `Throwable` and calling `getMessage()` on the typed binding returns garbage instead of the message string
 - [x] `$obj[$k]` subscript syntax for `ArrayAccess` implementers (read, write, `isset`, `unset` paths), including `Mixed`-boxing for offsets and values
 - [x] Raw pointer memory helpers for FFI/socket showcases: `ptr_read16()`, `ptr_write16()`, `ptr_read_string()`, `ptr_write_string()`
-- [ ] `IntrinsicCall` foundation for runtime-managed SPL/core objects when direct method interception is still the cleanest implementation path
+- [x] `IntrinsicCall` foundation for runtime-managed SPL/core objects when direct method interception is still the cleanest implementation path
 
 ## v0.23.x — SPL containers and iterator runway
 

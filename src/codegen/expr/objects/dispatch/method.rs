@@ -13,11 +13,12 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::functions;
+use crate::intrinsics::IntrinsicCall;
 use crate::names::php_symbol_key;
 use crate::parser::ast::Expr;
 use crate::types::{FunctionSig, PhpType};
 
-use super::fiber::emit_fiber_instance_method_dispatch;
+use super::intrinsic::emit_instance_intrinsic_with_loaded_args;
 use super::prep::{compute_register_assignments, eval_and_push_args, pop_args_to_registers};
 use super::super::super::emit_expr;
 use super::vtable::emit_dispatch_instance_method;
@@ -33,8 +34,14 @@ pub(in crate::codegen::expr::objects) fn emit_method_call_with_pushed_args(
     let assignments = compute_register_assignments(emitter, arg_types, 1);
     abi::emit_pop_reg(emitter, abi::int_arg_reg_name(emitter.target, 0));      // pop $this into the first integer argument register for the target ABI
     let overflow_bytes = pop_args_to_registers(emitter, &assignments);
-    let ret_ty = if class_name == "Fiber" {
-        emit_fiber_instance_method_dispatch(method, &assignments, overflow_bytes, emitter, ctx)
+    let ret_ty = if let Some(intrinsic) = IntrinsicCall::instance_method(class_name, method) {
+        emit_instance_intrinsic_with_loaded_args(
+            intrinsic,
+            &assignments,
+            overflow_bytes,
+            emitter,
+            ctx,
+        )
     } else {
         emit_dispatch_instance_method(class_name, method, emitter, ctx)
     };
@@ -42,8 +49,6 @@ pub(in crate::codegen::expr::objects) fn emit_method_call_with_pushed_args(
     abi::emit_release_temporary_stack(emitter, source_temp_bytes);              // drop source-order named-argument temporaries after dispatch
     ret_ty
 }
-
-/// Codegen interception for `Fiber::suspend(...)` and `Fiber::getCurrent()`.
 
 pub(in crate::codegen::expr::objects) fn emit_method_call_with_saved_receiver_below_args(
     class_name: &str,
