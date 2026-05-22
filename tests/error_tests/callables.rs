@@ -66,6 +66,38 @@ fn test_error_enum_exists_wrong_args() {
 }
 
 #[test]
+fn test_error_class_implements_wrong_args() {
+    expect_error(
+        r#"<?php class_implements();"#,
+        "class_implements() takes 1 or 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_class_implements_requires_literal_or_object() {
+    expect_error(
+        r#"<?php $name = "DateTime"; class_implements($name);"#,
+        "class_implements() first argument must be an object or string literal in AOT mode",
+    );
+}
+
+#[test]
+fn test_error_class_parents_requires_literal_autoload_flag() {
+    expect_error(
+        r#"<?php $autoload = true; class_parents("DateTime", $autoload);"#,
+        "class_parents() autoload argument must be a literal bool or int in AOT mode",
+    );
+}
+
+#[test]
+fn test_error_class_uses_wrong_args() {
+    expect_error(
+        r#"<?php class_uses("DateTime", true, false);"#,
+        "class_uses() takes 1 or 2 arguments",
+    );
+}
+
+#[test]
 fn test_error_get_class_wrong_args() {
     expect_error(
         r#"<?php class Box {} $box = new Box(); get_class($box, $box);"#,

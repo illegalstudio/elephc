@@ -14,6 +14,8 @@ mod autoload;
 mod classes;
 #[path = "spl/interfaces.rs"]
 mod interfaces;
+#[path = "spl/introspection.rs"]
+mod introspection;
 #[path = "spl/intrinsics.rs"]
 mod intrinsics;
 #[path = "spl/redirects.rs"]
