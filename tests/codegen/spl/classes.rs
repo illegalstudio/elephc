@@ -6,7 +6,7 @@
 //! - `cargo test --test codegen_tests` through the SPL test module.
 //!
 //! Key details:
-//! - Runtime tests cover Phase 4 containers before later SPL phases add iterator decorators and heaps.
+//! - Runtime tests cover Phase 4 containers; iterator decorators and heaps remain later roadmap phases.
 
 use crate::support::*;
 
@@ -217,7 +217,7 @@ echo "\n";
 unset($list[0]);
 echo $list[0];
 echo "\n";
-$list[1] = "c";
+$list[] = "c";
 echo $list[1];
 echo "\n";
 $list[0] = "z";
@@ -227,6 +227,27 @@ echo count($list);
 "#,
     );
     assert_eq!(out, "a|b\n1\nb\nc\nz|2");
+}
+
+#[test]
+fn test_phase4_spl_doubly_linked_list_php_error_edges() {
+    let out = compile_and_run(
+        r#"<?php
+$list = new SplDoublyLinkedList();
+try { $list->pop(); } catch (RuntimeException $e) { echo "pop"; }
+try { $list->shift(); } catch (RuntimeException $e) { echo "|shift"; }
+try { $list->top(); } catch (RuntimeException $e) { echo "|top"; }
+$list->push("a");
+try { $list[1] = "x"; } catch (OutOfRangeException $e) { echo "|set"; }
+try { $list->add(2, "x"); } catch (OutOfRangeException $e) { echo "|add"; }
+$list[] = "b";
+$list->setIteratorMode(SplDoublyLinkedList::IT_MODE_LIFO);
+echo "|";
+echo $list[0];
+echo $list[1];
+"#,
+    );
+    assert_eq!(out, "pop|shift|top|set|add|ba");
 }
 
 #[test]
@@ -295,4 +316,128 @@ echo count($json);
 "#,
     );
     assert_eq!(out, "2|2\na|3\n10\n3|c\n3|3|c\n3");
+}
+
+#[test]
+fn test_phase4_spl_fixed_array_php_error_edges() {
+    let out = compile_and_run(
+        r#"<?php
+try { $tmp = new SplFixedArray(-1); } catch (ValueError $e) { echo "new"; }
+$fixed = new SplFixedArray(1);
+try { $fixed[1] = "x"; } catch (OutOfBoundsException $e) { echo "|set"; }
+try { $x = $fixed[1]; } catch (OutOfBoundsException $e) { echo "|get"; }
+try { $fixed["x"] = "x"; } catch (TypeError $e) { echo "|type"; }
+try { $fixed->setSize(-1); } catch (ValueError $e) { echo "|resize"; }
+try { SplFixedArray::fromArray(["x" => "y"]); } catch (InvalidArgumentException $e) { echo "|from"; }
+"#,
+    );
+    assert_eq!(out, "new|set|get|type|resize|from");
+}
+
+#[test]
+fn test_phase4_spl_doubly_linked_list_serialization_helpers() {
+    let out = compile_and_run(
+        r#"<?php
+$list = new SplDoublyLinkedList();
+$list->push("a");
+$list->push(2);
+$list->setIteratorMode(SplDoublyLinkedList::IT_MODE_LIFO);
+
+$ser = $list->__serialize();
+echo count($ser);
+echo "|";
+echo $ser[0];
+echo "|";
+echo count($ser[1]);
+echo "|";
+echo $ser[1][0];
+echo "|";
+echo $ser[1][1];
+echo "|";
+echo count($ser[2]);
+echo "\n";
+
+$debug = $list->__debugInfo();
+echo count($debug);
+echo "\n";
+
+$copy = new SplDoublyLinkedList();
+$copy->__unserialize($ser);
+echo $copy->getIteratorMode();
+echo "|";
+echo $copy[0];
+echo "|";
+echo $copy[1];
+echo "\n";
+
+echo $list->serialize();
+echo "\n";
+
+$legacy = new SplDoublyLinkedList();
+$legacy->unserialize($list->serialize());
+echo $legacy->getIteratorMode();
+echo "|";
+echo $legacy[0];
+echo "|";
+echo $legacy[1];
+echo "\n";
+
+$scalars = new SplDoublyLinkedList();
+$scalars->push(true);
+$scalars->push(null);
+$round = new SplDoublyLinkedList();
+$round->unserialize($scalars->serialize());
+echo $round[0] ? "true" : "false";
+echo "|";
+echo is_null($round[1]) ? "null" : "value";
+"#,
+    );
+    assert_eq!(
+        out,
+        "3|2|2|a|2|0\n2\n2|2|a\ni:2;:s:1:\"a\";:i:2;\n2|2|a\ntrue|null"
+    );
+}
+
+#[test]
+fn test_phase4_spl_fixed_array_serialization_and_from_array_helpers() {
+    let out = compile_and_run(
+        r#"<?php
+$fixed = new SplFixedArray(3);
+$fixed[1] = "b";
+$ser = $fixed->__serialize();
+echo count($ser);
+echo "|";
+echo is_null($ser[0]) ? "null" : $ser[0];
+echo "|";
+echo $ser[1];
+echo "|";
+echo is_null($ser[2]) ? "null" : $ser[2];
+echo "\n";
+
+$copy = new SplFixedArray();
+$copy->__unserialize(["x", "y"]);
+echo $copy->getSize();
+echo "|";
+echo $copy[0];
+echo "|";
+echo $copy[1];
+echo "\n";
+
+$from = SplFixedArray::fromArray([2 => "x", 5 => "y"]);
+echo $from->getSize();
+echo "|";
+echo $from[2];
+echo "|";
+echo $from[5];
+echo "\n";
+
+$packed = SplFixedArray::fromArray([2 => "x", 5 => "y"], false);
+echo $packed->getSize();
+echo "|";
+echo $packed[0];
+echo "|";
+echo $packed[1];
+"#,
+    );
+    assert_eq!(out, "3|null|b|null\n2|x|y\n6|x|y\n2|x|y");
 }

@@ -122,34 +122,6 @@ fn test_error_spl_doubly_linked_list_cannot_be_redeclared() {
 }
 
 #[test]
-fn test_error_spl_doubly_linked_list_unbacked_methods_are_not_exposed() {
-    for (source, expected) in [
-        (
-            "<?php $list = new SplDoublyLinkedList(); $list->serialize();",
-            "Undefined method: SplDoublyLinkedList::serialize",
-        ),
-        (
-            "<?php $list = new SplDoublyLinkedList(); $list->unserialize(\"\");",
-            "Undefined method: SplDoublyLinkedList::unserialize",
-        ),
-        (
-            "<?php $list = new SplDoublyLinkedList(); $list->__serialize();",
-            "Undefined method: SplDoublyLinkedList::__serialize",
-        ),
-        (
-            "<?php $list = new SplDoublyLinkedList(); $list->__unserialize([]);",
-            "Undefined method: SplDoublyLinkedList::__unserialize",
-        ),
-        (
-            "<?php $list = new SplDoublyLinkedList(); $list->__debugInfo();",
-            "Undefined method: SplDoublyLinkedList::__debugInfo",
-        ),
-    ] {
-        expect_error(source, expected);
-    }
-}
-
-#[test]
 fn test_error_spl_fixed_array_cannot_be_redeclared() {
     expect_error(
         "<?php class SplFixedArray {}",
@@ -158,25 +130,9 @@ fn test_error_spl_fixed_array_cannot_be_redeclared() {
 }
 
 #[test]
-fn test_error_spl_fixed_array_unbacked_methods_are_not_exposed() {
-    for (source, expected) in [
-        (
-            "<?php $fixed = new SplFixedArray(); $fixed->getIterator();",
-            "Undefined method: SplFixedArray::getIterator",
-        ),
-        (
-            "<?php $fixed = new SplFixedArray(); $fixed->__serialize();",
-            "Undefined method: SplFixedArray::__serialize",
-        ),
-        (
-            "<?php $fixed = new SplFixedArray(); $fixed->__unserialize([]);",
-            "Undefined method: SplFixedArray::__unserialize",
-        ),
-        (
-            "<?php $fixed = new SplFixedArray(); $fixed->__wakeup();",
-            "Undefined method: SplFixedArray::__wakeup",
-        ),
-    ] {
-        expect_error(source, expected);
-    }
+fn test_error_spl_fixed_array_get_iterator_is_deferred_until_iterator_phase() {
+    expect_error(
+        "<?php $fixed = new SplFixedArray(); $fixed->getIterator();",
+        "Undefined method: SplFixedArray::getIterator",
+    );
 }
