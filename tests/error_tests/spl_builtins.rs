@@ -146,22 +146,6 @@ fn test_error_iterator_count_rejects_non_traversable() {
 }
 
 #[test]
-fn test_error_iterator_count_rejects_runtime_iterable_source() {
-    expect_error(
-        "<?php function size(iterable $items): int { return iterator_count($items); }",
-        "iterator_count() first argument must be a statically known array or Traversable",
-    );
-}
-
-#[test]
-fn test_error_iterator_to_array_rejects_runtime_iterable_source() {
-    expect_error(
-        "<?php function values(iterable $items): array { return iterator_to_array($items); }",
-        "iterator_to_array() first argument must be a statically known array or Traversable",
-    );
-}
-
-#[test]
 fn test_error_iterator_to_array_rejects_dynamic_preserve_keys() {
     expect_error(
         "<?php $preserve = false; iterator_to_array([1, 2], $preserve);",
@@ -173,12 +157,12 @@ fn test_error_iterator_to_array_rejects_dynamic_preserve_keys() {
 fn test_error_iterator_apply_rejects_array_source() {
     expect_error(
         "<?php function cb(): bool { return true; } iterator_apply([1], \"cb\");",
-        "iterator_apply() first argument must be a statically known Traversable",
+        "iterator_apply() first argument must be Traversable",
     );
 }
 
 #[test]
-fn test_error_iterator_apply_rejects_dynamic_args_array() {
+fn test_error_iterator_apply_rejects_dynamic_assoc_args_array() {
     expect_error(
         r#"<?php
 class Range implements Iterator {
@@ -189,9 +173,9 @@ class Range implements Iterator {
     public function next(): void {}
 }
 function cb(): bool { return true; }
-$args = [];
+$args = ["name" => "value"];
 iterator_apply(new Range(), "cb", $args);
 "#,
-        "iterator_apply() args must be null or a literal array of scalar literals",
+        "iterator_apply() args must be null, a literal array of scalar literals, or an indexed array value",
     );
 }

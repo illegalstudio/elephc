@@ -70,6 +70,33 @@ echo iterator_count(new Bag());
 }
 
 #[test]
+fn test_iterator_count_accepts_runtime_iterable_sources() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    private int $end;
+    public function __construct(int $end) { $this->i = 0; $this->end = $end; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < $this->end; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+function size(iterable $items): int {
+    return iterator_count($items);
+}
+echo size([1, 2]);
+echo ":";
+echo size(["a" => 10, "b" => 20, "c" => 30]);
+echo ":";
+echo size(new Range(4));
+"#,
+    );
+    assert_eq!(out, "2:3:4");
+}
+
+#[test]
 fn test_iterator_to_array_accepts_arrays() {
     let out = compile_and_run(
         r#"<?php
@@ -83,6 +110,65 @@ foreach ($items as $k => $v) {
 "#,
     );
     assert_eq!(out, "a=10 b=20 ");
+}
+
+#[test]
+fn test_iterator_to_array_reindexes_associative_array_without_preserving_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$items = iterator_to_array(["a" => 10, "b" => 20], false);
+foreach ($items as $k => $v) {
+    echo $k;
+    echo "=";
+    echo $v;
+    echo " ";
+}
+"#,
+    );
+    assert_eq!(out, "0=10 1=20 ");
+}
+
+#[test]
+fn test_iterator_to_array_accepts_runtime_iterable_sources() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i + 7; }
+    public function key(): string { return "k" . $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+function dump_preserved(iterable $items): void {
+    $copy = iterator_to_array($items);
+    foreach ($copy as $k => $v) {
+        echo $k;
+        echo "=";
+        echo $v;
+        echo " ";
+    }
+}
+function dump_values(iterable $items): void {
+    $copy = iterator_to_array($items, false);
+    foreach ($copy as $k => $v) {
+        echo $k;
+        echo "=";
+        echo $v;
+        echo " ";
+    }
+}
+dump_preserved(["a" => 10, "b" => 20]);
+echo "|";
+dump_values(["a" => 10, "b" => 20]);
+echo "|";
+dump_values([3, 4]);
+echo "|";
+dump_preserved(new Range());
+"#,
+    );
+    assert_eq!(out, "a=10 b=20 |0=10 1=20 |0=3 1=4 |k0=7 k1=8 ");
 }
 
 #[test]
@@ -219,4 +305,36 @@ echo iterator_apply(new Range(), "label", ["A"]);
 "#,
     );
     assert_eq!(out, "AA2");
+}
+
+#[test]
+fn test_iterator_apply_accepts_traversable_typed_source_and_dynamic_args() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+function label(string $prefix): bool {
+    echo $prefix;
+    return true;
+}
+function run_traversable(Traversable $items, array $args): int {
+    return iterator_apply($items, "label", $args);
+}
+function run_iterable(iterable $items, array $args): int {
+    return iterator_apply($items, "label", $args);
+}
+$args = ["B"];
+echo run_traversable(new Range(), $args);
+echo ":";
+echo run_iterable(new Range(), $args);
+"#,
+    );
+    assert_eq!(out, "BB2:BB2");
 }
