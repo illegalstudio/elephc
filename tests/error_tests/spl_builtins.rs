@@ -136,3 +136,62 @@ fn test_error_spl_fixed_array_get_iterator_is_deferred_until_iterator_phase() {
         "Undefined method: SplFixedArray::getIterator",
     );
 }
+
+#[test]
+fn test_error_iterator_count_rejects_non_traversable() {
+    expect_error(
+        "<?php iterator_count(123);",
+        "iterator_count() first argument must be a statically known array or Traversable",
+    );
+}
+
+#[test]
+fn test_error_iterator_count_rejects_runtime_iterable_source() {
+    expect_error(
+        "<?php function size(iterable $items): int { return iterator_count($items); }",
+        "iterator_count() first argument must be a statically known array or Traversable",
+    );
+}
+
+#[test]
+fn test_error_iterator_to_array_rejects_runtime_iterable_source() {
+    expect_error(
+        "<?php function values(iterable $items): array { return iterator_to_array($items); }",
+        "iterator_to_array() first argument must be a statically known array or Traversable",
+    );
+}
+
+#[test]
+fn test_error_iterator_to_array_rejects_dynamic_preserve_keys() {
+    expect_error(
+        "<?php $preserve = false; iterator_to_array([1, 2], $preserve);",
+        "iterator_to_array() preserve_keys must be a boolean literal",
+    );
+}
+
+#[test]
+fn test_error_iterator_apply_rejects_array_source() {
+    expect_error(
+        "<?php function cb(): bool { return true; } iterator_apply([1], \"cb\");",
+        "iterator_apply() first argument must be a statically known Traversable",
+    );
+}
+
+#[test]
+fn test_error_iterator_apply_rejects_dynamic_args_array() {
+    expect_error(
+        r#"<?php
+class Range implements Iterator {
+    public function rewind(): void {}
+    public function valid(): bool { return false; }
+    public function current(): int { return 0; }
+    public function key(): int { return 0; }
+    public function next(): void {}
+}
+function cb(): bool { return true; }
+$args = [];
+iterator_apply(new Range(), "cb", $args);
+"#,
+        "iterator_apply() args must be null or a literal array of scalar literals",
+    );
+}

@@ -16,6 +16,8 @@ mod classes;
 mod interfaces;
 #[path = "spl/introspection.rs"]
 mod introspection;
+#[path = "spl/iterator_helpers.rs"]
+mod iterator_helpers;
 #[path = "spl/intrinsics.rs"]
 mod intrinsics;
 #[path = "spl/redirects.rs"]
