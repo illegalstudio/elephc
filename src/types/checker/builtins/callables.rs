@@ -410,6 +410,11 @@ pub(super) fn check_builtin(
                 }
                 return Ok(Some(sig.return_type.clone()));
             }
+            let callback_ty = checker.infer_type(&args[0], env)?;
+            let arg_array_ty = checker.infer_type(&args[1], env)?;
+            if callback_ty == PhpType::Callable && matches!(arg_array_ty, PhpType::Array(_)) {
+                return Ok(Some(PhpType::Int));
+            }
             Err(CompileError::new(
                 args[0].span,
                 "call_user_func_array() callback must have a statically known callable signature",

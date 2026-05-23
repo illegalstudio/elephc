@@ -268,6 +268,23 @@ fn test_call_user_func_array_string_builtin_callback() {
 }
 
 #[test]
+fn test_call_user_func_array_dynamic_args_for_callable_without_known_signature() {
+    let out = compile_and_run(
+        r#"<?php
+function make_callback(): callable {
+    return function(string $prefix): int {
+        echo $prefix;
+        return 7;
+    };
+}
+$args = ["abc"];
+echo call_user_func_array(make_callback(), $args);
+"#,
+    );
+    assert_eq!(out, "abc7");
+}
+
+#[test]
 fn test_call_user_func_array_variadic_callback() {
     let out = compile_and_run(
         "<?php

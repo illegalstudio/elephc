@@ -13,11 +13,14 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
 use crate::codegen::expr::calls::args;
+use crate::codegen::platform::Arch;
 use crate::codegen::abi;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 use super::callback_env;
 use super::super::callable_lookup::{lookup_function, FunctionLookup};
+
+const UNKNOWN_CALLBACK_ARG_LIMIT: usize = 16;
 
 fn emit_array_value_type_stamp(emitter: &mut Emitter, array_reg: &str, elem_ty: &PhpType) {
     let value_type_tag = match elem_ty {
@@ -111,13 +114,13 @@ pub fn emit(
         &args[0].kind,
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_)
     ) {
-        ctx.deferred_closures
+        Some(ctx.deferred_closures
             .last()
             .expect("call_user_func_array: missing synthesized callable signature")
             .sig
-            .clone()
+            .clone())
     } else {
-        precomputed_sig.expect("call_user_func_array: callable signature not found")
+        precomputed_sig
     };
 
     // Evaluate the array argument (second arg)
@@ -127,18 +130,31 @@ pub fn emit(
         _ => None,
     };
 
-    let ret_ty = emit_loaded_array_callback_call(
-        LoadedArraySource::Result,
-        &arr_ty,
-        literal_arg_elems,
-        call_reg,
-        &captures,
-        &sig,
-        save_concat_before_args,
-        emitter,
-        ctx,
-        data,
-    );
+    let ret_ty = if let Some(sig) = sig {
+        emit_loaded_array_callback_call(
+            LoadedArraySource::Result,
+            &arr_ty,
+            literal_arg_elems,
+            call_reg,
+            &captures,
+            &sig,
+            save_concat_before_args,
+            emitter,
+            ctx,
+            data,
+        )
+    } else {
+        emit_loaded_array_unknown_callback_call(
+            LoadedArraySource::Result,
+            &arr_ty,
+            call_reg,
+            &captures,
+            save_concat_before_args,
+            emitter,
+            ctx,
+            data,
+        )
+    };
 
     Some(ret_ty)
 }
@@ -513,4 +529,137 @@ pub(crate) fn emit_loaded_array_callback_call(
     }
 
     ret_ty
+}
+
+pub(crate) fn emit_loaded_array_unknown_callback_call(
+    array_source: LoadedArraySource,
+    arr_ty: &PhpType,
+    call_reg: &str,
+    captures: &[(String, PhpType, bool)],
+    concat_saved_before_args: bool,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let (array_reg, len_reg) = match emitter.target.arch {
+        Arch::AArch64 => ("x20", "x21"),
+        Arch::X86_64 => ("r13", "r14"),
+    };
+    let elem_ty = match arr_ty {
+        PhpType::Array(elem_ty) => *elem_ty.clone(),
+        _ => PhpType::Int,
+    };
+    let elem_size = args::array_element_stride(&elem_ty);
+
+    match array_source {
+        LoadedArraySource::Result => {
+            emitter.instruction(&format!("mov {}, {}", array_reg, abi::int_result_reg(emitter))); // preserve the callback-argument array pointer for unknown signature dispatch
+        }
+        LoadedArraySource::TemporaryStackSlot(offset) => {
+            abi::emit_load_temporary_stack_slot(emitter, array_reg, offset);
+        }
+    }
+    abi::emit_load_from_address(emitter, len_reg, array_reg, 0);                // load callback-argument array length for unknown signature dispatch
+
+    let done_label = ctx.next_label("cufa_unknown_done");
+    let case_labels: Vec<String> = (0..=UNKNOWN_CALLBACK_ARG_LIMIT)
+        .map(|_| ctx.next_label("cufa_unknown_arity"))
+        .collect();
+    for (arg_count, label) in case_labels.iter().enumerate() {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("cmp {}, #{}", len_reg, arg_count)); // compare runtime callback-argument count against this unknown-signature case
+                emitter.instruction(&format!("b.eq {}", label));                // dispatch to the call shape matching the runtime argument count
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("cmp {}, {}", len_reg, arg_count)); // compare runtime callback-argument count against this unknown-signature case
+                emitter.instruction(&format!("je {}", label));                  // dispatch to the call shape matching the runtime argument count
+            }
+        }
+    }
+    emit_unknown_callback_arg_limit_abort(emitter, data);
+
+    for (arg_count, label) in case_labels.iter().enumerate() {
+        emitter.label(label);
+        emit_unknown_callback_case(
+            arg_count,
+            &elem_ty,
+            elem_size,
+            array_reg,
+            call_reg,
+            captures,
+            concat_saved_before_args,
+            &done_label,
+            emitter,
+            ctx,
+            data,
+        );
+    }
+
+    emitter.label(&done_label);
+    PhpType::Int
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_unknown_callback_case(
+    arg_count: usize,
+    elem_ty: &PhpType,
+    elem_size: usize,
+    array_reg: &str,
+    call_reg: &str,
+    captures: &[(String, PhpType, bool)],
+    concat_saved_before_args: bool,
+    done_label: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    let mut arg_types = Vec::with_capacity(arg_count + captures.len());
+    for i in 0..arg_count {
+        args::load_array_element_to_result(emitter, elem_ty, array_reg, 24 + i * elem_size);
+        let pushed_ty = args::push_loaded_array_element_arg(elem_ty, None, emitter, ctx, data);
+        arg_types.push(pushed_ty);
+    }
+    callback_env::push_captures_as_hidden_args(captures, emitter, ctx, &mut arg_types);
+
+    let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, &arg_types, 0);
+    let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
+    let ret_ty = PhpType::Int;
+
+    if !concat_saved_before_args {
+        crate::codegen::expr::save_concat_offset_before_nested_call(emitter, ctx);
+    }
+    abi::emit_call_reg(emitter, call_reg);
+    if concat_saved_before_args {
+        abi::emit_release_temporary_stack(emitter, overflow_bytes);
+        crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
+    } else {
+        crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
+        abi::emit_release_temporary_stack(emitter, overflow_bytes);
+    }
+    abi::emit_jump(emitter, done_label);
+}
+
+fn emit_unknown_callback_arg_limit_abort(emitter: &mut Emitter, data: &mut DataSection) {
+    let (message_label, message_len) = data.add_string(
+        b"Fatal error: call_user_func_array() unknown-signature callback argument array is too large\n",
+    );
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, #2");                                  // write the unknown-signature arity diagnostic to stderr
+            emitter.adrp("x1", &message_label);
+            emitter.add_lo12("x1", "x1", &message_label);
+            emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the diagnostic byte length to write()
+            emitter.syscall(4);
+            abi::emit_exit(emitter, 1);
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov edi, 2");                                  // write the unknown-signature arity diagnostic to stderr
+            abi::emit_symbol_address(emitter, "rsi", &message_label);
+            emitter.instruction(&format!("mov edx, {}", message_len));          // pass the diagnostic byte length to write()
+            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
+            emitter.instruction("syscall");                                     // emit the fatal unknown-signature arity diagnostic
+            abi::emit_exit(emitter, 1);
+        }
+    }
 }

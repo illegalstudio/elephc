@@ -230,9 +230,8 @@ runtime, the program aborts because PHP's `iterator_apply()` signature requires
 literal array, or a dynamic indexed array value; literal arrays with expressions
 are evaluated once before iteration starts. Dynamic associative arrays with
 string keys are rejected because PHP treats them as named callback arguments.
-Callback expressions without statically known signatures are accepted only when
-the callback arguments are omitted, `null`, or a literal scalar array; dynamic
-callback-argument arrays still require a statically known callback signature.
+Callback expressions without statically known signatures can receive dynamic
+indexed argument arrays through a generated runtime arity dispatcher.
 
 ## Compatibility Gaps
 

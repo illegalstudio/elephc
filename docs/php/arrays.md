@@ -197,5 +197,6 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `isset()` | `isset($var, ...$vars): int` | Check that every variable or offset is defined and not null |
 
 > Callback arguments can be string literals, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures.
+> `call_user_func_array()` also accepts dynamic indexed argument arrays for callable values whose signature is not statically known.
 
 **Not supported by design:** `compact()`, `extract()` require runtime variable-name tables and are listed in the roadmap's "Will not implement" section.

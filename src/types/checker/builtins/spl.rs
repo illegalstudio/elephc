@@ -432,6 +432,11 @@ fn check_iterator_apply_dynamic_callback(
         return Ok(());
     }
 
+    let callback_ty = checker.infer_type(callback, env)?;
+    if callback_ty == PhpType::Callable {
+        return Ok(());
+    }
+
     Err(CompileError::new(
         callback.span,
         "iterator_apply() dynamic args require a statically known callable signature",

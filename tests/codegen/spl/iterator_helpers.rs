@@ -405,6 +405,32 @@ echo iterator_apply(new Range(), $cb, ["A"]);
 }
 
 #[test]
+fn test_iterator_apply_dynamic_args_for_callable_without_known_signature() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+function make_label(): callable {
+    return function(string $prefix): bool {
+        echo $prefix;
+        return true;
+    };
+}
+$args = ["B"];
+echo iterator_apply(new Range(), make_label(), $args);
+"#,
+    );
+    assert_eq!(out, "BB2");
+}
+
+#[test]
 fn test_iterator_apply_accepts_traversable_typed_source_and_dynamic_args() {
     let out = compile_and_run(
         r#"<?php

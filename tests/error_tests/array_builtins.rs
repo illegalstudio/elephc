@@ -394,14 +394,17 @@ fn test_error_call_user_func_array_wrong_args() {
 }
 
 #[test]
-fn test_error_call_user_func_array_requires_known_callable_signature() {
+fn test_error_call_user_func_array_unknown_callable_rejects_dynamic_assoc_args() {
     expect_error(
         r#"<?php
-function make_callback() {
-    return strlen(...);
+function make_callback(): callable {
+    return function(string $prefix): int {
+        return 1;
+    };
 }
 
-echo call_user_func_array(make_callback(), ["abc"]);
+$args = ["prefix" => "abc"];
+echo call_user_func_array(make_callback(), $args);
 "#,
         "call_user_func_array() callback must have a statically known callable signature",
     );

@@ -179,26 +179,3 @@ iterator_apply(new Range(), "cb", $args);
         "iterator_apply() args must be null, a literal array, or an indexed array value",
     );
 }
-
-#[test]
-fn test_error_iterator_apply_dynamic_args_require_known_callback_signature() {
-    expect_error(
-        r#"<?php
-class Range implements Iterator {
-    public function rewind(): void {}
-    public function valid(): bool { return false; }
-    public function current(): int { return 0; }
-    public function key(): int { return 0; }
-    public function next(): void {}
-}
-function make_cb(): callable {
-    return function(string $prefix): bool {
-        return true;
-    };
-}
-$args = ["value"];
-iterator_apply(new Range(), make_cb(), $args);
-"#,
-        "iterator_apply() dynamic args require a statically known callable signature",
-    );
-}

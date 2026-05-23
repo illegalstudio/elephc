@@ -158,6 +158,6 @@ function make_iterator_labeler(): callable {
 }
 
 echo "iterator_apply returned callable:\n";
-$labeler = make_iterator_labeler();
-echo iterator_apply(new Range(0, 2, 1), $labeler, ["?"]);
+$dynamic_labels = ["?"];
+echo iterator_apply(new Range(0, 2, 1), make_iterator_labeler(), $dynamic_labels);
 echo "\n";

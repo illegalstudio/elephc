@@ -271,21 +271,31 @@ fn emit_callback_invocation(
         if save_concat_before_args {
             crate::codegen::expr::save_concat_offset_before_nested_call(emitter, ctx);
         }
-        let sig = sig.expect(
-            "iterator_apply(): dynamic args require a statically known callable signature",
-        );
-        let dynamic_ret_ty = call_user_func_array::emit_loaded_array_callback_call(
-            LoadedArraySource::TemporaryStackSlot(*args_offset),
-            arg_array_ty,
-            *literal_elems,
-            call_reg,
-            captures,
-            sig,
-            save_concat_before_args,
-            emitter,
-            ctx,
-            data,
-        );
+        let dynamic_ret_ty = if let Some(sig) = sig {
+            call_user_func_array::emit_loaded_array_callback_call(
+                LoadedArraySource::TemporaryStackSlot(*args_offset),
+                arg_array_ty,
+                *literal_elems,
+                call_reg,
+                captures,
+                sig,
+                save_concat_before_args,
+                emitter,
+                ctx,
+                data,
+            )
+        } else {
+            call_user_func_array::emit_loaded_array_unknown_callback_call(
+                LoadedArraySource::TemporaryStackSlot(*args_offset),
+                arg_array_ty,
+                call_reg,
+                captures,
+                save_concat_before_args,
+                emitter,
+                ctx,
+                data,
+            )
+        };
         crate::codegen::expr::coerce_to_truthiness(emitter, ctx, &dynamic_ret_ty);
         iterator_common::emit_increment_saved_count_at_offset(*count_offset, emitter);
         emit_branch_if_callback_false(emitter, loop_end);
