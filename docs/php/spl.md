@@ -228,12 +228,15 @@ accepts statically known Traversable objects and runtime-dispatched
 runtime, the program aborts because PHP's `iterator_apply()` signature requires
 `Traversable`. The third `iterator_apply()` argument may be omitted, `null`, a
 literal array, a dynamic indexed array value, or a dynamic associative array when
-the callback has a statically known non-variadic signature; literal arrays with
-expressions are evaluated once before iteration starts. Dynamic associative
-arrays with callback values whose signatures are not known are rejected because
-PHP treats string keys as named callback arguments. Callback expressions without
-statically known signatures can receive dynamic indexed argument arrays through a
-generated runtime arity dispatcher.
+the callback has a statically known signature, including userland variadic
+callbacks. For variadic callbacks, named keys consumed by fixed parameters are
+not copied into `...$rest`; remaining string keys keep their names, and remaining
+numeric keys are reindexed from zero. Literal arrays with expressions are
+evaluated once before iteration starts. Dynamic associative arrays with callback
+values whose signatures are not known are rejected because PHP treats string keys
+as named callback arguments. Callback expressions without statically known
+signatures can receive dynamic indexed argument arrays through a generated
+runtime arity dispatcher.
 
 ## Compatibility Gaps
 

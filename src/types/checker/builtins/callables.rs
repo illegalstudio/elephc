@@ -9,8 +9,8 @@
 //! - Signatures, callable aliases, optimizer effects, and codegen builtin dispatch must remain in lockstep.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, ExprKind};
-use crate::types::{PhpType, TypeEnv};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind};
+use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::canonical_builtin_function_name;
 use super::super::Checker;
@@ -18,6 +18,25 @@ use super::super::Checker;
 mod preg_replace_callback;
 
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
+
+pub(super) fn specialize_dynamic_assoc_variadic_user_callback(
+    checker: &mut Checker,
+    name: &str,
+    sig: &FunctionSig,
+) -> Result<(), CompileError> {
+    if sig.variadic.is_none() {
+        return Ok(());
+    }
+    let Some(decl) = checker.fn_decls.get(name).cloned() else {
+        return Ok(());
+    };
+    let mut param_types = sig.params.clone();
+    if let Some((_, variadic_ty)) = param_types.last_mut() {
+        *variadic_ty = PhpType::Iterable;
+    }
+    checker.resolve_function_signature(name, &decl, param_types)?;
+    Ok(())
+}
 
 fn validate_call_user_func_array_ref_args(
     sig: &crate::types::FunctionSig,
@@ -54,11 +73,20 @@ fn validate_call_user_func_array_dynamic_arg_array(
             "call_user_func_array() second argument must be an array",
         ));
     }
-    if matches!(arg_array_ty, PhpType::AssocArray { .. }) && sig.variadic.is_some() {
-        return Err(CompileError::new(
-            span,
-            "call_user_func_array() dynamic associative argument arrays require a non-variadic callable signature",
-        ));
+    Ok(())
+}
+
+fn specialize_dynamic_assoc_variadic_first_class_callback(
+    checker: &mut Checker,
+    target: &CallableTarget,
+    sig: &FunctionSig,
+    arg_array_ty: &PhpType,
+) -> Result<(), CompileError> {
+    if !matches!(arg_array_ty, PhpType::AssocArray { .. }) || sig.variadic.is_none() {
+        return Ok(());
+    }
+    if let CallableTarget::Function(name) = target {
+        specialize_dynamic_assoc_variadic_user_callback(checker, name.as_str(), sig)?;
     }
     Ok(())
 }
@@ -320,6 +348,13 @@ pub(super) fn check_builtin(
                 };
                 let sig = checker.specialize_first_class_callable_target(target, elems, span, env)?;
                 validate_call_user_func_array_dynamic_arg_array(checker, &sig, &args[1], span, env)?;
+                let arg_array_ty = checker.infer_type(&args[1], env)?;
+                specialize_dynamic_assoc_variadic_first_class_callback(
+                    checker,
+                    target,
+                    &sig,
+                    &arg_array_ty,
+                )?;
                 if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
                     let ret_ty = checker.check_known_callable_call(
                         &sig,
@@ -350,6 +385,13 @@ pub(super) fn check_builtin(
                         &args[1],
                         span,
                         env,
+                    )?;
+                    let arg_array_ty = checker.infer_type(&args[1], env)?;
+                    specialize_dynamic_assoc_variadic_first_class_callback(
+                        checker,
+                        &target,
+                        &sig,
+                        &arg_array_ty,
                     )?;
                     if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
                         let ret_ty = checker.check_known_callable_call(
@@ -399,6 +441,15 @@ pub(super) fn check_builtin(
                         span,
                         env,
                     )?;
+                    let arg_array_ty = checker.infer_type(&args[1], env)?;
+                    if matches!(arg_array_ty, PhpType::AssocArray { .. }) && sig.variadic.is_some()
+                    {
+                        specialize_dynamic_assoc_variadic_user_callback(
+                            checker,
+                            &cb_name,
+                            &sig,
+                        )?;
+                    }
                     if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
                         let ret_ty = checker.check_known_callable_call(
                             &sig,

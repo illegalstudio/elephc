@@ -455,6 +455,33 @@ echo iterator_apply(new Range(), "label_tick", $args);
 }
 
 #[test]
+fn test_iterator_apply_dynamic_assoc_args_for_variadic_callback() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+function label_tick(string $label, ...$rest): bool {
+    echo $label;
+    foreach ($rest as $key => $value) {
+        echo $key . "=" . $value . ";";
+    }
+    return true;
+}
+$args = ["label" => "L", "suffix" => "!"];
+echo iterator_apply(new Range(), "label_tick", $args);
+"#,
+    );
+    assert_eq!(out, "Lsuffix=!;Lsuffix=!;2");
+}
+
+#[test]
 fn test_iterator_apply_accepts_traversable_typed_source_and_dynamic_args() {
     let out = compile_and_run(
         r#"<?php

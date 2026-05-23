@@ -10,7 +10,7 @@
 //! - `spl_autoload_extensions()` only accepts literal setters until the runtime owns copied strings.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -396,7 +396,12 @@ fn check_iterator_apply_dynamic_callback(
     if let ExprKind::FirstClassCallable(target) = &callback.kind {
         let sig = checker.specialize_first_class_callable_target(target, &[], span, env)?;
         reject_dynamic_ref_args(&sig, span)?;
-        reject_dynamic_assoc_variadic_args(&sig, associative_args, span)?;
+        specialize_iterator_apply_dynamic_assoc_variadic_target(
+            checker,
+            target,
+            &sig,
+            associative_args,
+        )?;
         return Ok(());
     }
 
@@ -408,7 +413,12 @@ fn check_iterator_apply_dynamic_callback(
                 .closure_return_types
                 .insert(var_name.clone(), sig.return_type.clone());
             reject_dynamic_ref_args(&sig, span)?;
-            reject_dynamic_assoc_variadic_args(&sig, associative_args, span)?;
+            specialize_iterator_apply_dynamic_assoc_variadic_target(
+                checker,
+                &target,
+                &sig,
+                associative_args,
+            )?;
             return Ok(());
         }
     }
@@ -417,14 +427,12 @@ fn check_iterator_apply_dynamic_callback(
         if let Some(extern_name) = checker.canonical_extern_function_name_folded(cb_name) {
             if let Some(sig) = checker.functions.get(extern_name.as_str()).cloned() {
                 reject_dynamic_ref_args(&sig, span)?;
-                reject_dynamic_assoc_variadic_args(&sig, associative_args, span)?;
                 return Ok(());
             }
         }
         if let Some(builtin_name) = super::canonical_builtin_function_name(cb_name) {
             if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_name) {
                 reject_dynamic_ref_args(&sig, span)?;
-                reject_dynamic_assoc_variadic_args(&sig, associative_args, span)?;
                 return Ok(());
             }
         }
@@ -433,7 +441,13 @@ fn check_iterator_apply_dynamic_callback(
             .unwrap_or_else(|| cb_name.clone());
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
             reject_dynamic_ref_args(&sig, span)?;
-            reject_dynamic_assoc_variadic_args(&sig, associative_args, span)?;
+            if associative_args && sig.variadic.is_some() {
+                super::callables::specialize_dynamic_assoc_variadic_user_callback(
+                    checker,
+                    &cb_name,
+                    &sig,
+                )?;
+            }
             return Ok(());
         }
         if let Some(decl) = checker.fn_decls.get(cb_name.as_str()) {
@@ -443,19 +457,12 @@ fn check_iterator_apply_dynamic_callback(
                     "iterator_apply() requires a literal args array when the callback has pass-by-reference parameters",
                 ));
             }
-            if associative_args && decl.variadic.is_some() {
-                return Err(CompileError::new(
-                    span,
-                    "iterator_apply() dynamic associative args require a non-variadic callable signature",
-                ));
-            }
             return Ok(());
         }
     }
 
     if let Some(sig) = checker.resolve_expr_callable_sig(callback, env)? {
         reject_dynamic_ref_args(&sig, span)?;
-        reject_dynamic_assoc_variadic_args(&sig, associative_args, span)?;
         return Ok(());
     }
 
@@ -474,20 +481,6 @@ fn check_iterator_apply_dynamic_callback(
         callback.span,
         "iterator_apply() dynamic args require a statically known callable signature",
     ))
-}
-
-fn reject_dynamic_assoc_variadic_args(
-    sig: &crate::types::FunctionSig,
-    associative_args: bool,
-    span: crate::span::Span,
-) -> Result<(), CompileError> {
-    if associative_args && sig.variadic.is_some() {
-        return Err(CompileError::new(
-            span,
-            "iterator_apply() dynamic associative args require a non-variadic callable signature",
-        ));
-    }
-    Ok(())
 }
 
 fn check_iterator_apply_static_callback(
@@ -529,6 +522,25 @@ fn reject_dynamic_ref_args(
             span,
             "iterator_apply() requires a literal args array when the callback has pass-by-reference parameters",
         ));
+    }
+    Ok(())
+}
+
+fn specialize_iterator_apply_dynamic_assoc_variadic_target(
+    checker: &mut Checker,
+    target: &CallableTarget,
+    sig: &crate::types::FunctionSig,
+    associative_args: bool,
+) -> Result<(), CompileError> {
+    if !associative_args || sig.variadic.is_none() {
+        return Ok(());
+    }
+    if let CallableTarget::Function(name) = target {
+        super::callables::specialize_dynamic_assoc_variadic_user_callback(
+            checker,
+            name.as_str(),
+            sig,
+        )?;
     }
     Ok(())
 }
