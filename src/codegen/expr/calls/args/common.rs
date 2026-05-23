@@ -163,6 +163,29 @@ pub(crate) fn push_non_variable_ref_arg_address(
     PhpType::Int
 }
 
+pub(crate) fn push_current_result_ref_arg_address(
+    source_ty: &PhpType,
+    target_ty: Option<&PhpType>,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let source_repr = source_ty.codegen_repr();
+    let (pushed_ty, boxed_to_mixed) =
+        coerce_current_value_to_target(emitter, ctx, data, source_ty, target_ty);
+    if !boxed_to_mixed {
+        abi::emit_incref_if_refcounted(emitter, &source_repr);
+    }
+    push_arg_value(emitter, &pushed_ty);
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 16);
+    abi::emit_call_label(emitter, "__rt_heap_alloc");                         // allocate a stable 16-byte by-reference cell for a dynamic callback argument
+    let cell_reg = abi::symbol_scratch_reg(emitter);
+    emitter.instruction(&format!("mov {}, {}", cell_reg, abi::int_result_reg(emitter))); // keep the allocated callback reference cell while storing the loaded argument
+    store_pushed_value_to_ref_cell(emitter, cell_reg, &pushed_ty);
+    abi::emit_push_reg(emitter, cell_reg);
+    PhpType::Int
+}
+
 fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty: &PhpType) {
     let temp_reg = abi::temp_int_reg(emitter.target);
     match val_ty.codegen_repr() {

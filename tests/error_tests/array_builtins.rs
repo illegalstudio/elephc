@@ -394,23 +394,6 @@ fn test_error_call_user_func_array_wrong_args() {
 }
 
 #[test]
-fn test_error_call_user_func_array_unknown_callable_rejects_dynamic_assoc_args() {
-    expect_error(
-        r#"<?php
-function make_callback(): callable {
-    return function(string $prefix): int {
-        return 1;
-    };
-}
-
-$args = ["prefix" => "abc"];
-echo call_user_func_array(make_callback(), $args);
-"#,
-        "call_user_func_array() callback must have a statically known callable signature",
-    );
-}
-
-#[test]
 fn test_error_array_filter_rejects_complex_captured_callable_expression() {
     expect_error(
         r#"<?php
@@ -451,14 +434,6 @@ fn test_indexed_array_unrelated_object_values_widen_to_mixed() {
     assert!(
         check_source("<?php class Dog {} class Car {} $items = [new Dog(), new Car()];").is_ok(),
         "heterogeneous indexed-array values should widen to mixed",
-    );
-}
-
-#[test]
-fn test_error_call_user_func_array_ref_callback_requires_literal_argument_array() {
-    expect_error(
-        "<?php function bump(&$n) { $n = $n + 1; } $value = 1; $args = [$value]; call_user_func_array(\"bump\", $args);",
-        "requires a literal argument array when the callback has pass-by-reference parameters",
     );
 }
 

@@ -207,6 +207,12 @@ impl Checker {
             ExprKind::FirstClassCallable(target) => self
                 .resolve_first_class_callable_sig(target, expr.span, env)
                 .map(Some),
+            ExprKind::FunctionCall { name, .. } => {
+                let resolved_name = self
+                    .canonical_function_name_folded(name.as_str())
+                    .unwrap_or_else(|| name.as_str().to_string());
+                Ok(self.callable_return_sigs.get(&resolved_name).cloned())
+            }
             ExprKind::Variable(var_name) => Ok(self.callable_sigs.get(var_name).cloned()),
             ExprKind::ArrayAccess { array, .. } => {
                 if let ExprKind::Variable(array_name) = &array.kind {

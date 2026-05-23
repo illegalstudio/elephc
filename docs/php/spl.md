@@ -236,7 +236,9 @@ evaluated once before iteration starts. Dynamic associative arrays with callback
 values whose signatures are not known are rejected because PHP treats string keys
 as named callback arguments. Callback expressions without statically known
 signatures can receive dynamic indexed argument arrays through a generated
-runtime arity dispatcher.
+runtime arity dispatcher. Dynamic arrays passed to by-reference callback
+parameters use temporary reference cells, so callback writes do not mutate the
+source argument array.
 
 ## Compatibility Gaps
 

@@ -227,6 +227,21 @@ fn test_call_user_func_string_builtin_callback() {
 }
 
 #[test]
+fn test_call_user_func_accepts_callable_without_known_signature() {
+    let out = compile_and_run(
+        r#"<?php
+function make_callback(): callable {
+    return function($a, $b, $c): int {
+        return $a + $b + $c;
+    };
+}
+echo call_user_func(make_callback(), 2, 3, 4);
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+#[test]
 fn test_function_exists_true() {
     let out = compile_and_run(
         r#"<?php

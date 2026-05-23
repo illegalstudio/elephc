@@ -311,6 +311,33 @@ echo call_user_func_array(make_callback(), $args);
 }
 
 #[test]
+fn test_call_user_func_array_unknown_signature_captured_callback_dynamic_args_overflow_stack() {
+    let out = compile_and_run(
+        r#"<?php
+$base = 10;
+$callbacks = [
+    function(
+        $a1, $a2, $a3, $a4, $a5,
+        $a6, $a7, $a8, $a9, $a10,
+        $a11, $a12, $a13, $a14, $a15,
+        $a16, $a17, $a18, $a19, $a20
+    ) use ($base): int {
+        return $base + $a1 + $a2 + $a3 + $a4 + $a5
+            + $a6 + $a7 + $a8 + $a9 + $a10
+            + $a11 + $a12 + $a13 + $a14 + $a15
+            + $a16 + $a17 + $a18 + $a19 + $a20;
+    }
+];
+$cb = $callbacks[0];
+$args = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+         11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+echo call_user_func_array($cb, $args);
+"#,
+    );
+    assert_eq!(out, "220");
+}
+
+#[test]
 fn test_call_user_func_array_unknown_signature_dynamic_string_args_overflow_stack() {
     let out = compile_and_run(
         r#"<?php
@@ -400,6 +427,24 @@ call_user_func_array(summarize(...), $args);
 }
 
 #[test]
+fn test_call_user_func_array_dynamic_assoc_args_for_returned_callable_signature() {
+    let out = compile_and_run(
+        r#"<?php
+function make_callback(): callable {
+    return function(string $prefix): int {
+        echo $prefix;
+        return 7;
+    };
+}
+
+$args = ["prefix" => "abc"];
+echo call_user_func_array(make_callback(), $args);
+"#,
+    );
+    assert_eq!(out, "abc7");
+}
+
+#[test]
 fn test_call_user_func_array_variadic_float_tail_count() {
     let out = compile_and_run(
         "<?php
@@ -463,6 +508,25 @@ echo $value;
 "#,
     );
     assert_eq!(out, "7");
+}
+
+#[test]
+fn test_call_user_func_array_dynamic_args_for_by_ref_callback_use_temp_cells() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$n) {
+    $n = $n + 1;
+}
+
+$value = 5;
+$args = [$value];
+call_user_func_array("bump", $args);
+echo $value;
+echo ":";
+echo $args[0];
+"#,
+    );
+    assert_eq!(out, "5:5");
 }
 
 // -- v0.8 constants --

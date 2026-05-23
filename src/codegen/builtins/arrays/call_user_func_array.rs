@@ -20,8 +20,6 @@ use crate::types::{FunctionSig, PhpType};
 use super::callback_env;
 use super::super::callable_lookup::{lookup_function, FunctionLookup};
 
-const UNKNOWN_CALLBACK_ARG_LIMIT: usize = 16;
-
 fn emit_array_value_type_stamp(emitter: &mut Emitter, array_reg: &str, elem_ty: &PhpType) {
     let value_type_tag = match elem_ty {
         PhpType::Float => 2,
@@ -346,6 +344,55 @@ pub(crate) fn emit_loaded_array_callback_call(
                 arg_types.push(PhpType::Int);
                 continue;
             }
+            let has_default = sig.defaults.get(i).and_then(|d| d.as_ref()).is_some();
+            let target_ty = if args::declared_target_ty(Some(&sig), i).is_some() || has_default {
+                sig.params.get(i).map(|(_, ty)| ty)
+            } else {
+                None
+            };
+            if let Some(default_expr) = sig.defaults.get(i).and_then(|d| d.as_ref()) {
+                let load_label = ctx.next_label("cufa_ref_load_arg");
+                let done_label = ctx.next_label("cufa_ref_arg_done");
+                match emitter.target.arch {
+                    crate::codegen::platform::Arch::AArch64 => {
+                        emitter.instruction(&format!("cmp {}, #{}", len_reg, i + 1)); // compare provided array length before binding a by-reference callback argument
+                        emitter.instruction(&format!("b.ge {}", load_label));   // bind the provided element when this by-reference slot exists
+                    }
+                    crate::codegen::platform::Arch::X86_64 => {
+                        emitter.instruction(&format!("cmp {}, {}", len_reg, i + 1)); // compare provided array length before binding a by-reference callback argument
+                        emitter.instruction(&format!("jge {}", load_label));    // bind the provided element when this by-reference slot exists
+                    }
+                }
+                args::push_non_variable_ref_arg_address(
+                    default_expr,
+                    target_ty,
+                    emitter,
+                    ctx,
+                    data,
+                );
+                abi::emit_jump(emitter, &done_label);
+                emitter.label(&load_label);
+                args::load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + i * elem_size);
+                args::push_current_result_ref_arg_address(
+                    &elem_ty,
+                    target_ty,
+                    emitter,
+                    ctx,
+                    data,
+                );
+                emitter.label(&done_label);
+            } else {
+                args::load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + i * elem_size);
+                args::push_current_result_ref_arg_address(
+                    &elem_ty,
+                    target_ty,
+                    emitter,
+                    ctx,
+                    data,
+                );
+            }
+            arg_types.push(PhpType::Int);
+            continue;
         }
         let has_default = sig.defaults.get(i).and_then(|d| d.as_ref()).is_some();
         let target_ty = if args::declared_target_ty(Some(&sig), i).is_some() || has_default {
@@ -704,6 +751,37 @@ fn emit_loaded_assoc_array_callback_call(
             ctx,
             data,
         );
+
+        let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
+        if is_ref {
+            if let Some(default_expr) = sig.defaults.get(i).and_then(|d| d.as_ref()) {
+                let use_default = ctx.next_label("cufa_assoc_ref_default");
+                let done = ctx.next_label("cufa_assoc_ref_done");
+                abi::emit_branch_if_int_result_zero(emitter, &use_default);
+                args::push_loaded_hash_value_ref_arg(&elem_ty, target_ty, emitter, ctx, data);
+                abi::emit_jump(emitter, &done);
+                emitter.label(&use_default);
+                args::push_non_variable_ref_arg_address(
+                    default_expr,
+                    target_ty,
+                    emitter,
+                    ctx,
+                    data,
+                );
+                emitter.label(&done);
+            } else {
+                let missing = ctx.next_label("cufa_assoc_ref_missing");
+                let done = ctx.next_label("cufa_assoc_ref_done");
+                abi::emit_branch_if_int_result_zero(emitter, &missing);
+                args::push_loaded_hash_value_ref_arg(&elem_ty, target_ty, emitter, ctx, data);
+                abi::emit_jump(emitter, &done);
+                emitter.label(&missing);
+                emit_call_user_func_array_missing_arg_abort(emitter, data);
+                emitter.label(&done);
+            }
+            arg_types.push(PhpType::Int);
+            continue;
+        }
 
         let pushed_ty = if let Some(default_expr) = sig.defaults.get(i).and_then(|d| d.as_ref()) {
             let use_default = ctx.next_label("cufa_assoc_default");
@@ -1145,7 +1223,8 @@ pub(crate) fn emit_loaded_array_unknown_callback_call(
     abi::emit_load_from_address(emitter, len_reg, array_reg, 0);                // load callback-argument array length for unknown signature dispatch
 
     let done_label = ctx.next_label("cufa_unknown_done");
-    let case_labels: Vec<String> = (0..=UNKNOWN_CALLBACK_ARG_LIMIT)
+    let register_arg_capacity = unknown_callback_register_arg_capacity(emitter.target, &elem_ty);
+    let case_labels: Vec<String> = (0..=register_arg_capacity)
         .map(|_| ctx.next_label("cufa_unknown_arity"))
         .collect();
     for (arg_count, label) in case_labels.iter().enumerate() {
@@ -1160,7 +1239,18 @@ pub(crate) fn emit_loaded_array_unknown_callback_call(
             }
         }
     }
-    emit_unknown_callback_arg_limit_abort(emitter, data);
+    emit_unknown_captured_callback_overflow_dynamic(
+        array_reg,
+        len_reg,
+        &elem_ty,
+        register_arg_capacity,
+        call_reg,
+        captures,
+        concat_saved_before_args,
+        &done_label,
+        emitter,
+        ctx,
+    );
 
     for (arg_count, label) in case_labels.iter().enumerate() {
         emitter.label(label);
@@ -1196,6 +1286,134 @@ fn unknown_callback_register_arg_capacity(target: crate::codegen::platform::Targ
             Arch::X86_64 => 6,
         },
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_unknown_captured_callback_overflow_dynamic(
+    array_reg: &str,
+    len_reg: &str,
+    elem_ty: &PhpType,
+    register_arg_capacity: usize,
+    call_reg: &str,
+    captures: &[(String, PhpType, bool)],
+    concat_saved_before_args: bool,
+    done_label: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    let (overflow_count_reg, overflow_bytes_reg) = match emitter.target.arch {
+        Arch::AArch64 => ("x22", "x23"),
+        Arch::X86_64 => ("r15", "rbx"),
+    };
+    let capture_assignments = unknown_dynamic_capture_assignments(
+        emitter.target,
+        elem_ty,
+        register_arg_capacity,
+        captures,
+    );
+    let capture_stack_bytes = capture_assignments
+        .iter()
+        .filter(|(_, assignment)| !assignment.in_register())
+        .count()
+        * 16;
+    let visible_register_temp_bytes = register_arg_capacity * 16;
+    let capture_register_temp_bytes = capture_assignments
+        .iter()
+        .filter(|(_, assignment)| assignment.in_register())
+        .count()
+        * 16;
+    let register_temp_bytes = visible_register_temp_bytes + capture_register_temp_bytes;
+
+    emit_unknown_dynamic_overflow_size(
+        len_reg,
+        overflow_count_reg,
+        overflow_bytes_reg,
+        register_arg_capacity,
+        emitter,
+        ctx,
+    );
+    if capture_stack_bytes > 0 {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("add {}, {}, #{}", overflow_bytes_reg, overflow_bytes_reg, capture_stack_bytes)); // reserve trailing stack slots for captured callback arguments
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("add {}, {}", overflow_bytes_reg, capture_stack_bytes)); // reserve trailing stack slots for captured callback arguments
+            }
+        }
+    }
+    emit_dynamic_stack_adjust(emitter, overflow_bytes_reg, true);
+    abi::emit_reserve_temporary_stack(emitter, register_temp_bytes);
+
+    emit_unknown_dynamic_register_arg_temps(
+        array_reg,
+        len_reg,
+        elem_ty,
+        register_arg_capacity,
+        emitter,
+        ctx,
+    );
+    emit_unknown_dynamic_stack_args(
+        array_reg,
+        overflow_count_reg,
+        elem_ty,
+        register_arg_capacity,
+        register_temp_bytes,
+        emitter,
+        ctx,
+    );
+    let capture_register_temps = emit_unknown_dynamic_capture_args(
+        captures,
+        &capture_assignments,
+        overflow_count_reg,
+        register_temp_bytes,
+        visible_register_temp_bytes,
+        emitter,
+        ctx,
+    );
+    emit_unknown_dynamic_load_register_args(
+        len_reg,
+        elem_ty,
+        register_arg_capacity,
+        emitter,
+        ctx,
+    );
+    emit_unknown_dynamic_load_capture_register_args(&capture_register_temps, emitter);
+
+    abi::emit_release_temporary_stack(emitter, register_temp_bytes);
+    let ret_ty = PhpType::Int;
+    if !concat_saved_before_args {
+        crate::codegen::expr::save_concat_offset_before_nested_call(emitter, ctx);
+    }
+    abi::emit_call_reg(emitter, call_reg);
+    if concat_saved_before_args {
+        emit_dynamic_stack_adjust(emitter, overflow_bytes_reg, false);
+        crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
+    } else {
+        crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
+        emit_dynamic_stack_adjust(emitter, overflow_bytes_reg, false);
+    }
+    abi::emit_jump(emitter, done_label);
+}
+
+fn unknown_dynamic_capture_assignments(
+    target: crate::codegen::platform::Target,
+    elem_ty: &PhpType,
+    register_arg_capacity: usize,
+    captures: &[(String, PhpType, bool)],
+) -> Vec<(PhpType, abi::OutgoingArgAssignment)> {
+    let mut arg_types = vec![elem_ty.codegen_repr(); register_arg_capacity];
+    let capture_types: Vec<PhpType> = captures
+        .iter()
+        .map(|(_, ty, by_ref)| if *by_ref { PhpType::Int } else { ty.codegen_repr() })
+        .collect();
+    arg_types.extend(capture_types.iter().cloned());
+    abi::build_outgoing_arg_assignments_for_target(target, &arg_types, 0)
+        .into_iter()
+        .skip(register_arg_capacity)
+        .zip(capture_types)
+        .map(|(assignment, ty)| (ty, assignment))
+        .collect()
 }
 
 fn emit_loaded_array_unknown_callback_call_dynamic(
@@ -1509,6 +1727,131 @@ fn emit_unknown_dynamic_load_register_args(
     }
 }
 
+fn emit_unknown_dynamic_capture_args(
+    captures: &[(String, PhpType, bool)],
+    assignments: &[(PhpType, abi::OutgoingArgAssignment)],
+    overflow_count_reg: &str,
+    register_temp_bytes: usize,
+    visible_register_temp_bytes: usize,
+    emitter: &mut Emitter,
+    ctx: &Context,
+) -> Vec<(PhpType, abi::OutgoingArgAssignment, usize)> {
+    let mut register_temps = Vec::new();
+    let mut register_capture_idx = 0usize;
+    let mut stack_capture_idx = 0usize;
+    for ((capture_name, capture_ty, by_ref), (arg_ty, assignment)) in
+        captures.iter().zip(assignments.iter())
+    {
+        emit_capture_arg_to_result(capture_name, capture_ty, *by_ref, emitter, ctx);
+        if assignment.in_register() {
+            let offset = visible_register_temp_bytes + register_capture_idx * 16;
+            emit_store_current_result_to_sp_offset(emitter, arg_ty, offset);
+            register_temps.push((arg_ty.clone(), assignment.clone(), offset));
+            register_capture_idx += 1;
+        } else {
+            emit_store_current_result_to_dynamic_capture_stack(
+                overflow_count_reg,
+                register_temp_bytes,
+                stack_capture_idx * 16,
+                arg_ty,
+                emitter,
+            );
+            stack_capture_idx += 1;
+        }
+    }
+    register_temps
+}
+
+fn emit_capture_arg_to_result(
+    capture_name: &str,
+    capture_ty: &PhpType,
+    by_ref: bool,
+    emitter: &mut Emitter,
+    ctx: &Context,
+) {
+    emitter.comment(&format!("materialize callback capture ${}", capture_name));
+    if by_ref {
+        if !args::emit_ref_arg_variable_address(capture_name, "callback capture ref", emitter, ctx) {
+            emitter.comment(&format!(
+                "WARNING: captured callback variable ${} not found",
+                capture_name
+            ));
+            abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+        }
+        return;
+    }
+    let Some(capture_info) = ctx.variables.get(capture_name) else {
+        emitter.comment(&format!(
+            "WARNING: captured callback variable ${} not found",
+            capture_name
+        ));
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+        return;
+    };
+    abi::emit_load(emitter, capture_ty, capture_info.stack_offset);
+}
+
+fn emit_store_current_result_to_dynamic_capture_stack(
+    overflow_count_reg: &str,
+    register_temp_bytes: usize,
+    capture_stack_offset: usize,
+    ty: &PhpType,
+    emitter: &mut Emitter,
+) {
+    let (dest_reg, offset_reg) = match emitter.target.arch {
+        Arch::AArch64 => ("x10", "x11"),
+        Arch::X86_64 => ("r10", "r11"),
+    };
+    emit_dynamic_capture_stack_arg_address(
+        overflow_count_reg,
+        dest_reg,
+        offset_reg,
+        register_temp_bytes,
+        capture_stack_offset,
+        emitter,
+    );
+    emit_store_current_result_to_address(emitter, ty, dest_reg);
+}
+
+fn emit_dynamic_capture_stack_arg_address(
+    overflow_count_reg: &str,
+    dest_reg: &str,
+    offset_reg: &str,
+    register_temp_bytes: usize,
+    capture_stack_offset: usize,
+    emitter: &mut Emitter,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov {}, sp", dest_reg));              // seed the captured-argument stack slot from the current stack pointer
+            emitter.instruction(&format!("add {}, {}, #{}", dest_reg, dest_reg, register_temp_bytes)); // skip register-argument temps before captured stack args
+            emitter.instruction(&format!("lsl {}, {}, #4", offset_reg, overflow_count_reg)); // scale visible overflow count to outgoing stack bytes
+            emitter.instruction(&format!("add {}, {}, {}", dest_reg, dest_reg, offset_reg)); // skip dynamic visible overflow args before captured stack args
+            if capture_stack_offset > 0 {
+                emitter.instruction(&format!("add {}, {}, #{}", dest_reg, dest_reg, capture_stack_offset)); // select the current captured stack argument slot
+            }
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("lea {}, [rsp + {}]", dest_reg, register_temp_bytes)); // skip register-argument temps before captured stack args
+            emitter.instruction(&format!("mov {}, {}", offset_reg, overflow_count_reg)); // copy visible overflow count before scaling to bytes
+            emitter.instruction(&format!("shl {}, 4", offset_reg));             // scale visible overflow count to outgoing stack bytes
+            emitter.instruction(&format!("add {}, {}", dest_reg, offset_reg));  // skip dynamic visible overflow args before captured stack args
+            if capture_stack_offset > 0 {
+                emitter.instruction(&format!("add {}, {}", dest_reg, capture_stack_offset)); // select the current captured stack argument slot
+            }
+        }
+    }
+}
+
+fn emit_unknown_dynamic_load_capture_register_args(
+    register_temps: &[(PhpType, abi::OutgoingArgAssignment, usize)],
+    emitter: &mut Emitter,
+) {
+    for (ty, assignment, offset) in register_temps {
+        emit_load_sp_offset_to_assignment_register(emitter, ty, *offset, assignment);
+    }
+}
+
 fn emit_store_current_result_to_sp_offset(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     let stack_reg = match emitter.target.arch {
         Arch::AArch64 => "sp",
@@ -1568,6 +1911,31 @@ fn emit_load_sp_offset_to_arg_register(
     }
 }
 
+fn emit_load_sp_offset_to_assignment_register(
+    emitter: &mut Emitter,
+    ty: &PhpType,
+    offset: usize,
+    assignment: &abi::OutgoingArgAssignment,
+) {
+    match ty.codegen_repr() {
+        PhpType::Float => {
+            let reg = abi::float_arg_reg_name(emitter.target, assignment.start_reg);
+            abi::emit_load_temporary_stack_slot(emitter, reg, offset);
+        }
+        PhpType::Str => {
+            let ptr_reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
+            let len_reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg + 1);
+            abi::emit_load_temporary_stack_slot(emitter, ptr_reg, offset);
+            abi::emit_load_temporary_stack_slot(emitter, len_reg, offset + 8);
+        }
+        PhpType::Void | PhpType::Never => {}
+        _ => {
+            let reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
+            abi::emit_load_temporary_stack_slot(emitter, reg, offset);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit_unknown_callback_case(
     arg_count: usize,
@@ -1606,30 +1974,6 @@ fn emit_unknown_callback_case(
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
     }
     abi::emit_jump(emitter, done_label);
-}
-
-fn emit_unknown_callback_arg_limit_abort(emitter: &mut Emitter, data: &mut DataSection) {
-    let (message_label, message_len) = data.add_string(
-        b"Fatal error: call_user_func_array() unknown-signature callback argument array is too large\n",
-    );
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction("mov x0, #2");                                  // write the unknown-signature arity diagnostic to stderr
-            emitter.adrp("x1", &message_label);
-            emitter.add_lo12("x1", "x1", &message_label);
-            emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the diagnostic byte length to write()
-            emitter.syscall(4);
-            abi::emit_exit(emitter, 1);
-        }
-        Arch::X86_64 => {
-            emitter.instruction("mov edi, 2");                                  // write the unknown-signature arity diagnostic to stderr
-            abi::emit_symbol_address(emitter, "rsi", &message_label);
-            emitter.instruction(&format!("mov edx, {}", message_len));          // pass the diagnostic byte length to write()
-            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
-            emitter.instruction("syscall");                                     // emit the fatal unknown-signature arity diagnostic
-            abi::emit_exit(emitter, 1);
-        }
-    }
 }
 
 fn emit_call_user_func_array_missing_arg_abort(emitter: &mut Emitter, data: &mut DataSection) {

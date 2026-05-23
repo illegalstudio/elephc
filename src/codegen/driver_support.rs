@@ -224,6 +224,7 @@ pub(super) fn emit_deferred_closures(
                     &closure.body,
                     closure.current_class.as_deref(),
                     &ctx.functions,
+                    &ctx.callable_return_sigs,
                     &ctx.function_variant_groups,
                     &ctx.constants,
                     &ctx.interfaces,

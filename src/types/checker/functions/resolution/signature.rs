@@ -76,6 +76,7 @@ impl Checker {
 
         let mut return_type = PhpType::Void;
         let mut all_return_infos = Vec::new();
+        let mut callable_return_sigs = Vec::new();
         let mut errors = Vec::new();
         let ref_param_names: Vec<String> = decl
             .params
@@ -90,6 +91,7 @@ impl Checker {
                     errors.extend(error.flatten());
                 }
                 checker.collect_return_infos(stmt, &local_env, &mut all_return_infos);
+                checker.collect_return_callable_sigs(stmt, &local_env, &mut callable_return_sigs);
             }
             Ok(())
         })?;
@@ -185,6 +187,16 @@ impl Checker {
             ),
         };
         self.functions.insert(name.to_string(), sig);
+        if return_type == PhpType::Callable {
+            if let Some(callable_sig) = matching_callable_sig(&callable_return_sigs) {
+                self.callable_return_sigs
+                    .insert(name.to_string(), callable_sig);
+            } else {
+                self.callable_return_sigs.remove(name);
+            }
+        } else {
+            self.callable_return_sigs.remove(name);
+        }
 
         Ok(return_type)
     }
@@ -209,4 +221,16 @@ fn inferred_specific_array_type_from_infos(
         }
     }
     specific
+}
+
+fn matching_callable_sig(return_sigs: &[FunctionSig]) -> Option<FunctionSig> {
+    let first = return_sigs.first()?.clone();
+    if !first.declared_params.iter().all(|declared| *declared) {
+        return None;
+    }
+    if return_sigs.iter().all(|sig| sig == &first) {
+        Some(first)
+    } else {
+        None
+    }
 }

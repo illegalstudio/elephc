@@ -183,7 +183,7 @@ $hello = $greeter->hello(...);
 echo $hello("Ada"); // Hello Ada
 ```
 
-Captured first-class callable targets (`static::method(...)` and `$obj->method(...)`) can be called directly through a local callable variable or as an immediate callable expression such as `($obj->method(...))("Ada")`. They can also be passed to callback paths that forward captured callable environments, including `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()`, `call_user_func()`, and `call_user_func_array()`. For by-reference callback parameters, `call_user_func_array()` supports literal argument arrays whose by-reference positions are variables, such as `call_user_func_array($cb, [$value])`. PHP disallows nullsafe first-class callable syntax (`$obj?->method(...)`), and elephc reports the same error.
+Captured first-class callable targets (`static::method(...)` and `$obj->method(...)`) can be called directly through a local callable variable or as an immediate callable expression such as `($obj->method(...))("Ada")`. They can also be passed to callback paths that forward captured callable environments, including `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()`, `call_user_func()`, and `call_user_func_array()`. For by-reference callback parameters, `call_user_func_array()` passes original variable slots from literal argument arrays such as `call_user_func_array($cb, [$value])`; dynamic argument arrays are accepted through temporary reference cells, so callback writes do not mutate the source array or source variable. PHP disallows nullsafe first-class callable syntax (`$obj?->method(...)`), and elephc reports the same error.
 
 ## Global variables
 

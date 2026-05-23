@@ -45,6 +45,14 @@ pub(crate) fn callable_sig(callback: &Expr, ctx: &Context) -> Option<FunctionSig
         ExprKind::FirstClassCallable(target) => {
             crate::codegen::expr::calls::first_class_callable_sig(target, ctx)
         }
+        ExprKind::FunctionCall { name, .. } => {
+            let resolved_name = match lookup_function(ctx, name.as_str()) {
+                Some(FunctionLookup::UserFunction(name))
+                | Some(FunctionLookup::IncludeVariant(name)) => name,
+                _ => name.as_str().to_string(),
+            };
+            ctx.callable_return_sigs.get(&resolved_name).cloned()
+        }
         ExprKind::ArrayAccess { array, .. } => {
             if let ExprKind::Variable(name) = &array.kind {
                 ctx.closure_sigs.get(name).cloned()

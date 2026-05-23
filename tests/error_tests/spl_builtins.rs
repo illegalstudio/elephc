@@ -160,26 +160,3 @@ fn test_error_iterator_apply_rejects_array_source() {
         "iterator_apply() first argument must be Traversable",
     );
 }
-
-#[test]
-fn test_error_iterator_apply_unknown_callable_rejects_dynamic_assoc_args_array() {
-    expect_error(
-        r#"<?php
-class Range implements Iterator {
-    public function rewind(): void {}
-    public function valid(): bool { return false; }
-    public function current(): int { return 0; }
-    public function key(): int { return 0; }
-    public function next(): void {}
-}
-function make_cb(): callable {
-    return function(string $name): bool {
-        return true;
-    };
-}
-$args = ["name" => "value"];
-iterator_apply(new Range(), make_cb(), $args);
-"#,
-        "iterator_apply() dynamic associative args require a statically known callable signature",
-    );
-}

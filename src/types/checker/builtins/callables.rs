@@ -38,31 +38,13 @@ pub(super) fn specialize_dynamic_assoc_variadic_user_callback(
     Ok(())
 }
 
-fn validate_call_user_func_array_ref_args(
-    sig: &crate::types::FunctionSig,
-    arg_array: &Expr,
-    span: crate::span::Span,
-) -> Result<(), CompileError> {
-    if !sig.ref_params.iter().any(|is_ref| *is_ref) {
-        return Ok(());
-    }
-    if matches!(arg_array.kind, ExprKind::ArrayLiteral(_)) {
-        return Ok(());
-    }
-    Err(CompileError::new(
-        span,
-        "call_user_func_array() requires a literal argument array when the callback has pass-by-reference parameters",
-    ))
-}
-
 fn validate_call_user_func_array_dynamic_arg_array(
     checker: &mut Checker,
-    sig: &crate::types::FunctionSig,
+    _sig: &crate::types::FunctionSig,
     arg_array: &Expr,
-    span: crate::span::Span,
+    _span: crate::span::Span,
     env: &TypeEnv,
 ) -> Result<(), CompileError> {
-    validate_call_user_func_array_ref_args(sig, arg_array, span)?;
     let arg_array_ty = checker.infer_type(arg_array, env)?;
     if !matches!(
         arg_array_ty,
@@ -432,6 +414,17 @@ pub(super) fn check_builtin(
                 let cb_name = checker
                     .canonical_function_name_folded(cb_name)
                     .unwrap_or_else(|| cb_name.clone());
+                if !checker.functions.contains_key(cb_name.as_str()) {
+                    if let Some(decl) = checker.fn_decls.get(cb_name.as_str()).cloned() {
+                        if decl.ref_params.iter().any(|is_ref| *is_ref)
+                            && !matches!(args[1].kind, ExprKind::ArrayLiteral(_))
+                        {
+                            let param_types =
+                                checker.initial_function_param_types(&cb_name, &decl)?;
+                            checker.resolve_function_signature(&cb_name, &decl, param_types)?;
+                        }
+                    }
+                }
                 if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
                     validate_call_user_func_array_dynamic_arg_array(
                         checker,
@@ -460,16 +453,6 @@ pub(super) fn check_builtin(
                         return Ok(Some(ret_ty));
                     }
                     return Ok(Some(sig.return_type.clone()));
-                }
-                if let Some(decl) = checker.fn_decls.get(cb_name.as_str()).cloned() {
-                    if decl.ref_params.iter().any(|is_ref| *is_ref)
-                        && !matches!(args[1].kind, ExprKind::ArrayLiteral(_))
-                    {
-                        return Err(CompileError::new(
-                            span,
-                            "call_user_func_array() requires a literal argument array when the callback has pass-by-reference parameters",
-                        ));
-                    }
                 }
                 if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
                     let ret_ty = checker.check_function_call(&cb_name, elems, span, env)?;
@@ -503,9 +486,15 @@ pub(super) fn check_builtin(
             if callback_ty == PhpType::Callable && matches!(arg_array_ty, PhpType::Array(_)) {
                 return Ok(Some(PhpType::Int));
             }
+            if callback_ty == PhpType::Callable && matches!(arg_array_ty, PhpType::AssocArray { .. }) {
+                return Err(CompileError::new(
+                    args[1].span,
+                    "call_user_func_array() associative argument arrays require callable parameter metadata",
+                ));
+            }
             Err(CompileError::new(
                 args[0].span,
-                "call_user_func_array() callback must have a statically known callable signature",
+                "call_user_func_array() callback must be callable",
             ))
         }
         "call_user_func" => {
@@ -598,9 +587,16 @@ pub(super) fn check_builtin(
                 )?;
                 return Ok(Some(ret_ty));
             }
+            let callback_ty = checker.infer_type(&args[0], env)?;
+            if callback_ty == PhpType::Callable {
+                for arg in &args[1..] {
+                    checker.infer_type(arg, env)?;
+                }
+                return Ok(Some(PhpType::Int));
+            }
             Err(CompileError::new(
                 args[0].span,
-                "call_user_func() callback must have a statically known callable signature",
+                "call_user_func() callback must be callable",
             ))
         }
         "class_alias" => {

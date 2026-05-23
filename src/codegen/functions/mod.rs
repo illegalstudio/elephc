@@ -51,6 +51,7 @@ pub fn emit_function(
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
+    callable_return_sigs: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
@@ -85,6 +86,7 @@ pub fn emit_function(
         body,
         all_functions,
         callable_param_sigs,
+        callable_return_sigs,
         function_variant_groups,
         constants,
         all_global_var_names,
@@ -109,6 +111,7 @@ pub fn emit_closure(
     body: &[crate::parser::ast::Stmt],
     current_class: Option<&str>,
     all_functions: &HashMap<String, FunctionSig>,
+    callable_return_sigs: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     interfaces: &HashMap<String, InterfaceInfo>,
@@ -149,6 +152,7 @@ pub fn emit_closure(
         body,
         all_functions,
         &empty_callable_param_sigs,
+        callable_return_sigs,
         function_variant_groups,
         constants,
         &empty_globals,
@@ -174,6 +178,7 @@ pub fn emit_method(
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
+    callable_return_sigs: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     interfaces: &HashMap<String, InterfaceInfo>,
@@ -199,6 +204,7 @@ pub fn emit_method(
         body,
         all_functions,
         callable_param_sigs,
+        callable_return_sigs,
         function_variant_groups,
         constants,
         &empty_globals,
@@ -225,6 +231,7 @@ fn emit_function_with_label(
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
+    callable_return_sigs: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
@@ -250,6 +257,7 @@ fn emit_function_with_label(
         body,
         all_functions,
         callable_param_sigs,
+        callable_return_sigs,
         function_variant_groups,
         constants,
         all_global_var_names,
@@ -319,6 +327,7 @@ fn emit_function_with_label_and_class(
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
+    callable_return_sigs: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
@@ -337,6 +346,7 @@ fn emit_function_with_label_and_class(
     ctx.return_type = sig.return_type.clone();
     ctx.functions = all_functions.clone();
     ctx.callable_param_sigs = callable_param_sigs.clone();
+    ctx.callable_return_sigs = callable_return_sigs.clone();
     ctx.function_variant_groups = function_variant_groups.clone();
     ctx.constants = constants.clone();
     ctx.all_global_var_names = all_global_var_names.clone();
@@ -495,6 +505,7 @@ fn emit_function_with_label_and_class(
                     &closure.body,
                     closure.current_class.as_deref(),
                     all_functions,
+                    &ctx.callable_return_sigs,
                     &ctx.function_variant_groups,
                     constants,
                     interfaces,

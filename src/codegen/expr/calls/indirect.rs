@@ -145,6 +145,10 @@ fn callee_sig_for_expr(
             }
         }
         ExprKind::FirstClassCallable(target) => super::first_class_callable_sig(target, ctx),
+        ExprKind::FunctionCall { name, .. } => ctx
+            .callable_return_sigs
+            .get(name.as_str())
+            .cloned(),
         _ => None,
     }
 }

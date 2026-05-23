@@ -431,6 +431,70 @@ echo iterator_apply(new Range(), make_label(), $args);
 }
 
 #[test]
+fn test_iterator_apply_unknown_signature_captured_callback_dynamic_args_overflow_stack() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 1; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+$base = 10;
+$callbacks = [
+    function(
+        $a1, $a2, $a3, $a4, $a5,
+        $a6, $a7, $a8, $a9, $a10,
+        $a11, $a12, $a13, $a14, $a15,
+        $a16, $a17, $a18, $a19, $a20
+    ) use ($base): bool {
+        echo $base + $a1 + $a2 + $a3 + $a4 + $a5
+            + $a6 + $a7 + $a8 + $a9 + $a10
+            + $a11 + $a12 + $a13 + $a14 + $a15
+            + $a16 + $a17 + $a18 + $a19 + $a20;
+        return true;
+    }
+];
+$cb = $callbacks[0];
+$args = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+         11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+echo ":";
+echo iterator_apply(new Range(), $cb, $args);
+"#,
+    );
+    assert_eq!(out, ":2201");
+}
+
+#[test]
+fn test_iterator_apply_dynamic_assoc_args_for_returned_callable_signature() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+function make_label(): callable {
+    return function(string $name): bool {
+        echo $name;
+        return true;
+    };
+}
+$args = ["name" => "N"];
+echo iterator_apply(new Range(), make_label(), $args);
+"#,
+    );
+    assert_eq!(out, "NN2");
+}
+
+#[test]
 fn test_iterator_apply_dynamic_assoc_args_for_known_signature() {
     let out = compile_and_run(
         r#"<?php
@@ -452,6 +516,34 @@ echo iterator_apply(new Range(), "label_tick", $args);
 "#,
     );
     assert_eq!(out, "LL2");
+}
+
+#[test]
+fn test_iterator_apply_dynamic_args_for_by_ref_callback_use_temp_cells() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+function bump(&$n): bool {
+    $n = $n + 1;
+    echo $n;
+    return true;
+}
+$value = 5;
+$args = [$value];
+echo iterator_apply(new Range(), "bump", $args);
+echo ":";
+echo $value;
+"#,
+    );
+    assert_eq!(out, "662:5");
 }
 
 #[test]

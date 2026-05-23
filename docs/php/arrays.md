@@ -197,6 +197,6 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `isset()` | `isset($var, ...$vars): int` | Check that every variable or offset is defined and not null |
 
 > Callback arguments can be string literals, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures.
-> `call_user_func_array()` also accepts dynamic associative argument arrays for callbacks with a known signature, including userland variadic callbacks. String keys bind named parameters; unconsumed string and numeric keys are copied into `...$rest` for variadic callbacks. Dynamic indexed argument arrays are also supported for callable values whose signature is not statically known.
+> `call_user_func_array()` also accepts dynamic associative argument arrays for callbacks with a known signature, including userland variadic callbacks. String keys bind named parameters; unconsumed string and numeric keys are copied into `...$rest` for variadic callbacks. Dynamic indexed argument arrays are also supported for callable values whose signature is not statically known. Dynamic arrays passed to by-reference callback parameters use temporary reference cells, so callback writes do not mutate the source argument array.
 
 **Not supported by design:** `compact()`, `extract()` require runtime variable-name tables and are listed in the roadmap's "Will not implement" section.

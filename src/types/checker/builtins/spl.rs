@@ -450,13 +450,7 @@ fn check_iterator_apply_dynamic_callback(
             }
             return Ok(());
         }
-        if let Some(decl) = checker.fn_decls.get(cb_name.as_str()) {
-            if decl.ref_params.iter().any(|is_ref| *is_ref) {
-                return Err(CompileError::new(
-                    span,
-                    "iterator_apply() requires a literal args array when the callback has pass-by-reference parameters",
-                ));
-            }
+        if checker.fn_decls.contains_key(cb_name.as_str()) {
             return Ok(());
         }
     }
@@ -471,7 +465,7 @@ fn check_iterator_apply_dynamic_callback(
         if associative_args {
             return Err(CompileError::new(
                 span,
-                "iterator_apply() dynamic associative args require a statically known callable signature",
+                "iterator_apply() associative args require callable parameter metadata",
             ));
         }
         return Ok(());
@@ -479,7 +473,7 @@ fn check_iterator_apply_dynamic_callback(
 
     Err(CompileError::new(
         callback.span,
-        "iterator_apply() dynamic args require a statically known callable signature",
+        "iterator_apply() callback must be callable",
     ))
 }
 
@@ -514,15 +508,9 @@ fn check_iterator_apply_static_callback(
 }
 
 fn reject_dynamic_ref_args(
-    sig: &crate::types::FunctionSig,
-    span: crate::span::Span,
+    _sig: &crate::types::FunctionSig,
+    _span: crate::span::Span,
 ) -> Result<(), CompileError> {
-    if sig.ref_params.iter().any(|is_ref| *is_ref) {
-        return Err(CompileError::new(
-            span,
-            "iterator_apply() requires a literal args array when the callback has pass-by-reference parameters",
-        ));
-    }
     Ok(())
 }
 
