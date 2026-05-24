@@ -146,6 +146,7 @@ pub(crate) fn emit_runtime_data_user(
         ("_spl_stack_class_id", "SplStack"),
         ("_spl_queue_class_id", "SplQueue"),
         ("_spl_fixed_array_class_id", "SplFixedArray"),
+        ("_spl_logic_exception_class_id", "LogicException"),
         ("_spl_runtime_exception_class_id", "RuntimeException"),
         ("_spl_out_of_range_exception_class_id", "OutOfRangeException"),
         ("_spl_out_of_bounds_exception_class_id", "OutOfBoundsException"),

@@ -28,6 +28,8 @@ use super::dispatch::emit_dispatch_interface_method;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
+const ITERATOR_ITERATOR_DOWNCAST_MESSAGE: &str =
+    "Class to downcast to not found or not base class or does not implement Traversable";
 
 pub(super) fn emit_new_object(
     class_name: &str,
@@ -479,13 +481,17 @@ fn emit_new_iterator_iterator(
         return PhpType::Object("IteratorIterator".to_string());
     };
     let inner_offset = class_info.property_offsets.get("inner").copied().unwrap_or(8);
+    let normalized_args =
+        normalize_iterator_iterator_constructor_args(&class_info, args, emitter, ctx, data);
 
     emit_new_object_core("IteratorIterator", &[], false, emitter, ctx, data);
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the allocated IteratorIterator while normalizing the constructor source
 
-    if let Some(iterator_expr) = args.first() {
+    if let Some(iterator_expr) = normalized_args.first() {
         let source_ty = emit_expr(iterator_expr, emitter, ctx, data);
-        emit_normalize_loaded_traversable_to_iterator(iterator_expr, &source_ty, emitter, ctx);
+        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));              // preserve the Traversable candidate while evaluating the optional downcast class
+        emit_iterator_iterator_downcast_arg_status(normalized_args.get(1), emitter, ctx, data);
+        emit_normalize_saved_traversable_to_iterator(iterator_expr, &source_ty, emitter, ctx);
     } else {
         emitter.comment("WARNING: IteratorIterator constructor missing Traversable source");
         abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
@@ -496,7 +502,169 @@ fn emit_new_iterator_iterator(
     PhpType::Object("IteratorIterator".to_string())
 }
 
-fn emit_normalize_loaded_traversable_to_iterator(
+fn normalize_iterator_iterator_constructor_args(
+    class_info: &crate::types::ClassInfo,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Vec<Expr> {
+    let Some(sig) = class_info.methods.get("__construct") else {
+        return args.to_vec();
+    };
+    let call_span = args
+        .first()
+        .map(|arg| arg.span)
+        .unwrap_or_else(crate::span::Span::dummy);
+    let regular_param_count = call_args::regular_param_count(Some(sig), args.len());
+    call_args::preevaluate_named_call_args_to_temps(
+        sig,
+        args,
+        call_span,
+        regular_param_count,
+        false,
+        emitter,
+        ctx,
+        data,
+    )
+    .args
+}
+
+fn emit_iterator_iterator_downcast_arg_status(
+    class_expr: Option<&Expr>,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    let Some(class_expr) = class_expr else {
+        emit_push_iterator_iterator_downcast_status(emitter, 0, 0);
+        return;
+    };
+
+    let class_ty = emit_expr(class_expr, emitter, ctx, data).codegen_repr();
+    match class_ty {
+        PhpType::Str => emit_push_iterator_iterator_downcast_status_from_string(emitter, ctx),
+        PhpType::Void | PhpType::Never => {
+            emit_push_iterator_iterator_downcast_status(emitter, 0, 0);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_push_iterator_iterator_downcast_status_from_mixed(emitter, ctx);
+        }
+        _ => emit_push_iterator_iterator_downcast_status(emitter, 2, 0),
+    }
+}
+
+fn emit_push_iterator_iterator_downcast_status_from_string(
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    abi::emit_call_label(emitter, "__rt_instanceof_lookup");                    // resolve the optional downcast class-string argument
+    emit_push_iterator_iterator_downcast_status_from_lookup(emitter, ctx);
+}
+
+fn emit_push_iterator_iterator_downcast_status_from_mixed(
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    let string_case = ctx.next_label("iterator_iterator_downcast_string");
+    let null_case = ctx.next_label("iterator_iterator_downcast_null");
+    let invalid_case = ctx.next_label("iterator_iterator_downcast_invalid");
+    let done = ctx.next_label("iterator_iterator_downcast_done");
+
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // inspect nullable mixed downcast values at runtime
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #1");                                  // runtime tag 1 means the downcast argument is a string
+            emitter.instruction(&format!("b.eq {}", string_case));              // resolve string downcast targets through class metadata
+            emitter.instruction("cmp x0, #8");                                  // runtime tag 8 means the downcast argument is null
+            emitter.instruction(&format!("b.eq {}", null_case));                // null behaves like the omitted second constructor argument
+            emitter.instruction(&format!("b {}", invalid_case));                // non-string, non-null mixed payloads are invalid downcast targets
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 1");                                  // runtime tag 1 means the downcast argument is a string
+            emitter.instruction(&format!("je {}", string_case));                // resolve string downcast targets through class metadata
+            emitter.instruction("cmp rax, 8");                                  // runtime tag 8 means the downcast argument is null
+            emitter.instruction(&format!("je {}", null_case));                  // null behaves like the omitted second constructor argument
+            emitter.instruction(&format!("jmp {}", invalid_case));              // non-string, non-null mixed payloads are invalid downcast targets
+        }
+    }
+
+    emitter.label(&string_case);
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("mov rax, rdi");                                    // move the unboxed string pointer into the lookup input register
+    }
+    emit_push_iterator_iterator_downcast_status_from_string(emitter, ctx);
+    abi::emit_jump(emitter, &done);                                             // converge after pushing the resolved downcast metadata
+
+    emitter.label(&null_case);
+    emit_push_iterator_iterator_downcast_status(emitter, 0, 0);
+    abi::emit_jump(emitter, &done);                                             // converge after pushing the omitted/null downcast marker
+
+    emitter.label(&invalid_case);
+    emit_push_iterator_iterator_downcast_status(emitter, 2, 0);
+
+    emitter.label(&done);
+}
+
+fn emit_push_iterator_iterator_downcast_status_from_lookup(
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    let invalid_case = ctx.next_label("iterator_iterator_downcast_lookup_invalid");
+    let done = ctx.next_label("iterator_iterator_downcast_lookup_done");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #0");                                  // did the class-string lookup resolve to a declared target?
+            emitter.instruction(&format!("b.eq {}", invalid_case));             // unknown downcast class names fail when the source is an aggregate
+            emitter.instruction("cmp x2, #0");                                  // only concrete class targets are valid downcast classes
+            emitter.instruction(&format!("b.ne {}", invalid_case));             // interface names are not valid IteratorIterator downcast classes
+            emitter.instruction("mov x0, #1");                                  // status 1 means a concrete downcast class id follows
+            emitter.instruction(&format!("b {}", done));                        // keep the resolved class id in x1
+
+            emitter.label(&invalid_case);
+            emitter.instruction("mov x0, #2");                                  // status 2 means the class argument must throw for aggregates
+            emitter.instruction("mov x1, #0");                                  // invalid targets have no usable class id
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test rax, rax");                               // did the class-string lookup resolve to a declared target?
+            emitter.instruction(&format!("je {}", invalid_case));               // unknown downcast class names fail when the source is an aggregate
+            emitter.instruction("test rdx, rdx");                               // only concrete class targets are valid downcast classes
+            emitter.instruction(&format!("jne {}", invalid_case));              // interface names are not valid IteratorIterator downcast classes
+            emitter.instruction("mov rax, 1");                                  // status 1 means a concrete downcast class id follows
+            emitter.instruction(&format!("jmp {}", done));                      // keep the resolved class id in rdi
+
+            emitter.label(&invalid_case);
+            emitter.instruction("mov rax, 2");                                  // status 2 means the class argument must throw for aggregates
+            emitter.instruction("xor edi, edi");                                // invalid targets have no usable class id
+        }
+    }
+    emitter.label(&done);
+    match emitter.target.arch {
+        Arch::AArch64 => abi::emit_push_reg_pair(emitter, "x0", "x1"),
+        Arch::X86_64 => abi::emit_push_reg_pair(emitter, "rax", "rdi"),
+    }
+}
+
+fn emit_push_iterator_iterator_downcast_status(
+    emitter: &mut Emitter,
+    status: i64,
+    class_id: i64,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(emitter, "x0", status);
+            abi::emit_load_int_immediate(emitter, "x1", class_id);
+            abi::emit_push_reg_pair(emitter, "x0", "x1");
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(emitter, "rax", status);
+            abi::emit_load_int_immediate(emitter, "rdi", class_id);
+            abi::emit_push_reg_pair(emitter, "rax", "rdi");
+        }
+    }
+}
+
+fn emit_normalize_saved_traversable_to_iterator(
     source_expr: &Expr,
     source_ty: &PhpType,
     emitter: &mut Emitter,
@@ -517,13 +685,13 @@ fn emit_normalize_loaded_traversable_to_iterator(
     let done = ctx.next_label("iterator_iterator_source_done");
     let source_is_borrowed = expr_result_heap_ownership(source_expr) != HeapOwnership::Owned;
 
-    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the Traversable candidate while probing its runtime interface shape
-    emit_branch_if_saved_traversable_implements(iterator_id, &direct_case, emitter);
-    emit_branch_if_saved_traversable_implements(aggregate_id, &aggregate_case, emitter);
-    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // discard the unsupported Traversable candidate before reporting a fatal diagnostic
+    emit_branch_if_saved_traversable_implements(iterator_id, 16, &direct_case, emitter);
+    emit_branch_if_saved_traversable_implements(aggregate_id, 16, &aggregate_case, emitter);
+    abi::emit_release_temporary_stack(emitter, 32);                             // discard downcast metadata and unsupported Traversable candidate
     abi::emit_call_label(emitter, "__rt_iterable_unsupported_kind");            // invalid Traversable metadata aborts defensively
 
     emitter.label(&direct_case);
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard ignored downcast metadata for direct Iterator inputs
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the direct Iterator object pointer
     if source_is_borrowed {
         abi::emit_incref_if_refcounted(emitter, &source_ty.codegen_repr());
@@ -531,6 +699,8 @@ fn emit_normalize_loaded_traversable_to_iterator(
     abi::emit_jump(emitter, &done);                                             // direct Iterator inputs are already normalized
 
     emitter.label(&aggregate_case);
+    emit_validate_iterator_iterator_aggregate_downcast(aggregate_id, emitter, ctx);
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard validated downcast metadata before dispatching getIterator()
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the IteratorAggregate object pointer before getIterator()
     move_loaded_result_to_receiver_arg(emitter);
     emit_dispatch_interface_method("IteratorAggregate", "getiterator", emitter, ctx);
@@ -540,12 +710,13 @@ fn emit_normalize_loaded_traversable_to_iterator(
 
 fn emit_branch_if_saved_traversable_implements(
     interface_id: u64,
+    candidate_stack_offset: usize,
     target_label: &str,
     emitter: &mut Emitter,
 ) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("ldr x0, [sp]");                                // load the saved Traversable candidate as matcher argument 1
+            emitter.instruction(&format!("ldr x0, [sp, #{}]", candidate_stack_offset)); // load the saved Traversable candidate as matcher argument 1
             abi::emit_load_int_immediate(emitter, "x1", interface_id as i64);
             abi::emit_load_int_immediate(emitter, "x2", 1);
             abi::emit_call_label(emitter, "__rt_exception_matches");            // test whether the candidate implements the requested Traversable interface
@@ -553,12 +724,105 @@ fn emit_branch_if_saved_traversable_implements(
             emitter.instruction(&format!("b.ne {}", target_label));             // branch to the matching normalization path
         }
         Arch::X86_64 => {
-            emitter.instruction("mov rdi, QWORD PTR [rsp]");                    // load the saved Traversable candidate as matcher argument 1
+            emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", candidate_stack_offset)); // load the saved Traversable candidate as matcher argument 1
             abi::emit_load_int_immediate(emitter, "rsi", interface_id as i64);
             abi::emit_load_int_immediate(emitter, "rdx", 1);
             abi::emit_call_label(emitter, "__rt_exception_matches");            // test whether the candidate implements the requested Traversable interface
             emitter.instruction("test rax, rax");                               // did the runtime interface matcher succeed?
             emitter.instruction(&format!("jne {}", target_label));              // branch to the matching normalization path
+        }
+    }
+}
+
+fn emit_validate_iterator_iterator_aggregate_downcast(
+    aggregate_interface_id: u64,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    let skip = ctx.next_label("iterator_iterator_downcast_skip");
+    let throw = ctx.next_label("iterator_iterator_downcast_throw");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x9, [sp]");                                // load downcast status: 0 omitted/null, 1 class id, 2 invalid
+            emitter.instruction(&format!("cbz x9, {}", skip));                  // omitted/null class arguments do not constrain IteratorAggregate inputs
+            emitter.instruction("cmp x9, #1");                                  // only status 1 carries a valid concrete class id
+            emitter.instruction(&format!("b.ne {}", throw));                    // invalid class names and interfaces throw LogicException for aggregates
+            emitter.instruction("ldr x0, [sp, #16]");                           // pass the saved IteratorAggregate object to the class matcher
+            emitter.instruction("ldr x1, [sp, #8]");                            // pass the requested downcast class id to the class matcher
+            abi::emit_load_int_immediate(emitter, "x2", 0);
+            abi::emit_call_label(emitter, "__rt_exception_matches");            // require the aggregate object to be an instance of the requested class
+            emitter.instruction("cmp x0, #0");                                  // did the aggregate object match the requested class?
+            emitter.instruction(&format!("b.eq {}", throw));                    // non-base downcast classes are rejected like PHP
+            emitter.instruction("ldr x0, [sp, #8]");                            // pass the requested class id to the metadata-only interface checker
+            abi::emit_load_int_immediate(emitter, "x1", aggregate_interface_id as i64);
+            abi::emit_call_label(emitter, "__rt_class_implements_interface");   // require the downcast class itself to implement IteratorAggregate
+            emitter.instruction("cmp x0, #0");                                  // did the downcast class implement IteratorAggregate?
+            emitter.instruction(&format!("b.eq {}", throw));                    // non-Traversable base classes are rejected like PHP
+            emitter.instruction(&format!("b {}", skip));                        // the aggregate downcast class is valid
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r10, QWORD PTR [rsp]");                    // load downcast status: 0 omitted/null, 1 class id, 2 invalid
+            emitter.instruction("test r10, r10");                               // is there an explicit downcast class to validate?
+            emitter.instruction(&format!("je {}", skip));                       // omitted/null class arguments do not constrain IteratorAggregate inputs
+            emitter.instruction("cmp r10, 1");                                  // only status 1 carries a valid concrete class id
+            emitter.instruction(&format!("jne {}", throw));                     // invalid class names and interfaces throw LogicException for aggregates
+            emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");               // pass the saved IteratorAggregate object to the class matcher
+            emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                // pass the requested downcast class id to the class matcher
+            abi::emit_load_int_immediate(emitter, "rdx", 0);
+            abi::emit_call_label(emitter, "__rt_exception_matches");            // require the aggregate object to be an instance of the requested class
+            emitter.instruction("test rax, rax");                               // did the aggregate object match the requested class?
+            emitter.instruction(&format!("je {}", throw));                      // non-base downcast classes are rejected like PHP
+            emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                // pass the requested class id to the metadata-only interface checker
+            abi::emit_load_int_immediate(emitter, "rsi", aggregate_interface_id as i64);
+            abi::emit_call_label(emitter, "__rt_class_implements_interface");   // require the downcast class itself to implement IteratorAggregate
+            emitter.instruction("test rax, rax");                               // did the downcast class implement IteratorAggregate?
+            emitter.instruction(&format!("je {}", throw));                      // non-Traversable base classes are rejected like PHP
+            emitter.instruction(&format!("jmp {}", skip));                      // the aggregate downcast class is valid
+        }
+    }
+
+    emitter.label(&throw);
+    emit_throw_iterator_iterator_downcast_logic_exception(emitter);
+    emitter.label(&skip);
+}
+
+fn emit_throw_iterator_iterator_downcast_logic_exception(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, #32");                                 // request Throwable payload storage
+            emitter.instruction("bl __rt_heap_alloc");                          // allocate the LogicException object payload
+            emitter.instruction("mov x9, #6");                                  // heap kind 6 = object instance
+            emitter.instruction("str x9, [x0, #-8]");                           // stamp allocation as a runtime object
+            abi::emit_symbol_address(emitter, "x9", "_spl_logic_exception_class_id");
+            emitter.instruction("ldr x9, [x9]");                                // load LogicException's runtime class id for this program
+            emitter.instruction("str x9, [x0]");                                // store class id at object header
+            abi::emit_symbol_address(emitter, "x9", "_iterator_iterator_downcast_msg");
+            emitter.instruction("str x9, [x0, #8]");                            // store static exception message pointer
+            emitter.instruction(&format!("mov x9, #{}", ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len())); // load static exception message length
+            emitter.instruction("str x9, [x0, #16]");                           // store exception message length
+            emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
+            abi::emit_symbol_address(emitter, "x9", "_exc_value");
+            emitter.instruction("str x0, [x9]");                                // publish the active exception object
+            emitter.instruction("b __rt_throw_current");                        // enter the standard exception unwinder
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve caller frame pointer for exception allocation
+            emitter.instruction("mov rbp, rsp");                                // establish aligned helper frame
+            emitter.instruction("sub rsp, 16");                                 // keep the nested heap allocation call 16-byte aligned
+            emitter.instruction("mov rax, 32");                                 // request Throwable payload storage
+            emitter.instruction("call __rt_heap_alloc");                        // allocate the LogicException object payload
+            emitter.instruction("mov r10, 0x4548504c00000006");                 // x86_64 heap-kind word: HE LP magic + kind 6 object
+            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp allocation as a runtime object
+            emitter.instruction("mov r10, QWORD PTR [rip + _spl_logic_exception_class_id]"); // load LogicException's runtime class id for this program
+            emitter.instruction("mov QWORD PTR [rax], r10");                    // store class id at object header
+            emitter.instruction("lea r10, [rip + _iterator_iterator_downcast_msg]"); // materialize static exception message pointer
+            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store static exception message pointer
+            emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len())); // store static exception message length
+            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
+            emitter.instruction("mov QWORD PTR [rip + _exc_value], rax");       // publish the active exception object
+            emitter.instruction("mov rsp, rbp");                                // release helper frame before throwing
+            emitter.instruction("pop rbp");                                     // restore caller frame pointer before throwing
+            emitter.instruction("jmp __rt_throw_current");                      // enter the standard exception unwinder
         }
     }
 }

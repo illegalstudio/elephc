@@ -255,6 +255,7 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     pointers::emit_ptr_read_string(emitter);
     pointers::emit_ptr_write_string(emitter);
     exceptions::emit_exception_cleanup_frames(emitter);
+    exceptions::emit_class_implements_interface(emitter);
     exceptions::emit_dynamic_instanceof(emitter);
     exceptions::emit_exception_matches(emitter);
     exceptions::emit_throw_current(emitter);
@@ -342,6 +343,7 @@ mod tests {
         assert!(asm.contains("__rt_str_eq:\n"));
         assert!(asm.contains("__rt_is_callable_string:\n"));
         assert!(asm.contains("__rt_exception_cleanup_frames:\n"));
+        assert!(asm.contains("__rt_class_implements_interface:\n"));
         assert!(asm.contains("__rt_exception_matches:\n"));
         assert!(asm.contains("__rt_throw_current:\n"));
         assert!(asm.contains("__rt_rethrow_current:\n"));

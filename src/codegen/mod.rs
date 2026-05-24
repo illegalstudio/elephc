@@ -415,6 +415,7 @@ fn collect_x86_emitted_class_names(
         "TypeError",
         "ValueError",
         "Exception",
+        "LogicException",
         "RuntimeException",
         "JsonException",
         "InvalidArgumentException",

@@ -81,6 +81,114 @@ dump_wrapped(new ArrayIterator(["direct" => "I"]));
 }
 
 #[test]
+fn test_iterator_iterator_second_arg_downcasts_iterator_aggregate() {
+    let out = compile_and_run(
+        r#"<?php
+$class = "ArrayObject";
+$wrap = new IteratorIterator(new ArrayObject(["left" => "L"]), $class);
+foreach ($wrap as $k => $v) {
+    echo $k;
+    echo "=";
+    echo $v;
+    echo ";";
+}
+
+class BaseAgg implements IteratorAggregate {
+    public function getIterator(): Traversable {
+        return new ArrayIterator(["base" => "B"]);
+    }
+}
+class ChildAgg extends BaseAgg {}
+
+$parent = new IteratorIterator(new ChildAgg(), "BaseAgg");
+foreach ($parent as $k => $v) {
+    echo $k;
+    echo "=";
+    echo $v;
+    echo ";";
+}
+"#,
+    );
+    assert_eq!(out, "left=L;base=B;");
+}
+
+#[test]
+fn test_iterator_iterator_second_arg_is_evaluated_and_ignored_for_iterators() {
+    let out = compile_and_run(
+        r#"<?php
+function invalid_downcast_name(): string {
+    echo "class;";
+    return "NoSuchClass";
+}
+
+$wrap = new IteratorIterator(new ArrayIterator([9]), invalid_downcast_name());
+echo $wrap->current();
+"#,
+    );
+    assert_eq!(out, "class;9");
+}
+
+#[test]
+fn test_iterator_iterator_second_arg_preserves_positional_source_order() {
+    let out = compile_and_run(
+        r#"<?php
+function ordered_source(): Traversable {
+    echo "source;";
+    return new ArrayObject(["named" => "N"]);
+}
+
+function ordered_downcast(): string {
+    echo "class;";
+    return "ArrayObject";
+}
+
+$wrap = new IteratorIterator(ordered_source(), ordered_downcast());
+foreach ($wrap as $k => $v) {
+    echo $k;
+    echo "=";
+    echo $v;
+    echo ";";
+}
+"#,
+    );
+    assert_eq!(out, "source;class;named=N;");
+}
+
+#[test]
+fn test_iterator_iterator_second_arg_rejects_invalid_aggregate_downcasts() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    $tmp = new IteratorIterator(new ArrayObject([1]), "Iterator");
+    echo "bad-interface";
+} catch (LogicException $e) {
+    echo "interface:";
+    echo $e->getMessage();
+    echo "|";
+}
+
+class PlainBase {}
+class AggChild extends PlainBase implements IteratorAggregate {
+    public function getIterator(): Traversable {
+        return new ArrayIterator([1]);
+    }
+}
+
+try {
+    $tmp = new IteratorIterator(new AggChild(), "PlainBase");
+    echo "bad-base";
+} catch (LogicException $e) {
+    echo "base";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "interface:Class to downcast to not found or not base class or does not implement Traversable|base"
+    );
+}
+
+#[test]
 fn test_no_rewind_iterator_preserves_inner_position() {
     let out = compile_and_run(
         r#"<?php

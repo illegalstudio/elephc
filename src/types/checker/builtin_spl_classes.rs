@@ -269,6 +269,15 @@ pub(crate) fn patch_builtin_spl_storage_signatures(checker: &mut Checker) {
             if let Some((_, ty)) = sig.params.first_mut() {
                 *ty = PhpType::Object("Traversable".to_string());
             }
+            if sig.params.len() == 1 {
+                sig.params.push((
+                    "class".to_string(),
+                    PhpType::Union(vec![PhpType::Str, PhpType::Void]),
+                ));
+                sig.defaults.push(Some(null_expr()));
+                sig.ref_params.push(false);
+                sig.declared_params.push(true);
+            }
         }
     }
 }
@@ -434,7 +443,14 @@ fn spl_iterator_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
             "__construct",
-            vec![param("iterator", named_type("Iterator"))],
+            vec![
+                param("iterator", named_type("Traversable")),
+                param_default(
+                    "class",
+                    TypeExpr::Nullable(Box::new(TypeExpr::Str)),
+                    null_expr(),
+                ),
+            ],
             Some(TypeExpr::Void),
             iterator_iterator_construct_body(),
         ),

@@ -121,6 +121,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
             "_spl_fixed_from_array_keys_msg",
             "array must contain only positive integer keys",
         ),
+        (
+            "_iterator_iterator_downcast_msg",
+            "Class to downcast to not found or not base class or does not implement Traversable",
+        ),
     ] {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
