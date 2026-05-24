@@ -8,7 +8,9 @@ sidebar:
 elephc ships the SPL pieces that are needed by supported PHP code today:
 iterator/counting/access interfaces, the SPL exception hierarchy, autoload and
 introspection helpers, the Phase 4 container classes, and the Phase 5 storage
-iterator foundations: `EmptyIterator`, `ArrayIterator`, and `ArrayObject`.
+iterator/decorator foundations: `EmptyIterator`, `ArrayIterator`,
+`ArrayObject`, `IteratorIterator`, `LimitIterator`, `NoRewindIterator`, and
+`InfiniteIterator`.
 
 SPL names live in the global namespace, matching PHP. They are available
 without imports or runtime extensions.
@@ -46,10 +48,11 @@ matching follows PHP's normal class hierarchy rules.
 
 ## Container Classes
 
-The Phase 4 SPL containers and Phase 5 storage iterators are built-in classes.
+The Phase 4 SPL containers and Phase 5 storage/decorator iterators are built-in classes.
 `SplDoublyLinkedList`, `SplStack`, `SplQueue`, and `SplFixedArray` use dedicated
 runtime storage; `ArrayIterator` and `ArrayObject` use compiler-managed
-keys/values storage over boxed `mixed` cells:
+keys/values storage over boxed `mixed` cells; the iterator decorators forward to
+an inner `Iterator` object:
 
 | Class | Parent | Interfaces |
 |---|---|---|
@@ -60,6 +63,10 @@ keys/values storage over boxed `mixed` cells:
 | `EmptyIterator` | - | `Iterator` |
 | `ArrayIterator` | - | `Iterator`, `ArrayAccess`, `SeekableIterator`, `Countable` |
 | `ArrayObject` | - | `IteratorAggregate`, `ArrayAccess`, `Countable` |
+| `IteratorIterator` | - | `OuterIterator` |
+| `LimitIterator` | `IteratorIterator` | inherited from parent |
+| `NoRewindIterator` | `IteratorIterator` | inherited from parent |
+| `InfiniteIterator` | `IteratorIterator` | inherited from parent |
 
 Container slots store `mixed`, so scalar and object values can be mixed in the
 same container. Runtime ownership is handled by the SPL helpers, including
@@ -193,6 +200,10 @@ Supported methods:
 | `EmptyIterator` | `current()`, `key()`, `next()`, `rewind()`, `valid()` |
 | `ArrayIterator` | `__construct(array $array = [], int $flags = 0)`, `current()`, `key()`, `next()`, `rewind()`, `valid()`, `seek(int $offset): void`, `count(): int`, `offsetExists()`, `offsetGet()`, `offsetSet()`, `offsetUnset()`, `append()`, `getArrayCopy()` |
 | `ArrayObject` | `__construct(array $array = [], int $flags = 0)`, `getIterator(): ArrayIterator`, `count(): int`, `offsetExists()`, `offsetGet()`, `offsetSet()`, `offsetUnset()`, `append()`, `getArrayCopy()` |
+| `IteratorIterator` | `__construct(Iterator $iterator)`, `current()`, `key()`, `next()`, `rewind()`, `valid()`, `getInnerIterator(): ?Iterator` |
+| `LimitIterator` | `__construct(Iterator $iterator, int $offset = 0, int $limit = -1)`, `rewind()`, `next()`, `valid()`, `seek(int $offset): void`, `getPosition(): int`, plus inherited forwarding methods |
+| `NoRewindIterator` | `__construct(Iterator $iterator)`, `rewind()` no-op, plus inherited forwarding methods |
+| `InfiniteIterator` | `__construct(Iterator $iterator)`, `next()` cycles to the start when the inner iterator is exhausted, plus inherited forwarding methods |
 
 ```php
 <?php
@@ -211,11 +222,22 @@ foreach ($obj as $key => $value) {
     echo $key;
     echo $value;
 }
+
+$limited = new LimitIterator(
+    new InfiniteIterator(new ArrayIterator([1, 2])),
+    0,
+    5
+);
+foreach ($limited as $value) {
+    echo $value; // 12121
+}
 ```
 
 `ArrayIterator` and `ArrayObject` preserve insertion-order keys for array
 inputs and for writes through `ArrayAccess`. Appends use the current storage
-length as the next integer key.
+length as the next integer key. The simple decorators currently wrap concrete
+`Iterator` objects; generic `IteratorAggregate` constructor inputs are not
+expanded to their inner iterator yet.
 
 ## Autoload and Introspection
 
@@ -282,7 +304,9 @@ source argument array.
 
 ## Compatibility Gaps
 
-`SplFixedArray::getIterator()` is still deferred until the fixed-array runtime
-is wired to return an `ArrayIterator`. The Phase 4 containers otherwise keep
-their runtime-backed method surface aligned with PHP's empty-container,
+`IteratorIterator`, `LimitIterator`, `NoRewindIterator`, and `InfiniteIterator`
+currently accept `Iterator` constructor inputs rather than every `Traversable`
+shape. `SplFixedArray::getIterator()` is still deferred until the fixed-array
+runtime is wired to return an `ArrayIterator`. The Phase 4 containers otherwise
+keep their runtime-backed method surface aligned with PHP's empty-container,
 invalid-offset, serialization, and fixed-array key behaviors.

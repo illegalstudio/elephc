@@ -180,6 +180,74 @@ pub(crate) fn inject_builtin_spl_classes(
         },
     );
 
+    class_map.insert(
+        "IteratorIterator".to_string(),
+        FlattenedClass {
+            name: "IteratorIterator".to_string(),
+            extends: None,
+            implements: vec!["OuterIterator".to_string()],
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: iterator_iterator_properties(),
+            methods: spl_iterator_iterator_methods(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+        },
+    );
+
+    class_map.insert(
+        "LimitIterator".to_string(),
+        FlattenedClass {
+            name: "LimitIterator".to_string(),
+            extends: Some("IteratorIterator".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: limit_iterator_properties(),
+            methods: spl_limit_iterator_methods(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+        },
+    );
+
+    class_map.insert(
+        "NoRewindIterator".to_string(),
+        FlattenedClass {
+            name: "NoRewindIterator".to_string(),
+            extends: Some("IteratorIterator".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: spl_no_rewind_iterator_methods(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+        },
+    );
+
+    class_map.insert(
+        "InfiniteIterator".to_string(),
+        FlattenedClass {
+            name: "InfiniteIterator".to_string(),
+            extends: Some("IteratorIterator".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: spl_infinite_iterator_methods(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+        },
+    );
+
     Ok(())
 }
 
@@ -206,6 +274,10 @@ const SPL_CLASS_NAMES: &[&str] = &[
     "EmptyIterator",
     "ArrayIterator",
     "ArrayObject",
+    "IteratorIterator",
+    "LimitIterator",
+    "NoRewindIterator",
+    "InfiniteIterator",
 ];
 
 fn spl_empty_iterator_methods() -> Vec<ClassMethod> {
@@ -232,6 +304,18 @@ fn array_object_properties() -> Vec<ClassProperty> {
         storage_property("keys", array_type()),
         storage_property("values", array_type()),
         storage_property("flags", TypeExpr::Int),
+    ]
+}
+
+fn iterator_iterator_properties() -> Vec<ClassProperty> {
+    vec![storage_property("inner", named_type("Iterator"))]
+}
+
+fn limit_iterator_properties() -> Vec<ClassProperty> {
+    vec![
+        storage_property("position", TypeExpr::Int),
+        storage_property("offset", TypeExpr::Int),
+        storage_property("limit", TypeExpr::Int),
     ]
 }
 
@@ -336,6 +420,77 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
             array_append_body(),
         ),
         method_with_body("getArrayCopy", Vec::new(), Some(array_type()), array_copy_body()),
+    ]
+}
+
+fn spl_iterator_iterator_methods() -> Vec<ClassMethod> {
+    vec![
+        method_with_body(
+            "__construct",
+            vec![param("iterator", named_type("Iterator"))],
+            Some(TypeExpr::Void),
+            iterator_iterator_construct_body(),
+        ),
+        method_with_body("current", Vec::new(), Some(mixed_type()), inner_return_body("current")),
+        method_with_body("key", Vec::new(), Some(mixed_type()), inner_return_body("key")),
+        method_with_body("next", Vec::new(), Some(TypeExpr::Void), inner_void_body("next")),
+        method_with_body("rewind", Vec::new(), Some(TypeExpr::Void), inner_void_body("rewind")),
+        method_with_body("valid", Vec::new(), Some(TypeExpr::Bool), inner_return_body("valid")),
+        method_with_body(
+            "getInnerIterator",
+            Vec::new(),
+            Some(TypeExpr::Nullable(Box::new(named_type("Iterator")))),
+            return_body(inner_expr()),
+        ),
+    ]
+}
+
+fn spl_limit_iterator_methods() -> Vec<ClassMethod> {
+    vec![
+        method_with_body(
+            "__construct",
+            vec![
+                param("iterator", named_type("Iterator")),
+                param_default("offset", TypeExpr::Int, int_expr(0)),
+                param_default("limit", TypeExpr::Int, int_expr(-1)),
+            ],
+            Some(TypeExpr::Void),
+            limit_iterator_construct_body(),
+        ),
+        method_with_body("rewind", Vec::new(), Some(TypeExpr::Void), limit_rewind_body()),
+        method_with_body("next", Vec::new(), Some(TypeExpr::Void), limit_next_body()),
+        method_with_body("valid", Vec::new(), Some(TypeExpr::Bool), limit_valid_body()),
+        method_with_body(
+            "seek",
+            vec![param("offset", TypeExpr::Int)],
+            Some(TypeExpr::Void),
+            limit_seek_body(),
+        ),
+        method_with_body("getPosition", Vec::new(), Some(TypeExpr::Int), return_body(limit_position_expr())),
+    ]
+}
+
+fn spl_no_rewind_iterator_methods() -> Vec<ClassMethod> {
+    vec![
+        method_with_body(
+            "__construct",
+            vec![param("iterator", named_type("Iterator"))],
+            Some(TypeExpr::Void),
+            iterator_iterator_construct_body(),
+        ),
+        method_with_body("rewind", Vec::new(), Some(TypeExpr::Void), Vec::new()),
+    ]
+}
+
+fn spl_infinite_iterator_methods() -> Vec<ClassMethod> {
+    vec![
+        method_with_body(
+            "__construct",
+            vec![param("iterator", named_type("Iterator"))],
+            Some(TypeExpr::Void),
+            iterator_iterator_construct_body(),
+        ),
+        method_with_body("next", Vec::new(), Some(TypeExpr::Void), infinite_next_body()),
     ]
 }
 
@@ -1008,6 +1163,117 @@ fn array_object_get_iterator_body() -> Vec<Stmt> {
             ],
         ),
         return_stmt(var_expr("it")),
+    ]
+}
+
+fn iterator_iterator_construct_body() -> Vec<Stmt> {
+    vec![property_assign_stmt(this_expr(), "inner", var_expr("iterator"))]
+}
+
+fn inner_expr() -> Expr {
+    property_access(this_expr(), "inner")
+}
+
+fn inner_call(method: &str) -> Expr {
+    method_call(inner_expr(), method, Vec::new())
+}
+
+fn inner_return_body(method: &str) -> Vec<Stmt> {
+    return_body(inner_call(method))
+}
+
+fn inner_void_body(method: &str) -> Vec<Stmt> {
+    vec![expr_stmt(inner_call(method))]
+}
+
+fn limit_position_expr() -> Expr {
+    property_access(this_expr(), "position")
+}
+
+fn limit_offset_expr() -> Expr {
+    property_access(this_expr(), "offset")
+}
+
+fn limit_bound_expr() -> Expr {
+    property_access(this_expr(), "limit")
+}
+
+fn limit_iterator_construct_body() -> Vec<Stmt> {
+    vec![
+        property_assign_stmt(this_expr(), "inner", var_expr("iterator")),
+        property_assign_stmt(this_expr(), "offset", var_expr("offset")),
+        property_assign_stmt(this_expr(), "limit", var_expr("limit")),
+        property_assign_stmt(this_expr(), "position", int_expr(0)),
+    ]
+}
+
+fn limit_rewind_body() -> Vec<Stmt> {
+    vec![
+        expr_stmt(inner_call("rewind")),
+        property_assign_stmt(this_expr(), "position", int_expr(0)),
+        while_stmt(
+            binary_expr(limit_position_expr(), BinOp::Lt, limit_offset_expr()),
+            vec![
+                if_stmt(not_expr(inner_call("valid")), vec![return_void_stmt()], None),
+                expr_stmt(inner_call("next")),
+                property_assign_stmt(
+                    this_expr(),
+                    "position",
+                    binary_expr(limit_position_expr(), BinOp::Add, int_expr(1)),
+                ),
+            ],
+        ),
+    ]
+}
+
+fn limit_next_body() -> Vec<Stmt> {
+    vec![
+        expr_stmt(inner_call("next")),
+        property_assign_stmt(
+            this_expr(),
+            "position",
+            binary_expr(limit_position_expr(), BinOp::Add, int_expr(1)),
+        ),
+    ]
+}
+
+fn limit_valid_body() -> Vec<Stmt> {
+    vec![
+        if_stmt(not_expr(inner_call("valid")), return_body(bool_expr(false)), None),
+        if_stmt(
+            binary_expr(limit_bound_expr(), BinOp::Lt, int_expr(0)),
+            return_body(bool_expr(true)),
+            None,
+        ),
+        return_stmt(binary_expr(
+            binary_expr(limit_position_expr(), BinOp::Sub, limit_offset_expr()),
+            BinOp::Lt,
+            limit_bound_expr(),
+        )),
+    ]
+}
+
+fn limit_seek_body() -> Vec<Stmt> {
+    vec![
+        expr_stmt(method_call(this_expr(), "rewind", Vec::new())),
+        while_stmt(
+            binary_expr(limit_position_expr(), BinOp::Lt, var_expr("offset")),
+            vec![
+                if_stmt(
+                    not_expr(method_call(this_expr(), "valid", Vec::new())),
+                    vec![return_void_stmt()],
+                    None,
+                ),
+                expr_stmt(method_call(this_expr(), "next", Vec::new())),
+            ],
+        ),
+    ]
+}
+
+fn infinite_next_body() -> Vec<Stmt> {
+    vec![
+        expr_stmt(inner_call("next")),
+        if_stmt(not_expr(inner_call("valid")), inner_void_body("rewind"), None),
     ]
 }
 

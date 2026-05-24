@@ -293,6 +293,7 @@ impl Checker {
         instantiated_class: &str,
         param_index: usize,
         arg_ty: &PhpType,
+        param_has_declared_type: bool,
     ) {
         let Some((prop_name, declaring_class)) =
             self.classes.get(instantiated_class).and_then(|class_info| {
@@ -334,9 +335,11 @@ impl Checker {
                 }
             }
 
-            if let Some(sig) = class_info.methods.get_mut("__construct") {
-                if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
-                    *param_ty = arg_ty.clone();
+            if !param_has_declared_type {
+                if let Some(sig) = class_info.methods.get_mut("__construct") {
+                    if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
+                        *param_ty = arg_ty.clone();
+                    }
                 }
             }
         }

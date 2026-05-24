@@ -95,7 +95,14 @@ impl Checker {
                 for (i, arg) in normalized_args.iter().enumerate() {
                     let arg_ty = self.infer_type(arg, env)?;
                     if param_to_prop.get(i).is_some_and(|mapped| mapped.is_some()) {
-                        self.propagate_constructor_arg_type(class_name.as_str(), i, &arg_ty);
+                        let param_has_declared_type =
+                            declared_flags.get(i).copied().unwrap_or(false);
+                        self.propagate_constructor_arg_type(
+                            class_name.as_str(),
+                            i,
+                            &arg_ty,
+                            param_has_declared_type,
+                        );
                     }
                 }
                 return Ok(PhpType::Object(class_name));
@@ -118,7 +125,7 @@ impl Checker {
         for (i, arg) in args.iter().enumerate() {
             let arg_ty = self.infer_type(arg, env)?;
             if param_to_prop.get(i).is_some_and(|mapped| mapped.is_some()) {
-                self.propagate_constructor_arg_type(class_name.as_str(), i, &arg_ty);
+                self.propagate_constructor_arg_type(class_name.as_str(), i, &arg_ty, false);
             }
         }
         Ok(PhpType::Object(class_name))

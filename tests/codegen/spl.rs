@@ -12,6 +12,8 @@
 mod autoload;
 #[path = "spl/classes.rs"]
 mod classes;
+#[path = "spl/decorators.rs"]
+mod decorators;
 #[path = "spl/interfaces.rs"]
 mod interfaces;
 #[path = "spl/introspection.rs"]

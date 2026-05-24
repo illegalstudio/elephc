@@ -83,9 +83,9 @@ fn emit_object_hash(
 
 /// Materialise the SPL class/interface registry as an indexed string
 /// array. Names mirror what we ship today (SPL/core interfaces, Throwable
-/// types, SPL exceptions, and the Phase 4 container metadata shells);
-/// upcoming phases (iterator decorators, heaps, file iterators) will extend
-/// this list as their classes land.
+/// types, SPL exceptions, Phase 4 containers, and Phase 5 iterator
+/// foundations); upcoming phases (filters, recursive iterators, heaps, file
+/// iterators) will extend this list as their classes land.
 fn emit_classes(emitter: &mut Emitter, data: &mut DataSection) -> PhpType {
     let names = SPL_CLASS_NAMES;
     emitter.comment("spl_classes() — AOT snapshot of shipped SPL types");
@@ -146,12 +146,16 @@ const SPL_CLASS_NAMES: &[&str] = &[
     "EmptyIterator",
     "Error",
     "Exception",
+    "InfiniteIterator",
     "InvalidArgumentException",
     "Iterator",
     "IteratorAggregate",
+    "IteratorIterator",
     "JsonSerializable",
     "LengthException",
+    "LimitIterator",
     "LogicException",
+    "NoRewindIterator",
     "OuterIterator",
     "OutOfBoundsException",
     "OutOfRangeException",
