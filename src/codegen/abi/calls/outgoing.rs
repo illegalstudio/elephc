@@ -21,6 +21,15 @@ use super::super::registers::{
 };
 use super::stack::{emit_load_temporary_stack_slot, emit_store_to_sp};
 
+/// Plans register and stack assignment for each outgoing call argument.
+///
+/// Traverses `arg_types` in order, assigning registers until the target's integer or float
+/// register limit is exhausted, then switches to stack-only placement for remaining args.
+/// Uses `initial_int_reg_idx` to skip registers already allocated by the caller (e.g., for
+/// a closure's captured environment).
+///
+/// Returns an `OutgoingArgAssignment` per argument indicating which register index or
+/// `STACK_ARG_SENTINEL` to use, and whether the argument occupies a float register.
 pub fn build_outgoing_arg_assignments_for_target(
     target: Target,
     arg_types: &[PhpType],
@@ -72,6 +81,10 @@ pub fn build_outgoing_arg_assignments_for_target(
     assignments
 }
 
+/// Returns the stack slot byte size for `ty`.
+///
+/// All argument types use a 16-byte slot on the temporary stack (8-byte pointer + 8-byte
+/// length/aux), except `PhpType::Void` which occupies no space and requires no materialization.
 fn arg_slot_size(ty: &PhpType) -> usize {
     match ty {
         PhpType::Void => 0,
@@ -79,6 +92,12 @@ fn arg_slot_size(ty: &PhpType) -> usize {
     }
 }
 
+/// Copies one argument slot from `src_offset` (temporary stack) to `dst_offset` (SP-based
+/// outgoing area) using scratch registers.
+///
+/// `ty` determines which registers to use and how many 8-byte words to copy. `Str` occupies
+/// two consecutive 8-byte words (pointer, length). `Float` uses a float register. All other
+/// non-Void types use a single integer register pair.
 fn emit_copy_stack_arg_slot(
     emitter: &mut Emitter,
     ty: &PhpType,
@@ -113,6 +132,19 @@ fn emit_copy_stack_arg_slot(
     }
 }
 
+/// Materializes pre-evaluated arguments into ABI-visible registers and stack slots.
+///
+/// `assignments` maps each argument to its planned register or stack position from
+/// `build_outgoing_arg_assignments_for_target`. Temporaries hold pre-evaluated argument
+/// values; this function copies them to the outgoing frame:
+///
+/// - Registers: loads directly from temp slots into the appropriate register.
+/// - Stack overflow: adjusts SP downward, then copies each stack argument using scratch
+///   registers. A sentinel adjustment reserves the overflow area before register materialization,
+///   then a second adjustment removes only the total-temp region after all copies complete.
+///
+/// Returns the total bytes of stack overflow arguments (for the caller to track). The
+/// caller must also track the count of temp bytes (`sum(arg_slot_size)`) for cleanup.
 pub fn materialize_outgoing_args(
     emitter: &mut Emitter,
     assignments: &[OutgoingArgAssignment],

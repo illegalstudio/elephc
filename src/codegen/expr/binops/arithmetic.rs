@@ -22,6 +22,7 @@ use super::super::{
 };
 use crate::codegen::context::HeapOwnership;
 
+/// Lowers &&, ||, xor logical operators.
 pub(super) fn emit_logical_binop(
     left: &Expr,
     op: &BinOp,
@@ -83,6 +84,7 @@ pub(super) fn emit_logical_binop(
     }
 }
 
+/// Lowers the ** exponentiation operator using libc pow.
 pub(super) fn emit_pow_binop(
     left: &Expr,
     right: &Expr,
@@ -126,6 +128,7 @@ pub(super) fn emit_pow_binop(
     PhpType::Float
 }
 
+/// Lowers +, -, *, /, % operators with PHP-compatible numeric coercion.
 pub(super) fn emit_numeric_binop(
     left: &Expr,
     op: &BinOp,
@@ -233,6 +236,9 @@ pub(super) fn emit_numeric_binop(
     }
 }
 
+/// Returns true when the given operator and operand types require mixed-numeric binop emission.
+/// Only Add, Sub, and Mul can operate on Mixed/Union types; integerish pairs also use this path
+/// to bypass normal int/float coercions when both operands fit in integers.
 fn should_emit_mixed_numeric_binop(op: &BinOp, left_ty: &PhpType, right_ty: &PhpType) -> bool {
     if !matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) {
         return false;
@@ -245,10 +251,17 @@ fn should_emit_mixed_numeric_binop(op: &BinOp, left_ty: &PhpType, right_ty: &Php
     is_integerish_numeric(left_ty) && is_integerish_numeric(right_ty)
 }
 
+/// Returns true for PhpType values that represent integer-compatible PHP types:
+/// Int, Bool (coerced to int), and Void (null coerced to zero).
 fn is_integerish_numeric(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Int | PhpType::Bool | PhpType::Void)
 }
 
+/// Emits a mixed-numeric add/sub/mul operation.
+/// At least one operand is `PhpType::Mixed` or `PhpType::Union`; the other may be a concrete
+/// integer type that was previously on the expression stack. Non-Mixed operands are boxed as
+/// Mixed before the runtime helper is called. The result type is always `PhpType::Mixed`.
+/// Ownership: owned operands are released after the call; borrowed or static operands are not.
 fn emit_mixed_numeric_binop(
     left: &Expr,
     op: &BinOp,
@@ -304,11 +317,17 @@ fn emit_mixed_numeric_binop(
     PhpType::Mixed
 }
 
+/// Returns true when a Mixed or Union typed expression result is heap-allocated and owned
+/// (not borrowed, not static, not a call temporary). Used to decide whether the operand
+/// needs a reference-count release after the runtime numeric helper completes.
 fn mixed_numeric_operand_is_owned(expr: &Expr, ty: &PhpType) -> bool {
     matches!(ty, PhpType::Mixed | PhpType::Union(_))
         && expr_result_heap_ownership(expr) == HeapOwnership::Owned
 }
 
+/// Decrements refcounts for owned left/right operands that were pushed onto the temporary
+/// stack before calling a mixed-numeric runtime helper. Skips decrement for non-owned operands.
+/// The result from the helper is preserved on the stack during cleanup to avoid clobbering.
 fn release_temporary_numeric_operands(
     emitter: &mut Emitter,
     release_left_operand: bool,
@@ -334,6 +353,9 @@ fn release_temporary_numeric_operands(
     abi::emit_release_temporary_stack(emitter, operand_stack_bytes);
 }
 
+/// Loads a previously saved numeric operand from a temporary stack slot at the given offset.
+/// Handles Float (fp register), Str (ptr+len register pair), and integer types (single register).
+/// Void/Never types (null) are a no-op since null contributes zero to numeric operations.
 fn load_saved_numeric_operand(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty.codegen_repr() {
         PhpType::Float => {
@@ -355,6 +377,7 @@ fn load_saved_numeric_operand(emitter: &mut Emitter, ty: &PhpType, offset: usize
     }
 }
 
+/// Lowers the . concatenation operator using __rt_concat.
 pub(super) fn emit_concat_binop(
     left: &Expr,
     right: &Expr,
@@ -411,6 +434,10 @@ pub(super) fn emit_concat_binop(
     PhpType::Str
 }
 
+/// Cleans up persisted (non-heap) concat operands that were preserved on the temporary stack.
+/// Called after `__rt_concat` when the result has already copied the string data; the result
+/// is kept alive while each operand is freed via `__rt_heap_free_safe`. The result pointer/length
+/// pair is also restored to the return registers after cleanup.
 fn emit_release_preserved_concat_operands(emitter: &mut Emitter, count: usize) {
     let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
 
@@ -429,6 +456,7 @@ fn emit_release_preserved_concat_operands(emitter: &mut Emitter, count: usize) {
     abi::emit_release_temporary_stack(emitter, count * 16);
 }
 
+/// Lowers &, |, ^, <<, >> bitwise operators.
 pub(super) fn emit_bitwise_binop(
     left: &Expr,
     op: &BinOp,
@@ -491,6 +519,9 @@ pub(super) fn emit_bitwise_binop(
     PhpType::Int
 }
 
+/// Coerces a typed expression result to a numeric integer for arithmetic or bitwise operations.
+/// Null is coerced to zero; Mixed/Union values are normalized via `__rt_mixed_cast_int` which
+/// unboxes and converts string/bool/float representations to a plain int before the operation.
 fn coerce_numeric_mixed_to_int(emitter: &mut Emitter, ty: &PhpType) {
     coerce_null_to_zero(emitter, ty);
     if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
@@ -498,6 +529,10 @@ fn coerce_numeric_mixed_to_int(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
+/// Emits signed integer modulo (left % right) with a divisor-is-zero guard.
+/// On ARM64 uses sdiv/msub; on x86_64 uses idiv. When the divisor is zero, PHP semantics
+/// mandate returning zero rather than triggering a divide-by-zero trap. The left_reg holds
+/// the left operand and result_reg (x0/rax) holds the right operand at entry.
 fn emit_int_mod(emitter: &mut Emitter, ctx: &mut Context, left_reg: &str, result_reg: &str) {
     let skip = ctx.next_label("mod_ok");
     let zero = ctx.next_label("mod_zero");

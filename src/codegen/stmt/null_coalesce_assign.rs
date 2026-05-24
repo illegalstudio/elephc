@@ -13,6 +13,9 @@ use super::super::emit::Emitter;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::types::PhpType;
 
+/// Matches NullCoalesce on `$array[$index]` where the variable and index match.
+/// Returns `(current, default)` when `value` is `$array[$index] ?? <default>`,
+/// otherwise returns `None`. The `current` expression is the read-before-write form.
 pub(crate) fn null_coalesce_array_target<'a>(
     array: &str,
     index: &Expr,
@@ -41,6 +44,9 @@ pub(crate) fn null_coalesce_array_target<'a>(
     }
 }
 
+/// Matches NullCoalesce on `$object->property` where the object and property match.
+/// Returns `(current, default)` when `value` is `$object->property ?? <default>`,
+/// otherwise returns `None`. The `current` expression is the read-before-write form.
 pub(crate) fn null_coalesce_property_target<'a>(
     object: &Expr,
     property: &str,
@@ -67,6 +73,9 @@ pub(crate) fn null_coalesce_property_target<'a>(
     }
 }
 
+/// Matches NullCoalesce on `StaticProperty` where the receiver and property match.
+/// Returns `(current, default)` when `value` is `<Receiver>::$property ?? <default>`,
+/// otherwise returns `None`. The `current` expression is the read-before-write form.
 pub(crate) fn null_coalesce_static_property_target<'a>(
     receiver: &StaticReceiver,
     property: &str,
@@ -93,6 +102,9 @@ pub(crate) fn null_coalesce_static_property_target<'a>(
     }
 }
 
+/// Matches NullCoalesce on `$object->property[$index]` where object, property, and index match.
+/// Returns `(current, default)` when `value` is `$object->property[$index] ?? <default>`,
+/// otherwise returns `None`. The `current` expression is the read-before-write form.
 pub(crate) fn null_coalesce_property_array_target<'a>(
     object: &Expr,
     property: &str,
@@ -130,6 +142,9 @@ pub(crate) fn null_coalesce_property_array_target<'a>(
     }
 }
 
+/// Matches NullCoalesce on `StaticProperty[$index]` where receiver, property, and index match.
+/// Returns `(current, default)` when `value` is `<Receiver>::$property[$index] ?? <default>`,
+/// otherwise returns `None`. The `current` expression is the read-before-write form.
 pub(crate) fn null_coalesce_static_property_array_target<'a>(
     receiver: &StaticReceiver,
     property: &str,
@@ -209,6 +224,10 @@ fn expr_equivalent(left: &Expr, right: &Expr) -> bool {
     }
 }
 
+/// Emits a conditional branch to `keep_label` when the `??=` result value is non-null.
+/// Handles Mixed/Union by unboxing first and comparing the runtime tag; uses a sentinel
+/// value for scalar types (int, float, string). The sentinel avoids polluting the
+/// codegen for the common null case.
 pub(crate) fn emit_branch_if_result_non_null(
     ty: &PhpType,
     keep_label: &str,

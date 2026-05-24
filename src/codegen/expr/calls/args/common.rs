@@ -17,6 +17,7 @@ use crate::codegen::{
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 
+/// Returns the declared target PHP type for a parameter, considering explicit type annotations.
 pub(crate) fn declared_target_ty<'a>(
     sig: Option<&'a FunctionSig>,
     param_idx: usize,
@@ -37,6 +38,7 @@ pub(crate) fn declared_target_ty<'a>(
     })
 }
 
+/// Returns the effective call-target PHP type for a parameter, optionally including inferred types.
 pub(crate) fn call_target_ty<'a>(
     sig: Option<&'a FunctionSig>,
     param_idx: usize,
@@ -49,10 +51,12 @@ pub(crate) fn call_target_ty<'a>(
     }
 }
 
+/// Pushes the current value in the result register onto the argument stack for the ABI.
 pub(crate) fn push_arg_value(emitter: &mut Emitter, ty: &PhpType) {
     abi::emit_push_result_value(emitter, ty);
 }
 
+/// Emits the address of a variable for a by-reference argument and returns whether the variable is valid.
 pub(crate) fn emit_ref_arg_variable_address(
     var_name: &str,
     context_label: &str,
@@ -86,6 +90,7 @@ pub(crate) fn emit_ref_arg_variable_address(
     }
 }
 
+/// Coerces the current value to the target PHP type, returning the pushed type and whether boxing occurred.
 pub(crate) fn coerce_current_value_to_target(
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -121,6 +126,7 @@ pub(crate) fn coerce_current_value_to_target(
     (pushed_ty, boxed_to_mixed)
 }
 
+/// Evaluates an argument expression, coerces it to the target type, and pushes it as a call argument.
 pub(crate) fn push_expr_arg(
     arg: &Expr,
     target_ty: Option<&PhpType>,
@@ -146,6 +152,7 @@ pub(crate) fn push_expr_arg(
     pushed_ty
 }
 
+/// Allocates a by-reference cell for a non-variable argument and pushes its address.
 pub(crate) fn push_non_variable_ref_arg_address(
     arg: &Expr,
     target_ty: Option<&PhpType>,
@@ -163,6 +170,10 @@ pub(crate) fn push_non_variable_ref_arg_address(
     PhpType::Int
 }
 
+/// Stores the value currently on the ABI result register into a by-reference heap cell.
+/// The cell is organized as: [value_pointer, type_tag] with tag values matching PhpType
+/// variants (e.g., 4=Array, 6=Object, 7=Mixed/Union/Iterable, 9=Resource).
+/// Takes ownership of the value on the result register.
 fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty: &PhpType) {
     let temp_reg = abi::temp_int_reg(emitter.target);
     match val_ty.codegen_repr() {
@@ -227,6 +238,11 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
     }
 }
 
+/// Determines whether an owned Mixed or Union value must be preserved on the temporary
+/// stack and released after argument coercion rather than immediately released.
+/// Returns true when the source is heap-owned Mixed/Union, the target is a concrete non-Mixed
+/// type, and coercion is applicable. Arithmetic binary ops are treated as heap-owned to
+/// handle their intermediate results correctly.
 fn should_release_owned_mixed_after_arg_coerce(
     arg: &Expr,
     source_ty: &PhpType,
@@ -251,6 +267,7 @@ fn should_release_owned_mixed_after_arg_coerce(
             ))
 }
 
+/// Releases a preserved Mixed value after coercion when the target type is not Mixed.
 pub(crate) fn release_preserved_mixed_after_arg_coercion(
     emitter: &mut Emitter,
     target_ty: &PhpType,

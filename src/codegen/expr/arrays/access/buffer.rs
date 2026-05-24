@@ -17,6 +17,11 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::{Expr, TypeExpr};
 use crate::types::{packed_type_size, PhpType};
 
+/// Allocates a new buffer with `element_type` elements of the given length expression.
+///
+/// The length is evaluated first, then the element stride is loaded into the appropriate
+/// integer argument register for the target architecture before calling `__rt_buffer_new`.
+/// Returns `PhpType::Buffer` wrapping the resolved element type.
 pub(crate) fn emit_buffer_new(
     element_type: &TypeExpr,
     len: &Expr,
@@ -42,6 +47,11 @@ pub(crate) fn emit_buffer_new(
     PhpType::Buffer(Box::new(elem_ty))
 }
 
+/// Resolves a `TypeExpr` to a `PhpType` for buffer element type checking.
+///
+/// Unpacked named types are resolved against the packed class table; unknown named types
+/// fall back to `PhpType::Int`. Nullable, union, and iterable types are not valid buffer
+/// elements and resolve to `PhpType::Int` as a safe approximation.
 fn resolve_buffer_element_type(type_expr: &TypeExpr, ctx: &Context) -> PhpType {
     match type_expr {
         TypeExpr::Int => PhpType::Int,

@@ -14,6 +14,12 @@ use super::super::super::emit::Emitter;
 use super::super::super::{abi, platform::Arch};
 use super::super::{emit_expr, retain_borrowed_heap_arg, Expr, ExprKind, PhpType};
 
+/// Emits an empty associative array literal with the given key/value types.
+///
+/// Allocates a hash table with initial capacity 16 via `__rt_hash_new`, using the
+/// provided `key_ty` and `value_ty` to set the runtime value tag. Leaves the hash
+/// handle in the result register. Returns `PhpType::AssocArray` with the given
+/// key and value types boxed.
 pub(crate) fn emit_empty_assoc_array_literal(
     key_ty: PhpType,
     value_ty: PhpType,
@@ -35,6 +41,14 @@ pub(crate) fn emit_empty_assoc_array_literal(
     }
 }
 
+/// Emits a non-empty associative array literal with key/value expression pairs.
+///
+/// Allocates a hash table via `__rt_hash_new`, then inserts each key/value pair
+/// in source order via `__rt_hash_set`. Keys are emitted as normalized hash-key
+/// payloads before each value expression is evaluated and inserted. Persists the
+/// updated hash table pointer after each insertion (allowing the table to grow).
+/// Returns `PhpType::AssocArray` with the normalized key type and the merged value
+/// type (uses `PhpType::Mixed` when value types differ across pairs).
 pub(crate) fn emit_assoc_array_literal(
     pairs: &[(Expr, Expr)],
     emitter: &mut Emitter,
@@ -142,6 +156,13 @@ pub(crate) fn emit_assoc_array_literal(
     }
 }
 
+/// Emits an associative array literal with spread elements from other arrays.
+///
+/// Creates an empty hash table with `PhpType::Mixed` keys, then merges each spread
+/// operand in source order using `__rt_hash_union` (for assoc arrays) or
+/// `__rt_hash_array_union` (for indexed arrays). The merged hash handle is left in
+/// the result register. Returns `PhpType::AssocArray` with mixed keys and the
+/// inferred value type from the spread elements.
 pub(crate) fn emit_array_literal_with_assoc_spread(
     elems: &[Expr],
     emitter: &mut Emitter,
@@ -185,6 +206,12 @@ pub(crate) fn emit_array_literal_with_assoc_spread(
     }
 }
 
+/// Infers the value type for an associative array literal with spread elements.
+///
+/// Iterates over spread expressions in `elems`, extracting the value type from
+/// each `PhpType::Array` or `PhpType::AssocArray`. Returns the common value type
+/// if all spreads agree; otherwise returns `PhpType::Mixed`. Falls back to
+/// `PhpType::Mixed` when no spread elements are found.
 fn assoc_spread_literal_value_type(elems: &[Expr], ctx: &Context) -> PhpType {
     let mut value_ty = PhpType::Never;
     for elem in elems {
@@ -209,6 +236,10 @@ fn assoc_spread_literal_value_type(elems: &[Expr], ctx: &Context) -> PhpType {
     }
 }
 
+/// Normalizes the key expression type for an associative array element.
+///
+/// Infers the raw type of `key` from `ctx`, then applies array-key normalization
+/// via `crate::types::normalized_array_key_type` to produce a canonical key type.
 fn normalized_assoc_key_type(key: &Expr, ctx: &Context) -> PhpType {
     let raw_ty = super::super::super::functions::infer_contextual_type(key, ctx);
     crate::types::normalized_array_key_type(key, raw_ty)

@@ -10,6 +10,9 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
+/// Emits a direct call to a compile-time-known label.
+/// The caller has already set up the ABI (stack frame, arguments, etc.).
+/// This only transfers control to the callee.
 pub fn emit_call_label(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -21,6 +24,9 @@ pub fn emit_call_label(emitter: &mut Emitter, label: &str) {
     }
 }
 
+/// Emits an indirect call through a register holding the callee address.
+/// The callee is not known at compile time; the caller has already loaded
+/// the target address into `reg` and set up the ABI. This only transfers control.
 pub fn emit_call_reg(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {

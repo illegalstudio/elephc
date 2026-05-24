@@ -44,6 +44,10 @@ pub(crate) fn singular_object_class(ty: &PhpType) -> Option<&str> {
     }
 }
 
+/// Infers the PHP type for a property read on an object expression.
+/// Returns the declared property type from the class metadata, `Mixed` for
+/// stdClass or when the receiver is `Mixed`, or `PhpType::Int` as the dynamic
+/// fallback. When `nullable` is set, wraps the result in a union with `Void`.
 pub(super) fn infer_property_access_type(
     object: &Expr,
     property: &str,
@@ -104,6 +108,9 @@ pub(super) fn infer_property_access_type(
     PhpType::Int
 }
 
+/// Infers the PHP type for a null-safe (`?.`) property read.
+/// Returns the declared property type from class metadata, `Mixed` when the
+/// receiver is `Mixed`, or `PhpType::Void` when the object is statically `Void`.
 pub(super) fn infer_nullsafe_property_access_type(
     object: &Expr,
     property: &str,
@@ -137,6 +144,9 @@ pub(super) fn infer_nullsafe_property_access_type(
     PhpType::Void
 }
 
+/// Infers the PHP type for a static property read (`Class::$prop`).
+/// Returns the declared static property type from class metadata,
+/// or `PhpType::Int` when the receiver does not resolve to a known class.
 pub(super) fn infer_static_property_access_type(
     receiver: &StaticReceiver,
     property: &str,
@@ -159,6 +169,9 @@ pub(super) fn infer_static_property_access_type(
     PhpType::Int
 }
 
+/// Infers the PHP return type for a method call on an object expression.
+/// Returns the declared method return type from class/interface metadata,
+/// or `PhpType::Int` as the dynamic fallback.
 pub(super) fn infer_method_call_type(
     object: &Expr,
     method: &str,
@@ -187,6 +200,11 @@ pub(super) fn infer_method_call_type(
     PhpType::Int
 }
 
+/// Infers the PHP return type for a null-safe (`?->`) method call.
+/// Returns the declared method return type from class/interface metadata,
+/// `Mixed` when the receiver is `Mixed`, or `PhpType::Void` when the object
+/// is statically `Void`. When `nullable` is set, wraps the result in a union
+/// with `Void`.
 pub(super) fn infer_nullsafe_method_call_type(
     object: &Expr,
     method: &str,
@@ -226,6 +244,9 @@ pub(super) fn infer_nullsafe_method_call_type(
     PhpType::Void
 }
 
+/// Infers the PHP return type for a static method call (`Class::method()`).
+/// Returns the declared static method return type from class metadata,
+/// or `PhpType::Int` when the receiver does not resolve to a known class.
 pub(super) fn infer_static_method_call_type(
     receiver: &StaticReceiver,
     method: &str,
@@ -244,6 +265,10 @@ pub(super) fn infer_static_method_call_type(
     PhpType::Int
 }
 
+/// Infers the PHP type for `$this` in the current context.
+/// Returns `PhpType::Object(current_class)` when inside a class method,
+/// or `PhpType::Object("")` (an empty-named object) when no class context
+/// is active.
 pub(super) fn infer_this_type(ctx: Option<&Context>) -> PhpType {
     if let Some(c) = ctx {
         if let Some(cn) = &c.current_class {
@@ -253,6 +278,9 @@ pub(super) fn infer_this_type(ctx: Option<&Context>) -> PhpType {
     PhpType::Object(String::new())
 }
 
+/// Resolves the receiver expression of a null-safe access to the class name
+/// and nullability. Handles `Object`, `Void`, and single-class nullable unions.
+/// Returns `None` for `Mixed`, multi-class unions, or non-object types.
 fn nullsafe_context_class(
     object: &Expr,
     sig: &FunctionSig,
@@ -277,6 +305,10 @@ fn nullsafe_context_class(
     }
 }
 
+/// Resolves a `StaticReceiver` to a class name string. Handles `Named`,
+/// `Self_`, `Static`, and `Parent` variants — `Parent` looks up the current
+/// class's declared parent. Returns `None` when the receiver is `Parent` but
+/// the current class has no parent, or for `Self_`/`Static` outside a class.
 fn class_name_from_static_receiver(receiver: &StaticReceiver, ctx: &Context) -> Option<String> {
     match receiver {
         StaticReceiver::Named(class_name) => Some(class_name.as_str().to_string()),

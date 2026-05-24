@@ -13,6 +13,13 @@ use crate::codegen::{abi, context::Context, data_section::DataSection, functions
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Stores the current result value (from ABI result registers) into a variadic array
+/// element at the given index.
+///
+/// Reads from `int_result_reg`, `float_result_reg`, or `string_result_regs` depending
+/// on `elem_ty`. The element is stored at offset `24 + elem_idx * elem_size` to account
+/// for the 24-byte array header. String elements occupy 16 bytes (ptr + len); all other
+/// types occupy 8 bytes. Does nothing for `Void` type.
 pub(super) fn store_current_array_element(
     emitter: &mut Emitter,
     array_reg: &str,
@@ -35,6 +42,10 @@ pub(super) fn store_current_array_element(
     }
 }
 
+/// Returns the element type for a variadic container, mapping `Iterable` to `Mixed`.
+///
+/// Mixed is used as the container element type when the first argument is Iterable
+/// because the array may contain heterogeneous values after spread unpacking.
 pub(super) fn variadic_container_elem_ty(elem_ty: &PhpType) -> PhpType {
     if matches!(elem_ty.codegen_repr(), PhpType::Iterable) {
         PhpType::Mixed
@@ -43,6 +54,7 @@ pub(super) fn variadic_container_elem_ty(elem_ty: &PhpType) -> PhpType {
     }
 }
 
+/// Emits an empty variadic array argument (capacity 4) for absent variadic params.
 pub(crate) fn emit_empty_variadic_array_arg(context_label: &str, emitter: &mut Emitter) -> PhpType {
     emitter.comment(context_label);
     let (capacity_reg, elem_size_reg) = match emitter.target.arch {
@@ -56,6 +68,7 @@ pub(crate) fn emit_empty_variadic_array_arg(context_label: &str, emitter: &mut E
     PhpType::Array(Box::new(PhpType::Int))
 }
 
+/// Builds a variadic array from a list of evaluated expressions and pushes it as an argument.
 pub(crate) fn emit_variadic_array_arg_from_exprs(
     variadic_args: &[Expr],
     context_label: &str,

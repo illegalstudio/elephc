@@ -14,6 +14,7 @@ use crate::codegen::platform::Arch;
 use crate::codegen::{abi, runtime};
 use crate::types::PhpType;
 
+/// Emits a fiber wrapper that adapts a closure to run inside a runtime Fiber.
 pub(crate) fn emit_fiber_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper) {
     if emitter.target.arch == Arch::X86_64 {
         emit_x86_64_wrapper(emitter, wrapper);
@@ -49,6 +50,11 @@ pub(crate) fn emit_fiber_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberW
     abi::emit_return(emitter);
 }
 
+/// Spills visible parameters and hidden arguments from the Fiber's argument storage
+/// into the wrapper's stack frame, calculating how many integer/float registers each
+/// argument consumes so the caller's ABI expectations are met at the final call site.
+/// Visible params are read directly from the Fiber's start arguments; hidden args come
+/// after and use the same offset scheme.
 fn spill_wrapper_args(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper, arg_types: &[PhpType]) {
     let visible = wrapper.visible_param_count.min(arg_types.len());
     let user_int_regs = arg_types
@@ -98,6 +104,9 @@ fn spill_wrapper_args(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper, arg
     }
 }
 
+/// Retains a refcounted value that was captured from the Fiber's argument storage and
+/// will live in the closure's parameter slot after the call returns. Prevents the
+/// Fiber's argument slot from being freed prematurely while the closure executes.
 fn retain_refcounted_capture_for_closure_frame(
     emitter: &mut Emitter,
     ty: &PhpType,
@@ -118,6 +127,8 @@ fn retain_refcounted_capture_for_closure_frame(
     }
 }
 
+/// Builds the argument type list for a fiber wrapper by mapping the wrapper's visible
+/// parameters and hidden arguments to their codegen representations, in order.
 fn wrapper_arg_types(wrapper: &DeferredFiberWrapper) -> Vec<PhpType> {
     wrapper
         .sig
@@ -128,6 +139,10 @@ fn wrapper_arg_types(wrapper: &DeferredFiberWrapper) -> Vec<PhpType> {
         .collect()
 }
 
+/// Loads a visible user parameter from the Fiber object's argument area and spills it
+/// into the wrapper's stack frame at the slot corresponding to its parameter index.
+/// Unboxes the boxed Mixed argument from the Fiber's start area; for Float and Str
+/// types also handles the ABI register layout transformation for the final call.
 fn spill_user_arg(emitter: &mut Emitter, param_idx: usize, ty: &PhpType, slot_offset: usize) {
     let src_offset = runtime::FIBER_START_ARGS_OFFSET + (param_idx as i32) * 8;
     emitter.instruction(&format!("ldr x0, [x19, #{}]", src_offset));            // load the boxed Mixed start() argument from the Fiber object
@@ -153,6 +168,11 @@ fn spill_user_arg(emitter: &mut Emitter, param_idx: usize, ty: &PhpType, slot_of
     }
 }
 
+/// Materializes the spilled wrapper arguments back into ABI registers/stack slots for
+/// the closure call. First pushes all spilled args as call temporaries onto the
+/// temporary stack, then builds outgoing argument assignments for the target and
+/// materializes them. Returns the number of overflow bytes that must be cleaned up
+/// after the call returns.
 fn materialize_spilled_args_for_closure_call(
     emitter: &mut Emitter,
     arg_types: &[PhpType],
@@ -163,6 +183,10 @@ fn materialize_spilled_args_for_closure_call(
     abi::materialize_outgoing_args(emitter, &assignments)
 }
 
+/// Pushes each spilled wrapper argument from its frame slot onto the temporary call
+/// stack in preparation for the closure call. Arguments are pushed in reverse order
+/// so they land at the correct stack offsets for the callee; Float, Str, and scalar
+/// types each use their appropriate register-pair or single-register push sequence.
 fn push_spilled_args_as_call_temporaries(
     emitter: &mut Emitter,
     arg_types: &[PhpType],
@@ -202,6 +226,9 @@ fn push_spilled_args_as_call_temporaries(
     }
 }
 
+/// Boxes the closure's raw return value into a Mixed cell for the Fiber's result slot.
+/// For Void/Never return types, normalizes the implicit null to 0/NULL so the boxed
+/// representation is consistent before the wrapper returns to the fiber entry point.
 fn box_wrapper_return(emitter: &mut Emitter, return_ty: PhpType) {
     if matches!(return_ty, PhpType::Void | PhpType::Never) {
         match emitter.target.arch {
@@ -216,6 +243,9 @@ fn box_wrapper_return(emitter: &mut Emitter, return_ty: PhpType) {
     crate::codegen::emit_box_current_value_as_mixed(emitter, &return_ty);
 }
 
+/// x86_64-specific fiber wrapper emission. Uses the System V AMD64 ABI for both the
+/// wrapper frame and the closure call; preserves r12/r13 as callee-saved Fiber/callable
+/// pointers across the call. Differs from ARM64 in register layout and frame slot indexing.
 fn emit_x86_64_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper) {
     let arg_types = wrapper_arg_types(wrapper);
     let slot_count = arg_types.len().max(1);
@@ -245,6 +275,10 @@ fn emit_x86_64_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper) {
     abi::emit_return(emitter);
 }
 
+/// x86_64-specific spilling of visible parameters and hidden arguments from the Fiber's
+/// argument storage into the wrapper frame. Uses r12 to address the Fiber and accesses
+/// float/string/scalar slots via the same offset scheme as ARM64 but with x86_64 load
+/// instructions and frame slot offsets computed by frame_arg_slot_offset().
 fn spill_wrapper_args_x86_64(
     emitter: &mut Emitter,
     wrapper: &DeferredFiberWrapper,
@@ -299,6 +333,9 @@ fn spill_wrapper_args_x86_64(
     }
 }
 
+/// x86_64-specific loading and unboxing of a visible user parameter from the Fiber
+/// object's start argument area into the wrapper's frame slot. Unboxes via the same
+/// __rt_mixed_unbox helper; Float requires movq from rdi to xmm0 for bit reinterpretation.
 fn spill_user_arg_x86_64(emitter: &mut Emitter, param_idx: usize, ty: &PhpType, slot_offset: usize) {
     let src_offset = runtime::FIBER_START_ARGS_OFFSET + (param_idx as i32) * 8;
     emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", src_offset)); // load the boxed Mixed start() argument from the Fiber object
@@ -325,6 +362,9 @@ fn spill_user_arg_x86_64(emitter: &mut Emitter, param_idx: usize, ty: &PhpType, 
     }
 }
 
+/// x86_64-specific materialization of spilled wrapper arguments into ABI registers/stack
+/// for the closure call. Differs from ARM64 in that it does not pass frame_size since
+/// x86_64 frame slot offsets are computed directly from the slot index.
 fn materialize_spilled_args_for_closure_call_x86_64(
     emitter: &mut Emitter,
     arg_types: &[PhpType],
@@ -334,6 +374,9 @@ fn materialize_spilled_args_for_closure_call_x86_64(
     abi::materialize_outgoing_args(emitter, &assignments)
 }
 
+/// x86_64-specific pushing of spilled wrapper arguments from frame slots onto the temporary
+/// call stack. Arguments are pushed in reverse order; uses xmm0 for float push and
+/// r10/r11 register pair for string push, matching the System V AMD64 ABI conventions.
 fn push_spilled_args_as_call_temporaries_x86_64(emitter: &mut Emitter, arg_types: &[PhpType]) {
     for (idx, ty) in arg_types.iter().enumerate() {
         let slot_offset = frame_arg_slot_offset(idx);
@@ -356,10 +399,15 @@ fn push_spilled_args_as_call_temporaries_x86_64(emitter: &mut Emitter, arg_types
     }
 }
 
+/// Computes the x86_64 frame slot offset for argument slot `idx`. Each slot occupies
+/// 16 bytes; slot 0 is reserved (holds the return address), so argument i uses slot i+1.
 fn frame_arg_slot_offset(idx: usize) -> usize {
     (idx + 1) * 16
 }
 
+/// Rounds `n` up to the nearest 16-byte aligned value. Used to compute frame sizes
+/// that satisfy the ABI requirement for callee-saved register spill space and stack
+/// alignment at calls.
 fn align16(n: usize) -> usize {
     (n + 15) & !15
 }

@@ -11,6 +11,7 @@
 mod assignments;
 mod arrays;
 mod control_flow;
+/// helpers
 pub(crate) mod helpers;
 mod includes;
 mod io;
@@ -44,6 +45,8 @@ pub(crate) use assignments::{
 };
 pub(crate) use io::emit_expr_to_stdout;
 
+/// Extracts the user-facing function name from the context's return label by stripping
+/// the internal `_fn_` prefix and `_epilogue` suffix. Returns "main" if no label is set.
 fn current_function_name(ctx: &Context) -> String {
     ctx.return_label
         .as_ref()
@@ -53,14 +56,17 @@ fn current_function_name(ctx: &Context) -> String {
         .to_string()
 }
 
+/// Builds a static storage label by combining the current function name with the variable name.
 fn static_storage_label(ctx: &Context, name: &str) -> String {
     format!("_static_{}_{}", current_function_name(ctx), name)
 }
 
+/// Emits a static variable store operation, delegating to the storage module.
 fn emit_static_store(emitter: &mut Emitter, ctx: &Context, name: &str, ty: &PhpType) {
     storage::emit_static_store(emitter, ctx, name, ty);
 }
 
+/// Emits code for a single statement AST node.
 pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &mut DataSection) {
     if stmt.span.line > 0 {
         emitter.comment(&format!(
@@ -372,6 +378,9 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
     }
 }
 
+/// Releases heap ownership for an expression result that is discarded (not stored).
+/// For owned strings, moves the pointer to `__rt_heap_free_safe`; for other refcounted
+/// types, emits a conditional decref. Non-refcounted or borrowed values are no-ops.
 fn release_discarded_expr_result(
     expr: &crate::parser::ast::Expr,
     ty: &PhpType,
@@ -402,6 +411,7 @@ pub fn emit_global_load(emitter: &mut Emitter, ctx: &mut Context, name: &str, ty
     storage::emit_global_load(emitter, ctx, name, ty);
 }
 
+/// Emits a store to an extern global variable, writing the value from the current stack slot.
 fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &PhpType) {
     storage::emit_extern_global_store(emitter, name, ty);
 }

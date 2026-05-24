@@ -25,10 +25,19 @@ use super::super::super::{
     save_concat_offset_before_nested_call,
 };
 
+/// Emits a compile-time class ID as an immediate integer into the ABI integer result register.
+/// Used for direct static dispatch where the class is known at compile time.
+/// Loads `class_id as i64` into `abi::int_result_reg(emitter)`.
 pub(in crate::codegen::expr::objects) fn emit_immediate_class_id(emitter: &mut Emitter, class_id: u64) {
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), class_id as i64);
 }
 
+/// Loads the called-class ID for late static binding into the ABI integer result register.
+///
+/// Checks, in order: `__elephc_fcc_called_class_id` (first-class callable capture),
+/// `__elephc_called_class_id` (static method frame), `__elephc_fcc_this` (FCC receiver),
+/// then `this` (implicit receiver). Dereferences pointers to get the class ID.
+/// Returns `false` if no called-class context is available in the current frame.
 pub(in crate::codegen::expr::objects) fn emit_forwarded_called_class_id(emitter: &mut Emitter, ctx: &Context) -> bool {
     if let Some(var) = ctx.variables.get("__elephc_fcc_called_class_id") {
         abi::load_at_offset(emitter, abi::int_result_reg(emitter), var.stack_offset); // forward the first-class callable's captured called-class id
@@ -60,6 +69,14 @@ pub(in crate::codegen::expr::objects) fn emit_forwarded_called_class_id(emitter:
     }
 }
 
+/// Lowers `ClassName::method(...)`, `self::method(...)`, `parent::method(...)`,
+/// and `static::method(...)` static calls.
+///
+/// Dispatches through the static vtable when `static::` has a vtable slot (dynamic static dispatch),
+/// falls back to direct private static helpers, or calls the resolved method label.
+/// Pushes hidden `called_class` ID and implicit `$this` receiver as ABI registers when required,
+/// evaluates and materializes arguments in source order, then restores concat offsets and releases
+/// temporary stack space after the call returns.
 pub(in crate::codegen::expr::objects) fn emit_static_method_call(
     receiver: &StaticReceiver,
     method: &str,

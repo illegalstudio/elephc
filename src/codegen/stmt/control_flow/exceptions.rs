@@ -25,6 +25,10 @@ const PENDING_RETURN: u64 = 1;
 const PENDING_BRANCH: u64 = 2;
 const PENDING_RETHROW: u64 = 3;
 
+/// Lowers a `throw` statement.
+/// Evaluates the expression, stores the result to the exception value slot, then
+/// calls `__rt_throw_current` to unwind to the nearest enclosing handler.
+/// Borrowed heap results from the expression are released before unwinding.
 pub(super) fn emit_throw_stmt(
     expr: &Expr,
     emitter: &mut Emitter,
@@ -39,6 +43,11 @@ pub(super) fn emit_throw_stmt(
     abi::emit_call_label(emitter, "__rt_throw_current");                           // unwind to the nearest active exception handler
 }
 
+/// Lowers a `try`/`catch`/`finally` statement.
+/// Emits a `setjmp` guard for the try body, then sequentially emits the try body,
+/// catch dispatch (with optional finally), and finally dispatch. The finally block
+/// is invoked on normal completion, branch exit, return, or exception rethrow.
+/// Clears diagnostic suppression state when entering a catch handler.
 pub(super) fn emit_try_stmt(
     try_body: &[Stmt],
     catches: &[CatchClause],

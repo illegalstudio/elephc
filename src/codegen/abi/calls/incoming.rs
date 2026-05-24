@@ -20,6 +20,14 @@ use super::super::registers::{
     int_arg_reg_name, secondary_scratch_reg, tertiary_scratch_reg,
 };
 
+/// Stores a function parameter from the next available ABI register or caller stack slot
+/// into the local frame slot at `offset`.
+///
+/// Uses `cursor` to track the current position in the integer/float register file and the
+/// caller stack. Advances the cursor past the consumed register(s) or stack slot. For string
+/// parameters, consumes two consecutive integer registers (pointer + length). The `ty` is
+/// the codegen representation which determines routing to register or stack. Returns no
+/// value but mutates `cursor` to reflect the advance.
 pub fn emit_store_incoming_param(
     emitter: &mut Emitter,
     name: &str,

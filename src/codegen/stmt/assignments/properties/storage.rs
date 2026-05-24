@@ -13,7 +13,17 @@ use crate::codegen::emit::Emitter;
 use crate::types::PhpType;
 
 const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
+/// Sentinel value stored in a property slot's first word to represent `Void`
+/// when the upper word is also zeroed. Chosen to be an invalid pointer
+/// representation that avoids confusing null pointers with uninitialized slots.
 
+/// Releases the previous value stored in a property slot before the slot is
+/// overwritten. For `Str` properties, calls `__rt_heap_free_safe` on the
+/// previous string pointer. For other refcounted types, loads the previous
+/// pointer and calls `emit_decref_if_refcounted`. Non-refcounted scalars
+/// require no cleanup. The `object_reg` must hold the object pointer;
+/// `offset` is the byte offset of the property slot; `prop_ty` describes
+/// the type already stored in the slot.
 pub(super) fn release_previous_property_value(
     emitter: &mut Emitter,
     object_reg: &str,
@@ -33,6 +43,14 @@ pub(super) fn release_previous_property_value(
     }
 }
 
+/// Stores a value into a property slot at `offset` bytes from `object_reg`.
+/// The value's type determines the storage strategy: scalars are stored
+/// directly with a runtime type tag in the upper word (offset+8); strings
+/// are persisted via `__rt_str_persist` before storing pointer+length;
+/// floats use the float register; refcounted types (arrays, objects, Mixed)
+/// store the pointer and tag 7. `Void` stores a null sentinel; `Never`
+/// zeros both words. The value must already be on the temporary stack
+/// (or in the appropriate float register for Float).
 pub(super) fn store_property_value(emitter: &mut Emitter, object_reg: &str, val_ty: &PhpType, offset: usize) {
     let temp_reg = abi::temp_int_reg(emitter.target);
     match val_ty {
@@ -102,6 +120,11 @@ pub(super) fn store_property_value(emitter: &mut Emitter, object_reg: &str, val_
     }
 }
 
+/// Stores a property reference address into a property slot. The pointer to
+/// the reference cell is popped from the temporary stack and written directly
+/// into the property slot at `offset`; the upper word (offset+8) is zeroed.
+/// Used for reference property storage where the slot holds a pointer to
+/// the variable rather than the variable's value directly.
 pub(super) fn store_property_reference_address(
     emitter: &mut Emitter,
     object_reg: &str,
@@ -113,6 +136,12 @@ pub(super) fn store_property_reference_address(
     abi::emit_store_zero_to_address(emitter, object_reg, offset + 8);
 }
 
+/// Releases the previous value held through a reference property before
+/// the reference is updated. Loads the value at `pointer_reg + 0` and calls
+/// `emit_decref_if_refcounted` for refcounted types or `__rt_heap_free_safe`
+/// for strings. Skips release for scalar types. `incoming_ty` is the type
+/// being stored; registers used during release are saved/restored around
+/// the helper call to avoid clobbering result registers.
 pub(super) fn release_previous_referenced_value(
     emitter: &mut Emitter,
     pointer_reg: &str,
@@ -146,6 +175,12 @@ pub(super) fn release_previous_referenced_value(
     }
 }
 
+/// Stores a value through a reference pointer (already loaded from a
+/// reference property slot). Pops the value from the temporary stack (or
+/// float register for Float, register pair for Str) and writes it to
+/// `pointer_reg + 0`. Strings are persisted via `__rt_str_persist` before
+/// storing. The upper word is not modified since reference targets are
+/// always single-slot values.
 pub(super) fn store_referenced_value(
     emitter: &mut Emitter,
     pointer_reg: &str,

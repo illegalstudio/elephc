@@ -22,6 +22,10 @@ use super::super::super::{
     restore_concat_offset_after_owned_string_call, save_concat_offset_before_nested_call,
 };
 
+/// Maps an `IntrinsicCallKind` to its PHP return type.
+///
+/// Used by both static and instance intrinsic lowering to determine the result type
+/// when emitting calls or falling back after an unsupported intrinsic warning.
 pub(super) fn return_type_for(intrinsic: IntrinsicCall) -> PhpType {
     match intrinsic.kind() {
         IntrinsicCallKind::FiberIsStarted
@@ -67,6 +71,12 @@ pub(super) fn return_type_for(intrinsic: IntrinsicCall) -> PhpType {
     }
 }
 
+/// Lowers a static intrinsic call such as `Fiber::suspend(...)` or `SplFixedArray::fromArray(...)`.
+///
+/// Arguments are emitted and coerced before the runtime helper is called. For `Fiber::suspend`,
+/// the argument (or `null`) is shuttled through the temporary stack before being passed as the
+/// first integer argument to the helper. For `SplFixedArray::fromArray`, the source array and
+/// optional `preserveKeys` boolean are passed as arguments 2 and 3 after the class ID in arg 0.
 pub(super) fn emit_static_intrinsic_call(
     intrinsic: IntrinsicCall,
     args: &[Expr],
@@ -157,6 +167,12 @@ pub(super) fn emit_static_intrinsic_call(
     }
 }
 
+/// Lowers an instance intrinsic call where arguments are already materialized in registers.
+///
+/// The receiver is in `x0` (ARM64) or `rdi` (x86_64). Additional arguments are sourced from
+/// `assignments` which describes where each argument currently lives (register or stack overflow).
+/// `overflow_bytes` describes how many bytes of stack arguments were passed beyond the ABI limit.
+/// Falls through to `emit_simple_runtime_intrinsic` for most kinds; handles `Fiber::start` specially.
 pub(super) fn emit_instance_intrinsic_with_loaded_args(
     intrinsic: IntrinsicCall,
     assignments: &[abi::OutgoingArgAssignment],
@@ -231,6 +247,13 @@ pub(super) fn emit_instance_intrinsic_with_loaded_args(
     }
 }
 
+/// Lowers `Fiber::start` by copying user-supplied start arguments into the Fiber's start_args buffer
+/// before invoking the runtime helper.
+///
+/// Uses `FIBER_USER_ARG_MAX_OFFSET` to limit how many slots the callee may write, and
+/// `FIBER_START_ARGS_OFFSET` as the base for the start_args array. Only arguments up to
+/// `assignments.len()` are copied, capped by `FIBER_START_ARGS_MAX`. ARM64 spills registers
+/// directly; x86_64 handles stack overflow slots by loading from the known overflow area.
 fn emit_fiber_start_intrinsic(
     intrinsic: IntrinsicCall,
     assignments: &[abi::OutgoingArgAssignment],
@@ -286,6 +309,10 @@ fn emit_fiber_start_intrinsic(
     PhpType::Mixed
 }
 
+/// Lowers simple instance intrinsics that only need a runtime helper call with no special setup.
+///
+/// Receiver and arguments are already materialized in registers per the ABI. Calls the
+/// runtime helper directly and returns the type for the intrinsic kind.
 fn emit_simple_runtime_intrinsic(intrinsic: IntrinsicCall, emitter: &mut Emitter) -> PhpType {
     abi::emit_call_label(
         emitter,
@@ -296,6 +323,11 @@ fn emit_simple_runtime_intrinsic(intrinsic: IntrinsicCall, emitter: &mut Emitter
     return_type_for(intrinsic)
 }
 
+/// Lowers Fiber state-query intrinsics (`Fiber::isStarted`, `isRunning`, `isSuspended`, `isTerminated`).
+///
+/// Sets argument 1 to the expected state enum value (0–3), calls the shared runtime predicate helper,
+/// then inverts the result for `Fiber::isStarted` since the runtime encodes `NotStarted` as the
+/// absence of the Started state (state == 0 means not started).
 fn emit_fiber_state_intrinsic(intrinsic: IntrinsicCall, emitter: &mut Emitter) -> PhpType {
     let arg1 = abi::int_arg_reg_name(emitter.target, 1);
     let expected_state = match intrinsic.kind() {
@@ -321,6 +353,11 @@ fn emit_fiber_state_intrinsic(intrinsic: IntrinsicCall, emitter: &mut Emitter) -
     PhpType::Bool
 }
 
+/// Lowers Generator intrinsics (`Generator::current`, `key`, `next`, `valid`, `rewind`, `send`, `throw`, `getReturn`).
+///
+/// Saves concat offsets before the call to preserve nested string operations, calls the Generator
+/// runtime helper directly, then restores offsets after based on whether the result type is `Str`.
+/// Returns the PHP return type for the intrinsic kind.
 fn emit_generator_intrinsic(
     intrinsic: IntrinsicCall,
     emitter: &mut Emitter,

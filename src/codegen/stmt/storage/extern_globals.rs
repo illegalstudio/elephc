@@ -12,6 +12,14 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::types::PhpType;
 
+/// Emits a store to an external global symbol for the given PHP variable.
+///
+/// Dispatches by `ty` to select the correct ABI register and conversion:
+/// - Scalar types (bool, int, resource, pointer, buffer, packed, callable) use `int_result_reg`
+/// - Float uses `float_result_reg`
+/// - String allocates a null-terminated copy via `__rt_str_to_cstr` before storing the `char*`
+/// - Void, never, iterable, mixed, union, array, assoc_array, and object emit a warning and
+///   perform no store — these types cannot be stored to extern globals without runtime support.
 pub(super) fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &PhpType) {
     emitter.comment(&format!("store to extern global ${}", name));
     let sym = emitter.target.extern_symbol(name);
@@ -48,6 +56,15 @@ pub(super) fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &P
     }
 }
 
+/// Emits a load from an external global symbol for the given PHP variable.
+///
+/// Dispatches by `ty` to select the correct ABI register and conversion:
+/// - Scalar types (bool, int, resource, pointer, buffer, packed, callable) load into `int_result_reg`
+/// - Float loads into `float_result_reg`
+/// - String loads the `char*` first, then calls `__rt_cstr_to_str` to convert it to the PHP string
+///   result convention (borrowed C string → owned PhpString)
+/// - Void, never, iterable, mixed, union, array, assoc_array, and object emit a warning and
+///   perform no load — these types cannot be loaded from extern globals without runtime support.
 pub(super) fn emit_extern_global_load(emitter: &mut Emitter, name: &str, ty: &PhpType) {
     emitter.comment(&format!("load from extern global ${}", name));
     let sym = emitter.target.extern_symbol(name);

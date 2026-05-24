@@ -28,6 +28,18 @@ use super::driver_support::{
 };
 use super::program_usage::program_uses_variable;
 
+/// Orchestrates the full main-body emission pipeline:
+/// - Builds the main `Context` with all program metadata (functions, classes, enums, etc.).
+/// - Allocates main-frame locals and hidden slots (activation record, cleanup, concat offsets).
+/// - Emits the frame prologue (stack alignment, process args, heap-debug flag).
+/// - Zero-initializes refcounted locals to prevent stale-pointer frees.
+/// - Pushes the main activation record and emits enum singleton / static property initializers.
+/// - Lowers top-level statements in source order.
+/// - Emits the epilogue (local cleanup, activation record pop, frame restore, exit).
+/// - Emits deferred closures and the main cleanup callback.
+/// - Finalizes assembly (data section, user runtime data) and returns the complete asm string.
+///
+/// Clones all program metadata into the context; the context is not shared with caller.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_main_and_finalize(
     mut emitter: Emitter,
@@ -120,6 +132,10 @@ pub(super) fn emit_main_and_finalize(
     )
 }
 
+/// Builds the main-function `Context` by cloning all program-level metadata tables
+/// (functions, classes, enums, traits, interfaces, extern signatures, globals, constants).
+/// Marks `ctx.in_main = true` and sets `ctx.return_type = PhpType::Void`.
+/// No emission occurs here — only context population.
 #[allow(clippy::too_many_arguments)]
 fn build_main_context(
     functions: &HashMap<String, FunctionSig>,
@@ -157,6 +173,11 @@ fn build_main_context(
     ctx
 }
 
+/// Allocates main-function local variables into `ctx`.
+/// If `$argc` / `$argv` are used in the program but not already in `global_env`,
+/// adds them as `PhpType::Int` / `PhpType::Array(Str)` locals.
+/// Then iterates `global_env` and allocates every global variable with its
+/// codegen representation and full type preserved.
 fn allocate_main_variables(
     global_env: &TypeEnv,
     ctx: &mut Context,
@@ -174,6 +195,16 @@ fn allocate_main_variables(
     }
 }
 
+/// Allocates main-function hidden slots into `ctx`:
+/// - `activation_frame_base_offset` — base for the main activation record (8 bytes)
+/// - `activation_cleanup_offset` — cleanup handler address (8 bytes)
+/// - `activation_prev_offset` — previous frame link (8 bytes)
+/// - `pending_action_offset` — generic pending-action pointer (8 bytes)
+/// - `pending_target_offset` — generic pending-target pointer (8 bytes)
+/// - `nested_concat_offset_offset` — concat state offset (8 bytes)
+/// - `pending_return_value_offset` — return value slot (16 bytes, naturally aligned)
+///
+/// Returns the generated `main_cleanup_frame` label name for use in epilogue emits.
 fn allocate_main_hidden_slots(ctx: &mut Context) -> String {
     let main_cleanup_label = ctx.next_label("main_cleanup_frame");
     ctx.activation_frame_base_offset = Some(ctx.alloc_hidden_slot(8));
@@ -186,6 +217,18 @@ fn allocate_main_hidden_slots(ctx: &mut Context) -> String {
     main_cleanup_label
 }
 
+/// Emits the main entry-point prologue:
+/// - Aligns to 4 bytes, emits the entry label.
+/// - Emits the stack frame (size rounded to 16-byte alignment via `align16`).
+/// - Stores OS argc/argv into global slots via `abi::emit_store_process_args_to_globals`.
+/// - Optionally enables the heap-debug flag.
+/// - If `uses_argc`: copies OS `argc` into the `$argc` local slot via `abi::store_at_offset`.
+/// - If `uses_argv`: calls `__rt_build_argv` to construct the `$argv` array from OS argv,
+///   stores the result pointer through the ABI result-register helper, and marks the
+///   `$argv` variable `Borrowed` with `epilogue_cleanup_safe = false` (runtime owns the array).
+///
+/// The heap-debug flag and argc/argv globals are independent concerns; the function
+/// branches on each independently rather than pre-computing a combined condition.
 fn emit_main_prologue(
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -237,6 +280,10 @@ fn emit_main_prologue(
     }
 }
 
+/// Zero-initializes main-function local variables that are refcounted (string, array, object).
+/// Skips `$argc` and `$argv` since those are populated from OS arguments in the prologue.
+/// Uses `abi::emit_store_zero_to_local_slot` for each refcounted local to ensure
+/// no stale pointer is freed at function exit (prevents use-after-free on uninitialized slot).
 fn zero_initialize_main_locals(
     emitter: &mut Emitter,
     ctx: &Context,
@@ -260,6 +307,11 @@ fn zero_initialize_main_locals(
     }
 }
 
+/// Emits all top-level executable statements from `program` in source order.
+/// Skips `FunctionDecl`, `FunctionVariantGroup`, `ClassDecl`, `InterfaceDecl`, and `TraitDecl`
+/// statements — these are declaration-only and handled by the resolver/ name-resolver phases
+/// prior to codegen. Every other statement (expression statements, control flow, include/require,
+/// echo, return, etc.) is passed to `stmt::emit_stmt` with the current `emitter`, `ctx`, and `data`.
 fn emit_top_level_statements(
     program: &Program,
     emitter: &mut Emitter,
@@ -281,6 +333,15 @@ fn emit_top_level_statements(
     }
 }
 
+/// Emits the main entry-point epilogue:
+/// - Emits owned-local cleanup via `functions::emit_owned_local_epilogue_cleanup` (frees refcounted locals).
+/// - Pops the main activation record.
+/// - Restores the previous frame pointer and stack pointer via `abi::emit_frame_restore`.
+/// - Optionally emits GC allocation/free statistics to stderr (via `emit_gc_stats`).
+/// - Optionally emits the heap-debug summary and leak report via `__rt_heap_debug_report`.
+/// - Finally calls `abi::emit_exit(0)` to terminate the process cleanly.
+///
+/// `gc_stats` and `heap_debug` are independent flags; both branches may fire in the same build.
 fn emit_main_epilogue(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -304,6 +365,12 @@ fn emit_main_epilogue(
     abi::emit_exit(emitter, 0);
 }
 
+/// Emits GC allocation statistics to stderr:
+/// Writes the literal string "GC: allocs=" via `emit_write_literal_stderr`,
+/// then loads `_gc_allocs` symbol, converts it to a decimal string via `__rt_itoa`,
+/// writes that to stderr, repeats for `_gc_frees`, and finally writes a newline.
+/// The active target's integer-result register holds the numeric value during conversion;
+/// the string-result registers (`x1`, `x2` on ARM64) receive the formatted output.
 fn emit_gc_stats(emitter: &mut Emitter, data: &mut DataSection) {
     emitter.comment("gc-stats: print allocation statistics to stderr");
     let (lbl_a, len_a) = data.add_string(b"GC: allocs=");
@@ -321,6 +388,14 @@ fn emit_gc_stats(emitter: &mut Emitter, data: &mut DataSection) {
     emit_write_literal_stderr(emitter, &lbl_nl, 1);
 }
 
+/// Finalizes the assembly output:
+/// - Emits the data section via `data.emit()` and appends it to the emitter output.
+/// - Calls `runtime::emit_runtime_data_user` with all global metadata (vars, statics, functions,
+///   variant groups, interfaces, classes, enums, emitted class names) to produce user-facing
+///   runtime data (singleton tables, function metadata, class descriptors, etc.).
+/// - Concatenates everything into one complete asm string and returns it.
+///
+/// The function does not invoke `as`/`ld`; assembly is returned as a string for caller to link.
 #[allow(clippy::too_many_arguments)]
 fn finish_user_asm(
     emitter: Emitter,

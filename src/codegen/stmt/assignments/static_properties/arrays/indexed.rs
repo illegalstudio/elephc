@@ -20,6 +20,8 @@ use crate::names::static_property_symbol;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Lowers indexed array assignment to a static property: `$prop[$index] = value`.
+/// Handles array growth, slot layout normalization, and dispatches to late-bound storage when `class_id_saved` is true.
 pub(super) fn emit_static_indexed_array_assign(
     property: &str,
     declaring_class: &str,
@@ -120,6 +122,9 @@ pub(super) fn emit_static_indexed_array_assign(
     }
 }
 
+/// Publishes the static array pointer to the appropriate storage after a mutation.
+/// When `class_id_saved`, reloads the class ID from the stack offset and dispatches via late-bound store;
+/// otherwise stores directly to the static property symbol.
 fn publish_static_array_pointer(
     property: &str,
     declaring_class: &str,
@@ -158,6 +163,8 @@ fn publish_static_array_pointer(
     }
 }
 
+/// Holds the value type and store representation for a static indexed array assignment.
+/// `effective_store_ty` determines slot width and handling; `stores_refcounted_pointer` indicates heap-allocated values.
 struct StaticIndexedAssignState {
     val_ty: PhpType,
     effective_store_ty: PhpType,
@@ -165,6 +172,12 @@ struct StaticIndexedAssignState {
 }
 
 impl StaticIndexedAssignState {
+    /// Constructs state for a static indexed array assignment.
+    /// `elem_ty` is the declared element type of the static property array;
+    /// `val_ty` is the resolved type of the assigned value expression.
+    /// Derives `effective_store_ty` from the relationship between `elem_ty` and `val_ty`
+    /// (using `val_ty` when types differ, otherwise `elem_ty`; `Mixed` is preserved).
+    /// `stores_refcounted_pointer` is true when the effective store type requires a heap pointer.
     fn new(elem_ty: &PhpType, val_ty: &PhpType) -> Self {
         let effective_store_ty = if matches!(elem_ty, PhpType::Mixed) {
             PhpType::Mixed
@@ -185,6 +198,8 @@ impl StaticIndexedAssignState {
     }
 }
 
+/// Prepares the assigned value: emits the expression, coerces to `elem_ty` if needed, boxes iterables for Mixed containers,
+/// and pushes the value onto the stack in ABI-appropriate form (register pair for strings, single register otherwise).
 fn prepare_static_array_assign_value(
     value: &Expr,
     emitter: &mut Emitter,
@@ -230,6 +245,8 @@ fn prepare_static_array_assign_value(
     val_ty
 }
 
+/// Restores the assigned value from the stack into ABI result registers after index evaluation on ARM64.
+/// Strings use a register pair (x1, x2), floats use d0, and other types use x0.
 fn restore_static_array_assign_value_aarch64(emitter: &mut Emitter, val_ty: &PhpType) {
     match val_ty {
         PhpType::Str => abi::emit_pop_reg_pair(emitter, "x1", "x2"),
@@ -238,6 +255,8 @@ fn restore_static_array_assign_value_aarch64(emitter: &mut Emitter, val_ty: &Php
     }
 }
 
+/// Restores the assigned value from the stack into ABI result registers after index evaluation on x86_64.
+/// Strings use a register pair (rax, rdx), floats use xmm0, and other types use rax.
 fn restore_static_array_assign_value_x86_64(emitter: &mut Emitter, val_ty: &PhpType) {
     match val_ty {
         PhpType::Str => abi::emit_pop_reg_pair(emitter, "rax", "rdx"),
@@ -246,6 +265,8 @@ fn restore_static_array_assign_value_x86_64(emitter: &mut Emitter, val_ty: &PhpT
     }
 }
 
+/// Grows the static array until the target index is within capacity on ARM64.
+/// Loads capacity, loops with `__rt_array_grow` as needed, and restores the target index after reallocation.
 fn grow_static_indexed_array_until_ready_aarch64(emitter: &mut Emitter, ctx: &mut Context) {
     emitter.instruction("ldr x12, [x10, #8]");                                  // load the current static array capacity before growth checks
     let grow_check = ctx.next_label("static_array_assign_grow_check");
@@ -263,6 +284,8 @@ fn grow_static_indexed_array_until_ready_aarch64(emitter: &mut Emitter, ctx: &mu
     emitter.label(&grow_ready);
 }
 
+/// Grows the static array until the target index is within capacity on x86_64.
+/// Loads capacity, loops with `__rt_array_grow` as needed, and restores the target index after reallocation.
 fn grow_static_indexed_array_until_ready_x86_64(emitter: &mut Emitter, ctx: &mut Context) {
     let grow_check = ctx.next_label("static_array_assign_grow_check");
     let grow_ready = ctx.next_label("static_array_assign_grow_ready");
@@ -279,6 +302,8 @@ fn grow_static_indexed_array_until_ready_x86_64(emitter: &mut Emitter, ctx: &mut
     emitter.label(&grow_ready);
 }
 
+/// Normalizes the static array slot width on first write for ARM64.
+/// String elements use 16-byte slots; scalar and pointer types use 8-byte slots. Skipped when the array already has elements.
 fn normalize_static_indexed_array_layout_aarch64(
     state: &StaticIndexedAssignState,
     emitter: &mut Emitter,
@@ -300,6 +325,8 @@ fn normalize_static_indexed_array_layout_aarch64(
     emitter.label(&skip_normalize);
 }
 
+/// Normalizes the static array slot width on first write for x86_64.
+/// String elements use 16-byte slots; scalar and pointer types use 8-byte slots. Skipped when the array already has elements.
 fn normalize_static_indexed_array_layout_x86_64(
     state: &StaticIndexedAssignState,
     emitter: &mut Emitter,
@@ -321,6 +348,8 @@ fn normalize_static_indexed_array_layout_x86_64(
     emitter.label(&skip_normalize);
 }
 
+/// Stores the assigned value into the static array slot at the target index on ARM64.
+/// For refcounted types, stamps the value type and stores the pointer; for strings, stores pointer and length separately.
 fn store_static_indexed_array_value_aarch64(
     state: &StaticIndexedAssignState,
     emitter: &mut Emitter,
@@ -354,6 +383,8 @@ fn store_static_indexed_array_value_aarch64(
     }
 }
 
+/// Stores the assigned value into the static array slot at the target index on x86_64.
+/// For refcounted types, stamps the value type and stores the pointer; for strings, stores pointer and length separately.
 fn store_static_indexed_array_value_x86_64(
     state: &StaticIndexedAssignState,
     emitter: &mut Emitter,
@@ -388,6 +419,8 @@ fn store_static_indexed_array_value_x86_64(
     }
 }
 
+/// Extends the static array logical length if the target index is at or beyond the current length on ARM64.
+/// Skipped for overwrites inside the existing array bounds.
 fn extend_static_indexed_array_if_needed_aarch64(
     _state: &StaticIndexedAssignState,
     emitter: &mut Emitter,
@@ -402,6 +435,8 @@ fn extend_static_indexed_array_if_needed_aarch64(
     emitter.label(&skip_extend);
 }
 
+/// Extends the static array logical length if the target index is at or beyond the current length on x86_64.
+/// Skipped for overwrites inside the existing array bounds.
 fn extend_static_indexed_array_if_needed_x86_64(
     _state: &StaticIndexedAssignState,
     emitter: &mut Emitter,

@@ -19,6 +19,22 @@ use super::super::super::{
     save_concat_offset_before_nested_call,
 };
 
+/// Emits interface method dispatch by scanning the receiver's implemented-interfaces
+/// metadata for a matching interface ID, then branching to the resolved method slot.
+///
+/// Shares receiver preparation and ABI call conventions with the object call dispatcher.
+/// Uses the `_class_interface_ptrs` global symbol; vtable slot layout must match class
+/// metadata emission in the runtime data segment.
+///
+/// # Arguments
+/// * `interface_name` - The target interface name for dispatch
+/// * `method` - The method name to invoke on the interface
+/// * `emitter` - Assembly emitter (consumed/reused for all emitted instructions)
+/// * `ctx` - Codegen context providing interface metadata, labels, and platform info
+///
+/// # Returns
+/// The `PhpType` of the resolved interface method (fallback to `PhpType::Int` if
+/// interface or slot metadata is absent; valid programs never trigger this fallback).
 pub(crate) fn emit_dispatch_interface_method(
     interface_name: &str,
     method: &str,
@@ -133,6 +149,21 @@ pub(crate) fn emit_dispatch_interface_method(
     ret_ty
 }
 
+/// Emits a fast path for `Iterator` methods when the receiver is the built-in `Generator` class,
+/// bypassing the generic interface-vtable scan.
+///
+/// Checks the receiver's class ID against `_generator_class_id` and, on match, calls the
+/// appropriate runtime helper directly before jumping to `done`. Non-Generator receivers fall
+/// through to the `not_generator` label to continue with normal interface dispatch.
+///
+/// # Arguments
+/// * `rt_label` - Runtime helper label to call when the receiver is a Generator
+/// * `done` - Label to jump to after the fast path completes, skipping the generic dispatch path
+/// * `emitter` - Assembly emitter
+/// * `ctx` - Codegen context providing labels and platform info
+///
+/// # Notes
+/// This fast path is only valid for the `Iterator` interface, which `Generator` implements natively.
 fn emit_generator_interface_fast_path(
     rt_label: &str,
     done: &str,

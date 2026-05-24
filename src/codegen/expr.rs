@@ -12,11 +12,13 @@ pub(crate) mod arrays;
 mod assignment;
 mod binops;
 mod chains;
+/// calls
 pub(crate) mod calls;
 mod coerce;
 mod compare;
 mod diagnostics;
 mod helpers;
+/// objects
 pub(crate) mod objects;
 mod ownership;
 mod scalars;
@@ -39,10 +41,16 @@ pub(crate) use ownership::{
 pub use coerce::{coerce_null_to_zero, coerce_to_string, coerce_to_truthiness};
 use helpers::{retain_borrowed_heap_arg, widen_codegen_type};
 
-/// Emits code to evaluate an expression.
-/// Returns the type of the result.
-/// - Strings: x1 = pointer, x2 = length
-/// - Integers: x0 = value
+/// Dispatches an expression AST node to the appropriate lowering module.
+ ///
+ /// Returns the resulting `PhpType` after code generation. Result values follow
+ /// target ABI conventions: integers in `x0`, floats in `d0`, strings in `x1` (ptr)
+ /// and `x2` (len). For expressions that emit no value (e.g., `Throw`), returns the
+ /// bottom type for the context.
+ ///
+ /// Handles nullsafe chains first via `chains::emit_nullsafe_postfix_chain` before
+ /// falling through to the standard dispatch table. All other `ExprKind` variants
+ /// are delegated to their respective submodules.
 pub fn emit_expr(
     expr: &Expr,
     emitter: &mut Emitter,
@@ -273,6 +281,10 @@ pub fn emit_expr(
     }
 }
 
+/// Emits a PHP `print` expression: writes `inner` to stdout and returns integer `1`.
+ ///
+ /// PHP print always succeeds and evaluates to `1`. The result is placed in
+ /// `int_result_reg` per ABI convention.
 fn emit_print_expr(
     inner: &Expr,
     emitter: &mut Emitter,
@@ -285,7 +297,10 @@ fn emit_print_expr(
     PhpType::Int
 }
 
-/// Coerce any type to integer in x0 for loose comparison (==, !=).
+/// Delegates binary operation code generation to `binops::emit_binop`.
+ ///
+ /// Returns the `PhpType` produced by the operation, which depends on the operand types
+ /// and the operator (e.g., int+int → int, int+str → str, etc.).
 fn emit_binop(
     left: &Expr,
     op: &BinOp,
@@ -297,6 +312,9 @@ fn emit_binop(
     binops::emit_binop(left, op, right, emitter, ctx, data)
 }
 
+/// Saves the current concat offset before a nested function call.
+/// On ARM64 this pushes the offset onto a temporary stack; on x86_64 it spills
+/// the offset into a dedicated frame slot when one is allocated.
 pub(crate) fn save_concat_offset_before_nested_call(emitter: &mut Emitter, ctx: &Context) {
     let scratch = abi::temp_int_reg(emitter.target);
     abi::emit_load_symbol_to_reg(emitter, scratch, "_concat_off", 0);
@@ -314,6 +332,8 @@ pub(crate) fn save_concat_offset_before_nested_call(emitter: &mut Emitter, ctx: 
     }
 }
 
+/// Restores the concat offset after a nested function call returns.
+/// If the return type is `Str`, persists the returned string before restoring the offset.
 pub(crate) fn restore_concat_offset_after_nested_call(
     emitter: &mut Emitter,
     ctx: &Context,
@@ -322,6 +342,8 @@ pub(crate) fn restore_concat_offset_after_nested_call(
     restore_concat_offset_after_nested_call_impl(emitter, ctx, *return_ty == PhpType::Str);
 }
 
+/// Restores the concat offset after a call that returns an owned string.
+/// Does not persist the string (caller already handles ownership).
 pub(crate) fn restore_concat_offset_after_owned_string_call(
     emitter: &mut Emitter,
     ctx: &Context,
@@ -329,6 +351,8 @@ pub(crate) fn restore_concat_offset_after_owned_string_call(
     restore_concat_offset_after_nested_call_impl(emitter, ctx, false);
 }
 
+/// Internal implementation for restoring concat offset after a nested call.
+/// Optionally persists the returned string before restoring the offset.
 fn restore_concat_offset_after_nested_call_impl(
     emitter: &mut Emitter,
     ctx: &Context,

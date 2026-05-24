@@ -24,6 +24,7 @@ use super::prep::{compute_register_assignments, eval_and_push_args, pop_args_to_
 use super::super::super::emit_expr;
 use super::vtable::emit_dispatch_instance_method;
 
+/// Lowers a method call where arguments are already pushed to the temporary stack.
 pub(in crate::codegen::expr::objects) fn emit_method_call_with_pushed_args(
     class_name: &str,
     method: &str,
@@ -53,6 +54,7 @@ pub(in crate::codegen::expr::objects) fn emit_method_call_with_pushed_args(
     ret_ty
 }
 
+/// Lowers a method call where the receiver was saved below the pushed argument temporaries.
 pub(in crate::codegen::expr::objects) fn emit_method_call_with_saved_receiver_below_args(
     class_name: &str,
     method: &str,
@@ -80,6 +82,7 @@ pub(in crate::codegen::expr::objects) fn emit_method_call_with_saved_receiver_be
     ret_ty
 }
 
+/// Evaluates and pushes method arguments, returning metadata for subsequent dispatch.
 pub(in crate::codegen::expr::objects) fn emit_pushed_method_args(
     args: &[Expr],
     sig: Option<&crate::types::FunctionSig>,
@@ -90,6 +93,10 @@ pub(in crate::codegen::expr::objects) fn emit_pushed_method_args(
     eval_and_push_args(args, sig, emitter, ctx, data)
 }
 
+/// Computes the total size in bytes occupied by argument temporaries on the temporary stack.
+///
+/// Each argument occupies 16 bytes except `Void`-typed arguments which occupy 0 bytes.
+/// Used to locate the saved receiver slot when preparing late-binding dispatch.
 fn pushed_arg_temp_bytes(arg_types: &[PhpType]) -> usize {
     arg_types
         .iter()
@@ -97,6 +104,12 @@ fn pushed_arg_temp_bytes(arg_types: &[PhpType]) -> usize {
         .sum()
 }
 
+/// Lowers a method call expression with receiver, method name, and arguments.
+///
+/// Handles receiver evaluation order (object before arguments per PHP semantics),
+/// nullable/object-union unboxing with fatal-on-null, `__call` magic fallback,
+/// and `Fiber::start` special-cased signature. Emits receiver below argument
+/// temporaries then delegates to `emit_method_call_with_saved_receiver_below_args`.
 pub(in crate::codegen::expr::objects) fn emit_method_call(
     object: &Expr,
     method: &str,
@@ -183,6 +196,12 @@ pub(in crate::codegen::expr::objects) fn emit_method_call(
     )
 }
 
+/// Constructs a synthetic `FunctionSig` for `Fiber::start` calls where argument
+/// count is determined at runtime.
+///
+/// The PHP `Fiber::start` method accepts an arbitrary number of `Mixed`-typed
+/// arguments and returns `Mixed`. This is distinct from the type-checked catalog
+/// signature because the compiler emits call sites with runtime-discovered arity.
 fn fiber_start_call_sig(arg_count: usize) -> FunctionSig {
     FunctionSig {
         params: (0..arg_count)

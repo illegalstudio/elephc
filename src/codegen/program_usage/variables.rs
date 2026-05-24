@@ -10,10 +10,15 @@
 
 use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Program, Stmt, StmtKind};
 
+/// Returns true if any statement in the program references the named variable.
 pub(in crate::codegen) fn program_uses_variable(program: &Program, needle: &str) -> bool {
     program.iter().any(|stmt| stmt_uses_variable(stmt, needle))
 }
 
+/// Recursively walks a statement to detect any reference to `needle` (a named variable).
+///
+/// Checks the statement itself and all nested expressions, conditions, bodies, and
+/// clauses. Returns `true` on the first match.
 fn stmt_uses_variable(stmt: &Stmt, needle: &str) -> bool {
     match &stmt.kind {
         StmtKind::Synthetic(stmts) => stmts.iter().any(|stmt| stmt_uses_variable(stmt, needle)),
@@ -173,6 +178,9 @@ fn stmt_uses_variable(stmt: &Stmt, needle: &str) -> bool {
     }
 }
 
+/// Recursively walks an expression to detect any reference to `needle` (a named variable).
+///
+/// Checks the expression and all sub-expressions. Returns `true` on the first match.
 fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
     match &expr.kind {
         ExprKind::Variable(name) => name == needle,
@@ -307,6 +315,7 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
     }
 }
 
+/// Checks whether an `instanceof` target contains a reference to `needle`.
 fn instanceof_target_uses_variable(target: &InstanceOfTarget, needle: &str) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,

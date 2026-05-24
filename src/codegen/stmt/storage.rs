@@ -15,6 +15,8 @@ use super::super::context::Context;
 use super::super::emit::Emitter;
 use super::PhpType;
 
+/// Emits the store for a static variable into its data-section symbol.
+/// The variable is identified by `name` and laid out according to `ty`.
 pub(super) fn emit_static_store(
     emitter: &mut Emitter,
     ctx: &Context,
@@ -24,6 +26,8 @@ pub(super) fn emit_static_store(
     locals::emit_static_store(emitter, ctx, name, ty)
 }
 
+/// Emits the store for a global variable into its data-section symbol.
+/// The variable is identified by `name` and laid out according to `ty`.
 pub(super) fn emit_global_store(
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -33,6 +37,7 @@ pub(super) fn emit_global_store(
     locals::emit_global_store(emitter, ctx, name, ty)
 }
 
+/// Emits the load for a global variable from its data-section symbol.
 pub(super) fn emit_global_load(
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -46,6 +51,7 @@ pub(super) fn emit_global_load(
     locals::emit_global_load(emitter, name, ty)
 }
 
+/// Emits the store for an extern (FFI) global variable.
 pub(super) fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &PhpType) {
     extern_globals::emit_extern_global_store(emitter, name, ty)
 }

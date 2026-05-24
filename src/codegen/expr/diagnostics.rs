@@ -16,6 +16,11 @@ use super::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `@` error-control operator around an expression.
+///
+/// Pushes a suppression scope, evaluates the inner expression while preserving its
+/// result across the pop call, then restores the result after leaving the scope.
+/// Returns the type of the inner expression.
 pub(super) fn emit_error_suppress(
     inner: &Expr,
     emitter: &mut Emitter,
@@ -31,6 +36,7 @@ pub(super) fn emit_error_suppress(
     ty
 }
 
+/// Pushes the current expression result onto the stack to preserve it across a call.
 fn preserve_result(emitter: &mut Emitter, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Float => {
@@ -46,6 +52,7 @@ fn preserve_result(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
+/// Pops the preserved expression result from the stack back into the appropriate result register.
 fn restore_result(emitter: &mut Emitter, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Float => {

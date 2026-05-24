@@ -20,6 +20,17 @@ use crate::parser::ast::Expr;
 
 use super::ArrayAssignTarget;
 
+/// Orchestrates the four-phase indexed array assignment pipeline: prepare, normalize,
+/// store, and extend. Dispatches to target-specific helpers and preserves register state
+/// across phases using the prepared `IndexedAssignState`.
+///
+/// # Arguments
+/// * `target` - the array being assigned into
+/// * `index` - the integer index expression
+/// * `value` - the value expression to assign
+/// * `emitter` - target-specific instruction emitter
+/// * `ctx` - codegen context (labels, locals, types)
+/// * `data` - data section for literals and runtime metadata
 pub(super) fn emit_indexed_array_assign(
     target: &ArrayAssignTarget<'_>,
     index: &Expr,

@@ -20,6 +20,10 @@ use crate::types::PhpType;
 use super::super::emit_expr;
 use super::dispatch;
 
+/// Lowers `value instanceof Target` for named, dynamic, and late-static targets.
+///
+/// Dispatches to `emit_named_instanceof` for `InstanceOfTarget::Name` and
+/// `emit_dynamic_instanceof` for `InstanceOfTarget::Expr`. Returns `PhpType::Bool`.
 pub(super) fn emit_instanceof(
     value: &Expr,
     target: &InstanceOfTarget,
@@ -33,6 +37,11 @@ pub(super) fn emit_instanceof(
     }
 }
 
+/// Emits instanceof against a resolved named target (class, interface, or late-static).
+///
+/// Class targets emit `class_id` with `target_kind_id = 0`. Interface targets emit
+/// `interface_id` with `target_kind_id = 1`. Late-static uses `dispatch::emit_forwarded_called_class_id`
+/// to resolve at runtime. Returns `PhpType::Bool`.
 fn emit_named_instanceof(
     value: &Expr,
     target: &Name,
@@ -93,6 +102,10 @@ fn emit_named_instanceof(
     PhpType::Bool
 }
 
+/// Emits instanceof where the target is a dynamic expression.
+///
+/// Validates the target at runtime (string class-name, object, or boxed Mixed),
+/// then calls `__rt_exception_matches`. Returns `PhpType::Bool`.
 fn emit_dynamic_instanceof(
     value: &Expr,
     target: &Expr,
@@ -122,12 +135,17 @@ fn emit_dynamic_instanceof(
     PhpType::Bool
 }
 
+/// Named target resolved during codegen before runtime dispatch.
 enum ResolvedInstanceOfTarget {
     Class(u64),
     Interface(u64),
     LateStaticClass,
 }
 
+/// Classifies a named target into `Class`, `Interface`, or `LateStaticClass`.
+///
+/// Handles `self`, `parent`, `static`, and fully-qualified names using `ctx.classes`
+/// and `ctx.interfaces`. Returns `None` for unresolved names (caller emits false).
 fn classify_named_target(target: &Name, ctx: &Context) -> Option<ResolvedInstanceOfTarget> {
     let target_name = match target.as_str() {
         "self" => ctx.current_class.as_deref()?,
@@ -148,6 +166,12 @@ fn classify_named_target(target: &Name, ctx: &Context) -> Option<ResolvedInstanc
     }
 }
 
+/// Normalizes a value into an object pointer for dynamic instanceof.
+///
+/// For `PhpType::Object`, the pointer is already in the result register.
+/// For `PhpType::Mixed` and `PhpType::Union`, calls `__rt_mixed_unbox` and promotes
+/// the object pointer from `x1`/`rdi` if the runtime tag is 6 (object). Non-object
+/// payloads are zeroed so the matcher returns false. Other types emit null.
 fn emit_normalized_object_value(value_repr: &PhpType, emitter: &mut Emitter, ctx: &mut Context) {
     match value_repr {
         PhpType::Object(_) => {}
@@ -184,6 +208,13 @@ fn emit_normalized_object_value(value_repr: &PhpType, emitter: &mut Emitter, ctx
     }
 }
 
+/// Emits target resolution for a dynamic (expression-based) instanceof operand.
+///
+/// Emits the target expression, then dispatches based on its type:
+/// - `Str`: calls `__rt_instanceof_lookup` for class-string resolution
+/// - `Object`: loads class id from target object header
+/// - `Mixed`/`Union`: unboxes and routes to string or object path
+/// - Other: calls `__rt_instanceof_invalid_target` (fatal)
 fn emit_dynamic_target(
     target: &Expr,
     false_label: &str,
@@ -200,6 +231,11 @@ fn emit_dynamic_target(
     }
 }
 
+/// Emits class-string lookup for a string-typed dynamic target.
+///
+/// Calls `__rt_instanceof_lookup` and checks the returned pointer.
+/// On AArch64: zero means unresolved (jumps to `false_label`), non-zero puts
+/// the resolved target id in `x0` and target kind in `x1`.
 fn emit_lookup_string_target(false_label: &str, emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_instanceof_lookup");                    // resolve a dynamic class-string target to matcher metadata
     match emitter.target.arch {
@@ -217,6 +253,11 @@ fn emit_lookup_string_target(false_label: &str, emitter: &mut Emitter) {
     }
 }
 
+/// Emits metadata extraction for an object-typed dynamic target.
+///
+/// Checks the object pointer is non-null, then loads the class id from the object header.
+/// Emits `target_kind = 0` (class) into the kind register. Fatal if null.
+/// On AArch64: class id lands in `x0`, kind in `x1`. On x86_64: class id in `rax`, kind in `rdx`.
 fn emit_object_target_metadata(emitter: &mut Emitter, ctx: &mut Context) {
     let ok_label = ctx.next_label("instanceof_target_object_ok");
     match emitter.target.arch {
@@ -238,6 +279,12 @@ fn emit_object_target_metadata(emitter: &mut Emitter, ctx: &mut Context) {
     }
 }
 
+/// Emits metadata extraction for a Mixed/Union dynamic target.
+///
+/// Unboxes the Mixed value and routes to the appropriate handler:
+/// - Tag 1 (string): calls `emit_lookup_string_target`
+/// - Tag 6 (object): promotes the object pointer and calls `emit_object_target_metadata`
+/// - Other: calls `__rt_instanceof_invalid_target` (fatal)
 fn emit_mixed_target_metadata(false_label: &str, emitter: &mut Emitter, ctx: &mut Context) {
     let string_label = ctx.next_label("instanceof_target_string");
     let object_label = ctx.next_label("instanceof_target_object");
@@ -280,6 +327,11 @@ fn emit_mixed_target_metadata(false_label: &str, emitter: &mut Emitter, ctx: &mu
     emitter.label(&done);
 }
 
+/// Emits the call to `__rt_exception_matches` for dynamic instanceof.
+///
+/// Pushes the resolved target id and kind, then pops them into argument registers
+/// (object pointer arg0, class/interface id arg1, target kind arg2) before the call.
+/// The target kind distinguishes class (0) from interface (1) targets.
 fn emit_dynamic_match_call(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -297,10 +349,18 @@ fn emit_dynamic_match_call(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_exception_matches");                    // run the object/class/interface matcher for the dynamic target
 }
 
+/// Emits a fatal trap when a dynamic target is neither string nor object.
+///
+/// Called when the target expression type is invalid for instanceof (e.g., int, bool).
+/// Emits a call to `__rt_instanceof_invalid_target` which aborts at runtime.
 fn emit_invalid_target_fatal(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_instanceof_invalid_target");            // abort when a dynamic target is neither string nor object
 }
 
+/// Returns true if `ty` can hold an object or boxed (Mixed/Union) value at runtime.
+///
+/// Used to short-circuit instanceof to false when the value type cannot possibly
+/// be an object (e.g., int, float, bool, null, array, resource, callable).
 fn can_hold_object_or_boxed_value(ty: &PhpType) -> bool {
     match ty {
         PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_) => true,
@@ -308,6 +368,10 @@ fn can_hold_object_or_boxed_value(ty: &PhpType) -> bool {
     }
 }
 
+/// Emits a false boolean result for instanceof.
+///
+/// Loads `0` into the integer result register. Used when the value type cannot
+/// hold an object or when the named target cannot be resolved.
 fn emit_false(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
 }

@@ -12,6 +12,15 @@ use crate::codegen::context::{Context, HeapOwnership};
 use crate::parser::ast::{BinOp, CastType, Expr, ExprKind};
 use crate::types::PhpType;
 
+/// Classifies what kind of heap ownership an expression result carries.
+///
+/// Returns `Owned` for heap-allocated values that the callee owns (strings, arrays,
+/// objects, call results). Returns `Borrowed` for variables and property accesses
+/// that alias existing storage. Returns `Persistent` for values that outlive the
+/// current scope. Returns `NonHeap` for scalars that need no cleanup.
+///
+/// This is used to decide whether to emit `retain` or `release` around expression
+/// results in codegen cleanup paths.
 pub(crate) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {
     match &expr.kind {
         ExprKind::Variable(_)
@@ -69,6 +78,12 @@ pub(crate) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {
     }
 }
 
+/// Returns `true` if the expression produces a string result that uses a transient
+/// concatenation buffer (stack-allocated, not leak-safe across yields or exceptions).
+///
+/// This applies to binary concat operations and to casts/spreads/error-suppress
+/// wrappers around such concat chains. Codegen uses this to decide whether to copy
+/// the result before a potential yield or control-flow merge.
 pub(crate) fn string_result_uses_transient_concat_buffer(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::BinaryOp {
@@ -85,6 +100,12 @@ pub(crate) fn string_result_uses_transient_concat_buffer(expr: &Expr) -> bool {
     }
 }
 
+/// Returns `true` if a call expression produces an owned string temporary that
+/// requires release when the call's result is not consumed.
+///
+/// This is true for user-defined function calls that return strings (non-extern,
+/// non-builtin), method calls, closure calls, and expressions that involve types
+/// with `__toString`. Builtin functions that return owned strings are also included.
 pub(crate) fn string_result_is_owned_call_temp(value: &Expr, ctx: &Context) -> bool {
     match &value.kind {
         ExprKind::FunctionCall { name, .. } => {
@@ -118,10 +139,16 @@ pub(crate) fn string_result_is_owned_call_temp(value: &Expr, ctx: &Context) -> b
     }
 }
 
+/// Returns `true` for builtin functions that return an owned heap-allocated string
+/// requiring release.
+///
+/// Currently only `ptr_read_string` returns owned strings among builtins.
 fn builtin_returns_owned_string(name: &str) -> bool {
     matches!(name, "ptr_read_string")
 }
 
+/// Returns `true` if a PHP type has a `__toString` method, making its runtime
+/// representation an owned string when coerced.
 fn type_has_tostring(ty: &PhpType, ctx: &Context) -> bool {
     match ty.codegen_repr() {
         PhpType::Object(class_name) => class_has_tostring(ctx, &class_name),
@@ -129,6 +156,7 @@ fn type_has_tostring(ty: &PhpType, ctx: &Context) -> bool {
     }
 }
 
+/// Returns `true` if a class defines a `__toString` method.
 fn class_has_tostring(ctx: &Context, class_name: &str) -> bool {
     ctx.classes
         .get(class_name)

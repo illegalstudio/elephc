@@ -43,11 +43,16 @@ use spread_checks::{emit_array_length_bounds_check, emit_named_spread_length_abo
 use variadic::{store_current_array_element, variadic_container_elem_ty};
 pub(crate) use variadic::emit_empty_variadic_array_arg;
 
+/// Holds normalized argument expressions paired with their required spread-length validation checks.
+/// Produced by `normalize_named_call_args_with_checks` and `normalize_builtin_call_args_with_checks`.
 pub(crate) struct NormalizedCallArgs {
     pub(crate) args: Vec<Expr>,
     pub(crate) spread_length_checks: Vec<SpreadBoundsCheck>,
 }
 
+/// Holds the decomposed call-argument state for positional (non-named) calls.
+/// Tracks regular arguments, variadic arguments, spread arguments, and metadata needed for ABI materialization.
+/// Produced by `prepare_call_args`.
 pub(crate) struct PreparedCallArgs {
     pub(crate) all_args: Vec<Expr>,
     pub(crate) variadic_args: Vec<Expr>,
@@ -58,6 +63,9 @@ pub(crate) struct PreparedCallArgs {
     pub(crate) spread_into_named: bool,
 }
 
+/// Holds the emitted call-argument state after ABI materialization.
+/// `arg_types` lists the runtime PHP type of each pushed argument in order.
+/// `source_temp_bytes` tracks total stack bytes used for source temporaries (populated by named-arg lowering, zero elsewhere).
 pub(crate) struct EmittedCallArgs {
     pub(crate) arg_types: Vec<PhpType>,
     pub(crate) source_temp_bytes: usize,

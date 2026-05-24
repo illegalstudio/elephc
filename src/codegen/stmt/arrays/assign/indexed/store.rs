@@ -18,6 +18,20 @@ use crate::types::PhpType;
 use super::prepare::IndexedAssignState;
 use super::super::ArrayAssignTarget;
 
+/// Phase 3: emits the element store into the indexed array slot at the computed index.
+/// For refcounted payloads, emits a decref of the previous slot contents before storing.
+/// Uses the array header's slot width and kind word to address data region slots correctly.
+///
+/// # Arguments
+/// * `target` - the array being assigned into; provides base address, slot width, kind word, and element type
+/// * `state` - prepared indexed assignment state from phase 1; must contain computed index in `state.index` and array pointer in `state.data_ptr`
+/// * `emitter` - target-specific instruction emitter
+/// * `ctx` - codegen context (labels, locals, types)
+///
+/// # Notes
+/// - Reads `state.index` and `state.data_ptr` as the slot address and array base.
+/// - For refcounted types, emits `__rt_heap_free_safe` to release the previous slot.
+/// - Preserves registers needed by subsequent phases after `store_indexed_array_value`.
 pub(super) fn store_indexed_array_value(
     target: &ArrayAssignTarget<'_>,
     state: &IndexedAssignState,
@@ -65,6 +79,19 @@ pub(super) fn store_indexed_array_value(
     }
 }
 
+/// Emits the store for a string element value on ARM64. Handles release of the previous
+/// string slot when overwriting an existing element within the original logical length,
+/// then writes the new string pointer (x1) and length (x2) into the 16-byte string slot.
+///
+/// # Arguments
+/// * `emitter` - ARM64 instruction emitter
+/// * `ctx` - codegen context (labels, locals, types)
+/// * `val_ty` - PHP type of the string value being stored; must be `PhpType::String`
+///
+/// # Notes
+/// - Expects the array base pointer in x10 and target index in x9.
+/// - Uses `state.index` (x9) and `state.data_ptr` (x10) from prepared state.
+/// - On macOS: calls `__rt_heap_free_safe` via ABI helper to release previous slot.
 fn store_string_indexed_value(emitter: &mut Emitter, ctx: &mut Context, val_ty: &PhpType) {
     emitter.instruction("cmp x9, x11");                                         // check whether this write overwrites an existing string slot
     let skip_release = ctx.next_label("array_assign_skip_release");
@@ -87,6 +114,14 @@ fn store_string_indexed_value(emitter: &mut Emitter, ctx: &mut Context, val_ty: 
     emitter.instruction("str x2, [x12, #8]");                                   // store string length at slot+8
 }
 
+/// x86_64/Linux-specific value storage: emits equivalent store logic using System V ABI
+/// register conventions and Intel syntax.
+///
+/// # Arguments
+/// * `target` - the array being assigned into; provides slot width, kind word, and element type
+/// * `state` - prepared indexed assignment state; must contain computed index in r9 and array base in r10
+/// * `emitter` - x86_64 instruction emitter
+/// * `ctx` - codegen context (labels, locals, types)
 fn store_indexed_array_value_linux_x86_64(
     target: &ArrayAssignTarget<'_>,
     state: &IndexedAssignState,
@@ -129,6 +164,14 @@ fn store_indexed_array_value_linux_x86_64(
     }
 }
 
+/// Returns the PHP type of the slot being overwritten. When the array has been converted
+/// to mixed, all previous slots are typed as `Mixed`; otherwise uses `target.elem_ty`.
+///
+/// # Arguments
+/// * `target` - the array being assigned into
+///
+/// # Returns
+/// `PhpType::Mixed` if the array has been converted to mixed layout; otherwise `target.elem_ty`.
 fn previous_indexed_slot_type(
     target: &ArrayAssignTarget<'_>,
     state: &IndexedAssignState,
@@ -140,6 +183,19 @@ fn previous_indexed_slot_type(
     }
 }
 
+/// x86_64/Linux-specific string store: emits equivalent logic using System V ABI register
+/// conventions and Intel syntax.
+///
+/// # Arguments
+/// * `emitter` - x86_64 instruction emitter
+/// * `ctx` - codegen context (labels, locals, types)
+/// * `val_ty` - PHP type of the string value being stored; must be `PhpType::String`
+///
+/// # Notes
+/// - Expects the array base pointer in r10 and target index in r9.
+/// - Uses `state.index` (r9) and `state.data_ptr` (r10) from prepared state.
+/// - Checks r9 against r11 (logical length) to decide whether to release previous slot.
+/// - Uses System V ABI: string pointer in rax, string length in rdx.
 fn store_string_indexed_value_linux_x86_64(
     emitter: &mut Emitter,
     ctx: &mut Context,

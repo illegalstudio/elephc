@@ -21,6 +21,10 @@ use crate::codegen::{abi, emit_box_current_expr_value_as_mixed_for_container};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
+/// Emits `$array[index] = value` for a named array variable.
+/// Handles null-coalesce assignment (`??=`), `ArrayAccess` objects, `Mixed` types,
+/// buffers, associative arrays, and indexed arrays. Preserves COW semantics and
+/// evaluates the index and value expressions exactly once.
 pub(super) fn emit_array_assign_stmt(
     array: &str,
     index: &Expr,
@@ -106,6 +110,9 @@ pub(super) fn emit_array_assign_stmt(
     }
 }
 
+/// Emits a nested array-element assignment where the target is an `ArrayAccess` expression
+/// (`$array[index][sub_index] = value`). Routes to `ArrayAccess` object setters or `Mixed`
+/// array setters based on the base expression's inferred type.
 pub(super) fn emit_nested_array_assign_stmt(
     target: &Expr,
     value: &Expr,
@@ -136,6 +143,10 @@ pub(super) fn emit_nested_array_assign_stmt(
     }
 }
 
+/// Shared lowering for `Mixed` array element assignment when the base array pointer is
+/// already loaded into the result register. Pushes the base, emits the normalized key,
+/// emits the RHS and boxes it as `Mixed` if needed, then calls `__rt_mixed_array_set`
+/// to mutate the slot in place. Clobbers `x0`/`rax`, `x1`/`rsi`, `x2`/`rdx`, `x3`/`rcx`.
 fn emit_mixed_array_assign_with_loaded_base(
     index: &Expr,
     value: &Expr,
@@ -178,9 +189,18 @@ fn emit_mixed_array_assign_with_loaded_base(
 }
 
 #[derive(Clone)]
+/// Carries the layout and type metadata needed to emit array-element assignment for a
+/// named variable. `offset` is the stack slot; `is_ref` indicates by-reference binding;
+/// `elem_ty` is the PHP element type of the container.
 pub(super) struct ArrayAssignTarget<'a> {
+    /// Name of the PHP array variable being assigned to.
     pub array: &'a str,
+    /// Stack frame offset (in bytes) of the array variable's storage slot.
     pub offset: usize,
+    /// True when the variable is bound by-reference (`&$array`) and holds a pointer to
+    /// the actual array storage rather than the storage directly.
     pub is_ref: bool,
+    /// Inferred PHP element type of the container (e.g., `PhpType::Int` for a vector).
+    /// Used to select the correct storage strategy and runtime helper.
     pub elem_ty: PhpType,
 }

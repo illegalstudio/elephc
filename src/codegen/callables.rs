@@ -16,6 +16,14 @@ use crate::types::FunctionSig;
 
 use super::builtins::callable_lookup::{lookup_function, FunctionLookup};
 
+/// Returns the capture list for a callable expression.
+///
+/// For closures and first-class callables, returns the captures stored in the
+/// deferred closure context. For `$var` FCC variables, returns the captures
+/// registered for that variable name. Otherwise returns an empty vector.
+///
+/// Each capture is a tuple of `(name, PhpType, is_mutable)` describing the
+/// captured variable's name, PHP type, and whether it's mutated by the closure.
 pub(crate) fn callable_captures(
     callback: &Expr,
     ctx: &mut Context,
@@ -34,6 +42,14 @@ pub(crate) fn callable_captures(
     }
 }
 
+/// Returns the FunctionSig for a callable expression.
+///
+/// Resolves string literals via `lookup_function` and checks user-defined functions
+/// and include variants. Resolves `$var` variables from `ctx.closure_sigs`. Handles
+/// first-class callables via `first_class_callable_sig`. For array-access expressions
+/// where the array is a variable, resolves from `ctx.closure_sigs`. Delegates to
+/// `matching_branch_sig` for ternary and null-coalescing branches that must share
+/// the same signature. Returns `None` for expressions with no statically resolvable signature.
 pub(crate) fn callable_sig(callback: &Expr, ctx: &Context) -> Option<FunctionSig> {
     match &callback.kind {
         ExprKind::StringLiteral(name) => match lookup_function(ctx, name) {
@@ -64,6 +80,12 @@ pub(crate) fn callable_sig(callback: &Expr, ctx: &Context) -> Option<FunctionSig
     }
 }
 
+/// Returns the common signature when both branches of a ternary or null-coalesce resolve to the same signature.
+///
+/// Recursively resolves signatures for the left and right expressions using `callable_sig`.
+/// Returns the shared signature only if both branches resolve to an identical `FunctionSig`;
+/// otherwise returns `None`. Used to determine whether a branch-shaped callable can be
+/// emitted with a single code path.
 fn matching_branch_sig(left: &Expr, right: &Expr, ctx: &Context) -> Option<FunctionSig> {
     let left_sig = callable_sig(left, ctx)?;
     let right_sig = callable_sig(right, ctx)?;

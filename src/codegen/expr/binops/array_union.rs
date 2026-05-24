@@ -14,6 +14,11 @@ use super::super::super::emit::Emitter;
 use super::super::super::{abi, platform::Arch};
 use super::super::{emit_expr, Expr, ExprKind, PhpType};
 
+/// Returns true if both operands are array-like types that benefit from the
+/// specialized array-union codepath (rather than the general binary operator dispatch).
+///
+/// Matches `PhpType::Array` and `PhpType::AssocArray` in all four pairwise combinations.
+/// The `ctx` parameter provides contextual type information for both operands.
 pub(super) fn is_array_union_candidate(left: &Expr, right: &Expr, ctx: &Context) -> bool {
     matches!(
         (
@@ -27,6 +32,22 @@ pub(super) fn is_array_union_candidate(left: &Expr, right: &Expr, ctx: &Context)
     )
 }
 
+/// Lowers the `+` array union operator.
+///
+/// Saves the left array pointer before evaluating the right operand, then restores
+/// it as the first argument to the runtime helper. The runtime helper receives arguments
+/// in platform ABI order (x0/x1 on ARM64, rdi/rsi on x86_64) and returns the union result
+/// in the integer result register.
+///
+/// # Arguments
+/// * `left` - Left operand expression (evaluated first)
+/// * `right` - Right operand expression (evaluated second)
+/// * `emitter` - Code emitter
+/// * `ctx` - Codegen context (carries variable layout, class metadata)
+/// * `data` - Read-only data section for constants
+///
+/// # Returns
+/// The `PhpType` of the union result, derived from the static types of both operands.
 pub(super) fn emit_array_union_binop(
     left: &Expr,
     right: &Expr,
@@ -62,6 +83,22 @@ pub(super) fn emit_array_union_binop(
     result_ty
 }
 
+/// Determines the `PhpType` of an array union result from the static types of both operands.
+///
+/// This function applies PHP's type inference rules for the `+` operator:
+/// - Empty array operand is discarded (left or right)
+/// - Matching element types are preserved when both are homogeneous indexed arrays
+/// - Mixed indexed/associative unions produce `AssocArray` with merged key/value types
+/// - Dissimilar value types collapse to `Mixed`
+///
+/// # Arguments
+/// * `left_expr` - Left operand expression (used only to detect empty array literals)
+/// * `left` - Static `PhpType` of the left operand
+/// * `right_expr` - Right operand expression (used only to detect empty array literals)
+/// * `right` - Static `PhpType` of the right operand
+///
+/// # Returns
+/// The inferred `PhpType` for the union expression.
 fn array_union_result_type(
     left_expr: &Expr,
     left: &PhpType,
@@ -113,10 +150,19 @@ fn array_union_result_type(
     }
 }
 
+/// Returns true if the expression is an empty indexed array literal (`[]`).
+///
+/// Used by `array_union_result_type` to apply the empty-array optimization where the
+/// non-empty operand's type becomes the result type.
 fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
     matches!(&expr.kind, ExprKind::ArrayLiteral(elems) if elems.is_empty())
 }
 
+/// Merges the key type of an associative array with an indexed array in a union.
+///
+/// In PHP array union, indexed arrays use integer keys. When an `AssocArray` with a
+/// known `Int` key type is unioned with an indexed array, the key type remains `Int`;
+/// otherwise it becomes `Mixed` since the union result could have non-integer keys.
 fn merge_array_union_key_with_indexed(key: &PhpType) -> PhpType {
     if matches!(key, PhpType::Int) {
         PhpType::Int
@@ -125,6 +171,11 @@ fn merge_array_union_key_with_indexed(key: &PhpType) -> PhpType {
     }
 }
 
+/// Merges the value types of two array operands in a union.
+///
+/// Returns the left type if both types match. If one side is `Never` (unreachable),
+/// returns the other type. Otherwise collapses to `Mixed` since PHP arrays are
+/// heterogeneous and a union can introduce values of different types.
 fn merge_array_union_value_types(left: &PhpType, right: &PhpType) -> PhpType {
     if left == right {
         left.clone()

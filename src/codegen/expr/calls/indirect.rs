@@ -16,6 +16,17 @@ use crate::types::PhpType;
 
 use super::args;
 
+/// Emits a callable-indirect call where the callee expression has already been evaluated
+/// and placed in the result register. Handles `__invoke` on objects, closure captures as
+/// hidden arguments, and ABI-compliant argument materialization on x86_64.
+///
+/// - On x86_64: saves the result register to the stack before args, then restores it after
+///   to work around the limited argument-passing registers.
+/// - If the callee is a known class with `__invoke`, delegates to method call codegen.
+/// - Otherwise: resolves the signature from `ctx.closure_sigs` or infers from closure AST,
+///   pushes arguments, and emits the call via `nested_call_reg`.
+///
+/// Returns the PHP return type of the callee (inferred from signature or closure return annotation).
 pub(super) fn emit_loaded_expr_call(
     callee: &Expr,
     args_exprs: &[Expr],
@@ -131,6 +142,12 @@ pub(super) fn emit_loaded_expr_call(
     ret_ty
 }
 
+/// Resolves the function signature for a callee expression in an indirect call context.
+///
+/// Looks up the signature in `ctx.closure_sigs` for `Variable` and `ArrayAccess` nodes
+/// (where the array is a variable, e.g., `$arr()`). For `FirstClassCallable`, delegates to
+/// `first_class_callable_sig`. Returns `None` for unsupported expression kinds, in which
+/// case the caller defaults to `PhpType::Int`.
 fn callee_sig_for_expr(
     callee: &Expr,
     ctx: &Context,
@@ -149,6 +166,10 @@ fn callee_sig_for_expr(
     }
 }
 
+/// Pushes closure capture variables as hidden additional arguments before the regular call
+/// arguments. For by-reference captures, emits the variable address; for by-value captures,
+/// loads the value from the stack slot. Missing captures are warned but skipped to avoid
+/// blocking compilation of partially captured closures.
 fn push_captures_as_hidden_args(
     captures: &[(String, PhpType, bool)],
     emitter: &mut Emitter,

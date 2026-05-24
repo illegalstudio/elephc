@@ -37,6 +37,19 @@ use build::{build_nodes, collect_locals};
 use emit::{emit_resume, emit_wrapper};
 use model::{SlotType, StateNumberer};
 
+/// Emits the wrapper and resume symbols for a top-level generator function.
+///
+/// The wrapper allocates a `GeneratorFrame`, copies parameters into it,
+/// zeros locals, and returns the frame pointer. The resume symbol drives
+/// the body across yield points via a per-state label table.
+///
+/// # Arguments
+/// * `emitter` - Target instruction emitter
+/// * `data` - Data section for constants and metadata
+/// * `name` - PHP function name (converted to a symbol via `function_symbol()`)
+/// * `sig` - Function signature including parameters
+/// * `body` - Parsed AST statements (must contain `yield`)
+/// * `classes` - Optional class info map (used to look up the Generator class id)
 pub(crate) fn emit_generator_function(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -49,6 +62,21 @@ pub(crate) fn emit_generator_function(
     emit_generator_with_label(emitter, data, &wrapper_label, sig, &[], body, classes);
 }
 
+/// Emits the wrapper and resume symbols for a generator captured inside a closure.
+///
+/// Same shape as `emit_generator_function` but uses a caller-provided label
+/// (typically the closure's inner symbol) instead of deriving it from a
+/// function name. Also accepts additional hidden parameters that the closure
+/// captures from the outer scope.
+///
+/// # Arguments
+/// * `emitter` - Target instruction emitter
+/// * `data` - Data section for constants and metadata
+/// * `label` - Symbol name for the wrapper (closure inner symbol)
+/// * `sig` - Function signature of the generator
+/// * `hidden_params` - Captured variables from the enclosing closure scope
+/// * `body` - Parsed AST statements (must contain `yield`)
+/// * `classes` - Optional class info map (used to look up the Generator class id)
 pub(crate) fn emit_generator_closure(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -61,6 +89,20 @@ pub(crate) fn emit_generator_closure(
     emit_generator_with_label(emitter, data, label, sig, hidden_params, body, classes);
 }
 
+/// Common path for emitting both top-level generators and closure-captured generators.
+///
+/// Derives the resume label from `wrapper_label`, looks up the Generator class id,
+/// builds the slot table from parameters and inferred locals, then emits the wrapper
+/// and resume symbols.
+///
+/// # Arguments
+/// * `emitter` - Target instruction emitter
+/// * `data` - Data section for constants and metadata
+/// * `wrapper_label` - Symbol name for the wrapper; resume label is `<wrapper_label>__resume`
+/// * `sig` - Function signature including parameters
+/// * `hidden_params` - Additional params from closures (may be empty)
+/// * `body` - Parsed AST statements (must contain `yield`)
+/// * `classes` - Optional class info map (used to look up the Generator class id)
 fn emit_generator_with_label(
     emitter: &mut Emitter,
     data: &mut DataSection,

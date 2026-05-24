@@ -21,6 +21,32 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::runtime::generators::frame as gen_frame;
 
+/// Emits the `_fn_<f>` wrapper symbol for a generator function (ARM64 path).
+///
+/// Allocates a fresh `GeneratorFrame` on the heap via `__rt_heap_alloc`, stamps it
+/// with `class_id` and the `resume_label` address, copies integer parameters from
+/// the stash slots into their frame slots, zero-initialises all local slots, and
+/// returns the frame pointer in `x0`.
+///
+/// # Arguments
+/// - `emitter` — assembly emitter
+/// - `label` — global symbol name of the wrapper (e.g. `_fn_foo`)
+/// - `resume_label` — global symbol name of the generator's resume function
+/// - `class_id` — compile-time Generator class id written to the frame header
+/// - `int_param_count` — number of integer parameters to copy into the frame
+/// - `int_local_count` — number of local slots to zero-initialise
+///
+/// # Stack layout
+/// Prologue reserves `16 + param_save_bytes` bytes; `param_save_bytes` is
+/// `int_param_count * 8` rounded up to a 16-byte boundary. Parameters are parked
+/// in the stash before the heap allocation so the frame can be built before the
+/// caller frame is unwound.
+///
+/// # Frame header initialisation
+/// All fixed-header slots (class_id, resume_fn, state_idx/flags, auto_key_counter,
+/// last_key, last_value, return_value, sent_value, delegated_iter, layout_id) are
+/// written here so the resume function and runtime helpers can rely on the
+/// invariants on first entry.
 pub(in crate::codegen::functions::generator) fn emit_wrapper(
     emitter: &mut Emitter,
     label: &str,
@@ -99,6 +125,36 @@ pub(in crate::codegen::functions::generator) fn emit_wrapper(
     emitter.instruction("ret");                                                 // return the frame pointer
 }
 
+/// Emits the `_fn_<f>` wrapper symbol for a generator function (x86_64 path).
+///
+/// Allocates a fresh `GeneratorFrame` on the heap via `__rt_heap_alloc`, stamps it
+/// with `class_id` and the `resume_label` address, copies integer parameters from
+/// the spill slots into their frame slots, zero-initialises all local slots, and
+/// returns the frame pointer in `rax`.
+///
+/// # Arguments
+/// - `emitter` — assembly emitter
+/// - `label` — global symbol name of the wrapper (e.g. `_fn_foo`)
+/// - `resume_label` — global symbol name of the generator's resume function
+/// - `class_id` — compile-time Generator class id written to the frame header
+/// - `int_param_count` — number of integer parameters to copy into the frame
+/// - `int_local_count` — number of local slots to zero-initialise
+///
+/// # Stack layout
+/// A spill area of `param_save_bytes` (`int_param_count * 8` rounded up to 16 bytes)
+/// is reserved below `rbp`. Incoming register parameters (rdi, rsi, rdx, rcx, r8,
+/// r9) are spilled to the spill area; stack-passed parameters are loaded from the
+/// caller frame and also spilled.
+///
+/// # Frame header initialisation
+/// All fixed-header slots (class_id, resume_fn, state_idx/flags, auto_key_counter,
+/// last_key, last_value, return_value, sent_value, delegated_iter, layout_id) are
+/// written here so the resume function and runtime helpers can rely on the
+/// invariants on first entry.
+///
+/// # ABI note
+/// The x86_64 heap magic word embeds `X86_64_HEAP_MAGIC_HI32` in the upper 32 bits
+/// to distinguish generator frames from other heap objects during debugging.
 fn emit_wrapper_x86_64(
     emitter: &mut Emitter,
     label: &str,

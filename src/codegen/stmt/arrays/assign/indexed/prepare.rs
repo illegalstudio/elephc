@@ -20,6 +20,13 @@ use crate::types::PhpType;
 use super::super::super::super::helpers;
 use super::super::ArrayAssignTarget;
 
+/// Carries derived type information from the prepare phase to normalize, store, and extend phases.
+///
+/// Fields:
+/// * `val_ty` - the evaluated PHP type of the value expression after coercion
+/// * `effective_store_ty` - the runtime slot type (may differ from element type on first write)
+/// * `stores_refcounted_pointer` - true when the effective store type is Mixed/Array/Object
+/// * `converted_to_mixed` - true when the array was upgraded to mixed to hold heterogeneous values
 pub(super) struct IndexedAssignState {
     pub(super) val_ty: PhpType,
     pub(super) effective_store_ty: PhpType,
@@ -27,6 +34,21 @@ pub(super) struct IndexedAssignState {
     pub(super) converted_to_mixed: bool,
 }
 
+/// Phase 1: loads the array pointer, ensures uniqueness (COW split), evaluates the index
+/// and value expressions, coerces types, grows the array if the target index exceeds capacity,
+/// and returns the derived `IndexedAssignState` for subsequent phases.
+///
+/// # Arguments
+/// * `target` - the array being assigned into
+/// * `index` - the integer index expression
+/// * `value` - the value expression to assign
+/// * `emitter` - target-specific instruction emitter
+/// * `ctx` - codegen context (labels, locals, types)
+/// * `data` - data section for literals and runtime metadata
+///
+/// # Returns
+/// `IndexedAssignState` carrying the coerced value type, effective store type,
+/// refcounted pointer flag, and mixed-conversion flag for downstream phases.
 pub(super) fn prepare_indexed_array_assign(
     target: &ArrayAssignTarget<'_>,
     index: &Expr,
@@ -170,6 +192,8 @@ pub(super) fn prepare_indexed_array_assign(
     }
 }
 
+/// x86_64/Linux-specific preparation: emits equivalent logic using System V ABI register
+/// conventions and Intel syntax.
 fn prepare_indexed_array_assign_linux_x86_64(
     target: &ArrayAssignTarget<'_>,
     index: &Expr,
@@ -306,6 +330,19 @@ fn prepare_indexed_array_assign_linux_x86_64(
     }
 }
 
+/// Determines the runtime slot type for indexed storage given the declared element type
+/// and the value's evaluated type. Handles mixed conversion, never-type fallback, object
+/// common type, and heterogeneous unions.
+///
+/// # Arguments
+/// * `existing` - the declared or previously inferred element type of the array slot
+/// * `value` - the PHP type of the value being assigned
+/// * `ctx` - codegen context (used for object common-type resolution)
+/// * `generic_mixed_passthrough` - if true, allows a generic `Mixed` slot to be narrowed
+///   to a scalar type when the value is Int/Bool/Float/Callable
+///
+/// # Returns
+/// The `PhpType` to use for the runtime storage slot.
 fn effective_indexed_store_type(
     existing: &PhpType,
     value: &PhpType,

@@ -20,6 +20,7 @@ use super::super::{
     push_loaded_array_element_arg, push_loaded_hash_value_arg, spread_source_elem_ty,
 };
 
+/// Emits a bounds check for the positional prefix length before named spread args.
 pub(super) fn emit_prefix_array_length_check(
     prefix_temp_idx: usize,
     source_temp_types: &[PhpType],
@@ -50,6 +51,7 @@ pub(super) fn emit_prefix_array_length_check(
     emitter.label(&ok_label);
 }
 
+/// Pushes a prefix array element as a named call argument, with optional default.
 pub(super) fn push_prefix_array_element_arg(
     prefix_temp_idx: usize,
     element_idx: usize,
@@ -117,6 +119,12 @@ pub(super) fn push_prefix_array_element_arg(
     )
 }
 
+/// Emits a conditional branch to `label` when the positional-prefix array is too short
+/// to contain `element_idx` (i.e., when prefix length <= element index).
+///
+/// Loads the prefix array length from the temporary stack slot, compares it against
+/// `element_idx`, and jumps to `label` via `b.le` (ARM64) or `jle` (x86_64) if the
+/// element does not exist and a default value should be used instead.
 fn emit_branch_if_prefix_element_missing(
     prefix_temp_idx: usize,
     element_idx: usize,
@@ -144,6 +152,12 @@ fn emit_branch_if_prefix_element_missing(
     }
 }
 
+/// Loads the element at `element_idx` from a positional-prefix array and pushes it as a
+/// call argument.
+///
+/// Uses `array_element_stride` to compute the byte offset into the payload region
+/// (skipping the 24-byte array header). Requires the element to exist; does not handle
+/// defaults or missing elements. Returns the PHP type of the loaded element.
 fn push_existing_prefix_array_element_arg(
     prefix_temp_idx: usize,
     element_idx: usize,
@@ -175,6 +189,15 @@ fn push_existing_prefix_array_element_arg(
     push_loaded_array_element_arg(&source_elem_ty, target_ty, emitter, ctx, data)
 }
 
+/// Loads and pushes an element from an associative-prefix array as a named call argument.
+///
+/// Performs a hash lookup for `param_name` within the associative-prefix array.
+/// If `default` is provided, returns the loaded value or the default if the key is absent.
+/// If no default is provided and the key is missing, emits a runtime abort (matching PHP
+/// behavior for missing required named arguments from spread arrays).
+///
+/// Returns the widened PHP type resulting from merging the loaded element type with the
+/// default expression type when a default is present.
 #[allow(clippy::too_many_arguments)]
 fn push_assoc_prefix_array_element_arg(
     prefix_temp_idx: usize,

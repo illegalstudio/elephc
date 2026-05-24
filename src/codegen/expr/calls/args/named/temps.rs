@@ -18,12 +18,14 @@ use super::super::{
     push_non_variable_ref_arg_address,
 };
 
+/// Appends a source temp type and returns its index.
 pub(super) fn push_source_temp_type(source_temp_types: &mut Vec<PhpType>, ty: PhpType) -> usize {
     let idx = source_temp_types.len();
     source_temp_types.push(ty);
     idx
 }
 
+/// Emits a source argument into a temp slot and returns the temp index.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_source_temp_arg(
     arg: &Expr,
@@ -56,6 +58,7 @@ pub(super) fn emit_source_temp_arg(
     push_source_temp_type(source_temp_types, pushed_ty)
 }
 
+/// Returns the stack slot size for a PhpType (16 bytes, or 0 for void/never).
 pub(super) fn temp_slot_size(ty: &PhpType) -> usize {
     if matches!(ty, PhpType::Void | PhpType::Never) {
         0
@@ -64,10 +67,12 @@ pub(super) fn temp_slot_size(ty: &PhpType) -> usize {
     }
 }
 
+/// Computes the total bytes needed for all source temps (for stack allocation).
 pub(crate) fn pushed_temp_bytes(types: &[PhpType]) -> usize {
     types.iter().map(temp_slot_size).sum()
 }
 
+/// Computes reversed cumulative offsets (from low to high memory) for temp slots.
 fn temp_offsets(types: &[PhpType]) -> Vec<usize> {
     let mut offsets = vec![0usize; types.len()];
     let mut running = 0usize;
@@ -78,10 +83,12 @@ fn temp_offsets(types: &[PhpType]) -> Vec<usize> {
     offsets
 }
 
+/// Computes the stack offset for a source temp slot, including extra_bytes preamble.
 pub(super) fn source_temp_offset(source_temp_types: &[PhpType], temp_idx: usize, extra_bytes: usize) -> usize {
     extra_bytes + temp_offsets(source_temp_types)[temp_idx]
 }
 
+/// Loads a saved source temp into the result register and returns its type.
 pub(super) fn load_source_temp_to_result(
     temp_idx: usize,
     source_temp_types: &[PhpType],
@@ -107,6 +114,7 @@ pub(super) fn load_source_temp_to_result(
     ty
 }
 
+/// Pushes a saved source temp arg onto the ABI stack and returns its type.
 pub(super) fn push_saved_source_temp_arg(
     temp_idx: usize,
     source_temp_types: &[PhpType],

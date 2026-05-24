@@ -18,6 +18,31 @@ use super::finally;
 use super::handlers;
 use super::PENDING_RETHROW;
 
+/// Emits catch-clause dispatch for the current exception.
+///
+/// For each catch clause it calls `__rt_exception_matches` for each listed
+/// exception type; on a match it binds the catch variable, emits the body, then
+/// branches to `finally_label` or `catch_end_label`. If no catch matches and no
+/// finally exists, rethrows the exception. If catches are absent entirely, either
+/// defers to finally or rethrows immediately depending on whether a finally is
+/// present.
+///
+/// # Parameters
+/// - `catches`: Sorted list of catch clauses to evaluate in order.
+/// - `finally_label`: Label of the enclosing finally block, if any; controls whether to defer rethrow until after finally.
+/// - `catch_end_label`: Label to branch to after a matching catch body completes (when no finally is present).
+/// - `emitter`: Target-specific assembly emitter.
+/// - `ctx`: Codegen context carrying exception dispatch state and label generator.
+/// - `data`: Mutable data section for exception metadata tables.
+///
+/// # Side effects
+/// - Emits jumps/calls to `__rt_exception_matches`, `__rt_rethrow_current`, and potentially `finally` handlers.
+/// - May emit pending rethrow state via `emit_set_pending_action`.
+/// - Binding the catch variable creates a local slot and assigns the current exception value.
+///
+/// # ABI constraints
+/// - Exception value is read from the canonical slot (`_exc_value`) via `int_arg_reg_name(0)`.
+/// - Matching uses `int_arg_reg_name(0..=2)` for value, catch_id, and catch_kind. ///
 pub(super) fn emit_catch_dispatch(
     catches: &[CatchClause],
     finally_label: Option<&str>,

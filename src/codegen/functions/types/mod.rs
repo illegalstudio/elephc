@@ -31,10 +31,18 @@ pub(crate) use objects::singular_object_class;
 pub(crate) use type_expr::{codegen_declared_type, codegen_static_type};
 use type_expr::resolve_buffer_element_type;
 
+/// Infers the static PHP type of `expr` using the given function signature and context.
+///
+/// A convenience wrapper that always passes `Some(ctx)` to `infer_local_type`.
 pub fn infer_local_type_with_ctx(expr: &Expr, sig: &FunctionSig, ctx: &Context) -> PhpType {
     infer_local_type(expr, sig, Some(ctx))
 }
 
+/// Infers the contextual type for `expr` when used as the callee in a context such as property access.
+///
+/// Constructs an empty function signature (no parameters, void return) and delegates to
+/// `infer_local_type`. Used when the expression itself determines the type based on its context,
+/// not its position as a function argument.
 pub fn infer_contextual_type(expr: &Expr, ctx: &Context) -> PhpType {
     let empty_sig = FunctionSig {
         params: Vec::new(),
@@ -49,6 +57,12 @@ pub fn infer_contextual_type(expr: &Expr, ctx: &Context) -> PhpType {
     infer_local_type(expr, &empty_sig, Some(ctx))
 }
 
+/// Infers the static PHP type of `expr` for codegen decisions.
+///
+/// This is the core type-inference entry point. It recurses over the expression AST,
+/// using `sig` to resolve parameter types and `ctx` to resolve variable types and class metadata.
+/// Returns the narrowest known type that is consistent with the PHP semantics of the construct.
+/// Falls back to `PhpType::Int` for unknown variables and unhandled expression kinds.
 pub(super) fn infer_local_type(
     expr: &Expr,
     sig: &FunctionSig,
@@ -372,6 +386,10 @@ pub(super) fn infer_local_type(
     }
 }
 
+/// Infers the return type of a pipe (`|>`) expression given the callable at the pipe's RHS.
+///
+/// Handles `Variable`, `FirstClassCallable`, `Closure` (with or without a return type annotation),
+/// and `Assignment` (unwrapping the RHS). Falls back to `PhpType::Int` for unknown callables.
 fn infer_pipe_result_type(
     callable: &Expr,
     sig: &FunctionSig,
@@ -397,6 +415,10 @@ fn infer_pipe_result_type(
     }
 }
 
+/// Returns the element type for `array[key]` on `ArrayAccess` implementations of `class_name`.
+///
+/// Looks up the `offsetGet` method on the class and returns its return type.
+/// Falls back to `PhpType::Mixed` if the class or interface does not define `offsetGet`.
 fn array_access_offset_get_type(ctx: &Context, class_name: &str) -> PhpType {
     ctx.classes
         .get(class_name)
@@ -411,6 +433,11 @@ fn array_access_offset_get_type(ctx: &Context, class_name: &str) -> PhpType {
         .unwrap_or(PhpType::Mixed)
 }
 
+/// Determines the value type of an associative array literal that contains spread elements.
+///
+/// Iterates over spread elements within `elems`, infers the type of each inner expression,
+/// and merges them. Non-spread elements are ignored. Returns `PhpType::Never` when no
+/// spread elements exist, which callers treat as "use the regular element type path".
 fn assoc_spread_literal_value_type(
     elems: &[Expr],
     sig: &FunctionSig,
@@ -439,6 +466,10 @@ fn assoc_spread_literal_value_type(
     }
 }
 
+/// Returns the element type for one position in an indexed (non-associative) array literal.
+///
+/// Handles spread elements by unwrapping the inner array type. For regular elements,
+/// applies `mixed_container_value_type` to normalize the element type for heterogeneous arrays.
 fn indexed_literal_element_type(
     elem: &Expr,
     sig: &FunctionSig,
@@ -453,6 +484,11 @@ fn indexed_literal_element_type(
     }
 }
 
+/// Merges two element types from adjacent positions in an indexed array literal.
+///
+/// Returns `existing` if types match, handles `Never` identity cases, promotes to `Mixed`
+/// when either type is `Mixed` or `Union`, and falls back to `PhpType::Mixed` for mismatched
+/// scalar types or unrelated object types. Uses `ctx` to find common object type via `common_object_type`.
 fn merge_indexed_literal_element_type(
     existing: &PhpType,
     next: &PhpType,

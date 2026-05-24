@@ -16,6 +16,14 @@ use super::arrays::{array_like_key_type, array_like_value_type, indexed_array_va
 use super::infer_local_type;
 use super::union::merge_union_members;
 
+/// Infers the PHP return type for a builtin function call based on the function name,
+/// argument expressions, call signature, and optional codegen context.
+///
+/// Uses `infer_local_type` to determine the types of actual arguments where needed
+/// (e.g., for `array_fill_keys`, `array_combine`, `abs`, `min`, `max`). Falls back
+/// to a fixed return type per builtin when the argument types are not informative.
+/// For unknown builtins, queries `ctx.functions` for user-defined functions;
+/// otherwise defaults to `PhpType::Int`.
 pub(super) fn infer_function_call_type(
     name: &str,
     args: &[Expr],
@@ -225,6 +233,10 @@ pub(super) fn infer_function_call_type(
     }
 }
 
+/// Infers the return type for `pathinfo()` based on its optional second argument (the
+/// `PATHINFO_*` constant). Returns a string for `PATHINFO_EXTENSION`, an associative
+/// array of strings for `PATHINFO_DIRNAME`/`PATHINFO_BASENAME`/`PATHINFO_FILENAME`,
+/// and `PhpType::Mixed` when no flag is present or the flag is not statically resolvable.
 fn infer_pathinfo_type(args: &[Expr]) -> PhpType {
     match args.get(1).and_then(pathinfo_static_flag_value) {
         None if args.len() == 1 => PhpType::AssocArray {
@@ -240,6 +252,10 @@ fn infer_pathinfo_type(args: &[Expr]) -> PhpType {
     }
 }
 
+/// Statically evaluates the given expression as a `PATHINFO_*` constant bitmask,
+/// handling integer literals, constant references (`PATHINFO_DIRNAME`, etc.),
+/// negation, and bitwise AND/OR/XOR combinations thereof. Returns `None` if the
+/// expression cannot be resolved to a constant at compile time.
 fn pathinfo_static_flag_value(flag: &Expr) -> Option<i64> {
     match &flag.kind {
         ExprKind::IntLiteral(value) => Some(*value),

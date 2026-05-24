@@ -20,6 +20,7 @@ use crate::types::PhpType;
 
 use super::super::{coerce_result_to_type, emit_expr};
 
+/// Lowers `$obj->property` where the receiver type is known at compile time.
 pub(super) fn emit_property_access(
     object: &Expr,
     property: &str,
@@ -280,6 +281,7 @@ fn emit_named_dynamic_property_access(
     PhpType::Mixed
 }
 
+/// Lowers `$obj->{$expr}` where property name is a dynamic expression.
 pub(super) fn emit_dynamic_property_access(
     object: &Expr,
     property: &Expr,
@@ -341,6 +343,12 @@ pub(super) fn emit_dynamic_property_access(
     PhpType::Mixed
 }
 
+/// Emits a runtime dispatch over all classes that declare `property`.
+///
+/// Scans `ctx.classes` for every class that has `property` as a declared
+/// property, builds a match table keyed by class id, and falls through to
+/// `emit_dynamic_property_miss` when no declared name matches the evaluated
+/// dynamic property name.
 fn emit_dynamic_declared_property_lookup(
     class_name: &str,
     emitter: &mut Emitter,
@@ -388,11 +396,21 @@ fn emit_dynamic_declared_property_lookup(
     emitter.label(&done_label);
 }
 
+/// Emits cleanup for a failed dynamic property lookup and returns boxed null.
+///
+/// Releases the temporary stack slot (32 bytes) and emits a boxed null as the
+/// result of a dynamic property access that matched no declared property name.
 fn emit_dynamic_property_miss(emitter: &mut Emitter) {
     abi::emit_release_temporary_stack(emitter, 32);
     super::emit_boxed_null(emitter);
 }
 
+/// Emits a runtime dynamic property read from a receiver saved on the temporary stack.
+///
+/// Loads the object pointer (offset 16), property name pointer (offset 0), and
+/// name length (offset 8) from the temporary stack and calls `runtime_symbol`
+/// (`__rt_mixed_property_get` or `__rt_stdclass_get`). Releases 32 bytes of
+/// temporary stack after the call. Result lands in int_result_reg.
 fn emit_runtime_dynamic_property_get_from_saved_receiver(
     runtime_symbol: &str,
     emitter: &mut Emitter,
@@ -414,6 +432,12 @@ fn emit_runtime_dynamic_property_get_from_saved_receiver(
     abi::emit_release_temporary_stack(emitter, 32);
 }
 
+/// Emits a runtime string comparison and conditional branch for a declared property name.
+///
+/// Compares the evaluated dynamic property name (loaded from temporary stack at
+/// offsets 0 and 8) against `property` using `__rt_str_eq`. On match, branches
+/// to `target_label`. Uses target-specific calling convention for the comparison
+/// helper (x0/x1/x2 on ARM64, rdi/rsi/rdx on x86_64).
 fn emit_branch_if_dynamic_name_matches(
     property: &str,
     target_label: &str,
@@ -442,12 +466,24 @@ fn emit_branch_if_dynamic_name_matches(
     }
 }
 
+/// Boxes the loaded property value as `PhpType::Mixed` when the result type is not already `Mixed`.
+///
+/// Consults `result_ty.codegen_repr()` to determine whether boxing is needed;
+/// when it is, calls `emit_box_current_value_as_mixed`. Used after loading a
+/// declared property through a dynamic name to ensure the result type is consistent
+/// with the broader dynamic property access path.
 fn box_dynamic_property_result(result_ty: &PhpType, emitter: &mut Emitter) {
     if !matches!(result_ty.codegen_repr(), PhpType::Mixed) {
         crate::codegen::emit_box_current_value_as_mixed(emitter, result_ty);
     }
 }
 
+/// Collects all classes that declare `property` as a declared property, sorted by class id.
+///
+/// Scans `ctx.classes` for every class that has `property` in its `properties` map,
+/// returning a vector of `(class_name, property_type, class_id)` sorted by class id.
+/// Used by `emit_mixed_property_access` to build a runtime dispatch table for
+/// declared property access on `Mixed` receivers.
 fn declared_property_candidates(
     property: &str,
     ctx: &Context,
@@ -467,6 +503,12 @@ fn declared_property_candidates(
     candidates
 }
 
+/// Emits a branch to `null_label` when the mixed payload is not an object.
+///
+/// Unboxes the mixed value in `int_result_reg` (x0/rax) and checks whether the
+/// runtime tag equals 6 (object). On non-object, branches to `null_label`; on
+/// object, promotes the unboxed pointer to the result register (x0 = x1 on ARM64,
+/// rax = rdi on x86_64).
 fn emit_object_payload_or_null_branch(null_label: &str, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -482,6 +524,13 @@ fn emit_object_payload_or_null_branch(null_label: &str, emitter: &mut Emitter) {
     }
 }
 
+/// Emits a runtime class-id dispatch over declared property candidates.
+///
+/// Loads the receiver's class id from `int_result_reg` and compares it against
+/// each candidate's `class_id` (x9/x10 on ARM64, r11/r10 on x86_64). Jumps to
+/// the corresponding `match_label` on equality, falling through when no candidate
+/// matches. The caller is responsible for emitting the fallthrough path (typically
+/// a miss label or stdclass fallback).
 fn emit_branch_to_declared_property_candidates(
     candidates: &[(String, PhpType, u64)],
     match_labels: &[String],
@@ -507,6 +556,13 @@ fn emit_branch_to_declared_property_candidates(
     }
 }
 
+/// Emits a branch to `label` when the receiver's class id matches stdClass's sentinel.
+///
+/// Reloads the class id from the object in `int_result_reg` and compares it
+/// against the compile-time `_stdclass_class_id` sentinel via `emit_symbol_address`.
+/// On match, branches to `label` to route the read through `__rt_stdclass_get`.
+/// Used by `emit_mixed_property_access` to distinguish stdClass dynamic storage
+/// from other object types before falling through to the null result path.
 fn emit_branch_to_stdclass_fallback(label: &str, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -525,6 +581,11 @@ fn emit_branch_to_stdclass_fallback(label: &str, emitter: &mut Emitter) {
     }
 }
 
+/// Emits a static stdClass property read from an already-unboxed object.
+///
+/// The object pointer is expected in `int_result_reg` (x0/rax). Emits the property
+/// name as a runtime string and calls `__rt_stdclass_get`. On ARM64 passes arguments
+/// in x0/x1/x2; on x86_64 passes in rdi/rsi/rdx. Result is `PhpType::Mixed`.
 fn emit_static_stdclass_get_from_loaded_object(
     property: &str,
     emitter: &mut Emitter,
@@ -546,12 +607,18 @@ fn emit_static_stdclass_get_from_loaded_object(
     }
 }
 
+/// Converts a property or class name into a label-safe fragment.
+///
+/// Replaces every non-alphanumeric character with `_` so the result can be used
+/// in asm label names without冲突. Used to construct readable dispatch label
+/// names like `mixed_prop_stdclass` or `dyn_prop_myProp`.
 fn label_fragment(name: &str) -> String {
     name.chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
         .collect()
 }
 
+/// Lowers `?Class->property` with a nullable receiver that may be null at runtime.
 pub(super) fn emit_nullable_object_property_access(
     class_name: &str,
     property: &str,
@@ -576,6 +643,7 @@ pub(super) fn emit_nullable_object_property_access(
     PhpType::Mixed
 }
 
+/// Lowers `$obj->property` where the class is loaded and property is declared.
 pub(super) fn emit_loaded_object_property_access(
     class_name: &str,
     property: &str,
@@ -652,6 +720,13 @@ pub(super) fn emit_loaded_object_property_access(
     )
 }
 
+/// Lowers a declared property load for a known class and property offset.
+///
+/// Called by `emit_loaded_object_property_access` once the class info, property
+/// type, and memory offset have all been resolved. Emits a comment describing
+/// the access path, optionally guards uninitialized typed properties, handles
+/// reference vs value semantics, and loads the property payload into the
+/// appropriate result register(s) based on `prop_ty`. Returns the loaded `PhpType`.
 fn emit_loaded_object_property_value(
     class_name: &str,
     property: &str,
@@ -744,6 +819,14 @@ fn emit_loaded_object_property_value(
     prop_ty
 }
 
+/// Emits a guard that aborts when a typed property has not been initialized.
+///
+/// Loads the marker word at `offset + 8` from `object_reg` and compares it against
+/// `UNINITIALIZED_TYPED_PROPERTY_SENTINEL`. When the sentinel is detected, falls
+/// through to `emit_uninitialized_typed_property_fatal`; otherwise jumps to
+/// `initialized_label` to continue the property read. Used for typed properties
+/// that must not be accessed before initialization, matching PHP's own runtime
+/// behavior.
 fn emit_uninitialized_typed_property_guard(
     class_name: &str,
     property: &str,
@@ -772,6 +855,14 @@ fn emit_uninitialized_typed_property_guard(
     emitter.label(&initialized_label);
 }
 
+/// Emits a fatal runtime error and terminates the program.
+///
+/// Formats the message "Fatal error: Typed property {class_name}::{property} must
+/// not be accessed before initialization" and emits it to stderr via the `write`
+/// syscall, then calls `exit(1)`. Emits platform-specific syscalls directly (ARM64
+/// uses x0=fd, x1=buf, x2=len with syscall 4/1; x86_64 uses rdi=fd, rsi=buf,
+/// rdx=len with syscall 1/60). Called by `emit_uninitialized_typed_property_guard`
+/// when the sentinel marker is detected.
 fn emit_uninitialized_typed_property_fatal(
     class_name: &str,
     property: &str,

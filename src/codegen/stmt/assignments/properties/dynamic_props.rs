@@ -20,15 +20,14 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
-/// Emit code that stores the current expression result (already produced by
-/// the caller and pushed on the temporary stack) as a dynamic property of
-/// the receiver. The receiver pointer must already sit in
-/// `abi::int_result_reg(emitter)` when this function is called.
-///
-/// Layout assumptions:
-/// - `dyn_slot_offset` is the byte offset of the hashtable slot from the
-///   start of the object payload.
-/// - The hashtable is already allocated (eager init at construction time).
+/// Stores the current expression result (already produced and pushed on the
+/// temporary stack) as a dynamic property of the receiver. The receiver
+/// pointer must already sit in `abi::int_result_reg(emitter)` when called.
+/// `dyn_slot_offset` is the byte offset of the hashtable slot from the start
+/// of the object payload; the hashtable is assumed already allocated (eager
+/// init at construction time). Boxes scalar/void values into a `Mixed` cell,
+/// then calls `__rt_hash_set` to insert the entry. The possibly-reallocated
+/// hashtable pointer is written back to the slot after the call.
 pub(super) fn emit_dynamic_property_set(
     property: &str,
     value: &Expr,
@@ -145,9 +144,12 @@ pub(super) fn emit_dynamic_property_set(
     let _ = ctx; // hash_set call inherits ABI conventions; no extra context needed yet
 }
 
-/// Emit code that loads a dynamic property from the receiver hashtable and
-/// returns a `Mixed` value in the standard result registers. The receiver
-/// pointer must already sit in `abi::int_result_reg(emitter)`.
+/// Emits code that loads a dynamic property from the receiver's per-object
+/// hashtable and returns a `Mixed` value in the standard result registers.
+/// The receiver pointer must already sit in `abi::int_result_reg(emitter)`.
+/// Calls `__rt_hash_get` which returns: found flag in result reg, value_lo in
+/// x1/rdi, value_hi in x2/rsi, value_tag in x3/rcx. On a cache miss, allocates
+/// a fresh boxed null `Mixed` cell. Returns `PhpType::Mixed`.
 pub(crate) fn emit_dynamic_property_get(
     property: &str,
     dyn_slot_offset: usize,

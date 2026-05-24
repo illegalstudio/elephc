@@ -19,16 +19,24 @@ use crate::codegen::functions;
 use crate::parser::ast::Expr;
 use crate::types::{FunctionSig, PhpType};
 
+/// Dispatch target for ArrayAccess method calls.
+///
+/// `Class` indicates a single concrete class that directly implements ArrayAccess
+/// and allows static dispatch. `Interface` indicates either an interface type or
+/// a union of multiple distinct classes that require virtual dispatch through
+/// the ArrayAccess vtable.
 enum ArrayAccessDispatchTarget {
     Class(String),
     Interface(String),
 }
 
+/// Returns true if the expression type resolves to a PHP ArrayAccess object.
 pub(crate) fn expr_is_array_access_object(expr: &Expr, ctx: &Context) -> bool {
     let ty = functions::infer_contextual_type(expr, ctx);
     type_is_array_access_object(&ty, ctx)
 }
 
+/// Returns true if the type is an object implementing PHP's ArrayAccess interface.
 pub(crate) fn type_is_array_access_object(ty: &PhpType, ctx: &Context) -> bool {
     match ty {
         PhpType::Object(name) => ctx.object_type_implements_interface(name, "ArrayAccess"),
@@ -52,6 +60,7 @@ pub(crate) fn type_is_array_access_object(ty: &PhpType, ctx: &Context) -> bool {
     }
 }
 
+/// Emits `$obj[$key]` read via ArrayAccess::offsetGet.
 pub(crate) fn emit_offset_get(
     object: &Expr,
     index: &Expr,
@@ -62,6 +71,7 @@ pub(crate) fn emit_offset_get(
     emit_array_access_method(object, "offsetget", &[index.clone()], emitter, ctx, data)
 }
 
+/// Emits `$obj[$key] = $value` via ArrayAccess::offsetSet.
 pub(crate) fn emit_offset_set(
     object: &Expr,
     index: &Expr,
@@ -80,6 +90,7 @@ pub(crate) fn emit_offset_set(
     )
 }
 
+/// Emits `isset($obj[$key])` via ArrayAccess::offsetExists.
 pub(crate) fn emit_offset_exists(
     object: &Expr,
     index: &Expr,
@@ -90,6 +101,7 @@ pub(crate) fn emit_offset_exists(
     emit_array_access_method(object, "offsetexists", &[index.clone()], emitter, ctx, data)
 }
 
+/// Emits `unset($obj[$key])` via ArrayAccess::offsetUnset.
 pub(crate) fn emit_offset_unset(
     object: &Expr,
     index: &Expr,
@@ -100,6 +112,11 @@ pub(crate) fn emit_offset_unset(
     emit_array_access_method(object, "offsetunset", &[index.clone()], emitter, ctx, data)
 }
 
+/// Shared lowering for all ArrayAccess subscript operations.
+///
+/// Evaluates the receiver and index/value arguments, infers the static dispatch target
+/// (class or interface), unboxes Mixed receivers, then delegates to the class or interface
+/// method call emitter. Returns the declared return type of the resolved `offset*` method.
 fn emit_array_access_method(
     object: &Expr,
     method: &str,
@@ -163,6 +180,10 @@ fn emit_array_access_method(
     }
 }
 
+/// Infers the static dispatch target for an ArrayAccess method call from a static type.
+/// Returns `Class(name)` for a single concrete class, `Interface("ArrayAccess")` when virtual
+/// dispatch is required, or `None` if the type does not implement ArrayAccess. Union types must
+/// contain only objects implementing ArrayAccess (or Void); any other member yields `None`.
 fn array_access_dispatch_target(
     ty: &PhpType,
     ctx: &Context,
@@ -220,6 +241,8 @@ fn array_access_dispatch_target(
     }
 }
 
+/// Looks up the `offsetGet`/`offsetSet`/`offsetExists`/`offsetUnset` method signature
+/// from the class or interface metadata for the given dispatch target.
 fn array_access_method_sig(
     target: &ArrayAccessDispatchTarget,
     method: &str,
@@ -239,6 +262,11 @@ fn array_access_method_sig(
     }
 }
 
+/// Emits an interface ArrayAccess method call with the receiver saved below the evaluated arguments.
+///
+/// The receiver was pushed onto the stack before argument evaluation; this function duplicates
+/// it above the arguments, then emits the interface method call and discards all saved slots.
+/// Returns the declared return type of the interface method.
 fn emit_interface_method_call_with_saved_receiver_below_args(
     interface_name: &str,
     method: &str,
@@ -266,6 +294,12 @@ fn emit_interface_method_call_with_saved_receiver_below_args(
     ret_ty
 }
 
+/// Emits an interface method call after arguments have been pushed onto the stack.
+///
+/// Pops the receiver into the first integer argument register, materializes outgoing
+/// arguments per the target ABI, dispatches through the interface vtable, then releases
+/// overflow stack arguments and source-order named-argument temporaries. Returns the
+/// declared return type of the dispatched interface method.
 fn emit_interface_method_call_with_pushed_args(
     interface_name: &str,
     method: &str,
@@ -288,6 +322,9 @@ fn emit_interface_method_call_with_pushed_args(
     ret_ty
 }
 
+/// Computes the total temporary stack bytes consumed by pushed arguments for
+/// ArrayAccess method calls. Non-Void arguments consume 16 bytes each; Void arguments
+/// consume 0 bytes.
 fn pushed_arg_temp_bytes(arg_types: &[PhpType]) -> usize {
     arg_types
         .iter()

@@ -16,6 +16,10 @@ use super::common::{
     coerce_current_value_to_target, push_arg_value, release_preserved_mixed_after_arg_coercion,
 };
 
+/// Loads a spread/callback array element into the appropriate result register based on `source_elem_ty`.
+/// For `Float`, loads into `float_result_reg`; for `Str`, loads pointer and length into `string_result_regs`;
+/// for `Void`, emits nothing; otherwise loads scalar or pointer into `int_result_reg`.
+/// `data_base_reg` points to the spread/callback array payload; `byte_offset` is the element's offset within that payload.
 pub(crate) fn load_array_element_to_result(
     emitter: &mut Emitter,
     source_elem_ty: &PhpType,
@@ -38,6 +42,9 @@ pub(crate) fn load_array_element_to_result(
     }
 }
 
+/// Returns the byte stride of a spread array element based on its PHP type.
+/// `Str` elements occupy 16 bytes (8-byte pointer + 8-byte length), `Void` occupies 0 bytes,
+/// and all other types occupy 8 bytes (a single machine word or pointer).
 pub(crate) fn array_element_stride(source_elem_ty: &PhpType) -> usize {
     match source_elem_ty.codegen_repr() {
         PhpType::Str => 16,
@@ -46,6 +53,10 @@ pub(crate) fn array_element_stride(source_elem_ty: &PhpType) -> usize {
     }
 }
 
+/// Coerces a spread array element to the target type and pushes it as a call argument.
+/// First applies `coerce_current_value_to_target` using `source_elem_ty` and `target_ty`.
+/// Increments the refcount if the source is refcounted but not boxed to `Mixed`.
+/// Returns the post-coercion `PhpType` that was pushed.
 pub(crate) fn push_loaded_array_element_arg(
     source_elem_ty: &PhpType,
     target_ty: Option<&PhpType>,
@@ -63,6 +74,11 @@ pub(crate) fn push_loaded_array_element_arg(
     pushed_ty
 }
 
+/// Emits a hash lookup for a named or numeric key in a spread/callback array argument.
+/// Sets up `x0`/`rdi` with the hash base register and `x1`/`edi` with the key pointer/index,
+/// `x2`/`esi` with the key length, then calls `__rt_hash_get`.
+/// If `param_name` is provided, performs a named-key lookup first and branches to `found_label`
+/// when the key is present before falling through to the numeric-key lookup.
 pub(crate) fn emit_hash_lookup_for_param_or_index(
     hash_base_reg: &str,
     param_name: Option<&str>,
@@ -112,6 +128,11 @@ pub(crate) fn emit_hash_lookup_for_param_or_index(
     }
 }
 
+/// Materializes a hash lookup result and pushes it as a call argument, handling Mixed boxing.
+/// Calls `materialize_hash_value_to_result` to move the hash lookup output into the standard result registers.
+/// For `Mixed` or `Union` source types that must coerce to a narrower target type, preserves the boxed payload
+/// on the stack during coercion then releases it afterward via `release_preserved_mixed_after_arg_coercion`.
+/// Returns the post-coercion `PhpType` that was pushed.
 pub(crate) fn push_loaded_hash_value_arg(
     source_elem_ty: &PhpType,
     target_ty: Option<&PhpType>,
@@ -141,6 +162,10 @@ pub(crate) fn push_loaded_hash_value_arg(
     pushed_ty
 }
 
+/// Moves the hash lookup result (delivered in architecture-specific register pairs: x1/x2 on ARM64, rdi/rsi on x86_64)
+/// into the standard result registers (`x0`/`d0`/`string_result_regs`) based on `source_elem_ty`.
+/// For `Int`/`Bool`, moves the scalar; for `Str`, moves pointer and length; for `Float`, moves bits via `fmov`/`movq`;
+/// for `Mixed`/`Union`, boxes the runtime payload as `Mixed` using `emit_box_runtime_payload_as_mixed`.
 fn materialize_hash_value_to_result(emitter: &mut Emitter, source_elem_ty: &PhpType) {
     match emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => match source_elem_ty.codegen_repr() {
@@ -179,6 +204,9 @@ fn materialize_hash_value_to_result(emitter: &mut Emitter, source_elem_ty: &PhpT
     }
 }
 
+/// Returns the element type for a spread source based on the container PHP type.
+/// For `PhpType::Array` and `PhpType::AssocArray`, returns the inner element type;
+/// for all other types, defaults to `PhpType::Int`.
 pub(super) fn spread_source_elem_ty(spread_ty: &PhpType) -> PhpType {
     match spread_ty {
         PhpType::Array(elem) => (**elem).clone(),

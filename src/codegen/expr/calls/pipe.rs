@@ -17,6 +17,10 @@ use super::super::super::context::Context;
 use super::super::super::data_section::DataSection;
 use super::super::super::emit::Emitter;
 
+/// Lowers `value |> callable` into a direct call by first storing `value` to a temporary,
+/// then synthesizing a call expression where the temporary is the sole argument to `callable`.
+/// The synthesized call carries `span` so diagnostics point at the `|>` token.
+/// Delegates to `emit_expr` for ABI materialization and ownership handling of the resulting call.
 pub(super) fn emit_pipe(
     value: &Expr,
     callable: &Expr,

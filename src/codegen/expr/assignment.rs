@@ -14,6 +14,19 @@ use super::super::emit::Emitter;
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::types::PhpType;
 
+/// Emits an assignment expression that also serves as an expression result.
+///
+/// For simple local variable targets, emits the assignment statement then emits
+/// the result target (or the variable itself if no result target is specified).
+/// For non-local targets (array access, property access), delegates to the
+/// non-local machinery which writes first then evaluates the result expression.
+///
+/// The `prelude` contains any leading assignment statements (e.g., from spread
+/// argument preprocessing). The `conditional_value_temp` is set when a null
+/// coalescing assignment has a non-null current value that must be preserved
+/// across the default branch.
+///
+/// Returns the PHP type of the result expression.
 pub(super) fn emit_assignment_expr(
     target: &Expr,
     value: &Expr,
@@ -53,10 +66,17 @@ pub(super) fn emit_assignment_expr(
     }
 }
 
+/// Returns true if `expr` is a Variable node with the same name as `name`.
 fn is_same_local(expr: &Expr, name: &str) -> bool {
     matches!(&expr.kind, ExprKind::Variable(other) if other == name)
 }
 
+/// Emits an assignment expression with a non-local target (array access, property, etc.).
+///
+/// Writes the value to the target first, then evaluates and returns the result expression
+/// (or the target itself if no result target is given). Unlike local variable assignment,
+/// the write must occur before the result is computed because the target may involve
+/// intermediate expressions or memory that would be clobbered by result evaluation.
 pub(super) fn emit_non_local_assignment_expr(
     target: &Expr,
     value: &Expr,
@@ -70,6 +90,17 @@ pub(super) fn emit_non_local_assignment_expr(
     super::emit_expr(result_target.unwrap_or(target), emitter, ctx, data)
 }
 
+/// Emits a null-coalescing assignment expression with a non-local target.
+///
+/// Handles the case where the right-hand side is a NullCoalesce node, and the current
+/// value may be a Mixed or Union type requiring special handling. If the current value
+/// is non-null, emits the result target (preserving the current value via a temporary
+/// on the stack for Mixed/Union types) and jumps to done. If the current value is null,
+/// evaluates the default, assigns it to `temp_name`, writes it to the non-local target,
+/// and uses the default as the result.
+///
+/// Returns `None` if the value is not a NullCoalesce expression (caller should fall back
+/// to a regular non-local assignment). Returns `Some(PhpType)` with the widened result type.
 fn emit_conditional_non_local_null_coalesce_assignment(
     temp_name: &str,
     target: &Expr,
@@ -138,6 +169,16 @@ fn emit_conditional_non_local_null_coalesce_assignment(
     Some(result_ty)
 }
 
+/// Emits the write half of a non-local assignment expression.
+///
+/// Dispatches to the appropriate statement emitter based on the target expression kind:
+/// - ArrayAccess on a Variable: `emit_array_assign_stmt`
+/// - ArrayAccess on a PropertyAccess: `emit_property_array_assign_stmt`
+/// - ArrayAccess on a StaticPropertyAccess: `emit_static_property_array_assign_stmt`
+/// - ArrayAccess on a nested expression: `emit_nested_array_assign_stmt`
+/// - PropertyAccess: `emit_property_assign_stmt`
+/// - StaticPropertyAccess: `emit_static_property_assign_stmt`
+/// Falls through to a warning comment for unsupported targets.
 fn emit_non_local_assignment_write(
     target: &Expr,
     value: &Expr,
@@ -182,6 +223,11 @@ fn emit_non_local_assignment_write(
     }
 }
 
+/// Emits any leading statements that precede the assignment expression.
+///
+/// Iterates over `prelude` statements and emits each one. Assign statements are emitted
+/// via `emit_assign_stmt` directly. Synthetic statements are handled recursively.
+/// All other statement kinds are emitted via the standard statement emitter.
 fn emit_assignment_prelude(
     prelude: &[Stmt],
     emitter: &mut Emitter,

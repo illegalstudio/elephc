@@ -19,6 +19,12 @@ use crate::codegen::stmt::helpers;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
+/// Lowers `$obj->property = $value` for all property assignment paths:
+/// null-coalescing (`??=`), stdClass dynamic properties, Mixed receivers,
+/// magic `__set`, nullable object receivers, reference properties, and
+/// concrete typed property slots. Emits the receiver, resolves the target
+/// slot, handles type coercion and boxing, releases the previous property
+/// value for non-reference properties, and stores the new value.
 pub(crate) fn emit_property_assign_stmt(
     object: &Expr,
     property: &str,
@@ -188,6 +194,12 @@ pub(crate) fn emit_property_assign_stmt(
     storage::store_property_value(emitter, object_reg, &val_ty, target.offset);
 }
 
+/// Rewrites a bare array literal as an `AssocArray` literal when assigning to
+/// a `T[string]:mixed` typed property. Converts positional integer keys `0..N`
+/// to explicit `0 => elem, 1 => elem, ...` pairs so the associative emitter
+/// can normalize string keys. Returns `None` if the value is not an array literal
+/// or the target type is not an associative array; in that case the caller falls
+/// back to ordinary expression emission.
 fn emit_indexed_literal_as_assoc_property_target(
     value: &Expr,
     target_ty: &PhpType,
@@ -228,18 +240,20 @@ fn emit_indexed_literal_as_assoc_property_target(
     ))
 }
 
+/// Returns `true` when the receiver expression's inferred type is `stdClass`.
 fn is_stdclass_receiver(object: &Expr, ctx: &Context) -> bool {
     let obj_ty = crate::codegen::functions::infer_contextual_type(object, ctx);
     crate::codegen::functions::singular_object_class(&obj_ty)
         .is_some_and(crate::types::checker::builtin_stdclass::is_stdclass)
 }
 
+/// Returns `true` when the receiver expression's inferred type is `Mixed`.
 fn is_mixed_receiver(object: &Expr, ctx: &Context) -> bool {
     let obj_ty = crate::codegen::functions::infer_contextual_type(object, ctx);
     matches!(obj_ty, PhpType::Mixed)
 }
 
-/// Lower `$obj->name = $value` for receivers whose property storage lives in
+/// Lowers `$obj->name = $value` for receivers whose property storage lives in
 /// a runtime hash (stdClass directly, or a Mixed receiver that resolves to a
 /// stdClass at runtime). Boxes the RHS into a Mixed cell with the existing
 /// helper, evaluates the receiver, and dispatches to the named runtime
@@ -283,6 +297,8 @@ fn emit_dynamic_property_assign_stmt(
     }
 }
 
+/// Extracts the concrete class name from a `Nullable<Object>` union type.
+/// Returns `None` for non-union types or unions without a single object class.
 fn nullable_object_class(object: &Expr, ctx: &Context) -> Option<String> {
     let obj_ty = crate::codegen::functions::infer_contextual_type(object, ctx);
     if !matches!(obj_ty, PhpType::Union(_)) {
@@ -291,6 +307,14 @@ fn nullable_object_class(object: &Expr, ctx: &Context) -> Option<String> {
     crate::codegen::functions::singular_object_class(&obj_ty).map(str::to_string)
 }
 
+/// Lowers `$obj->property = $value` when the receiver is a `Nullable<Object>`
+/// union type. Saves the receiver pointer on the temporary stack before evaluating
+/// the RHS (preserving PHP evaluation order), guards against null-at-runtime
+/// by calling `emit_unbox_mixed_object_or_fatal` when the runtime type is
+/// `Mixed` or a union, then proceeds with normal property assignment using
+/// the concrete class as the target. Handles magic `__set`, dynamic properties,
+/// and referenced property storage. Cleans up both the saved receiver and the
+/// pushed RHS value from the temporary stack before returning.
 fn emit_nullable_property_assign_stmt(
     object: &Expr,
     class_name: &str,
@@ -412,6 +436,9 @@ fn emit_nullable_property_assign_stmt(
     abi::emit_release_temporary_stack(emitter, 16);                             // discard the saved nullable receiver after property storage consumes the RHS
 }
 
+/// Returns the number of temporary-stack bytes consumed by a pushed RHS value.
+/// `Void` and `Never` types push 0 bytes; all other types push a full 16-byte
+/// slot (the standard size for a Mixed cell or scalar slot on the temp stack).
 fn pushed_value_temp_bytes(val_ty: &PhpType) -> usize {
     if matches!(val_ty, PhpType::Void | PhpType::Never) {
         0
@@ -420,12 +447,18 @@ fn pushed_value_temp_bytes(val_ty: &PhpType) -> usize {
     }
 }
 
+/// Looks up the declared PHP type of a property on the receiver's inferred
+/// class. Returns `None` if the class is not a unique object class or the
+/// property is not declared in the class info.
 fn declared_property_type(object: &Expr, property: &str, ctx: &Context) -> Option<PhpType> {
     let obj_ty = crate::codegen::functions::infer_contextual_type(object, ctx);
     let class_name = crate::codegen::functions::singular_object_class(&obj_ty)?;
     declared_property_type_for_class(class_name, property, ctx)
 }
 
+/// Looks up the declared PHP type of a named property on a given class.
+/// Returns `None` if the class is not registered in `ctx.classes` or
+/// the property is not declared in the class's property table.
 fn declared_property_type_for_class(class_name: &str, property: &str, ctx: &Context) -> Option<PhpType> {
     let class_info = ctx.classes.get(class_name)?;
     class_info
@@ -435,6 +468,9 @@ fn declared_property_type_for_class(class_name: &str, property: &str, ctx: &Cont
         .map(|(_, ty)| ty.clone())
 }
 
+/// Returns `Some(class_name)` when the given class has a `__set` magic method
+/// and does not declare the given property. This means property assignments
+/// should be routed through `__set` at runtime rather than a concrete slot.
 fn magic_set_target_for_class(class_name: &str, property: &str, ctx: &Context) -> Option<String> {
     let class_info = ctx.classes.get(class_name)?;
     if class_info.properties.iter().any(|(name, _)| name == property) {

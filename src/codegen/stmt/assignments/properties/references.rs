@@ -19,6 +19,8 @@ use crate::codegen::stmt::helpers;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
+/// Returns `true` when the receiver's inferred type is a declared object
+/// class that has a reference property of the given name.
 pub(super) fn is_reference_property(object: &Expr, property: &str, ctx: &Context) -> bool {
     let obj_ty = crate::codegen::functions::infer_contextual_type(object, ctx);
     let PhpType::Object(class_name) = obj_ty else {
@@ -28,6 +30,10 @@ pub(super) fn is_reference_property(object: &Expr, property: &str, ctx: &Context
         .get(&class_name)
         .is_some_and(|class_info| class_info.reference_properties.contains(property))
 }
+/// Returns `Some(var_name)` when `object` is `$this`, `value` is a variable
+/// with the same name as `property`, and that name is a registered reference
+/// parameter in `ctx.ref_params`. Used for promoted constructor properties
+/// that are declared as `&$param`.
 pub(super) fn promoted_reference_bind_var(
     object: &Expr,
     property: &str,
@@ -46,6 +52,11 @@ pub(super) fn promoted_reference_bind_var(
     Some(var_name.clone())
 }
 
+/// Emits a reference bind for a promoted constructor property: `&$prop = $this->prop`.
+/// Emits the variable address via `emit_ref_arg_variable_address`, pushes the
+/// result value, evaluates the receiver, resolves the property slot, and stores
+/// the address of the property slot into the variable's storage. The property
+/// must be a concrete (non-dynamic, non-magic) reference property.
 pub(super) fn emit_property_reference_bind(
     var_name: &str,
     object: &Expr,
@@ -73,6 +84,11 @@ pub(super) fn emit_property_reference_bind(
     storage::store_property_reference_address(emitter, object_reg, target.offset);
 }
 
+/// Lowers property assignment through a reference lvalue (e.g. `&$obj->prop = $value`).
+/// Coerces the RHS to the property's declared type, retains borrowed heap results,
+/// pushes the value, evaluates the receiver, resolves the concrete property slot,
+/// releases the previous referenced value, and stores the new value through the
+/// reference pointer.
 pub(super) fn emit_property_reference_write(
     value: &Expr,
     object: &Expr,
@@ -105,6 +121,9 @@ pub(super) fn emit_property_reference_write(
     storage::store_referenced_value(emitter, pointer_reg, &val_ty);
 }
 
+/// Looks up the declared PHP type of a named reference property on a given
+/// object. Returns `None` if the receiver is not a unique object class, the
+/// class has no such property, or the property is not declared as a reference.
 fn reference_property_type(object: &Expr, property: &str, ctx: &Context) -> Option<PhpType> {
     let obj_ty = crate::codegen::functions::infer_contextual_type(object, ctx);
     let PhpType::Object(class_name) = obj_ty else {

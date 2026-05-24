@@ -20,6 +20,11 @@ use crate::codegen::stmt::helpers;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
+/// Lowers `$obj->prop[$index] = $value` for indexed (positional) arrays.
+/// Handles null-coalescing targets, `ArrayAccess` objects, `Mixed` receivers,
+/// and concrete typed property slots. Emits array growth checks, slot
+/// normalization on first write, proper release of the previous slot payload
+/// for overwrites, and zero-fills gap slots when extending the logical length.
 pub(crate) fn emit_property_array_assign_stmt(
     object: &Expr,
     property: &str,
@@ -195,6 +200,11 @@ pub(crate) fn emit_property_array_assign_stmt(
     }
 }
 
+/// Lowers `$obj->prop[$index] = $value` for `AssocArray` (string-key) properties.
+/// Loads the property-backed hash table, computes the normalized string key,
+/// evaluates the value, persists strings as needed, and calls `__rt_hash_set`
+/// to insert or update the entry. Publishes the possibly-reallocated hash
+/// pointer back to the property slot on return.
 fn emit_property_assoc_array_assign_stmt(
     target: &target::PropertyAssignTarget,
     index: &Expr,
@@ -283,6 +293,11 @@ fn emit_property_assoc_array_assign_stmt(
     abi::emit_store_to_address(emitter, table_reg, object_reg, target.offset);  // publish the possibly-reallocated hash pointer back to the property slot
 }
 
+/// Lowers `$obj->prop[$index] = $value` when the receiver type is `Mixed`.
+/// Pushes the evaluated Mixed receiver, computes the integer index, evaluates
+/// and boxes the RHS as a Mixed cell, then calls `__rt_mixed_property_get` to
+/// resolve the property and `__rt_mixed_array_set` to mutate the decoded array
+/// slot in place. Uses the temporary stack to preserve values across calls.
 fn emit_mixed_property_array_assign_stmt(
     property: &str,
     index: &Expr,
@@ -335,6 +350,11 @@ fn emit_mixed_property_array_assign_stmt(
     }
 }
 
+/// Carries derived layout and ownership state for an indexed property-array
+/// assignment. `effective_store_ty` is the type actually stored (accounting for
+/// element-type specialization and Mixed coercion). `stores_refcounted_pointer`
+/// is true when the effective store type is a heap pointer that requires
+/// reference-counted release on overwrite.
 struct PropertyIndexedAssignState {
     val_ty: PhpType,
     effective_store_ty: PhpType,
@@ -342,6 +362,12 @@ struct PropertyIndexedAssignState {
 }
 
 impl PropertyIndexedAssignState {
+    /// Constructs assignment state from the declared element type and the
+    /// evaluated value type. Determines `effective_store_ty` by upgrading to
+    /// `Mixed` when the element type is `Mixed`; otherwise uses the value type
+    /// if it differs (e.g. assigning a narrower type into a wider slot).
+    /// Sets `stores_refcounted_pointer` true for heap-pointer types that
+    /// require a reference-counted release when overwriting an existing slot.
     fn new(elem_ty: &PhpType, val_ty: &PhpType) -> Self {
         let effective_store_ty = if matches!(elem_ty, PhpType::Mixed) {
             PhpType::Mixed
@@ -365,6 +391,13 @@ impl PropertyIndexedAssignState {
     }
 }
 
+/// Evaluates the RHS of a property-array indexed assignment and prepares it
+/// for storage. Performs type coercion when the value type differs from the
+/// declared element type, boxes iterables into Mixed cells for Mixed containers,
+/// retains borrowed heap results as needed, and pushes the prepared value
+/// onto the temporary stack (register pair for strings, float register for
+/// floats, single register otherwise). Returns the final `val_ty` after all
+/// transformations.
 fn prepare_property_array_assign_value(
     value: &Expr,
     emitter: &mut Emitter,
@@ -410,6 +443,11 @@ fn prepare_property_array_assign_value(
     val_ty
 }
 
+/// Reloads the saved RHS value from the temporary stack into the appropriate
+/// result register after array growth and other helper calls that may have
+/// clobbered caller-saved registers. On ARM64: strings → `x1:x2`, floats →
+/// `d0`, scalars → `x0`. On x86_64: strings → `rax:rdx`, floats → `xmm0`,
+/// scalars → `rax`.
 fn restore_property_array_assign_value_aarch64(
     emitter: &mut Emitter,
     val_ty: &PhpType,
@@ -421,6 +459,10 @@ fn restore_property_array_assign_value_aarch64(
     }
 }
 
+/// Reloads the saved RHS value from the temporary stack into the appropriate
+/// result register after array growth and other helper calls that may have
+/// clobbered caller-saved registers. On x86_64: strings → `rax:rdx`, floats →
+/// `xmm0`, scalars → `rax`.
 fn restore_property_array_assign_value_x86_64(
     emitter: &mut Emitter,
     val_ty: &PhpType,
@@ -432,6 +474,11 @@ fn restore_property_array_assign_value_x86_64(
     }
 }
 
+/// On first indexed write (original length == 0), initializes the slot-width
+/// and value-type kind word in the property-backed array header so the runtime
+/// knows how to interpret slots. String arrays use 16-byte pointer+length slots;
+/// refcounted pointers and Mixed use 8-byte slots; scalars record a packed kind
+/// marker preserving the indexed-array kind and copy-on-write flag bits.
 fn normalize_property_indexed_array_layout_aarch64(
     state: &PropertyIndexedAssignState,
     emitter: &mut Emitter,
@@ -465,6 +512,11 @@ fn normalize_property_indexed_array_layout_aarch64(
     emitter.label(&skip_normalize);
 }
 
+/// On first indexed write (original length == 0), initializes the slot-width
+/// and value-type kind word in the property-backed array header so the runtime
+/// knows how to interpret slots. String arrays use 16-byte pointer+length slots;
+/// refcounted pointers and Mixed use 8-byte slots; scalars record a packed kind
+/// marker preserving the indexed-array kind and copy-on-write flag bits.
 fn normalize_property_indexed_array_layout_x86_64(
     state: &PropertyIndexedAssignState,
     emitter: &mut Emitter,
@@ -500,6 +552,13 @@ fn normalize_property_indexed_array_layout_x86_64(
     emitter.label(&skip_normalize);
 }
 
+/// Stores the prepared RHS value into the addressed indexed slot of a
+/// property-backed array on ARM64. For refcounted pointer types (Mixed, arrays,
+/// objects) that overwrite an existing slot within the original logical length,
+/// releases the previous payload via `emit_decref_if_refcounted` before
+/// writing. For strings, calls `__rt_heap_free_safe` on the previous string
+/// before replacing the pointer+length slot. Stamps the array value-type header
+/// after the write and computes the slot address as base+24+(index<<element_shift).
 fn store_property_indexed_array_value_aarch64(
     elem_ty: &PhpType,
     state: &PropertyIndexedAssignState,
@@ -559,6 +618,13 @@ fn store_property_indexed_array_value_aarch64(
     }
 }
 
+/// Stores the prepared RHS value into the addressed indexed slot of a
+/// property-backed array on x86_64. For refcounted pointer types (Mixed, arrays,
+/// objects) that overwrite an existing slot within the original logical length,
+/// releases the previous payload via `emit_decref_if_refcounted` before
+/// writing. For strings, calls `__rt_heap_free_safe` on the previous string
+/// before replacing the pointer+length slot. Stamps the array value-type header
+/// after the write and computes the slot address as base+24+(index<<3).
 fn store_property_indexed_array_value_x86_64(
     elem_ty: &PhpType,
     state: &PropertyIndexedAssignState,
@@ -622,6 +688,12 @@ fn store_property_indexed_array_value_x86_64(
     }
 }
 
+/// Zero-fills gap slots when the target index extends beyond the original
+/// logical length of a property-backed indexed array on ARM64. Iterates from
+/// the previous logical end up to and including the target index, initializing
+/// each gap slot (null pointer and zero length for strings, zero for scalars).
+/// Finally writes the new logical length (= highest_written_index + 1) to the
+/// array header word at offset 0.
 fn extend_property_indexed_array_if_needed_aarch64(
     state: &PropertyIndexedAssignState,
     emitter: &mut Emitter,
@@ -658,6 +730,12 @@ fn extend_property_indexed_array_if_needed_aarch64(
     emitter.label(&skip_extend);
 }
 
+/// Zero-fills gap slots when the target index extends beyond the original
+/// logical length of a property-backed indexed array on x86_64. Iterates from
+/// the previous logical end up to and including the target index, initializing
+/// each gap slot (null pointer and zero length for strings, zero for scalars).
+/// Finally writes the new logical length (= highest_written_index + 1) to the
+/// array header word at offset 0.
 fn extend_property_indexed_array_if_needed_x86_64(
     state: &PropertyIndexedAssignState,
     emitter: &mut Emitter,

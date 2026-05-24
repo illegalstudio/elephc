@@ -14,6 +14,10 @@ use crate::codegen::platform::Arch;
 use crate::codegen::abi;
 use crate::types::PhpType;
 
+/// Emits a native callback wrapper that adapts an external ABI caller into a PHP-callable
+/// function body. Dispatches to the x86_64 variant; ARM64 uses the general path below.
+/// The wrapper preserves callee-saved registers, spills incoming arguments and captures
+/// from the environment struct, then calls the original closure entry point before returning.
 pub(crate) fn emit_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCallbackWrapper) {
     if emitter.target.arch == Arch::X86_64 {
         emit_x86_64_callback_wrapper(emitter, wrapper);
@@ -53,6 +57,9 @@ pub(crate) fn emit_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCal
     abi::emit_return(emitter);
 }
 
+/// Emits the x86_64-specific callback wrapper. Follows the same general pattern as the ARM64
+/// path but uses x86_64 callee-saved registers (r12, r13), different frame layout, and
+/// stdarg-style argument push for overflow parameters.
 fn emit_x86_64_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCallbackWrapper) {
     let arg_types = wrapper_arg_types(wrapper);
     let slot_count = arg_types.len().max(1);
@@ -90,6 +97,8 @@ fn emit_x86_64_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCallbac
     abi::emit_return(emitter);
 }
 
+/// Returns the ordered list of PHP types for all arguments the wrapper will pass to the
+/// adapted callback: visible arg types first (in incoming ABI order), then capture types.
 fn wrapper_arg_types(wrapper: &DeferredCallbackWrapper) -> Vec<PhpType> {
     wrapper
         .visible_arg_types
@@ -99,6 +108,10 @@ fn wrapper_arg_types(wrapper: &DeferredCallbackWrapper) -> Vec<PhpType> {
         .collect()
 }
 
+/// Returns the ABI register name that holds the incoming environment pointer (the closure
+/// struct passed by the external caller). The environment pointer is the last argument in
+/// the incoming type list; this function reverses the outgoing assignment logic to find
+/// which register it occupies on entry.
 fn incoming_env_reg(emitter: &Emitter, visible_arg_types: &[PhpType]) -> &'static str {
     let mut incoming_types: Vec<PhpType> =
         visible_arg_types.iter().map(PhpType::codegen_repr).collect();
@@ -111,6 +124,9 @@ fn incoming_env_reg(emitter: &Emitter, visible_arg_types: &[PhpType]) -> &'stati
     abi::int_arg_reg_name(emitter.target, env_assignment.start_reg)
 }
 
+/// Spills every incoming visible argument from ABI registers to fixed stack slots in the
+/// wrapper frame. This must happen before `spill_captures` loads from the environment struct,
+/// because the environment pointer lives in a register that may clobber one of the arg regs.
 fn spill_visible_args(emitter: &mut Emitter, visible_arg_types: &[PhpType]) {
     let visible_types: Vec<PhpType> = visible_arg_types.iter().map(PhpType::codegen_repr).collect();
     let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, &visible_types, 0);
@@ -148,6 +164,9 @@ fn spill_visible_args(emitter: &mut Emitter, visible_arg_types: &[PhpType]) {
     }
 }
 
+/// Loads captured values from the closure environment struct (starting at offset 16, slot 0
+/// is the entry point) and spills them to stack slots after the visible args. `env_reg`
+/// holds the pointer to the environment struct.
 fn spill_captures(
     emitter: &mut Emitter,
     visible_count: usize,
@@ -191,6 +210,9 @@ fn spill_captures(
     }
 }
 
+/// Takes the spilled arguments and pushes them onto the standard temporary call stack in
+/// preparation for the adapted callback call. Returns the number of overflow bytes pushed
+/// so the caller can release them after the call returns.
 fn materialize_spilled_args_for_callback(
     emitter: &mut Emitter,
     arg_types: &[PhpType],
@@ -201,6 +223,9 @@ fn materialize_spilled_args_for_callback(
     abi::materialize_outgoing_args(emitter, &assignments)
 }
 
+/// ARM64 path: pushes each spilled argument (float, string pair, or scalar) onto the
+/// standard temporary call stack for the adapted closure invocation. Arguments are pushed
+/// in reverse order so the called function can consume them as overflow parameters.
 fn push_spilled_args_as_call_temporaries(
     emitter: &mut Emitter,
     arg_types: &[PhpType],
@@ -228,6 +253,8 @@ fn push_spilled_args_as_call_temporaries(
     }
 }
 
+/// x86_64 path: materializes spilled arguments for the adapted callback call. Returns
+/// the number of overflow bytes pushed so the caller can release them after the call.
 fn materialize_spilled_args_for_callback_x86_64(
     emitter: &mut Emitter,
     arg_types: &[PhpType],
@@ -237,6 +264,9 @@ fn materialize_spilled_args_for_callback_x86_64(
     abi::materialize_outgoing_args(emitter, &assignments)
 }
 
+/// x86_64 path: pushes each spilled argument (float in xmm0, string pair in r10/r11, or
+/// scalar in r10) onto the standard temporary call stack in reverse order so the called
+/// function consumes them as overflow parameters.
 fn push_spilled_args_as_call_temporaries_x86_64(emitter: &mut Emitter, arg_types: &[PhpType]) {
     for (idx, ty) in arg_types.iter().enumerate() {
         let slot_offset = frame_arg_slot_offset(idx);
@@ -259,10 +289,13 @@ fn push_spilled_args_as_call_temporaries_x86_64(emitter: &mut Emitter, arg_types
     }
 }
 
+/// Returns the fixed stack slot offset for the idx-th incoming frame argument on x86_64.
+/// Each slot occupies 16 bytes, and slot 0 is reserved for the return address.
 fn frame_arg_slot_offset(idx: usize) -> usize {
     (idx + 1) * 16
 }
 
+/// Rounds `n` up to the nearest 16-byte boundary for stack alignment purposes.
 fn align16(n: usize) -> usize {
     (n + 15) & !15
 }

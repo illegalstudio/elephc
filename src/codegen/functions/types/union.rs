@@ -10,6 +10,12 @@
 
 use crate::types::PhpType;
 
+/// Merges a vector of `PhpType` members into a single `PhpType`.
+///
+/// Unpacks any nested `Union` types into a flat list. If any member is `Mixed`,
+/// returns `Mixed` immediately. Otherwise deduplicates the remaining members.
+/// Returns the sole member directly if only one remains after deduplication,
+/// otherwise wraps the result in a `Union`.
 pub(super) fn merge_union_members(members: Vec<PhpType>) -> PhpType {
     let mut flat = Vec::new();
     for member in members {

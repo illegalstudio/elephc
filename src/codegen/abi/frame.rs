@@ -15,6 +15,9 @@ use super::registers::{
     float_result_reg, frame_pointer_reg, int_result_reg, is_float_register, string_result_regs,
 };
 
+/// Sets up the stack frame for a function body.
+/// On AArch64: allocates `frame_size` bytes, saves x29/x30 in the footer, and establishes x29 as the frame pointer.
+/// On x86_64: pushes rbp, establishes rsp as the frame base, and reserves `frame_size - 16` bytes for locals.
 pub fn emit_frame_prologue(emitter: &mut Emitter, frame_size: usize) {
     emitter.comment("prologue");
     match emitter.target.arch {
@@ -46,6 +49,9 @@ pub fn emit_frame_prologue(emitter: &mut Emitter, frame_size: usize) {
     }
 }
 
+/// Tears down the stack frame and restores the caller's frame state.
+/// On AArch64: restores x29/x30 from the footer and releases `frame_size` bytes.
+/// On x86_64: releases local bytes and pops rbp.
 pub fn emit_frame_restore(emitter: &mut Emitter, frame_size: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -68,10 +74,14 @@ pub fn emit_frame_restore(emitter: &mut Emitter, frame_size: usize) {
     }
 }
 
+/// Emits the function return sequence using the platform `ret` instruction.
 pub fn emit_return(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller using the platform return instruction
 }
 
+/// Sets up the stack frame for a cleanup callback (e.g., from destructor unwinding).
+/// On AArch64: allocates 16 bytes of spill space and saves x29/x30.
+/// On x86_64: pushes rbp and establishes `frame_base_reg` as the temporary frame pointer.
 pub fn emit_cleanup_callback_prologue(emitter: &mut Emitter, frame_base_reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -86,6 +96,9 @@ pub fn emit_cleanup_callback_prologue(emitter: &mut Emitter, frame_base_reg: &st
     }
 }
 
+/// Tears down the cleanup callback frame and returns.
+/// On AArch64: restores x29/x30 from the 16-byte spill area and releases it.
+/// On x86_64: pops rbp. Both targets then emit the platform `ret` instruction.
 pub fn emit_cleanup_callback_epilogue(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -99,6 +112,9 @@ pub fn emit_cleanup_callback_epilogue(emitter: &mut Emitter) {
     emit_return(emitter);
 }
 
+/// Emits code that computes the address of a local frame slot and stores it in `dest`.
+/// Uses the frame pointer (x29/rbp) as the base. Large offsets on AArch64 are walked down in
+/// 4095-byte chunks to stay within immediate-add instructions.
 pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -126,10 +142,15 @@ pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize)
     }
 }
 
+/// Stores `reg` into the local frame slot at `offset` from the frame pointer, using x9 as scratch.
+/// On AArch64: uses `stur` for offsets ≤ 255, otherwise computes the address first.
+/// On x86_64: stores via `[rbp - offset]` with a mov instruction; float registers use movsd.
 pub fn store_at_offset(emitter: &mut Emitter, reg: &str, offset: usize) {
     store_at_offset_scratch(emitter, reg, offset, "x9");
 }
 
+/// Stores `reg` into the local frame slot at `offset` from the frame pointer, using `scratch` as scratch.
+/// This variant accepts a caller-specified scratch register to avoid conflicts in multi-register sequences.
 pub fn store_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, scratch: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -155,10 +176,15 @@ pub fn store_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, 
     }
 }
 
+/// Loads the local frame slot at `offset` from the frame pointer into `reg`, using x9 as scratch.
+/// On AArch64: uses `ldur` for offsets ≤ 255, otherwise computes the address first.
+/// On x86_64: loads via `[rbp - offset]` with a mov instruction; float registers use movsd.
 pub fn load_at_offset(emitter: &mut Emitter, reg: &str, offset: usize) {
     load_at_offset_scratch(emitter, reg, offset, "x9");
 }
 
+/// Loads the local frame slot at `offset` from the frame pointer into `reg`, using `scratch` as scratch.
+/// This variant accepts a caller-specified scratch register to avoid conflicts in multi-register sequences.
 pub fn load_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, scratch: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -184,6 +210,9 @@ pub fn load_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, s
     }
 }
 
+/// Loads a value from an arbitrary address in memory into `reg`.
+/// `addr_reg` holds the base address; `byte_offset` is added (AArch64 scaled immediate, x86_64 additive).
+/// On x86_64, float registers use movsd; integers use mov.
 pub fn emit_load_from_address(emitter: &mut Emitter, reg: &str, addr_reg: &str, byte_offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -208,6 +237,9 @@ pub fn emit_load_from_address(emitter: &mut Emitter, reg: &str, addr_reg: &str, 
     }
 }
 
+/// Stores `reg` to an arbitrary address in memory.
+/// `addr_reg` holds the base address; `byte_offset` is added (AArch64 scaled immediate, x86_64 additive).
+/// On x86_64, float registers use movsd; integers use mov.
 pub fn emit_store_to_address(
     emitter: &mut Emitter,
     reg: &str,
@@ -237,6 +269,8 @@ pub fn emit_store_to_address(
     }
 }
 
+/// Stores zero to an arbitrary address in memory using the architectural zero register.
+/// On AArch64 uses xzr; on x86_64 stores an explicit 0. `byte_offset` is added to `addr_reg`.
 pub fn emit_store_zero_to_address(emitter: &mut Emitter, addr_reg: &str, byte_offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -257,6 +291,9 @@ pub fn emit_store_zero_to_address(emitter: &mut Emitter, addr_reg: &str, byte_of
     }
 }
 
+/// Loads a spilled incoming call argument from the caller stack into `reg`.
+/// On AArch64 uses the frame pointer (x29) as base with positive offset; large offsets are walked
+/// through a scratch register in 4080-byte chunks. On x86_64 uses rbp with positive offset.
 pub fn load_from_caller_stack(emitter: &mut Emitter, reg: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -288,6 +325,8 @@ pub fn load_from_caller_stack(emitter: &mut Emitter, reg: &str, offset: usize) {
     }
 }
 
+/// Zero-initializes the local frame slot at `offset` from the frame pointer.
+/// On AArch64 uses the xzr register via `store_at_offset`; on x86_64 emits a mov with immediate 0.
 pub fn emit_store_zero_to_local_slot(emitter: &mut Emitter, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -303,6 +342,10 @@ pub fn emit_store_zero_to_local_slot(emitter: &mut Emitter, offset: usize) {
     }
 }
 
+/// Saves the return value into a hidden frame slot so it survives a tail-call or callback frame switch.
+/// Float values use the float result register; strings use string_result_regs (pointer + length);
+/// scalars use the integer result register. `return_offset` is the slot for the primary value; string
+/// length is stored 8 bytes before it.
 pub fn emit_preserve_return_value(
     emitter: &mut Emitter,
     return_ty: &PhpType,
@@ -323,6 +366,9 @@ pub fn emit_preserve_return_value(
     }
 }
 
+/// Restores the return value from a hidden frame slot after a tail-call or callback frame switch.
+/// Reverse of `emit_preserve_return_value`: loads based on `return_ty` codegen repr into the
+/// appropriate result registers.
 pub fn emit_restore_return_value(
     emitter: &mut Emitter,
     return_ty: &PhpType,
@@ -343,6 +389,9 @@ pub fn emit_restore_return_value(
     }
 }
 
+/// Allocates or releases `amount` bytes from the stack pointer.
+/// On AArch64 emits at most 4080-byte chunks to stay within sub/add immediate limits.
+/// On x86_64 emits a single sub or add. `subtract=true` reserves space; `subtract=false` releases.
 pub(crate) fn emit_adjust_sp(emitter: &mut Emitter, amount: usize, subtract: bool) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -370,6 +419,9 @@ pub(crate) fn emit_adjust_sp(emitter: &mut Emitter, amount: usize, subtract: boo
     }
 }
 
+/// Computes the address of a temporary stack slot relative to the current stack pointer and
+/// stores it in `scratch`. Used for stack positions that are not part of the fixed frame layout.
+/// On AArch64 walks up from sp in 4080-byte chunks; on x86_64 uses lea with rsp base.
 pub(crate) fn emit_sp_address(emitter: &mut Emitter, scratch: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {

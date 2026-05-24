@@ -11,6 +11,10 @@
 use super::*;
 
 #[test]
+// Tests that `emit_store_incoming_param` stores the first 8 integer parameters
+// in registers (x0-x7) and spills subsequent parameters to the caller stack.
+// Verifies the cursor advances correctly and stack loads use the correct
+// frame-pointer offset for the 9th parameter.
 fn test_emit_store_incoming_param_uses_registers_then_caller_stack() {
     let mut emitter = test_emitter();
     let mut cursor = IncomingArgCursor::default();
@@ -32,6 +36,9 @@ fn test_emit_store_incoming_param_uses_registers_then_caller_stack() {
 }
 
 #[test]
+// Tests that `emit_frame_slot_address` correctly handles offsets larger than
+// a single immediate instruction can encode by emitting multiple sub instructions
+// to reach offsets like 5000 on ARM64.
 fn test_emit_frame_slot_address_large_offset() {
     let mut emitter = test_emitter();
     emit_frame_slot_address(&mut emitter, "x0", 5000);
@@ -47,6 +54,10 @@ fn test_emit_frame_slot_address_large_offset() {
 }
 
 #[test]
+// Tests that `build_outgoing_arg_assignments_for_target` respects register limits
+// on ARM64, using registers x0-x7 for the first 8 integer args and spilling
+// subsequent args to the stack. Also verifies float args (d0-d7) are tracked
+// with is_float=true and correctly overflow to stack after 8 float registers.
 fn test_build_outgoing_arg_assignments_respects_register_limits() {
     let assignments = build_outgoing_arg_assignments_for_target(
         Target::new(Platform::MacOS, Arch::AArch64),
@@ -82,6 +93,10 @@ fn test_build_outgoing_arg_assignments_respects_register_limits() {
 }
 
 #[test]
+// Tests that `materialize_outgoing_args` emits stack allocation for overflow
+// args (beyond 8 integer registers) and generates correct ldr/str instructions
+// to move args between stack slots and registers. Verifies the total overflow
+// bytes returned matches the expected stack reservation.
 fn test_materialize_outgoing_args_keeps_overflow_on_stack() {
     let mut emitter = test_emitter();
     let assignments = build_outgoing_arg_assignments_for_target(
@@ -112,6 +127,10 @@ fn test_materialize_outgoing_args_keeps_overflow_on_stack() {
 }
 
 #[test]
+// Tests that `emit_store_local_slot_to_symbol` handles string slots with large
+// offsets (>4095) by emitting the necessary adrp/add page calculations and
+// decomposed sub instructions to reach the slot, then stores both x10 and x11
+// (the string pointer and length halves) at the computed address.
 fn test_emit_store_local_slot_to_symbol_handles_large_string_slot() {
     let mut emitter = test_emitter();
     emit_store_local_slot_to_symbol(&mut emitter, "_static_demo_name", &PhpType::Str, 5000);
@@ -128,6 +147,11 @@ fn test_emit_store_local_slot_to_symbol_handles_large_string_slot() {
 }
 
 #[test]
+// Tests that `emit_load_symbol_to_local_slot` handles string slots with large
+// offsets (>4095) by emitting the necessary adrp/add page calculations and
+// decomposed sub instructions to reach the slot, then loads x1 and x2 (the
+// string pointer and length halves) from the symbol and stores them at the
+// computed local slot address.
 fn test_emit_load_symbol_to_local_slot_handles_large_string_slot() {
     let mut emitter = test_emitter();
     emit_load_symbol_to_local_slot(&mut emitter, "_static_demo_name", &PhpType::Str, 5000);

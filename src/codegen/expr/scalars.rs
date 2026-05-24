@@ -18,18 +18,24 @@ use super::{Expr, PhpType};
 
 const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 
+/// Emits a boolean literal as an integer into the integer result register.
+/// `true` becomes 1, `false` becomes 0.
 pub(super) fn emit_bool_literal(b: bool, emitter: &mut Emitter) -> PhpType {
     emitter.comment(&format!("bool {}", b));
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), if b { 1 } else { 0 });
     PhpType::Bool
 }
 
+/// Emits a null literal using a sentinel value into the integer result register.
+/// Uses `NULL_SENTINEL` (0x7fff_ffff_ffff_fffe) to represent null at runtime.
 pub(super) fn emit_null_literal(emitter: &mut Emitter) -> PhpType {
     emitter.comment("null");
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), NULL_SENTINEL);
     PhpType::Void
 }
 
+/// Adds a string literal to the data section and loads its address and length
+/// into the string result registers (ptr in first reg, len in second reg).
 pub(super) fn emit_string_literal(
     value: &str,
     emitter: &mut Emitter,
@@ -44,12 +50,15 @@ pub(super) fn emit_string_literal(
     PhpType::Str
 }
 
+/// Loads an integer literal directly into the integer result register.
 pub(super) fn emit_int_literal(value: i64, emitter: &mut Emitter) -> PhpType {
     emitter.comment(&format!("load int {}", value));
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), value);
     PhpType::Int
 }
 
+/// Adds a float literal to the data section and loads it via a symbol address
+/// into the float result register (xmm0 on ARM64, xmm0 on x86_64).
 pub(super) fn emit_float_literal(
     value: f64,
     emitter: &mut Emitter,
@@ -74,6 +83,10 @@ pub(super) fn emit_float_literal(
     PhpType::Float
 }
 
+/// Evaluates the inner expression, then negates it in place.
+/// For floats uses `fneg` (ARM64) or `subsd` with 0.0 (x86_64).
+/// For integers uses two's-complement `neg`.
+/// Coerces null to zero before negating.
 pub(super) fn emit_negate(
     inner: &Expr,
     emitter: &mut Emitter,
@@ -121,6 +134,8 @@ pub(super) fn emit_negate(
     }
 }
 
+/// Evaluates the inner expression, coerces null to zero, then applies
+/// bitwise NOT (`mvn` on ARM64, `not` on x86_64) in place.
 pub(super) fn emit_bit_not(
     inner: &Expr,
     emitter: &mut Emitter,
@@ -145,6 +160,9 @@ pub(super) fn emit_bit_not(
     PhpType::Int
 }
 
+/// Evaluates the inner expression, coerces it to a truthiness value,
+/// then applies logical NOT (compare to 0, set result to 1 if equal).
+/// Returns a boolean (0 or 1) in the integer result register.
 pub(super) fn emit_not(
     inner: &Expr,
     emitter: &mut Emitter,

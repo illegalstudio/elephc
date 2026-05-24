@@ -15,6 +15,7 @@ use crate::types::PhpType;
 
 use super::super::abi;
 
+/// Preserves return registers before epilogue cleanup so the return value survives.
 pub(super) fn preserve_return_registers(emitter: &mut Emitter, ctx: &Context, return_ty: &PhpType) {
     let return_offset = ctx
         .pending_return_value_offset
@@ -22,6 +23,7 @@ pub(super) fn preserve_return_registers(emitter: &mut Emitter, ctx: &Context, re
     super::super::abi::emit_preserve_return_value(emitter, return_ty, return_offset);
 }
 
+/// Restores return registers after epilogue cleanup.
 pub(super) fn restore_return_registers(emitter: &mut Emitter, ctx: &Context, return_ty: &PhpType) {
     let return_offset = ctx
         .pending_return_value_offset
@@ -29,6 +31,7 @@ pub(super) fn restore_return_registers(emitter: &mut Emitter, ctx: &Context, ret
     super::super::abi::emit_restore_return_value(emitter, return_ty, return_offset);
 }
 
+/// Returns true if the function epilogue must emit cleanup for owned locals.
 pub(super) fn epilogue_has_side_effects(ctx: &Context) -> bool {
     !ctx.static_vars.is_empty()
         || !ctx.local_ref_cell_flags.is_empty()
@@ -42,6 +45,7 @@ pub(super) fn epilogue_has_side_effects(ctx: &Context) -> bool {
         })
 }
 
+/// Emits zero-initialization for local reference-cell flags at function entry.
 pub(crate) fn emit_local_ref_cell_flag_zero_init(emitter: &mut Emitter, ctx: &Context) {
     let mut offsets: Vec<_> = ctx
         .local_ref_cell_flags
@@ -54,6 +58,7 @@ pub(crate) fn emit_local_ref_cell_flag_zero_init(emitter: &mut Emitter, ctx: &Co
     }
 }
 
+/// Emits cleanup for owned locals at function epilogue (before return).
 pub(crate) fn emit_owned_local_epilogue_cleanup(
     emitter: &mut Emitter,
     ctx: &Context,
@@ -98,6 +103,11 @@ pub(crate) fn emit_owned_local_epilogue_cleanup(
     emit_local_ref_cell_epilogue_cleanup(emitter, ctx, label_scope);
 }
 
+/// Emits conditional cleanup for local reference cells at function epilogue.
+///
+/// For each reference-cell flag, emits a branch that skips cleanup when the flag
+/// indicates borrowed storage. Otherwise loads the cell address and releases it,
+/// then zeros the flag. Handles both AArch64 and x86_64 register conventions.
 fn emit_local_ref_cell_epilogue_cleanup(
     emitter: &mut Emitter,
     ctx: &Context,
@@ -146,6 +156,7 @@ fn emit_local_ref_cell_epilogue_cleanup(
     }
 }
 
+/// Pushes the exception-activation record for the current function frame.
 pub(super) fn emit_activation_record_push(emitter: &mut Emitter, ctx: &Context, cleanup_label: &str) {
     let prev_offset = ctx
         .activation_prev_offset
@@ -174,6 +185,7 @@ pub(super) fn emit_activation_record_push(emitter: &mut Emitter, ctx: &Context, 
     super::super::abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
 }
 
+/// Pops the exception-activation record for the current function frame.
 pub(super) fn emit_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
     let prev_offset = ctx
         .activation_prev_offset
@@ -185,6 +197,7 @@ pub(super) fn emit_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
     super::super::abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
 }
 
+/// Emits the cleanup callback label that runs owned-local cleanup and then returns.
 pub(super) fn emit_frame_cleanup_callback(emitter: &mut Emitter, ctx: &Context, cleanup_label: &str) {
     emitter.label(cleanup_label);
     super::super::abi::emit_cleanup_callback_prologue(

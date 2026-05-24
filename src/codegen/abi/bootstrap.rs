@@ -17,21 +17,35 @@ use super::{
     temp_int_reg,
 };
 
+/// Store OS-provided argc and argv into global symbols.
 pub fn emit_store_process_args_to_globals(emitter: &mut Emitter) {
     emit_store_reg_to_symbol(emitter, process_argc_reg(emitter.target), "_global_argc", 0);
     emit_store_reg_to_symbol(emitter, process_argv_reg(emitter.target), "_global_argv", 0);
 }
 
+/// Set the heap debug flag to 1 in global symbol storage.
 pub fn emit_enable_heap_debug_flag(emitter: &mut Emitter) {
     let scratch = temp_int_reg(emitter.target);
     emit_load_int_immediate(emitter, scratch, 1);
     emit_store_reg_to_symbol(emitter, scratch, "_heap_debug_enabled", 0);
 }
 
+/// Copy the current frame pointer into the destination scratch register.
 pub fn emit_copy_frame_pointer(emitter: &mut Emitter, dest: &str) {
     emitter.instruction(&format!("mov {}, {}", dest, super::registers::frame_pointer_reg(emitter))); // copy the current frame pointer into the requested scratch register
 }
 
+/// Emit a process-exit sequence for the current target, then return control to the OS.
+///
+/// # Arguments
+/// - `code`: the exit code visible to the OS; must fit in the target's exit register.
+///
+/// # Platform behavior
+/// - **macOS ARM64 / Linux ARM64**: loads `code` into `x0` and invokes syscall 1 (`sys_exit`).
+/// - **Linux x86_64**: loads `code` into `edi` (SysV first-argument register) and invokes syscall 60 (`exit`).
+/// - **macOS x86_64**: panics — not yet implemented.
+///
+/// This routine never returns to the calling code. The syscall consumes the current execution context.
 pub fn emit_exit(emitter: &mut Emitter, code: u32) {
     match (emitter.target.platform, emitter.target.arch) {
         (super::super::platform::Platform::MacOS, Arch::AArch64)

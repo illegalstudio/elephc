@@ -20,6 +20,18 @@ use super::super::PhpType;
 use crate::names::Name;
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
 
+/// Emits code for a local variable assignment (`$name = <expr>`).
+///
+/// Handles the full assignment sequence: evaluates the RHS expression,
+/// manages ownership release for the previous local value, coerces the result
+/// type to the local slot type, and updates `ctx` with the new type and ownership.
+/// Also manages closure metadata, first-class callables, and special cases for
+/// globals, static vars, and ref params.
+///
+/// - For null-coalescing (`$name ??= <default>`), delegates to `emit_null_coalesce_assign_stmt`.
+/// - For `Closure` / `FirstClassCallable` assignments, updates `ctx.closure_sigs`,
+///   `ctx.closure_captures`, `ctx.first_class_callable_targets`, and `ctx.variable_fcc_label`.
+/// - For `Callable` variable-to-variable copies, propagates the above metadata.
 pub(crate) fn emit_assign_stmt(
     name: &str,
     value: &Expr,
@@ -332,6 +344,15 @@ pub(crate) fn emit_assign_stmt(
     }
 }
 
+/// Saves the current type, static type, ownership, and cleanup safety of a local
+/// variable that will be assigned a closure capturing that same variable by reference.
+/// Temporarily sets the local's type to `PhpType::Callable` so that emitting the RHS
+/// closure does not treat the self-reference as a borrow of the old type.
+///
+/// Returns `None` if the value is not a capturing closure targeting this name;
+/// returns `Some((old_ty, old_static_ty, old_ownership, old_cleanup_safe))` when a
+/// self-referential capture was detected, allowing `restore_self_ref_closure_capture`
+/// to undo the temporary mutation.
 fn prepare_self_ref_closure_capture(
     name: &str,
     value: &Expr,
@@ -353,6 +374,11 @@ fn prepare_self_ref_closure_capture(
     Some(saved)
 }
 
+/// Restores a local variable's type, static type, ownership, and cleanup safety
+/// after a self-referential closure capture is emitted.
+///
+/// This is the counterpart to `prepare_self_ref_closure_capture`. It is a no-op
+/// when `saved` is `None` (no self-reference was detected).
 fn restore_self_ref_closure_capture(
     name: &str,
     saved: Option<(PhpType, PhpType, HeapOwnership, bool)>,
@@ -369,6 +395,12 @@ fn restore_self_ref_closure_capture(
     }
 }
 
+/// Returns `true` if `value` is a `Closure` expression that captures `name`
+/// both by value and by reference.
+///
+/// This is used to detect self-referential closure captures (`$x = fn() => &$x`)
+/// so that the local slot's type can be temporarily mutated to `PhpType::Callable`
+/// before the closure is emitted, preventing incorrect aliasing analysis.
 fn closure_captures_name_by_ref(value: &Expr, name: &str) -> bool {
     matches!(
         &value.kind,
@@ -381,6 +413,11 @@ fn closure_captures_name_by_ref(value: &Expr, name: &str) -> bool {
     )
 }
 
+/// Returns the target `PhpType` when assigning an `ArrayLiteral` to a local whose
+/// declared type is an `AssocArray`; otherwise returns `None`.
+///
+/// This allows indexed array literals (`[1, 2, 3]`) to be stored into explicitly
+/// typed associative-array locals without forcing a re-keying at runtime.
 fn assoc_array_literal_target_type(value: &Expr, target_ty: Option<&PhpType>) -> Option<PhpType> {
     if !matches!(value.kind, ExprKind::ArrayLiteral(_)) {
         return None;
@@ -391,6 +428,11 @@ fn assoc_array_literal_target_type(value: &Expr, target_ty: Option<&PhpType>) ->
     }
 }
 
+/// Emits an indexed `ArrayLiteral` (`[val0, val1, ...]`) as an `AssocArray`
+/// by re-keying each element to its integer index.
+///
+/// This allows assigning an indexed literal to a local with an explicit
+/// associative-array type without runtime re-keying overhead.
 fn emit_indexed_literal_as_assoc_target(
     value: &Expr,
     target_ty: &PhpType,
@@ -460,6 +502,15 @@ fn resolve_storable_target(target: &CallableTarget, ctx: &Context) -> Option<Cal
     }
 }
 
+/// Emits code for a null-coalescing assignment (`$name ??= <default>`).
+///
+/// Loads the current value of `$name`, tests whether it is non-null, and only
+/// evaluates `default` and performs the store when the current value is null.
+/// Skips the store entirely when `default` is `literal null`, leaving the
+/// current value untouched.
+///
+/// Uses `__rt_mixed_unbox` for `Mixed`/`Union` types to inspect the runtime tag;
+/// otherwise compares against the shared null sentinel (`0x7fff_ffff_ffff_fffe`).
 fn emit_null_coalesce_assign_stmt(
     name: &str,
     current: &Expr,
@@ -485,6 +536,13 @@ fn emit_null_coalesce_assign_stmt(
     }
 }
 
+/// Emits a conditional branch to `keep_label` when the result register holds a
+/// non-null value.
+///
+/// For `Mixed`/`Union` types, calls `__rt_mixed_unbox` first to inspect the boxed
+/// tag; for scalar types, compares the result register against the shared null
+/// sentinel. ARM64 and x86_64 produce architecturally appropriate comparison + branch
+/// sequences.
 fn emit_branch_if_result_non_null(ty: &PhpType, keep_label: &str, emitter: &mut Emitter) {
     if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_call_label(emitter, "__rt_mixed_unbox");                      // inspect the boxed value tag before deciding whether ??= should store

@@ -17,6 +17,12 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::context::{Context, TRY_HANDLER_SLOT_SIZE};
 
+/// Seeds the constant map with built-in PHP constants and user-defined constants.
+///
+/// Built-in constants include platform-specific values (e.g., `FNM_*` flags differ
+/// between macOS and Linux), `PATHINFO_*` bitmask values, stream handles (`STDIN`/`STDOUT`/`STDERR`),
+/// `LOCK_*` values, and `JSON_*` integer constants. User constants come from `const`
+/// declarations and `define()` calls discovered by `collect_constant_decls`.
 pub(super) fn collect_constants(
     program: &Program,
     target_platform: Platform,
@@ -107,6 +113,12 @@ pub(super) fn collect_constants(
     constants
 }
 
+/// Recursively scans statements for user-defined constant declarations.
+///
+/// Visits `const` declarations and `define()` function calls, inserting each
+/// constant's name, expression, and inferred type into `constants`. Skips nested
+/// functions/classes; only processes statement bodies at the top level and within
+/// `IncludeOnceGuard` or synthetic bodies.
 fn collect_constant_decls(
     stmts: &[Stmt],
     constants: &mut HashMap<String, (ExprKind, PhpType)>,
@@ -138,6 +150,10 @@ fn collect_constant_decls(
     }
 }
 
+/// Infers the `PhpType` for a constant expression from its `ExprKind` variant.
+///
+/// Returns `PhpType::Int` as a fallback for unsupported expression kinds.
+/// Does not evaluate the expression; only maps literal variants to their types.
 fn constant_expr_type(kind: &ExprKind) -> PhpType {
     match kind {
         ExprKind::IntLiteral(_) => PhpType::Int,
@@ -149,6 +165,11 @@ fn constant_expr_type(kind: &ExprKind) -> PhpType {
     }
 }
 
+/// Collects the names of all PHP `global` variables declared inside user functions.
+///
+/// Scans every function body in the program (but not the top level) and gathers
+/// variable names from `global` declarations. Returns a set of global variable
+/// names used to seed the codegen context.
 pub(super) fn collect_global_var_names(program: &Program) -> HashSet<String> {
     let mut names = HashSet::new();
     for stmt in program {
@@ -159,6 +180,10 @@ pub(super) fn collect_global_var_names(program: &Program) -> HashSet<String> {
     names
 }
 
+/// Recursively gathers `global` variable names from a statement list.
+///
+/// Helper for `collect_global_var_names`. Descends into control-flow bodies
+/// (if/while/for/foreach/try/switch) but ignores top-level declarations.
 fn collect_global_vars_in_body(stmts: &[Stmt], names: &mut HashSet<String>) {
     for stmt in stmts {
         match &stmt.kind {
@@ -212,6 +237,11 @@ fn collect_global_vars_in_body(stmts: &[Stmt], names: &mut HashSet<String>) {
     }
 }
 
+/// Collects all static variables declared inside user functions, keyed by `(function_name, var_name)`.
+///
+/// Scans every function body in the program and registers `static` variable declarations
+/// with their inferred type (from the initializer expression). The resulting map
+/// seeds the codegen context to emit static storage.
 pub(super) fn collect_static_vars(
     program: &Program,
     global_env: &TypeEnv,
@@ -225,6 +255,11 @@ pub(super) fn collect_static_vars(
     statics
 }
 
+/// Recursively gathers `static` variable declarations from a function body.
+///
+/// Helper for `collect_static_vars`. Descends into control-flow bodies and
+/// registers each `static var` with its `(func_name, var_name)` key and inferred type.
+/// The `global_env` parameter is unused but accepted for API compatibility.
 fn collect_static_vars_in_body(
     func_name: &str,
     stmts: &[Stmt],
@@ -296,6 +331,12 @@ fn collect_static_vars_in_body(
     let _ = global_env;
 }
 
+/// Pre-allocates hidden stack slots for every `try` block in the top-level program.
+///
+/// Each `try` block requires a dedicated slot to store the handler pointer during
+/// unwinding. This scans the main statement list (not function bodies) recursively,
+/// allocating a slot and pushing its offset for each `try` encountered. Nested
+/// try/catch/finally structures are handled recursively.
 pub(super) fn collect_main_try_slots(stmts: &[Stmt], ctx: &mut Context) {
     for stmt in stmts {
         match &stmt.kind {

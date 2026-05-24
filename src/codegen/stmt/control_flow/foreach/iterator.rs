@@ -128,6 +128,20 @@ pub(crate) fn emit_iterator_foreach(
     abi::emit_release_temporary_stack(emitter, 16);                             // discard the parked receiver slot
 }
 
+/// Emits foreach for objects that may implement Iterator or IteratorAggregate.
+///
+/// Probes the saved iterable object at runtime to determine whether it implements
+/// Iterator directly or requires IteratorAggregate's getIterator() to obtain an
+/// Iterator. Branches to the appropriate lowering path; objects implementing
+/// neither interface call `__rt_iterable_unsupported_kind` which aborts with a
+/// fatal diagnostic.
+///
+/// # Arguments
+/// * `receiver_var` - variable holding the iterable object (parked on the stack)
+/// * `key_var` - optional key variable name
+/// * `value_var` - value variable name
+/// * `body` - foreach body statements
+/// * `emitter`, `ctx`, `data` - codegen state
 pub(crate) fn emit_iterable_object_foreach(
     receiver_var: Option<&str>,
     key_var: &Option<String>,
@@ -207,6 +221,9 @@ enum IteratorDispatchTarget {
     Interface(String),
 }
 
+/// Dispatches an Iterator method (rewind/valid/key/current/next) through the
+/// appropriate class vtable or interface dispatch path. Returns the PHP return
+/// type of the dispatched method.
 impl IteratorDispatchTarget {
     fn dispatch(&self, method: &str, emitter: &mut Emitter, ctx: &mut Context) -> PhpType {
         match self {
@@ -219,6 +236,9 @@ impl IteratorDispatchTarget {
         }
     }
 
+    /// Returns true if the dispatch target implements the Iterator interface.
+    /// For classes, checks the class's interface list. For interfaces, checks
+    /// the interface's parent hierarchy via BFS.
     fn implements_iterator(&self, ctx: &Context) -> bool {
         match self {
             IteratorDispatchTarget::Class(class_name) => {
@@ -231,6 +251,8 @@ impl IteratorDispatchTarget {
     }
 }
 
+/// Constructs an IteratorDispatchTarget from a class or interface name.
+/// Distinguishes between classes and interfaces in the context's type registry.
 fn iterator_dispatch_target(name: &str, ctx: &Context) -> IteratorDispatchTarget {
     if ctx.interfaces.contains_key(name) {
         IteratorDispatchTarget::Interface(name.to_string())
@@ -239,6 +261,9 @@ fn iterator_dispatch_target(name: &str, ctx: &Context) -> IteratorDispatchTarget
     }
 }
 
+/// Constructs an IteratorDispatchTarget from the return type of getIterator().
+/// If the return type is a known interface, dispatches via that interface;
+/// otherwise dispatches via the Iterator interface directly.
 fn iterator_return_dispatch_target(ret_ty: &PhpType, ctx: &Context) -> IteratorDispatchTarget {
     match ret_ty {
         PhpType::Object(name) if ctx.interfaces.contains_key(name) => {
@@ -249,6 +274,8 @@ fn iterator_return_dispatch_target(ret_ty: &PhpType, ctx: &Context) -> IteratorD
     }
 }
 
+/// Returns true if the named class directly implements the named interface,
+/// checked via linear scan of the class's interface list.
 fn class_implements_interface(class_name: &str, interface_name: &str, ctx: &Context) -> bool {
     ctx.classes.get(class_name).is_some_and(|class_info| {
         class_info
@@ -258,6 +285,9 @@ fn class_implements_interface(class_name: &str, interface_name: &str, ctx: &Cont
     })
 }
 
+/// Returns true if the named interface extends (directly or transitively)
+/// the ancestor interface, checked via breadth-first search through the
+/// interface parent hierarchy.
 fn interface_extends_interface(interface_name: &str, ancestor_name: &str, ctx: &Context) -> bool {
     if interface_name == ancestor_name {
         return true;
@@ -281,6 +311,15 @@ fn interface_extends_interface(interface_name: &str, ancestor_name: &str, ctx: &
     false
 }
 
+/// Stores the result of `key()` or `current()` into the foreach variable's
+/// stack slot as a Mixed value. Preserves the previous slot value (if owned)
+/// by calling `__rt_decref_mixed` before overwriting. Updates the variable's
+/// type to Mixed and ownership to Owned.
+///
+/// # Arguments
+/// * `var_name` - name of the foreach variable
+/// * `offset` - stack offset of the variable slot
+/// * `result_ty` - PHP type returned by key() or current()
 fn store_iterator_mixed_result(
     var_name: &str,
     offset: usize,
@@ -308,6 +347,11 @@ fn store_iterator_mixed_result(
     ctx.update_var_type_and_ownership(var_name, PhpType::Mixed, HeapOwnership::Owned);
 }
 
+/// Normalizes a foreach variable's stack slot to Mixed type before iteration.
+/// If the variable aliases the iterator receiver (e.g. `foreach ($obj as $obj)`),
+/// retains the receiver to prevent it being freed prematurely and returns the
+/// type to release later. Otherwise returns None. Boxing and cleanup of the
+/// old slot value are handled here before the slot is reused as Mixed.
 fn normalize_iterator_mixed_slot(
     var_name: &str,
     receiver_var: Option<&str>,
@@ -357,6 +401,11 @@ fn normalize_iterator_mixed_slot(
     deferred_receiver_release
 }
 
+/// Releases the old value in a slot before it is overwritten by a Mixed
+/// foreach variable. Only releases if the previous ownership was Owned.
+/// For refcounted types (strings, arrays, objects), calls the runtime
+/// decref helper. For non-refcounted types (int, float, bool, null),
+/// this is a no-op.
 fn cleanup_replaced_iterator_slot(
     old_ty: &PhpType,
     old_offset: usize,
@@ -397,6 +446,10 @@ fn cleanup_replaced_iterator_slot(
     }
 }
 
+/// Reloads the parked iterator receiver from the stack slot and increments
+/// its refcount. Called when a foreach variable aliases the receiver to
+/// prevent the receiver being freed when the alias's old slot value is
+/// cleaned up in the next iteration.
 fn retain_saved_iterator_receiver(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -412,6 +465,9 @@ fn retain_saved_iterator_receiver(emitter: &mut Emitter) {
     );
 }
 
+/// Reloads the parked iterator receiver from the stack slot and decrements
+/// its refcount. Called after the foreach loop completes when a variable
+/// aliased the receiver (deferred release after loop body finishes).
 fn release_saved_iterator_receiver(release_ty: &PhpType, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -424,12 +480,18 @@ fn release_saved_iterator_receiver(release_ty: &PhpType, emitter: &mut Emitter) 
     crate::codegen::abi::emit_decref_if_refcounted(emitter, release_ty);
 }
 
+/// Moves the object result from the integer result register (rax/x0) into
+/// the receiver argument register (rdi on SysV x86_64; x0 already holds it
+/// on ARM64). On ARM64 this is a no-op since x0 is already the result reg.
 fn move_result_to_receiver_arg(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emitter.instruction("mov rdi, rax");                                    // move the object result into the SysV receiver argument register
     }
 }
 
+/// Reloads the parked iterator receiver from the 16-byte stack slot into
+/// the receiver argument register (x0 on ARM64, rdi on x86_64) before each
+/// Iterator method dispatch (rewind/valid/key/current/next).
 fn reload_iterator_receiver(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -441,6 +503,9 @@ fn reload_iterator_receiver(emitter: &mut Emitter) {
     }
 }
 
+/// Emits a conditional branch to `loop_end` when the iterator is exhausted.
+/// Tests the integer result register (x0/rax) after a `valid()` call: if zero,
+/// the iterator has no more elements and the foreach exits.
 fn emit_branch_if_invalid_iterator(emitter: &mut Emitter, loop_end: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -454,6 +519,11 @@ fn emit_branch_if_invalid_iterator(emitter: &mut Emitter, loop_end: &str) {
     }
 }
 
+/// Emits a runtime interface check via `__rt_exception_matches` to test
+/// whether the saved iterable object implements the given interface (Iterator
+/// or IteratorAggregate). Branches to `target_label` if the check succeeds.
+/// The saved object is loaded from the stack slot; the interface ID and
+/// exception flag (1) are passed as immediate arguments.
 fn emit_branch_if_saved_receiver_implements(
     interface_id: u64,
     target_label: &str,

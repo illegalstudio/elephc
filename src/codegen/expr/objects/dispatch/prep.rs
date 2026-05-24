@@ -16,6 +16,8 @@ use crate::names::method_symbol;
 use crate::parser::ast::{Expr, Visibility};
 use crate::types::{FunctionSig, PhpType};
 
+/// Evaluates arguments left-to-right and pushes them to the temporary stack in source order.
+/// Returns emitted call args describing how arguments were placed for the call dispatcher.
 pub(super) fn eval_and_push_args(
     args: &[Expr],
     sig: Option<&FunctionSig>,
@@ -36,6 +38,8 @@ pub(super) fn eval_and_push_args(
     )
 }
 
+/// Computes register assignments for outgoing call arguments on the target ABI.
+/// Takes the target ABI, argument types, and the first integer register number to use.
 pub(super) fn compute_register_assignments(
     emitter: &Emitter,
     arg_types: &[PhpType],
@@ -44,6 +48,8 @@ pub(super) fn compute_register_assignments(
     abi::build_outgoing_arg_assignments_for_target(emitter.target, arg_types, first_int_reg)
 }
 
+/// Pops arguments from the temporary stack into registers according to the ABI layout.
+/// Returns the number of stack bytes consumed by the argument materialization.
 pub(super) fn pop_args_to_registers(
     emitter: &mut Emitter,
     assignments: &[abi::OutgoingArgAssignment],
@@ -51,6 +57,7 @@ pub(super) fn pop_args_to_registers(
     abi::materialize_outgoing_args(emitter, assignments)
 }
 
+/// Resolves return type, vtable slot, and private-method label for an instance method dispatch.
 pub(super) fn resolve_instance_method_dispatch(
     ctx: &Context,
     class_name: &str,

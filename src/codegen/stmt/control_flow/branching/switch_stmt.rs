@@ -17,6 +17,11 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::{Expr, Stmt};
 use crate::types::PhpType;
 
+/// Lowers a switch statement into per-case equality checks and label jumps.
+/// Saves the subject expression to a temporary stack slot (16 bytes for strings, 8 bytes for scalars),
+/// then for each case emits an equality comparison against the saved subject.
+/// Jumps to the default label (or switch_end if no default) when all patterns miss.
+/// Each case body is emitted under a loop-stack entry where continue and break both target switch_end.
 pub(super) fn emit_switch_stmt(
     subject: &Expr,
     cases: &[(Vec<Expr>, Vec<Stmt>)],

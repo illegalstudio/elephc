@@ -15,6 +15,14 @@ use crate::types::PhpType;
 
 use super::prepare::IndexedAssignState;
 
+/// Extends the indexed array with null/zero slots when the target index is beyond the
+/// current logical length. Guarded by a capacity check; only zero-fills gap slots up to
+/// but not including the target index. Persists the updated logical length in the array header.
+///
+/// # Arguments
+/// * `state` - prepared indexed assignment state from the prepare phase
+/// * `emitter` - target-specific instruction emitter
+/// * `ctx` - codegen context (labels, locals, types)
 pub(super) fn extend_indexed_array_if_needed(
     state: &IndexedAssignState,
     emitter: &mut Emitter,
@@ -56,6 +64,21 @@ pub(super) fn extend_indexed_array_if_needed(
     emitter.label(&skip_extend);
 }
 
+/// x86_64/Linux-specific implementation that extends the indexed array by zero-filling
+/// gap slots between the current logical length and the target index, then updates
+/// the array header with the new logical length.
+///
+/// # Register conventions (System V ABI)
+/// * `r10` - pointer to the indexed array header (base for length and data access)
+/// * `r9` - target index being written
+/// * `r11` - clobbered to reload current logical length after potential store path clobbering
+/// * `r12` - running gap-filling index, advances from original length toward target
+/// * `r13` - temporary for computing string-slot addresses when `effective_store_ty` is `Str`
+///
+/// # Control flow
+/// * `skip_extend` - taken when `r9 <= current_length` (no extension needed)
+/// * `extend_loop` - iterates zero-filling gap slots until `r12 == r9`
+/// * `extend_store_len` - merges to here after loop completes to store new length
 fn extend_indexed_array_if_needed_linux_x86_64(
     state: &IndexedAssignState,
     emitter: &mut Emitter,

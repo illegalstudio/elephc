@@ -17,6 +17,11 @@ use crate::types::{FunctionSig, PhpType};
 
 use super::{coerce_result_to_type, coerce_to_string, coerce_to_truthiness, emit_expr};
 
+/// Emits a full ternary expression (`cond ? then : else`).
+///
+/// Evaluates `condition`, branches to `else_label` if zero, then emits `then_expr` and jumps to `end_label`.
+/// Falls through to `else_label` for the else branch. Both branches are coerced to a common `result_ty`.
+/// Returns the unified result type after both branches have been emitted.
 pub(super) fn emit_ternary(
     condition: &Expr,
     then_expr: &Expr,
@@ -49,6 +54,11 @@ pub(super) fn emit_ternary(
     result_ty
 }
 
+/// Emits the short ternary / elvis operator (`value ?: default`).
+///
+/// Emits `value` and saves the result before testing its truthiness.
+/// If truthy, restores the saved value and jumps to `end_label`. Otherwise falls through to emit `default`.
+/// Both branches are coerced to a common `result_ty`. Returns the unified result type.
 pub(super) fn emit_short_ternary(
     value: &Expr,
     default: &Expr,
@@ -81,6 +91,11 @@ pub(super) fn emit_short_ternary(
     result_ty
 }
 
+/// Infers the unified result type for the two ternary branches.
+///
+/// Uses a dummy signature to infer the type of each branch via `functions::infer_local_type_with_ctx`.
+/// Returns the common type: exact match if equal, `Mixed` if one branch is `Void`,
+/// `Str` if either is `Str`, `Float` if either is `Float`, otherwise the left type.
 fn infer_branch_result_type(left: &Expr, right: &Expr, ctx: &Context) -> PhpType {
     let dummy_sig = FunctionSig {
         params: vec![],
@@ -107,6 +122,12 @@ fn infer_branch_result_type(left: &Expr, right: &Expr, ctx: &Context) -> PhpType
     }
 }
 
+/// Coerces a branch result from `branch_ty` to `result_ty` in place.
+///
+/// No-op if types already match. Handles `Mixed`/`Union` boxing, string coercion,
+/// int-to-float promotion, and general type coercion via `coerce_result_to_type`.
+/// When the branch expression owns a `Mixed` that is being coerced to a non-Mixed type,
+/// preserves the mixed value across coercion and releases it afterward to keep ownership balanced.
 fn coerce_branch_result(
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -144,6 +165,13 @@ fn coerce_branch_result(
     }
 }
 
+/// Pops the saved result value from the runtime stack into the appropriate result register(s).
+///
+/// Matches on `PhpType::codegen_repr()` to emit the correct pop instruction(s):
+///   - Scalar/integer types → pop `int_result_reg`
+///   - Float → pop `float_result_reg`
+///   - String → pop register pair (ptr + len)
+///   - Void/Never → nothing
 fn pop_saved_result_value(emitter: &mut Emitter, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Bool
@@ -172,6 +200,10 @@ fn pop_saved_result_value(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
+/// Discards the saved result value from the runtime stack without materializing it as a result.
+///
+/// Simply pops the value off the stack; used when the short-ternary condition is falsy
+/// and the saved left value is not needed.
 fn discard_saved_result_value(emitter: &mut Emitter, ty: &PhpType) {
     pop_saved_result_value(emitter, ty);
 }

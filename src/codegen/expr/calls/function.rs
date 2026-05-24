@@ -17,6 +17,12 @@ use crate::types::{FunctionSig, PhpType};
 
 use super::args;
 
+/// Emits a direct user-defined or builtin function call.
+///
+/// Saves concat offset on x86_64 before nested calls, prepares arguments via
+/// `emit_pushed_call_args`, materializes outgoing ABI arguments, emits the call
+/// label, and restores concat offset for string returns. Returns the function's
+/// return type from the signature lookup, or `PhpType::Void` if not found.
 pub(super) fn emit_function_call(
     name: &str,
     args_exprs: &[Expr],
@@ -84,6 +90,12 @@ pub(super) fn emit_function_call(
     ret_ty
 }
 
+/// For each argument whose corresponding parameter has type `PhpType::Callable`, looks
+/// up the concrete callable signature from `callable_param_sigs` and registers it on
+/// the argument expression tree so the callee can be specialized at emit time.
+///
+/// Iterates positional and named arguments, skipping spreads, maps them to
+/// parameter indices, and calls `specialize_callable_expr` for eligible arguments.
 fn specialize_callable_arguments(
     function_name: &str,
     args_exprs: &[Expr],
@@ -128,6 +140,11 @@ fn specialize_callable_arguments(
     }
 }
 
+/// Recursively traverses `expr` to find the storage location that will hold a
+/// callable and delegates to `specialize_callable_var`.
+///
+/// Handles `Variable`, `ArrayAccess` (when the array is a `Variable`), and
+/// `Assignment` (traverses the value side). Other expression kinds are ignored.
 fn specialize_callable_expr(expr: &Expr, callable_sig: &FunctionSig, ctx: &mut Context) {
     match &expr.kind {
         ExprKind::Variable(name) => specialize_callable_var(name, callable_sig, ctx),
@@ -141,6 +158,12 @@ fn specialize_callable_expr(expr: &Expr, callable_sig: &FunctionSig, ctx: &mut C
     }
 }
 
+/// Associates `callable_sig` with the variable `name` in `ctx.closure_sigs`, then
+/// updates any previously deferred closures with matching parameter signatures and
+/// closure captures to use the new signature.
+///
+/// This propagates callable type information forward through deferred closure
+/// bodies that were already queued before the concrete signature was known.
 fn specialize_callable_var(name: &str, callable_sig: &FunctionSig, ctx: &mut Context) {
     let previous_sig = ctx
         .closure_sigs

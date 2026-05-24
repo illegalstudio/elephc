@@ -14,6 +14,21 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
 use crate::parser::ast::{Expr, Stmt};
 
+/// Emits a do-while loop.
+///
+/// # Inputs
+/// - `body`: statements executed each iteration before the condition check
+/// - `condition`: expression evaluated after each body execution; result coerced to truthiness
+///
+/// # Side effects
+/// - Allocates three labels: `dowhile_start`, `dowhile_cond`, `dowhile_end`
+/// - Pushes loop labels to `ctx.loop_stack` with `continue→dowhile_cond`, `break→dowhile_end`
+/// - Pops loop labels after body emission completes
+/// - Mutates `emitter` to emit labels and branch instructions
+/// - `condition` result is left in the current result register after truthiness coercion
+///
+/// # PHP semantics
+/// - Body executes at least once before condition is evaluated
 pub(crate) fn emit_do_while_stmt(
     body: &[Stmt],
     condition: &Expr,
@@ -46,6 +61,21 @@ pub(crate) fn emit_do_while_stmt(
     emitter.label(&loop_end);
 }
 
+/// Emits a while loop.
+///
+/// # Inputs
+/// - `condition`: expression evaluated before each iteration; result coerced to truthiness
+/// - `body`: statements executed each iteration while condition is non-zero
+///
+/// # Side effects
+/// - Allocates two labels: `while_start`, `while_end`
+/// - Pushes loop labels to `ctx.loop_stack` with `continue→while_start`, `break→while_end`
+/// - Pops loop labels after body emission completes
+/// - Mutates `emitter` to emit labels and branch instructions
+/// - `condition` result is left in the current result register after truthiness coercion
+///
+/// # PHP semantics
+/// - Condition is evaluated before the first iteration; body never executes if condition is initially zero
 pub(crate) fn emit_while_stmt(
     condition: &Expr,
     body: &[Stmt],
@@ -77,6 +107,25 @@ pub(crate) fn emit_while_stmt(
     emitter.label(&loop_end);
 }
 
+/// Emits a for loop.
+///
+/// # Inputs
+/// - `init`: statement executed once before the loop (typically variable assignment); may be None
+/// - `condition`: expression evaluated before each iteration; skipped if None; result coerced to truthiness
+/// - `update`: statement executed after each iteration body; may be None
+/// - `body`: statements executed each iteration while condition is non-zero
+///
+/// # Side effects
+/// - Allocates three labels: `for_start`, `for_cont`, `for_end`
+/// - Pushes loop labels to `ctx.loop_stack` with `continue→for_cont`, `break→for_end`
+/// - Pops loop labels after body emission completes
+/// - Mutates `emitter` to emit labels and branch instructions
+/// - `condition` result is left in the current result register after truthiness coercion
+///
+/// # PHP semantics
+/// - `init` executes once before any condition check
+/// - If `condition` is None, loop runs indefinitely (no PHP exit mechanism here; caller must arrange alternative control flow)
+/// - `continue` jumps to `update` (not to `condition`)
 pub(crate) fn emit_for_stmt(
     init: &Option<Box<Stmt>>,
     condition: &Option<Expr>,

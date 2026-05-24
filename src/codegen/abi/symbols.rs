@@ -23,6 +23,10 @@ use super::values::{emit_decref_if_refcounted, emit_load_int_immediate};
 
 const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 
+/// Stores a local variable from its frame slot into a static/global symbol.
+/// Loads the value from `offset` relative to the frame pointer, then writes it
+/// to `symbol` at `byte_offset`.  Handles Float (single register), Str (pointer
+/// + length pair), Void (null sentinel), and scalar/pointer types differently.
 pub fn emit_store_local_slot_to_symbol(
     emitter: &mut Emitter,
     symbol: &str,
@@ -54,6 +58,10 @@ pub fn emit_store_local_slot_to_symbol(
     }
 }
 
+/// Loads a value from a static/global symbol into a local frame slot.
+/// Reads from `symbol` at `byte_offset` and writes it to `offset` relative to
+/// the frame pointer.  Dispatches on `ty` to handle Float, Str (pointer +
+/// length), Void (null sentinel), and scalar/pointer types.
 pub fn emit_load_symbol_to_local_slot(
     emitter: &mut Emitter,
     symbol: &str,
@@ -85,6 +93,10 @@ pub fn emit_load_symbol_to_local_slot(
     }
 }
 
+/// Materializes the address of a local/internal symbol into `dest`.
+/// Uses ADRP+ADD on AArch64 (page-relative) and LEA with RIP-relative
+/// addressing on x86_64.  The symbol must be defined in the current module's
+/// data section.
 pub fn emit_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -97,6 +109,10 @@ pub fn emit_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &str) {
     }
 }
 
+/// Materializes the address of an external/global symbol into `dest`.
+/// Resolves the symbol through the GOT on both targets: ADRP+GOT on AArch64
+/// and MOVQ with GOTPCREL on x86_64.  Used for symbols defined outside the
+/// current translation unit.
 pub fn emit_extern_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -109,6 +125,10 @@ pub fn emit_extern_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &st
     }
 }
 
+/// Loads a value from an external symbol into `reg`.
+/// First resolves the extern symbol address via the GOT, then performs a
+/// load from `byte_offset` into `reg`.  Used for reading global variables
+/// defined in external libraries or other compilation units.
 pub fn emit_load_extern_symbol_to_reg(
     emitter: &mut Emitter,
     reg: &str,
@@ -120,6 +140,10 @@ pub fn emit_load_extern_symbol_to_reg(
     emit_load_from_address(emitter, reg, scratch, byte_offset);
 }
 
+/// Stores the contents of `reg` into an external symbol at a byte offset.
+/// First resolves the extern symbol address via the GOT, then performs a
+/// store from `reg` to `byte_offset`.  Used for writing to global variables
+/// defined in external libraries or other compilation units.
 pub fn emit_store_reg_to_extern_symbol(
     emitter: &mut Emitter,
     reg: &str,
@@ -131,6 +155,11 @@ pub fn emit_store_reg_to_extern_symbol(
     emit_store_to_address(emitter, reg, scratch, byte_offset);
 }
 
+/// Loads a value from a local/internal symbol into `reg`.
+/// Uses a temporary scratch register (x9 on AArch64) to compute the symbol
+/// address, then loads from `byte_offset`.  On x86_64 uses RIP-relative
+/// addressing directly when offset is zero.  Dispatches on register type
+/// for float vs. integer moves on x86_64.
 pub fn emit_load_symbol_to_reg(
     emitter: &mut Emitter,
     reg: &str,
@@ -166,6 +195,11 @@ pub fn emit_load_symbol_to_reg(
     }
 }
 
+/// Stores the contents of `reg` into a local/internal symbol at a byte offset.
+/// Uses a temporary scratch register (x9 on AArch64) to compute the symbol
+/// address, then stores at `byte_offset`.  On x86_64 uses RIP-relative
+/// addressing directly when offset is zero.  Dispatches on register type
+/// for float vs. integer moves on x86_64.
 pub fn emit_store_reg_to_symbol(
     emitter: &mut Emitter,
     reg: &str,
@@ -201,6 +235,10 @@ pub fn emit_store_reg_to_symbol(
     }
 }
 
+/// Stores the architectural zero register (xzr / zero) into a symbol slot.
+/// On AArch64 this is a single STR using xzr; on x86_64 it emits a MOV
+/// immediate zero.  Used to initialize symbol storage to null/zero without
+/// a separate load-from-register step.
 pub fn emit_store_zero_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -218,6 +256,11 @@ pub fn emit_store_zero_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offse
     }
 }
 
+/// Loads a symbol's value and places it into the appropriate result registers.
+/// Reads from `symbol` at offset 0 (and 8 for strings) and places the value
+/// into the target's canonical result registers: float_result_reg for Float,
+/// string_result_regs for Str, int_result_reg otherwise.  Used to return
+/// a symbol's value as a call result.
 pub fn emit_load_symbol_to_result(emitter: &mut Emitter, symbol: &str, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Float => {
@@ -237,6 +280,12 @@ pub fn emit_load_symbol_to_result(emitter: &mut Emitter, symbol: &str, ty: &PhpT
     }
 }
 
+/// Stores the current result registers into a static/global symbol.
+/// If `release_previous` is true, first loads the old symbol value and
+/// releases it: strings call `__rt_heap_free_safe`, refcounted types call
+/// `emit_decref_if_refcounted`.  Incoming results are preserved on the stack
+/// during the release call.  Handles Float, Str (pointer + length pair),
+/// Void (null sentinel), and scalar/pointer types.
 pub fn emit_store_result_to_symbol(
     emitter: &mut Emitter,
     symbol: &str,

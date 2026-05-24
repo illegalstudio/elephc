@@ -16,6 +16,17 @@ use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use super::{expr_result_heap_ownership, Expr, PhpType};
 
+/// Emits code to read a variable by name, dispatching on storage class.
+///
+/// Checks for FCC deferred closures, extern globals, global vars, ref params,
+/// and local stack slots. Loads the value into the standard expression result
+/// register(s) and returns the PHP type.
+///
+/// - **FCC closures**: marks the deferred wrapper as needed before dispatching.
+/// - **Extern globals**: delegates to `emit_global_load`.
+/// - **Global vars**: delegates to `emit_global_load`.
+/// - **Ref params**: delegates to `emit_ref_variable`.
+/// - **Local slots**: loads from the stack offset via `abi::emit_load`.
 pub(super) fn emit_variable(name: &str, emitter: &mut Emitter, ctx: &mut Context) -> PhpType {
     // Loading the variable's value as an Expr means the FCC pointer escapes the
     // short-circuit path (`emit_closure_call` bypasses this function when it
@@ -57,6 +68,15 @@ pub(super) fn emit_variable(name: &str, emitter: &mut Emitter, ctx: &mut Context
     ty
 }
 
+/// Emits code to throw an exception.
+///
+/// Evaluates `inner`, retains borrowed refcounted heap values before publishing
+/// them as the active exception, stores the result in `_exc_value`, and calls
+/// `__rt_throw_current` to unwind to the nearest handler. Returns `PhpType::Void`.
+///
+/// - `inner` is evaluated first (source order preserved).
+/// - Retains the value if it is refcounted and not already owned.
+/// - Uses `abi::int_result_reg(emitter)` as the temporary register for the value.
 pub(super) fn emit_throw(
     inner: &Expr,
     emitter: &mut Emitter,
@@ -77,6 +97,16 @@ pub(super) fn emit_throw(
     PhpType::Void
 }
 
+/// Emits code for a pre-increment operation (`++$name`).
+///
+/// Reads the current value, increments it in place, stores back to the original
+/// slot, and returns `PhpType::Int`. Supports global vars, ref params, and local
+/// stack slots.
+///
+/// - **Undefined var**: emits a warning comment and returns `PhpType::Int`.
+/// - **Global vars**: loads via `emit_global_load`, increments, stores inline to the global symbol.
+/// - **Ref params**: loads the pointer from the stack slot, dereferences, increments, stores back.
+/// - **Local slots**: uses `abi::load_at_offset` / `abi::store_at_offset`.
 pub(super) fn emit_pre_increment(name: &str, emitter: &mut Emitter, ctx: &mut Context) -> PhpType {
     let Some(var) = ctx.variables.get(name) else {
         emitter.comment(&format!("WARNING: undefined variable ${}", name));
@@ -114,6 +144,16 @@ pub(super) fn emit_pre_increment(name: &str, emitter: &mut Emitter, ctx: &mut Co
     PhpType::Int
 }
 
+/// Emits code for a post-increment operation (`$name++`).
+///
+/// Copies the current value to the result register, increments a scratch copy,
+/// stores back to the original slot, and returns the original value as
+/// `PhpType::Int`. Supports global vars, ref params, and local stack slots.
+///
+/// - **Undefined var**: emits a warning comment and returns `PhpType::Int`.
+/// - **Global vars**: loads via `emit_global_load`, copies to scratch, increments scratch, stores inline.
+/// - **Ref params**: loads the pointer from the stack slot, dereferences, copies result, increments scratch, stores back.
+/// - **Local slots**: uses `abi::load_at_offset` to result reg, copies to scratch, increments scratch, stores back.
 pub(super) fn emit_post_increment(
     name: &str,
     emitter: &mut Emitter,
@@ -161,6 +201,16 @@ pub(super) fn emit_post_increment(
     PhpType::Int
 }
 
+/// Emits code for a pre-decrement operation (`--$name`).
+///
+/// Reads the current value, decrements it in place, stores back to the original
+/// slot, and returns `PhpType::Int`. Supports global vars, ref params, and local
+/// stack slots.
+///
+/// - **Undefined var**: emits a warning comment and returns `PhpType::Int`.
+/// - **Global vars**: loads via `emit_global_load`, decrements, stores inline to the global symbol.
+/// - **Ref params**: loads the pointer from the stack slot, dereferences, decrements, stores back.
+/// - **Local slots**: uses `abi::load_at_offset` / `abi::store_at_offset`.
 pub(super) fn emit_pre_decrement(name: &str, emitter: &mut Emitter, ctx: &mut Context) -> PhpType {
     let Some(var) = ctx.variables.get(name) else {
         emitter.comment(&format!("WARNING: undefined variable ${}", name));
@@ -195,6 +245,16 @@ pub(super) fn emit_pre_decrement(name: &str, emitter: &mut Emitter, ctx: &mut Co
     PhpType::Int
 }
 
+/// Emits code for a post-decrement operation (`$name--`).
+///
+/// Copies the current value to the result register, decrements a scratch copy,
+/// stores back to the original slot, and returns the original value as
+/// `PhpType::Int`. Supports ref params and local stack slots. Note: global vars
+/// are not handled for post-decrement (no inline global store path).
+///
+/// - **Undefined var**: emits a warning comment and returns `PhpType::Int`.
+/// - **Ref params**: loads the pointer from the stack slot, dereferences, copies result, decrements scratch, stores back.
+/// - **Local slots**: uses `abi::load_at_offset` to result reg, copies to scratch, decrements scratch, stores back.
 pub(super) fn emit_post_decrement(
     name: &str,
     emitter: &mut Emitter,
@@ -229,6 +289,13 @@ pub(super) fn emit_post_decrement(
     PhpType::Int
 }
 
+/// Emits code to read the `$this` variable.
+///
+/// Loads `$this` from its stack slot into the integer result register and returns
+/// `PhpType::Object(class_name)` where `class_name` is the current class or empty
+/// string if outside a class scope.
+///
+/// - Emits a warning and returns `PhpType::Int` if `$this` is not in scope.
 pub(super) fn emit_this(emitter: &mut Emitter, ctx: &mut Context) -> PhpType {
     emitter.comment("$this");
     let var = match ctx.variables.get("this") {
@@ -244,6 +311,16 @@ pub(super) fn emit_this(emitter: &mut Emitter, ctx: &mut Context) -> PhpType {
     PhpType::Object(class_name)
 }
 
+/// Emits code to read a variable passed by reference (ref param).
+///
+/// Loads the pointer stored in the stack slot, then dereferences it and loads
+/// the value into the appropriate result register(s) based on type:
+/// - `Int`/`Bool` → `abi::int_result_reg`
+/// - `Float` → `abi::float_result_reg`
+/// - `Str` → `abi::string_result_regs` (pointer in first reg, length in second)
+/// - Other types → `abi::int_result_reg`
+///
+/// Returns the variable's `PhpType`.
 fn emit_ref_variable(name: &str, emitter: &mut Emitter, ctx: &mut Context) -> PhpType {
     let Some(var) = ctx.variables.get(name) else {
         emitter.comment(&format!("WARNING: undefined variable ${}", name));
@@ -273,11 +350,15 @@ fn emit_ref_variable(name: &str, emitter: &mut Emitter, ctx: &mut Context) -> Ph
     ty
 }
 
+/// Emits a store of `reg` into the global variable symbol `_gvar_{name}`.
+///
+/// Uses `abi::emit_store_reg_to_symbol` with offset 0.
 fn emit_global_store_inline(emitter: &mut Emitter, name: &str, reg: &str) {
     let label = format!("_gvar_{}", name);
     abi::emit_store_reg_to_symbol(emitter, reg, &label, 0);
 }
 
+/// Copies the integer value from `src` to `dst` using a target-specific mov instruction.
 fn emit_copy_int_reg(emitter: &mut Emitter, dst: &str, src: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -289,6 +370,7 @@ fn emit_copy_int_reg(emitter: &mut Emitter, dst: &str, src: &str) {
     }
 }
 
+/// Emits an in-place increment of `reg` by 1 using a target-specific add instruction.
 fn emit_add_one(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -300,6 +382,7 @@ fn emit_add_one(emitter: &mut Emitter, reg: &str) {
     }
 }
 
+/// Emits an in-place decrement of `reg` by 1 using a target-specific sub instruction.
 fn emit_sub_one(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {

@@ -14,6 +14,9 @@ use crate::types::PhpType;
 
 use super::union::merge_union_members;
 
+/// Recursively resolves a `Buffer` element type to its inner `PhpType`.
+/// Used during codegen to determine the element type stored in a buffer.
+/// Falls back to `PhpType::Int` for unknown types within buffers.
 pub(super) fn resolve_buffer_element_type(type_expr: &TypeExpr, ctx: &Context) -> PhpType {
     match type_expr {
         TypeExpr::Int => PhpType::Int,
@@ -39,6 +42,11 @@ pub(super) fn resolve_buffer_element_type(type_expr: &TypeExpr, ctx: &Context) -
     }
 }
 
+/// Converts a type expression to the `PhpType` used for codegen slot allocation and
+/// runtime value representation. Does not resolve nullable/union wrappers — those
+/// are handled separately by `codegen_static_type`. For named types, resolves class
+/// names to `PhpType::Object` or `PhpType::Packed` when the class is known;
+/// unknown names fall back to `PhpType::Int`.
 pub(crate) fn codegen_declared_type(type_expr: &TypeExpr, ctx: &Context) -> PhpType {
     match type_expr {
         TypeExpr::Int => PhpType::Int,
@@ -75,6 +83,10 @@ pub(crate) fn codegen_declared_type(type_expr: &TypeExpr, ctx: &Context) -> PhpT
     }
 }
 
+/// Resolves the static `PhpType` for a type expression, including nullable and union
+/// types. Nullable types are flattened into a union of the inner type and `void`.
+/// Union types are merged using `merge_union_members`. Non-union/non-nullable types
+/// delegate to `codegen_declared_type`.
 pub(crate) fn codegen_static_type(type_expr: &TypeExpr, ctx: &Context) -> PhpType {
     match type_expr {
         TypeExpr::Nullable(inner) => {

@@ -20,6 +20,7 @@ use super::temps::{emit_source_temp_arg, push_source_temp_type};
 use super::{FinalArgSource, PrefixVariadicTail, VariadicArgSource};
 use super::super::{push_expr_arg, EmittedCallArgs};
 
+/// Evaluates source expressions and builds final call args in source order.
 pub(in crate::codegen::expr::calls::args) fn emit_source_order_named_call_args(
     args_exprs: &[Expr],
     sig: &FunctionSig,
@@ -67,6 +68,9 @@ pub(in crate::codegen::expr::calls::args) fn emit_source_order_named_call_args(
     )
 }
 
+/// Emits call args for named non-spread calls.
+/// Evaluates each source expression to a temporary, records its type, then maps
+/// regular and variadic slots to those temporaries before pushing final args.
 fn emit_source_order_named_non_spread_call_args(
     plan: &call_args::CallArgPlan,
     sig: &FunctionSig,
@@ -156,6 +160,10 @@ fn emit_source_order_named_non_spread_call_args(
     )
 }
 
+/// Emits call args for named calls that include spread arguments.
+/// The positional prefix is evaluated first, then named arguments, with variadic
+/// tail handling determined by the signature. Emits a prefix length check when
+/// the prefix does not contain a dynamic named spread.
 fn emit_source_order_named_spread_call_args(
     plan: &call_args::CallArgPlan,
     sig: &FunctionSig,
@@ -310,6 +318,9 @@ fn emit_source_order_named_spread_call_args(
     )
 }
 
+/// Returns a bool vector indicating which spread elements in `args` are
+/// associative arrays. Used to determine whether static named spread arguments
+/// can be reordered into the final arg list.
 fn assoc_spread_sources(args: &[Expr], ctx: &Context) -> Vec<bool> {
     call_args::expand_static_assoc_spread_args(args)
         .iter()

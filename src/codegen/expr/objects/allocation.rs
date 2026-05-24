@@ -24,9 +24,15 @@ use super::super::{
     save_concat_offset_before_nested_call,
 };
 
+/// Magic high-32 bits baked into every x86_64 object heap header so `__rt_heap_alloc` can
+/// identify object-kind allocations without consulting the uniform header tag field.
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
+/// Sentinel written to the hi word of typed properties that carry no value yet (e.g., uninitialized
+/// properties with no default). The runtime uses this to distinguish truly empty slots from
+/// explicitly null-valued ones.
 const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 
+/// Lowers `new Class(...)` for known classes, routing to runtime helpers for built-in types.
 pub(super) fn emit_new_object(
     class_name: &str,
     args: &[Expr],
@@ -51,6 +57,7 @@ pub(super) fn emit_new_object(
     emit_new_object_core(class_name, args, true, emitter, ctx, data)
 }
 
+/// Lowers the core allocation path for `new Class(...)` with optional constructor invocation.
 pub(super) fn emit_new_object_core(
     class_name: &str,
     args: &[Expr],
@@ -321,10 +328,15 @@ pub(super) fn emit_new_object_core(
     PhpType::Object(class_name.to_string())
 }
 
+/// Returns true for SPL container classes that use a shared runtime doubly-linked-list
+/// representation regardless of the concrete subtype (SplDoublyLinkedList, SplStack, SplQueue).
 fn is_spl_doubly_linked_list_family(class_name: &str) -> bool {
     matches!(class_name, "SplDoublyLinkedList" | "SplStack" | "SplQueue")
 }
 
+/// Allocates and constructs an SPL doubly-linked-list variant (SplDoublyLinkedList, SplStack,
+/// SplQueue). Constructor arguments are ignored — the runtime helper owns all field setup.
+/// Class id is retrieved from `ctx.classes`; defaults to 0 if the class is unknown.
 fn emit_new_spl_doubly_linked_list(
     class_name: &str,
     args: &[Expr],
@@ -352,6 +364,9 @@ fn emit_new_spl_doubly_linked_list(
     PhpType::Object(class_name.to_string())
 }
 
+/// Allocates a runtime-managed SplFixedArray. If a size argument is provided it is emitted and
+/// coerced to int; otherwise the size defaults to 0. The allocated array is returned as
+/// `PhpType::Object("SplFixedArray")`.
 fn emit_new_spl_fixed_array(
     args: &[Expr],
     emitter: &mut Emitter,
@@ -381,14 +396,13 @@ fn emit_new_spl_fixed_array(
     PhpType::Object("SplFixedArray".to_string())
 }
 
-/// Codegen interception for `new Fiber($callable)`.
-///
-/// The standard `emit_new_object` path would size the object as `8 + num_props * 16`,
-/// which for Fiber (zero declared properties) yields only the object header and
-/// not enough room for the runtime-managed Fiber payload. We instead delegate the
-/// entire allocation, stack setup, and field initialisation to `__rt_fiber_construct`,
-/// passing the captured closure plus the runtime class id so `instanceof Fiber` keeps
-/// working.
+/// Handles `new Fiber($callable)` by delegating allocation, stack setup, and field
+/// initialisation to `__rt_fiber_construct`. The standard `emit_new_object` path would
+/// size the object as `8 + num_props * 16` which for Fiber (zero declared properties) yields
+/// only the object header and not enough room for the runtime-managed Fiber payload.
+/// Returns `PhpType::Object("Fiber")`. Captured closure variables are pre-loaded into the
+/// Fiber's `start_args` slots before the constructor returns so they are accessible when
+/// the fiber is first started.
 fn emit_new_fiber(
     args: &[Expr],
     emitter: &mut Emitter,

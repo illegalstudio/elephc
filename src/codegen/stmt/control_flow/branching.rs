@@ -16,6 +16,10 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::parser::ast::{Expr, Stmt};
 
+/// Lowers a PHP if/elseif/else statement into conditional branch assembly.
+/// Evaluates the condition once, emits branch labels for each clause,
+/// and jumps past remaining branches after each body completes.
+/// All branch bodies share the surrounding cleanup context (loops, switch, finally).
 pub(super) fn emit_if_stmt(
     condition: &Expr,
     then_body: &[Stmt],
@@ -36,6 +40,10 @@ pub(super) fn emit_if_stmt(
     )
 }
 
+/// Lowers a PHP switch statement into jump-table or chained-equality branch assembly.
+/// Evaluates the subject expression once, saves it to a temporary stack slot,
+/// compares it against each case pattern, and dispatches to the matching body label.
+/// The default label is pushed onto the loop stack so that break exits correctly.
 pub(super) fn emit_switch_stmt(
     subject: &Expr,
     cases: &[(Vec<Expr>, Vec<Stmt>)],

@@ -20,6 +20,7 @@ use crate::parser::ast::{Expr, Stmt};
 use crate::parser::ast::CatchClause;
 use crate::span::Span;
 
+/// Emits a PHP if/elseif/else statement.
 pub(super) fn emit_if_stmt(
     condition: &Expr,
     then_body: &[Stmt],
@@ -40,6 +41,7 @@ pub(super) fn emit_if_stmt(
     )
 }
 
+/// Emits a PHP foreach statement.
 pub(super) fn emit_foreach_stmt(
     array: &Expr,
     key_var: &Option<String>,
@@ -64,6 +66,7 @@ pub(super) fn emit_foreach_stmt(
     )
 }
 
+/// Emits a PHP do-while statement.
 pub(super) fn emit_do_while_stmt(
     body: &[Stmt],
     condition: &Expr,
@@ -74,6 +77,7 @@ pub(super) fn emit_do_while_stmt(
     loops::emit_do_while_stmt(body, condition, emitter, ctx, data)
 }
 
+/// Emits a PHP while statement.
 pub(super) fn emit_while_stmt(
     condition: &Expr,
     body: &[Stmt],
@@ -84,6 +88,7 @@ pub(super) fn emit_while_stmt(
     loops::emit_while_stmt(condition, body, emitter, ctx, data)
 }
 
+/// Emits a PHP for statement.
 pub(super) fn emit_for_stmt(
     init: &Option<Box<Stmt>>,
     condition: &Option<Expr>,
@@ -96,14 +101,17 @@ pub(super) fn emit_for_stmt(
     loops::emit_for_stmt(init, condition, update, body, emitter, ctx, data)
 }
 
+/// Emits a PHP break statement.
 pub(super) fn emit_break_stmt(levels: usize, emitter: &mut Emitter, ctx: &Context) {
     loops::emit_break_stmt(levels, emitter, ctx)
 }
 
+/// Emits a branch through a finally block when leaving a try/catch scope.
 pub(super) fn emit_branch_through_finally(emitter: &mut Emitter, ctx: &Context, target_label: &str) {
     exceptions::emit_branch_through_finally(emitter, ctx, target_label)
 }
 
+/// Emits a PHP return statement.
 pub(super) fn emit_return_stmt(
     expr: &Option<Expr>,
     emitter: &mut Emitter,
@@ -113,6 +121,7 @@ pub(super) fn emit_return_stmt(
     loops::emit_return_stmt(expr, emitter, ctx, data)
 }
 
+/// Emits a PHP throw statement.
 pub(super) fn emit_throw_stmt(
     expr: &Expr,
     emitter: &mut Emitter,
@@ -122,6 +131,7 @@ pub(super) fn emit_throw_stmt(
     exceptions::emit_throw_stmt(expr, emitter, ctx, data)
 }
 
+/// Emits a PHP try/catch/finally statement.
 pub(super) fn emit_try_stmt(
     try_body: &[Stmt],
     catches: &[CatchClause],
@@ -133,10 +143,12 @@ pub(super) fn emit_try_stmt(
     exceptions::emit_try_stmt(try_body, catches, finally_body, emitter, ctx, data)
 }
 
+/// Emits a PHP continue statement.
 pub(super) fn emit_continue_stmt(levels: usize, emitter: &mut Emitter, ctx: &Context) {
     loops::emit_continue_stmt(levels, emitter, ctx)
 }
 
+/// Emits a PHP switch statement.
 pub(super) fn emit_switch_stmt(
     subject: &Expr,
     cases: &[(Vec<Expr>, Vec<Stmt>)],

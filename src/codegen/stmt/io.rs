@@ -17,6 +17,8 @@ use super::super::platform::Arch;
 use super::PhpType;
 use crate::parser::ast::Expr;
 
+/// Lowers a top-level `echo` statement into stdout writes.
+/// Outputs a blank line and comment, then delegates to `emit_expr_to_stdout`.
 pub(super) fn emit_echo_stmt(
     expr: &Expr,
     emitter: &mut Emitter,
@@ -28,6 +30,13 @@ pub(super) fn emit_echo_stmt(
     emit_expr_to_stdout(expr, emitter, ctx, data);
 }
 
+/// Emits `expr` to stdout, coercing the expression result to a string first.
+/// For `PhpType::Str` and `PhpType::Object`, the string is written and released
+/// (the caller's ownership determines whether release is needed).
+/// For integer results on x86_64, stabilizes the result through a spill/reload
+/// pair before sentinel checks to avoid register corruption in caller-saved registers.
+/// Other types are passed directly to `emit_write_stdout`. Exits early for zero/null
+/// sentinels where PHP semantics suppress output.
 pub(crate) fn emit_expr_to_stdout(
     expr: &Expr,
     emitter: &mut Emitter,
@@ -80,6 +89,7 @@ pub(crate) fn emit_expr_to_stdout(
     }
 }
 
+/// Emits a string to stdout, releasing the temporary if `release_owned_temp` is true.
 fn emit_string_to_stdout_and_release_if_needed(emitter: &mut Emitter, release_owned_temp: bool) {
     if !release_owned_temp {
         abi::emit_write_stdout(emitter, &PhpType::Str);
@@ -94,6 +104,9 @@ fn emit_string_to_stdout_and_release_if_needed(emitter: &mut Emitter, release_ow
     abi::emit_release_temporary_stack(emitter, 16);                             // discard the saved string pointer/length pair
 }
 
+/// On x86_64 only, stabilizes the echo result through a temporary stack slot before
+/// sentinel checks or helper calls that may consume caller-saved registers.
+/// Handles both integer (x0) and float (d0) result registers; other types are left unchanged.
 fn stabilize_x86_64_echo_result(emitter: &mut Emitter, ty: &PhpType) {
     if emitter.target.arch != Arch::X86_64 {
         return;

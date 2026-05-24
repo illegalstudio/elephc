@@ -16,6 +16,7 @@ use crate::types::{FunctionSig, PhpType};
 
 use super::types::infer_local_type;
 
+/// Marks variables whose assignment within control flow disables epilogue cleanup.
 pub(super) fn mark_control_flow_epilogue_unsafe(
     stmts: &[crate::parser::ast::Stmt],
     ctx: &mut Context,
@@ -149,6 +150,11 @@ pub(super) fn mark_control_flow_epilogue_unsafe(
     }
 }
 
+/// Returns true if an assignment to `name` requires an epilogue cleanup guard.
+///
+/// A guard is needed when the variable is borrowed, a global, a static, or a
+/// by-ref parameter — cases where the normal epilogue cleanup would be incorrect
+/// or insufficient.
 fn assignment_needs_epilogue_guard(name: &str, ctx: &Context) -> bool {
     ctx.variables.get(name).is_some_and(|var| {
         var.ownership == HeapOwnership::Borrowed
@@ -158,6 +164,7 @@ fn assignment_needs_epilogue_guard(name: &str, ctx: &Context) -> bool {
     })
 }
 
+/// Collects try-handler slot offsets for all try/catch/finally blocks in the statement list.
 pub(super) fn collect_try_slots(stmts: &[crate::parser::ast::Stmt], ctx: &mut Context) {
     for stmt in stmts {
         match &stmt.kind {
@@ -217,6 +224,13 @@ pub(super) fn collect_try_slots(stmts: &[crate::parser::ast::Stmt], ctx: &mut Co
     }
 }
 
+/// Collects variable assignments from `stmts` that are guaranteed to execute
+/// along any straight-line control-flow path (no branches, no loops).
+///
+/// Returns a map from variable name to inferred type, and a boolean indicating
+/// whether the statement list may fall through (ends with return/break/continue).
+/// When `may_fall_through` is false, later statements in the same block are
+/// unreachable and are not included.
 fn collect_straight_line_direct_assignments(
     stmts: &[crate::parser::ast::Stmt],
     ctx: &Context,
@@ -243,6 +257,14 @@ fn collect_straight_line_direct_assignments(
     (assignments, may_fall_through)
 }
 
+/// Finds variables that are definitely assigned in every branch of an if/elseif/else
+/// construct where all branches fall through.
+///
+/// For each branch that may fall through, collects direct (non-conditional) assignments.
+/// A variable is "definitely assigned" when it receives the same refcounted type in every
+/// such branch. These variables can have their epilogue cleanup re-enabled after the if
+/// statement, because the control flow merge guarantees the assignment executes regardless
+/// of which branch is taken.
 fn exhaustive_if_direct_heap_assignments(
     then_body: &[crate::parser::ast::Stmt],
     elseif_clauses: &[(crate::parser::ast::Expr, Vec<crate::parser::ast::Stmt>)],

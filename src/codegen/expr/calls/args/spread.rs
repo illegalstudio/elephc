@@ -20,6 +20,11 @@ use super::array_elements::{
 use super::common::{declared_target_ty, push_expr_arg};
 use super::variadic::variadic_container_elem_ty;
 
+/// Emits code that unpacks a spread array's elements into the remaining named parameter slots.
+/// For positional (non-assoc) spreads, emits a length check before accessing elements to ensure
+/// required parameters are covered. For assoc spreads, performs key-based lookups against
+/// parameter names. Each element is pushed as an ABI-ready argument and its type appended to `arg_types`.
+/// Returns early with no emitted code if `remaining == 0`.
 pub(crate) fn emit_spread_into_named_params(
     spread_expr: &Expr,
     sig: Option<&FunctionSig>,
@@ -95,6 +100,9 @@ pub(crate) fn emit_spread_into_named_params(
     }
 }
 
+/// Generates a bounds check that aborts if the spread array contains fewer than `min_len` elements.
+/// Loads the spread array length from `array_base_reg`, compares against `min_len`, and branches to
+/// `emit_spread_too_few_args_abort` on failure. On success falls through to the next label.
 fn emit_spread_required_length_check(
     array_base_reg: &str,
     min_len: usize,
@@ -124,6 +132,9 @@ fn emit_spread_required_length_check(
     emitter.label(&ok_label);
 }
 
+/// Emits a fatal runtime abort with a "too few arguments" diagnostic message.
+/// Writes a fixed string to stderr and exits with code 1. Used when a spread provides
+/// insufficient elements for required parameters.
 fn emit_spread_too_few_args_abort(emitter: &mut Emitter, data: &mut DataSection) {
     let (message_label, message_len) =
         data.add_string(b"Fatal error: too few arguments for spread call\n");
@@ -147,6 +158,10 @@ fn emit_spread_too_few_args_abort(emitter: &mut Emitter, data: &mut DataSection)
     }
 }
 
+/// Emits code to push either a spread element at `element_idx` or a default expression to the ABI.
+/// For non-assoc (positional) spread arrays. Reads the element from the spread array at offset
+/// `24 + element_idx * elem_stride` (skipping the array header). If `default` is present and the
+/// spread is too short, jumps to the default path. Returns the widnened PHP type of the pushed argument.
 #[allow(clippy::too_many_arguments)]
 fn push_spread_element_or_default_arg(
     array_base_reg: &str,
@@ -187,6 +202,10 @@ fn push_spread_element_or_default_arg(
     push_loaded_array_element_arg(source_elem_ty, target_ty, emitter, ctx, data)
 }
 
+/// Emits code to push either an associative spread element matching `param_name` or a default expression.
+/// Performs a hash lookup for `param_name` in the spread array. If found, pushes the loaded value;
+/// if not found and a default exists, pushes the default expression. If no default and the key is
+/// missing, aborts with a fatal error. Returns the widnened PHP type of the pushed argument.
 #[allow(clippy::too_many_arguments)]
 fn push_assoc_spread_element_or_default_arg(
     hash_base_reg: &str,
@@ -232,6 +251,10 @@ fn push_assoc_spread_element_or_default_arg(
     loaded_ty
 }
 
+/// Emits a conditional branch to `label` if the spread array has fewer than `element_idx + 1` elements.
+/// Loads the spread array length from `array_base_reg` and compares against `element_idx`.
+/// On AArch64 uses `x9`/`x10`; on x86_64 uses `r10`/`r11`. Branches to `label` when the spread
+/// is too short to contain this element (i.e., the element is missing and a default should be used).
 fn emit_branch_if_spread_element_missing(
     array_base_reg: &str,
     element_idx: usize,
@@ -254,6 +277,7 @@ fn emit_branch_if_spread_element_missing(
     }
 }
 
+/// Emits a variadic array from the tail of a spread expression starting at a given offset.
 pub(crate) fn emit_spread_tail_variadic_array_arg(
     spread_expr: &Expr,
     tail_start: usize,
