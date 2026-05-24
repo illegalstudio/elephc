@@ -637,6 +637,55 @@ echo iterator_apply(new Range(), "label_tick", $args);
 }
 
 #[test]
+fn test_iterator_apply_dynamic_string_callback_without_args() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+function tick_name(): bool {
+    echo "x";
+    return true;
+}
+$callback = "TICK_NAME";
+echo iterator_apply(new Range(), $callback);
+"#,
+    );
+    assert_eq!(out, "xx2");
+}
+
+#[test]
+fn test_iterator_apply_dynamic_string_callback_assoc_args() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+function label_name(string $label): bool {
+    echo $label;
+    return true;
+}
+$callback = "label_name";
+$args = ["label" => "S"];
+echo iterator_apply(new Range(), $callback, $args);
+"#,
+    );
+    assert_eq!(out, "SS2");
+}
+
+#[test]
 fn test_iterator_apply_dynamic_args_for_by_ref_callback_use_temp_cells() {
     let out = compile_and_run(
         r#"<?php

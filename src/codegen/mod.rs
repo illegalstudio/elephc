@@ -10,6 +10,7 @@
 
 mod abi;
 mod builtins;
+pub(crate) mod callable_dispatch;
 mod callables;
 mod class_methods;
 pub mod context;

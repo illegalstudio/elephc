@@ -483,6 +483,11 @@ pub(super) fn check_builtin(
             }
             let callback_ty = checker.infer_type(&args[0], env)?;
             let arg_array_ty = checker.infer_type(&args[1], env)?;
+            if callback_ty == PhpType::Str
+                && matches!(arg_array_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+            {
+                return Ok(Some(PhpType::Mixed));
+            }
             if callback_ty == PhpType::Callable && matches!(arg_array_ty, PhpType::Array(_)) {
                 return Ok(Some(PhpType::Mixed));
             }
@@ -585,6 +590,12 @@ pub(super) fn check_builtin(
                 return Ok(Some(ret_ty));
             }
             let callback_ty = checker.infer_type(&args[0], env)?;
+            if callback_ty == PhpType::Str {
+                for arg in &args[1..] {
+                    checker.infer_type(arg, env)?;
+                }
+                return Ok(Some(PhpType::Mixed));
+            }
             if callback_ty == PhpType::Callable {
                 for arg in &args[1..] {
                     checker.infer_type(arg, env)?;

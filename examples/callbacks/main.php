@@ -67,6 +67,12 @@ $named_callback = $named_callbacks[$named_choice];
 $named_args = ["right" => 2, "left" => 1];
 echo "dynamic named call_user_func_array: " . call_user_func_array($named_callback, $named_args) . "\n";
 
+function dynamic_string_sum(int $left, int $right): int {
+    return $left + $right;
+}
+$string_callback = "DYNAMIC_STRING_SUM";
+echo "dynamic string call_user_func: " . call_user_func($string_callback, 4, 5) . "\n";
+
 function bump(&$value) {
     $value = $value + 1;
 }

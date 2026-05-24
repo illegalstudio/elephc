@@ -48,40 +48,67 @@ pub fn emit(
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve iterator receiver while resolving the callback
 
     let call_reg = abi::nested_call_reg(emitter);
-    let is_callable_expr = matches!(
-        &args[1].kind,
-        ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_)
-    );
-    let direct_fcc_function =
-        crate::codegen::callables::direct_first_class_function_sig(&args[1], ctx);
-    let precomputed_sig = direct_fcc_function
-        .as_ref()
-        .map(|(_, sig)| sig.clone())
-        .or_else(|| crate::codegen::callables::callable_sig(&args[1], ctx));
-    let captures = if let Some((resolved_name, _)) = direct_fcc_function.as_ref() {
-        let label = crate::names::function_symbol(resolved_name);
-        abi::emit_symbol_address(emitter, call_reg, &label);
-        Vec::new()
+    let runtime_string_callback =
+        call_user_func_array::callback_is_runtime_string(&args[1], ctx);
+    let (captures, sig) = if runtime_string_callback {
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));              // save iterator_apply()'s callback-invocation counter before preserving the string callback
+        let callback_ty = emit_expr(&args[1], emitter, ctx, data);
+        debug_assert!(matches!(callback_ty.codegen_repr(), PhpType::Str));
+        let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+        abi::emit_push_reg_pair(emitter, ptr_reg, len_reg);                     // save the runtime string callback name beneath the loop receiver
+        (Vec::new(), None)
     } else {
-        callback_env::materialize_callback_address(&args[1], call_reg, emitter, ctx, data)
-    };
-    let sig: Option<FunctionSig> = if direct_fcc_function.is_none() && is_callable_expr {
-        ctx.deferred_closures
-            .last()
-            .map(|deferred| deferred.sig.clone())
-    } else {
-        precomputed_sig
+        let is_callable_expr = matches!(
+            &args[1].kind,
+            ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_)
+        );
+        let direct_fcc_function =
+            crate::codegen::callables::direct_first_class_function_sig(&args[1], ctx);
+        let precomputed_sig = direct_fcc_function
+            .as_ref()
+            .map(|(_, sig)| sig.clone())
+            .or_else(|| crate::codegen::callables::callable_sig(&args[1], ctx));
+        let captures = if let Some((resolved_name, _)) = direct_fcc_function.as_ref() {
+            let label = crate::names::function_symbol(resolved_name);
+            abi::emit_symbol_address(emitter, call_reg, &label);
+            Vec::new()
+        } else {
+            callback_env::materialize_callback_address(&args[1], call_reg, emitter, ctx, data)
+        };
+        let sig: Option<FunctionSig> = if direct_fcc_function.is_none() && is_callable_expr {
+            ctx.deferred_closures
+                .last()
+                .map(|deferred| deferred.sig.clone())
+        } else {
+            precomputed_sig
+        };
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));              // save iterator_apply()'s callback-invocation counter
+        abi::emit_push_reg(emitter, call_reg);                                  // save the resolved callback address beneath the loop receiver
+        (captures, sig)
     };
     let ret_ty = sig
         .as_ref()
         .map(|sig| sig.return_type.clone())
-        .unwrap_or(PhpType::Int);
-
-    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
-    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // save iterator_apply()'s callback-invocation counter
-    abi::emit_push_reg(emitter, call_reg);                                      // save the resolved callback address beneath the loop receiver
+        .unwrap_or_else(|| if runtime_string_callback { PhpType::Mixed } else { PhpType::Int });
 
     let callback_arg_source = match callback_args_expr(args) {
+        CallbackArgsExpr::Literal(callback_args) if runtime_string_callback => {
+            let arg_array = Expr::new(
+                ExprKind::ArrayLiteral(callback_args.to_vec()),
+                args.get(2).map(|arg| arg.span).unwrap_or(args[1].span),
+            );
+            let arg_array_ty = emit_expr(&arg_array, emitter, ctx, data);
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // save iterator_apply()'s synthesized callback-argument array for every invocation
+            CallbackArgSource::Dynamic {
+                args_offset: 16,
+                callback_offset: 32,
+                count_offset: 48,
+                arg_array_ty,
+                literal_elems: Some(callback_args),
+            }
+        }
         CallbackArgsExpr::Evaluated {
             expr,
             literal_elems,
@@ -132,6 +159,7 @@ pub fn emit(
                         &captures,
                         sig.as_ref(),
                         &ret_ty,
+                        runtime_string_callback,
                         &loop_end,
                         emitter,
                         ctx,
@@ -154,6 +182,7 @@ pub fn emit(
                         &captures,
                         sig.as_ref(),
                         &ret_ty,
+                        runtime_string_callback,
                         active_loop_end,
                         emitter,
                         ctx,
@@ -169,6 +198,7 @@ pub fn emit(
                 &captures,
                 sig.as_ref(),
                 &ret_ty,
+                runtime_string_callback,
                 emitter,
                 ctx,
                 data,
@@ -178,7 +208,7 @@ pub fn emit(
     if matches!(callback_arg_source, CallbackArgSource::Dynamic { .. }) {
         abi::emit_release_temporary_stack(emitter, 16);                         // discard the evaluated iterator_apply() args array
     }
-    abi::emit_release_temporary_stack(emitter, 16);                             // discard the saved callback address after iteration
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the saved callback slot after iteration
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // return the final iterator_apply() invocation count
     abi::emit_release_temporary_stack(emitter, 16);                             // discard the receiver preserved while resolving the callback
     Some(PhpType::Int)
@@ -253,6 +283,7 @@ fn emit_callback_invocation(
     captures: &[(String, PhpType, bool)],
     sig: Option<&FunctionSig>,
     ret_ty: &PhpType,
+    runtime_string_callback: bool,
     loop_end: &str,
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -267,7 +298,9 @@ fn emit_callback_invocation(
             callback_offset, ..
         } => *callback_offset,
     };
-    abi::emit_load_temporary_stack_slot(emitter, call_reg, callback_offset);
+    if !runtime_string_callback {
+        abi::emit_load_temporary_stack_slot(emitter, call_reg, callback_offset);
+    }
 
     if let CallbackArgSource::Dynamic {
         args_offset,
@@ -281,7 +314,19 @@ fn emit_callback_invocation(
         if save_concat_before_args {
             crate::codegen::expr::save_concat_offset_before_nested_call(emitter, ctx);
         }
-        let dynamic_ret_ty = if let Some(sig) = sig {
+        let dynamic_ret_ty = if runtime_string_callback {
+            call_user_func_array::emit_loaded_array_string_callback_call(
+                LoadedArraySource::TemporaryStackSlot(*args_offset),
+                arg_array_ty,
+                callback_offset,
+                callback_offset + 8,
+                call_reg,
+                save_concat_before_args,
+                emitter,
+                ctx,
+                data,
+            )
+        } else if let Some(sig) = sig {
             call_user_func_array::emit_loaded_array_callback_call(
                 LoadedArraySource::TemporaryStackSlot(*args_offset),
                 arg_array_ty,
@@ -375,6 +420,7 @@ fn emit_apply_loaded_iterable(
     captures: &[(String, PhpType, bool)],
     sig: Option<&FunctionSig>,
     ret_ty: &PhpType,
+    runtime_string_callback: bool,
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
@@ -410,6 +456,7 @@ fn emit_apply_loaded_iterable(
                 captures,
                 sig,
                 ret_ty,
+                runtime_string_callback,
                 active_loop_end,
                 emitter,
                 ctx,

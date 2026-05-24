@@ -461,6 +461,9 @@ fn check_iterator_apply_dynamic_callback(
     }
 
     let callback_ty = checker.infer_type(callback, env)?;
+    if callback_ty == PhpType::Str {
+        return Ok(());
+    }
     if callback_ty == PhpType::Callable {
         return Ok(());
     }
@@ -489,7 +492,7 @@ fn check_iterator_apply_static_callback(
         Ok(_) => Ok(()),
         Err(error) if error.message == ITERATOR_APPLY_UNKNOWN_STATIC_CALLBACK_SIG => {
             let callback_ty = checker.infer_type(callback, env)?;
-            if callback_ty != PhpType::Callable {
+            if callback_ty != PhpType::Callable && callback_ty != PhpType::Str {
                 return Err(error);
             }
             for arg in callback_args {

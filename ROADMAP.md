@@ -498,7 +498,9 @@ block the EIR migration unless it exposes core dispatch, ownership, or lvalue
 gaps that must be fixed first.
 
 - [x] Phase 4 — `SplDoublyLinkedList`, `SplStack`, `SplQueue`, `SplFixedArray`
+- [x] Runtime callable dispatch metadata foundation — shared AOT callable cases for pointer-selected callbacks and runtime string-name user callbacks, reused by `call_user_func()`, `call_user_func_array()`, and `iterator_apply()`
 - [ ] Phase 5 — iterator decorators (`ArrayIterator`, `ArrayObject`, `IteratorIterator`, `LimitIterator`, `NoRewindIterator`, `InfiniteIterator`, `EmptyIterator`, `AppendIterator`, `MultipleIterator`, `CallbackFilterIterator`, `FilterIterator`, `CachingIterator`, `RecursiveArrayIterator`, `RecursiveCallbackFilterIterator`, `RecursiveFilterIterator`, `RecursiveIteratorIterator`, `ParentIterator`); functions `iterator_to_array`, `iterator_count`, `iterator_apply`, `class_implements`, `class_parents`, `class_uses`
+- [ ] Universal runtime callable descriptors — replace raw function-pointer callable values with descriptors carrying target kind, entry ABI, PHP-visible name, signature/default/by-ref/variadic metadata, receiver/capture environment, and invocation support for string, array, closure, first-class callable, object `__invoke`, static/instance method, builtin, and extern callable shapes
 - [ ] Phase 5 follow-up — iterator-dependent Phase 4 parity: `SplFixedArray::getIterator()` plus `IteratorAggregate`/`InternalIterator` runtime wiring once iterator classes are available
 - [ ] Phase 6 — `SplHeap`, `SplMaxHeap`, `SplMinHeap`, `SplPriorityQueue`, `SplObjectStorage`, and per-instance handle finalization
 - [ ] Phase 7 — `RegexIterator`, `RecursiveRegexIterator`

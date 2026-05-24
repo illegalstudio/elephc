@@ -268,6 +268,49 @@ fn test_call_user_func_array_string_builtin_callback() {
 }
 
 #[test]
+fn test_call_user_func_dynamic_string_user_callback() {
+    let out = compile_and_run(
+        r#"<?php
+function add_pair($left, $right): int {
+    return $left + $right;
+}
+$callback = "ADD_PAIR";
+echo call_user_func($callback, 2, 5);
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_call_user_func_dynamic_string_boxes_string_return() {
+    let out = compile_and_run(
+        r#"<?php
+function greet_dynamic(string $name): string {
+    return "hi " . $name;
+}
+$callback = "greet_dynamic";
+echo call_user_func($callback, "Ada");
+"#,
+    );
+    assert_eq!(out, "hi Ada");
+}
+
+#[test]
+fn test_call_user_func_array_dynamic_string_assoc_callback() {
+    let out = compile_and_run(
+        r#"<?php
+function stamp_named(string $prefix, int $value): string {
+    return $prefix . ":" . $value;
+}
+$callback = "stamp_named";
+$args = ["value" => 7, "prefix" => "id"];
+echo call_user_func_array($callback, $args);
+"#,
+    );
+    assert_eq!(out, "id:7");
+}
+
+#[test]
 fn test_call_user_func_array_dynamic_args_for_callable_without_known_signature() {
     let out = compile_and_run(
         r#"<?php

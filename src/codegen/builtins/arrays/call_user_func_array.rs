@@ -15,7 +15,9 @@ use crate::codegen::expr::emit_expr;
 use crate::codegen::expr::calls::args;
 use crate::codegen::platform::Arch;
 use crate::codegen::abi;
-use crate::names::function_symbol;
+use crate::codegen::callable_dispatch::{
+    self, RuntimeCallableCase, RuntimeCallableSelector,
+};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 use super::callback_env;
@@ -62,13 +64,6 @@ pub(crate) enum LoadedArraySource {
     TemporaryStackSlot(usize),
 }
 
-#[derive(Clone)]
-struct RuntimeCallableCase {
-    label: String,
-    sig: FunctionSig,
-    captures: Vec<(String, PhpType, bool)>,
-}
-
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -112,6 +107,18 @@ pub fn emit(
         crate::codegen::expr::save_concat_offset_before_nested_call(emitter, ctx);
     }
     let call_reg = abi::nested_call_reg(emitter);
+    if callback_is_runtime_string(&args[0], ctx) {
+        let ret_ty = emit_dynamic_string_callback_with_array_expr(
+            &args[0],
+            &args[1],
+            call_reg,
+            save_concat_before_args,
+            emitter,
+            ctx,
+            data,
+        );
+        return Some(ret_ty);
+    }
 
     // -- resolve callback function address and signature --
     let direct_fcc_function =
@@ -237,6 +244,43 @@ fn should_use_unknown_indexed_dispatch(
         && sig.ref_params.iter().all(|is_ref| !*is_ref)
         && sig.defaults.iter().all(Option::is_none)
         && sig.declared_params.iter().all(|declared| !*declared)
+}
+
+pub(crate) fn callback_is_runtime_string(callback: &Expr, ctx: &Context) -> bool {
+    !matches!(callback.kind, ExprKind::StringLiteral(_))
+        && matches!(
+            crate::codegen::functions::infer_contextual_type(callback, ctx).codegen_repr(),
+            PhpType::Str
+        )
+}
+
+pub(crate) fn emit_dynamic_string_callback_with_array_expr(
+    callback: &Expr,
+    arg_array: &Expr,
+    call_reg: &str,
+    concat_saved_before_args: bool,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let callback_ty = emit_expr(callback, emitter, ctx, data);
+    debug_assert!(matches!(callback_ty.codegen_repr(), PhpType::Str));
+    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+    abi::emit_push_reg_pair(emitter, ptr_reg, len_reg);                         // preserve the runtime string callback name while evaluating argument array
+    let arr_ty = emit_expr(arg_array, emitter, ctx, data);
+    let ret_ty = emit_loaded_array_string_callback_call(
+        LoadedArraySource::Result,
+        &arr_ty,
+        0,
+        8,
+        call_reg,
+        concat_saved_before_args,
+        emitter,
+        ctx,
+        data,
+    );
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the preserved runtime string callback name
+    ret_ty
 }
 
 fn emit_spread_callback_call_from_array_expr(
@@ -1282,7 +1326,7 @@ pub(crate) fn emit_loaded_array_unknown_callback_call(
     }
 
     let elem_ty = callback_array_elem_ty(arr_ty);
-    let cases = runtime_callable_cases(ctx, captures, Some(&elem_ty));
+    let cases = callable_dispatch::runtime_callable_cases(ctx, captures, Some(&elem_ty));
     if !cases.is_empty() {
         return emit_loaded_indexed_array_unknown_callback_call(
             array_source,
@@ -1310,6 +1354,92 @@ pub(crate) fn emit_loaded_array_unknown_callback_call(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_loaded_array_string_callback_call(
+    array_source: LoadedArraySource,
+    arr_ty: &PhpType,
+    string_ptr_offset: usize,
+    string_len_offset: usize,
+    call_reg: &str,
+    concat_saved_before_args: bool,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let elem_ty = callback_array_elem_ty(arr_ty);
+    let cases = callable_dispatch::runtime_callable_cases(ctx, &[], Some(&elem_ty));
+    let done_label = ctx.next_label("cufa_string_done");
+    let pushed_array = matches!(array_source, LoadedArraySource::Result);
+    let (array_source, string_ptr_offset, string_len_offset) = match array_source {
+        LoadedArraySource::Result => {
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // preserve the callback-argument array for runtime string-name dispatch
+            (
+                LoadedArraySource::TemporaryStackSlot(0),
+                string_ptr_offset + 16,
+                string_len_offset + 16,
+            )
+        }
+        LoadedArraySource::TemporaryStackSlot(offset) => (
+            LoadedArraySource::TemporaryStackSlot(offset),
+            string_ptr_offset,
+            string_len_offset,
+        ),
+    };
+    let selector = RuntimeCallableSelector::StringNameStack {
+        ptr_offset: string_ptr_offset,
+        len_offset: string_len_offset,
+        call_reg,
+    };
+
+    for case in &cases {
+        let next_case = ctx.next_label("cufa_string_next");
+        callable_dispatch::emit_branch_if_callable_case_mismatch(
+            &selector,
+            case,
+            &next_case,
+            emitter,
+            ctx,
+            data,
+        );
+        let case_ret_ty = if matches!(arr_ty, PhpType::AssocArray { .. }) {
+            emit_loaded_assoc_array_callback_call(
+                array_source,
+                arr_ty,
+                call_reg,
+                &case.captures,
+                &case.sig,
+                concat_saved_before_args,
+                emitter,
+                ctx,
+                data,
+            )
+        } else {
+            emit_loaded_array_callback_call(
+                array_source,
+                arr_ty,
+                None,
+                call_reg,
+                &case.captures,
+                &case.sig,
+                concat_saved_before_args,
+                emitter,
+                ctx,
+                data,
+            )
+        };
+        crate::codegen::emit_box_current_value_as_mixed(emitter, &case_ret_ty.codegen_repr());
+        abi::emit_jump(emitter, &done_label);
+        emitter.label(&next_case);
+    }
+
+    emit_dynamic_string_callback_abort(emitter, data);
+    emitter.label(&done_label);
+    if pushed_array {
+        abi::emit_release_temporary_stack(emitter, 16);                         // discard the preserved callback-argument array
+    }
+    PhpType::Mixed
+}
+
+#[allow(clippy::too_many_arguments)]
 fn emit_loaded_indexed_array_unknown_callback_call(
     array_source: LoadedArraySource,
     arr_ty: &PhpType,
@@ -1331,9 +1461,17 @@ fn emit_loaded_indexed_array_unknown_callback_call(
         LoadedArraySource::TemporaryStackSlot(offset) => LoadedArraySource::TemporaryStackSlot(offset),
     };
 
+    let selector = RuntimeCallableSelector::Address(call_reg);
     for case in cases {
         let next_case = ctx.next_label("cufa_unknown_indexed_next");
-        emit_branch_if_callable_case_mismatch(call_reg, &case.label, &next_case, emitter);
+        callable_dispatch::emit_branch_if_callable_case_mismatch(
+            &selector,
+            case,
+            &next_case,
+            emitter,
+            ctx,
+            data,
+        );
         let case_ret_ty = emit_loaded_array_callback_call(
             array_source,
             arr_ty,
@@ -1475,7 +1613,7 @@ fn emit_loaded_assoc_array_unknown_callback_call(
 ) -> PhpType {
     let done_label = ctx.next_label("cufa_unknown_assoc_done");
     let elem_ty = callback_array_elem_ty(arr_ty);
-    let cases = runtime_callable_cases(ctx, captures, Some(&elem_ty));
+    let cases = callable_dispatch::runtime_callable_cases(ctx, captures, Some(&elem_ty));
     let pushed_array = matches!(array_source, LoadedArraySource::Result);
     let array_source = match array_source {
         LoadedArraySource::Result => {
@@ -1485,9 +1623,17 @@ fn emit_loaded_assoc_array_unknown_callback_call(
         LoadedArraySource::TemporaryStackSlot(offset) => LoadedArraySource::TemporaryStackSlot(offset),
     };
 
+    let selector = RuntimeCallableSelector::Address(call_reg);
     for case in &cases {
         let next_case = ctx.next_label("cufa_unknown_assoc_next");
-        emit_branch_if_callable_case_mismatch(call_reg, &case.label, &next_case, emitter);
+        callable_dispatch::emit_branch_if_callable_case_mismatch(
+            &selector,
+            case,
+            &next_case,
+            emitter,
+            ctx,
+            data,
+        );
         let case_ret_ty = emit_loaded_assoc_array_callback_call(
             array_source,
             arr_ty,
@@ -1512,105 +1658,11 @@ fn emit_loaded_assoc_array_unknown_callback_call(
     PhpType::Mixed
 }
 
-fn runtime_callable_cases(
-    ctx: &mut Context,
-    captures: &[(String, PhpType, bool)],
-    source_elem_ty: Option<&PhpType>,
-) -> Vec<RuntimeCallableCase> {
-    let mut cases = Vec::new();
-    for (name, sig) in &ctx.functions {
-        if ctx.extern_functions.contains_key(name) {
-            continue;
-        }
-        cases.push(RuntimeCallableCase {
-            label: function_symbol(name),
-            sig: specialized_runtime_case_sig(sig, source_elem_ty),
-            captures: Vec::new(),
-        });
-    }
-    for deferred in &mut ctx.deferred_closures {
-        if deferred.hidden_params.as_slice() != captures {
-            continue;
-        }
-        let sig = specialized_runtime_case_sig(&deferred.sig, source_elem_ty);
-        deferred.sig = sig.clone();
-        cases.push(RuntimeCallableCase {
-            label: deferred.label.clone(),
-            sig,
-            captures: captures.to_vec(),
-        });
-    }
-    cases.sort_by(|left, right| left.label.cmp(&right.label));
-    cases.dedup_by(|left, right| left.label == right.label);
-    cases
-}
-
 fn callback_array_elem_ty(arr_ty: &PhpType) -> PhpType {
     match arr_ty {
         PhpType::Array(elem_ty) => *elem_ty.clone(),
         PhpType::AssocArray { value, .. } => *value.clone(),
         _ => PhpType::Int,
-    }
-}
-
-fn specialized_runtime_case_sig(
-    sig: &FunctionSig,
-    source_elem_ty: Option<&PhpType>,
-) -> FunctionSig {
-    let Some(source_elem_ty) = source_elem_ty else {
-        return sig.clone();
-    };
-    let mut sig = sig.clone();
-    let visible_param_count = sig.params.len();
-    let regular_param_count = if sig.variadic.is_some() {
-        visible_param_count.saturating_sub(1)
-    } else {
-        visible_param_count
-    };
-    let source_ty = source_elem_ty.codegen_repr();
-    for i in 0..regular_param_count {
-        if sig.declared_params.get(i).copied().unwrap_or(false)
-            || sig.ref_params.get(i).copied().unwrap_or(false)
-        {
-            continue;
-        }
-        if let Some((_, param_ty)) = sig.params.get_mut(i) {
-            *param_ty = source_ty.clone();
-        }
-    }
-    if sig.variadic.is_some() {
-        let variadic_idx = visible_param_count.saturating_sub(1);
-        if !sig
-            .declared_params
-            .get(variadic_idx)
-            .copied()
-            .unwrap_or(false)
-        {
-            if let Some((_, param_ty)) = sig.params.get_mut(variadic_idx) {
-                *param_ty = PhpType::Array(Box::new(source_ty));
-            }
-        }
-    }
-    sig
-}
-
-fn emit_branch_if_callable_case_mismatch(
-    call_reg: &str,
-    candidate_label: &str,
-    next_case: &str,
-    emitter: &mut Emitter,
-) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(emitter, "x9", candidate_label);
-            emitter.instruction(&format!("cmp {}, x9", call_reg));              // does the runtime callable pointer match this AOT signature case?
-            emitter.instruction(&format!("b.ne {}", next_case));                // try the next callable signature case when the pointer differs
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(emitter, "r10", candidate_label);
-            emitter.instruction(&format!("cmp {}, r10", call_reg));             // does the runtime callable pointer match this AOT signature case?
-            emitter.instruction(&format!("jne {}", next_case));                 // try the next callable signature case when the pointer differs
-        }
     }
 }
 
@@ -2360,6 +2412,30 @@ fn emit_call_user_func_array_unknown_assoc_abort(emitter: &mut Emitter, data: &m
             emitter.instruction(&format!("mov edx, {}", message_len));          // pass the callback metadata diagnostic byte length to write()
             emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
             emitter.instruction("syscall");                                     // emit the fatal callback metadata diagnostic
+            abi::emit_exit(emitter, 1);
+        }
+    }
+}
+
+fn emit_dynamic_string_callback_abort(emitter: &mut Emitter, data: &mut DataSection) {
+    let (message_label, message_len) = data.add_string(
+        b"Fatal error: dynamic string callback could not be resolved\n",
+    );
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, #2");                                  // write the dynamic callback diagnostic to stderr
+            emitter.adrp("x1", &message_label);
+            emitter.add_lo12("x1", "x1", &message_label);
+            emitter.instruction(&format!("mov x2, #{}", message_len));          // pass the dynamic callback diagnostic byte length to write()
+            emitter.syscall(4);
+            abi::emit_exit(emitter, 1);
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov edi, 2");                                  // write the dynamic callback diagnostic to stderr
+            abi::emit_symbol_address(emitter, "rsi", &message_label);
+            emitter.instruction(&format!("mov edx, {}", message_len));          // pass the dynamic callback diagnostic byte length to write()
+            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
+            emitter.instruction("syscall");                                     // emit the fatal dynamic callback diagnostic
             abi::emit_exit(emitter, 1);
         }
     }

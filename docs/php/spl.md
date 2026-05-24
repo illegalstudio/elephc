@@ -233,12 +233,14 @@ callbacks. If the call site has no single static callback signature, elephc can
 dispatch dynamic indexed or associative args by matching the runtime callable
 pointer against user functions and closure/FCC wrappers available in that
 codegen context, then applying the matched target's parameter and return
-metadata. For variadic callbacks, named keys consumed by fixed parameters are not
-copied into `...$rest`; remaining string keys keep their names, and remaining
-numeric keys are reindexed from zero. Literal arrays with expressions are
-evaluated once before iteration starts. Dynamic arrays passed to by-reference
-callback parameters use temporary reference cells, so callback writes do not
-mutate the source argument array.
+metadata. Runtime string callback names dispatch over user functions by
+case-insensitive name matching and then use the same metadata path. For variadic
+callbacks, named keys consumed by fixed parameters are not copied into
+`...$rest`; remaining string keys keep their names, and remaining numeric keys
+are reindexed from zero. Literal arrays with expressions are evaluated once
+before iteration starts. Dynamic arrays passed to by-reference callback
+parameters use temporary reference cells, so callback writes do not mutate the
+source argument array.
 
 ## Compatibility Gaps
 
