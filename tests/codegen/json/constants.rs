@@ -10,10 +10,8 @@
 
 use super::*;
 
-// Verify every JSON_* int constant exposed by the runtime resolves to the
-// PHP-spec value. Originally these lived as 12 separate one-line tests; we
-// merge them into a single multi-echo test that exercises the same surface
-// in one compile/link/run cycle (~12 fewer fork+exec cycles per suite run).
+// Verifies every JSON_* integer constant exposed by the runtime resolves to the PHP-spec
+// value. Merges 12 former one-line tests into one compile/link/run cycle.
 #[test]
 fn test_json_all_int_constants() {
     let out = compile_and_run(
@@ -39,6 +37,8 @@ echo JSON_ERROR_NONE;
     );
 }
 
+// Verifies the JSON_HEX_TAG / JSON_HEX_AMP / JSON_HEX_APOS / JSON_HEX_QUOT hex-family
+// constants resolve to the expected bitmask values.
 #[test]
 fn test_json_hex_family_constants() {
     let out = compile_and_run(
@@ -47,6 +47,8 @@ fn test_json_hex_family_constants() {
     assert_eq!(out, "1,2,4,8");
 }
 
+// Verifies all JSON_ERROR_* depth/state/UTF constants resolve to their PHP code values.
+// Merges 10 former one-line tests into one compile/link/run cycle.
 #[test]
 fn test_json_error_codes_sequence() {
     let out = compile_and_run(
@@ -66,6 +68,7 @@ echo JSON_ERROR_UTF16;
     assert_eq!(out, "1,2,3,4,5,6,7,8,9,10");
 }
 
+// Verifies JSON constant values combine with bitwise OR to produce the expected sum.
 #[test]
 fn test_json_constants_compose_with_or() {
     let out = compile_and_run(
@@ -74,6 +77,8 @@ fn test_json_constants_compose_with_or() {
     assert_eq!(out, "448");
 }
 
+// Verifies JSON constants resolve to their integer values when used as function call
+// arguments, even though json_encode currently ignores flags.
 #[test]
 fn test_json_constants_in_function_call_argument() {
     // Even though json_encode currently ignores flags, the constant must

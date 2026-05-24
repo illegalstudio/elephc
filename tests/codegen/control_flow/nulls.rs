@@ -9,6 +9,8 @@
 
 use super::*;
 
+// Tests that `null` in a ternary condition is treated as falsy, matching PHP semantics.
+// Verifies that `$x = null; echo $x ? "yes" : "no";` outputs `"no"`.
 #[test]
 fn test_ternary_null_is_falsy() {
     let out = compile_and_run("<?php $x = null; echo $x ? \"yes\" : \"no\";");

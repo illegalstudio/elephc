@@ -13,9 +13,11 @@ use crate::support::*;
 
 #[test]
 fn test_foreach_iterator_aggregate_class() {
-    // A class that implements only IteratorAggregate (not Iterator
-    // directly) — foreach calls getIterator() once before the loop and
-    // dispatches the per-iteration calls against the returned class.
+    // Verifies foreach works with IteratorAggregate-only classes.
+    // Fixture: a class implementing IteratorAggregate.getIterator() returns a
+    // separate Iterator implementation (Range). Confirms getIterator() is called
+    // exactly once before iteration begins and per-iteration calls dispatch
+    // against the returned iterator.
     let out = compile_and_run(
         r#"<?php
 class Range implements Iterator {
@@ -42,6 +44,10 @@ foreach (new Aggregate() as $v) { echo $v; echo " "; }
 
 #[test]
 fn test_foreach_user_iterator_break() {
+    // Verifies break exits a foreach loop over a user-defined Iterator.
+    // Fixture: Counter implements Iterator with infinite valid() but break
+    // terminates after emitting values 0-3. Confirms break unwinds iteration
+    // without calling next() after the loop exits.
     let out = compile_and_run(
         r#"<?php
 class Counter implements Iterator {

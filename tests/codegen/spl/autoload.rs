@@ -11,6 +11,7 @@ use crate::support::*;
 
 #[test]
 fn test_psr4_single_namespace_autoload() {
+    // PSR-4 single namespace maps "App\" → "src/" and class is autoloaded.
     let out = compile_and_run_files(
         &[
             (
@@ -33,6 +34,7 @@ fn test_psr4_single_namespace_autoload() {
 
 #[test]
 fn test_psr4_nested_namespace_autoload() {
+    // PSR-4 with a two-segment namespace App\Models maps src/ and resolves correctly.
     let out = compile_and_run_files(
         &[
             (
@@ -55,7 +57,7 @@ fn test_psr4_nested_namespace_autoload() {
 
 #[test]
 fn test_psr4_transitive_autoload() {
-    // Greeter uses User; both must be autoloaded transitively.
+    // Greeter uses User via use statement; both classes must be autoloaded transitively.
     let out = compile_and_run_files(
         &[
             (
@@ -82,6 +84,7 @@ fn test_psr4_transitive_autoload() {
 
 #[test]
 fn test_psr4_static_property_assignment_triggers_autoload() {
+    // Static property write on App\State\::$count triggers PSR-4 autoload.
     let out = compile_and_run_files(
         &[
             (
@@ -104,6 +107,7 @@ fn test_psr4_static_property_assignment_triggers_autoload() {
 
 #[test]
 fn test_psr4_scoped_constant_access_triggers_autoload() {
+    // Class constant access App\Config::NAME triggers PSR-4 autoload.
     let out = compile_and_run_files(
         &[
             (
@@ -123,6 +127,7 @@ fn test_psr4_scoped_constant_access_triggers_autoload() {
 
 #[test]
 fn test_psr4_pipe_value_triggers_autoload() {
+    // First-class callable pipe syntax `|>` with class argument triggers PSR-4 autoload.
     let out = compile_and_run_files(
         &[
             (
@@ -145,6 +150,7 @@ fn test_psr4_pipe_value_triggers_autoload() {
 
 #[test]
 fn test_psr4_vendor_autoload() {
+    // Nested vendor PSR-4: Acme\Widgets\ maps vendor/acme/widgets/src/.
     let out = compile_and_run_files(
         &[
             (
@@ -171,8 +177,7 @@ fn test_psr4_vendor_autoload() {
 
 #[test]
 fn test_no_composer_json_compiles_normally() {
-    // Programs without composer.json must still compile; autoload is a no-op
-    // when the index is empty.
+    // Program without composer.json must still compile; autoload index is empty and class loads via include path.
     let out = compile_and_run_files(
         &[(
             "main.php",
@@ -185,6 +190,7 @@ fn test_no_composer_json_compiles_normally() {
 
 #[test]
 fn test_spl_autoload_register_returns_true() {
+    // spl_autoload_register with a closure returns true on success.
     let out = compile_and_run(
         r#"<?php
 $ok = spl_autoload_register(function($name) {});
@@ -196,6 +202,7 @@ echo $ok ? "true" : "false";
 
 #[test]
 fn test_spl_autoload_unregister_returns_true() {
+    // spl_autoload_unregister returns true after removing a registered autoloader.
     let out = compile_and_run(
         r#"<?php
 $ok = spl_autoload_unregister(function($name) {});
@@ -207,6 +214,7 @@ echo $ok ? "true" : "false";
 
 #[test]
 fn test_spl_autoload_functions_returns_empty_array() {
+    // spl_autoload_functions() returns empty array when no autoloaders are registered.
     let out = compile_and_run(
         r#"<?php
 $fns = spl_autoload_functions();
@@ -218,6 +226,7 @@ echo count($fns);
 
 #[test]
 fn test_spl_autoload_extensions_returns_default() {
+    // spl_autoload_extensions() returns the default ".inc,.php" when called with no argument.
     let out = compile_and_run(
         r#"<?php
 echo spl_autoload_extensions();
@@ -228,6 +237,7 @@ echo spl_autoload_extensions();
 
 #[test]
 fn test_spl_autoload_call_compiles_as_noop() {
+    // spl_autoload_call with a literal class name compiles as a no-op (no registered autoloaders).
     let out = compile_and_run(
         r#"<?php
 spl_autoload_call("Foo");
@@ -239,6 +249,7 @@ echo "after";
 
 #[test]
 fn test_spl_autoload_compiles_as_noop() {
+    // spl_autoload (deprecated no-op) must compile and execute without error.
     let out = compile_and_run(
         r#"<?php
 spl_autoload("Bar");
@@ -252,9 +263,7 @@ echo "after";
 
 #[test]
 fn test_register_with_concat_closure_loads_class() {
-    // Direct concatenation pattern: __DIR__ . '/lib/' . $name . '.php'.
-    // The interpreter resolves __DIR__ to the magic-constant-substituted
-    // absolute path and the class is loaded.
+    // Closure with direct concatenation __DIR__ . '/lib/' . $name . '.php' loads class from lib/.
     let out = compile_and_run_files(
         &[
             (
@@ -273,6 +282,7 @@ fn test_register_with_concat_closure_loads_class() {
 
 #[test]
 fn test_register_name_is_case_insensitive_before_name_resolver() {
+    // SPL_AUTOLOAD_REGISTER case-insensitive alias compiles and loads class.
     let out = compile_and_run_files(
         &[
             (
@@ -297,6 +307,7 @@ echo $m->tag();
 
 #[test]
 fn test_namespaced_local_spl_autoload_register_is_not_collected() {
+    // Namespaced local spl_autoload_register shadows the builtin and is called directly.
     let out = compile_and_run(
         r#"<?php
 namespace App;
@@ -309,6 +320,7 @@ spl_autoload_register(function ($name) {});
 
 #[test]
 fn test_unregister_name_is_case_insensitive_before_name_resolver() {
+    // sPl_AuToLoAd_UnReGiStEr case-insensitive alias removes the autoloader from the stack.
     let out = compile_and_run(
         r#"<?php
 spl_autoload_register(function ($name) {
@@ -325,7 +337,7 @@ echo count(spl_autoload_functions());
 
 #[test]
 fn test_register_with_str_replace_closure() {
-    // PSR-0-style autoloader: backslash → underscore translation.
+    // PSR-0-style autoloader: str_replace('\', '_', $name) maps class name to file path.
     let out = compile_and_run_files(
         &[
             (
@@ -344,8 +356,7 @@ fn test_register_with_str_replace_closure() {
 
 #[test]
 fn test_register_with_intermediate_variable() {
-    // The closure binds $path as a local before requiring it. The
-    // interpreter must thread variable assignments correctly.
+    // Closure captures $path in local variable before require_once; variable threading must be correct.
     let out = compile_and_run_files(
         &[
             (
@@ -364,8 +375,7 @@ fn test_register_with_intermediate_variable() {
 
 #[test]
 fn test_register_with_file_exists_positive_branch() {
-    // The closure guards the include with file_exists($path). The file is
-    // present, so the interpreter takes the then-branch and loads.
+    // Closure guards require_once with file_exists($path); file is present so then-branch loads class.
     let out = compile_and_run_files(
         &[
             (
@@ -384,8 +394,7 @@ fn test_register_with_file_exists_positive_branch() {
 
 #[test]
 fn test_register_file_exists_directory_guard_loads_file() {
-    // PHP's file_exists() returns true for directories. Autoload rules
-    // often guard on the base directory before requiring the class file.
+    // file_exists() returns true for directories; base-dir guard passes and class file is loaded.
     let out = compile_and_run_files(
         &[
             (
@@ -404,8 +413,7 @@ fn test_register_file_exists_directory_guard_loads_file() {
 
 #[test]
 fn test_register_is_readable_directory_guard_loads_file() {
-    // is_readable() checks read access, not whether the path is a regular
-    // file. A readable autoload base directory must pass the guard.
+    // is_readable() on a directory returns true; class file is loaded through the guard.
     let out = compile_and_run_files(
         &[
             (
@@ -424,9 +432,7 @@ fn test_register_is_readable_directory_guard_loads_file() {
 
 #[test]
 fn test_register_chain_first_misses_second_loads() {
-    // Two registered closures. The first looks in lib/missing/ (where the
-    // file isn't); the second looks in lib/ where it is. The first rule's
-    // file_exists guard returns false, so we fall through to the second.
+    // Two registered closures; first misses (file not in lib/missing/), second hits (file in lib/).
     let out = compile_and_run_files(
         &[
             (
@@ -445,8 +451,7 @@ fn test_register_chain_first_misses_second_loads() {
 
 #[test]
 fn test_register_unregister_round_trip() {
-    // Register a closure, then unregister it. The class must still load
-    // because of the second (still-registered) closure.
+    // Register two closures, unregister the first; second closure still loads class.
     let out = compile_and_run_files(
         &[
             (
@@ -465,8 +470,7 @@ fn test_register_unregister_round_trip() {
 
 #[test]
 fn test_register_with_use_capture_falls_back_to_psr4() {
-    // The closure uses a captured variable via `use(...)` — the collector
-    // rejects it, so PSR-4 from composer.json takes over.
+    // Closure with `use ($base)` capture is rejected by collector; PSR-4 from composer.json takes over.
     let out = compile_and_run_files(
         &[
             (
@@ -489,8 +493,7 @@ fn test_register_with_use_capture_falls_back_to_psr4() {
 
 #[test]
 fn test_spl_autoload_extensions_round_trip() {
-    // Read default, write new value (returns old), read again returns
-    // the new value.
+    // Read default, write new value (returns old), read again returns the new value.
     let out = compile_and_run(
         r#"<?php
 echo spl_autoload_extensions();
@@ -506,8 +509,7 @@ echo spl_autoload_extensions();
 
 #[test]
 fn test_spl_autoload_extensions_null_arg_is_readonly() {
-    // Passing null is the explicit read-only call shape; the global is
-    // unchanged afterward.
+    // spl_autoload_extensions(null) is explicit read-only; global is unchanged afterward.
     let out = compile_and_run(
         r#"<?php
 spl_autoload_extensions(".custom");
@@ -522,8 +524,7 @@ echo spl_autoload_extensions();
 
 #[test]
 fn test_spl_autoload_functions_size_reflects_register_count() {
-    // Two register sites at the top level → spl_autoload_functions()
-    // has size 2.
+    // Two registered closures; spl_autoload_functions() count is 2 and class loads via second rule.
     let out = compile_and_run_files(
         &[
             (
@@ -553,7 +554,7 @@ echo $a->tag();
 
 #[test]
 fn test_spl_autoload_functions_iterable() {
-    // Foreach over the introspection array yields one entry per rule.
+    // foreach over spl_autoload_functions() iterates one entry per registered rule.
     let out = compile_and_run_files(
         &[
             (
@@ -585,9 +586,7 @@ echo $b->tag();
 
 #[test]
 fn test_autoload_files_section_always_inlines() {
-    // Files listed under autoload.files must be inlined unconditionally.
-    // The helper below isn't referenced as a class — it's just a
-    // function that main.php expects to be in scope.
+    // Files listed under autoload.files are inlined unconditionally; no class autoload needed.
     let out = compile_and_run_files(
         &[
             (
@@ -610,6 +609,7 @@ fn test_autoload_files_section_always_inlines() {
 
 #[test]
 fn test_autoload_files_section_executes_before_main_in_composer_order() {
+    // Files autoload sections execute in composer.json order before main.php.
     let out = compile_and_run_files(
         &[
             (
@@ -627,6 +627,7 @@ fn test_autoload_files_section_executes_before_main_in_composer_order() {
 
 #[test]
 fn test_class_triggered_autoload_executes_before_first_use() {
+    // Class file echoes "load" when parsed; must execute before first class instantiation in main.
     let out = compile_and_run_files(
         &[
             (
@@ -649,8 +650,7 @@ fn test_class_triggered_autoload_executes_before_first_use() {
 
 #[test]
 fn test_autoload_classmap_explicit_file() {
-    // classmap entry pointing directly at a .php file: the compiler
-    // scans it for class declarations and indexes them under their FQN.
+    // classmap entry with explicit .php file scans it for class declarations and indexes by FQN.
     let out = compile_and_run_files(
         &[
             (
@@ -673,9 +673,7 @@ fn test_autoload_classmap_explicit_file() {
 
 #[test]
 fn test_autoload_classmap_directory_scan() {
-    // classmap entry pointing at a directory: the compiler walks it
-    // recursively and indexes every class declaration under the right
-    // FQN, even when the file path doesn't follow PSR-4.
+    // classmap entry with directory path recursively walks it and indexes all class FQNs.
     let out = compile_and_run_files(
         &[
             (
@@ -698,9 +696,7 @@ fn test_autoload_classmap_directory_scan() {
 
 #[test]
 fn test_autoload_dev_psr4_section() {
-    // Classes declared under autoload-dev are merged into the same
-    // index. In an AOT model there is no production/test split — both
-    // sections contribute to one binary.
+    // autoload-dev PSR-4 is merged into the same AOT index as autoload; both sections contribute to one binary.
     let out = compile_and_run_files(
         &[
             (
@@ -727,8 +723,7 @@ fn test_autoload_dev_psr4_section() {
 
 #[test]
 fn test_psr0_namespaced_prefix() {
-    // Legacy PSR-0 with a namespaced prefix. Behaves like PSR-4 for
-    // namespaced classes.
+    // Legacy PSR-0 with namespaced prefix Vendor\Pkg maps to vendor-src/ directory.
     let out = compile_and_run_files(
         &[
             (
@@ -751,9 +746,7 @@ fn test_psr0_namespaced_prefix() {
 
 #[test]
 fn test_psr0_underscore_class_convention() {
-    // Twig_Loader_Filesystem-style class names: prefix `Twig_` maps to
-    // `lib/`, and the underscore-separated class lives at the path
-    // formed by treating each underscore as a directory separator.
+    // Twig_Loader_Filesystem-style underscore-as-directory convention: Twig_ prefix maps to lib/.
     let out = compile_and_run_files(
         &[
             (
@@ -776,9 +769,7 @@ fn test_psr0_underscore_class_convention() {
 
 #[test]
 fn test_psr4_longest_prefix_wins() {
-    // Two PSR-4 prefixes that both could resolve App\Models\User; the
-    // longer one (App\Models\) must win, picking models/User.php instead
-    // of src/Models/User.php.
+    // Two PSR-4 prefixes both matching App\Models\User; the longer prefix wins (App\Models\ > App\).
     let out = compile_and_run_files(
         &[
             (
@@ -805,9 +796,7 @@ fn test_psr4_longest_prefix_wins() {
 
 #[test]
 fn test_class_exists_literal_triggers_autoload() {
-    // class_exists with a literal class name and the default
-    // (autoload = true) loads the class even if the rest of the program
-    // doesn't reference it directly.
+    // class_exists with a literal class name and default autoload=true loads class via PSR-4.
     let out = compile_and_run_files(
         &[
             (
@@ -830,6 +819,7 @@ fn test_class_exists_literal_triggers_autoload() {
 
 #[test]
 fn test_class_exists_with_explicit_true_triggers_autoload() {
+    // class_exists with explicit autoload=true (second arg = true) triggers PSR-4 autoload.
     let out = compile_and_run_files(
         &[
             (
@@ -852,6 +842,7 @@ fn test_class_exists_with_explicit_true_triggers_autoload() {
 
 #[test]
 fn test_class_exists_with_int_nonzero_triggers_autoload() {
+    // class_exists($name, 1) with integer non-zero second arg behaves like autoload=true.
     let out = compile_and_run_files(
         &[
             (
@@ -874,6 +865,7 @@ fn test_class_exists_with_int_nonzero_triggers_autoload() {
 
 #[test]
 fn test_class_exists_dynamic_autoload_arg_does_not_trigger_aot_autoload() {
+    // class_exists with a variable (non-literal) second arg must not trigger AOT autoload; panics.
     let result = std::panic::catch_unwind(|| {
         compile_and_run_files(
             &[
@@ -898,6 +890,7 @@ fn test_class_exists_dynamic_autoload_arg_does_not_trigger_aot_autoload() {
 
 #[test]
 fn test_interface_exists_literal_triggers_autoload() {
+    // interface_exists with literal name triggers PSR-4 autoload and class implementing it is available.
     let out = compile_and_run_files(
         &[
             (
@@ -924,6 +917,7 @@ fn test_interface_exists_literal_triggers_autoload() {
 
 #[test]
 fn test_class_like_exists_literals_are_case_insensitive() {
+    // class_exists, interface_exists, enum_exists with lowercase names are case-insensitive.
     let out = compile_and_run(
         r#"<?php
 class Foo {}
@@ -939,6 +933,7 @@ echo enum_exists("status", false) ? "e" : "n";
 
 #[test]
 fn test_trait_exists_reports_declared_traits() {
+    // trait_exists reports declared traits; both canonical and lowercase names return true.
     let out = compile_and_run(
         r#"<?php
 trait VisibleTrait {}
@@ -953,6 +948,7 @@ echo trait_exists("visibletrait", false) ? "y" : "n";
 
 #[test]
 fn test_register_with_variable_stored_closure() {
+    // Closure stored in $loader variable then registered with spl_autoload_register($loader) loads class.
     let out = compile_and_run_files(
         &[
             (
@@ -978,6 +974,7 @@ echo $s->tag();
 
 #[test]
 fn test_register_with_function_name_string() {
+    // spl_autoload_register('myAutoloader') with function name string loads class via named autoloader.
     let out = compile_and_run_files(
         &[
             (
@@ -1003,8 +1000,7 @@ echo $n->tag();
 
 #[test]
 fn test_register_inside_if_true_block() {
-    // if (true) { register(...); } — folds to true so the inner
-    // register is collected like a top-level call.
+    // if (true) { spl_autoload_register(...); } folds at compile time; closure is collected.
     let out = compile_and_run_files(
         &[
             (
@@ -1031,8 +1027,7 @@ echo $g->tag();
 
 #[test]
 fn test_register_inside_if_false_else_block() {
-    // if (false) { ... } else { register(...); } — the else branch is
-    // taken at compile time.
+    // if (false) { ... } else { register(...); } else branch taken at compile time; closure is collected.
     let out = compile_and_run_files(
         &[
             (
@@ -1063,6 +1058,7 @@ echo $e->tag();
 
 #[test]
 fn test_register_with_sprintf_in_closure() {
+    // Closure uses sprintf to construct the require_once path; class file is found and loaded.
     let out = compile_and_run_files(
         &[
             (
@@ -1087,6 +1083,7 @@ echo $f->tag();
 
 #[test]
 fn test_register_with_dirname_in_closure() {
+    // Closure uses dirname(__DIR__) to navigate to sibling lib/ directory; class is loaded.
     let out = compile_and_run_files(
         &[
             (
@@ -1113,6 +1110,7 @@ echo $a->tag();
 
 #[test]
 fn test_spl_object_id_unique_and_stable() {
+    // spl_object_id returns same value for same object (stable) and different values for distinct objects (unique).
     let out = compile_and_run(
         r#"<?php
 class Box {}
@@ -1128,6 +1126,7 @@ echo (spl_object_id($a) !== spl_object_id($b)) ? "unique" : "same";
 
 #[test]
 fn test_spl_object_hash_distinct() {
+    // spl_object_hash returns same value for same object (stable) and different values for distinct objects (unique).
     let out = compile_and_run(
         r#"<?php
 class Box {}
@@ -1143,6 +1142,7 @@ echo (spl_object_hash($a) !== spl_object_hash($b)) ? "unique" : "same";
 
 #[test]
 fn test_spl_classes_returns_known_set() {
+    // spl_classes() includes Exception, Error, and LogicException in the returned array.
     let out = compile_and_run(
         r#"<?php
 $names = spl_classes();
@@ -1164,6 +1164,7 @@ echo $found_logic ? "l" : "-";
 
 #[test]
 fn test_get_class_returns_static_type() {
+    // get_class($dog) returns "Dog"; get_parent_class returns "Animal".
     let out = compile_and_run(
         r#"<?php
 class Animal {}
@@ -1179,6 +1180,7 @@ echo get_parent_class($d);
 
 #[test]
 fn test_is_a_walks_parent_chain() {
+    // is_a and is_subclass_of walk the parent chain: Dog → Animal.
     let out = compile_and_run(
         r#"<?php
 class Animal {}
@@ -1196,6 +1198,7 @@ echo is_subclass_of($d, "Animal") ? "y" : "n";
 
 #[test]
 fn test_is_a_target_string_is_case_insensitive() {
+    // is_a and is_subclass_of target string is case-insensitive (lowercase "dog", "animal", "pettable").
     let out = compile_and_run(
         r#"<?php
 interface Pettable {}
@@ -1213,6 +1216,7 @@ echo is_subclass_of($dog, "animal") ? "s" : "n";
 
 #[test]
 fn test_is_a_parent_chain_normalizes_namespaced_parent() {
+    // is_a with backslash-prefixed uppercase namespaced parent class normalizes correctly.
     let out = compile_and_run(
         r#"<?php
 namespace App;
@@ -1228,6 +1232,7 @@ echo is_subclass_of($dog, "\\APP\\ANIMAL") ? "s" : "n";
 
 #[test]
 fn test_is_a_walks_implemented_interface() {
+    // is_a and is_subclass_of walk implemented interfaces: Cat implements Pettable.
     let out = compile_and_run(
         r#"<?php
 interface Pettable {}
@@ -1243,11 +1248,7 @@ echo is_subclass_of($c, "Pettable") ? "y" : "n";
 
 #[test]
 fn test_register_with_use_capture_warns() {
-    // Captures aren't supported; the call compiles as a no-op and
-    // composer.json PSR-4 takes over. The fixture exists already (in
-    // test_register_with_use_capture_falls_back_to_psr4); this one
-    // narrows the contract: after rejection, count(spl_autoload_functions)
-    // is 0 because no rule got registered.
+    // Closure with `use ($base)` capture is rejected; count(spl_autoload_functions) is 0 afterward.
     let out = compile_and_run_files(
         &[
             (
@@ -1268,6 +1269,7 @@ echo count(spl_autoload_functions());
 
 #[test]
 fn test_get_declared_classes_includes_user_classes() {
+    // get_declared_classes() includes user-declared Alpha and Beta.
     let out = compile_and_run(
         r#"<?php
 class Alpha {}
@@ -1288,6 +1290,7 @@ echo $found_beta ? "b" : "-";
 
 #[test]
 fn test_get_declared_classes_preserves_user_declaration_order() {
+    // get_declared_classes() preserves declaration order: Zebra appears before Alpha.
     let out = compile_and_run(
         r#"<?php
 class Zebra {}
@@ -1309,6 +1312,7 @@ echo ($zebra >= 0 && $alpha >= 0 && $zebra < $alpha) ? "ok" : "bad";
 
 #[test]
 fn test_get_declared_interfaces_includes_user_interfaces() {
+    // get_declared_interfaces() includes user-declared MyContract.
     let out = compile_and_run(
         r#"<?php
 interface MyContract {}
@@ -1325,6 +1329,7 @@ echo $found ? "yes" : "no";
 
 #[test]
 fn test_get_declared_interfaces_preserves_user_declaration_order() {
+    // get_declared_interfaces() preserves declaration order: ZebraContract appears before AlphaContract.
     let out = compile_and_run(
         r#"<?php
 interface ZebraContract {}
@@ -1346,6 +1351,7 @@ echo ($zebra >= 0 && $alpha >= 0 && $zebra < $alpha) ? "ok" : "bad";
 
 #[test]
 fn test_get_declared_traits_preserves_user_declaration_order() {
+    // get_declared_traits() preserves declaration order: ZebraTrait appears before AlphaTrait.
     let out = compile_and_run(
         r#"<?php
 trait ZebraTrait {}
@@ -1367,6 +1373,7 @@ echo ($zebra >= 0 && $alpha >= 0 && $zebra < $alpha) ? "ok" : "bad";
 
 #[test]
 fn test_class_alias_creates_subclass() {
+    // class_alias("Original", "Alias") creates Alias as subclass of Original; instanceof works both ways.
     let out = compile_and_run(
         r#"<?php
 class Original {
@@ -1386,6 +1393,7 @@ echo ($a instanceof Alias) ? "yes" : "no";
 
 #[test]
 fn test_class_alias_with_namespace() {
+    // class_alias with namespaced original App\Original and namespaced alias App\Alias creates valid alias.
     let out = compile_and_run(
         r#"<?php
 namespace App;
@@ -1402,6 +1410,7 @@ echo $a->tag();
 
 #[test]
 fn test_class_alias_name_is_case_insensitive_before_name_resolver() {
+    // CLASS_ALIAS case-insensitive alias compiles and creates alias; new alias class is usable.
     let out = compile_and_run(
         r#"<?php
 class Original {
@@ -1417,6 +1426,7 @@ echo $a->tag();
 
 #[test]
 fn test_psr4_empty_prefix_root_namespace() {
+    // PSR-4 with empty prefix "" maps root namespace to src/; Plain class in src/ is found.
     let out = compile_and_run_files(
         &[
             (
@@ -1439,6 +1449,7 @@ fn test_psr4_empty_prefix_root_namespace() {
 
 #[test]
 fn test_autoload_does_not_shadow_builtin_exception() {
+    // User-defined Exception class in autoload must not shadow the builtin SPL Exception.
     let out = compile_and_run_files(
         &[
             (
@@ -1461,9 +1472,7 @@ fn test_autoload_does_not_shadow_builtin_exception() {
 
 #[test]
 fn test_classmap_exclude_from_classmap() {
-    // A classmap directory contains both regular code and a tests/
-    // subdirectory excluded via exclude-from-classmap. The test class
-    // must NOT end up in the index, while the regular class does.
+    // lib/ contains Real class plus tests/ subdirectory excluded via exclude-from-classmap; Excluded is missing.
     let out = compile_and_run_files(
         &[
             (
@@ -1495,9 +1504,7 @@ echo class_exists("Excluded", false) ? "exists" : "missing";
 
 #[test]
 fn test_classmap_exclude_with_double_star() {
-    // **/internal/** matches the internal/ subtree at any depth. Real
-    // sits at lib/Real.php and is kept; Hidden sits at lib/sub/internal/
-    // Hidden.php and is dropped.
+    // **/internal/** glob pattern excludes lib/sub/internal/Hidden.php from classmap; Hidden is missing.
     let out = compile_and_run_files(
         &[
             (
@@ -1529,9 +1536,7 @@ echo class_exists("Hidden", false) ? "exists" : "missing";
 
 #[test]
 fn test_classmap_exclude_with_filename_glob() {
-    // The pattern lib/*.test.php matches test files in lib/ but not in
-    // subdirectories. The .test.php file is excluded, the regular file
-    // is kept.
+    // lib/*.test.php glob excludes lib/Foo.test.php from classmap; FooTest is missing.
     let out = compile_and_run_files(
         &[
             (
@@ -1563,9 +1568,7 @@ echo class_exists("FooTest", false) ? "exists" : "missing";
 
 #[test]
 fn test_spl_autoload_call_with_literal_loads_class() {
-    // spl_autoload_call("App\\Forced") with a literal class string forces
-    // the autoload pass to resolve App\Forced even though the rest of the
-    // program doesn't reference it.
+    // spl_autoload_call("App\\Forced") forces autoload resolution even when program doesn't reference the class.
     let out = compile_and_run_files(
         &[
             (

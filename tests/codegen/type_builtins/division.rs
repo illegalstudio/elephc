@@ -10,51 +10,56 @@
 use super::*;
 
 #[test]
+    // Verifies `/` produces a float-formatted string (PHP semantics: non-integer division returns float).
 fn test_int_division_returns_float() {
     let out = compile_and_run("<?php echo 10 / 3;");
     assert_eq!(out, "3.3333333333333");
 }
 
 #[test]
+    // Verifies exact division still returns float-formatted output, not integer.
 fn test_int_division_exact() {
-    // Even exact division returns float-formatted output
     let out = compile_and_run("<?php echo 10 / 2;");
     assert_eq!(out, "5");
 }
 
 #[test]
+    // Verifies compound assignment `/=` updates the variable type to float.
 fn test_division_assign_updates_type() {
     let out = compile_and_run("<?php $x = 10; $x /= 3; echo $x;");
     assert_eq!(out, "3.3333333333333");
 }
 
 #[test]
+    // Verifies float arithmetic is used when summing multiple division results.
 fn test_division_in_expression() {
     let out = compile_and_run("<?php echo 1 / 3 + 1 / 3 + 1 / 3;");
     assert_eq!(out, "1");
 }
 
 #[test]
+    // Verifies `intdiv()` returns an integer (truncates toward zero).
 fn test_intdiv_still_returns_int() {
     let out = compile_and_run("<?php echo intdiv(10, 3);");
     assert_eq!(out, "3");
 }
 
 #[test]
+    // Verifies `intdiv()` with exact division returns integer without decimal.
 fn test_intdiv_exact() {
     let out = compile_and_run("<?php echo intdiv(10, 5);");
     assert_eq!(out, "2");
 }
 
 #[test]
+    // Verifies `intdiv()` with negative dividend truncates toward zero (not floor).
 fn test_intdiv_negative() {
     let out = compile_and_run("<?php echo intdiv(-7, 2);");
     assert_eq!(out, "-3");
 }
 
-// --- INF, NAN, is_nan, is_finite, is_infinite ---
-
 #[test]
+    // Verifies float division by zero produces `INF`.
 fn test_division_by_zero_inf() {
     let out = compile_and_run("<?php echo 1.0 / 0.0;");
     assert_eq!(out, "INF");

@@ -9,10 +9,10 @@
 
 use super::*;
 
+// Verifies that `$f->start($a, $b)` forwards two `mixed` arguments to the fiber
+// closure's parameters and formats them correctly.
 #[test]
 fn test_fiber_start_passes_arguments_to_closure() {
-    // start(...$args) hands up to four Mixed payloads to the closure. The
-    // Fiber entry wrapper adapts those cells to the closure's declared ABI.
     let out = compile_and_run(
         r#"<?php
 $f = new Fiber(function(mixed $a, mixed $b): void {
@@ -24,6 +24,8 @@ $f->start("hello", "world");
     assert_eq!(out, "hello/world");
 }
 
+// Verifies that an untyped (no type declaration) fiber closure parameter receives
+// the value passed to `$f->start()` and `echo` outputs it correctly.
 #[test]
 fn test_fiber_start_untyped_argument_receives_value() {
     let out = compile_and_run(
@@ -37,6 +39,10 @@ $f->start(42);
     assert_eq!(out, "42");
 }
 
+// Verifies that a Fiber constructed from a closure variable (not an inline
+// closure literal) works correctly: arguments are received, `start()` returns
+// null (first-class callables don't capture return values that way), and
+// `getReturn()` returns the fiber's final return value.
 #[test]
 fn test_fiber_from_closure_variable_uses_entry_wrapper() {
     let out = compile_and_run(
@@ -56,6 +62,8 @@ echo $f->getReturn();
     assert_eq!(out, "41/null/42");
 }
 
+// Verifies that an `int`-typed fiber closure parameter receives a value via
+// `start()` and the fiber body can perform arithmetic on it.
 #[test]
 fn test_fiber_start_typed_int_argument_receives_value() {
     let out = compile_and_run(
@@ -69,6 +77,8 @@ $f->start(41);
     assert_eq!(out, "42");
 }
 
+// Verifies that a `float`-typed fiber closure parameter receives a value via
+// `start()` and the fiber body correctly performs floating-point arithmetic.
 #[test]
 fn test_fiber_start_typed_float_argument_receives_value() {
     let out = compile_and_run(
@@ -82,6 +92,8 @@ $f->start(1.5);
     assert_eq!(out, "2");
 }
 
+// Verifies that five `string`-typed parameters are all received correctly when
+// passed via `start()` and can be concatenated in the fiber body.
 #[test]
 fn test_fiber_start_typed_string_arguments_use_stack_overflow() {
     let out = compile_and_run(
@@ -95,6 +107,9 @@ $f->start("A", "B", "C", "D", "E");
     assert_eq!(out, "ABCDE");
 }
 
+// Verifies that an `int`-typed fiber closure parameter combined with a `use`
+// captured variable works correctly: the parameter is received from `start()`
+// and the captured variable is accessible in the fiber body.
 #[test]
 fn test_fiber_start_typed_argument_with_string_capture() {
     let out = compile_and_run(
@@ -109,6 +124,9 @@ $f->start(41);
     assert_eq!(out, "42!");
 }
 
+// Verifies that a Fiber constructed from a first-class callable (`fiber_job(...)`)
+// works correctly: arguments are received, `start()` returns null, and
+// `getReturn()` returns the fiber's final return value.
 #[test]
 fn test_fiber_first_class_function_callable_uses_entry_wrapper() {
     let out = compile_and_run(
@@ -128,6 +146,9 @@ echo $f->getReturn();
     assert_eq!(out, "41/null/42");
 }
 
+// Verifies that seven `mixed` arguments can be passed through `start()` to the
+// fiber closure.  Seven is the maximum on AArch64 (integer arg-reg count
+// minus `$this`).
 #[test]
 fn test_fiber_start_seven_args() {
     // 7 = the maximum, equal to the AArch64 integer arg-reg count minus $this.
@@ -142,6 +163,8 @@ $f->start("1", "2", "3", "4", "5", "6", "7");
     assert_eq!(out, "1234567");
 }
 
+// Verifies that `start()` correctly forwards zero, one, and four arguments to
+// three different fibers with matching parameter counts.
 #[test]
 fn test_fiber_start_zero_one_four_args() {
     let out = compile_and_run(
@@ -159,6 +182,9 @@ $f4->start("A", "B", "C", "D");
     assert_eq!(out, "[0][1:one][4:A,B,C,D]");
 }
 
+// Verifies that a runaway recursion inside a fiber triggers the guard page at
+// the bottom of the fiber stack and aborts with SIGSEGV/SIGBUS rather than
+// silently corrupting the heap. The program must not reach "should-not-reach".
 #[test]
 fn test_fiber_stack_overflow_faults_via_guard_page() {
     // The fiber stack now has a 16 KB PROT_NONE guard page at its bottom. A

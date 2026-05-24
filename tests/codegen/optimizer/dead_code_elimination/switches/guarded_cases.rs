@@ -9,6 +9,8 @@
 
 use super::*;
 
+// Verifies that a nested `if` region contradicting a switch boolean guard is pruned.
+// Confirms "ab".
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_switch_bool_guard_case() {
     let out = compile_and_run(
@@ -35,6 +37,8 @@ run(false);
     assert_eq!(out, "ab");
 }
 
+// Verifies that impossible switch cases ruled out by outer guards are dropped from assembly.
+// Confirms "ab" with "dead-int" and "dead-bool" absent.
 #[test]
 fn test_dead_code_elimination_drops_impossible_switch_cases_from_outer_guards() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_guard_prune");
@@ -85,7 +89,6 @@ run(0, true);
     assert!(!user_asm.contains("dead-int"));
     assert!(!user_asm.contains("dead-bool"));
 }
-
 #[test]
 fn test_dead_code_elimination_drops_exhaustive_switch_true_default_from_cumulative_guards() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_true_exhaustive");
@@ -108,7 +111,6 @@ switch (true) {
         false,
         false,
     );
-
     let out = assemble_and_run(
         &user_asm,
         get_runtime_obj(),
@@ -117,11 +119,9 @@ switch (true) {
         &default_link_paths(),
         &[],
     );
-
     assert_eq!(out, "B");
     assert!(!user_asm.contains("dead-default"));
 }
-
 #[test]
 fn test_dead_code_elimination_uses_cumulative_switch_true_guards_inside_case_body() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_true_cumulative_body");
@@ -145,7 +145,6 @@ function run($a, $b, $c, $d) {
         }
     }
 }
-
 run(true, true, true, true);
 run(false, false, false, true);
 "#,
@@ -154,7 +153,6 @@ run(false, false, false, true);
         false,
         false,
     );
-
     let out = assemble_and_run(
         &user_asm,
         get_runtime_obj(),
@@ -163,12 +161,13 @@ run(false, false, false, true);
         &default_link_paths(),
         &[],
     );
-
     assert_eq!(out, "AB");
     assert!(!user_asm.contains("dead-ab"));
     assert!(!user_asm.contains("dead-default"));
 }
 
+// Verifies that an excluded scalar switch case is dropped from assembly when an outer guard
+// rules it out. Confirms "A" with "dead-case" absent.
 #[test]
 fn test_dead_code_elimination_drops_excluded_scalar_switch_case_from_outer_guard() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_excluded_scalar_case");
@@ -211,6 +210,8 @@ run(2);
     assert!(user_asm.contains("live-default"));
 }
 
+// Verifies that falsy switch cases and default are pruned when the switch subject is truthy
+// and a guard case covers the truthy path. Confirms "A" with dead labels absent.
 #[test]
 fn test_dead_code_elimination_prunes_truthy_switch_cases_and_default() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_truthy_switch_cases");
@@ -258,6 +259,8 @@ run(true);
     assert!(!user_asm.contains("bad"));
 }
 
+// Verifies that a switch boolean guard is invalidated after a local write inside the case body.
+// Confirms "a".
 #[test]
 fn test_dead_code_elimination_prunes_falsy_scalar_labels_from_truthy_switch_subject() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_truthy_switch_scalar_labels");
@@ -279,7 +282,6 @@ function run($flag, $other) {
         }
     }
 }
-
 run(true, false);
 "#,
         &dir,
@@ -287,7 +289,6 @@ run(true, false);
         false,
         false,
     );
-
     let out = assemble_and_run(
         &user_asm,
         get_runtime_obj(),
@@ -296,12 +297,10 @@ run(true, false);
         &default_link_paths(),
         &[],
     );
-
     assert_eq!(out, "A");
     assert!(!user_asm.contains("dead-falsy-case"));
     assert!(!user_asm.contains("dead-default"));
 }
-
 #[test]
 fn test_dead_code_elimination_combines_exclusion_and_truthy_switch_guards() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_mixed_truthy_exclusion");
@@ -325,7 +324,6 @@ function run($value) {
         }
     }
 }
-
 run(true);
 "#,
         &dir,
@@ -333,7 +331,6 @@ run(true);
         false,
         false,
     );
-
     let out = assemble_and_run(
         &user_asm,
         get_runtime_obj(),
@@ -342,12 +339,10 @@ run(true);
         &default_link_paths(),
         &[],
     );
-
     assert_eq!(out, "A");
     assert!(!user_asm.contains("dead-mixed-case"));
     assert!(!user_asm.contains("dead-default"));
 }
-
 #[test]
 fn test_dead_code_elimination_invalidates_switch_bool_guard_after_local_write() {
     let out = compile_and_run(

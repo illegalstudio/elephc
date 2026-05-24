@@ -11,6 +11,8 @@ use super::*;
 
 #[test]
 fn test_spread_into_named_params() {
+    // Verifies positional spread args (`...$array`) correctly fill a function's
+    // positional parameters. Fixture: 2-element array unpacked into 2-param function.
     let out = compile_and_run(
         r#"<?php
 function add($a, $b) { return $a + $b; }
@@ -23,6 +25,7 @@ echo add(...$args);
 
 #[test]
 fn test_spread_into_named_params_three() {
+    // Verifies positional spread args with 3 elements unpacked into a 3-param function.
     let out = compile_and_run(
         r#"<?php
 function sum3($a, $b, $c) { return $a + $b + $c; }
@@ -35,6 +38,7 @@ echo sum3(...$args);
 
 #[test]
 fn test_braceless_if() {
+    // Verifies single-statement `if` without braces compiles and executes correctly.
     let out = compile_and_run(
         r#"<?php
 if (true) echo "yes";
@@ -45,6 +49,7 @@ if (true) echo "yes";
 
 #[test]
 fn test_multi_argument_echo() {
+    // Verifies `echo` with multiple comma-separated arguments outputs each in sequence.
     let out = compile_and_run(
         r#"<?php
 echo "A", "B", 3, "\n";
@@ -55,6 +60,7 @@ echo "A", "B", 3, "\n";
 
 #[test]
 fn test_braceless_if_else() {
+    // Verifies braceless `if`/`else` with single-statement branches executes the correct branch.
     let out = compile_and_run(
         r#"<?php
 $x = 5;
@@ -67,6 +73,7 @@ else echo "small";
 
 #[test]
 fn test_braceless_for() {
+    // Verifies single-statement `for` loop without braces iterates 0..2.
     let out = compile_and_run(
         r#"<?php
 for ($i = 0; $i < 3; $i++) echo $i;
@@ -77,6 +84,7 @@ for ($i = 0; $i < 3; $i++) echo $i;
 
 #[test]
 fn test_braceless_while() {
+    // Verifies single-statement `while` loop without braces iterates post-increment 0..2.
     let out = compile_and_run(
         r#"<?php
 $i = 0;
@@ -88,6 +96,7 @@ while ($i < 3) echo $i++;
 
 #[test]
 fn test_braceless_foreach() {
+    // Verifies single-statement `foreach` without braces iterates array values 1..3.
     let out = compile_and_run(
         r#"<?php
 $arr = [1, 2, 3];
@@ -99,6 +108,8 @@ foreach ($arr as $v) echo $v;
 
 #[test]
 fn test_braceless_else_if() {
+    // Verifies braceless `if` / `else if` / `else` chain with single-statement branches
+    // selects the correct branch based on condition $x > 10 > 3.
     let out = compile_and_run(
         r#"<?php
 $x = 5;

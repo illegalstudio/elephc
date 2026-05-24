@@ -1,5 +1,6 @@
 //! Purpose:
-//! Integration or regression tests for optimizer-sensitive codegen coverage of optimizer, dead-code elimination guards, including dead code elimination rebuilds empty elseif tail as needed guard, dead code elimination prunes nested if region from demorgan equivalent guard, and dead code elimination prunes nested if region from loose comparison guard.
+//! Integration or regression tests for optimizer-sensitive codegen coverage of optimizer, dead-code elimination guards,
+//! including composite guard refinement, elseif suffix pruning, guard normalization, and order preservation.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -9,6 +10,8 @@
 
 use super::*;
 
+// Verifies that an empty `if/elseif` chain with a pure else body rebuilds as a needed guard,
+// preserving condition effects. Confirms "ab!".
 #[test]
 fn test_dead_code_elimination_rebuilds_empty_elseif_tail_as_needed_guard() {
     let out = compile_and_run(
@@ -38,6 +41,8 @@ echo "!";
     assert_eq!(out, "ab!");
 }
 
+// Verifies that a nested `if` region contradicting a De Morgan equivalent guard is pruned.
+// Confirms "ab".
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_demorgan_equivalent_guard() {
     let out = compile_and_run(
@@ -62,6 +67,8 @@ run(true, true);
     assert_eq!(out, "ab");
 }
 
+// Verifies that a nested `if` contradicting an outer loose comparison guard (`== 0`) is
+// pruned from assembly. Confirms "ab" with "dead-loose" absent.
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_loose_comparison_guard() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_loose_comparison_guard");
@@ -101,6 +108,8 @@ run(2);
     assert!(!user_asm.contains("dead-loose"));
 }
 
+// Verifies that a nested `if` contradicting an outer relational guard (`> 10`) is pruned
+// from assembly. Confirms "ab" with "dead-rel" absent.
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_relational_guard() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_relational_guard");
@@ -140,6 +149,8 @@ run(10);
     assert!(!user_asm.contains("dead-rel"));
 }
 
+// Verifies that a nested elseif with `true` body is pruned when a composite guard makes it
+// unreachable. Confirms "acx" with "dead" absent.
 #[test]
 fn test_dead_code_elimination_prunes_nested_elseif_from_composite_guard_refinement() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_composite_guard_refinement");
@@ -184,6 +195,8 @@ run(false, false, false);
     assert!(!user_asm.contains("dead"));
 }
 
+// Verifies that a nested subexpr contradicting a composite guard is pruned. Confirms "acx"
+// with "dead-ab" and "dead-d" absent.
 #[test]
 fn test_dead_code_elimination_prunes_nested_subexpr_from_composite_guard_refinement() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_nested_subexpr_guard_refinement");
@@ -233,6 +246,8 @@ run(false, false, false, false);
     assert!(!user_asm.contains("dead-d"));
 }
 
+// Verifies that a chain `if/elseif/elseif/else` where two guards cover all possibilities
+// drops the unreachable elseif suffix and final else. Confirms "B" with dead labels absent.
 #[test]
 fn test_dead_code_elimination_drops_unreachable_elseif_suffix_from_cumulative_guards() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_elseif_guard_prune");
@@ -274,6 +289,8 @@ if ($flag) {
     assert!(!user_asm.contains("dead-else"));
 }
 
+// Verifies that `if/elseif/elseif/else` where `($a || $b)` and `!($a || $b)` cover all
+// possibilities drops the unreachable elseif suffix and final else. Confirms "AB".
 #[test]
 fn test_dead_code_elimination_drops_unreachable_elseif_suffix_from_negated_composite_guards() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_negated_elseif_guard_prune");
@@ -319,6 +336,8 @@ run(false, false);
     assert!(!user_asm.contains("dead-else"));
 }
 
+// Verifies that a De Morgan equivalent guard pair (`!($a && $b)` vs `!$a || !$b`) makes
+// the second elseif unreachable. Confirms "AC" with "dead-equivalent" absent.
 #[test]
 fn test_dead_code_elimination_drops_unreachable_elseif_suffix_from_demorgan_equivalent_guards() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_demorgan_elseif_guard_prune");
@@ -359,6 +378,7 @@ run(true, true);
     assert!(!user_asm.contains("dead-else"));
 }
 
+// Verifies that an empty head with a matching elseif preserves execution order. Confirms "ab!".
 #[test]
 fn test_dead_code_elimination_preserves_elseif_order_after_empty_head() {
     let out = compile_and_run(
@@ -377,6 +397,7 @@ if (step("a", false)) {
     assert_eq!(out, "ab!");
 }
 
+// Verifies that an elseif is skipped when the empty head already matched. Confirms "a?".
 #[test]
 fn test_dead_code_elimination_skips_elseif_when_empty_head_matches() {
     let out = compile_and_run(
@@ -396,6 +417,7 @@ echo "?";
     assert_eq!(out, "a?");
 }
 
+// Verifies that normalization preserves the correct elseif execution order. Confirms "abB".
 #[test]
 fn test_dead_code_elimination_preserves_regular_elseif_order_after_normalization() {
     let out = compile_and_run(

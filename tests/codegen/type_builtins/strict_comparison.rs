@@ -10,126 +10,140 @@
 use super::*;
 
 #[test]
+    // Verifies `===` returns true for identical integer values.
 fn test_strict_eq_int_same() {
     let out = compile_and_run("<?php echo 1 === 1;");
     assert_eq!(out, "1");
 }
 
 #[test]
+    // Verifies `===` returns empty (false) when comparing two different integer values.
 fn test_strict_eq_int_different() {
     let out = compile_and_run("<?php echo 1 === 2;");
     assert_eq!(out, "");
 }
 
 #[test]
+    // Verifies `!==` returns empty (false) when comparing two identical integer values.
 fn test_strict_neq_int_same() {
     let out = compile_and_run("<?php echo 1 !== 1;");
     assert_eq!(out, "");
 }
 
 #[test]
+    // Verifies `!==` returns true for two different integer values.
 fn test_strict_neq_int_different() {
     let out = compile_and_run("<?php echo 1 !== 2;");
     assert_eq!(out, "1");
 }
 
 #[test]
+    // Verifies `===` returns false when comparing int `1` to bool `true` (different types).
 fn test_strict_eq_int_vs_bool() {
-    // 1 === true should be false (different types)
     let out = compile_and_run("<?php echo 1 === true;");
     assert_eq!(out, "");
 }
 
 #[test]
+    // Verifies `!==` returns true when comparing int `1` to bool `true` (different types).
 fn test_strict_neq_int_vs_bool() {
-    // 1 !== true should be true (different types)
     let out = compile_and_run("<?php echo 1 !== true;");
     assert_eq!(out, "1");
 }
 
 #[test]
+    // Verifies `===` returns false when comparing int `1` to string `"1"` (different types).
 fn test_strict_eq_int_vs_string() {
-    // 1 === "1" should be false (different types)
     let out = compile_and_run("<?php echo 1 === \"1\";");
     assert_eq!(out, "");
 }
 
 #[test]
+    // Verifies `===` returns true for two identical string values.
 fn test_strict_eq_string_same() {
     let out = compile_and_run("<?php echo \"hello\" === \"hello\";");
     assert_eq!(out, "1");
 }
 
 #[test]
+    // Verifies `===` returns empty (false) when comparing two different string values.
 fn test_strict_eq_string_different() {
     let out = compile_and_run("<?php echo \"hello\" === \"world\";");
     assert_eq!(out, "");
 }
 
 #[test]
+    // Verifies `!==` returns true for two different string values.
 fn test_strict_neq_string() {
     let out = compile_and_run("<?php echo \"abc\" !== \"def\";");
     assert_eq!(out, "1");
 }
 
 #[test]
+    // Verifies `===` returns true when both operands are boolean `true`.
 fn test_strict_eq_bool_true() {
     let out = compile_and_run("<?php echo true === true;");
     assert_eq!(out, "1");
 }
 
 #[test]
+    // Verifies `===` returns true when both operands are boolean `false`.
 fn test_strict_eq_bool_false() {
     let out = compile_and_run("<?php echo false === false;");
     assert_eq!(out, "1");
 }
 
 #[test]
+    // Verifies `===` returns empty (false) when comparing `true` to `false`.
 fn test_strict_eq_bool_mixed() {
     let out = compile_and_run("<?php echo true === false;");
     assert_eq!(out, "");
 }
 
 #[test]
+    // Verifies `===` returns true when both operands are `null`.
 fn test_strict_eq_null() {
     let out = compile_and_run("<?php echo null === null;");
     assert_eq!(out, "1");
 }
 
 #[test]
+    // Verifies `===` returns false when comparing `null` to integer `0` (different types).
 fn test_strict_eq_null_vs_int() {
-    // null === 0 should be false
     let out = compile_and_run("<?php echo null === 0;");
     assert_eq!(out, "");
 }
 
 #[test]
+    // Verifies `===` returns false when comparing `null` to bool `false` (different types).
 fn test_strict_eq_null_vs_false() {
-    // null === false should be false (different types)
     let out = compile_and_run("<?php echo null === false;");
     assert_eq!(out, "");
 }
 
 #[test]
+    // Verifies `===` returns true for two identical float values.
 fn test_strict_eq_float_same() {
     let out = compile_and_run("<?php echo 3.14 === 3.14;");
     assert_eq!(out, "1");
 }
 
 #[test]
+    // Verifies `===` returns empty (false) when comparing two different float values.
 fn test_strict_eq_float_different() {
     let out = compile_and_run("<?php echo 3.14 === 2.71;");
     assert_eq!(out, "");
 }
 
 #[test]
+    // Verifies `===` returns false when comparing float `1.0` to int `1` (different types).
 fn test_strict_eq_float_vs_int() {
-    // 1.0 === 1 should be false (different types)
     let out = compile_and_run("<?php echo 1.0 === 1;");
     assert_eq!(out, "");
 }
 
 #[test]
+    // Verifies `===` works correctly inside an `if` condition with an integer variable.
 fn test_strict_eq_in_if() {
     let out = compile_and_run(
         r#"<?php
@@ -145,6 +159,7 @@ if ($x === 5) {
 }
 
 #[test]
+    // Verifies `!==` works correctly inside an `if` condition with string variables.
 fn test_strict_neq_in_if() {
     let out = compile_and_run(
         r#"<?php
@@ -160,6 +175,7 @@ if ($x !== "world") {
 }
 
 #[test]
+    // Verifies `===` returns true when two distinct variables hold the same string value.
 fn test_strict_eq_string_variables() {
     let out = compile_and_run(
         r#"<?php
@@ -172,6 +188,7 @@ echo $a === $b;
 }
 
 #[test]
+    // Verifies `!==` returns true when two distinct variables hold different string values.
 fn test_strict_neq_string_variables() {
     let out = compile_and_run(
         r#"<?php
@@ -184,8 +201,8 @@ echo $a !== $b;
 }
 
 #[test]
+    // Verifies both operands of `===` are evaluated even when types differ (no short-circuit on type mismatch).
 fn test_strict_eq_side_effects_preserved() {
-    // Both operands must be evaluated even when types differ
     let out = compile_and_run(
         r#"<?php
 function effect() { echo "X"; return 1; }
@@ -197,6 +214,7 @@ echo $r;
 }
 
 #[test]
+    // Verifies the boolean result of `===` can be assigned to a variable.
 fn test_strict_eq_assign_result() {
     let out = compile_and_run(
         r#"<?php
@@ -208,6 +226,7 @@ echo $x;
 }
 
 #[test]
+    // Verifies the boolean result of `!==` can be assigned to a variable.
 fn test_strict_neq_assign_result() {
     let out = compile_and_run(
         r#"<?php
@@ -219,6 +238,7 @@ echo $x;
 }
 
 #[test]
+    // Verifies strict comparison uses both type and value from a map with int, string, and bool entries.
 fn test_strict_compare_mixed_uses_payload_type_and_value() {
     let out = compile_and_run(
         r#"<?php

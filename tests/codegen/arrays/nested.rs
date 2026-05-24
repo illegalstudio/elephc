@@ -11,6 +11,7 @@ use crate::support::*;
 
 // --- Phase 14: Multi-dimensional arrays ---
 
+// Compiles a 2D numeric array literal and verifies indexed access to all four elements.
 #[test]
 fn test_nested_array_create_access() {
     let out = compile_and_run(
@@ -22,6 +23,7 @@ echo $a[0][0] . " " . $a[0][1] . " " . $a[1][0] . " " . $a[1][1];
     assert_eq!(out, "1 2 3 4");
 }
 
+// Verifies `count()` on a 2D array returns the outer element count and the inner sub-array length.
 #[test]
 fn test_nested_array_count() {
     let out = compile_and_run(
@@ -33,6 +35,7 @@ echo count($a) . " " . count($a[0]);
     assert_eq!(out, "3 2");
 }
 
+// Appends a new sub-array to a 2D array via `[]` and confirms the outer count incremented and the new sub-array is accessible.
 #[test]
 fn test_nested_array_push() {
     let out = compile_and_run(
@@ -45,6 +48,7 @@ echo count($a) . " " . $a[1][0];
     assert_eq!(out, "2 3");
 }
 
+// Exercises nested `foreach` iteration over a 2D array, confirming each scalar element is visited in row-major order.
 #[test]
 fn test_nested_array_foreach() {
     let out = compile_and_run(
@@ -60,6 +64,7 @@ foreach ($matrix as $row) {
     assert_eq!(out, "1 2 3 4 ");
 }
 
+// Tests three levels of array nesting (`[[[1]]]`), verifying that evaluation order correctly traverses to the innermost scalar.
 #[test]
 fn test_nested_array_3_levels() {
     let out = compile_and_run(
@@ -71,6 +76,7 @@ echo $a[0][0][0];
     assert_eq!(out, "1");
 }
 
+// Constructs a 2D array of string values and asserts that indexed access and string concatenation produce the expected output.
 #[test]
 fn test_nested_array_string_elements() {
     let out = compile_and_run(
@@ -82,6 +88,7 @@ echo $a[0][0] . " " . $a[1][1];
     assert_eq!(out, "hello bar");
 }
 
+// Tests `array_column()` extracting a named string key from an array of associative rows, confirming the result count is correct.
 #[test]
 fn test_array_column() {
     let out = compile_and_run(
@@ -98,6 +105,7 @@ echo count($names);
     assert_eq!(out, "3");
 }
 
+// Exercises `array_column()` on rows containing mixed (string and int) values, then iterates both result arrays to confirm ordering and values are preserved.
 #[test]
 fn test_array_column_mixed_row_values() {
     let out = compile_and_run(
@@ -121,6 +129,7 @@ foreach ($scores as $score) {
     assert_eq!(out, "Ada Linus Grace |10 12 8 ");
 }
 
+// Regression test for GC balance: after `array_column()` on mixed-type rows with all three arrays subsequently `unset`, allocations must equal frees.
 #[test]
 fn test_array_column_mixed_row_values_balances_gc_stats() {
     let baseline = compile_and_run_with_gc_stats("<?php");
@@ -144,6 +153,7 @@ unset($users);
     assert_eq!(allocs - baseline_allocs, frees - baseline_frees);
 }
 
+// Verifies that `array_column()` creating copied sub-arrays survives `unset` of the source rows, and that individual nested elements are still accessible.
 #[test]
 fn test_gc_array_column_borrowed_array_survives_source_unset() {
     let out = compile_and_run(

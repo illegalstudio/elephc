@@ -9,24 +9,28 @@
 
 use super::*;
 
+// Tests ternary true branch using equality comparison that evaluates to true.
 #[test]
 fn test_ternary_true() {
     let out = compile_and_run("<?php echo 1 == 1 ? \"yes\" : \"no\";");
     assert_eq!(out, "yes");
 }
 
+// Tests ternary false branch using equality comparison that evaluates to false.
 #[test]
 fn test_ternary_false() {
     let out = compile_and_run("<?php echo 1 == 2 ? \"yes\" : \"no\";");
     assert_eq!(out, "no");
 }
 
+// Tests ternary with integer comparison and integer branches, selecting the larger of two values.
 #[test]
 fn test_ternary_int() {
     let out = compile_and_run("<?php $x = 3; $y = 7; echo $x > $y ? $x : $y;");
     assert_eq!(out, "7");
 }
 
+// Tests ternary with mixed types when array_pop returns null on empty array.
 #[test]
 fn test_ternary_mixed_types_str_vs_int() {
     let out = compile_and_run(
@@ -35,12 +39,14 @@ fn test_ternary_mixed_types_str_vs_int() {
     assert_eq!(out, "null");
 }
 
+// Tests ternary with int condition (0) selecting false branch.
 #[test]
 fn test_ternary_mixed_types_then_branch_str() {
     let out = compile_and_run("<?php $x = 0; echo $x ? \"yes\" : \"no\";");
     assert_eq!(out, "no");
 }
 
+// Tests ternary with bool true condition selecting int branch over string.
 #[test]
 fn test_ternary_int_string() {
     let out = compile_and_run(
@@ -52,6 +58,7 @@ echo $x ? 42 : "none";
     assert_eq!(out, "42");
 }
 
+// Tests ternary with bool false condition selecting string branch over int (result is "0").
 #[test]
 fn test_ternary_string_int() {
     let out = compile_and_run(
@@ -63,6 +70,7 @@ echo $x ? "yes" : 0;
     assert_eq!(out, "0");
 }
 
+// Tests ternary with bool true condition selecting string branch over another string.
 #[test]
 fn test_ternary_string_string() {
     let out = compile_and_run(
@@ -74,6 +82,7 @@ echo $x ? "hello" : "world";
     assert_eq!(out, "hello");
 }
 
+// Tests ternary with bool true condition selecting int branch over another int.
 #[test]
 fn test_ternary_int_int() {
     let out = compile_and_run(
@@ -85,6 +94,7 @@ echo $x ? 1 : 0;
     assert_eq!(out, "1");
 }
 
+// Tests ternary nested inside string concatenation with int and string result types.
 #[test]
 fn test_ternary_mixed_in_concat() {
     let out = compile_and_run(
@@ -96,6 +106,7 @@ echo "Items: " . ($count > 0 ? $count : "none");
     assert_eq!(out, "Items: 5");
 }
 
+// Tests ternary with bool false condition selecting string branch over float.
 #[test]
 fn test_ternary_float_string() {
     let out = compile_and_run(
@@ -107,6 +118,7 @@ echo $x ? 3.14 : "zero";
     assert_eq!(out, "zero");
 }
 
+// Tests nested ternary with int condition (0) and string/int branches in both outer and inner ternary.
 #[test]
 fn test_ternary_nested_mixed() {
     let out = compile_and_run(
@@ -118,6 +130,7 @@ echo $a ? "yes" : ($a === 0 ? "zero" : "no");
     assert_eq!(out, "zero");
 }
 
+// Tests ternary with variable as the true branch result, condition is bool true.
 #[test]
 fn test_ternary_variable_string() {
     let out = compile_and_run(
@@ -130,6 +143,7 @@ echo $greeting;
     assert_eq!(out, "Alice");
 }
 
+// Tests ternary with user-defined function call as the true branch result.
 #[test]
 fn test_ternary_function_result() {
     let out = compile_and_run(
@@ -141,6 +155,7 @@ echo true ? get_name() : "default";
     assert_eq!(out, "Bob");
 }
 
+// Tests ternary with comparison expression as condition and int variable vs string variable as branches.
 #[test]
 fn test_ternary_variable_int_vs_string() {
     let out = compile_and_run(
@@ -153,6 +168,7 @@ echo ($count > 0) ? $count : $label;
     assert_eq!(out, "5");
 }
 
+// Tests ternary with method call on object as the true branch result.
 #[test]
 fn test_ternary_method_call_result() {
     let out = compile_and_run(

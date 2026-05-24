@@ -9,6 +9,9 @@
 
 use super::*;
 
+// Tests deeply chained property access through an array: `$this->palette->colors[$i]->r`.
+// Verifies object→array→property chain where `$palette` is an object, `colors` is an array
+// of Color objects, and `r` is a public property on Color. Compilation and stdout checked.
 #[test]
 fn test_deep_mixed_property_and_array_chain() {
     let out = compile_and_run(
@@ -51,6 +54,8 @@ echo $catalog->sample();
     assert_eq!(out, "9");
 }
 
+// Tests method call returning array, then array-offset access, then property access:
+// `$shop->getItems()[0]->name`. Verifies chained call→array→property chain. Compilation and stdout checked.
 #[test]
 fn test_method_call_array_access_then_property_access() {
     let out = compile_and_run(
@@ -84,6 +89,8 @@ echo $shop->getItems()[0]->name;
     assert_eq!(out, "apple");
 }
 
+// Tests property access on an array of objects element: `$this->entries[$i]->name`.
+// Verifies array-of-objects element access and property read. Compilation and stdout checked.
 #[test]
 fn test_property_access_on_array_of_objects_element() {
     let out = compile_and_run(
@@ -120,6 +127,9 @@ echo $wad->secondName();
     assert_eq!(out, "COLORMAP");
 }
 
+// Tests write to a deeply chained property after array access:
+// `$this->palette->colors[$i]->r = 12`. Verifies object→array→property write chain and read-back.
+// Compilation and stdout checked.
 #[test]
 fn test_deep_property_assign_after_array_access() {
     let out = compile_and_run(
@@ -163,6 +173,9 @@ echo $catalog->repaint();
     assert_eq!(out, "12");
 }
 
+// Tests write to a nested array property after array access:
+// `$this->palette->colors[$i]->shades[1] = 7`. Verifies object→array→object→array write chain and read-back.
+// Compilation and stdout checked.
 #[test]
 fn test_deep_property_array_assign_after_array_access() {
     let out = compile_and_run(
@@ -205,6 +218,9 @@ echo $catalog->repaint();
     assert_eq!(out, "7");
 }
 
+// Tests push to a nested array property after array access:
+// `$this->palette->colors[$i]->shades[] = 7`. Verifies object→array→object→array push chain and read-back.
+// Compilation and stdout checked.
 #[test]
 fn test_deep_property_array_push_after_array_access() {
     let out = compile_and_run(
@@ -247,6 +263,8 @@ echo $catalog->repaint();
     assert_eq!(out, "7");
 }
 
+// Tests 3-level array chain on a plain PHP array (no objects): `$data[0]["tags"][1]`.
+// Verifies multi-level array-offset chaining with string keys. Compilation and stdout checked.
 #[test]
 fn test_nested_3_level_chained() {
     let out = compile_and_run(
@@ -258,6 +276,9 @@ echo $data[0]["tags"][1];
     assert_eq!(out, "rust");
 }
 
+// Tests access to a private static property inside its class via `self::$code`.
+// Verifies static property resolution and access within the declaring class context.
+// Compilation and stdout checked.
 #[test]
 fn test_private_static_property_access_inside_class() {
     let out = compile_and_run(

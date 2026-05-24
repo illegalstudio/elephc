@@ -10,6 +10,9 @@
 use super::*;
 
 #[test]
+// Verifies a concrete class can satisfy an interface contract by implementing all required methods.
+// Fixture: interface `Named` with method `name()`, concrete `User` implementing `Named`.
+// Asserts the method call on the concrete instance returns the expected string.
 fn test_interface_contract_can_be_satisfied_by_concrete_class() {
     let out = compile_and_run(
         r#"<?php
@@ -31,6 +34,9 @@ echo $user->name();
 }
 
 #[test]
+// Verifies an abstract class can defer interface method implementation to a concrete child class.
+// Fixture: abstract `BaseGreeter` with abstract method `label()` and concrete `PersonGreeter`.
+// Asserts calling `greet()` on the concrete child triggers `label()` via `$this->label()`.
 fn test_abstract_base_can_defer_method_to_concrete_child() {
     let out = compile_and_run(
         r#"<?php
@@ -56,6 +62,9 @@ echo $g->greet();
 }
 
 #[test]
+// Verifies a class can implement multiple interfaces simultaneously.
+// Fixture: `Named` and `Tagged` interfaces, `Item` implementing both.
+// Asserts chained method calls resolve to the correct interface method on the same instance.
 fn test_class_can_implement_multiple_interfaces() {
     let out = compile_and_run(
         r#"<?php
@@ -85,6 +94,9 @@ echo $item->name() . ":" . $item->tag();
 }
 
 #[test]
+// Verifies transitive interface extension is enforced: a class must satisfy the full chain.
+// Fixture: `Labeled extends Named`, `Product implements Labeled`. Uses `strtoupper($this->name())`.
+// Asserts the method call correctly resolves through the transitive interface hierarchy.
 fn test_transitive_interface_extends_is_enforced() {
     let out = compile_and_run(
         r#"<?php
@@ -114,12 +126,17 @@ echo $product->label();
 }
 
 #[test]
+// Verifies the checked-in example at `examples/interfaces/main.php` compiles and runs end-to-end.
+// Loads the PHP fixture via `include_str!`, asserts stdout matches expected multi-line output.
 fn test_example_interfaces_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/interfaces/main.php"));
     assert_eq!(out, "WIDGET\nA-42\n1\n0\n");
 }
 
 #[test]
+// Verifies an interface with a read-only property (`get;`) can be satisfied by a concrete property.
+// Fixture: interface `HasId` with `public int $id { get; }`, concrete `User` with int field.
+// Asserts reading the property on the concrete instance returns the expected value.
 fn test_interface_get_property_contract_is_satisfied_by_concrete_property() {
     let out = compile_and_run(
         r#"<?php
@@ -139,6 +156,10 @@ echo $user->id;
 }
 
 #[test]
+// Verifies interface property setters allow contravariant type (subclass) in implementing class.
+// Fixture: `Dog extends Animal`, interface `DogSink` with `public Dog $pet { set; }`,
+// implementing `Kennel` declares `public Animal $pet`. Sets a `Dog` instance and checks `instanceof Animal`.
+// Asserts contravariant property types are accepted per PHP semantics.
 fn test_interface_set_property_contract_allows_contravariant_type() {
     let out = compile_and_run(
         r#"<?php
@@ -162,6 +183,10 @@ echo $kennel->pet instanceof Animal;
 }
 
 #[test]
+// Verifies an abstract class can defer interface property implementation to a concrete child.
+// Fixture: interface `HasName` with `string $name { get; set; }`, abstract `NamedBase implements HasName`,
+// concrete `Product extends NamedBase` with a default field initializer.
+// Asserts reading the property on the concrete child resolves via the abstract's interface contract.
 fn test_abstract_class_can_defer_interface_property_to_child() {
     let out = compile_and_run(
         r#"<?php

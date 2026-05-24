@@ -9,6 +9,9 @@
 
 use crate::support::*;
 
+// Verifies `use function` aliasing and global builtin resolution inside a namespaced file.
+// Uses a two-namespace fixture: `Demo\Util\render` aliased as `paint` and global `strlen`.
+// Checks that the alias resolves correctly and global builtins are accessible without prefix.
 #[test]
 fn test_namespace_use_function_and_global_builtin_resolution() {
     let out = compile_and_run(
@@ -26,6 +29,9 @@ echo strlen("bc");
     assert_eq!(out, "A2");
 }
 
+// Verifies that a class inside a namespace can call a global `extern function` without
+// a namespace prefix. Regression test: extern functions must resolve globally regardless
+// of the enclosing namespace context.
 #[test]
 fn test_namespace_class_can_call_global_extern_function() {
     let out = compile_and_run(
@@ -47,6 +53,9 @@ echo $probe->ok();
     assert_eq!(out, "1");
 }
 
+// Verifies that pointer builtins (`ptr_null`, `ptr_is_null`) are accessible inside a
+// namespaced class method without a global prefix. Regression test for builtin resolution
+// within namespace scope.
 #[test]
 fn test_namespace_class_can_call_pointer_builtins_without_global_prefix() {
     let out = compile_and_run(
@@ -67,6 +76,8 @@ echo $probe->ok();
     assert_eq!(out, "1");
 }
 
+// Verifies that string builtins (`strlen`) are accessible inside a namespaced class method
+// without a global prefix. Regression test for builtin resolution within namespace scope.
 #[test]
 fn test_namespace_class_can_call_string_builtin_without_global_prefix() {
     let out = compile_and_run(
@@ -86,6 +97,9 @@ echo $probe->ok();
     assert_eq!(out, "5");
 }
 
+// Verifies that a declared return type (`Box`) resolves to the same-namespace class
+// inside a typed local variable declaration (`Box $box = ...`). Checks both return-type
+// resolution and typed local variable initialization.
 #[test]
 fn test_namespace_resolves_class_type_hints_in_functions_and_typed_locals() {
     let out = compile_and_run(
@@ -111,6 +125,8 @@ echo $box->value;
     assert_eq!(out, "7");
 }
 
+// Verifies that `buffer<Vertex>` works correctly when `Vertex` is a packed class declared
+// in the same namespace. Tests buffer element access with typed buffer slots.
 #[test]
 fn test_namespace_resolves_packed_class_types_inside_buffers() {
     let out = compile_and_run(
@@ -138,6 +154,9 @@ echo $probe->run();
     assert_eq!(out, "7");
 }
 
+// Verifies that property types converge across a chain of classes: `Box.items` holds a
+// `buffer<Point>` written by `Loader.load()`, and `Game.run()` reads `items[0]->x`.
+// Regression test for post-pass type convergence across class boundaries.
 #[test]
 fn test_method_post_pass_converges_property_types_across_classes() {
     let out = compile_and_run(
@@ -185,6 +204,8 @@ echo $game->run();
     assert_eq!(out, "7");
 }
 
+// Verifies that a forward class reference in a method return type (`load(): Item`) resolves
+// even when `Item` is defined after the method. Both classes are in the global namespace.
 #[test]
 fn test_forward_class_reference_in_method_return_type() {
     let out = compile_and_run(
@@ -211,6 +232,9 @@ echo $item->value;
     assert_eq!(out, "9");
 }
 
+// Verifies that property array access (`$this->items[0]`) works correctly when `items`
+// is an array property initialized in the constructor. Regression test for property lookup
+// followed by subscript in the same expression.
 #[test]
 fn test_property_array_access_after_property_lookup() {
     let out = compile_and_run(
@@ -234,6 +258,9 @@ echo $bag->first();
     assert_eq!(out, "10");
 }
 
+// Verifies that a typed parameter (`string $text`) is correctly available inside the
+// method body for use in a subsequent call (`strlen($text)`). All types are in the
+// global namespace.
 #[test]
 fn test_typed_method_param_is_available_with_declared_type_in_body() {
     let out = compile_and_run(
@@ -251,6 +278,10 @@ echo $reader->len("doom");
     assert_eq!(out, "4");
 }
 
+// Verifies that a typed constructor parameter (`string $bytes`) is not overwritten by
+// untyped property inference. The property `$bytes` should be set from the parameter,
+// and `$this->bytes` should remain accessible in the method body. Regression test for
+// constructor parameter vs. property name collision.
 #[test]
 fn test_typed_constructor_param_is_not_overwritten_by_untyped_property_inference() {
     let out = compile_and_run(
@@ -274,6 +305,9 @@ echo $blob->len();
     assert_eq!(out, "4");
 }
 
+// Verifies that `require` inside a namespace preserves the required file's namespace
+// context (`Demo\Lib`) while the main file uses `use Demo\Lib\User`. Multi-file fixture
+// with `main.php` and `lib.php`; regression test for include-time namespace context.
 #[test]
 fn test_namespace_include_preserves_class_namespace_context() {
     let out = compile_and_run_files(
@@ -308,6 +342,9 @@ class User {
     assert_eq!(out, "ok");
 }
 
+// Verifies that `use const` aliasing and fully-qualified constant paths both resolve
+// correctly in the same namespace (`Demo\Values\ANSWER` aliased as `ANSWER` and accessed
+// via `\Demo\Values\ANSWER`). Checks both resolution paths produce the same value.
 #[test]
 fn test_namespace_use_const_and_fully_qualified_constant_resolution() {
     let out = compile_and_run(
@@ -325,6 +362,9 @@ echo \Demo\Values\ANSWER;
     assert_eq!(out, "4242");
 }
 
+// Verifies that `call_user_func` with a short name (`"triple"`) resolves to the current
+// namespace's function, while `function_exists` also sees the local name. Both checks
+// return truthy, confirming the function is found without a global prefix.
 #[test]
 fn test_namespace_callback_string_literals_resolve_current_namespace() {
     let out = compile_and_run(
@@ -342,6 +382,9 @@ echo call_user_func("triple", 4);
     assert_eq!(out, "112");
 }
 
+// Verifies that fully-qualified callback strings (`"Demo\\Support\\format_user"`) resolve
+// absolutely and that `call_user_func_array` works with the same path. Uses a namespaced
+// class method and `use` import; checks both single-argument and array-argument forms.
 #[test]
 fn test_namespace_fully_qualified_callback_strings_are_absolute() {
     let out = compile_and_run(
@@ -370,6 +413,9 @@ echo call_user_func_array("Demo\\Support\\format_user", [new User()]);
     assert_eq!(out, "1[ok][ok]");
 }
 
+// Verifies that group use syntax (`use Demo\Lib\{User, function render as paint, const ANSWER}`)
+// resolves class, function, and const imports correctly within a namespaced file.
+// Checks static method call, const access, and aliased function call all produce expected output.
 #[test]
 fn test_namespace_group_use_resolves_class_function_and_const() {
     let out = compile_and_run(

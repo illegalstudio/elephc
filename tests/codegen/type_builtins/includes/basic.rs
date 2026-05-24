@@ -10,6 +10,7 @@
 use super::*;
 
 #[test]
+    // Compiles main.php that includes helper.php and calls the exported function.
 fn test_include_basic() {
     let out = compile_and_run_files(
         &[
@@ -22,6 +23,7 @@ fn test_include_basic() {
 }
 
 #[test]
+    // Compiles main.php that requires math.php and calls the exported function.
 fn test_require_basic() {
     let out = compile_and_run_files(
         &[
@@ -34,6 +36,7 @@ fn test_require_basic() {
 }
 
 #[test]
+    // Verifies `include` with parentheses (functional syntax) works correctly.
 fn test_include_with_parens() {
     let out = compile_and_run_files(
         &[
@@ -46,8 +49,8 @@ fn test_include_with_parens() {
 }
 
 #[test]
+    // Verifies top-level code in an included file executes at the include point, interleaving with main file output.
 fn test_include_top_level_code() {
-    // Top-level code in included file executes at the include point
     let out = compile_and_run_files(
         &[
             (
@@ -62,8 +65,8 @@ fn test_include_top_level_code() {
 }
 
 #[test]
+    // Verifies `include_once` only executes the file the first time; subsequent calls in the same runtime are no-ops.
 fn test_include_once() {
-    // include_once should only include the file once
     let out = compile_and_run_files(
         &[
             (
@@ -82,6 +85,7 @@ echo $x;
 }
 
 #[test]
+    // Verifies `require_once` only executes the file once; function is callable after first load.
 fn test_require_once() {
     let out = compile_and_run_files(
         &[
@@ -101,6 +105,7 @@ echo double(5);
 }
 
 #[test]
+    // Verifies constants and functions declared in a `require_once` file are accessible after loading.
 fn test_require_once_const_visible_inside_included_function() {
     let out = compile_and_run_files(
         &[
@@ -126,6 +131,7 @@ function from_func() { return LIB_CONST; }
 }
 
 #[test]
+    // Verifies `include_once` in a constant-false branch does not claim the file; later `include_once` still executes it.
 fn test_include_once_skipped_branch_does_not_claim_file() {
     let out = compile_and_run_files(
         &[
@@ -146,6 +152,7 @@ include_once 'piece.php';
 }
 
 #[test]
+    // Verifies `include_once` in a loop only executes the file once across all iterations.
 fn test_include_once_in_loop_executes_file_once() {
     let out = compile_and_run_files(
         &[
@@ -167,6 +174,7 @@ while ($i < 3) {
 }
 
 #[test]
+    // Verifies `require_once` inside a function has globalOnce semantics; subsequent calls do not re-execute.
 fn test_require_once_in_function_is_global_once() {
     let out = compile_and_run_files(
         &[
@@ -188,6 +196,7 @@ load_piece();
 }
 
 #[test]
+    // Verifies `require_once` inside a class method has globalOnce semantics across calls on the same instance.
 fn test_require_once_in_method_is_global_once() {
     let out = compile_and_run_files(
         &[
@@ -212,6 +221,7 @@ $loader->load();
 }
 
 #[test]
+    // Verifies `require_once` inside a closure has globalOnce semantics across closure invocations.
 fn test_require_once_in_closure_is_global_once() {
     let out = compile_and_run_files(
         &[
@@ -233,6 +243,7 @@ $load();
 }
 
 #[test]
+    // Verifies a regular `include` inside a closure marks the file as loaded, causing a later `include_once` to skip it.
 fn test_regular_include_in_closure_marks_later_include_once() {
     let out = compile_and_run_files(
         &[
@@ -254,6 +265,7 @@ include_once 'piece.php';
 }
 
 #[test]
+    // Verifies declarations from a regular `include` are visible to a subsequent `include_once` (no duplicate error).
 fn test_regular_include_marks_later_include_once_declarations() {
     let out = compile_and_run_files(
         &[
@@ -273,6 +285,7 @@ echo seven();
 }
 
 #[test]
+    // Verifies `include_once` in a constant-false branch does not claim the file; later `include_once` still executes and finds the declaration.
 fn test_skipped_regular_include_does_not_make_include_once_skip() {
     let out = compile_and_run_files(
         &[

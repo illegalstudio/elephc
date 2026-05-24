@@ -10,6 +10,8 @@
 
 use crate::support::*;
 
+// Tests that Phase 4 SPL classes appear in `spl_classes()`, `get_declared_classes()`,
+// and are recognized by `class_exists()` including case-insensitive names.
 #[test]
 fn test_phase4_spl_classes_are_declared_for_introspection() {
     let out = compile_and_run(
@@ -42,6 +44,9 @@ var_dump(class_exists("splstack"));
     assert_eq!(out, "11111111bool(true)\nbool(true)\n");
 }
 
+// Tests that SplDoublyLinkedList, SplStack, SplQueue, and SplFixedArray implement the
+// correct interfaces (Iterator, Countable, ArrayAccess, JsonSerializable) and that
+// SplStack/SplQueue inherit from SplDoublyLinkedList.
 #[test]
 fn test_phase4_spl_class_interface_and_parent_metadata() {
     let out = compile_and_run(
@@ -82,6 +87,8 @@ var_dump($fixed instanceof JsonSerializable);
     );
 }
 
+// Tests that SplDoublyLinkedList constants (IT_MODE_LIFO, IT_MODE_DELETE, IT_MODE_FIFO)
+// are correctly inherited by SplStack and SplQueue with their expected integer values.
 #[test]
 fn test_phase4_spl_doubly_linked_list_constants_are_inherited() {
     let out = compile_and_run(
@@ -96,6 +103,8 @@ echo SplQueue::IT_MODE_FIFO;
     assert_eq!(out, "2,1,0");
 }
 
+// Tests SplDoublyLinkedList mutation methods: push, unshift, add, pop, shift, bottom, top,
+// count, and isEmpty on a non-empty and empty list.
 #[test]
 fn test_phase4_spl_doubly_linked_list_mutation_methods() {
     let out = compile_and_run(
@@ -135,6 +144,8 @@ var_dump($list->isEmpty());
     );
 }
 
+// Tests SplDoublyLinkedList iteration modes: IT_MODE_FIFO and IT_MODE_LIFO with getIteratorMode/setIteratorMode,
+// verifying that foreach produces correct key:value ordering and that the mode value is preserved.
 #[test]
 fn test_phase4_spl_doubly_linked_list_iteration_modes() {
     let out = compile_and_run(
@@ -164,6 +175,9 @@ echo $list->getIteratorMode();
     assert_eq!(out, "0:a;1:b;2:c;\n2:c;1:b;0:a;\n2");
 }
 
+// Tests IT_MODE_DELETE combined with IT_MODE_FIFO and IT_MODE_LIFO: verifies that foreach
+// consumes elements during iteration and that count reaches zero after FIFO traversal but
+// preserves order for LIFO.
 #[test]
 fn test_phase4_spl_doubly_linked_list_delete_iteration_modes() {
     let out = compile_and_run(
@@ -201,6 +215,9 @@ echo count($lifo);
     assert_eq!(out, "0:a;0:b;0:c;\n0\n2:c;1:b;0:a;\n0");
 }
 
+// Tests SplDoublyLinkedList ArrayAccess implementation: offsetExists, offsetGet, offsetSet,
+// and offsetUnset via direct bracket access on an empty list, populated list, after unset,
+// and that iteration order follows LIFO mode.
 #[test]
 fn test_phase4_spl_doubly_linked_list_array_access() {
     let out = compile_and_run(
@@ -229,6 +246,8 @@ echo count($list);
     assert_eq!(out, "a|b\n1\nb\nc\nz|2");
 }
 
+// Tests RuntimeException from pop/shift/top on empty list and OutOfRangeException from
+// offsetSet/add beyond current size, plus that iteration mode affects bracket read order.
 #[test]
 fn test_phase4_spl_doubly_linked_list_php_error_edges() {
     let out = compile_and_run(
@@ -250,6 +269,8 @@ echo $list[1];
     assert_eq!(out, "pop|shift|top|set|add|ba");
 }
 
+// Tests SplStack push/pop/top/count and SplQueue enqueue/dequeue/bottom/top/count
+// runtime methods, verifying stack LIFO and queue FIFO ordering.
 #[test]
 fn test_phase4_spl_stack_and_queue_runtime_methods() {
     let out = compile_and_run(
@@ -279,6 +300,8 @@ echo count($queue);
     assert_eq!(out, "2|1|1\na|b|b|1");
 }
 
+// Tests SplFixedArray getSize/setSize, direct bracket read/write, isset/unset, toArray,
+// jsonSerialize, and that resizing a fixed array preserves existing elements up to the new size.
 #[test]
 fn test_phase4_spl_fixed_array_runtime_methods() {
     let out = compile_and_run(
@@ -318,6 +341,9 @@ echo count($json);
     assert_eq!(out, "2|2\na|3\n10\n3|c\n3|3|c\n3");
 }
 
+// Tests that negative size to SplFixedArray constructor throws ValueError, out-of-bounds
+// get/set throws OutOfBoundsException, non-integer index throws TypeError, and fromArray
+// with string keys throws InvalidArgumentException.
 #[test]
 fn test_phase4_spl_fixed_array_php_error_edges() {
     let out = compile_and_run(
@@ -334,6 +360,9 @@ try { SplFixedArray::fromArray(["x" => "y"]); } catch (InvalidArgumentException 
     assert_eq!(out, "new|set|get|type|resize|from");
 }
 
+// Tests SplDoublyLinkedList serialization helpers: __serialize, __unserialize, __debugInfo,
+// serialize, and unserialize, including round-trip preservation of LIFO mode and scalar
+// values (true, null).
 #[test]
 fn test_phase4_spl_doubly_linked_list_serialization_helpers() {
     let out = compile_and_run(
@@ -398,6 +427,9 @@ echo is_null($round[1]) ? "null" : "value";
     );
 }
 
+// Tests SplFixedArray __serialize, __unserialize, and fromArray with both preserve-keys
+// (default) and non-preserving (packed) modes, verifying correct null-slot handling and
+// size computation.
 #[test]
 fn test_phase4_spl_fixed_array_serialization_and_from_array_helpers() {
     let out = compile_and_run(

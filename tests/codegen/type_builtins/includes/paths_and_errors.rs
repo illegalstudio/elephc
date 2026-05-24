@@ -10,8 +10,8 @@
 use super::*;
 
 #[test]
+    // Verifies a.php includes b.php which includes c.php; the leaf function `c_func` is callable from main.
 fn test_include_nested() {
-    // a.php includes b.php which includes c.php
     let out = compile_and_run_files(
         &[
             ("main.php", "<?php include 'a.php'; echo c_func();"),
@@ -25,6 +25,7 @@ fn test_include_nested() {
 }
 
 #[test]
+    // Verifies include paths can contain subdirectory separators; function is resolved correctly.
 fn test_include_subdirectory() {
     let out = compile_and_run_files(
         &[
@@ -40,8 +41,8 @@ fn test_include_subdirectory() {
 }
 
 #[test]
+    // Verifies variables defined in the main file are accessible in the included file (shared scope).
 fn test_include_variables_shared_scope() {
-    // Variables from included file are in the same scope
     let out = compile_and_run_files(
         &[
             (
@@ -59,6 +60,7 @@ include 'greet.php';
 }
 
 #[test]
+    // Verifies multiple sequential includes expose functions from each file in the same compilation.
 fn test_include_multiple_files() {
     let out = compile_and_run_files(
         &[
@@ -79,6 +81,7 @@ echo add(1, 2) . " " . mul(3, 4);
 }
 
 #[test]
+    // Verifies a cycle of includes (a → b → a) produces a compile error.
 fn test_circular_include_error() {
     assert!(compile_files_fails(
         &[
@@ -91,11 +94,10 @@ fn test_circular_include_error() {
 }
 
 #[test]
+    // Verifies `require` of a nonexistent file produces a compile error.
 fn test_require_missing_file_error() {
     assert!(compile_files_fails(
         &[("main.php", "<?php require 'nonexistent.php';"),],
         "main.php"
     ));
 }
-
-// --- Division returns float ---

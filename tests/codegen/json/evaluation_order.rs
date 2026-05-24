@@ -11,6 +11,8 @@
 use super::*;
 
 #[test]
+// Verifies json_encode evaluates arguments left-to-right: value, then flags, then depth.
+// Each argument function echoes a unique marker so evaluation order is observable in output.
 fn test_json_encode_evaluates_value_before_flags_and_depth() {
     let out = compile_and_run(
         r#"<?php
@@ -24,6 +26,9 @@ echo json_encode(value_arg(), flags_arg(), depth_arg());
 }
 
 #[test]
+// Verifies json_decode evaluates arguments left-to-right: JSON string, assoc, depth, flags.
+// Each argument function echoes a unique marker so evaluation order is observable in output.
+// Also confirms the return type is correctly determined (array vs object).
 fn test_json_decode_evaluates_arguments_left_to_right() {
     let out = compile_and_run(
         r#"<?php
@@ -38,6 +43,8 @@ echo gettype(json_decode(json_arg(), assoc_arg(), depth_arg(), flags_arg()));
 }
 
 #[test]
+// Verifies json_validate evaluates arguments left-to-right: JSON string, depth, flags.
+// Each argument function echoes a unique marker so evaluation order is observable in output.
 fn test_json_validate_evaluates_arguments_left_to_right() {
     let out = compile_and_run(
         r#"<?php
@@ -51,6 +58,9 @@ echo json_validate(json_arg(), depth_arg(), flags_arg()) ? "ok" : "no";
 }
 
 #[test]
+// Verifies json_decode uses PHP truthiness for string assoc arguments.
+// Non-numeric strings coerce to boolean per PHP semantics: "" and "0" are falsy (→ object),
+// "1" and other non-empty non-"0" strings are truthy (→ array).
 fn test_json_decode_string_associative_uses_php_truthiness() {
     let out = compile_and_run(
         r#"<?php
@@ -63,6 +73,9 @@ echo gettype(json_decode("{}", "1"));
 }
 
 #[test]
+// Verifies JSON_OBJECT_AS_ARRAY flag is applied only when assoc is null (not false).
+// When assoc is null, the flag controls return type (array). When assoc is explicitly false,
+// the flag is ignored and the return type is always object.
 fn test_json_decode_object_as_array_flag_applies_when_associative_is_null() {
     let out = compile_and_run(
         r#"<?php
@@ -74,6 +87,8 @@ echo gettype(json_decode("{}", false, 512, JSON_OBJECT_AS_ARRAY));
 }
 
 #[test]
+// Verifies json_decode and json_validate accept integer JSON strings without error.
+// Numeric strings passed to these builtins are accepted as valid JSON input (scalar coercion).
 fn test_json_string_arguments_accept_scalar_coercion() {
     let out = compile_and_run(
         r#"<?php

@@ -13,6 +13,7 @@ use crate::support::*;
 
 #[test]
 fn test_closure_basic() {
+    // Verifies basic anonymous function creation, assignment to variable, and invocation with one argument.
     let out = compile_and_run(
         r#"<?php
 $double = function($x) { return $x * 2; };
@@ -24,6 +25,7 @@ echo $double(5);
 
 #[test]
 fn test_closure_multiple_params() {
+    // Verifies anonymous function with multiple parameters and a simple arithmetic body.
     let out = compile_and_run(
         r#"<?php
 $add = function($a, $b) { return $a + $b; };
@@ -35,6 +37,7 @@ echo $add(3, 7);
 
 #[test]
 fn test_arrow_function_basic() {
+    // Verifies basic arrow function (`fn`) syntax with one parameter and multiplication body.
     let out = compile_and_run(
         r#"<?php
 $triple = fn($x) => $x * 3;
@@ -46,6 +49,7 @@ echo $triple(4);
 
 #[test]
 fn test_arrow_function_expression() {
+    // Verifies arrow function with a compound expression body (`$x * $x + 1`).
     let out = compile_and_run(
         r#"<?php
 $calc = fn($x) => $x * $x + 1;
@@ -57,6 +61,7 @@ echo $calc(5);
 
 #[test]
 fn test_closure_return_type_annotation() {
+    // Verifies closure with typed parameter, return type annotation, and `use` clause capturing a string variable.
     let out = compile_and_run(
         r#"<?php
 $prefix = "id:";
@@ -71,6 +76,7 @@ echo $format(7);
 
 #[test]
 fn test_closure_return_type_annotation_uses_typed_param() {
+    // Verifies closure parameter and return type are both `string`, with passthrough returning the same value.
     let out = compile_and_run(
         r#"<?php
 $identity = function(string $value): string {
@@ -84,6 +90,7 @@ echo $identity("ok");
 
 #[test]
 fn test_arrow_return_type_annotation() {
+    // Verifies arrow function with typed `int` parameter and return type annotation.
     let out = compile_and_run(
         r#"<?php
 $double = fn(int $value): int => $value * 2;
@@ -95,6 +102,7 @@ echo $double(9);
 
 #[test]
 fn test_iife_arrow_return_type_annotation() {
+    // Verifies immediately-invoked arrow function (IIFE) with return type annotation and no parameters.
     let out = compile_and_run(
         r#"<?php
 echo (fn(): string => "ready")();
@@ -105,6 +113,7 @@ echo (fn(): string => "ready")();
 
 #[test]
 fn test_closure_array_map() {
+    // Verifies `array_map` with an anonymous closure using `array_map(function($x) { ... }, [...])` syntax.
     let out = compile_and_run(
         r#"<?php
 $result = array_map(function($x) { return $x * 10; }, [1, 2, 3]);
@@ -118,6 +127,7 @@ echo $result[2];
 
 #[test]
 fn test_arrow_function_array_map() {
+    // Verifies `array_map` with a typed arrow function `fn(int $x): int => ...` passed as callable.
     let out = compile_and_run(
         r#"<?php
 $result = array_map(fn(int $x): int => $x + 100, [1, 2, 3]);
@@ -131,6 +141,7 @@ echo $result[2];
 
 #[test]
 fn test_captured_closure_array_map() {
+    // Verifies `array_map` with a closure that captures a variable via `use ($factor)`.
     let out = compile_and_run(
         r#"<?php
 $factor = 7;
@@ -145,6 +156,7 @@ echo $result[2];
 
 #[test]
 fn test_captured_closure_variable_array_map() {
+    // Verifies `array_map` where the callable closure is assigned to a variable before passing.
     let out = compile_and_run(
         r#"<?php
 $offset = 5;
@@ -159,6 +171,7 @@ echo $result[1];
 
 #[test]
 fn test_captured_closure_variable_array_map_string_capture() {
+    // Verifies string capture via `use ($prefix)` in a typed closure passed to `array_map`, producing string-concatenated output.
     let out = compile_and_run(
         r#"<?php
 $prefix = "id:";
@@ -176,6 +189,7 @@ echo $result[1];
 
 #[test]
 fn test_captured_closure_variable_array_map_string_values() {
+    // Verifies `str_starts_with` inside a captured closure passed to `array_map` with string array input.
     let out = compile_and_run(
         r#"<?php
 $prefix = "a";
@@ -193,6 +207,7 @@ echo $result[2];
 
 #[test]
 fn test_closure_array_filter() {
+    // Verifies `array_filter` with an anonymous closure returning even numbers.
     let out = compile_and_run(
         r#"<?php
 $evens = array_filter([1, 2, 3, 4, 5, 6], function($x) { return $x % 2 == 0; });
@@ -204,6 +219,7 @@ echo count($evens);
 
 #[test]
 fn test_captured_closure_array_filter() {
+    // Verifies `array_filter` with a captured `use ($limit)` closure comparing against a threshold.
     let out = compile_and_run(
         r#"<?php
 $limit = 4;
@@ -217,6 +233,7 @@ foreach ($filtered as $value) { echo $value; }
 
 #[test]
 fn test_captured_closure_variable_array_filter_string_values() {
+    // Verifies `str_starts_with` inside a captured closure passed to `array_filter` with string array input.
     let out = compile_and_run(
         r#"<?php
 $prefix = "a";
@@ -233,6 +250,7 @@ foreach ($filtered as $value) { echo $value; }
 
 #[test]
 fn test_captured_closure_call_user_func() {
+    // Verifies `call_user_func` with a closure that captures a base value via `use ($base)`.
     let out = compile_and_run(
         r#"<?php
 $base = 30;
@@ -245,6 +263,7 @@ echo call_user_func($fn, 12);
 
 #[test]
 fn test_inline_captured_closure_call_user_func() {
+    // Verifies `call_user_func` with an inline immediately-created captured closure without intermediate variable assignment.
     let out = compile_and_run(
         r#"<?php
 $base = 9;
@@ -256,6 +275,7 @@ echo call_user_func(function($x) use ($base) { return $x * $base; }, 6);
 
 #[test]
 fn test_arrow_function_array_filter() {
+    // Verifies `array_filter` with an arrow function predicate filtering values greater than 8.
     let out = compile_and_run(
         r#"<?php
 $big = array_filter([1, 5, 10, 15, 20], fn($x) => $x > 8);
@@ -267,6 +287,7 @@ echo count($big);
 
 #[test]
 fn test_closure_as_variable_then_call() {
+    // Verifies closure stored in a variable and called multiple times, confirming each invocation is independent.
     let out = compile_and_run(
         r#"<?php
 $fn = function($x) { return $x + 1; };
@@ -281,6 +302,7 @@ echo $b;
 
 #[test]
 fn test_closure_no_params() {
+    // Verifies anonymous closure with no parameters that returns a constant integer.
     let out = compile_and_run(
         r#"<?php
 $hello = function() { return 42; };
@@ -292,6 +314,7 @@ echo $hello();
 
 #[test]
 fn test_arrow_no_params() {
+    // Verifies arrow function with no parameters that returns a constant integer.
     let out = compile_and_run(
         r#"<?php
 $val = fn() => 99;
@@ -303,6 +326,7 @@ echo $val();
 
 #[test]
 fn test_closure_array_reduce() {
+    // Verifies `array_reduce` with an anonymous closure summing a numeric array, using an initial carry value of 0.
     let out = compile_and_run(
         r#"<?php
 $sum = array_reduce([1, 2, 3, 4], function($carry, $item) { return $carry + $item; }, 0);
@@ -316,6 +340,7 @@ echo $sum;
 
 #[test]
 fn test_iife_basic() {
+    // Verifies immediately-invoked anonymous function expression (IIFE) returning a constant.
     let out = compile_and_run(
         r#"<?php
 echo (function() { return 42; })();
@@ -326,6 +351,7 @@ echo (function() { return 42; })();
 
 #[test]
 fn test_iife_with_args() {
+    // Verifies immediately-invoked anonymous function expression (IIFE) with one argument passed at call site.
     let out = compile_and_run(
         r#"<?php
 echo (function($x) { return $x * 3; })(7);
@@ -336,6 +362,7 @@ echo (function($x) { return $x * 3; })(7);
 
 #[test]
 fn test_iife_arrow() {
+    // Verifies immediately-invoked arrow function (IIFE) with one argument passed at call site.
     let out = compile_and_run(
         r#"<?php
 echo (fn($x) => $x + 100)(5);
@@ -348,6 +375,7 @@ echo (fn($x) => $x + 100)(5);
 
 #[test]
 fn test_closure_from_array_call() {
+    // Verifies closure stored in an array and invoked via array-access syntax `$fns[0](5)`.
     let out = compile_and_run(
         r#"<?php
 $fns = [function($x) { return $x * 10; }];
@@ -359,6 +387,7 @@ echo $fns[0](5);
 
 #[test]
 fn test_closure_from_array_no_args() {
+    // Verifies parameterless closure stored in an array and invoked via array-access syntax `$fns[0]()`.
     let out = compile_and_run(
         r#"<?php
 $fns = [function() { return 99; }];
@@ -372,6 +401,7 @@ echo $fns[0]();
 
 #[test]
 fn test_closure_returning_closure() {
+    // Verifies a closure that returns another closure, which is then invoked, confirming proper closure-of-closure codegen.
     let out = compile_and_run(
         r#"<?php
 $f = function() { return function() { return 99; }; };
@@ -384,6 +414,7 @@ echo $g();
 
 #[test]
 fn test_closure_returning_closure_with_args() {
+    // Verifies a closure factory that returns a closure accepting one argument, which is then called with a value.
     let out = compile_and_run(
         r#"<?php
 $maker = function() { return function($x) { return $x * 3; }; };

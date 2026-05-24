@@ -11,6 +11,9 @@ use super::*;
 
 #[test]
 fn test_class_chained_property_access() {
+    // Verifies that chained property access ($a->next->value) works correctly
+    // when traversing a linked list of Node objects. Fixture: Node with public
+    // $value and $next properties, __construct sets $value.
     let out = compile_and_run(
         r#"<?php
 class Node {
@@ -29,6 +32,9 @@ echo $a->next->value;
 
 #[test]
 fn test_nullsafe_property_access_returns_property_or_null() {
+    // Verifies nullsafe (?->) returns the property value when receiver is non-null,
+    // or null when receiver is null, using the ?? operator to coalesce. Fixture:
+    // User with nullable ?Profile $profile, one instance with profile set, one without.
     let out = compile_and_run(
         r#"<?php
 class Profile {
@@ -50,6 +56,10 @@ echo $without->profile?->name ?? "none";
 
 #[test]
 fn test_nullsafe_property_access_does_not_suppress_uninitialized_typed_property() {
+    // Verifies nullsafe (?->) does NOT suppress the "must not be accessed before
+    // initialization" error for typed properties that are genuinely uninitialized,
+    // as opposed to explicitly set to null. Fixture: User with uninitialized
+    // typed property ?Profile $profile (no default, not set in __construct).
     let err = compile_and_run_expect_failure(
         r#"<?php
 class Profile {
@@ -70,6 +80,9 @@ echo $without?->profile?->name ?? "none";
 
 #[test]
 fn test_nullsafe_method_call_skips_arguments_when_receiver_is_null() {
+    // Verifies nullsafe method call (?->) does not evaluate call arguments when
+    // the receiver is null. Fixture: side() function echoes "bad" if called,
+    // Box?->label(side()) with null box should output "none" (not "bad").
     let out = compile_and_run(
         r#"<?php
 function side() {
@@ -90,6 +103,10 @@ echo $box?->label(side()) ?? "none";
 
 #[test]
 fn test_nullsafe_method_call_evaluates_receiver_before_arguments() {
+    // Verifies nullsafe method call evaluates receiver expression before arguments,
+    // preserving PHP's left-to-right evaluation order. Fixture: receiver() echoes
+    // "receiver|", side() echoes "arg|", method echoes "method|"; chained result
+    // must be "receiver|arg|method|value".
     let out = compile_and_run(
         r#"<?php
 function receiver() {
@@ -114,6 +131,9 @@ echo receiver()?->label(side());
 
 #[test]
 fn test_method_call_evaluates_receiver_before_arguments() {
+    // Verifies regular (non-nullsafe) method call also evaluates receiver before
+    // arguments, matching PHP's left-to-right evaluation order. Same fixture as
+    // nullsafe variant but with -> instead of ?-> to confirm consistency.
     let out = compile_and_run(
         r#"<?php
 function receiver() {
@@ -138,6 +158,9 @@ echo receiver()->label(side());
 
 #[test]
 fn test_nullsafe_chained_access_short_circuits_each_hop() {
+    // Verifies nullsafe (?->) short-circuits at each hop in a chained access:
+    // $with?->profile?->address?->city returns "Rome" (all hops non-null),
+    // $without?->profile?->address?->city returns "none" (profile is null).
     let out = compile_and_run(
         r#"<?php
 class Address {
@@ -164,6 +187,10 @@ echo $without?->profile?->address?->city ?? "none";
 
 #[test]
 fn test_nullsafe_chained_method_result_short_circuits() {
+    // Verifies nullsafe method call (?->) short-circuits when the method returns
+    // null, returning null for the whole expression. Fixture: User with nullable
+    // ?Profile $profile and profile() method returning $this->profile; with user
+    // has profile set, without user has null profile.
     let out = compile_and_run(
         r#"<?php
 class Profile {
@@ -188,6 +215,11 @@ echo $without?->profile()?->name ?? "none";
 
 #[test]
 fn test_nullsafe_static_null_receiver_keeps_receiver_side_effects() {
+    // Verifies nullsafe (?->) evaluates receiver side effects even when receiver
+    // is null, but skips property access and following arguments. Fixture: none()
+    // echoes "receiver|" and returns null; arg() echoes "arg|" and returns "value";
+    // none()?->name evaluates receiver (output "receiver|") then returns "none",
+    // none()?->label(arg()) evaluates receiver (output "receiver|") but skips arg().
     let out = compile_and_run(
         r#"<?php
 function none() {
@@ -208,6 +240,9 @@ echo none()?->label(arg()) ?? "none";
 
 #[test]
 fn test_mixed_nullsafe_member_chain_skips_rest_when_base_is_null() {
+    // Verifies mixed chain (regular -> followed by nullsafe ?->) short-circuits
+    // and returns null when the base receiver is null, skipping remaining property
+    // accesses. Fixture: Root?->branch->leaf->name with read(null) returns "fallback".
     let out = compile_and_run_capture(
         r#"<?php
 class Leaf {
@@ -232,6 +267,10 @@ read(null);
 
 #[test]
 fn test_mixed_nullsafe_member_chain_warns_for_real_null_midpoint() {
+    // Verifies mixed chain (nullsafe ?-> followed by regular ->) emits a warning
+    // when a real null is encountered at a non-nullsafe hop. Fixture: Root with
+    // Branch but Branch->leaf is null; $root?->branch->leaf->name emits
+    // "Attempt to read property 'name' on null" warning and returns "fallback".
     let out = compile_and_run_capture(
         r#"<?php
 class Leaf {
@@ -259,6 +298,9 @@ echo $root?->branch->leaf->name ?? "fallback";
 
 #[test]
 fn test_mixed_nullsafe_member_chain_skips_method_arguments() {
+    // Verifies mixed chain ($root?->branch->label(noisy())) skips noisy() argument
+    // evaluation when base receiver is null. Fixture: noisy() echoes "noisy|",
+    // Branch->label returns the value; read(null) returns "fallback" with no stderr.
     let out = compile_and_run_capture(
         r#"<?php
 function noisy(): string {
@@ -286,6 +328,10 @@ read(null);
 
 #[test]
 fn test_mixed_nullsafe_member_chain_fatals_before_method_arguments_on_real_null() {
+    // Verifies mixed chain with non-null base but null mid-hop (Branch->leaf is
+    // null) fatals before evaluating method arguments. Fixture: Root with Branch
+    // but Branch->leaf is null; $root?->branch->label(noisy()) fatals with
+    // "Call to a member function label() on null" and skips noisy() evaluation.
     let out = compile_and_run_capture(
         r#"<?php
 function noisy(): string {
@@ -315,6 +361,10 @@ echo $root?->branch->label(noisy()) ?? "fallback";
 
 #[test]
 fn test_nullsafe_middle_of_member_chain_skips_following_member() {
+    // Verifies nullsafe (?->) in the middle of a chain ($root->branch?->leaf->name)
+    // short-circuits when that hop is null, returning null and skipping the
+    // following ->leaf->name accesses. Fixture: Root with Branch but Branch->leaf
+    // is null; $root->branch?->leaf->name returns "fallback" with no warning.
     let out = compile_and_run_capture(
         r#"<?php
 class Leaf {
@@ -337,6 +387,10 @@ echo $root->branch?->leaf->name ?? "fallback";
 
 #[test]
 fn test_nullsafe_chain_skips_array_index_expression() {
+    // Verifies nullsafe (?->) skips array index expression evaluation when
+    // receiver is null. Fixture: noisy() echoes "noisy|", Root has array $items,
+    // $root?->items[noisy()] with null $root returns "fallback" and does not
+    // call noisy().
     let out = compile_and_run_capture(
         r#"<?php
 function noisy(): int {
@@ -359,6 +413,10 @@ read(null);
 
 #[test]
 fn test_nullsafe_chain_skips_expr_call_arguments() {
+    // Verifies nullsafe (?->) skips callable invocation argument evaluation when
+    // receiver is null. Fixture: noisy() echoes "noisy|", Root has callback()
+    // returning a closure, $root?->callback()(noisy()) with null $root returns
+    // "fallback" and does not call noisy().
     let out = compile_and_run_capture(
         r#"<?php
 function noisy(): string {
@@ -385,6 +443,10 @@ read(null);
 
 #[test]
 fn test_nullsafe_chain_calls_loaded_expr_call_on_non_null_receiver() {
+    // Verifies nullsafe (?->) calls the loaded callable and evaluates arguments
+    // when receiver is non-null. Fixture: noisy() echoes "noisy|", Root has
+    // callback() returning a closure, ($root?->callback())(noisy()) with non-null
+    // $root calls both and returns "noisy|21" (noisy output + value + 1).
     let out = compile_and_run_capture(
         r#"<?php
 function noisy(): int {

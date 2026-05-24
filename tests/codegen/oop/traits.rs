@@ -10,6 +10,7 @@
 use super::*;
 
 #[test]
+// Verifies that a trait's public method is imported into a class that uses the trait.
 fn test_trait_basic_method_import() {
     let out = compile_and_run(
         r#"<?php
@@ -27,6 +28,7 @@ echo $p->greet();
 }
 
 #[test]
+// Verifies that when a class defines the same method as an imported trait, the class method takes precedence.
 fn test_trait_class_method_override_wins() {
     let out = compile_and_run(
         r#"<?php
@@ -45,6 +47,7 @@ echo $p->greet();
 }
 
 #[test]
+// Verifies trait conflict resolution via insteadof and aliasing: one method is selected via insteadof, the other is aliased to a new name.
 fn test_trait_insteadof_and_alias() {
     let out = compile_and_run(
         r#"<?php
@@ -70,6 +73,7 @@ echo $b->bLabel();
 }
 
 #[test]
+// Verifies that a trait property with a default value is accessible via a trait method when used by a class.
 fn test_trait_property_default_and_method_access() {
     let out = compile_and_run(
         r#"<?php
@@ -88,6 +92,7 @@ echo $b->read();
 }
 
 #[test]
+// Verifies that a trait can use another trait; the outer trait's method can call the inner trait's method via $this.
 fn test_trait_can_use_another_trait() {
     let out = compile_and_run(
         r#"<?php
@@ -109,6 +114,7 @@ echo $p->greetTwice();
 }
 
 #[test]
+// Verifies that a static method from a trait is imported and callable on the class directly.
 fn test_trait_static_method_import() {
     let out = compile_and_run(
         r#"<?php
@@ -125,6 +131,7 @@ echo Box::one();
 }
 
 #[test]
+// Verifies that a trait method aliased as protected is callable from within the class but not from outside.
 fn test_trait_protected_alias_is_callable_inside_class() {
     let out = compile_and_run(
         r#"<?php
@@ -152,6 +159,7 @@ echo $demo->reveal();
 }
 
 #[test]
+// Verifies that a child class can satisfy an abstract property declaration from a trait it inherits via an abstract class.
 fn test_abstract_trait_property_can_be_satisfied_by_concrete_child() {
     let out = compile_and_run(
         r#"<?php

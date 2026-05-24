@@ -10,6 +10,8 @@
 use super::*;
 
 #[test]
+// Verifies `fileperms()` extracts the regular file type bits (0x8000) from a known file.
+// Uses a temp directory to create `perms.txt` and asserts the type code equals "regular".
 fn test_fileperms_known_file() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -23,6 +25,8 @@ echo ($perms & 0xF000) === 0x8000 ? "regular" : "other";
 }
 
 #[test]
+// Verifies `fileowner()` returns a non-negative UID for an existing file.
+// Uses a temp directory to create `ownr.txt` and asserts output is "ok".
 fn test_fileowner_returns_uid() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -36,6 +40,8 @@ echo $uid >= 0 ? "ok" : "neg";
 }
 
 #[test]
+// Verifies `filegroup()` returns a non-negative GID for an existing file.
+// Uses a temp directory to create `grp.txt` and asserts output is "ok".
 fn test_filegroup_returns_gid() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -49,6 +55,8 @@ echo $gid >= 0 ? "ok" : "neg";
 }
 
 #[test]
+// Verifies `fileinode()` returns a value greater than zero for an existing file.
+// Uses a temp directory to create `ino.txt` and asserts output is "ok".
 fn test_fileinode_nonzero() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -61,6 +69,8 @@ echo fileinode("ino.txt") > 0 ? "ok" : "zero";
 }
 
 #[test]
+// Verifies `fileatime()` returns a timestamp greater than zero for a recently accessed file.
+// Uses a temp directory to create `atime.txt` and asserts output is "ok".
 fn test_fileatime_nonzero() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -73,6 +83,8 @@ echo fileatime("atime.txt") > 0 ? "ok" : "zero";
 }
 
 #[test]
+// Verifies `filectime()` returns a timestamp greater than zero for a file with metadata changes.
+// Uses a temp directory to create `ctime.txt` and asserts output is "ok".
 fn test_filectime_nonzero() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -85,6 +97,8 @@ echo filectime("ctime.txt") > 0 ? "ok" : "zero";
 }
 
 #[test]
+// Verifies `filetype()` returns "file" for a regular file.
+// Uses a temp directory to create `ft.txt` and asserts output is "file".
 fn test_filetype_regular_file() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -97,6 +111,8 @@ echo filetype("ft.txt");
 }
 
 #[test]
+// Verifies `filetype()` returns "dir" for a directory.
+// Uses a temp directory to create then remove `mydir/` and asserts output is "dir".
 fn test_filetype_directory() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -110,6 +126,8 @@ rmdir("mydir");
 }
 
 #[test]
+// Verifies `filetype()` returns the string `"false"` when called on a nonexistent path.
+// Asserts strict `=== false` comparison (not a falsy string) so PHP semantics are preserved.
 fn test_filetype_missing_is_strict_false() {
     let out = compile_and_run(
         r#"<?php echo filetype("/nonexistent/path/xyz") === false ? "false" : "string";"#,
@@ -118,6 +136,9 @@ fn test_filetype_missing_is_strict_false() {
 }
 
 #[test]
+// Verifies all scalar stat getters (`fileatime`, `filectime`, `fileperms`, `fileowner`,
+// `filegroup`, `fileinode`) return strict `false` when the target file does not exist.
+// Each function is checked individually and concatenated results must be "acpogi".
 fn test_scalar_stat_getters_missing_are_strict_false() {
     let out = compile_and_run(
         r#"<?php
@@ -133,6 +154,8 @@ echo fileinode("missing.txt") === false ? "i" : "!";
 }
 
 #[test]
+// Verifies `is_executable()` returns true for `/bin/sh`, which is executable on every
+// POSIX target the compiler ships for. Regression guard for target-specific path handling.
 fn test_is_executable_true_for_self() {
     // /bin/sh is executable on every POSIX target we ship for.
     let out = compile_and_run(
@@ -142,6 +165,8 @@ fn test_is_executable_true_for_self() {
 }
 
 #[test]
+// Verifies `is_executable()` returns false for a plain text file with no execute bit.
+// Uses a temp directory to create `plain.txt` and asserts output is "n".
 fn test_is_executable_false_for_text() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -154,6 +179,8 @@ echo is_executable("plain.txt") ? "y" : "n";
 }
 
 #[test]
+// Verifies `is_link()` returns false for a regular file.
+// Uses a temp directory to create `plain.txt` and asserts output is "n".
 fn test_is_link_false_for_regular_file() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -166,6 +193,9 @@ echo is_link("plain.txt") ? "y" : "n";
 }
 
 #[cfg(unix)]
+// Verifies `filetype()` returns "link" and `is_link()` returns true for a symlink.
+// Uses a temp directory with a `target.txt` file and a `link.txt` symlink pointing to it.
+// Asserts output is "link|y". Platform-restricted to unix targets due to `symlink` usage.
 #[test]
 fn test_filetype_and_is_link_for_symlink() {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
@@ -196,6 +226,8 @@ echo is_link("link.txt") ? "y" : "n";
 }
 
 #[test]
+// Verifies `is_writeable()` (PHP alias for `is_writable`) works correctly.
+// Uses a temp directory to create `wr.txt` and asserts output is "y".
 fn test_is_writeable_alias_of_is_writable() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -208,12 +240,15 @@ echo is_writeable("wr.txt") ? "y" : "n";
 }
 
 #[test]
+// Verifies `clearstatcache()` with no arguments is a no-op and prints "ok".
 fn test_clearstatcache_no_op_no_args() {
     let out = compile_and_run(r#"<?php clearstatcache(); echo "ok";"#);
     assert_eq!(out, "ok");
 }
 
 #[test]
+// Verifies `clearstatcache()` with arguments (bool and path) is a no-op and prints "ok".
+// Arguments are accepted and discarded; this guards against argument handling bugs.
 fn test_clearstatcache_no_op_with_args() {
     let out = compile_and_run(
         r#"<?php clearstatcache(true, "foo.txt"); echo "ok";"#,
@@ -222,6 +257,9 @@ fn test_clearstatcache_no_op_with_args() {
 }
 
 #[test]
+// Verifies `clearstatcache()` evaluates its arguments before discarding them.
+// A user-defined function `marker()` is called and must echo "arg|" before "ok" appears,
+// confirming argument evaluation order is preserved.
 fn test_clearstatcache_evaluates_arguments() {
     let out = compile_and_run(
         r#"<?php
@@ -237,6 +275,9 @@ echo "ok";
 }
 
 #[test]
+// Verifies `stat()` returns an array with expected string keys ("size", "mode") and
+// numeric key 7 equal to "size". Uses a temp directory to create `metadata.txt`
+// and checks that mode bits equal 0x8000 (regular file) and key 7 matches size.
 fn test_stat_array_has_expected_keys() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -250,6 +291,9 @@ echo $info["size"] . "|" . ($info["mode"] & 0xF000) . "|" . ($info[7] === $info[
 }
 
 #[test]
+// Verifies `stat`, `lstat`, and `fopen`-derived `fstat` all return strict `false`
+// when given a nonexistent path or a false resource handle. Each result checked
+// individually and concatenated must be "slf".
 fn test_stat_lstat_fstat_failures_are_strict_false() {
     let out = compile_and_run(
         r#"<?php
@@ -263,6 +307,9 @@ echo $f === false ? "f" : "!";
 }
 
 #[test]
+// Verifies `fstat()` rejects a false handle (from failed `fopen`) with a TypeError
+// at runtime. The program is expected to fail with stderr containing
+// "TypeError: fstat()" and "false given".
 fn test_fstat_rejects_fopen_false_runtime_handle() {
     let out = compile_and_run_capture(
         r#"<?php
@@ -279,6 +326,10 @@ fstat($f);
 }
 
 #[test]
+// Verifies that a failed `stat()` result still evaluates its key argument.
+// A user function `stat_key()` is called as the array access key and must echo
+// "key|" even though `stat("missing.txt")` returns false, confirming that
+// the key expression is evaluated before the array access short-circuits.
 fn test_failed_stat_array_access_still_evaluates_key() {
     let out = compile_and_run(
         r#"<?php
@@ -294,6 +345,8 @@ echo "done";
 }
 
 #[test]
+// Verifies `stat()` array "size" field equals `filesize()` for a 7-byte file.
+// Uses a temp directory to create `seven.txt` containing "1234567".
 fn test_stat_array_size_matches_filesize() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -307,6 +360,8 @@ echo $info["size"] === filesize("seven.txt") ? "ok" : "differ";
 }
 
 #[test]
+// Verifies `stat()` array "mtime" field equals `filemtime()` for an existing file.
+// Uses a temp directory to create `mt.txt` and asserts both functions agree.
 fn test_stat_array_mtime_matches_filemtime() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -320,6 +375,8 @@ echo $info["mtime"] === filemtime("mt.txt") ? "ok" : "differ";
 }
 
 #[test]
+// Verifies `lstat()` array for a regular file has the same "size" field as `stat()`.
+// Uses a temp directory to create `plain.txt` and asserts both arrays agree on size.
 fn test_lstat_array_for_regular_file_matches_stat() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -334,6 +391,9 @@ echo $st["size"] === $lst["size"] ? "ok" : "differ";
 }
 
 #[test]
+// Verifies `fstat()` array "size" field reflects actual file contents (10 bytes).
+// Uses a temp directory to create `fd.txt` with "abcdefghij", opens it with `fopen`,
+// calls `fstat`, then `fclose`, and asserts size is "10".
 fn test_fstat_array_size_matches_file_contents() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php

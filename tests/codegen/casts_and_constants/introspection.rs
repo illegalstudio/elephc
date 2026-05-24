@@ -9,36 +9,43 @@
 
 use super::*;
 
+// Tests that `gettype(42)` returns "integer".
 #[test]
 fn test_gettype_int() {
     let out = compile_and_run("<?php echo gettype(42);");
     assert_eq!(out, "integer");
 }
 
+// Tests that `gettype(3.14)` returns "double" (PHP's float type name).
 #[test]
 fn test_gettype_float() {
     let out = compile_and_run("<?php echo gettype(3.14);");
     assert_eq!(out, "double");
 }
 
+// Tests that `gettype("hi")` returns "string".
 #[test]
 fn test_gettype_string() {
     let out = compile_and_run("<?php echo gettype(\"hi\");");
     assert_eq!(out, "string");
 }
 
+// Tests that `gettype(true)` returns "boolean".
 #[test]
 fn test_gettype_bool() {
     let out = compile_and_run("<?php echo gettype(true);");
     assert_eq!(out, "boolean");
 }
 
+// Tests that `gettype(null)` returns "NULL".
 #[test]
 fn test_gettype_null() {
     let out = compile_and_run("<?php echo gettype(null);");
     assert_eq!(out, "NULL");
 }
 
+// Tests that `gettype` on a mixed value returns the concrete payload type
+// (integer, string, NULL, array, boolean) rather than "mixed".
 #[test]
 fn test_gettype_mixed_returns_concrete_payload_type() {
     let out = compile_and_run(
@@ -66,48 +73,57 @@ echo gettype($map["b"]);
 
 // --- empty ---
 
+// Tests that `empty(0)` is true (0 is falsy in PHP).
 #[test]
 fn test_empty_zero() {
     let out = compile_and_run("<?php echo empty(0);");
     assert_eq!(out, "1");
 }
 
+// Tests that `empty(42)` is false (non-zero int is truthy).
 #[test]
 fn test_empty_nonzero() {
     let out = compile_and_run("<?php echo empty(42);");
     assert_eq!(out, "");
 }
 
+// Tests that `empty("")` is true (empty string is falsy).
 #[test]
 fn test_empty_empty_string() {
     let out = compile_and_run("<?php echo empty(\"\");");
     assert_eq!(out, "1");
 }
 
+// Tests that `empty("hi")` is false (non-empty string is truthy).
 #[test]
 fn test_empty_nonempty_string() {
     let out = compile_and_run("<?php echo empty(\"hi\");");
     assert_eq!(out, "");
 }
 
+// Tests that `empty(null)` is true.
 #[test]
 fn test_empty_null() {
     let out = compile_and_run("<?php echo empty(null);");
     assert_eq!(out, "1");
 }
 
+// Tests that `empty(false)` is true.
 #[test]
 fn test_empty_false() {
     let out = compile_and_run("<?php echo empty(false);");
     assert_eq!(out, "1");
 }
 
+// Tests that `empty(true)` is false.
 #[test]
 fn test_empty_true() {
     let out = compile_and_run("<?php echo empty(true);");
     assert_eq!(out, "");
 }
 
+// Tests that `empty` on a mixed-valued associative array uses boxed payload
+// semantics (zeros/blank/null/empty-array are falsy; non-zeros/non-blank are truthy).
 #[test]
 fn test_empty_mixed_uses_boxed_payload_semantics() {
     let out = compile_and_run(
@@ -133,6 +149,7 @@ echo empty($map["text"]) ? "1" : "0";
 
 // --- unset ---
 
+// Tests that `unset` marks a variable as undefined so `is_null` returns true.
 #[test]
 fn test_unset_variable() {
     let out = compile_and_run(
@@ -147,6 +164,7 @@ echo is_null($x);
 
 // --- settype ---
 
+// Tests that `settype($x, "string")` converts an integer to a string.
 #[test]
 fn test_settype_to_string() {
     let out = compile_and_run(
@@ -159,6 +177,7 @@ echo $x;
     assert_eq!(out, "42");
 }
 
+// Tests that `settype($x, "integer")` truncates a float to an integer.
 #[test]
 fn test_settype_to_int() {
     let out = compile_and_run(

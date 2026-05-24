@@ -11,6 +11,8 @@ use crate::support::*;
 
 #[test]
 fn test_expr_call_returns_string() {
+    // Verifies that a callable variable returning a string compiles and runs correctly.
+    // Fixture: anonymous function taking $name, returning `"Hello " . $name`.
     let out = compile_and_run(
         r#"<?php
 $greet = function($name) { return "Hello " . $name; };
@@ -22,6 +24,8 @@ echo $greet("World");
 
 #[test]
 fn test_expr_call_returns_float() {
+    // Verifies that a callable variable returning a float compiles and runs correctly.
+    // Fixture: anonymous function returning `$x * 3.14`, called with `2.0`.
     let out = compile_and_run(
         r#"<?php
 $calc = function($x) { return $x * 3.14; };
@@ -33,6 +37,8 @@ echo $calc(2.0);
 
 #[test]
 fn test_expr_call_returns_int() {
+    // Verifies that a callable variable returning an integer compiles and runs correctly.
+    // Fixture: anonymous function returning `$x * 2`, called with `21`.
     let out = compile_and_run(
         r#"<?php
 $double = function($x) { return $x * 2; };
@@ -44,6 +50,8 @@ echo $double(21);
 
 #[test]
 fn test_expr_call_string_in_concat() {
+    // Verifies that a callable variable returning a string can be used in concatenation.
+    // Fixture: lambda returning `"<b>" . $s . "</b>"`, result prepended with `"Result: "`.
     let out = compile_and_run(
         r#"<?php
 $tag = function($s) { return "<b>" . $s . "</b>"; };
@@ -55,6 +63,8 @@ echo "Result: " . $tag("hello");
 
 #[test]
 fn test_closure_call_returns_string() {
+    // Verifies that a closure stored in a variable can be called and returns a string.
+    // Fixture: `$fn = function() { return "test"; };` called as `$fn()`.
     let out = compile_and_run(
         r#"<?php
 $fn = function() { return "test"; };
@@ -67,6 +77,9 @@ echo $result;
 
 #[test]
 fn test_closure_via_array_element_local_preserves_signature() {
+    // Verifies that a closure fetched from an array element and stored in a local
+    // preserves its call signature and returns the expected value.
+    // Fixture: closure stored in `$arr[0]`, fetched into `$f`, called with `"2"`.
     let out = compile_and_run(
         r#"<?php
 $arr = [];
@@ -80,6 +93,9 @@ echo $f("2");
 
 #[test]
 fn test_closure_via_function_parameter_preserves_signature() {
+    // Verifies that a closure passed as a function argument can be called inside
+    // that function and returns the correct value.
+    // Fixture: closure captured by `$ok`, passed to `call_it()`, invoked with `"4"`.
     let out = compile_and_run(
         r#"<?php
 $ok = function($n) { return "v" . $n; };
@@ -94,6 +110,8 @@ echo call_it($ok);
 
 #[test]
 fn test_fcc_variable_function_target_direct_call() {
+    // Verifies that a user-defined function used as FCC target calls correctly via direct call syntax.
+    // Fixture: `function triple(int $n): int { return $n * 3; }` called as `$cb(14)` where `$cb = triple(...)`.
     let out = compile_and_run(
         r#"<?php
 function triple(int $n): int { return $n * 3; }
@@ -106,6 +124,8 @@ echo $cb(14);
 
 #[test]
 fn test_fcc_variable_builtin_function_target_direct_call() {
+    // Verifies that a builtin function used as FCC target calls correctly via direct call syntax.
+    // Fixture: `$cb = strtoupper(...)`, invoked with `"hello"`.
     let out = compile_and_run(
         r#"<?php
 $cb = strtoupper(...);
@@ -117,8 +137,10 @@ echo $cb("hello");
 
 #[test]
 fn test_fcc_variable_reassignment_clears_target() {
-    // $cb is rebound to a generic closure, so subsequent calls must go through
-    // the regular closure path (not the stale Function short-circuit).
+    // Verifies that reassigning an FCC variable to a regular closure causes subsequent
+    // calls to use the closure wrapper path, not the stale Function short-circuit.
+    // Fixture: `$cb` first bound to `double(...)`, then rebound to an anonymous function;
+    // final call `$cb(5)` returns `5 + 100 = 105`.
     let out = compile_and_run(
         r#"<?php
 function double(int $n): int { return $n * 2; }
@@ -132,6 +154,8 @@ echo $cb(5);
 
 #[test]
 fn test_fcc_variable_via_pipe_short_circuits() {
+    // Verifies that an FCC variable can be called via the pipe operator with correct short-circuit behavior.
+    // Fixture: `$cb = quad(...)` (function returning `$n * 4`), called as `6 |> $cb`.
     let out = compile_and_run(
         r#"<?php
 function quad(int $n): int { return $n * 4; }
@@ -144,6 +168,8 @@ echo 6 |> $cb;
 
 #[test]
 fn test_fcc_variable_instance_method_target_direct_call() {
+    // Verifies that an instance method FCC target calls correctly via direct call syntax.
+    // Fixture: `$b = new Bumper(10)`, `$cb = $b->apply(...)`, `$cb(5)` returns `5 + 10`.
     let out = compile_and_run(
         r#"<?php
 class Bumper {
@@ -161,6 +187,8 @@ echo $cb(5);
 
 #[test]
 fn test_fcc_variable_instance_method_via_pipe_short_circuits() {
+    // Verifies that an instance method FCC variable can be called via the pipe operator with correct short-circuit.
+    // Fixture: `$m = new Multiplier(7)`, `$cb = $m->times(...)`, `6 |> $cb` returns `42`.
     let out = compile_and_run(
         r#"<?php
 class Multiplier {
@@ -177,6 +205,8 @@ echo 6 |> $cb;
 
 #[test]
 fn test_fcc_variable_static_method_named_target_direct_call() {
+    // Verifies that a statically-namespaced method FCC target (Class::method(...)) calls correctly.
+    // Fixture: `$cb = Calc::quad(...)`, `$cb(5)` returns `20`.
     let out = compile_and_run(
         r#"<?php
 class Calc {
@@ -191,6 +221,8 @@ echo $cb(5);
 
 #[test]
 fn test_fcc_variable_static_method_via_pipe_short_circuits() {
+    // Verifies that a statically-namespaced method FCC target can be called via the pipe operator.
+    // Fixture: `$cb = Calc::add10(...)`, `7 |> $cb` returns `17`.
     let out = compile_and_run(
         r#"<?php
 class Calc {
@@ -205,8 +237,8 @@ echo 7 |> $cb;
 
 #[test]
 fn test_fcc_variable_self_static_method_target_short_circuits() {
-    // `self::method(...)` is resolved to the lexically-current class at FCC
-    // storage time, so the short-circuit fires and calls the right method.
+    // Verifies that `self::method(...)` FCC short-circuits to the lexically enclosing class method.
+    // Fixture: `Marker::wrap()` creates `$cb = self::tag(...)`, calls `$cb("ok")` → `"[ok]"`.
     let out = compile_and_run(
         r#"<?php
 class Marker {
@@ -224,7 +256,8 @@ echo Marker::wrap("ok");
 
 #[test]
 fn test_fcc_variable_parent_static_method_target_short_circuits() {
-    // `parent::method(...)` resolves to the parent class at FCC storage time.
+    // Verifies that `parent::method(...)` FCC short-circuits to the parent class method.
+    // Fixture: `Child::viaParent()` creates `$cb = parent::name(...)`, calls `$cb()` → `"Base"`.
     let out = compile_and_run(
         r#"<?php
 class Base {
@@ -245,10 +278,9 @@ echo Child::viaParent();
 
 #[test]
 fn test_fcc_variable_static_receiver_short_circuits_with_late_static_binding() {
-    // `static::method(...)` short-circuits to a direct static-method call that
-    // re-uses the caller scope's hidden `__elephc_called_class_id` (the same
-    // chain `emit_forwarded_called_class_id` would consult inside the wrapper),
-    // so late-static binding is preserved without the closure trampoline.
+    // Verifies that `static::method(...)` FCC preserves late static binding via the called-class chain
+    // (reuses `__elephc_called_class_id` without a closure trampoline). Fixture: `B::describe()` calls
+    // `static::name()` through an FCC; B's override is selected, returning `"B"`.
     let out = compile_and_run(
         r#"<?php
 class A {
@@ -269,10 +301,9 @@ echo B::describe();
 
 #[test]
 fn test_fcc_variable_static_receiver_in_instance_method_resolves_via_this() {
-    // When `$cb = static::name(...)` is created inside an instance method, the
-    // caller scope's `$this` provides the runtime called class. The short-circuit
-    // falls through the same `__elephc_fcc_called_class_id` → `__elephc_called_class_id`
-    // → `__elephc_fcc_this` → `this` chain as the closure wrapper would.
+    // Verifies that `static::method(...)` FCC created inside an instance method resolves via `$this`
+    // at runtime (falls through `__elephc_fcc_called_class_id` → `__elephc_called_class_id` →
+    // `__elephc_fcc_this` → `this`). Fixture: `B::describe()` returns `"B"` via late static binding.
     let out = compile_and_run(
         r#"<?php
 class A {
@@ -294,7 +325,8 @@ echo $obj->describe();
 
 #[test]
 fn test_fcc_variable_static_receiver_chained_pipe() {
-    // Combine commit 1 (pipe operator) with the static:: short-circuit.
+    // Verifies that `static::method(...)` FCC combined with the pipe operator works correctly.
+    // Fixture: `Caps::go("ok")` creates `$cb = static::shout(...)`, pipes `$s |> $cb` → `"OK"`.
     let out = compile_and_run(
         r#"<?php
 class Caps {
@@ -321,6 +353,9 @@ echo Caps::go("ok");
 
 #[test]
 fn test_fcc_indirect_via_array_element_through_local_runs() {
+    // Verifies that an FCC stored in an array element and fetched back into a local
+    // still calls correctly (goes through the closure wrapper fallback path).
+    // Fixture: `tripler(...)` stored in `$arr[0]`, fetched into `$cb`, called with `7`.
     let out = compile_and_run(
         r#"<?php
 function tripler(int $n): int { return $n * 3; }
@@ -334,9 +369,9 @@ echo $cb(7);
 
 #[test]
 fn test_fcc_method_complex_receiver_via_local_workaround_runs() {
-    // FCC creation rejects complex receiver expressions for instance methods
-    // (`$obj->inner->method(...)`). The documented workaround is to copy the
-    // chained receiver to a local first, then take the FCC against that local.
+    // Verifies the documented workaround for complex receiver FCC: copy the chained receiver to a
+    // local first, then create the FCC against that local. Fixture: `$inner = $o->inner`,
+    // `$cb = $inner->apply(...)`, piped call `7 |> $cb` returns `17`.
     let out = compile_and_run(
         r#"<?php
 class Inner {
@@ -358,9 +393,9 @@ echo 7 |> $cb;
 
 #[test]
 fn test_fcc_indirect_via_assoc_array_value_through_local_runs() {
-    // Storing the FCC in an associative-array value, fetching it back into a
-    // local, and invoking — exercises the same "FCC outside a local slot →
-    // closure wrapper fallback" path as direct array indexing.
+    // Verifies that an FCC stored in an associative-array value and fetched back into a local
+    // calls correctly (closure wrapper fallback path). Fixture: `doubler(...)` stored as
+    // `["double" => doubler(...)]`, fetched via `$reg["double"]`, called with `9`.
     let out = compile_and_run(
         r#"<?php
 function doubler(int $n): int { return $n * 2; }
@@ -374,6 +409,9 @@ echo $cb(9);
 
 #[test]
 fn test_closure_fetched_from_object_property_through_method_runs() {
+    // Verifies that a closure stored in an object property and fetched via a method call
+    // can still be invoked correctly. Fixture: `Box` holds `$cb`; `fetch()` returns it;
+    // `invoke($b->fetch(), 5)` returns `5 + 7 = 12`.
     let out = compile_and_run(
         r#"<?php
 class Box {
@@ -401,9 +439,8 @@ echo invoke($b->fetch(), 5);
 
 #[test]
 fn test_fcc_variable_static_method_named_target_preserves_late_static_binding() {
-    // `B::m(...)` produces a Named target. The short-circuit calls B::m
-    // directly, and `static::name()` inside m is resolved at call time so it
-    // still picks B's override.
+    // Verifies that a Named static-method FCC target (B::describe(...)) preserves late static
+    // binding when the FCC is called. Fixture: `B::describe()` calls `static::name()` returning `"B"`.
     let out = compile_and_run(
         r#"<?php
 class A {

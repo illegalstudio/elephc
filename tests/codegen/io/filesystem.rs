@@ -11,6 +11,8 @@ use super::*;
 
 #[test]
 fn test_mkdir_rmdir() {
+    // Verifies mkdir, rmdir, and is_dir by creating a directory, confirming it
+    // exists, removing it, and confirming it no longer exists.
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
 mkdir("testdir");
@@ -25,6 +27,8 @@ if (!is_dir("testdir")) { echo "gone"; }
 
 #[test]
 fn test_copy_unlink() {
+    // Verifies copy, unlink, and file existence by creating a file, copying it,
+    // reading through the copy, deleting both files, and confirming removal.
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
 file_put_contents("orig.txt", "content");
@@ -41,6 +45,8 @@ unlink("orig.txt");
 
 #[test]
 fn test_rename_file() {
+    // Verifies rename by creating a file, renaming it, confirming the new name
+    // holds the data, confirming the old name is gone, and cleaning up.
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
 file_put_contents("old.txt", "data");
@@ -56,6 +62,7 @@ unlink("new.txt");
 
 #[test]
 fn test_getcwd() {
+    // Verifies getcwd returns a non-empty string (platform-independent check).
     let out = compile_and_run(
         r#"<?php
 $cwd = getcwd();
@@ -67,6 +74,8 @@ if (strlen($cwd) > 0) { echo "ok"; }
 
 #[test]
 fn test_sys_get_temp_dir() {
+    // Verifies sys_get_temp_dir returns a path containing "tmp" (case-insensitive
+    // check to cover Linux, macOS, and Windows temp naming).
     let out = compile_and_run(
         r#"<?php
 $tmp = sys_get_temp_dir();
@@ -78,6 +87,8 @@ echo $tmp;
 
 #[test]
 fn test_chdir_getcwd() {
+    // Verifies chdir changes the working directory and getcwd reflects the new
+    // path, confirming the change by checking path length increased after chdir.
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
 mkdir("subdir");
@@ -95,6 +106,8 @@ rmdir("subdir");
 
 #[test]
 fn test_scandir() {
+    // Verifies scandir by creating two files, confirming all four entries (. .. a.txt b.txt)
+    // appear in the result, and cleaning up the directory.
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
 mkdir("sd");
@@ -121,6 +134,8 @@ rmdir("sd");
 
 #[test]
 fn test_glob_fn() {
+    // Verifies glob by creating two files matching a pattern, confirming both
+    // are returned with their full paths, and cleaning up.
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
 mkdir("gd");
@@ -145,6 +160,8 @@ rmdir("gd");
 
 #[test]
 fn test_tempnam() {
+    // Verifies tempnam creates a unique file in the given directory and that it
+    // exists immediately, then cleans up the temporary file.
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
 $tmp = tempnam(".", "test");

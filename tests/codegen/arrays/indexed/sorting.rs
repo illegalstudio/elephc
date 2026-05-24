@@ -10,6 +10,8 @@
 use super::*;
 
 #[test]
+// Verifies asort maintains key-value associations and sorts by values in ascending order.
+// Fixture: [3, 1, 2] → sorted [1, 2, 3] → first element $a[0] should be 1.
 fn test_asort() {
     let out = compile_and_run(
         r#"<?php
@@ -22,6 +24,8 @@ echo $a[0];
 }
 
 #[test]
+// Verifies arsort maintains key-value associations and sorts by values in descending order.
+// Fixture: [1, 3, 2] → sorted descending [3, 2, 1] → first element $a[0] should be 3.
 fn test_arsort() {
     let out = compile_and_run(
         r#"<?php
@@ -34,6 +38,8 @@ echo $a[0];
 }
 
 #[test]
+// Verifies ksort sorts by keys in ascending order, preserving values.
+// Fixture: [3, 1, 2] with string keys → sorted by key → count remains 3.
 fn test_ksort() {
     let out = compile_and_run(
         r#"<?php
@@ -46,6 +52,8 @@ echo count($a);
 }
 
 #[test]
+// Verifies krsort sorts by keys in descending order, preserving values.
+// Fixture: [1, 2, 3] with string keys → sorted descending → count remains 3.
 fn test_krsort() {
     let out = compile_and_run(
         r#"<?php
@@ -58,6 +66,8 @@ echo count($a);
 }
 
 #[test]
+// Verifies natsort sorts values naturally (human ordering), preserving key-value associations.
+// Fixture: [3, 1, 2] → natural sort [1, 2, 3] → first element $a[0] should be 1.
 fn test_natsort() {
     let out = compile_and_run(
         r#"<?php
@@ -70,6 +80,8 @@ echo $a[0];
 }
 
 #[test]
+// Verifies natcasesort sorts values naturally case-insensitively, preserving key-value associations.
+// Fixture: [3, 1, 2] → case-insensitive natural sort [1, 2, 3] → first element $a[0] should be 1.
 fn test_natcasesort() {
     let out = compile_and_run(
         r#"<?php

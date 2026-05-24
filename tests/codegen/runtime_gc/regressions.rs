@@ -9,6 +9,9 @@
 
 use crate::support::*;
 
+// Regression test: associative array values accessed inside a function after the
+// array is passed as an argument. Verifies that reading multiple keys (`done`,
+// `title`, `priority`) from a passed assoc array produces correct output.
 #[test]
 fn test_regression_assoc_value_in_function() {
     let out = compile_and_run(
@@ -25,6 +28,9 @@ show($t);
     assert_eq!(out, "[ ] Buy milk high");
 }
 
+// Regression test: iterating a numerically-indexed array of assoc arrays inside a
+// function. Verifies that indexed access into a passed array of assoc arrays
+// (`$items[$i]["name"]`, `$items[$i]["value"]`) works correctly.
 #[test]
 fn test_regression_iterate_assoc_in_function() {
     let out = compile_and_run(
@@ -44,6 +50,10 @@ echo format($data);
     assert_eq!(out, "a:1\nb:2\n");
 }
 
+// Regression test: appending to a function parameter array and returning it.
+// Verifies that `$arr[] = $val` and returning the modified array works across
+// multiple calls and that the result is correctly assigned back to the caller's
+// variable.
 #[test]
 fn test_regression_arr_equals_func_arr() {
     let out = compile_and_run(
@@ -61,6 +71,9 @@ echo count($nums) . "|" . $nums[0] . "|" . $nums[2];
     assert_eq!(out, "3|1|3");
 }
 
+// Verifies that nested integerish arithmetic inside a function releases Mixed
+// temporaries cleanly. Runs 1000 iterations and asserts the heap is clean
+// (allocations == deallocations) with no leaks.
 #[test]
 fn test_nested_integerish_arithmetic_releases_mixed_temporaries() {
     let out = compile_and_run_with_gc_stats(
@@ -83,6 +96,10 @@ echo "done";
     assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }
 
+// Regression test: creating assoc arrays via a factory function, pushing them
+// into a numerically-indexed array, then iterating and accessing keys. Verifies
+// that `make()` return values survive being stored and retrieved from a outer
+// array.
 #[test]
 fn test_regression_make_assoc_then_iterate() {
     let out = compile_and_run(
@@ -101,6 +118,9 @@ for ($i = 0; $i < count($items); $i++) {
     assert_eq!(out, "x=1 y=2 z=3 ");
 }
 
+// Regression test: concatenating multiple string accesses from assoc array
+// elements inside a loop and returning the result. Verifies that repeated
+// `$content .= $items[$i]["a"] . "|" . ...` chains are handled correctly.
 #[test]
 fn test_regression_save_concat_chain() {
     let out = compile_and_run(
@@ -120,6 +140,9 @@ echo save($data);
     assert_eq!(out, "x|y|z\n");
 }
 
+// Regression test: passing an object to a function and accessing its properties
+// (`$dog->name`, `$dog->breed`). Verifies that object properties are correctly
+// accessible inside function scope.
 #[test]
 fn test_regression_object_string_property_in_function() {
     let out = compile_and_run(
@@ -139,6 +162,9 @@ echo describe($d);
     assert_eq!(out, "Rex (Labrador)");
 }
 
+// Regression test: objects stored in an array are retrieved and their methods
+// called. Verifies that `$items[$i]->format()` works correctly after objects are
+// stored and fetched from a numerically-indexed array.
 #[test]
 fn test_regression_objects_in_array_with_methods() {
     let out = compile_and_run(
@@ -158,6 +184,9 @@ for ($i = 0; $i < count($items); $i++) {
     assert_eq!(out, "Apple: $1\nBanana: $2\n");
 }
 
+// Regression test: early `return` inside a `switch` within a loop. Verifies that
+// `label()` returning from within `switch` cases in a loop does not corrupt
+// control flow or stack state.
 #[test]
 fn test_regression_switch_return_in_loop() {
     let out = compile_and_run(
@@ -179,6 +208,9 @@ echo $r;
     assert_eq!(out, "ABCABC");
 }
 
+// Regression test: chained string operations (`strtolower`, `str_replace`) on a
+// function parameter. Verifies that successive string builtins that modify a
+// local variable work correctly and the result is returned.
 #[test]
 fn test_regression_string_ops_in_function() {
     let out = compile_and_run(
@@ -194,6 +226,9 @@ echo clean("Hello World");
     assert_eq!(out, "hello_world");
 }
 
+// Regression test: `explode` result used as an array inside a function, then
+// indexed. Verifies that `$parts[0]` and `$parts[1]` access the correct exploded
+// segments after `explode` is called on a comma-separated string.
 #[test]
 fn test_regression_explode_in_function_use_parts() {
     let out = compile_and_run(
@@ -208,6 +243,9 @@ echo parse("foo,bar");
     assert_eq!(out, "foo+bar");
 }
 
+// Regression test: function returns an assoc array and the caller reads multiple
+// keys from it. Verifies that `config()["host"]`, `config()["port"]`, etc.
+// access the correct returned values after a single call.
 #[test]
 fn test_regression_return_assoc_read_keys() {
     let out = compile_and_run(
@@ -222,6 +260,9 @@ echo $c["host"] . ":" . $c["port"] . "/" . $c["db"];
     assert_eq!(out, "localhost:3306/myapp");
 }
 
+// Regression test: reading multiple distinct keys (`first`, `second`, `third`)
+// from a single assoc array parameter. Verifies correct access to each key
+// without interference between the reads.
 #[test]
 fn test_regression_multiple_hash_get_locals() {
     let out = compile_and_run(
@@ -238,6 +279,9 @@ show(["first" => "x", "second" => "y", "third" => "z"]);
     assert_eq!(out, "x|y|z");
 }
 
+// Regression test: method receives a string parameter and also accesses an
+// object property (`$this->prefix`). Verifies that the property is correctly
+// available inside the method and the result is returned correctly.
 #[test]
 fn test_regression_method_string_param_and_prop() {
     let out = compile_and_run(
@@ -254,6 +298,10 @@ echo $g->greet("World");
     assert_eq!(out, "Hello World!");
 }
 
+// Regression test: object property stores a string that was derived from a
+// concatenated literal (`"AB" . "CD"`). Verifies that property initialization
+// and subsequent method access (`$this->bytes`) survives constructor parameter
+// cleanup without corrupting the stored value.
 #[test]
 fn test_regression_string_property_survives_constructor_param_cleanup() {
     let out = compile_and_run(
@@ -271,6 +319,10 @@ echo $reader->head();
     assert_eq!(out, "ABCD");
 }
 
+// Regression test: a string variable passed to a constructor is still usable
+// after the object is created. Verifies that the callee (constructor) does not
+// prematurely free the caller's string argument, leaving the original variable
+// with a valid value.
 #[test]
 fn test_regression_callee_does_not_free_caller_string_argument() {
     let out = compile_and_run(
@@ -291,6 +343,10 @@ echo $greeter->prefix;
     assert_eq!(out, "IWAD|IWAD");
 }
 
+// Regression test: a large heap-backed string (1 MB file) is read, sliced via
+// `substr`, stored in an object property, and the object is returned from a
+// function. Verifies that heap-allocated string slices survive across object
+// return and are not prematurely collected or corrupted.
 #[test]
 fn test_regression_string_property_persists_heap_slice_across_object_return() {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
@@ -330,6 +386,9 @@ echo $wad->name;
     assert_eq!(out, "PLAYPAL");
 }
 
+// Regression test: an object returned from a function carries a property built
+// via a loop that accumulates string characters. Verifies that the property built
+// inside the loop (`$name .= $ch`) is correctly preserved on the returned object.
 #[test]
 fn test_regression_returned_object_preserves_loop_built_string_property() {
     let out = compile_and_run(
@@ -374,6 +433,9 @@ echo $wad->firstEntryName;
     assert_eq!(out, "IWAD|PLAYPAL");
 }
 
+// Regression test: calling a static method with parameters and string
+// concatenation. Verifies that `Fmt::wrap("hello", "b")` correctly concatenates
+// the tag and string and returns the wrapped result.
 #[test]
 fn test_regression_static_method_string() {
     let out = compile_and_run(
@@ -387,6 +449,9 @@ echo Fmt::wrap("hello", "b");
     assert_eq!(out, "<b>hello</b>");
 }
 
+// Regression test: chained property access (`$o->inner->val`) where an inner
+// object is stored in an outer object property and returned. Verifies that
+// accessing a property of a nested object works correctly.
 #[test]
 fn test_regression_chained_property_access() {
     let out = compile_and_run(
@@ -404,6 +469,9 @@ echo $o->inner->val;
     assert_eq!(out, "42");
 }
 
+// Regression test: object with a float property, used in a method that
+// performs arithmetic. Verifies that float properties are correctly stored and
+// used in method computations.
 #[test]
 fn test_regression_float_property() {
     let out = compile_and_run(
@@ -420,6 +488,10 @@ echo $c->area();
     assert_eq!(out, "314");
 }
 
+// Regression test: `$obj->prop[] = <scalar>` boxes the scalar into a Mixed cell
+// and `__rt_array_push_refcounted` retains a reference. The codegen was keeping
+// the cell's original (heap_alloc) reference and never releasing it, leaking one
+// reference past the array's deep-free. Asserts heap is clean at exit.
 #[test]
 fn test_regression_property_array_push_scalar_does_not_leak() {
     // `$obj->prop[] = <scalar>` boxes the scalar into a Mixed cell, then
@@ -445,6 +517,11 @@ echo count($x->a);
     );
 }
 
+// Regression test: pushing an owned array literal into a Mixed-element property
+// array adds a second ownership layer. The inner array is retained by the Mixed
+// box and the Mixed box is retained by `__rt_array_push_refcounted`. The property
+// push path must use the container-aware boxer and release the boxed cell after
+// the append. Asserts heap is clean at exit.
 #[test]
 fn test_regression_property_array_push_array_value_does_not_leak() {
     // Pushing an owned array literal into a Mixed-element property array adds
@@ -472,6 +549,9 @@ echo count($x->a);
     );
 }
 
+// Regression test: a loop pushing scalars into a property array repeatedly
+// exercises the boxing + push path; each iteration must balance its refcount or
+// the leak compounds. Asserts heap is clean after 20 iterations.
 #[test]
 fn test_regression_property_array_push_in_loop_does_not_leak() {
     // A loop pushing scalars into a property array repeatedly exercises the
@@ -497,6 +577,10 @@ echo count($x->a);
     );
 }
 
+// Regression test: overwriting a static array must release the payloads appended
+// to the old array. The scalar is boxed into Mixed and retained by
+// `__rt_array_push_refcounted`; only the replacement static array should remain
+// live at exit. Asserts exactly one live block (the current static array).
 #[test]
 fn test_regression_static_property_array_push_scalar_releases_old_payload() {
     // Static storage itself is process-lifetime state, but an overwritten
@@ -522,6 +606,11 @@ echo count(C::$a);
     );
 }
 
+// Regression test: pushing an owned array literal into a Mixed-element static
+// property array needs both the container-aware boxer and the post-push release.
+// After the static property is overwritten the old array and appended literal
+// should be gone; only the replacement static array remains live. Asserts exactly
+// one live block.
 #[test]
 fn test_regression_static_property_array_push_array_value_releases_old_payload() {
     // Pushing an owned array literal into a Mixed-element static property array
@@ -547,6 +636,11 @@ echo count(C::$a);
     );
 }
 
+// Regression test: array literals with spread build their result through
+// `__rt_array_push_refcounted` for refcounted elements. The non-spread element
+// path retained the element via `retain_borrowed_heap_arg` and again inside the
+// push helper without releasing the codegen's owning reference, leaking the
+// appended element. Asserts heap is clean at exit.
 #[test]
 fn test_regression_spread_array_literal_does_not_leak() {
     // Array literals with spread build their result through
@@ -570,6 +664,10 @@ echo count($b);
     );
 }
 
+// Regression test: `foreach ($items as &$value)` on a non-empty array where the
+// by-ref loop variable is reassigned after the loop. Verifies that the by-ref
+// loop does not leak the local ref cell, and that reassigning `$value = 99`
+// after the loop correctly mutates the array element.
 #[test]
 fn test_regression_foreach_by_ref_non_empty_does_not_leak_local_ref_cell() {
     let out = compile_and_run_with_heap_debug(
@@ -591,6 +689,9 @@ echo $items[2];
     );
 }
 
+// Regression test: `foreach ($items as &$value)` on an empty array (after
+// `array_pop` empties it) should not leak the local ref cell. The loop body is
+// never entered but the by-ref binding must still be cleaned up at function exit.
 #[test]
 fn test_regression_foreach_by_ref_empty_releases_local_ref_cell_at_exit() {
     let out = compile_and_run_with_heap_debug(
@@ -613,6 +714,10 @@ echo $value;
     );
 }
 
+// Regression test: a by-ref foreach reusing the same variable name (`$value`)
+// across two separate loops where the first array becomes empty mid-way.
+// Verifies that the prior fallback type (`string`) is released when `$value` is
+// rebound to a new by-ref cell in the second loop.
 #[test]
 fn test_regression_foreach_by_ref_reused_name_releases_prior_fallback_type() {
     let out = compile_and_run_with_heap_debug(

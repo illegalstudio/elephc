@@ -10,6 +10,8 @@
 
 use super::*;
 
+// Tests an instance method captured as a first-class callable is passed to `call_user_func`
+// and the captured receiver is correctly bound on invocation.
 #[test]
 fn test_first_class_callable_instance_method_call_user_func_with_capture() {
     let out = compile_and_run(
@@ -28,6 +30,8 @@ echo call_user_func($fn, 5);
     assert_eq!(out, "12");
 }
 
+// Tests an inline instance method callable passed directly to `call_user_func` with
+// receiver bound via the temporary object expression.
 #[test]
 fn test_first_class_callable_inline_instance_method_call_user_func_with_capture() {
     let out = compile_and_run(
@@ -45,6 +49,8 @@ echo call_user_func($greeter->greet(...), "Ada");
     assert_eq!(out, "Hi Ada");
 }
 
+// Tests an instance method first-class callable passed to `call_user_func_array`, verifying
+// that the variadic array is correctly spread into positional parameters.
 #[test]
 fn test_first_class_callable_instance_method_call_user_func_array_with_capture() {
     let out = compile_and_run(
@@ -63,6 +69,9 @@ echo call_user_func_array($fn, [3, 4]);
     assert_eq!(out, "34");
 }
 
+// Tests that a first-class callable user-defined function with a by-ref parameter correctly
+// propagates the reference modification back to the caller's scope when invoked via
+// `call_user_func`.
 #[test]
 fn test_call_user_func_first_class_callable_preserves_by_ref_params() {
     let out = compile_and_run(
@@ -80,6 +89,8 @@ echo $value;
     assert_eq!(out, "6");
 }
 
+// Tests that a closure alias (two variables holding the same closure) correctly propagates
+// by-ref parameter modifications when invoked via `call_user_func`.
 #[test]
 fn test_call_user_func_closure_alias_preserves_by_ref_params() {
     let out = compile_and_run(
@@ -96,6 +107,8 @@ echo $value;
     assert_eq!(out, "6");
 }
 
+// Tests that an instance method called directly with multiple by-ref array parameters
+// correctly propagates modifications to both arrays.
 #[test]
 fn test_instance_method_preserves_multiple_byref_array_params() {
     let out = compile_and_run(
@@ -118,6 +131,9 @@ echo $y[0];
     assert_eq!(out, "12");
 }
 
+// Tests an instance method captured as a first-class callable and invoked via an indirect
+// variable call expression `$fn(...)`, verifying the receiver and arguments are bound
+// correctly.
 #[test]
 fn test_first_class_callable_instance_method_indirect_call() {
     let out = compile_and_run(
@@ -136,6 +152,8 @@ echo $fn("Ada");
     assert_eq!(out, "Hello Ada");
 }
 
+// Tests an instance method captured as a first-class callable and passed to `array_map`,
+// verifying integer return values are correctly captured and accessed in the result array.
 #[test]
 fn test_first_class_callable_instance_method_array_map_with_capture() {
     let out = compile_and_run(
@@ -157,6 +175,8 @@ echo $values[2];
     assert_eq!(out, "3:9");
 }
 
+// Tests an inline instance method callable passed directly to `array_map` with the receiver
+// bound from a temporary object, and return values are accessed from the result array.
 #[test]
 fn test_first_class_callable_inline_instance_method_array_map_with_capture() {
     let out = compile_and_run(
@@ -177,6 +197,9 @@ echo $values[1];
     assert_eq!(out, "4:8");
 }
 
+// Tests `array_map` with an inline instance method first-class callable that returns a string.
+// Verifies both key and value string results are correctly stored and retrieved from the
+// result array.
 #[test]
 fn test_first_class_callable_inline_instance_method_array_map_string_return_with_capture() {
     let out = compile_and_run(
@@ -197,6 +220,8 @@ echo $values[1];
     assert_eq!(out, "[a]:[b]");
 }
 
+// Tests `array_filter` with an instance method first-class callable, verifying the filtered
+// array contains only elements for which the predicate returns true.
 #[test]
 fn test_first_class_callable_inline_instance_method_array_filter_with_capture() {
     let out = compile_and_run(
@@ -219,6 +244,8 @@ foreach ($values as $value) {
     assert_eq!(out, "2:3:4");
 }
 
+// Tests that `array_filter` evaluates its array argument before constructing the method
+// callable receiver, confirming left-to-right evaluation order.
 #[test]
 fn test_array_filter_evaluates_array_before_method_callable_receiver() {
     let out = compile_and_run(
@@ -245,6 +272,8 @@ echo count($values);
     assert_eq!(out, "array:receiver:1");
 }
 
+// Tests that an instance method first-class callable correctly propagates by-ref parameter
+// modifications when invoked via indirect call expression.
 #[test]
 fn test_first_class_callable_instance_method_preserves_by_ref_params() {
     let out = compile_and_run(
@@ -265,6 +294,8 @@ echo $value;
     assert_eq!(out, "7");
 }
 
+// Tests that a parameter name that shadows the variable name of a captured receiver does
+// not interfere with the callable's ability to bind and invoke the method correctly.
 #[test]
 fn test_first_class_callable_instance_method_receiver_name_can_match_param() {
     let out = compile_and_run(
@@ -283,6 +314,8 @@ echo $fn(10);
     assert_eq!(out, "11");
 }
 
+// Tests a static method using late static binding captured as a first-class callable and
+// invoked via an indirect call, verifying the correct class is resolved at runtime.
 #[test]
 fn test_first_class_callable_static_late_bound_method_indirect_call() {
     let out = compile_and_run(
@@ -312,6 +345,9 @@ echo ChildMaker::run();
     assert_eq!(out, "base:child");
 }
 
+// Tests a static method using late static binding captured inside an instance method and
+// invoked indirectly, verifying the static context is correctly resolved to the runtime
+// class of the object on which `run()` was called.
 #[test]
 fn test_first_class_callable_static_late_bound_from_instance_method() {
     let out = compile_and_run(
@@ -343,6 +379,9 @@ echo $child->run();
     assert_eq!(out, "base:child");
 }
 
+// Tests a static method using late static binding passed to `array_map` inside a static
+// method, verifying each subclass resolves its own static context when the mapper is
+// inherited.
 #[test]
 fn test_first_class_callable_static_late_bound_array_map_with_capture() {
     let out = compile_and_run(
@@ -374,6 +413,8 @@ ChildMapper::run();
     assert_eq!(out, "11:12|21:22");
 }
 
+// Tests an instance method captured as a first-class callable and passed to `array_reduce`,
+// verifying the carry and item arguments are correctly folded with the offset.
 #[test]
 fn test_first_class_callable_instance_method_array_reduce_with_capture() {
     let out = compile_and_run(
@@ -392,6 +433,8 @@ echo array_reduce([1, 2], $fn, 0);
     assert_eq!(out, "23");
 }
 
+// Tests that `array_reduce` evaluates arguments left-to-right: array first, then the
+// method callable receiver, then the initial value, confirming evaluation order.
 #[test]
 fn test_array_reduce_evaluates_args_left_to_right_for_method_callable() {
     let out = compile_and_run(
@@ -422,6 +465,8 @@ echo array_reduce(values(), (new Reducer())->add(...), initial());
     assert_eq!(out, "array:receiver:initial:3");
 }
 
+// Tests that `array_filter` accepts a conditional expression producing a non-captured
+// first-class callable (function reference), verifying complex callable expressions work.
 #[test]
 fn test_array_filter_accepts_complex_noncaptured_callable_expression() {
     let out = compile_and_run(
@@ -446,6 +491,8 @@ foreach ($values as $value) {
     assert_eq!(out, "2:2:4");
 }
 
+// Tests an instance method captured as a first-class callable and passed to `array_walk`,
+// verifying the callable receives each item and writes output for each element.
 #[test]
 fn test_first_class_callable_instance_method_array_walk_with_capture() {
     let out = compile_and_run(
@@ -464,6 +511,8 @@ array_walk([1, 2], $walker->show(...));
     assert_eq!(out, "6:7:");
 }
 
+// Tests an instance method captured as a first-class callable and passed to `usort`, verifying
+// the comparator correctly reorders the array and the sorted result is echoed.
 #[test]
 fn test_first_class_callable_instance_method_usort_with_capture() {
     let out = compile_and_run(
@@ -485,6 +534,8 @@ foreach ($values as $value) {
     assert_eq!(out, "321");
 }
 
+// Tests an instance method captured as a first-class callable and passed to `uksort`, verifying
+// the comparator correctly reorders the array by string keys.
 #[test]
 fn test_first_class_callable_instance_method_uksort_with_capture() {
     let out = compile_and_run(
@@ -506,6 +557,8 @@ foreach ($values as $value) {
     assert_eq!(out, "321");
 }
 
+// Tests an instance method captured as a first-class callable and passed to `uasort`, verifying
+// the associative array is sorted by values while preserving string keys.
 #[test]
 fn test_first_class_callable_instance_method_uasort_with_capture() {
     let out = compile_and_run(
@@ -527,6 +580,8 @@ foreach ($values as $value) {
     assert_eq!(out, "123");
 }
 
+// Tests a static method using late static binding passed to `array_reduce` inside a static
+// method, verifying each subclass's static context is preserved when the reducer is inherited.
 #[test]
 fn test_first_class_callable_static_late_bound_array_reduce_with_capture() {
     let out = compile_and_run(
@@ -555,6 +610,9 @@ echo ChildReducer::run();
     assert_eq!(out, "23:43");
 }
 
+// Tests late-static-bound static method callables across all remaining callback runtimes:
+// `array_reduce`, `array_walk`, `usort`, `uksort`, and `uasort` in a single static method,
+// verifying each subclass correctly resolves its own static context in each context.
 #[test]
 fn test_first_class_callable_static_late_bound_remaining_callback_runtimes_with_capture() {
     let out = compile_and_run(
@@ -624,6 +682,9 @@ ChildCallbacks::run();
     assert_eq!(out, "23:11,12,:321:321:321|43:21,22,:123:123:123");
 }
 
+// Tests an instance method first-class callable invoked immediately via an expression call
+// `$obj->method(...)(...)` without an intermediate variable assignment, verifying the
+// receiver is correctly captured and bound at the point of call.
 #[test]
 fn test_direct_first_class_callable_instance_method_expr_call() {
     let out = compile_and_run(
@@ -641,6 +702,8 @@ echo ($greeter->greet(...))("Ada");
     assert_eq!(out, "Hi Ada");
 }
 
+// Tests that in an expression-callable invocation `($obj->method(...))(args...)`, the
+// receiver (object) is evaluated before the arguments, confirming left-to-right evaluation.
 #[test]
 fn test_direct_first_class_callable_expr_call_evaluates_receiver_before_args() {
     let out = compile_and_run(
@@ -666,6 +729,9 @@ echo ((new Greeter())->greet(...))(name_arg());
     assert_eq!(out, "receiver:arg:Ada");
 }
 
+// Tests a captured first-class callable stored in a variable, then invoked via a
+// parenthesized variable expression call `($fn)(...)`, verifying the method is correctly
+// dispatched with the captured receiver.
 #[test]
 fn test_parenthesized_captured_first_class_callable_variable_expr_call() {
     let out = compile_and_run(
@@ -684,6 +750,9 @@ echo ($fn)(5);
     assert_eq!(out, "12");
 }
 
+// Tests a first-class callable where the method's receiver captures a private property
+// from the outer scope, verifying the non-local state is correctly preserved across
+// callable invocation.
 #[test]
 fn test_first_class_callable_non_local_method_receiver() {
     let out = compile_and_run(
