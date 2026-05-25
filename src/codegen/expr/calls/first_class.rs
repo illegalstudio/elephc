@@ -302,11 +302,15 @@ pub(super) fn emit_first_class_callable(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
-    let Some(sig) = first_class_callable_sig(target, ctx) else {
+    let Some(base_sig) = first_class_callable_sig(target, ctx) else {
         emitter.comment("WARNING: unsupported first-class callable target");
         abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
         return PhpType::Callable;
     };
+    let sig = ctx
+        .expected_first_class_callable_sig
+        .clone()
+        .unwrap_or(base_sig);
 
     let Some((normalized_target, captures, hidden_params)) =
         normalized_target_and_captures(target, &sig, emitter, ctx, data)

@@ -10,8 +10,9 @@ iterator/counting/access interfaces, the SPL exception hierarchy, autoload and
 introspection helpers, the Phase 4 container classes, and the Phase 5 storage
 iterator/decorator foundations: `EmptyIterator`, `ArrayIterator`,
 `ArrayObject`, `IteratorIterator`, `LimitIterator`, `NoRewindIterator`, and
-`InfiniteIterator`, plus the multi-source decorators `AppendIterator` and
-`MultipleIterator`.
+`InfiniteIterator`, filter/cache decorators `FilterIterator`,
+`CallbackFilterIterator`, and `CachingIterator`, plus the multi-source
+decorators `AppendIterator` and `MultipleIterator`.
 
 SPL names live in the global namespace, matching PHP. They are available
 without imports or runtime extensions.
@@ -68,6 +69,9 @@ one or more `Iterator` objects:
 | `LimitIterator` | `IteratorIterator` | inherited from parent |
 | `NoRewindIterator` | `IteratorIterator` | inherited from parent |
 | `InfiniteIterator` | `IteratorIterator` | inherited from parent |
+| `FilterIterator` | `IteratorIterator` | inherited from parent |
+| `CallbackFilterIterator` | `FilterIterator` | inherited from parent |
+| `CachingIterator` | `IteratorIterator` | `ArrayAccess`, `Countable`, `Stringable` |
 | `AppendIterator` | `IteratorIterator` | inherited from parent |
 | `MultipleIterator` | - | `Iterator` |
 
@@ -207,6 +211,9 @@ Supported methods:
 | `LimitIterator` | `__construct(Iterator $iterator, int $offset = 0, int $limit = -1)`, `rewind()`, `next()`, `valid()`, `seek(int $offset): void`, `getPosition(): int`, plus inherited forwarding methods |
 | `NoRewindIterator` | `__construct(Iterator $iterator)`, `rewind()` no-op, plus inherited forwarding methods |
 | `InfiniteIterator` | `__construct(Iterator $iterator)`, `next()` cycles to the start when the inner iterator is exhausted, plus inherited forwarding methods |
+| `FilterIterator` | `__construct(Iterator $iterator)`, abstract `accept(): bool`, `rewind()`, `next()`, plus inherited forwarding methods |
+| `CallbackFilterIterator` | `__construct(Iterator $iterator, callable $callback)`, `accept(): bool` calling the callback as `callback(current, key, inner)` |
+| `CachingIterator` | `__construct(Iterator $iterator, int $flags = CachingIterator::CALL_TOSTRING)`, `rewind()`, `valid()`, `next()`, `current()`, `key()`, `hasNext()`, `__toString()`, `getFlags()`, `setFlags(int $flags): void`, `getCache()`, `count()`, `offsetExists()`, `offsetGet()`, `offsetSet()`, `offsetUnset()` |
 | `AppendIterator` | `__construct()`, `append(Iterator $iterator): void`, `rewind()`, `valid()`, `current()`, `key()`, `next()`, `getInnerIterator(): ?Iterator`, `getIteratorIndex(): int\|string\|null`, `getArrayIterator(): ArrayIterator` |
 | `MultipleIterator` | `__construct(int $flags = MultipleIterator::MIT_NEED_ALL)`, `attachIterator(Iterator $iterator, string\|int\|null $info = null): void`, `detachIterator(Iterator $iterator): void`, `containsIterator(Iterator $iterator): bool`, `countIterators(): int`, `getFlags(): int`, `setFlags(int $flags): void`, `rewind()`, `valid()`, `key()`, `current()`, `next()` |
 
@@ -243,6 +250,29 @@ foreach ($limited as $value) {
     echo $value; // 12121
 }
 
+function keep_large(int $value, string $key, Iterator $inner): bool {
+    return $value > 1;
+}
+
+$filter = new CallbackFilterIterator(
+    new ArrayIterator(["a" => 1, "b" => 2]),
+    keep_large(...)
+);
+foreach ($filter as $key => $value) {
+    echo $key;
+    echo $value;
+}
+
+$cache = new CachingIterator(
+    new ArrayIterator(["a" => "A", "b" => "B"]),
+    CachingIterator::FULL_CACHE | CachingIterator::TOSTRING_USE_KEY
+);
+foreach ($cache as $key => $value) {
+    echo (string) $cache;
+    echo $cache->hasNext() ? "more" : "last";
+}
+echo $cache["a"];
+
 $append = new AppendIterator();
 $append->append(new ArrayIterator(["a" => 1]));
 $append->append(new ArrayIterator(["b" => 2]));
@@ -273,6 +303,14 @@ length as the next integer key. `IteratorIterator` accepts any `Traversable`;
 when passed an `IteratorAggregate`, it calls `getIterator()` once and wraps the
 returned iterator. `LimitIterator`, `NoRewindIterator`, and `InfiniteIterator`
 follow PHP's constructors and require an `Iterator` directly.
+
+`FilterIterator` is abstract and skips inner positions whose `accept()` returns
+false during `rewind()` and `next()`. `CallbackFilterIterator` stores a callable
+and invokes it with current value, current key, and the inner iterator object.
+`CachingIterator` implements one-element lookahead through `hasNext()`, supports
+the string mode flags `CALL_TOSTRING`, `TOSTRING_USE_KEY`,
+`TOSTRING_USE_CURRENT`, and `TOSTRING_USE_INNER`, and supports `FULL_CACHE` for
+`getCache()`, `count()`, and `ArrayAccess`.
 
 `AppendIterator` skips exhausted appended iterators and exposes the current
 storage key through `getIteratorIndex()`. Its `getArrayIterator()` result is a
@@ -353,3 +391,7 @@ source argument array.
 is wired to return an `ArrayIterator`. The Phase 4 containers otherwise keep
 their runtime-backed method surface aligned with PHP's empty-container,
 invalid-offset, serialization, and fixed-array key behaviors.
+
+`CallbackFilterIterator` supports function first-class callables stored in the
+iterator object. Closure environments stored in object properties are still a
+broader callable-runtime limitation.

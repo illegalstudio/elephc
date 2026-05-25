@@ -502,6 +502,7 @@ gaps that must be fixed first.
 - [x] Phase 5 storage foundation — `EmptyIterator`, `ArrayIterator`, `ArrayObject`
 - [x] Phase 5 simple iterator decorators — `IteratorIterator`, `LimitIterator`, `NoRewindIterator`, `InfiniteIterator`
 - [x] Phase 5 multi-source iterator decorators — `AppendIterator`, `MultipleIterator`
+- [x] Phase 5 filter/cache decorators — `FilterIterator`, `CallbackFilterIterator`, `CachingIterator`
 - [ ] Phase 5 — iterator decorators (`ArrayIterator`, `ArrayObject`, `IteratorIterator`, `LimitIterator`, `NoRewindIterator`, `InfiniteIterator`, `EmptyIterator`, `AppendIterator`, `MultipleIterator`, `CallbackFilterIterator`, `FilterIterator`, `CachingIterator`, `RecursiveArrayIterator`, `RecursiveCallbackFilterIterator`, `RecursiveFilterIterator`, `RecursiveIteratorIterator`, `ParentIterator`); functions `iterator_to_array`, `iterator_count`, `iterator_apply`, `class_implements`, `class_parents`, `class_uses`
 - [ ] Universal runtime callable descriptors — replace raw function-pointer callable values with descriptors carrying target kind, entry ABI, PHP-visible name, signature/default/by-ref/variadic metadata, receiver/capture environment, and invocation support for string, array, closure, first-class callable, object `__invoke`, static/instance method, builtin, and extern callable shapes
 - [ ] Phase 5 follow-up — iterator-dependent Phase 4 parity: `SplFixedArray::getIterator()` plus `IteratorAggregate`/`InternalIterator` runtime wiring once iterator classes are available

@@ -16,8 +16,8 @@ use crate::codegen::expr::calls::args as call_args;
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::names::method_symbol;
-use crate::parser::ast::{Expr, ExprKind, TypeExpr};
-use crate::types::PhpType;
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, TypeExpr};
+use crate::types::{FunctionSig, PhpType};
 
 use super::super::{
     coerce_result_to_type, emit_expr, expr_result_heap_ownership,
@@ -52,6 +52,9 @@ pub(super) fn emit_new_object(
     }
     if class_name == "IteratorIterator" {
         return emit_new_iterator_iterator(args, emitter, ctx, data);
+    }
+    if class_name == "CallbackFilterIterator" {
+        return emit_new_callback_filter_iterator(args, emitter, ctx, data);
     }
     if super::reflection::is_reflection_owner_class(class_name) {
         return super::reflection::emit_new_reflection_owner(
@@ -502,7 +505,66 @@ fn emit_new_iterator_iterator(
     PhpType::Object("IteratorIterator".to_string())
 }
 
+fn emit_new_callback_filter_iterator(
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment("new CallbackFilterIterator() — callback filter construction");
+    let Some(class_info) = ctx.classes.get("CallbackFilterIterator").cloned() else {
+        emitter.comment("WARNING: missing CallbackFilterIterator metadata");
+        return PhpType::Object("CallbackFilterIterator".to_string());
+    };
+    let inner_offset = class_info.property_offsets.get("inner").copied().unwrap_or(8);
+    let callback_offset = class_info
+        .property_offsets
+        .get("callback")
+        .copied()
+        .unwrap_or(24);
+    let normalized_args = normalize_constructor_args(&class_info, args, emitter, ctx, data);
+
+    emit_new_object_core("CallbackFilterIterator", &[], false, emitter, ctx, data);
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the allocated CallbackFilterIterator while constructor arguments are stored
+
+    if let Some(iterator_expr) = normalized_args.first() {
+        let actual_ty = emit_expr(iterator_expr, emitter, ctx, data);
+        coerce_result_to_type(
+            emitter,
+            ctx,
+            data,
+            &actual_ty,
+            &PhpType::Object("Iterator".to_string()),
+        );
+    } else {
+        emitter.comment("WARNING: CallbackFilterIterator constructor missing Iterator source");
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+    }
+    store_iterator_inner_property_from_result(emitter, inner_offset);
+
+    if let Some(callback_expr) = normalized_args.get(1) {
+        emit_callback_filter_callable_arg(callback_expr, emitter, ctx, data);
+    } else {
+        emitter.comment("WARNING: CallbackFilterIterator constructor missing callback");
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+    }
+    store_callable_property_from_result(emitter, callback_offset);
+
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the initialized CallbackFilterIterator object as the expression result
+    PhpType::Object("CallbackFilterIterator".to_string())
+}
+
 fn normalize_iterator_iterator_constructor_args(
+    class_info: &crate::types::ClassInfo,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Vec<Expr> {
+    normalize_constructor_args(class_info, args, emitter, ctx, data)
+}
+
+fn normalize_constructor_args(
     class_info: &crate::types::ClassInfo,
     args: &[Expr],
     emitter: &mut Emitter,
@@ -528,6 +590,51 @@ fn normalize_iterator_iterator_constructor_args(
         data,
     )
     .args
+}
+
+fn callback_filter_callable_sig() -> FunctionSig {
+    FunctionSig {
+        params: vec![
+            ("current".to_string(), PhpType::Mixed),
+            ("key".to_string(), PhpType::Mixed),
+            ("iterator".to_string(), PhpType::Object("Iterator".to_string())),
+        ],
+        defaults: vec![None, None, None],
+        return_type: PhpType::Bool,
+        declared_return: false,
+        ref_params: vec![false, false, false],
+        declared_params: vec![false, false, false],
+        variadic: None,
+        deprecation: None,
+    }
+}
+
+fn emit_callback_filter_callable_arg(
+    callback_expr: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let previous_sig = ctx
+        .expected_first_class_callable_sig
+        .replace(callback_filter_callable_sig());
+    let callback_ty = if let ExprKind::Variable(name) = &callback_expr.kind {
+        if let Some(CallableTarget::Function(function_name)) =
+            ctx.first_class_callable_targets.get(name).cloned()
+        {
+            let synthetic = Expr::new(
+                ExprKind::FirstClassCallable(CallableTarget::Function(function_name)),
+                callback_expr.span,
+            );
+            emit_expr(&synthetic, emitter, ctx, data)
+        } else {
+            emit_expr(callback_expr, emitter, ctx, data)
+        }
+    } else {
+        emit_expr(callback_expr, emitter, ctx, data)
+    };
+    ctx.expected_first_class_callable_sig = previous_sig;
+    callback_ty
 }
 
 fn emit_iterator_iterator_downcast_arg_status(
@@ -845,6 +952,21 @@ fn store_iterator_inner_property_from_result(emitter: &mut Emitter, inner_offset
             emitter.instruction("mov r11, QWORD PTR [rsp]");                    // reload the IteratorIterator object pointer
             emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", inner_offset)); // store the normalized inner Iterator object
             emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 6", inner_offset + 8)); // stamp the inner property as an object
+        }
+    }
+}
+
+fn store_callable_property_from_result(emitter: &mut Emitter, property_offset: usize) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x9, [sp]");                                // reload the object pointer that owns the callable property
+            emitter.instruction(&format!("str x0, [x9, #{}]", property_offset)); // store the callable wrapper entry address
+            emitter.instruction(&format!("str xzr, [x9, #{}]", property_offset + 8)); // clear callable property metadata because callables are raw code pointers
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r11, QWORD PTR [rsp]");                    // reload the object pointer that owns the callable property
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", property_offset)); // store the callable wrapper entry address
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", property_offset + 8)); // clear callable property metadata because callables are raw code pointers
         }
     }
 }

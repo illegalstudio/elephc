@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
-    BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, PropertyHooks, Stmt,
+    BinOp, CastType, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, PropertyHooks, Stmt,
     StmtKind, TypeExpr, Visibility,
 };
 use crate::types::{traits::FlattenedClass, PhpType};
@@ -249,6 +249,61 @@ pub(crate) fn inject_builtin_spl_classes(
     );
 
     class_map.insert(
+        "FilterIterator".to_string(),
+        FlattenedClass {
+            name: "FilterIterator".to_string(),
+            extends: Some("IteratorIterator".to_string()),
+            implements: Vec::new(),
+            is_abstract: true,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: spl_filter_iterator_methods(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+        },
+    );
+
+    class_map.insert(
+        "CallbackFilterIterator".to_string(),
+        FlattenedClass {
+            name: "CallbackFilterIterator".to_string(),
+            extends: Some("FilterIterator".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: callback_filter_iterator_properties(),
+            methods: spl_callback_filter_iterator_methods(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+        },
+    );
+
+    class_map.insert(
+        "CachingIterator".to_string(),
+        FlattenedClass {
+            name: "CachingIterator".to_string(),
+            extends: Some("IteratorIterator".to_string()),
+            implements: vec![
+                "ArrayAccess".to_string(),
+                "Countable".to_string(),
+                "Stringable".to_string(),
+            ],
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: caching_iterator_properties(),
+            methods: spl_caching_iterator_methods(),
+            attributes: Vec::new(),
+            constants: caching_iterator_constants(),
+            used_traits: Vec::new(),
+        },
+    );
+
+    class_map.insert(
         "AppendIterator".to_string(),
         FlattenedClass {
             name: "AppendIterator".to_string(),
@@ -359,6 +414,31 @@ pub(crate) fn patch_builtin_spl_storage_signatures(checker: &mut Checker) {
             }
         }
     }
+    if let Some(class_info) = checker.classes.get_mut("CallbackFilterIterator") {
+        for (name, ty) in &mut class_info.properties {
+            if name == "callback" {
+                *ty = PhpType::Callable;
+            }
+        }
+    }
+    if let Some(class_info) = checker.classes.get_mut("CachingIterator") {
+        for (name, ty) in &mut class_info.properties {
+            if name == "cache" {
+                *ty = PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                };
+            } else if name == "currentKey" || name == "currentValue" {
+                *ty = PhpType::Mixed;
+            }
+        }
+        if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getCache")) {
+            sig.return_type = PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            };
+        }
+    }
 }
 
 const SPL_CLASS_NAMES: &[&str] = &[
@@ -373,6 +453,9 @@ const SPL_CLASS_NAMES: &[&str] = &[
     "LimitIterator",
     "NoRewindIterator",
     "InfiniteIterator",
+    "FilterIterator",
+    "CallbackFilterIterator",
+    "CachingIterator",
     "AppendIterator",
     "MultipleIterator",
 ];
@@ -438,6 +521,21 @@ fn multiple_iterator_properties() -> Vec<ClassProperty> {
         storage_property("iterators", array_type()),
         storage_property("infos", array_type()),
         storage_property("flags", TypeExpr::Int),
+    ]
+}
+
+fn callback_filter_iterator_properties() -> Vec<ClassProperty> {
+    vec![storage_property_untyped("callback")]
+}
+
+fn caching_iterator_properties() -> Vec<ClassProperty> {
+    vec![
+        storage_property("flags", TypeExpr::Int),
+        storage_property("cache", array_type()),
+        storage_property("currentKey", mixed_type()),
+        storage_property("currentValue", mixed_type()),
+        storage_property("currentValid", TypeExpr::Bool),
+        storage_property("cachedHasNext", TypeExpr::Bool),
     ]
 }
 
@@ -620,6 +718,95 @@ fn spl_infinite_iterator_methods() -> Vec<ClassMethod> {
             iterator_iterator_construct_body(),
         ),
         method_with_body("next", Vec::new(), Some(TypeExpr::Void), infinite_next_body()),
+    ]
+}
+
+fn spl_filter_iterator_methods() -> Vec<ClassMethod> {
+    vec![
+        method_with_body(
+            "__construct",
+            vec![param("iterator", named_type("Iterator"))],
+            Some(TypeExpr::Void),
+            iterator_iterator_construct_body(),
+        ),
+        abstract_method("accept", Vec::new(), Some(TypeExpr::Bool)),
+        method_with_body("rewind", Vec::new(), Some(TypeExpr::Void), filter_rewind_body()),
+        method_with_body("next", Vec::new(), Some(TypeExpr::Void), filter_next_body()),
+    ]
+}
+
+fn spl_callback_filter_iterator_methods() -> Vec<ClassMethod> {
+    vec![
+        method_with_body(
+            "__construct",
+            vec![
+                param("iterator", named_type("Iterator")),
+                param("callback", named_type("callable")),
+            ],
+            Some(TypeExpr::Void),
+            callback_filter_construct_body(),
+        ),
+        method_with_body("accept", Vec::new(), Some(TypeExpr::Bool), callback_filter_accept_body()),
+    ]
+}
+
+fn spl_caching_iterator_methods() -> Vec<ClassMethod> {
+    vec![
+        method_with_body(
+            "__construct",
+            vec![
+                param("iterator", named_type("Iterator")),
+                param_default("flags", TypeExpr::Int, int_expr(1)),
+            ],
+            Some(TypeExpr::Void),
+            caching_construct_body(),
+        ),
+        method_with_body("rewind", Vec::new(), Some(TypeExpr::Void), caching_rewind_body()),
+        method_with_body("valid", Vec::new(), Some(TypeExpr::Bool), return_body(caching_current_valid_expr())),
+        method_with_body("next", Vec::new(), Some(TypeExpr::Void), caching_next_body()),
+        method_with_body("current", Vec::new(), Some(mixed_type()), caching_current_body()),
+        method_with_body("key", Vec::new(), Some(mixed_type()), caching_key_body()),
+        method_with_body("hasNext", Vec::new(), Some(TypeExpr::Bool), return_body(caching_has_next_expr())),
+        method_with_body("__toString", Vec::new(), Some(TypeExpr::Str), caching_to_string_body()),
+        method_with_body("getFlags", Vec::new(), Some(TypeExpr::Int), return_body(caching_flags_expr())),
+        method_with_body(
+            "setFlags",
+            vec![param("flags", TypeExpr::Int)],
+            Some(TypeExpr::Void),
+            caching_set_flags_body(),
+        ),
+        method_with_body(
+            "offsetGet",
+            vec![param("key", mixed_type())],
+            Some(mixed_type()),
+            caching_offset_get_body(),
+        ),
+        method_with_body(
+            "offsetSet",
+            vec![param("key", mixed_type()), param("value", mixed_type())],
+            Some(TypeExpr::Void),
+            caching_offset_set_body(),
+        ),
+        method_with_body(
+            "offsetUnset",
+            vec![param("key", mixed_type())],
+            Some(TypeExpr::Void),
+            caching_offset_unset_body(),
+        ),
+        method_with_body(
+            "offsetExists",
+            vec![param("key", mixed_type())],
+            Some(TypeExpr::Bool),
+            caching_offset_exists_body(),
+        ),
+        method_with_body("getCache", Vec::new(), Some(array_type()), caching_get_cache_body()),
+        method_with_body("count", Vec::new(), Some(TypeExpr::Int), caching_count_body()),
+        method_with_body(
+            "__elephcCaptureCurrent",
+            Vec::new(),
+            Some(TypeExpr::Void),
+            caching_capture_current_body(),
+        ),
     ]
 }
 
@@ -979,6 +1166,17 @@ fn multiple_iterator_constants() -> Vec<ClassConst> {
     ]
 }
 
+fn caching_iterator_constants() -> Vec<ClassConst> {
+    vec![
+        class_const("CALL_TOSTRING", 1),
+        class_const("CATCH_GET_CHILD", 16),
+        class_const("TOSTRING_USE_KEY", 2),
+        class_const("TOSTRING_USE_CURRENT", 4),
+        class_const("TOSTRING_USE_INNER", 8),
+        class_const("FULL_CACHE", 256),
+    ]
+}
+
 fn method(
     name: &str,
     params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
@@ -994,6 +1192,17 @@ fn method_with_body(
     body: Vec<Stmt>,
 ) -> ClassMethod {
     class_method_with_body(name, false, params, return_type, body)
+}
+
+fn abstract_method(
+    name: &str,
+    params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
+    return_type: Option<TypeExpr>,
+) -> ClassMethod {
+    let mut method = class_method_with_body(name, false, params, return_type, Vec::new());
+    method.is_abstract = true;
+    method.has_body = false;
+    method
 }
 
 fn class_method(
@@ -1040,6 +1249,23 @@ fn storage_property(name: &str, type_expr: TypeExpr) -> ClassProperty {
 
 fn storage_property_default(name: &str, type_expr: TypeExpr, default: Expr) -> ClassProperty {
     storage_property_with_default(name, type_expr, Some(default))
+}
+
+fn storage_property_untyped(name: &str) -> ClassProperty {
+    ClassProperty {
+        name: name.to_string(),
+        visibility: Visibility::Private,
+        type_expr: None,
+        hooks: PropertyHooks::none(),
+        readonly: false,
+        is_final: false,
+        is_static: false,
+        is_abstract: false,
+        by_ref: false,
+        default: None,
+        span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
+    }
 }
 
 fn storage_property_with_default(
@@ -1180,6 +1406,13 @@ fn binary_expr(left: Expr, op: BinOp, right: Expr) -> Expr {
 
 fn not_expr(value: Expr) -> Expr {
     expr(ExprKind::Not(Box::new(value)))
+}
+
+fn cast_expr(target: CastType, value: Expr) -> Expr {
+    expr(ExprKind::Cast {
+        target,
+        expr: Box::new(value),
+    })
 }
 
 fn method_call(object: Expr, method: &str, args: Vec<Expr>) -> Expr {
@@ -1644,6 +1877,313 @@ fn infinite_next_body() -> Vec<Stmt> {
         expr_stmt(inner_call("next")),
         if_stmt(not_expr(inner_call("valid")), inner_void_body("rewind"), None),
     ]
+}
+
+fn filter_rewind_body() -> Vec<Stmt> {
+    let mut body = inner_void_body("rewind");
+    body.extend(filter_skip_rejected_body());
+    body
+}
+
+fn filter_next_body() -> Vec<Stmt> {
+    let mut body = inner_void_body("next");
+    body.extend(filter_skip_rejected_body());
+    body
+}
+
+fn filter_skip_rejected_body() -> Vec<Stmt> {
+    vec![while_stmt(
+        binary_expr(
+            inner_call("valid"),
+            BinOp::And,
+            not_expr(method_call(this_expr(), "accept", Vec::new())),
+        ),
+        inner_void_body("next"),
+    )]
+}
+
+fn callback_filter_callback_expr() -> Expr {
+    property_access(this_expr(), "callback")
+}
+
+fn callback_filter_construct_body() -> Vec<Stmt> {
+    vec![
+        property_assign_stmt(this_expr(), "inner", var_expr("iterator")),
+        property_assign_stmt(this_expr(), "callback", var_expr("callback")),
+    ]
+}
+
+fn callback_filter_accept_body() -> Vec<Stmt> {
+    return_body(cast_expr(
+        CastType::Bool,
+        function_call(
+            "call_user_func",
+            vec![
+                callback_filter_callback_expr(),
+                inner_call("current"),
+                inner_call("key"),
+                inner_expr(),
+            ],
+        ),
+    ))
+}
+
+fn caching_flags_expr() -> Expr {
+    property_access(this_expr(), "flags")
+}
+
+fn caching_cache_expr() -> Expr {
+    property_access(this_expr(), "cache")
+}
+
+fn caching_current_key_expr() -> Expr {
+    property_access(this_expr(), "currentKey")
+}
+
+fn caching_current_value_expr() -> Expr {
+    property_access(this_expr(), "currentValue")
+}
+
+fn caching_current_valid_expr() -> Expr {
+    property_access(this_expr(), "currentValid")
+}
+
+fn caching_has_next_expr() -> Expr {
+    property_access(this_expr(), "cachedHasNext")
+}
+
+fn caching_flag_enabled_expr(flags: Expr, bit: i64) -> Expr {
+    binary_expr(
+        binary_expr(flags, BinOp::BitAnd, int_expr(bit)),
+        BinOp::NotEq,
+        int_expr(0),
+    )
+}
+
+fn caching_full_cache_expr() -> Expr {
+    caching_flag_enabled_expr(caching_flags_expr(), 256)
+}
+
+fn caching_construct_body() -> Vec<Stmt> {
+    let mut body = caching_validate_flags_body("CachingIterator::__construct", "flags");
+    body.extend(vec![
+        property_assign_stmt(this_expr(), "inner", var_expr("iterator")),
+        property_assign_stmt(this_expr(), "flags", var_expr("flags")),
+        property_assign_stmt(this_expr(), "cache", empty_assoc_array_expr()),
+        property_assign_stmt(this_expr(), "currentKey", null_expr()),
+        property_assign_stmt(this_expr(), "currentValue", null_expr()),
+        property_assign_stmt(this_expr(), "currentValid", bool_expr(false)),
+        property_assign_stmt(this_expr(), "cachedHasNext", bool_expr(false)),
+    ]);
+    body
+}
+
+fn caching_validate_flags_body(context: &str, var_name: &str) -> Vec<Stmt> {
+    let mut body = vec![assign_stmt("stringFlagCount", int_expr(0))];
+    for bit in [1, 2, 4, 8] {
+        body.push(if_stmt(
+            caching_flag_enabled_expr(var_expr(var_name), bit),
+            vec![assign_stmt(
+                "stringFlagCount",
+                binary_expr(var_expr("stringFlagCount"), BinOp::Add, int_expr(1)),
+            )],
+            None,
+        ));
+    }
+    body.push(if_stmt(
+        binary_expr(var_expr("stringFlagCount"), BinOp::Gt, int_expr(1)),
+        vec![throw_stmt(new_object_expr(
+            "ValueError",
+            vec![string_expr(&format!(
+                "{context}(): Argument #{} ($flags) must contain only one of CachingIterator::CALL_TOSTRING, CachingIterator::TOSTRING_USE_KEY, CachingIterator::TOSTRING_USE_CURRENT, or CachingIterator::TOSTRING_USE_INNER",
+                if context.ends_with("__construct") { 2 } else { 1 }
+            ))],
+        ))],
+        None,
+    ));
+    body
+}
+
+fn caching_rewind_body() -> Vec<Stmt> {
+    vec![
+        expr_stmt(inner_call("rewind")),
+        expr_stmt(method_call(this_expr(), "__elephcCaptureCurrent", Vec::new())),
+    ]
+}
+
+fn caching_next_body() -> Vec<Stmt> {
+    vec![
+        if_stmt(
+            not_expr(caching_has_next_expr()),
+            vec![
+                property_assign_stmt(this_expr(), "currentValid", bool_expr(false)),
+                property_assign_stmt(this_expr(), "cachedHasNext", bool_expr(false)),
+                property_assign_stmt(this_expr(), "currentKey", null_expr()),
+                property_assign_stmt(this_expr(), "currentValue", null_expr()),
+                return_void_stmt(),
+            ],
+            None,
+        ),
+        expr_stmt(method_call(this_expr(), "__elephcCaptureCurrent", Vec::new())),
+    ]
+}
+
+fn caching_capture_current_body() -> Vec<Stmt> {
+    vec![
+        if_stmt(
+            not_expr(inner_call("valid")),
+            vec![
+                property_assign_stmt(this_expr(), "currentValid", bool_expr(false)),
+                property_assign_stmt(this_expr(), "cachedHasNext", bool_expr(false)),
+                property_assign_stmt(this_expr(), "currentKey", null_expr()),
+                property_assign_stmt(this_expr(), "currentValue", null_expr()),
+                return_void_stmt(),
+            ],
+            None,
+        ),
+        property_assign_stmt(this_expr(), "currentKey", inner_call("key")),
+        property_assign_stmt(this_expr(), "currentValue", inner_call("current")),
+        property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
+        if_stmt(
+            caching_full_cache_expr(),
+            vec![property_array_assign_stmt(
+                this_expr(),
+                "cache",
+                caching_current_key_expr(),
+                caching_current_value_expr(),
+            )],
+            None,
+        ),
+        expr_stmt(inner_call("next")),
+        property_assign_stmt(this_expr(), "cachedHasNext", inner_call("valid")),
+    ]
+}
+
+fn caching_current_body() -> Vec<Stmt> {
+    vec![
+        if_stmt(not_expr(caching_current_valid_expr()), null_return_body(), None),
+        return_stmt(caching_current_value_expr()),
+    ]
+}
+
+fn caching_key_body() -> Vec<Stmt> {
+    vec![
+        if_stmt(not_expr(caching_current_valid_expr()), null_return_body(), None),
+        return_stmt(caching_current_key_expr()),
+    ]
+}
+
+fn caching_to_string_body() -> Vec<Stmt> {
+    vec![
+        if_stmt(
+            binary_expr(
+                binary_expr(caching_flags_expr(), BinOp::BitAnd, int_expr(15)),
+                BinOp::StrictEq,
+                int_expr(0),
+            ),
+            vec![throw_stmt(new_object_expr(
+                "BadMethodCallException",
+                vec![string_expr(
+                    "CachingIterator does not fetch string value (see CachingIterator::__construct)",
+                )],
+            ))],
+            None,
+        ),
+        if_stmt(not_expr(caching_current_valid_expr()), return_body(string_expr("")), None),
+        if_stmt(
+            caching_flag_enabled_expr(caching_flags_expr(), 2),
+            return_body(cast_expr(CastType::String, caching_current_key_expr())),
+            None,
+        ),
+        if_stmt(
+            caching_flag_enabled_expr(caching_flags_expr(), 8),
+            return_body(cast_expr(CastType::String, inner_expr())),
+            None,
+        ),
+        return_stmt(cast_expr(CastType::String, caching_current_value_expr())),
+    ]
+}
+
+fn caching_set_flags_body() -> Vec<Stmt> {
+    let mut body = caching_validate_flags_body("CachingIterator::setFlags", "flags");
+    body.push(if_stmt(
+        binary_expr(
+            caching_flag_enabled_expr(caching_flags_expr(), 1),
+            BinOp::And,
+            not_expr(caching_flag_enabled_expr(var_expr("flags"), 1)),
+        ),
+        vec![throw_stmt(new_object_expr(
+            "InvalidArgumentException",
+            vec![string_expr("Unsetting flag CALL_TO_STRING is not possible")],
+        ))],
+        None,
+    ));
+    body.push(property_assign_stmt(this_expr(), "flags", var_expr("flags")));
+    body
+}
+
+fn caching_require_full_cache_body(mut body: Vec<Stmt>) -> Vec<Stmt> {
+    let mut out = vec![if_stmt(
+        not_expr(caching_full_cache_expr()),
+        vec![throw_stmt(new_object_expr(
+            "BadMethodCallException",
+            vec![string_expr(
+                "CachingIterator does not use a full cache (see CachingIterator::__construct)",
+            )],
+        ))],
+        None,
+    )];
+    out.append(&mut body);
+    out
+}
+
+fn caching_offset_get_body() -> Vec<Stmt> {
+    caching_require_full_cache_body(return_body(array_access(caching_cache_expr(), var_expr("key"))))
+}
+
+fn caching_offset_set_body() -> Vec<Stmt> {
+    caching_require_full_cache_body(vec![property_array_assign_stmt(
+        this_expr(),
+        "cache",
+        var_expr("key"),
+        var_expr("value"),
+    )])
+}
+
+fn caching_offset_unset_body() -> Vec<Stmt> {
+    caching_require_full_cache_body(vec![
+        assign_stmt("newCache", empty_assoc_array_expr()),
+        foreach_stmt(
+            caching_cache_expr(),
+            Some("cacheKey"),
+            "cacheValue",
+            vec![if_stmt(
+                not_expr(binary_expr(var_expr("cacheKey"), BinOp::StrictEq, var_expr("key"))),
+                vec![array_assign_stmt(
+                    "newCache",
+                    var_expr("cacheKey"),
+                    var_expr("cacheValue"),
+                )],
+                None,
+            )],
+        ),
+        property_assign_stmt(this_expr(), "cache", var_expr("newCache")),
+    ])
+}
+
+fn caching_offset_exists_body() -> Vec<Stmt> {
+    caching_require_full_cache_body(return_body(function_call(
+        "array_key_exists",
+        vec![var_expr("key"), caching_cache_expr()],
+    )))
+}
+
+fn caching_get_cache_body() -> Vec<Stmt> {
+    caching_require_full_cache_body(return_body(caching_cache_expr()))
+}
+
+fn caching_count_body() -> Vec<Stmt> {
+    caching_require_full_cache_body(return_body(count_expr(caching_cache_expr())))
 }
 
 fn append_iterators_expr() -> Expr {

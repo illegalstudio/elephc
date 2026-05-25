@@ -122,6 +122,9 @@ fn specialized_runtime_case_sig(
             continue;
         }
         if let Some((_, param_ty)) = sig.params.get_mut(i) {
+            if !matches!(param_ty.codegen_repr(), PhpType::Int) {
+                continue;
+            }
             *param_ty = source_ty.clone();
         }
     }

@@ -1,6 +1,6 @@
 //! Purpose:
 //! End-to-end tests for SPL iterator decorator classes.
-//! Covers forwarding, IteratorAggregate normalization, windows, no-rewind behavior, cycling, and multi-source decorators.
+//! Covers forwarding, IteratorAggregate normalization, windows, no-rewind behavior, cycling, filters, cache, and multi-source decorators.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests` through the SPL test module.
@@ -27,10 +27,16 @@ var_dump(class_exists("IteratorIterator"));
 var_dump(class_exists("LimitIterator"));
 var_dump(class_exists("NoRewindIterator"));
 var_dump(class_exists("InfiniteIterator"));
+var_dump(class_exists("FilterIterator"));
+var_dump(class_exists("CallbackFilterIterator"));
+var_dump(class_exists("CachingIterator"));
 var_dump(class_exists("AppendIterator"));
 var_dump(class_exists("MultipleIterator"));
 var_dump(class_exists("__ElephcAppendIteratorArrayIterator", false));
 $names = spl_classes();
+var_dump(has_name($names, "FilterIterator"));
+var_dump(has_name($names, "CallbackFilterIterator"));
+var_dump(has_name($names, "CachingIterator"));
 var_dump(has_name($names, "AppendIterator"));
 var_dump(has_name($names, "MultipleIterator"));
 $declared = get_declared_classes();
@@ -39,6 +45,15 @@ var_dump(new IteratorIterator(new ArrayIterator([])) instanceof OuterIterator);
 var_dump(new LimitIterator(new ArrayIterator([])) instanceof OuterIterator);
 var_dump(new NoRewindIterator(new ArrayIterator([])) instanceof Iterator);
 var_dump(new InfiniteIterator(new ArrayIterator([])) instanceof Iterator);
+$filter = new CallbackFilterIterator(new ArrayIterator([]), function($current, $key, $iterator) {
+    return true;
+});
+var_dump($filter instanceof FilterIterator);
+var_dump($filter instanceof OuterIterator);
+$cache = new CachingIterator(new ArrayIterator([]));
+var_dump($cache instanceof ArrayAccess);
+var_dump($cache instanceof Countable);
+var_dump($cache instanceof Stringable);
 var_dump(new AppendIterator() instanceof OuterIterator);
 var_dump(new MultipleIterator() instanceof Iterator);
 "#,
@@ -52,10 +67,21 @@ var_dump(new MultipleIterator() instanceof Iterator);
             "bool(true)\n",
             "bool(true)\n",
             "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
             "bool(false)\n",
             "bool(true)\n",
             "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
             "bool(false)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
             "bool(true)\n",
             "bool(true)\n",
             "bool(true)\n",
@@ -296,6 +322,168 @@ echo "end";
 "#,
     );
     assert_eq!(out, "start:end");
+}
+
+#[test]
+fn test_filter_iterator_subclass_skips_rejected_items() {
+    let out = compile_and_run(
+        r#"<?php
+class SkipKeyFilter extends FilterIterator {
+    public function accept(): bool {
+        return $this->key() !== "skip";
+    }
+}
+
+$it = new SkipKeyFilter(new ArrayIterator(["keep" => 1, "skip" => 2, "tail" => 3]));
+foreach ($it as $key => $value) {
+    echo $key;
+    echo "=";
+    echo $value;
+    echo ";";
+}
+"#,
+    );
+    assert_eq!(out, "keep=1;tail=3;");
+}
+
+#[test]
+fn test_callback_filter_iterator_uses_callback_current_key_and_inner() {
+    let out = compile_and_run(
+        r#"<?php
+function keep_after_first(int $current, string $key, Iterator $iterator): bool {
+    echo "cb:";
+    echo $key;
+    echo "=";
+    echo $current;
+    echo ":";
+    echo $iterator instanceof ArrayIterator ? "it" : "bad";
+    echo ";";
+    return $current > 1;
+}
+
+$it = new CallbackFilterIterator(
+    new ArrayIterator(["a" => 1, "b" => 2, "c" => 3]),
+    keep_after_first(...)
+);
+foreach ($it as $key => $value) {
+    echo "out:";
+    echo $key;
+    echo "=";
+    echo $value;
+    echo ";";
+}
+$cb = keep_after_first(...);
+$it2 = new CallbackFilterIterator(
+    new ArrayIterator(["x" => 1, "y" => 2]),
+    $cb
+);
+foreach ($it2 as $key => $value) {
+    echo "var:";
+    echo $key;
+    echo "=";
+    echo $value;
+    echo ";";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "cb:a=1:it;cb:b=2:it;out:b=2;cb:c=3:it;out:c=3;cb:x=1:it;cb:y=2:it;var:y=2;"
+    );
+}
+
+#[test]
+fn test_caching_iterator_tracks_has_next_and_string_value() {
+    let out = compile_and_run(
+        r#"<?php
+$it = new CachingIterator(new ArrayIterator(["a" => "A", "b" => "B"]));
+foreach ($it as $key => $value) {
+    echo $key;
+    echo "=";
+    echo $value;
+    echo "/";
+    echo $it->hasNext() ? "Y" : "N";
+    echo "/";
+    echo (string) $it;
+    echo ";";
+}
+try {
+    $it->getCache();
+} catch (BadMethodCallException $e) {
+    echo "|";
+    echo $e->getMessage();
+}
+try {
+    $it->setFlags(CachingIterator::FULL_CACHE);
+} catch (InvalidArgumentException $e) {
+    echo "|";
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "a=A/Y/A;b=B/N/B;|CachingIterator does not use a full cache (see CachingIterator::__construct)|Unsetting flag CALL_TO_STRING is not possible"
+    );
+}
+
+#[test]
+fn test_caching_iterator_full_cache_array_access_and_flags() {
+    let out = compile_and_run(
+        r#"<?php
+$it = new CachingIterator(
+    new ArrayIterator(["a" => "A", "b" => "B"]),
+    CachingIterator::FULL_CACHE | CachingIterator::TOSTRING_USE_KEY
+);
+echo $it->getFlags();
+echo ":";
+foreach ($it as $key => $value) {
+    echo (string) $it;
+    echo "=";
+    echo $value;
+    echo "/";
+    echo $it->hasNext() ? "Y" : "N";
+    echo ";";
+}
+echo ":";
+echo $it->count();
+echo ":";
+var_dump($it->offsetExists("a"));
+echo $it["a"];
+$it["z"] = "Z";
+unset($it["a"]);
+$cache = $it->getCache();
+echo ":";
+echo count($cache);
+echo ":";
+echo $cache["b"];
+echo "/";
+echo $cache["z"];
+
+try {
+    $bad = new CachingIterator(new ArrayIterator([]), CachingIterator::CALL_TOSTRING | CachingIterator::TOSTRING_USE_KEY);
+    echo "bad";
+} catch (ValueError $e) {
+    echo "|flags";
+}
+
+try {
+    $noString = new CachingIterator(new ArrayIterator([1]), CachingIterator::FULL_CACHE);
+    $noString->rewind();
+    echo (string) $noString;
+} catch (BadMethodCallException $e) {
+    echo "|string";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "258:a=A/Y;b=B/N;:2:",
+            "bool(true)\n",
+            "A:2:B/Z|flags|string",
+        )
+    );
 }
 
 #[test]

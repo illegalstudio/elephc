@@ -33,6 +33,38 @@ echo "=";
 echo $limited->current();
 echo "\n";
 
+echo "filter:\n";
+function keep_decorator_value(int $value, string $key, Iterator $inner): bool {
+    return $value > 1;
+}
+
+$filter = new CallbackFilterIterator(
+    new ArrayIterator(["skip" => 1, "keep" => 2, "tail" => 3]),
+    keep_decorator_value(...)
+);
+foreach ($filter as $key => $value) {
+    echo $key;
+    echo "=";
+    echo $value;
+    echo "\n";
+}
+
+echo "cache:\n";
+$cache = new CachingIterator(
+    new ArrayIterator(["a" => "A", "b" => "B"]),
+    CachingIterator::FULL_CACHE | CachingIterator::TOSTRING_USE_KEY
+);
+foreach ($cache as $key => $value) {
+    echo (string) $cache;
+    echo "=";
+    echo $value;
+    echo "/";
+    echo $cache->hasNext() ? "more" : "last";
+    echo "\n";
+}
+echo $cache["a"];
+echo "\n";
+
 echo "append:\n";
 $append = new AppendIterator();
 $append->append(new ArrayIterator(["left" => "L"]));

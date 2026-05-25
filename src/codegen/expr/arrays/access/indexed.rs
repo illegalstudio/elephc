@@ -295,7 +295,16 @@ pub(crate) fn emit_array_access_with_loaded_base(
                     emitter.instruction("fmov d0, x1");                         // move the borrowed associative-array float bits into the standard float result register
                 }
                 PhpType::Mixed => {
+                    let box_label = ctx.next_label("hash_mixed_box");
+                    let done_label = ctx.next_label("hash_mixed_done");
+                    emitter.instruction("cmp x3, #7");                          // is the associative-array value already a boxed Mixed cell?
+                    emitter.instruction(&format!("b.ne {}", box_label));        // box typed payloads while preserving existing Mixed cells directly
+                    emitter.instruction("mov x0, x1");                          // move the stored Mixed cell into the standard result register
+                    abi::emit_call_label(emitter, "__rt_incref");
+                    emitter.instruction(&format!("b {}", done_label));          // skip typed-payload boxing after retaining the stored Mixed cell
+                    emitter.label(&box_label);
                     emit_box_runtime_payload_as_mixed(emitter, "x3", "x1", "x2"); // box the borrowed associative-array payload into an owned mixed cell
+                    emitter.label(&done_label);
                 }
                 _ => {
                     emitter.instruction("mov x0, x1");                          // move the borrowed associative-array pointer payload into the standard integer result register
@@ -313,7 +322,16 @@ pub(crate) fn emit_array_access_with_loaded_base(
                     emitter.instruction("movq xmm0, rdi");                      // move the borrowed associative-array float bits into the standard float result register
                 }
                 PhpType::Mixed => {
+                    let box_label = ctx.next_label("hash_mixed_box");
+                    let done_label = ctx.next_label("hash_mixed_done");
+                    emitter.instruction("cmp rcx, 7");                          // is the associative-array value already a boxed Mixed cell?
+                    emitter.instruction(&format!("jne {}", box_label));         // box typed payloads while preserving existing Mixed cells directly
+                    emitter.instruction("mov rax, rdi");                        // move the stored Mixed cell into the standard result register
+                    abi::emit_call_label(emitter, "__rt_incref");
+                    emitter.instruction(&format!("jmp {}", done_label));        // skip typed-payload boxing after retaining the stored Mixed cell
+                    emitter.label(&box_label);
                     emit_box_runtime_payload_as_mixed(emitter, "rcx", "rdi", "rsi"); // box the borrowed associative-array payload into an owned mixed cell
+                    emitter.label(&done_label);
                 }
                 _ => {
                     emitter.instruction("mov rax, rdi");                        // move the borrowed associative-array pointer payload into the standard integer result register

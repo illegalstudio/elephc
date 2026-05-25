@@ -134,6 +134,9 @@ pub struct Context {
     pub all_static_vars: HashMap<(String, String), PhpType>,
     /// Closure signatures keyed by variable name, for resolving defaults at call sites.
     pub closure_sigs: HashMap<String, FunctionSig>,
+    /// Temporary expected wrapper signature for first-class callables evaluated
+    /// as arguments to APIs that store and invoke the callable later.
+    pub expected_first_class_callable_sig: Option<FunctionSig>,
     /// Callable signatures inferred for user-function callable parameters.
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
     /// Callable signatures inferred for user-function callable returns.
@@ -242,6 +245,7 @@ impl Context {
             all_global_var_names: HashSet::new(),
             all_static_vars: HashMap::new(),
             closure_sigs: HashMap::new(),
+            expected_first_class_callable_sig: None,
             callable_param_sigs: HashMap::new(),
             callable_return_sigs: HashMap::new(),
             closure_captures: HashMap::new(),

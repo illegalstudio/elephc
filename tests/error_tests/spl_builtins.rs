@@ -138,6 +138,22 @@ fn test_error_spl_fixed_array_get_iterator_is_deferred_until_iterator_phase() {
 }
 
 #[test]
+fn test_error_filter_iterator_is_abstract() {
+    expect_error(
+        "<?php $it = new FilterIterator(new ArrayIterator([]));",
+        "Cannot instantiate abstract class: FilterIterator",
+    );
+}
+
+#[test]
+fn test_error_callback_filter_iterator_requires_callable() {
+    expect_error(
+        "<?php $it = new CallbackFilterIterator(new ArrayIterator([]), 123);",
+        "Constructor 'CallbackFilterIterator::__construct' parameter $callback expects Callable, got Int",
+    );
+}
+
+#[test]
 fn test_error_iterator_count_rejects_non_traversable() {
     expect_error(
         "<?php iterator_count(123);",

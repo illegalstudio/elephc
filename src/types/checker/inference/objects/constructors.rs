@@ -45,6 +45,9 @@ impl Checker {
         if class_name == "Fiber" {
             self.validate_fiber_constructor_args(args, expr, env)?;
         }
+        if class_name == "CallbackFilterIterator" {
+            self.specialize_callback_filter_iterator_callback(args)?;
+        }
         if is_reflection_owner_class(&class_name) {
             self.validate_reflection_owner_constructor(&class_name, args, expr, env)?;
             return Ok(PhpType::Object(class_name));
@@ -473,6 +476,75 @@ impl Checker {
         };
 
         fibers::validate_callback_signature(&sig, visible_param_count, expr.span)
+    }
+
+    fn specialize_callback_filter_iterator_callback(
+        &mut self,
+        args: &[Expr],
+    ) -> Result<(), CompileError> {
+        let Some(callback) = args.get(1) else {
+            return Ok(());
+        };
+
+        match &callback.kind {
+            ExprKind::FirstClassCallable(crate::parser::ast::CallableTarget::Function(name)) => {
+                self.specialize_callback_filter_function(name.as_str(), callback.span)?;
+            }
+            ExprKind::Variable(var_name) => {
+                if let Some(crate::parser::ast::CallableTarget::Function(name)) =
+                    self.first_class_callable_targets.get(var_name).cloned()
+                {
+                    self.specialize_callback_filter_function(name.as_str(), callback.span)?;
+                }
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn specialize_callback_filter_function(
+        &mut self,
+        name: &str,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        if crate::name_resolver::is_builtin_function(name) {
+            return Ok(());
+        }
+
+        let name = self
+            .canonical_function_name_folded(name)
+            .unwrap_or_else(|| name.to_string());
+        if !self.functions.contains_key(name.as_str()) {
+            if let Some(decl) = self.fn_decls.get(name.as_str()).cloned() {
+                let param_types = self.initial_function_param_types(&name, &decl)?;
+                self.resolve_function_signature(&name, &decl, param_types)?;
+            }
+        }
+
+        let Some(sig) = self.functions.get_mut(name.as_str()) else {
+            return Err(CompileError::new(
+                span,
+                &format!("Undefined function for CallbackFilterIterator callback: {}", name),
+            ));
+        };
+        let callback_arg_types = [
+            PhpType::Mixed,
+            PhpType::Mixed,
+            PhpType::Object("Iterator".to_string()),
+        ];
+        for (idx, callback_arg_ty) in callback_arg_types.into_iter().enumerate() {
+            if idx >= sig.params.len() {
+                break;
+            }
+            if !sig.declared_params.get(idx).copied().unwrap_or(false)
+                && !sig.ref_params.get(idx).copied().unwrap_or(false)
+                && sig.params[idx].1 == PhpType::Int
+            {
+                sig.params[idx].1 = callback_arg_ty;
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn infer_enum_case_type(
