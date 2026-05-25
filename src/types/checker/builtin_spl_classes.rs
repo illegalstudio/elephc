@@ -105,6 +105,7 @@ pub(crate) fn inject_builtin_spl_classes(
             name: "SplFixedArray".to_string(),
             extends: None,
             implements: vec![
+                "IteratorAggregate".to_string(),
                 "ArrayAccess".to_string(),
                 "Countable".to_string(),
                 "JsonSerializable".to_string(),
@@ -131,6 +132,23 @@ pub(crate) fn inject_builtin_spl_classes(
             is_readonly_class: false,
             properties: Vec::new(),
             methods: spl_empty_iterator_methods(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+        },
+    );
+
+    class_map.insert(
+        "InternalIterator".to_string(),
+        FlattenedClass {
+            name: "InternalIterator".to_string(),
+            extends: None,
+            implements: vec!["Iterator".to_string()],
+            is_abstract: false,
+            is_final: true,
+            is_readonly_class: false,
+            properties: internal_iterator_properties(),
+            methods: spl_internal_iterator_methods(),
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
@@ -567,6 +585,7 @@ const SPL_CLASS_NAMES: &[&str] = &[
     "SplQueue",
     "SplFixedArray",
     "EmptyIterator",
+    "InternalIterator",
     "ArrayIterator",
     "RecursiveArrayIterator",
     "ArrayObject",
@@ -592,6 +611,32 @@ fn spl_empty_iterator_methods() -> Vec<ClassMethod> {
         method_with_body("next", Vec::new(), Some(TypeExpr::Void), Vec::new()),
         method_with_body("rewind", Vec::new(), Some(TypeExpr::Void), Vec::new()),
         method_with_body("valid", Vec::new(), Some(TypeExpr::Bool), return_body(bool_expr(false))),
+    ]
+}
+
+fn spl_internal_iterator_methods() -> Vec<ClassMethod> {
+    let mut construct = method_with_body(
+        "__construct",
+        vec![param("owner", named_type("SplFixedArray"))],
+        Some(TypeExpr::Void),
+        internal_iterator_construct_body(),
+    );
+    construct.visibility = Visibility::Private;
+
+    vec![
+        construct,
+        method_with_body("current", Vec::new(), Some(mixed_type()), internal_iterator_current_body()),
+        method_with_body("key", Vec::new(), Some(mixed_type()), return_body(internal_iterator_position_expr())),
+        method_with_body("next", Vec::new(), Some(TypeExpr::Void), internal_iterator_next_body()),
+        method_with_body("rewind", Vec::new(), Some(TypeExpr::Void), internal_iterator_rewind_body()),
+        method_with_body("valid", Vec::new(), Some(TypeExpr::Bool), internal_iterator_valid_body()),
+    ]
+}
+
+fn internal_iterator_properties() -> Vec<ClassProperty> {
+    vec![
+        storage_property("owner", named_type("SplFixedArray")),
+        storage_property("position", TypeExpr::Int),
     ]
 }
 
@@ -1433,6 +1478,12 @@ fn spl_fixed_array_methods() -> Vec<ClassMethod> {
         ),
         method("__unserialize", vec![param("data", array_type())], Some(TypeExpr::Void)),
         method("count", Vec::new(), Some(TypeExpr::Int)),
+        method_with_body(
+            "getIterator",
+            Vec::new(),
+            Some(named_type("Iterator")),
+            fixed_array_get_iterator_body(),
+        ),
         method("toArray", Vec::new(), Some(array_type())),
         method("getSize", Vec::new(), Some(TypeExpr::Int)),
         method(
@@ -1920,6 +1971,53 @@ fn position_expr() -> Expr {
 
 fn count_expr(value: Expr) -> Expr {
     function_call("count", vec![value])
+}
+
+fn internal_iterator_owner_expr() -> Expr {
+    property_access(this_expr(), "owner")
+}
+
+fn internal_iterator_position_expr() -> Expr {
+    property_access(this_expr(), "position")
+}
+
+fn internal_iterator_construct_body() -> Vec<Stmt> {
+    vec![
+        property_assign_stmt(this_expr(), "owner", var_expr("owner")),
+        property_assign_stmt(this_expr(), "position", int_expr(0)),
+    ]
+}
+
+fn internal_iterator_current_body() -> Vec<Stmt> {
+    return_body(method_call(
+        internal_iterator_owner_expr(),
+        "offsetGet",
+        vec![internal_iterator_position_expr()],
+    ))
+}
+
+fn internal_iterator_next_body() -> Vec<Stmt> {
+    vec![property_assign_stmt(
+        this_expr(),
+        "position",
+        binary_expr(internal_iterator_position_expr(), BinOp::Add, int_expr(1)),
+    )]
+}
+
+fn internal_iterator_rewind_body() -> Vec<Stmt> {
+    vec![property_assign_stmt(this_expr(), "position", int_expr(0))]
+}
+
+fn internal_iterator_valid_body() -> Vec<Stmt> {
+    return_body(binary_expr(
+        internal_iterator_position_expr(),
+        BinOp::Lt,
+        method_call(internal_iterator_owner_expr(), "count", Vec::new()),
+    ))
+}
+
+fn fixed_array_get_iterator_body() -> Vec<Stmt> {
+    return_body(new_object_expr("InternalIterator", vec![this_expr()]))
 }
 
 fn key_at(index: Expr) -> Expr {

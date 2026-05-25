@@ -8,7 +8,7 @@ sidebar:
 elephc ships the SPL pieces that are needed by supported PHP code today:
 iterator/counting/access interfaces, the SPL exception hierarchy, autoload and
 introspection helpers, the Phase 4 container classes, and the Phase 5 storage
-iterator/decorator foundations: `EmptyIterator`, `ArrayIterator`,
+iterator/decorator foundations: `EmptyIterator`, `InternalIterator`, `ArrayIterator`,
 `ArrayObject`, `IteratorIterator`, `LimitIterator`, `NoRewindIterator`, and
 `InfiniteIterator`, filter/cache decorators `FilterIterator`,
 `CallbackFilterIterator`, and `CachingIterator`, plus the multi-source
@@ -64,8 +64,9 @@ one or more `Iterator` objects:
 | `SplDoublyLinkedList` | - | `Iterator`, `Countable`, `ArrayAccess` |
 | `SplStack` | `SplDoublyLinkedList` | inherited from parent |
 | `SplQueue` | `SplDoublyLinkedList` | inherited from parent |
-| `SplFixedArray` | - | `ArrayAccess`, `Countable`, `JsonSerializable` |
+| `SplFixedArray` | - | `IteratorAggregate`, `ArrayAccess`, `Countable`, `JsonSerializable` |
 | `EmptyIterator` | - | `Iterator` |
+| `InternalIterator` | - | `Iterator` |
 | `ArrayIterator` | - | `Iterator`, `ArrayAccess`, `SeekableIterator`, `Countable` |
 | `ArrayObject` | - | `IteratorAggregate`, `ArrayAccess`, `Countable` |
 | `IteratorIterator` | - | `OuterIterator` |
@@ -184,6 +185,7 @@ Supported methods:
 | `__serialize(): array` | Returns the same indexed values as `toArray()` |
 | `__unserialize(array $data): void` | Replaces storage with packed source values |
 | `count(): int` | Current size |
+| `getIterator(): Iterator` | Returns an `InternalIterator` over live fixed-array storage |
 | `getSize(): int` | Current size |
 | `setSize(int $size): void` | Resize storage |
 | `offsetExists(mixed $index): bool` | False for invalid, unset, or null slots |
@@ -419,10 +421,3 @@ are reindexed from zero. Literal arrays with expressions are evaluated once
 before iteration starts. Dynamic arrays passed to by-reference callback
 parameters use temporary reference cells, so callback writes do not mutate the
 source argument array.
-
-## Compatibility Gaps
-
-`SplFixedArray::getIterator()` is still deferred until the fixed-array runtime
-is wired to return an `ArrayIterator`. The Phase 4 containers otherwise keep
-their runtime-backed method surface aligned with PHP's empty-container,
-invalid-offset, serialization, and fixed-array key behaviors.

@@ -34,12 +34,14 @@ echo has_name($declared, "SplDoublyLinkedList");
 echo has_name($declared, "SplStack");
 echo has_name($declared, "SplQueue");
 echo has_name($declared, "SplFixedArray");
+echo has_name($declared, "InternalIterator");
 
 var_dump(class_exists("SplDoublyLinkedList"));
 var_dump(class_exists("splstack"));
+var_dump(class_exists("InternalIterator"));
 "#,
     );
-    assert_eq!(out, "11111111bool(true)\nbool(true)\n");
+    assert_eq!(out, "111111111bool(true)\nbool(true)\nbool(true)\n");
 }
 
 #[test]
@@ -60,6 +62,7 @@ var_dump($queue instanceof SplDoublyLinkedList);
 var_dump($queue instanceof Countable);
 
 $fixed = new SplFixedArray();
+var_dump($fixed instanceof IteratorAggregate);
 var_dump($fixed instanceof ArrayAccess);
 var_dump($fixed instanceof Countable);
 var_dump($fixed instanceof JsonSerializable);
@@ -68,6 +71,7 @@ var_dump($fixed instanceof JsonSerializable);
     assert_eq!(
         out,
         concat!(
+            "bool(true)\n",
             "bool(true)\n",
             "bool(true)\n",
             "bool(true)\n",
@@ -440,4 +444,51 @@ echo $packed[1];
 "#,
     );
     assert_eq!(out, "3|null|b|null\n2|x|y\n6|x|y\n2|x|y");
+}
+
+#[test]
+fn test_phase4_spl_fixed_array_get_iterator() {
+    let out = compile_and_run(
+        r#"<?php
+$fixed = new SplFixedArray(3);
+$fixed[1] = "b";
+$it = $fixed->getIterator();
+var_dump($it instanceof InternalIterator);
+var_dump($it instanceof Iterator);
+var_dump($it instanceof SeekableIterator);
+foreach ($it as $key => $value) {
+    echo $key;
+    echo "=";
+    echo is_null($value) ? "null" : $value;
+    echo ";";
+}
+echo "\n";
+$it->rewind();
+$fixed[0] = "a";
+echo $it->current();
+echo "\n";
+foreach ($fixed as $key => $value) {
+    echo $key;
+    echo "=";
+    echo is_null($value) ? "null" : $value;
+    echo ";";
+}
+echo "\n";
+$it->next();
+$fixed->setSize(1);
+var_dump($it->valid());
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(false)\n",
+            "0=null;1=b;2=null;\n",
+            "a\n",
+            "0=a;1=b;2=null;\n",
+            "bool(false)\n",
+        )
+    );
 }

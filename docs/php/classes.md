@@ -101,23 +101,24 @@ PHP 8.1. Use `__serialize` / `__unserialize` magic methods instead
 
 The SPL container and storage iterator classes are built-ins:
 `SplDoublyLinkedList`, `SplStack`, `SplQueue`, `SplFixedArray`,
-`EmptyIterator`, `ArrayIterator`, `ArrayObject`, `IteratorIterator`,
+`EmptyIterator`, `InternalIterator`, `ArrayIterator`, `ArrayObject`, `IteratorIterator`,
 `LimitIterator`, `NoRewindIterator`, `InfiniteIterator`, `FilterIterator`,
 `CallbackFilterIterator`, `CachingIterator`, `AppendIterator`,
 `MultipleIterator`, `RecursiveArrayIterator`, `RecursiveFilterIterator`,
 `RecursiveCallbackFilterIterator`, `RecursiveIteratorIterator`, and
-`ParentIterator`. They participate in
-`class_exists()`, `get_declared_classes()`, `spl_classes()`, `instanceof`,
-inherited class constants, interface checks, `foreach`, and `ArrayAccess`
-where PHP expects it.
+`ParentIterator`. They participate in `class_exists()`,
+`get_declared_classes()`, `instanceof`, inherited class constants, interface
+checks, `foreach`, and `ArrayAccess` where PHP expects it. PHP does not include
+`InternalIterator` in `spl_classes()`, so elephc keeps it out of that helper too.
 
 | Class | Parent | Interfaces |
 |---|---|---|
 | `SplDoublyLinkedList` | — | `Iterator`, `Countable`, `ArrayAccess` |
 | `SplStack` | `SplDoublyLinkedList` | inherited from parent |
 | `SplQueue` | `SplDoublyLinkedList` | inherited from parent |
-| `SplFixedArray` | — | `ArrayAccess`, `Countable`, `JsonSerializable` |
+| `SplFixedArray` | — | `IteratorAggregate`, `ArrayAccess`, `Countable`, `JsonSerializable` |
 | `EmptyIterator` | — | `Iterator` |
+| `InternalIterator` | — | `Iterator` |
 | `ArrayIterator` | — | `Iterator`, `ArrayAccess`, `SeekableIterator`, `Countable` |
 | `ArrayObject` | — | `IteratorAggregate`, `ArrayAccess`, `Countable` |
 | `IteratorIterator` | — | `OuterIterator` |

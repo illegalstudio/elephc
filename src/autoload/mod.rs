@@ -45,6 +45,7 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "Fiber",
     "FiberError",
     "Generator",
+    "InternalIterator",
     "InvalidArgumentException",
     "Iterator",
     "IteratorAggregate",

@@ -69,7 +69,9 @@ impl Checker {
                         .get("__construct")
                         .map(String::as_str)
                         .unwrap_or(class_name.as_str());
-                    if !self.can_access_member(declaring_class, visibility) {
+                    if !self.can_access_member(declaring_class, visibility)
+                        && !self.can_construct_internal_iterator_from_builtin_get_iterator(&class_name)
+                    {
                         return Err(CompileError::new(
                             expr.span,
                             &format!(
@@ -135,6 +137,13 @@ impl Checker {
             }
         }
         Ok(PhpType::Object(class_name))
+    }
+
+    fn can_construct_internal_iterator_from_builtin_get_iterator(&self, class_name: &str) -> bool {
+        let get_iterator_key = php_symbol_key("getIterator");
+        class_name == "InternalIterator"
+            && self.current_class.as_deref() == Some("SplFixedArray")
+            && self.current_method.as_deref() == Some(get_iterator_key.as_str())
     }
 
     fn validate_reflection_owner_constructor(

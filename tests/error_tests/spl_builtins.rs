@@ -130,10 +130,18 @@ fn test_error_spl_fixed_array_cannot_be_redeclared() {
 }
 
 #[test]
-fn test_error_spl_fixed_array_get_iterator_is_deferred_until_iterator_phase() {
+fn test_error_internal_iterator_cannot_be_redeclared() {
     expect_error(
-        "<?php $fixed = new SplFixedArray(); $fixed->getIterator();",
-        "Undefined method: SplFixedArray::getIterator",
+        "<?php class InternalIterator {}",
+        "Cannot redeclare built-in SPL class: InternalIterator",
+    );
+}
+
+#[test]
+fn test_error_internal_iterator_constructor_is_private() {
+    expect_error(
+        "<?php $fixed = new SplFixedArray(1); $it = new InternalIterator($fixed);",
+        "Cannot access private constructor: InternalIterator::__construct",
     );
 }
 

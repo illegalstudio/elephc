@@ -27,6 +27,7 @@ const BUILTIN_CLASS_LIKE_SYMBOLS: &[&str] = &[
     "Exception",
     "FilterIterator",
     "InfiniteIterator",
+    "InternalIterator",
     "Iterator",
     "IteratorAggregate",
     "IteratorIterator",
