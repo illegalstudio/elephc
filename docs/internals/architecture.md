@@ -197,6 +197,8 @@ src/
 │       ├── builtin_interfaces.rs Built-in SPL/core interface injection
 │       ├── builtin_iterators.rs Built-in Iterator / IteratorAggregate metadata
 │       ├── builtin_json.rs    JsonException / JsonSerializable metadata
+│       ├── builtin_spl_classes.rs SPL class metadata orchestration
+│       ├── builtin_spl_classes/ Focused SPL container and iterator metadata builders
 │       ├── builtin_spl_exceptions.rs SPL exception hierarchy metadata
 │       ├── builtin_stdclass.rs stdClass dynamic-property metadata
 │       ├── builtin_types/     Shared builtin class/type helper predicates
