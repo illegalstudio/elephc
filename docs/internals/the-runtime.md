@@ -188,7 +188,11 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 These routines implement the runtime fallback path for `is_callable()` when the argument is not a compile-time literal or statically known callable value. They consult generated metadata for builtins, user functions, public methods, public static methods, and `__invoke` objects.
 
-Dynamic invocation builtins use a separate AOT descriptor path in codegen rather than these boolean helpers: `call_user_func()`, `call_user_func_array()`, and `iterator_apply()` compare runtime string names or descriptor-selected callable entries against generated cases carrying entry labels, PHP-visible names, signatures, defaults, by-reference flags, variadic metadata, and capture lists. The generated cases now include user functions, supported builtin wrappers, public static-method strings, closures/first-class callables, invokable object calls, and tracked callable arrays.
+Dynamic invocation builtins use generated callable descriptors rather than these boolean helpers. A descriptor is a seven-word record: callable kind, native entry pointer, PHP-visible name pointer, name length, signature-record pointer, environment-record pointer, and invocation-record pointer. Indirect calls keep the one-word callable ABI by loading the native entry from the descriptor before the final branch.
+
+The signature side record stores visible, required, and regular parameter counts; variadic index; return type and return register count; declared-return flags; parameter names and types; defaults; by-reference flags; and declared-parameter flags. The environment record stores capture and hidden wrapper-parameter bindings. The invocation record stores the callable shape (`string`, callable array, closure, first-class callable, object `__invoke`, static method, instance method, builtin, extern, or user function) plus receiver, method, and auxiliary names where applicable.
+
+`call_user_func()`, `call_user_func_array()`, and `iterator_apply()` compare runtime string names or descriptor-selected callable entries against generated cases. Runtime string callback names now materialize the matched descriptor and load its entry slot before applying the matched descriptor signature. Callable arrays and invokable objects still lower through the normal method/static-call paths when compile-time shape metadata identifies the target.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
