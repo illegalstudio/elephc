@@ -26,6 +26,9 @@ mod iterator_to_array;
 const EXTS_PTR_SYMBOL: &str = "_spl_autoload_exts_ptr";
 const EXTS_LEN_SYMBOL: &str = "_spl_autoload_exts_len";
 
+/// Dispatches to the appropriate SPL builtin emitter by name.
+/// Returns `Some(PhpType)` if `name` matches a known SPL builtin,
+/// or `None` if the builtin is not handled here.
 pub fn emit(
     name: &str,
     args: &[Expr],
@@ -50,10 +53,11 @@ pub fn emit(
     }
 }
 
-/// Return the object's heap pointer as an integer — unique per object,
-/// stable per process. Matches PHP's contract for `spl_object_id`
-/// (PHP's IDs start at 1 and increment, ours are pointer-sized; both
-/// satisfy "two distinct objects → distinct ids" within a process).
+/// Returns the object's heap pointer as an integer.
+///
+/// Unique per object and stable per process. Matches PHP's contract for
+/// `spl_object_id` (PHP's IDs start at 1 and increment; ours are pointer-sized;
+/// both satisfy "two distinct objects → distinct ids" within a process).
 fn emit_object_id(
     args: &[Expr],
     emitter: &mut Emitter,
@@ -65,9 +69,10 @@ fn emit_object_id(
     PhpType::Int
 }
 
-/// Return the object's heap pointer formatted as a string. PHP returns
-/// a 32-character hex string; we return the pointer as a decimal string
-/// via `__rt_itoa`. Both forms are unique-per-object and stable
+/// Returns the object's heap pointer formatted as a string.
+///
+/// PHP returns a 32-character hex string; we return the pointer as a decimal
+/// string via `__rt_itoa`. Both forms are unique-per-object and stable
 /// per-process — only the textual format differs.
 fn emit_object_hash(
     args: &[Expr],
@@ -81,11 +86,11 @@ fn emit_object_hash(
     PhpType::Str
 }
 
-/// Materialise the SPL class/interface registry as an indexed string
-/// array. Names mirror what we ship today (SPL/core interfaces, Throwable
-/// types, SPL exceptions, Phase 4 containers, and Phase 5 iterator
-/// foundations); upcoming phases (filters, recursive iterators, heaps, file
-/// iterators) will extend this list as their classes land.
+/// Materialises the SPL class/interface registry as an indexed string array.
+///
+/// Names mirror the compiler-shipped SPL/core interfaces, Throwable types,
+/// SPL exceptions, Phase 4 containers, and Phase 5 iterator foundations.
+/// The array stores (pointer, length) pairs per entry.
 fn emit_classes(emitter: &mut Emitter, data: &mut DataSection) -> PhpType {
     let names = SPL_CLASS_NAMES;
     emitter.comment("spl_classes() — AOT snapshot of shipped SPL types");
@@ -189,6 +194,7 @@ const SPL_CLASS_NAMES: &[&str] = &[
     "ValueError",
 ];
 
+/// Evaluate all arguments for their side effects, discarding results.
 fn emit_args_for_side_effects(
     args: &[Expr],
     emitter: &mut Emitter,
@@ -200,6 +206,7 @@ fn emit_args_for_side_effects(
     }
 }
 
+/// Stub a builtin that evaluates args for side effects and returns a boolean constant.
 fn emit_const_bool(
     name: &str,
     args: &[Expr],
@@ -214,6 +221,7 @@ fn emit_const_bool(
     PhpType::Bool
 }
 
+/// Stub a builtin that evaluates args for side effects and returns void.
 fn emit_void(
     name: &str,
     args: &[Expr],
@@ -226,6 +234,7 @@ fn emit_void(
     PhpType::Void
 }
 
+/// Emit `spl_autoload_functions()` — returns AOT registry as int-array view.
 fn emit_functions_array(
     name: &str,
     args: &[Expr],

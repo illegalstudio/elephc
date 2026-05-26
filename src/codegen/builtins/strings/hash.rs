@@ -16,6 +16,26 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a PHP `hash($algo, $data)` call as a runtime helper invocation.
+///
+/// The algorithm string is evaluated first and preserved (on stack for AArch64,
+/// or in registers for x86_64) while the data string is evaluated second.
+/// After both arguments are materialised in the correct ABI registers, dispatches
+/// to `__rt_hash` which handles md5/sha1/sha256 and returns a lowercase hex string.
+///
+/// # Arguments
+/// - `_name`: Unused; the runtime helper handles algorithm dispatch internally.
+/// - `args`: Two expressions — algorithm name and data string.
+/// - `emitter`: Target-aware assembly emitter.
+/// - `ctx`: Codegen context carrying variable layout and metadata.
+/// - `data`: Data section for relocatable constants.
+///
+/// # Returns
+/// `Some(PhpType::Str)` indicating the result is a PHP string.
+///
+/// # Side effects
+/// - Clobbers caller-saved registers appropriate to each target's ABI.
+/// - The runtime helper allocates a PHP string; caller owns the returned value.
 pub fn emit(
     _name: &str,
     args: &[Expr],

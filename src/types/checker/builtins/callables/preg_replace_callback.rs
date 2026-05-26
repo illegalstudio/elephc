@@ -16,6 +16,12 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 use super::{check_callback_builtin_call, BuiltinResult};
 use super::super::super::Checker;
 
+/// Builds a synthetic `[""]` array literal expression representing the contextual
+/// type hint for `$matches` in `preg_replace_callback` callbacks.
+///
+/// The empty-string element signals to the type checker that the closure's
+/// first parameter should be typed as `array<string>`, enabling safe access
+/// to `$matches[0]` and named capture groups before runtime.
 fn matches_arg(span: crate::span::Span) -> Expr {
     Expr::new(
         ExprKind::ArrayLiteral(vec![Expr::new(ExprKind::StringLiteral(String::new()), span)]),
@@ -23,10 +29,25 @@ fn matches_arg(span: crate::span::Span) -> Expr {
     )
 }
 
+/// Returns the PHP type `array<string>` representing the contextual type of the
+/// `$matches` parameter in `preg_replace_callback` callbacks.
+///
+/// This is the type injected into the closure's first parameter when no explicit
+/// type hint is given, enabling type-safe access to match groups at analysis time.
 fn matches_type() -> PhpType {
     PhpType::Array(Box::new(PhpType::Str))
 }
 
+/// Builds a `FunctionSig` for a closure with contextual argument type hints injected.
+///
+/// For each closure parameter:
+/// - If a type annotation is present, validates compatibility with the contextual type
+///   and specializes generic array hints accordingly.
+/// - If no annotation is present, uses the contextual type when available, otherwise
+///   falls back to `Int` for the environment and `Mixed` for the signature.
+///
+/// Also resolves the closure's return type against its body and validates any `use()`
+/// variables. Returns `Ok(None)` if `callback` is not a `Closure` expression.
 fn contextual_closure_sig(
     checker: &mut Checker,
     callback: &Expr,
@@ -124,6 +145,12 @@ fn contextual_closure_sig(
     }))
 }
 
+/// Type-checks a call to PHP `preg_replace_callback(pattern, callback, subject)`.
+///
+/// Validates exactly 3 arguments, infers types for the pattern and subject
+/// expressions, synthesizes an `array<string>` type for the `$matches` callback
+/// parameter, and delegates to `check_known_callable_call` to verify the closure
+/// signature. Returns `PhpType::Str` on success.
 pub(super) fn check(
     checker: &mut Checker,
     args: &[Expr],

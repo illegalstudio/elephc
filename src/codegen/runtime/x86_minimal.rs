@@ -24,6 +24,10 @@ use super::system;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Platform;
 
+/// Emits an allowlisted subset of runtime helpers for Linux x86_64 targets.
+/// On Linux, declares `MD5`, `SHA1`, and `SHA256` as weak symbols so linking
+/// succeeds when they are not otherwise provided. Calls each category emitter
+/// in the order required by the runtime surface.
 pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     if emitter.target.platform == Platform::Linux {
         emitter.raw(".weak MD5");
@@ -317,6 +321,9 @@ mod tests {
     use super::*;
     use crate::codegen::platform::{Arch, Target};
 
+    /// Verifies that the emitted Linux x86_64 runtime contains only the
+    /// allowlisted __rt_ symbols and none others. Each assertion checks
+    /// for the presence of a specific runtime entry point by name.
     #[test]
     fn test_linux_x86_64_runtime_is_minimal_for_now() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));

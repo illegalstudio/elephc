@@ -16,6 +16,17 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `floatval()` builtin, which converts a value to a float.
+///
+/// Converts the first argument to a double-precision floating-point value.
+/// If the argument is already a `Float`, no conversion occurs; otherwise an integer
+/// result is converted to the target float register via the ABI conversion routine.
+///
+/// - `args[0]`: the expression to convert
+/// - `emitter`: used to emit instructions and comments
+/// - `ctx`: carries variable layout and compilation context
+/// - `data`: data section for literals and runtime symbols
+/// - Returns `Some(PhpType::Float)` unconditionally; callers can ignore the result.
 pub fn emit(
     _name: &str,
     args: &[Expr],

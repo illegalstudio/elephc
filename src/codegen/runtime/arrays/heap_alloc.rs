@@ -11,14 +11,24 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// High 32 bits of the x86_64 heap-block kind field, used to stamp owned heap allocations
+/// so the runtime can distinguish them from other runtime values. Value: `"ELEPH"` in ASCII.
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
-/// heap_alloc: free-list allocator with 16-byte header.
-/// Each allocation has a 16-byte header [size:4][refcount:4][kind:8] before the user pointer.
-/// Small freed blocks are cached in size-segregated bins before falling back to the
-/// general address-ordered free list: [size:4][refcount:4][kind:8][next_ptr:8].
-/// Input: x0 = bytes needed
-/// Output: x0 = pointer to allocated memory (after header)
+/// Emits the `__rt_heap_alloc` runtime helper: a free-list allocator with size-segregated
+/// small-bin caching and a bump-pointer fallback.
+///
+/// Allocation path (ARM64): small bins (≤64 bytes) → ordered free list → bump pointer.
+/// Allocation path (x86_64): identical logic via `emit_heap_alloc_linux_x86_64`.
+///
+/// Each block carries a 16-byte header `[size:4][refcount:4][kind:8]` before the user pointer.
+/// Free blocks reuse the same header layout plus a `next_ptr:8` word for list chaining.
+///
+/// Input: `x0` (ARM) / `rax` (x86_64) = requested payload bytes (minimum 8 enforced).
+/// Output: `x0` / `rax` = user pointer (header + 16).
+///
+/// Updates `_gc_allocs`, `_gc_live`, and `_gc_peak` counters on every allocation.
+/// On heap exhaustion, prints a fatal message to stderr and exits with code 1.
 pub fn emit_heap_alloc(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_heap_alloc_linux_x86_64(emitter);
@@ -194,6 +204,14 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.syscall(1);
 }
 
+/// Emits the x86_64 Linux variant of `__rt_heap_alloc`.
+///
+/// Identical allocation strategy to the ARM64 path but uses System V AMD64 ABI
+/// registers (`rax` = size/return, `r8–r15` = temporaries) and Linux syscalls
+/// for error reporting (`syscall` instead of `svc #0x80`).
+///
+/// Header stamping uses `X86_64_HEAP_MAGIC_HI32` in the high 32 bits of the kind field
+/// to distinguish owned heap blocks from other runtime values.
 fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: heap_alloc (free-list + bump) ---");

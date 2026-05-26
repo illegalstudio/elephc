@@ -11,9 +11,21 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// chr: convert int to single-character string.
-/// Input: x0 = char code
-/// Output: x1 = ptr, x2 = 1
+/// Emits the `__rt_chr` runtime helper assembly for chr.
+///
+/// Converts an integer code point to a single-byte string by writing the byte
+/// into the shared concat buffer and returning a pointer/length pair.
+///
+/// # Inputs
+/// - `x0`: The character code (only the low byte is used)
+///
+/// # Outputs
+/// - `x1`: Pointer to the byte in the concat buffer
+/// - `x2`: Length = 1
+///
+/// # Side effects
+/// - Advances `_concat_off` by 1 byte; result is stored in the concat buffer
+///   which is heap-backed and refcount-compatible.
 pub fn emit_chr(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_chr_linux_x86_64(emitter);
@@ -38,6 +50,15 @@ pub fn emit_chr(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_chr`.
+///
+/// Same behavior as the ARM64 variant but uses x86_64 System V ABI registers:
+/// - `dil` (low byte of `di`/`rdi`): input character code
+/// - `rax`: returned string pointer (concat buffer address)
+/// - `rdx`: returned string length = 1
+///
+/// # Side effects
+/// - Reads and updates `_concat_off` and `_concat_buf` globals.
 fn emit_chr_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: chr ---");

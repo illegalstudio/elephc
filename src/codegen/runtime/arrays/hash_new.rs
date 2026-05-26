@@ -77,6 +77,11 @@ pub fn emit_hash_new(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = hash table pointer
 }
 
+/// x86_64 Linux variant of `emit_hash_new` using the System V AMD64 ABI.
+/// Input:  rdi=initial_capacity, rsi=value_type_tag
+///         (0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object, 7=mixed, 8=null)
+/// Output: rax=pointer to hash table
+/// Layout: [count:8][capacity:8][value_type:8][head:8][tail:8][entries...] — identical to ARM64.
 fn emit_hash_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_new ---");

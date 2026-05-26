@@ -19,6 +19,27 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the PHP `array_pop` builtin: removes and returns the last element of an indexed array.
+///
+/// For x86_64: calls `ensure_unique_arg` and `store_mutating_arg` to handle COW and write back
+/// the modified array pointer to caller storage, then loads the array header from `rax` to
+/// obtain/modify the length and load the popped element into registers.
+///
+/// For ARM64: loads array header from `x0`, decrements length, and materializes the popped
+/// element into return registers (`x0`/`d0` for scalars, `x1`/`x2` for strings).
+///
+/// On empty array: returns a null sentinel (i64::MAX - 1 on x86_64, 0x7FFFFFFFFFFFFFFE on ARM64).
+///
+/// # Arguments
+/// * `_name` - unused (builtin dispatches by name)
+/// * `args` - must contain exactly one argument: the array expression
+/// * `emitter` - target-aware code emitter
+/// * `ctx` - codegen context (labels, frame layout, variable allocation)
+/// * `data` - data section for constants
+///
+/// # Returns
+/// `Some(elem_ty)` where `elem_ty` is the element type (PhpType::Int, PhpType::Str, or PhpType::Array
+/// for arrays-of-arrays), or `None` if the array type could not be determined.
 pub fn emit(
     _name: &str,
     args: &[Expr],

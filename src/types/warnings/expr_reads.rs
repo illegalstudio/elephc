@@ -15,6 +15,11 @@ use super::scope_usage::{
     ScopeUsage, analyze_function_like_scope, analyze_method_scope, collect_free_reads_in_function_like,
 };
 
+/// Recursively collects variable read warnings by scanning an expression tree.
+/// Records each variable reference into `scope` and emits warnings for suspicious patterns.
+/// For closures, distinguishes between captured variables (captures list) and free reads
+/// that must be resolved from the outer scope. Arrow closures collect free reads differently
+/// than classic closures due to PHP semantics.
 pub(super) fn collect_expr_reads(
     expr: &Expr,
     scope: &mut ScopeUsage,
@@ -197,6 +202,9 @@ pub(super) fn collect_expr_reads(
     }
 }
 
+/// Scans a synthetic or include-guarded statement for variable reads in assignment preludes.
+/// Only `Assign` statements contribute reads; other statement kinds are skipped.
+/// This handles the initializer expressions that run before a compound assignment completes.
 fn collect_assignment_prelude_reads(
     stmt: &Stmt,
     scope: &mut ScopeUsage,
@@ -219,6 +227,8 @@ fn collect_assignment_prelude_reads(
     }
 }
 
+/// Recursively collects variable reads from an instanceof target expression.
+/// Only `InstanceOfTarget::Expr` contains a nested expression; other variants are no-ops.
 fn collect_instanceof_target_reads(
     target: &InstanceOfTarget,
     scope: &mut ScopeUsage,
@@ -229,6 +239,10 @@ fn collect_instanceof_target_reads(
     }
 }
 
+/// Entry point for statement-level warning analysis. Walks a statement tree (including synthetic
+/// and include-guarded statements) and collects variable reads by instantiating a fresh `ScopeUsage`
+/// per distinct scope region. This isolation ensures reads in one branch do not bleed into others,
+/// which is required for accurate warning attribution in control-flow structures.
 pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<CompileWarning>) {
     match &stmt.kind {
         StmtKind::Synthetic(stmts) => {

@@ -16,6 +16,23 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a PHP `log10($arg)` builtin call, computing the base-10 logarithm of the argument.
+///
+/// Inputs:
+/// - `args[0]` is the operand, which may be an integer or float. Integer operands are
+///   normalized to floating-point before the libc call.
+/// - `emitter` is used to emit the conversion, call, and any target-specific instructions.
+/// - `ctx` carries variable layout and metadata through the call.
+/// - `data` provides access to the data section for any constant materialization.
+///
+/// Outputs:
+/// - Always returns `Some(PhpType::Float)` since `log10` produces a float result.
+///
+/// Side effects:
+/// - Emits an `emit_int_result_to_float_result` call when the operand is an integer,
+///   converting the integer in the integer result register to the float argument register.
+/// - Calls the platform's libc `log10` function via `bl_c` (AArch64) or `call` (x86_64).
+/// - On AArch64 the scalar argument is in `d0`; on x86_64 it follows the SysV float ABI.
 pub fn emit(
     _name: &str,
     args: &[Expr],

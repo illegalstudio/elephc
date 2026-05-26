@@ -10,6 +10,16 @@
 
 use super::*;
 
+/// Recursively folds expressions within a statement, applying constant-folding to all
+/// sub-expressions while preserving the statement structure.
+///
+/// Handles every `StmtKind` variant: passes through variants with no expressions unchanged,
+/// and recursively processes expression fields in variants that contain them (conditions,
+/// bodies, values, etc.). Used by the optimizer to propagate folded constants through
+/// the AST before DCE or control-flow pruning.
+///
+/// - `stmt`: The statement to process.
+/// Returns a new `Stmt` with all nested expressions folded via `fold_expr`.
 pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
     let span = stmt.span;
     let attributes = stmt.attributes.clone();
@@ -327,6 +337,10 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
     Stmt { kind, span, attributes }
 }
 
+/// Folds all statements in a block by mapping `fold_stmt` over each element.
+///
+/// - `body`: A vector of statements representing a block body.
+/// Returns a new `Vec<Stmt>` with each statement folded.
 pub(crate) fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
     body.into_iter().map(fold_stmt).collect()
 }

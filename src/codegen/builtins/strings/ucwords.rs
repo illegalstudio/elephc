@@ -16,6 +16,21 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `ucwords` builtin, which uppercases the first character of each
+/// whitespace-delimited word in a string.
+///
+/// # Arguments
+/// - `_name`: Unused; PHP builtins are dispatched by name.
+/// - `args`: Single argument — the string to transform.
+///
+/// # Outputs
+/// - Pushes a string pointer/length pair onto the call stack.
+/// - Returns `PhpType::Str` indicating the result is a PHP string.
+///
+/// # Runtime behavior
+/// - Calls `__rt_ucwords` via `abi::emit_call_label`.
+/// - The runtime helper allocates a new owned PHP string; the caller must
+///   treat the returned pointer/length as an owned value.
 pub fn emit(
     _name: &str,
     args: &[Expr],

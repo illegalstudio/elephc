@@ -16,6 +16,26 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::super::Checker;
 
 impl Checker {
+    /// Infers the type of an assignment expression and updates the type environment.
+    ///
+    /// Handles all assignment forms: simple variable (`$a = 1`), array access
+    /// (`$a[0] = 1`), property access (`$obj->prop = 1`), and static property access.
+    /// Compound assignments (e.g., `+=`) use `result_target` to distinguish the value
+    /// expression from the target expression.
+    ///
+    /// # Arguments
+    /// * `target` - Left-hand side of the assignment (Variable, ArrayAccess, PropertyAccess, StaticPropertyAccess)
+    /// * `value` - Right-hand side expression providing the assigned value
+    /// * `result_target` - For compound assignments, the expression whose type becomes the result; if None or same as target, `value`'s type is used
+    /// * `prelude` - Statements to execute before the assignment (e.g., from null coalescing `??=` initializer)
+    /// * `span` - Source span for error reporting
+    /// * `env` - Mutable type environment; updated with the target's new type
+    ///
+    /// # Returns
+    /// The `PhpType` of the result expression (type of `value` or `result_target`).
+    ///
+    /// # Errors
+    /// Returns `CompileError` for invalid assignment targets (e.g., literals, expressions).
     pub(super) fn check_assignment_expression(
         &mut self,
         target: &Expr,

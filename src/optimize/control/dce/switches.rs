@@ -21,6 +21,15 @@ use super::guards::{
 use super::state::{GuardState, TailSinkTarget};
 use super::tail::sink_tail_into_terminal_path;
 
+/// Classifies switch pattern matching against a known scalar subject value.
+///
+/// Returns `CaseMatch::Matches` if the subject value matches at least one pattern
+/// and no pattern is unknown; `CaseMatch::NoMatch` if the subject value matches
+/// no pattern and all patterns are known; `CaseMatch::Unknown` if any pattern
+/// cannot be evaluated statically.
+///
+/// Uses loose switch comparison semantics (== instead of ===) and handles boolean
+/// guard conditions by comparing the guard truthiness against the subject value.
 fn classify_switch_patterns_for_exact_scalar(
     subject_value: &ScalarValue,
     patterns: &[Expr],
@@ -54,6 +63,14 @@ fn classify_switch_patterns_for_exact_scalar(
     }
 }
 
+/// Classifies switch pattern matching for a variable subject with active guards.
+///
+/// Used when the subject is a Variable whose truthiness or scalar value can be
+/// tracked through guard state. Returns `CaseMatch::Matches` if a pattern provably
+/// matches, `CaseMatch::NoMatch` if all patterns provably don't match, or
+/// `CaseMatch::Unknown` if matching cannot be determined statically.
+///
+/// Handles guard-based exclusions and truthiness comparisons for boolean patterns.
 fn classify_switch_patterns_with_guards(
     subject: &Expr,
     patterns: &[Expr],
@@ -103,6 +120,15 @@ fn classify_switch_patterns_with_guards(
     }
 }
 
+/// Determines which switch cases are guaranteed to execute given known subject value and guards.
+///
+/// Returns a tuple of `(entry_case_indices, default_may_be_reached)` where:
+/// - `entry_case_indices` are the case indices that may match based on static analysis
+/// - `default_may_be_reached` indicates whether the default branch could still be reached
+///
+/// For boolean subjects, computes guards incrementally across cases. For other scalar
+/// subjects, stops at the first guaranteed match. For variable subjects with guard state,
+/// applies guard-based exclusions to rule out patterns.
 pub(super) fn direct_switch_entry_blocks(
     subject: &Expr,
     cases: &[(Vec<Expr>, Vec<Stmt>)],
@@ -160,6 +186,11 @@ pub(super) fn direct_switch_entry_blocks(
     ((0..cases.len()).collect(), has_default)
 }
 
+/// Removes switch cases and default branch that are unreachable based on guard state.
+///
+/// Builds a control-flow graph for the switch, collects reachable blocks from
+/// guaranteed entry points, and filters out cases whose bodies are provably
+/// unreachable. The default is dropped if its entry block is not reachable.
 fn prune_unreachable_switch_blocks(
     subject: &Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
@@ -187,6 +218,12 @@ fn prune_unreachable_switch_blocks(
     (cases, default)
 }
 
+/// Prunes unreachable switch cases and truncates the case list to only reachable entries.
+///
+/// First removes unreachable blocks via `prune_unreachable_switch_blocks`, then if the
+/// subject has a known scalar value, identifies the first matching case and discards
+/// all earlier cases (since they cannot be reached for this subject value). Returns
+/// empty cases if no case is reachable.
 fn prune_unreachable_switch_entries(
     subject: &Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
@@ -208,6 +245,13 @@ fn prune_unreachable_switch_entries(
     (cases[first_entry..].to_vec(), default)
 }
 
+/// Removes individual patterns from switch cases that provably don't match given guard state.
+///
+/// For each pattern in each case, determines whether it matches using guard-aware
+/// classification. Patterns that provably don't match are dropped. If any pattern
+/// in a case matches, direct entry optimization is disabled for all subsequent cases
+/// (since control flow may have entered through an earlier case). The default branch
+/// is dropped when direct entry is no longer possible.
 fn prune_switch_patterns_with_guards(
     subject: &Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
@@ -267,6 +311,13 @@ fn prune_switch_patterns_with_guards(
     (pruned_cases, default)
 }
 
+/// Applies DCE to switch case bodies with guard state tracking across cases.
+///
+/// Each case body is processed with `dce_block_with_guards` using guards extended
+/// for that case. Guard state is accumulated across cases to track which paths
+/// are reachable. Cases that terminate with `break` or exit are marked as
+/// direct-only, allowing subsequent cases to use accumulated guard state.
+/// Switch-noop breaks (a break as the sole statement) are trimmed from bodies.
 fn dce_switch_cases_with_guards(
     subject: &Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
@@ -308,6 +359,13 @@ fn dce_switch_cases_with_guards(
     processed
 }
 
+/// Applies DCE to a switch statement with optional default branch.
+///
+/// Normalizes and prunes patterns, removes unreachable cases, drops trailing
+/// empty cases, and eliminates the switch entirely if all bodies are empty and
+/// there is no default (replaced with subject expression as effect statement).
+/// Preserves the switch if it contains level-sensitive loop exits that require
+/// the full switch structure for correct semantics.
 pub(super) fn dce_switch_stmt(
     subject: Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
@@ -362,6 +420,14 @@ pub(super) fn dce_switch_stmt(
     )]
 }
 
+/// Applies DCE to a switch statement with a tail of statements to execute after the switch.
+///
+/// The tail is first processed with DCE. If the switch has level-sensitive loop exits,
+/// the tail is appended after the full switch statement. If the switch has unknown
+/// reachability paths, the tail is appended to the switch result without further
+/// optimization. Otherwise, the tail is sunk into case and default bodies that
+/// terminate with `break` or `falls through`, using `sink_tail_into_terminal_path`.
+/// Returns the result of `dce_switch_stmt` on the processed switch.
 pub(super) fn dce_switch_stmt_with_tail(
     subject: Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,

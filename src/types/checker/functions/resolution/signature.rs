@@ -16,6 +16,16 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 use super::super::super::{Checker, FnDecl};
 
 impl Checker {
+    /// Resolves a function's signature given its declaration, parameter types, and body.
+    ///
+    /// Builds a `TypeEnv` from the provided parameter types, then type-checks the body
+    /// while collecting return type information. Handles callable parameters by saving and
+    /// restoring their metadata around the body check. Validates declared return types
+    /// against inferred returns, and applies PHP's generator rules (functions containing
+    /// `yield` implicitly return `Generator`). Stores the final signature in `self.functions`.
+    ///
+    /// Returns the resolved return type, or a `CompileError` if the body fails to type-check
+    /// or return types are incompatible with any declared annotation.
     pub(crate) fn resolve_function_signature(
         &mut self,
         name: &str,
@@ -202,6 +212,11 @@ impl Checker {
     }
 }
 
+/// Infers a concrete array type from return info when the declared return type is a generic `array` hint.
+    ///
+    /// Returns `Some(PhpType)` only when every non-void return in `return_types` is the same
+    /// array type (including `array<T>` or `assocArray` shapes). Returns `None` if returns differ,
+    /// include non-array types, or are all `void`.
 fn inferred_specific_array_type_from_infos(
     return_types: &[super::super::returns::ReturnInfo],
 ) -> Option<PhpType> {

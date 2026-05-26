@@ -25,6 +25,11 @@ use super::exception::{
 };
 use super::fiber::builtin_fiber_methods;
 
+/// Metadata for a builtin PHP interface declaration.
+///
+/// `name` is the fully-qualified interface name. `extends` lists parent interfaces.
+/// `properties`, `methods`, and `constants` carry the type contract exposed to user code;
+/// the checker consults these to validate member access without emitting runtime behavior.
 pub(crate) struct InterfaceDeclInfo {
     pub name: String,
     pub extends: Vec<String>,
@@ -35,6 +40,7 @@ pub(crate) struct InterfaceDeclInfo {
 }
 
 impl Clone for InterfaceDeclInfo {
+    /// Deep-copies all fields: name, extends list, properties, methods, span, and constants.
     fn clone(&self) -> Self {
         InterfaceDeclInfo {
             name: self.name.clone(),
@@ -47,6 +53,15 @@ impl Clone for InterfaceDeclInfo {
     }
 }
 
+/// Registers the nine builtin exception/error types (Throwable, Error, TypeError,
+/// ValueError, Exception, RuntimeException, JsonException, Fiber, FiberError) in
+/// `interface_map` and `class_map`.
+///
+/// Checks for name collisions with user-declared types before inserting; returns
+/// `CompileError` if any builtin name is already present. Insertion order sets
+/// the inheritance chain: Error/Exception extend Throwable; TypeError/ValueError
+/// extend Error; RuntimeException extends Exception; JsonException extends
+/// RuntimeException; FiberError extends Error. Fiber is final with no parent.
 pub(crate) fn inject_builtin_throwables(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,

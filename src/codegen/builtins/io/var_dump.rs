@@ -16,6 +16,16 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a `write(fd=1, buf=literal, len=sizeof(literal))` syscall to stdout.
+///
+/// Writes a compile-time-known byte string directly to stdout without any
+/// runtime buffering or length computation. The string is stored in the data
+/// section and referenced by address.
+///
+/// # Arguments
+/// * `emitter` - Target-aware instruction emitter
+/// * `data` - Data section where the literal string is placed
+/// * `bytes` - The literal byte content to write
 fn emit_write_literal(emitter: &mut Emitter, data: &mut DataSection, bytes: &[u8]) {
     let (lbl, len) = data.add_string(bytes);
     match emitter.target.arch {
@@ -36,6 +46,14 @@ fn emit_write_literal(emitter: &mut Emitter, data: &mut DataSection, bytes: &[u8
     }
 }
 
+/// Emits a branch instruction when the integer payload is non-zero.
+///
+/// Used to test whether a value is truthy or non-null without consuming
+/// ownership. Dispatches to `b.ne` on ARM64 or `jne` on x86_64.
+///
+/// # Arguments
+/// * `emitter` - Target-aware instruction emitter
+/// * `label` - The target label for the branch when the condition is true
 fn emit_branch_if_nonzero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -47,6 +65,13 @@ fn emit_branch_if_nonzero(emitter: &mut Emitter, label: &str) {
     }
 }
 
+/// Emits a branch instruction when two compared values are equal.
+///
+/// Dispatches to `b.eq` on ARM64 or `je` on x86_64.
+///
+/// # Arguments
+/// * `emitter` - Target-aware instruction emitter
+/// * `label` - The target label for the branch when the condition is true
 fn emit_branch_if_eq(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -58,6 +83,13 @@ fn emit_branch_if_eq(emitter: &mut Emitter, label: &str) {
     }
 }
 
+/// Emits a branch instruction when two compared values are different.
+///
+/// Dispatches to `b.ne` on ARM64 or `jne` on x86_64.
+///
+/// # Arguments
+/// * `emitter` - Target-aware instruction emitter
+/// * `label` - The target label for the branch when the condition is true
 fn emit_branch_if_ne(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -69,10 +101,27 @@ fn emit_branch_if_ne(emitter: &mut Emitter, label: &str) {
     }
 }
 
+/// Writes the current string result register to stdout.
+///
+/// Uses the target ABI to emit the string pointer and length from the
+/// string result registers through `__rt_write`.
+///
+/// # Arguments
+/// * `emitter` - Target-aware instruction emitter
 fn emit_write_current_string(emitter: &mut Emitter) {
     abi::emit_write_stdout(emitter, &PhpType::Str);                            // write the current string result through the active target ABI
 }
 
+/// Emits var_dump output for an integer payload.
+///
+/// Checks the integer against the shared null sentinel (0x7fff_ffff_ffff_fffe).
+/// If the payload is null, prints `NULL\n`. Otherwise prints `int(N)\n`
+/// where N is the decimal conversion via `__rt_itoa`.
+///
+/// # Arguments
+/// * `emitter` - Target-aware instruction emitter
+/// * `ctx` - Codegen context (used for label allocation)
+/// * `data` - Data section for literal strings
 fn emit_var_dump_int(emitter: &mut Emitter, ctx: &mut Context, data: &mut DataSection) {
     let not_null = ctx.next_label("vd_not_null");
     let done = ctx.next_label("vd_done");
@@ -93,6 +142,14 @@ fn emit_var_dump_int(emitter: &mut Emitter, ctx: &mut Context, data: &mut DataSe
     emitter.label(&done);
 }
 
+/// Emits var_dump output for a float payload.
+///
+/// Prints `float(N)\n` where N is the decimal conversion of the float
+/// in the floating-point result register via `__rt_ftoa`.
+///
+/// # Arguments
+/// * `emitter` - Target-aware instruction emitter
+/// * `data` - Data section for literal strings
 fn emit_var_dump_float(emitter: &mut Emitter, data: &mut DataSection) {
     let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
     abi::emit_call_label(emitter, "__rt_ftoa");                                 // convert the float payload to decimal text through the target-aware runtime helper
@@ -103,6 +160,14 @@ fn emit_var_dump_float(emitter: &mut Emitter, data: &mut DataSection) {
     emit_write_literal(emitter, data, b")\n");
 }
 
+/// Emits var_dump output for a string payload.
+///
+/// Prints `string(LEN) "VALUE"\n` where LEN is the decimal string length
+/// via `__rt_itoa` and VALUE is the raw string content in quotes.
+///
+/// # Arguments
+/// * `emitter` - Target-aware instruction emitter
+/// * `data` - Data section for literal strings
 fn emit_var_dump_string(emitter: &mut Emitter, data: &mut DataSection) {
     let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
     abi::emit_push_reg_pair(emitter, ptr_reg, len_reg);                         // preserve the original string payload while printing the type prefix and quoted payload
@@ -123,6 +188,15 @@ fn emit_var_dump_string(emitter: &mut Emitter, data: &mut DataSection) {
     emit_write_literal(emitter, data, b"\"\n");
 }
 
+/// Emits var_dump output for a boolean payload.
+///
+/// Prints `bool(false)\n` or `bool(true)\n` based on the integer result register.
+/// The payload is expected in the standard integer result register.
+///
+/// # Arguments
+/// * `emitter` - Target-aware instruction emitter
+/// * `ctx` - Codegen context (used for label allocation)
+/// * `data` - Data section for literal strings
 fn emit_var_dump_bool(emitter: &mut Emitter, ctx: &mut Context, data: &mut DataSection) {
     let true_label = ctx.next_label("vd_true");
     let done = ctx.next_label("vd_done");
@@ -136,6 +210,15 @@ fn emit_var_dump_bool(emitter: &mut Emitter, ctx: &mut Context, data: &mut DataS
     emitter.label(&done);
 }
 
+/// Emits var_dump output for a resource payload.
+///
+/// Prints `resource(N) of type (stream)\n` where N is the 1-based display id
+/// (native payload + 1) via `__rt_itoa`. The native payload is preserved and
+/// incremented before conversion.
+///
+/// # Arguments
+/// * `emitter` - Target-aware instruction emitter
+/// * `data` - Data section for literal strings
 fn emit_var_dump_resource(emitter: &mut Emitter, data: &mut DataSection) {
     let result_reg = abi::int_result_reg(emitter);
     abi::emit_push_reg(emitter, result_reg);                                    // preserve the native resource payload before prefix writes clobber the result register
@@ -154,10 +237,25 @@ fn emit_var_dump_resource(emitter: &mut Emitter, data: &mut DataSection) {
     emit_write_literal(emitter, data, b") of type (stream)\n");
 }
 
+/// Emits var_dump output for a null/void/never payload.
+///
+/// Prints `NULL\n`. Used as a fallback for types with no specific formatter.
+///
+/// # Arguments
+/// * `emitter` - Target-aware instruction emitter
+/// * `data` - Data section for literal strings
 fn emit_var_dump_null(emitter: &mut Emitter, data: &mut DataSection) {
     emit_write_literal(emitter, data, b"NULL\n");
 }
 
+/// Emits var_dump output for an array payload.
+///
+/// Prints `array(N) {\n}\n` where N is the element count loaded from
+/// the array/hash header via `__rt_itoa`. Does not recursively dump elements.
+///
+/// # Arguments
+/// * `emitter` - Target-aware instruction emitter
+/// * `data` - Data section for literal strings
 fn emit_var_dump_array(emitter: &mut Emitter, data: &mut DataSection) {
     let result_reg = abi::int_result_reg(emitter);
     abi::emit_push_reg(emitter, result_reg);                                    // preserve the array/hash pointer across literal writes
@@ -176,15 +274,43 @@ fn emit_var_dump_array(emitter: &mut Emitter, data: &mut DataSection) {
     emit_write_literal(emitter, data, b") {\n}\n");
 }
 
+/// Emits var_dump output for a callable payload.
+///
+/// Prints `callable\n`. Used when a value's type is exactly `Callable`
+/// (not a closure or invokable object).
+///
+/// # Arguments
+/// * `emitter` - Target-aware instruction emitter
+/// * `data` - Data section for literal strings
 fn emit_var_dump_callable(emitter: &mut Emitter, data: &mut DataSection) {
     emit_write_literal(emitter, data, b"callable\n");
 }
 
+/// Emits var_dump output for a statically-known object class name.
+///
+/// Prints `object(ClassName)\n` where ClassName is the known class.
+/// Used for types that carry a resolved class name at codegen time.
+///
+/// # Arguments
+/// * `emitter` - Target-aware instruction emitter
+/// * `data` - Data section for literal strings
+/// * `class_name` - The resolved class name to display
 fn emit_var_dump_object_name(emitter: &mut Emitter, data: &mut DataSection, class_name: &str) {
     let obj_str = format!("object({})\n", class_name);
     emit_write_literal(emitter, data, obj_str.as_bytes());
 }
 
+/// Emits var_dump output for an object with runtime-determined class.
+///
+/// Probes the heap kind via `__rt_heap_kind`, then performs a switch on
+/// the runtime class id (loaded from the object header) to dispatch to
+/// the matching `object(ClassName)` formatter. Falls back to `object\n`
+/// for unknown class ids, and to `NULL\n` for null object pointers.
+///
+/// # Arguments
+/// * `emitter` - Target-aware instruction emitter
+/// * `ctx` - Codegen context (used for label allocation and class metadata)
+/// * `data` - Data section for literal strings
 fn emit_var_dump_dynamic_object(
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -239,6 +365,26 @@ fn emit_var_dump_dynamic_object(
     emitter.label(&done);
 }
 
+/// Emits PHP `var_dump` output for the first argument expression.
+///
+/// Dispatches to a type-specific formatter based on the resolved type of
+/// `args[0]`. Handles all PHP types: int, float, string, bool, resource,
+/// null, array, object, callable, pointer, buffer, packed, and mixed/union
+/// (which unboxes via `__rt_mixed_unbox` and re-dispatches).
+///
+/// Does not consume ownership of the argument; values are inspected in place.
+/// Returns `PhpType::Void` to indicate the call has side effects and yields no
+/// value.
+///
+/// # Arguments
+/// * `_name` - The builtin name (unused; dispatch is by resolved type)
+/// * `args` - Call arguments; only `args[0]` is formatted
+/// * `emitter` - Target-aware instruction emitter
+/// * `ctx` - Codegen context (label allocation, class metadata)
+/// * `data` - Data section for literal strings
+///
+/// # Returns
+/// `Some(PhpType::Void)` because var_dump always produces output and returns null
 pub fn emit(
     _name: &str,
     args: &[Expr],

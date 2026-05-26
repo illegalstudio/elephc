@@ -27,6 +27,7 @@ pub enum AttrArgValue {
     Str(String),
 }
 
+/// Property hook contract for `get`/`set` hook declarations in classes and interfaces.
 #[derive(Debug, Clone)]
 pub struct PropertyHookContract {
     pub get_type: Option<PhpType>,
@@ -36,6 +37,9 @@ pub struct PropertyHookContract {
     pub span: Span,
 }
 
+/// Compares PropertyHookContract by get/set types and declaring type.
+/// Does not compare span — two contracts at different source positions
+/// are considered equivalent if their types and declaring class match.
 impl PartialEq for PropertyHookContract {
     fn eq(&self, other: &Self) -> bool {
         self.get_type == other.get_type
@@ -45,6 +49,8 @@ impl PartialEq for PropertyHookContract {
     }
 }
 
+/// Interface metadata for resolved declarations. Tracks parents, properties,
+/// methods, constants, and vtable layout after name resolution and inheritance flattening.
 #[derive(Debug, Clone)]
 pub struct InterfaceInfo {
     pub interface_id: u64,
@@ -59,6 +65,8 @@ pub struct InterfaceInfo {
     pub constants: HashMap<String, crate::parser::ast::Expr>,
 }
 
+/// Class metadata for resolved declarations. Tracks inheritance, properties,
+/// methods, constants, attributes, and vtable layout after name resolution and inheritance flattening.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassInfo {
     pub class_id: u64,
@@ -135,26 +143,33 @@ pub struct ClassInfo {
     pub constructor_param_to_prop: Vec<Option<String>>,
 }
 
+/// Enum case value, either an integer or a string (PHP 8.1+ backed enums).
 #[derive(Debug, Clone, PartialEq)]
 pub enum EnumCaseValue {
     Int(i64),
     Str(String),
 }
 
+/// Enum case metadata for a single case in a backed enum (PHP 8.1+).
+/// The `value` field is `None` for unit-only enums with no backing type.
 #[derive(Debug, Clone)]
 pub struct EnumCaseInfo {
     pub name: String,
     pub value: Option<EnumCaseValue>,
 }
 
+/// Enum metadata for a resolved backed enum declaration (PHP 8.1+).
+/// Tracks the backing type and ordered case list.
 #[derive(Debug, Clone)]
 pub struct EnumInfo {
     pub backing_type: Option<PhpType>,
     pub cases: Vec<EnumCaseInfo>,
 }
 
+/// Extern (FFI) function signature with name, parameters, return type,
+/// and optional linked library for codegen linkage.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields read by codegen via pattern matching
+#[allow(dead_code)]
 pub struct ExternFunctionSig {
     pub name: String,
     pub params: Vec<(String, PhpType)>,
@@ -162,28 +177,36 @@ pub struct ExternFunctionSig {
     pub library: Option<String>,
 }
 
+/// Extern (FFI) class metadata with name, fields, total size, and field offsets
+/// for codegen to emit packed struct layout.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields used in extern class codegen
+#[allow(dead_code)]
 pub struct ExternClassInfo {
     pub name: String,
     pub fields: Vec<ExternFieldInfo>,
     pub total_size: usize,
 }
 
+/// Extern (FFI) field metadata with name, PHP type, and offset into the
+/// containing extern class struct for codegen layout.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields used in extern class codegen
+#[allow(dead_code)]
 pub struct ExternFieldInfo {
     pub name: String,
     pub php_type: PhpType,
     pub offset: usize,
 }
 
+/// Packed (non-nullable) class metadata with fields, total size, and per-field
+/// offsets for codegen to emit a packed struct layout.
 #[derive(Debug, Clone)]
 pub struct PackedClassInfo {
     pub fields: Vec<PackedFieldInfo>,
     pub total_size: usize,
 }
 
+/// Packed field metadata with name, PHP type, and offset into the containing
+/// packed class struct for codegen layout.
 #[derive(Debug, Clone)]
 pub struct PackedFieldInfo {
     pub name: String,

@@ -10,9 +10,18 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// itoa: convert signed 64-bit integer to decimal string.
-/// Input:  x0 = integer value
-/// Output: x1 = pointer to string, x2 = length
+/// Emits the `__rt_itoa` runtime helper: converts a signed 64-bit integer to a decimal string.
+/// Uses a 21-byte scratch area in `_concat_buf` written right-to-left, then returns a pointer to
+/// the first digit and the total length.
+///
+/// # ABI
+/// - ARM64: input in `x0`, returns pointer in `x1`, length in `x2`.
+/// - x86_64 Linux: input in `rax`, returns pointer in `rax`, length in `rdx`.
+/// - x86_64 macOS uses `emit_itoa_linux_x86_64` with the same convention.
+///
+/// # Side effects
+/// - Advances `_concat_off` by 21 to reserve the scratch area.
+/// - Scratch area is written right-to-left starting 21 bytes past the current concat_buf offset.
 pub fn emit_itoa(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_itoa_linux_x86_64(emitter);
@@ -88,6 +97,16 @@ pub fn emit_itoa(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the `__rt_itoa` runtime helper for x86_64 Linux.
+///
+/// # ABI
+/// Input is expected in `rax`; the function returns the string pointer in `rax` and the length
+/// in `rdx`. This is the System V AMD64 ABI convention used on Linux.
+///
+/// # Implementation notes
+/// Mirrors the ARM64 logic: writes digits right-to-left into the 21-byte `_concat_buf` scratch
+/// area, handles the zero special case, prepends a minus sign for negative values, then updates
+/// `_concat_off` before returning.
 fn emit_itoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: itoa ---");

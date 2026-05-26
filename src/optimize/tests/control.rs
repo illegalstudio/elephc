@@ -10,6 +10,8 @@
 
 use super::*;
 
+// Verifies that `analyze_switch_tail_paths` classifies both case tails as FallsThrough
+// when neither case body terminates with a break or return.
 #[test]
 fn test_switch_tail_reachability_tracks_suffix_paths() {
     let cases = vec![
@@ -27,6 +29,8 @@ fn test_switch_tail_reachability_tracks_suffix_paths() {
     assert_eq!(reachability.default_tail_path, Some(TailPathKind::FallsThrough));
 }
 
+// Verifies that `build_switch_cfg` produces correct case/default entry indices and
+// that successor edges reflect break vs fallthrough semantics.
 #[test]
 fn test_build_switch_cfg_tracks_case_successors() {
     let cases = vec![
@@ -58,6 +62,8 @@ fn test_build_switch_cfg_tracks_case_successors() {
     );
 }
 
+// Verifies that `classify_switch_cfg_paths` propagates FallsThrough along the chain
+// and that the default block's final successor is also FallsThrough.
 #[test]
 fn test_classify_switch_cfg_paths_follows_fallthrough_chain() {
     let cases = vec![
@@ -81,6 +87,8 @@ fn test_classify_switch_cfg_paths_follows_fallthrough_chain() {
     );
 }
 
+// Verifies that `collect_reachable_cfg_blocks` marks only the first case block
+// reachable when the second case terminates with a break and the default body is unreachable.
 #[test]
 fn test_collect_reachable_switch_cfg_blocks_follows_only_reachable_suffix() {
     let cases = vec![
@@ -98,6 +106,8 @@ fn test_collect_reachable_switch_cfg_blocks_follows_only_reachable_suffix() {
     assert_eq!(reachable, vec![true, false, false]);
 }
 
+// Verifies that the first case is classified Breaks (has echo then break) and the
+// second case FallsThrough (no break) when analyzing tail reachability.
 #[test]
 fn test_switch_tail_reachability_tracks_break_and_fallthrough_paths() {
     let cases = vec![
@@ -118,6 +128,8 @@ fn test_switch_tail_reachability_tracks_break_and_fallthrough_paths() {
     assert_eq!(reachability.default_tail_path, Some(TailPathKind::FallsThrough));
 }
 
+// Verifies that when a case body contains an if/else with a break in one branch
+// and a return in the other, `analyze_switch_tail_paths` classifies the tail as Unknown.
 #[test]
 fn test_switch_tail_reachability_marks_mixed_break_paths_unknown() {
     let cases = vec![(
@@ -142,6 +154,8 @@ fn test_switch_tail_reachability_marks_mixed_break_paths_unknown() {
     assert_eq!(reachability.default_tail_path, None);
 }
 
+// Verifies that the then body exits, the first elseif sinks (fallthrough), the second
+// elseif does not sink (has return), no explicit else body, and implicit else sinks.
 #[test]
 fn test_if_tail_reachability_tracks_fallthrough_and_implicit_else() {
     let elseif_clauses = vec![
@@ -167,6 +181,8 @@ fn test_if_tail_reachability_tracks_fallthrough_and_implicit_else() {
     assert!(reachability.implicit_else_sinks_tail);
 }
 
+// Verifies that `build_if_cfg` produces correct entry indices for then/elseif/else
+// and that each block's successors reflect exits, falls-through, or branch edges.
 #[test]
 fn test_build_if_cfg_tracks_condition_and_body_successors() {
     let elseif_clauses = vec![(
@@ -212,6 +228,8 @@ fn test_build_if_cfg_tracks_condition_and_body_successors() {
     );
 }
 
+// Verifies that `classify_if_cfg_paths` marks the then body as Exits (has return)
+// and the elseif body as FallsThrough.
 #[test]
 fn test_classify_if_cfg_paths_tracks_branch_bodies() {
     let elseif_clauses = vec![(
@@ -231,6 +249,8 @@ fn test_classify_if_cfg_paths_tracks_branch_bodies() {
     );
 }
 
+// Verifies that an ifdef with an else body that exits means the then body does not
+// sink and neither the else nor implicit else sinks.
 #[test]
 fn test_ifdef_tail_reachability_tracks_implicit_else() {
     let reachability = analyze_ifdef_tail_paths(
@@ -246,6 +266,8 @@ fn test_ifdef_tail_reachability_tracks_implicit_else() {
     assert!(!reachability.implicit_else_sinks_tail);
 }
 
+// Verifies that a try/catch/finally with all bodies falling through sets
+// `can_sink_into_finally` to true, but adding a catch with a return sets it to false.
 #[test]
 fn test_try_tail_reachability_prefers_finally_only_when_safe() {
     let safe_try = vec![Stmt::echo(Expr::int_lit(7))];
@@ -268,6 +290,8 @@ fn test_try_tail_reachability_prefers_finally_only_when_safe() {
     assert!(!with_catch.can_sink_into_finally);
 }
 
+// Verifies that `build_try_cfg` assigns correct entry indices to try/catch/finally
+// and that successor edges reflect break, exit, or fallthrough semantics.
 #[test]
 fn test_build_try_cfg_tracks_try_catch_and_finally_successors() {
     let catches = vec![
@@ -311,6 +335,8 @@ fn test_build_try_cfg_tracks_try_catch_and_finally_successors() {
     );
 }
 
+// Verifies that `classify_try_cfg_paths` classifies try/catch bodies as FallsThrough
+// and catch-with-return as Exits, and that the finally block also FallsThrough.
 #[test]
 fn test_classify_try_cfg_paths_tracks_try_and_catch_bodies() {
     let catches = vec![
@@ -346,6 +372,8 @@ fn test_classify_try_cfg_paths_tracks_try_and_catch_bodies() {
     );
 }
 
+// Verifies that when no finally is present, the first catch FallsThrough and the
+// second catch Exits; `can_sink_into_finally` is false.
 #[test]
 fn test_try_tail_reachability_tracks_catch_fallthrough_without_finally() {
     let catches = vec![

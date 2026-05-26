@@ -10,11 +10,24 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// ftoa: convert double-precision float to string.
-/// Input:  d0 = float value
-/// Output: x1 = pointer to string, x2 = length
-/// Uses _snprintf with "%.14G" format.
-/// On Apple ARM64 variadic ABI, the double goes on the stack.
+/// Converts a double-precision float to a PHP-compatible byte string.
+///
+/// # Input
+/// - ARM64: `d0` holds the float value
+/// - x86_64: `xmm0` holds the float value (SysV variadic ABI)
+///
+/// # Output
+/// - ARM64: `x1` = pointer to string, `x2` = length
+/// - x86_64: `rax` = pointer to string, `rdx` = length
+///
+/// # Behavior
+/// Formats the float using `snprintf` with `"%.14G"` format into the global
+/// `_concat_buf` buffer at the current `_concat_off` cursor, then advances
+/// `_concat_off` by the number of characters written.
+///
+/// # ABI Notes
+/// - Apple ARM64: variadic floats are passed on the stack, not in SIMD registers
+/// - Linux x86_64: delegates to `emit_ftoa_linux_x86_64`; uses SysV variadic ABI with `eax=1` to indicate one SIMD register argument
 pub fn emit_ftoa(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_ftoa_linux_x86_64(emitter);
@@ -66,6 +79,18 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the `__rt_ftoa` routine for Linux x86_64.
+///
+/// # Input
+/// - `xmm0` holds the float value (SysV variadic ABI)
+///
+/// # Output
+/// - `rax` = pointer to formatted string, `rdx` = length
+///
+/// # Behavior
+/// Same as `emit_ftoa` but for the Linux x86_64 target. Uses `rbp`-based
+/// frame with 32 bytes of scratch space for concat cursor and output pointer.
+/// Sets `eax = 1` to signal one SIMD register argument to `snprintf`.
 fn emit_ftoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ftoa ---");
@@ -107,6 +132,8 @@ mod tests {
 
     use super::*;
 
+    /// Verifies that `emit_ftoa` on Linux x86_64 uses the SysV variadic calling convention
+    /// by checking that `eax` is set to 1 (one SIMD register argument) before calling `snprintf`.
     #[test]
     fn test_emit_ftoa_linux_x86_64_uses_sysv_variadic_call() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));

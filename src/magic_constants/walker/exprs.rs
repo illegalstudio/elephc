@@ -13,6 +13,11 @@ use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget};
 use super::stmts::{walk_program, walk_stmt};
 use super::Pass;
 
+/// Recursively walks an expression AST, applying `pass` transformations to magic constants and
+/// string literals, and recursing into all expression subtrees.
+///
+/// Returns a new `Expr` with transformed `MagicConstant` and `StringLiteral` nodes, and all
+/// child expressions recursively processed. Other leaf variants are returned unchanged.
 pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
     let span = expr.span;
     let kind = match expr.kind {
@@ -245,6 +250,11 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
     Expr { kind, span }
 }
 
+/// Transforms a `CallableTarget` by recursively walking any boxed expression inside it.
+///
+/// `CallableTarget::Method` carries a boxed object expression that must be walked;
+/// `CallableTarget::Function` and `CallableTarget::StaticMethod` carry no expressions and are
+/// returned unchanged.
 fn walk_callable_target<P: Pass>(target: CallableTarget, pass: &mut P) -> CallableTarget {
     match target {
         CallableTarget::Method { object, method } => CallableTarget::Method {
@@ -258,6 +268,10 @@ fn walk_callable_target<P: Pass>(target: CallableTarget, pass: &mut P) -> Callab
     }
 }
 
+/// Transforms an `InstanceOfTarget` by recursively walking any boxed expression inside it.
+///
+/// `InstanceOfTarget::Expr` carries a boxed expression operand that must be walked;
+/// `InstanceOfTarget::Name` carries no expression and is returned unchanged.
 fn walk_instanceof_target<P: Pass>(
     target: InstanceOfTarget,
     pass: &mut P,

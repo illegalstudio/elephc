@@ -29,6 +29,9 @@ pub(crate) use catalog::{
 };
 
 impl Checker {
+    /// Records that a Linux target requires the given shared library for this compilation.
+    ///
+    /// No-op on non-Linux targets. Prevents duplicate entries in `required_libraries`.
     fn require_linux_builtin_library(&mut self, library: &str) {
         if self.target_platform == crate::codegen::platform::Platform::Linux
             && !self.required_libraries.iter().any(|lib| lib == library)
@@ -37,6 +40,7 @@ impl Checker {
         }
     }
 
+    /// Type-checks a PHP builtin function call, returning the inferred return type or `None` if unhandled.
     pub fn check_builtin(
         &mut self,
         name: &str,

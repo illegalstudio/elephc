@@ -635,6 +635,9 @@ pub(crate) fn emit_runtime_data_user(
     out
 }
 
+/// Emits the callable-function name table and pointer table for user-defined functions.
+/// Each function name is emitted as an ASCII label; the pointer table references either
+/// the active variant symbol (for polymorphic functions) or zero.
 fn emit_callable_function_data(
     out: &mut String,
     functions: &HashMap<String, FunctionSig>,
@@ -667,6 +670,9 @@ fn emit_callable_function_data(
     }
 }
 
+/// Emits the per-class callable-method name table and count for __invoke support.
+/// Only public instance methods are included. Each method name is emitted as an
+/// ASCII label; the table is indexed by class_id at runtime.
 fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {
     let mut public_methods: Vec<&String> = class_info
         .methods
@@ -703,6 +709,9 @@ fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {
     }
 }
 
+/// Emits the static-callable method table for ReflectionMethod support on static methods.
+/// For each class with public static methods, emits class-name and method-name labels,
+/// then builds an entries table of (class_name_ptr, class_name_len, method_name_ptr, method_name_len).
 fn emit_static_callable_method_data(out: &mut String, sorted_classes: &[(&String, &ClassInfo)]) {
     let mut entries = Vec::new();
     for (class_name, class_info) in sorted_classes {
@@ -756,6 +765,9 @@ fn emit_static_callable_method_data(out: &mut String, sorted_classes: &[(&String
     }
 }
 
+/// Returns the symbol name to use for an interface method table entry.
+/// Returns a wrapper symbol when the interface declares a Mixed return type but the
+/// implementing class uses a narrower type (the wrapper bridges the type mismatch).
 fn interface_method_table_symbol(
     class_info: &ClassInfo,
     interface_info: &InterfaceInfo,
@@ -774,6 +786,10 @@ fn interface_method_table_symbol(
     }
 }
 
+/// Returns true when an interface method requires a return-type wrapper at call sites.
+/// A wrapper is needed when the interface declares a Mixed return type but the
+/// implementing class uses a narrower type — without the wrapper, a Mixed would be
+/// written where a typed value is expected.
 fn interface_method_needs_return_wrapper(
     interface_info: &InterfaceInfo,
     method_name: &str,

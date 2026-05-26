@@ -160,6 +160,10 @@ pub fn emit_array_pad(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = copied array
 }
 
+/// Emits the x86_64 Linux variant of `__rt_array_pad` for indexed integer arrays.
+/// Uses the System V ABI: rdi = source array pointer, rsi = size (negative = pad left),
+/// rdx = pad value; returns padded array pointer in rax.
+/// Clobbers caller-saved registers rax, rcx, rdx, r8–r11 and uses rbp as frame base.
 fn emit_array_pad_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_pad ---");

@@ -11,10 +11,28 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// hash_iter_next: iterate over hash table entries in insertion order.
-/// Input:  x0=hash_table_ptr, x1=cursor (start with 0)
-/// Output: x0=next_cursor (or -1 if done), x1=key_ptr, x2=key_len, x3=value_lo,
-/// x4=value_hi, x5=value_tag, x6=value_addr for by-reference foreach binding.
+/// Emits `__rt_hash_iter_next` for the host target (ARM64 or x86_64).
+///
+/// Iterates over hash table entries in insertion order using a cursor protocol:
+/// - Cursor `0` starts a fresh walk from the header head slot
+/// - Cursor `> 0` encodes `slot_index + 1` for resumed iteration
+/// - Cursor `-2` is returned after yielding the tail entry; the next probe returns done
+/// - Cursor `-1` signals no more entries
+///
+/// # Inputs (ARM64 convention)
+/// - `x0`: hash table pointer
+/// - `x1`: cursor (0 for first call, previously returned cursor for resume)
+///
+/// # Outputs (ARM64 convention)
+/// - `x0`: next cursor (or `-1` if done)
+/// - `x1`: key pointer
+/// - `x2`: key length
+/// - `x3`: value low word
+/// - `x4`: value high word
+/// - `x5`: value tag
+/// - `x6`: value address (for by-reference foreach binding)
+///
+/// Delegates to `emit_hash_iter_linux_x86_64` on x86_64.
 pub fn emit_hash_iter(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_iter_linux_x86_64(emitter);
@@ -77,6 +95,15 @@ pub fn emit_hash_iter(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits `__rt_hash_iter_next` for the x86_64 Linux ABI.
+///
+/// Identical iteration semantics to the ARM64 variant but uses System V AMD64 ABI:
+/// - `rdi`: hash table pointer
+/// - `rsi`: cursor
+/// - `rax`: next cursor (or `-1` if done), key pointer, key length, value words, value tag
+/// - `r10`: value address (for by-reference foreach binding)
+///
+/// Cursor protocol and slot encoding match the ARM64 implementation.
 fn emit_hash_iter_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_iter_next ---");

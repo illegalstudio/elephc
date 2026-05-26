@@ -12,6 +12,9 @@
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
+/// Number of capture groups supported by the regex callback helper.
+/// PCRE allows up to 99 capturing groups, but POSIX regex on some platforms
+/// only guarantees a smaller working set; 10 covers the common PHP use cases.
 const PREG_REPLACE_CALLBACK_NMATCH: usize = 10;
 
 /// __rt_preg_replace_callback: replace regex matches with a callback result.
@@ -267,6 +270,14 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to generated code
 }
 
+/// Publishes the current output write pointer as the `_concat_off` global offset.
+///
+/// Called before a nested callback invocation so that nested string allocations
+/// start after the already-emitted prefix rather than at the original concat_buf base.
+///
+/// # Arguments
+/// * `emitter` - the assembly emitter
+/// * `output_write_off` - stack offset where the current output write pointer is saved
 fn publish_concat_offset(emitter: &mut Emitter, output_write_off: usize) {
     emitter.instruction(&format!("ldr x11, [sp, #{}]", output_write_off));      // reload current output write pointer for concat publication
     abi::emit_symbol_address(emitter, "x9", "_concat_buf");
@@ -275,6 +286,11 @@ fn publish_concat_offset(emitter: &mut Emitter, output_write_off: usize) {
     emitter.instruction("str x10, [x9]");                                       // publish concat offset before a nested callback writes strings
 }
 
+/// x86_64 Linux implementation of `__rt_preg_replace_callback`.
+///
+/// Identical in behavior to the ARM64 variant but emits x86_64 System V ABI
+/// assembly. Stack frame layout, register usage, and calling conventions all
+/// differ to match the target platform.
 fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     let regex_t_size = emitter.platform.regex_t_size();
     let regmatch_rm_eo_off = emitter.platform.regmatch_rm_eo_offset();
@@ -528,6 +544,8 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to generated code
 }
 
+/// x86_64 variant of `publish_concat_offset`. Publishes the current output write
+/// pointer as the `_concat_off` global offset before a nested callback invocation.
 fn publish_concat_offset_x86_64(emitter: &mut Emitter, output_write_off: usize) {
     emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_write_off)); // reload current output write pointer for concat publication
     abi::emit_symbol_address(emitter, "r9", "_concat_buf");

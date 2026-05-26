@@ -16,6 +16,32 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `printf` builtin call.
+///
+/// This function implements `printf` as `sprintf` + `echo`: it evaluates the format string,
+/// marshals the variadic arguments in reverse order onto the stack (ABI requirement), calls the
+/// `__rt_sprintf` runtime helper to produce the formatted string, then writes the result to stdout
+/// via the target syscall and returns the byte count written.
+///
+/// # Arguments
+/// - `_name`: unused for `printf`; required by the dispatcher signature
+/// - `args`: `[format_string, arg1, arg2, ...]` — format string is always `args[0]`
+/// - `emitter`: target-aware instruction emitter
+/// - `ctx`: codegen context (variable layout, ownership state, class metadata)
+/// - `data`: data section for relocations and static data
+///
+/// # Returns
+/// `Some(PhpType::Int)` — always returns the character count written (PHP printf semantics).
+/// Never returns `None`.
+///
+/// # ABI notes
+/// Each argument is pushed as a 16-byte tagged record (low 8 bytes: payload; high 8 bytes: type tag).
+/// AArch64 uses `str` with pre-decrement `[sp, #-16]!`; x86_64 uses `sub rsp, 16` then `mov`.
+/// Arguments are pushed in reverse source order to match the runtime helper's variadic processing.
+///
+/// # Ownership
+/// Arguments are consumed by value; the runtime-allocated formatted string is passed directly to
+/// the write syscall without duplication.
 pub fn emit(
     _name: &str,
     args: &[Expr],

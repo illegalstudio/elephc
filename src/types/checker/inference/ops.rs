@@ -19,6 +19,11 @@ use super::super::Checker;
 use super::syntactic::infer_return_type_syntactic;
 
 impl Checker {
+    /// Infers the result type of a binary operator expression.
+    ///
+    /// Validates operand types according to PHP operator semantics (e.g., numeric
+    /// operands for arithmetic, integer operands for bitwise). Returns the `PhpType`
+    /// of the result or a compile error if operands are incompatible.
     pub(crate) fn infer_binary_op_type(
         &mut self,
         left: &Expr,
@@ -142,6 +147,11 @@ impl Checker {
         }
     }
 
+    /// Merges two array-like types for the `+` operator (array union).
+    ///
+    /// Handles `PhpType::Array` vs `PhpType::Array`, `PhpType::AssocArray` vs
+    /// `PhpType::AssocArray`, and cross-typed combinations. Produces a merged
+    /// element type or an error if the array kinds are incompatible.
     fn infer_array_union_type(
         &self,
         lt: &PhpType,
@@ -213,6 +223,10 @@ impl Checker {
         }
     }
 
+    /// Infers the result type of an `instanceof` expression.
+    ///
+    /// Validates the target class name resolves correctly (`self`, `parent`,
+    /// `static`, or a concrete class). Always returns `PhpType::Bool`.
     pub(crate) fn infer_instanceof_type(
         &mut self,
         value: &Expr,
@@ -232,6 +246,11 @@ impl Checker {
         Ok(PhpType::Bool)
     }
 
+    /// Resolves the class name for an `instanceof` target.
+    ///
+    /// Rewrites `self`, `parent`, and `static` to their concrete class names
+    /// in the current context. Returns the class name string or an error if
+    /// used outside a class context or if `parent` has no parent class.
     pub(crate) fn resolve_instanceof_target_name(
         &self,
         target: &Name,
@@ -263,6 +282,11 @@ impl Checker {
         }
     }
 
+    /// Infers the type of a closure expression, including captured environment.
+    ///
+    /// Builds a closure signature from params, variadic, and return type. Checks
+    /// the closure body with a local storage context that includes reference
+    /// parameters and capture refs. Returns `PhpType::Callable`.
     pub(crate) fn infer_closure_type(
         &mut self,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
@@ -297,6 +321,12 @@ impl Checker {
         Ok(PhpType::Callable)
     }
 
+    /// Infers the return type of a variable callable call: `$var(...)`.
+    ///
+    /// Looks up the variable's type in `env`, validates it is `PhpType::Callable`
+    /// or an invokable object, then dispatches to signature specialization and
+    /// `check_known_callable_call`. Falls back to the closure return type or
+    /// `PhpType::Int` if the callable signature is unknown.
     pub(crate) fn infer_closure_call_type(
         &mut self,
         var: &str,
@@ -379,6 +409,12 @@ impl Checker {
             .unwrap_or(PhpType::Int))
     }
 
+    /// Infers the return type of an arbitrary expression callable call: `expr(...)`.
+    ///
+    /// Handles variable callables, first-class callables, closures, and
+    /// invokable objects. Complex callees (closures with captures, captured
+    /// callables) may require a runtime capture and are rejected if unsupported.
+    /// Returns the specialized return type, possibly wrapped in a nullable union.
     pub(crate) fn infer_expr_call_type(
         &mut self,
         callee: &Expr,
@@ -503,6 +539,10 @@ impl Checker {
         Ok(self.nullable_callable_result(PhpType::Int, nullable_callable)) // fallback for unknown callables
     }
 
+    /// Returns the class name if `ty` is an invokable object or a single-member
+    /// object union; otherwise returns `None`.
+    ///
+    /// Used to detect `__invoke` on class-type values during callable inference.
     pub(crate) fn invokable_class_for_type(&self, ty: &PhpType) -> Option<String> {
         match ty {
             PhpType::Object(class_name) => Some(class_name.clone()),
@@ -529,6 +569,8 @@ impl Checker {
         }
     }
 
+    /// Wraps `ret_ty` in a nullable union if the callable result is nullable
+    /// (e.g., from a nullsafe chain). Otherwise returns `ret_ty` unchanged.
     fn nullable_callable_result(&self, ret_ty: PhpType, nullable_callable: bool) -> PhpType {
         if nullable_callable {
             self.normalize_union_type(vec![ret_ty, PhpType::Void])
@@ -537,6 +579,9 @@ impl Checker {
         }
     }
 
+    /// Returns `true` if the callee expression would require a runtime capture
+    /// to be passed to `__rt_call` because the callable cannot be materialized
+    /// as a direct symbol address (e.g., closures with captures, captured callables).
     pub(crate) fn expr_call_complex_callee_needs_runtime_capture(&self, callee: &Expr) -> bool {
         match &callee.kind {
             ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) | ExprKind::Variable(_) => {
@@ -560,6 +605,9 @@ impl Checker {
         }
     }
 
+    /// Returns `true` if `expr` evaluates to a callable that needs a runtime
+    /// capture (closure with captures, first-class callable with method/receiver,
+    /// variable with capture refs).
     fn expr_produces_captured_callable(&self, expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::Closure { captures, .. } => !captures.is_empty(),
@@ -593,6 +641,8 @@ impl Checker {
         }
     }
 
+    /// Returns `true` if a first-class callable target requires a runtime capture
+    /// (instance method or static method with static receiver).
     fn first_class_callable_target_needs_runtime_capture(target: &CallableTarget) -> bool {
         matches!(
             target,
@@ -711,6 +761,8 @@ impl Checker {
         Ok(PhpType::Int)
     }
 
+    /// Validates and delegates to `check_known_callable_call` for pipe operator
+    /// calls. Rejects signatures with by-reference parameters per the RFC.
     fn check_pipe_known_callable_call(
         &mut self,
         sig: &FunctionSig,
@@ -728,6 +780,10 @@ impl Checker {
         self.check_known_callable_call(sig, args, span, env, callee_desc)
     }
 
+    /// Specializes a callable variable's signature by inferring actual argument
+    /// types and updating `sig.params` entries that are `PhpType::Mixed` with
+    /// the inferred type. Stores the updated signature and return type in
+    /// `closure_return_types` and `callable_sigs` if anything changed.
     fn specialize_callable_var_sig_from_args(
         &mut self,
         var: &str,
@@ -769,6 +825,8 @@ impl Checker {
         Ok(sig)
     }
 
+    /// Returns `true` if `callee_ty` is a union containing both `Callable` and
+    /// `Void` and the callee expression contains a nullsafe member access.
     fn is_nullable_callable_from_nullsafe_chain(callee: &Expr, callee_ty: &PhpType) -> bool {
         let PhpType::Union(members) = callee_ty else {
             return false;
@@ -779,6 +837,8 @@ impl Checker {
     }
 }
 
+/// Returns `true` if `expr` contains a nullsafe member access anywhere in
+/// its subtree (nullsafe property, dynamic property, method call).
 fn expr_contains_nullsafe_member(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::NullsafePropertyAccess { .. }
@@ -793,10 +853,15 @@ fn expr_contains_nullsafe_member(expr: &Expr) -> bool {
     }
 }
 
+/// Returns `true` if `ty` is an array-like type (flat `Array` or `AssocArray`).
 fn is_array_like_type(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
 }
 
+/// Returns `true` if `ty` is a valid operand type for numeric binary operators
+/// (addition, subtraction, multiplication, division, modulo, comparison, spaceship).
+/// Numeric operands include `Int`, `Float`, `Bool`, `Void`, `Mixed`, or a union
+/// with mixed integer dispatch behavior.
 fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     matches!(
         ty,
@@ -804,6 +869,8 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     ) || checker.is_union_with_mixed_int_dispatch(ty)
 }
 
+/// Returns `true` if `ty` is a valid operand type for bitwise binary operators.
+/// Accepts `Int`, `Bool`, `Void`, `Mixed`, or a union with mixed integer dispatch.
 fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     matches!(
         ty,
@@ -811,10 +878,13 @@ fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     ) || checker.is_union_with_mixed_int_dispatch(ty)
 }
 
+/// Returns `true` if `ty` uses mixed numeric dispatch — i.e., the result type
+/// cannot be narrowed to a single concrete numeric type at compile time.
 fn uses_mixed_numeric_dispatch(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Mixed | PhpType::Union(_))
 }
 
+/// Returns `true` if `expr` is an empty array literal (`[]`).
 fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
     matches!(&expr.kind, ExprKind::ArrayLiteral(elems) if elems.is_empty())
 }

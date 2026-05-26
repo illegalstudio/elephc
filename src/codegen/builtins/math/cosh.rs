@@ -16,6 +16,16 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a `cosh()` call to the target's libc.
+///
+/// Arguments:
+/// - `_name`: unused, matches the builtin dispatcher signature
+/// - `args[0]`: the operand, evaluated and left in the FP argument register
+///
+/// Behavior:
+/// - Emits the argument expression and normalizes non-Float types to the FP result register.
+/// - Calls the platform's `cosh` libc function (AArch64: `bl cosh`, x86_64: `call cosh`).
+/// - Returns `PhpType::Float`. NaN/infinity behavior follows libc's `cosh`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

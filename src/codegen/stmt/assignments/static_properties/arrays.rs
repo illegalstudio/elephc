@@ -23,6 +23,8 @@ use crate::types::PhpType;
 
 mod indexed;
 
+/// Lowers `$prop[] = value` on a static property array, appending the value at the next index.
+/// Resolves the declaring class, handles late-bound receivers, and emits runtime calls to persist the appended element.
 pub(crate) fn emit_static_property_array_push_stmt(
     receiver: &StaticReceiver,
     property: &str,
@@ -111,6 +113,8 @@ pub(crate) fn emit_static_property_array_push_stmt(
     }
 }
 
+/// Lowers `$prop[$index] = value` on a static property array.
+/// Handles null-coalesce assignment, array-access objects, and late-bound receivers before emitting the indexed store.
 pub(crate) fn emit_static_property_array_assign_stmt(
     receiver: &StaticReceiver,
     property: &str,
@@ -224,6 +228,8 @@ pub(crate) fn emit_static_property_array_assign_stmt(
     );
 }
 
+/// Emits a runtime call to append a value to a static property indexed array.
+/// Dispatches to `__rt_array_push_int`, `__rt_array_push_str`, or `__rt_array_push_refcounted` based on `val_ty` and target ABI.
 fn emit_array_push_runtime_call(array_reg: &str, val_ty: &PhpType, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => match val_ty {
@@ -288,6 +294,8 @@ fn emit_array_push_runtime_call(array_reg: &str, val_ty: &PhpType, emitter: &mut
     }
 }
 
+/// Allocates and initializes an indexed array in the static property slot if it is null.
+/// Uses element size from `elem_ty` (16 for strings, 8 otherwise) and a default capacity of 4.
 fn emit_ensure_indexed_array_pointer(elem_ty: &PhpType, emitter: &mut Emitter, ctx: &mut Context) {
     let ready = ctx.next_label("static_array_ready");
     let elem_size = if matches!(elem_ty.codegen_repr(), PhpType::Str) { 16 } else { 8 };

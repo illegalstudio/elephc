@@ -15,6 +15,8 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::Checker;
 
+/// Maps a `CallArgPlanError` from the shared call-argument planner to a typed `CompileError`
+/// with a human-readable message that references the callee description and parameter names.
 fn call_arg_plan_error(
     sig: &FunctionSig,
     callee_desc: &str,
@@ -77,6 +79,8 @@ fn call_arg_plan_error(
     }
 }
 
+/// Returns a boolean vector indicating which argument positions contain assoc-spread sources
+/// (arrays with string keys that map to named arguments after spread expansion).
 fn assoc_spread_sources(args: &[Expr], env: &TypeEnv) -> Vec<bool> {
     call_args::expand_static_assoc_spread_args(args)
         .iter()
@@ -87,6 +91,8 @@ fn assoc_spread_sources(args: &[Expr], env: &TypeEnv) -> Vec<bool> {
         .collect()
 }
 
+/// Returns true if the expression is or expands to an assoc-array at runtime,
+/// which means spread arguments from it should be treated as named arguments.
 fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv) -> bool {
     match &expr.kind {
         ExprKind::Variable(name) => matches!(env.get(name), Some(PhpType::AssocArray { .. })),
@@ -99,10 +105,13 @@ fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv) -> bool {
 }
 
 impl Checker {
+    /// Returns true if any argument in the slice is a named argument or a spread of an assoc-array.
     pub(crate) fn has_named_args(args: &[Expr]) -> bool {
         call_args::has_named_args(args)
     }
 
+    /// Normalizes arguments for a user-defined function call, allowing unknown named arguments
+    /// to be collected into the variadic parameter.
     pub(crate) fn normalize_named_call_args(
         &self,
         sig: &FunctionSig,
@@ -114,6 +123,8 @@ impl Checker {
         self.normalize_call_args(sig, args, span, callee_desc, false, true, env)
     }
 
+    /// Normalizes arguments for a builtin or extern function call, rejecting unknown named
+    /// arguments and not allowing unknown named arguments to flow into the variadic parameter.
     pub(crate) fn normalize_builtin_call_args(
         &self,
         sig: &FunctionSig,
@@ -125,6 +136,8 @@ impl Checker {
         self.normalize_call_args(sig, args, span, callee_desc, true, false, env)
     }
 
+    /// Shared argument normalization for both user-defined and builtin calls. Delegates to the
+    /// shared call-argument planner and converts planner errors to `CompileError`.
     fn normalize_call_args(
         &self,
         sig: &FunctionSig,
@@ -149,6 +162,9 @@ impl Checker {
         Ok(plan.normalized_args())
     }
 
+    /// Returns true if `expected` and `actual` are compatible according to PHP assignment
+    /// coercion rules (e.g., int is compatible with float, float is compatible with int/bool/void,
+    /// `Mixed` is compatible with everything, `Never` is compatible with everything).
     pub(crate) fn types_compatible(expected: &PhpType, actual: &PhpType) -> bool {
         if expected == actual {
             return true;
@@ -177,6 +193,8 @@ impl Checker {
         }
     }
 
+    /// Returns `Ok(())` if `actual` is compatible with `expected` (via `types_compatible` or
+    /// `type_accepts`), otherwise returns a `CompileError` describing the type mismatch.
     pub(crate) fn require_compatible_arg_type(
         &self,
         expected: &PhpType,
@@ -194,6 +212,7 @@ impl Checker {
         }
     }
 
+    /// Formats a parameter-count range as a human-readable string, e.g. `3` or `2 to 5`.
     pub(crate) fn format_fixed_or_range_arity(min_args: usize, max_args: usize) -> String {
         if min_args == max_args {
             format!("{}", min_args)
@@ -202,6 +221,9 @@ impl Checker {
         }
     }
 
+    /// Validates and type-checks a call to a known callable (user function or builtin with
+    /// a known signature): arity constraints, named/spread arguments, ref-param requirements,
+    /// and argument-type compatibility. Returns the signature's return type on success.
     pub(crate) fn check_known_callable_call(
         &mut self,
         sig: &FunctionSig,

@@ -14,6 +14,24 @@
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
+/// Emits the locale preparation sequence used before compiling POSIX regex patterns.
+///
+/// For each target architecture, emits instructions that:
+/// - Select `LC_CTYPE` category so character classes observe the locale
+/// - Attempt to activate `"C.UTF-8"` locale first for Unicode POSIX class support
+/// - Fall back to the empty-string locale (environment-supplied) if `C.UTF-8` is unavailable
+///
+/// # Arguments
+/// * `emitter` — target-specific instruction emitter; carries architecture and platform context
+///
+/// # Side effects
+/// Calls `setlocale(LC_CTYPE, ...)` which modifies the process-wide locale state.
+/// This must be called before any regex compilation to ensure consistent character class behavior
+/// in statically linked binaries that lack runtime C library initialization.
+///
+/// # ABI notes
+/// AArch64: passes `LC_CTYPE` in `x0`, locale name pointer in `x1`, result in `x0`
+/// X86_64: passes `LC_CTYPE` in `edi`, locale name pointer in `rsi`, result in `rax`
 pub(crate) fn emit_prepare_regex_locale(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {

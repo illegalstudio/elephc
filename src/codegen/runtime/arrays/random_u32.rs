@@ -12,7 +12,14 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::platform::Platform;
 
-/// __rt_random_u32: return a pseudo-random 32-bit unsigned integer in x0.
+/// Emits the `__rt_random_u32` runtime helper.
+///
+/// Dispatches to `emit_random_u32_linux_x86_64` on x86_64 Linux; otherwise emits
+/// macOS or Linux ARM64 variants. On macOS this calls `arc4random()` from libc.
+/// On Linux ARM64 it attempts the `getrandom` syscall first; if that fails
+/// (e.g., `/dev/urandom` not yet seeded) it falls back to `time()` mixed into a 32-bit value.
+///
+/// The result is returned in the platform's integer register: `x0` on ARM64, `eax` on x86_64.
 pub fn emit_random_u32(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_random_u32_linux_x86_64(emitter);
@@ -65,6 +72,11 @@ pub fn emit_random_u32(emitter: &mut Emitter) {
     }
 }
 
+/// Emits the `__rt_random_u32` runtime helper for Linux x86_64.
+///
+/// Attempts the `getrandom` syscall first; if it fails (e.g., `/dev/urandom` not yet
+/// seeded) it falls back to `time()` mixed into a 32-bit value. The result is returned
+/// in `eax`.
 fn emit_random_u32_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: random_u32 ---");

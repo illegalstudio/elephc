@@ -9,12 +9,17 @@
 
 use super::*;
 
+// Verifies that the compiler emits "Unused variable" warnings for function parameters
+// and local assignments that are never read.
 #[test]
 fn test_warning_unused_variable() {
     expect_warning("<?php function foo($x) { $y = 1; return 2; }", "Unused variable: $x");
     expect_warning("<?php function foo($x) { $y = 1; return 2; }", "Unused variable: $y");
 }
 
+// Verifies that by-reference parameters are NOT flagged as unused even when they
+// are not explicitly read in the function body, because they are semantically
+// output parameters — the callee writes to the caller's variable.
 #[test]
 fn test_warning_byref_params_not_flagged_as_unused() {
     expect_no_warning(
@@ -35,11 +40,15 @@ fn test_warning_byref_params_not_flagged_as_unused() {
     );
 }
 
+// Verifies that code immediately following a `return` statement within a function
+// body is flagged as unreachable.
 #[test]
 fn test_warning_unreachable_code() {
     expect_warning("<?php function foo() { return 1; echo 2; }", "Unreachable code");
 }
 
+// Verifies that code after a `switch` that covers all cases (including `default`)
+// is flagged as unreachable.
 #[test]
 fn test_warning_unreachable_after_exhaustive_switch() {
     expect_warning(
@@ -48,6 +57,8 @@ fn test_warning_unreachable_after_exhaustive_switch() {
     );
 }
 
+// Verifies that code after a `try-catch` where both branches return is flagged
+// as unreachable.
 #[test]
 fn test_warning_unreachable_after_exhaustive_try_catch() {
     expect_warning(
@@ -56,6 +67,9 @@ fn test_warning_unreachable_after_exhaustive_try_catch() {
     );
 }
 
+// Verifies that code after a `try-finally` where the `finally` block performs a
+// return is flagged as unreachable (finally's return takes precedence over the
+// try's return from the caller's perspective).
 #[test]
 fn test_warning_unreachable_after_try_finally_return() {
     expect_warning(
@@ -64,6 +78,9 @@ fn test_warning_unreachable_after_try_finally_return() {
     );
 }
 
+// Verifies that code after a `try-catch` where only the `catch` branch returns
+// is NOT flagged as unreachable, because the `try` block may complete without
+// returning and fall through to the subsequent code.
 #[test]
 fn test_warning_no_unreachable_after_fallthrough_try() {
     expect_no_warning(
@@ -72,6 +89,8 @@ fn test_warning_no_unreachable_after_fallthrough_try() {
     );
 }
 
+// Verifies that a closure variable is not flagged as unused when the closure is
+// invoked (the variable holds a callable that is called, so it is used).
 #[test]
 fn test_warning_closure_call_marks_callable_variable_as_used() {
     expect_no_warning(
@@ -80,6 +99,8 @@ fn test_warning_closure_call_marks_callable_variable_as_used() {
     );
 }
 
+// Verifies that unused parameters of nested function declarations are analyzed
+// and produce warnings, not silently ignored.
 #[test]
 fn test_warning_nested_function_is_analyzed() {
     expect_warning(
@@ -88,6 +109,8 @@ fn test_warning_nested_function_is_analyzed() {
     );
 }
 
+// Verifies that an outer variable captured by an arrow function is not flagged
+// as unused, because the arrow function implicitly returns the variable.
 #[test]
 fn test_warning_arrow_function_marks_outer_variable_as_used() {
     expect_no_warning(
@@ -96,6 +119,9 @@ fn test_warning_arrow_function_marks_outer_variable_as_used() {
     );
 }
 
+// Verifies that the span of an unused parameter warning is a real source span
+// (line > 0) rather than a dummy fallback span, ensuring the diagnostic points
+// to the correct source location.
 #[test]
 fn test_warning_unused_param_has_real_span() {
     let result = check_source_full("<?php function foo($x) { return 1; }").unwrap();
@@ -107,6 +133,9 @@ fn test_warning_unused_param_has_real_span() {
     assert!(warning.span.line > 0, "expected non-dummy span, got {:?}", warning.span);
 }
 
+// Verifies that marking a private method as final produces a warning, because
+// private methods cannot be overridden by child classes, making the `final`
+// modifier redundant.
 #[test]
 fn test_warning_final_private_method() {
     expect_warning(
@@ -115,6 +144,9 @@ fn test_warning_final_private_method() {
     );
 }
 
+// Verifies that a final private constructor does NOT produce a warning. Unlike
+// regular private methods, a final private constructor is a legitimate pattern
+// (e.g., singleton enforcement) and is not redundant.
 #[test]
 fn test_warning_final_private_constructor_is_allowed() {
     expect_no_warning(
@@ -125,6 +157,8 @@ fn test_warning_final_private_constructor_is_allowed() {
 
 // --- #[\Deprecated] warnings (PHP 8.4) ---
 
+// Verifies that calling a function marked with #[Deprecated] without arguments
+// emits a deprecation warning.
 #[test]
 fn test_warning_deprecated_function_call() {
     expect_warning(
@@ -133,6 +167,8 @@ fn test_warning_deprecated_function_call() {
     );
 }
 
+// Verifies that a deprecation reason provided via #[Deprecated("use newApi()")] is
+// included in the emitted warning message after a dash separator.
 #[test]
 fn test_warning_deprecated_function_includes_reason() {
     expect_warning(
@@ -141,6 +177,8 @@ fn test_warning_deprecated_function_includes_reason() {
     );
 }
 
+// Verifies that calling an instance method marked with #[Deprecated] emits a
+// deprecation warning mentioning the method name.
 #[test]
 fn test_warning_deprecated_method_call() {
     expect_warning(
@@ -149,6 +187,8 @@ fn test_warning_deprecated_method_call() {
     );
 }
 
+// Verifies that calling a static method marked with #[Deprecated] emits a
+// deprecation warning including the reason string when provided.
 #[test]
 fn test_warning_deprecated_static_method_call() {
     expect_warning(
@@ -157,6 +197,9 @@ fn test_warning_deprecated_static_method_call() {
     );
 }
 
+// Verifies that the short `#[Deprecated]` attribute (without backslash) on a
+// function is recognized as a deprecation marker and produces a warning when
+// the function is called.
 #[test]
 fn test_warning_deprecated_unqualified_form_is_recognized() {
     expect_warning(
@@ -165,6 +208,8 @@ fn test_warning_deprecated_unqualified_form_is_recognized() {
     );
 }
 
+// Verifies that a `use Deprecated as Old;` import alias is accepted as a valid
+// deprecation attribute and produces a warning when the aliased function is called.
 #[test]
 fn test_warning_deprecated_import_alias_is_recognized() {
     expect_warning(
@@ -173,6 +218,8 @@ fn test_warning_deprecated_import_alias_is_recognized() {
     );
 }
 
+// Verifies that `#[Foo\Deprecated]` (a namespaced attribute that is not the
+// built-in `Deprecated`) does NOT produce a deprecation warning.
 #[test]
 fn test_warning_no_deprecation_for_qualified_lookalike() {
     expect_no_warning(
@@ -181,6 +228,9 @@ fn test_warning_no_deprecation_for_qualified_lookalike() {
     );
 }
 
+// Verifies that `#[Deprecated]` inside a namespace does NOT produce a deprecation
+// warning when called via an unqualified name, because in namespaced files the
+// compiler's builtin attribute fallback is not applied to local names.
 #[test]
 fn test_warning_no_deprecation_for_namespaced_unqualified_lookalike() {
     expect_no_warning(
@@ -189,6 +239,8 @@ fn test_warning_no_deprecation_for_namespaced_unqualified_lookalike() {
     );
 }
 
+// Verifies that a deprecated function does NOT produce a deprecation warning
+// when it is declared but never called.
 #[test]
 fn test_warning_no_deprecation_when_not_called() {
     expect_no_warning(
@@ -197,6 +249,8 @@ fn test_warning_no_deprecation_when_not_called() {
     );
 }
 
+// Verifies that a regular (non-deprecated) function does NOT produce any
+// deprecation warning when called.
 #[test]
 fn test_warning_no_deprecation_for_undeprecated_function() {
     expect_no_warning(

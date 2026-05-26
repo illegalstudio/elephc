@@ -75,6 +75,10 @@ pub fn emit_cstr_to_str(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return x1=ptr, x2=len
 }
 
+/// Emits x86_64 Linux assembly for `__rt_cstr_to_str`: null-terminated C string to owned elefphc string.
+/// Input:  rax = pointer to null-terminated C string
+/// Output: rax = heap-allocated string pointer, rdx = computed length
+/// Saves and restores rbp; uses 16 bytes of spill stack space.
 fn emit_cstr_to_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: cstr_to_str ---");

@@ -17,6 +17,12 @@ use crate::span::Span;
 use super::super::expect_semicolon;
 use super::compound::{assignment_operator, assignment_value, AssignmentOperator};
 
+/// Parses a postfix assignment where the target involves property access, array access,
+/// or other complex expressions. Detects `+=` append style via `[]` in the target.
+/// Returns the lowered `StmtKind` directly for simple targets, or synthesizes a
+/// temporary-variable sequence for effectful (compound operator) targets that cannot
+/// be replayed safely.
+/// Returns `Ok(None)` if the token range does not contain a postfix assignment pattern.
 pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -96,6 +102,11 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     Ok(Some(Stmt::new(stmt, span)))
 }
 
+/// Parses a scoped (static class member) postfix assignment, handling targets like
+/// `$obj::prop`, `$obj::$prop`, and `$obj::prop[]`. Detects `+=` append style via `[]`.
+/// For compound operators on static properties that cannot be replayed safely, lowers
+/// to a temporary-variable sequence via `lower_effectful_static_assignment`.
+/// Returns `Ok(None)` when no scoped assignment pattern is found.
 pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -163,6 +174,9 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     Ok(Some(Stmt::new(stmt, span)))
 }
 
+/// Scans tokens starting from `start` (skipping nested parentheses, brackets, and braces)
+/// and returns the position and operator of the first top-level assignment at nesting depth 0.
+/// Returns `None` if no assignment operator is found before a semicolon at depth 0.
 fn find_top_level_assignment(
     tokens: &[(Token, Span)],
     start: usize,
@@ -196,6 +210,11 @@ fn find_top_level_assignment(
     None
 }
 
+/// Returns `true` if the expression is safe to replay as an l-value in a compound assignment,
+/// meaning its value can be read multiple times without observable side effects.
+/// Replayable expressions include variables, literals, property/static-property access on
+/// replayable bases, and recursively their sub-expressions.
+/// Function calls, new[], and most other `ExprKind` variants return `false`.
 pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
@@ -241,6 +260,7 @@ pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
     }
 }
 
+/// Recursively checks whether `target` can be used as an r-value in a replay-safe assignment.
 fn can_replay_instanceof_target(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(_) => true,
@@ -248,6 +268,9 @@ fn can_replay_instanceof_target(target: &InstanceOfTarget) -> bool {
     }
 }
 
+/// Lowers a compound postfix assignment (e.g., `+=`, `-=`) on a non-replayable l-value
+/// by extracting sub-expressions into temporary variables so each is evaluated exactly once.
+/// Builds a `Synthetic` statement containing the temporaries followed by the final assignment.
 fn lower_effectful_postfix_assignment(
     lhs_expr: Expr,
     op: AssignmentOperator,
@@ -323,6 +346,9 @@ fn lower_effectful_postfix_assignment(
     Ok(lowerer.finish(lowered))
 }
 
+/// Lowers a compound static property assignment where the target cannot be replayed safely.
+/// Temporaries are created for any sub-expression that could produce observable side effects
+/// (e.g., method calls on the object or array accesses). Returns a `Synthetic` statement.
 fn lower_effectful_static_assignment(
     lhs_expr: Expr,
     op: AssignmentOperator,
@@ -384,6 +410,8 @@ fn lower_effectful_static_assignment(
     Ok(lowerer.finish(lowered))
 }
 
+/// Helper that rewrites complex l-value targets into sequences of temporary-variable
+/// assignments so that source evaluation order is preserved and side effects are not duplicated.
 struct EffectfulTargetLowerer {
     span: Span,
     next_temp: usize,
@@ -391,6 +419,8 @@ struct EffectfulTargetLowerer {
 }
 
 impl EffectfulTargetLowerer {
+    /// Initializes the lowerer with the source span used for all synthesized statements
+    /// and temporary variable names.
     fn new(span: Span) -> Self {
         Self {
             span,
@@ -399,6 +429,9 @@ impl EffectfulTargetLowerer {
         }
     }
 
+    /// If `expr` is replay-safe, returns it unchanged. Otherwise, emits an `Assign`
+    /// statement to a uniquely-named temporary and returns a `Variable` reference to it.
+    /// Increments `next_temp` to keep temporary names unique across the same statement.
     fn stabilize(&mut self, expr: Expr) -> Expr {
         if can_replay_assignment_target(&expr) {
             return expr;
@@ -418,6 +451,9 @@ impl EffectfulTargetLowerer {
         Expr::new(ExprKind::Variable(name), self.span)
     }
 
+    /// Stabilizes an array-access target, recursively stabilizing both the array base
+    /// and the index. For simple array bases (Variable, This, StaticPropertyAccess),
+    /// the array base is kept as-is; deeper bases are stabilized via `stabilize_array_base`.
     fn stabilize_array_target(&mut self, expr: Expr) -> Expr {
         let span = expr.span;
         match expr.kind {
@@ -432,6 +468,9 @@ impl EffectfulTargetLowerer {
         }
     }
 
+    /// Stabilizes the base of a nested array access chain. Recursively processes
+    /// `ArrayAccess` and `PropertyAccess` chains; returns `Variable`, `This`,
+    /// and `StaticPropertyAccess` directly; calls `stabilize` for all other expressions.
     fn stabilize_array_base(&mut self, expr: Expr) -> Expr {
         let span = expr.span;
         match expr.kind {
@@ -454,6 +493,8 @@ impl EffectfulTargetLowerer {
         }
     }
 
+    /// Appends `final_stmt` as the last statement and wraps the entire sequence
+    /// in a `Synthetic` statement node returned as a single `Stmt`.
     fn finish(mut self, final_stmt: StmtKind) -> Stmt {
         self.stmts.push(Stmt::new(final_stmt, self.span));
         Stmt::new(StmtKind::Synthetic(self.stmts), self.span)

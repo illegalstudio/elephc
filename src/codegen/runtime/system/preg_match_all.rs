@@ -124,6 +124,10 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Target-specific implementation of `__rt_preg_match_all` for Linux x86_64.
+/// Uses the System V AMD64 ABI: pattern ptr in rdi, pattern len in rsi, subject ptr in rdx, subject len in rcx.
+/// Returns the non-overlapping match count in rax.
+/// Handles zero-length matches by advancing at least one byte to avoid infinite loops.
 fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
     let regex_t_size = emitter.platform.regex_t_size();
     let regmatch_off = regex_t_size;

@@ -11,6 +11,7 @@
 use crate::names::Name;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Type expression in PHP syntax.
 pub enum TypeExpr {
     Int,
     Float,

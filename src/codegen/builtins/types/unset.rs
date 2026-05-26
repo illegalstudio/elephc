@@ -15,6 +15,19 @@ use crate::codegen::emit::Emitter;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits PHP `unset($var)` and `unset($arr[$key])` calls.
+///
+/// For each argument, dispatches to array-element unset if the argument is an
+/// array-access expression; otherwise treats it as a variable unset. Releases
+/// any owned heap-backed value before writing the null sentinel into the
+/// variable slot.
+///
+/// Arguments:
+/// - `_name`: unused, matches the builtin dispatcher signature
+/// - `args`: one or more expressions to unset
+///
+/// Output:
+/// - Always returns `Some(PhpType::Void)` to satisfy the builtin caller
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -29,6 +42,24 @@ pub fn emit(
     Some(PhpType::Void)
 }
 
+/// Emits the runtime cleanup and null-sentinel write for a single `unset` argument.
+///
+/// For array-access targets, delegates to `emit_array_access_offset_unset`. For
+/// simple variables, loads the old heap pointer, calls the appropriate refcount
+/// helper (`__rt_heap_free_safe`, `__rt_decref_array`, `__rt_decref_hash`, or
+/// `__rt_decref_object`), then writes the null sentinel (0x7FFFFFFFFFFFFFFFE)
+/// into the variable slot and marks it `Void`/non-heap.
+///
+/// Arguments:
+/// - `arg`: the expression to unset (must be `ArrayAccess` or `Variable`)
+/// - `emitter`: target assembly emitter
+/// - `ctx`: current codegen context (provides variable layout and type info)
+/// - `data`: mutable data section for relocations
+///
+/// ABI/side effects:
+/// - Clobbers `int_result_reg` for loading the old heap pointer and materializing
+///   the null sentinel
+/// - Updates `ctx` variable entry to `PhpType::Void` with `HeapOwnership::NonHeap`
 fn emit_unset_arg(
     arg: &Expr,
     emitter: &mut Emitter,

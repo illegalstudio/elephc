@@ -16,6 +16,22 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits PHP `is_string` type predicate as a runtime check.
+///
+/// For `PhpType::Mixed` or `PhpType::Union` arguments, unboxes the value via
+/// `__rt_mixed_unbox` and compares the resulting runtime tag against the
+/// string-payload sentinel (tag value 1). For types known at compile time,
+/// returns a constant 1 (string) or 0 (not string).
+///
+/// Returns `Some(PhpType::Bool)` unconditionally.
+///
+/// Arguments:
+/// - `args[0]`: the expression to test
+///
+/// Input type `ty`:
+/// - `Mixed` / `Union`: runtime unbox + tag comparison
+/// - `Str`: constant 1
+/// - all other types: constant 0
 pub fn emit(
     _name: &str,
     args: &[Expr],

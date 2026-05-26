@@ -19,6 +19,9 @@ use crate::span::Span;
 use super::calls::parse_first_class_callable_parens;
 use super::{parse_args, parse_expr};
 
+/// Parses a PHP `match` expression: `match ($subject) { pattern => result, default => fallback }`.
+/// Consumes the `match` keyword, parenthesized subject expression, and the braced arm list.
+/// Handles comma-separated patterns within a single arm, and an optional `default =>` fallback arm.
 pub(super) fn parse_match_expr(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -92,6 +95,9 @@ pub(super) fn parse_match_expr(
     ))
 }
 
+/// Parses a PHP 8.0 attributed closure or arrow function: `#[Attr] function() { … }` or `#[Attr] fn() => …`.
+/// Consumes attribute lists (discarded for now), then dispatches to `parse_closure` or `parse_arrow_closure`.
+/// Supports static and non-static variants, and the `static` keyword between attributes and the callable.
 pub(super) fn parse_attributed_closure(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -125,6 +131,9 @@ pub(super) fn parse_attributed_closure(
     }
 }
 
+/// Parses a PHP `function(...) use ($capture) { ... }` closure.
+/// Consumes the `function` keyword and parameter list, an optional `use ($vars)` capture clause,
+/// an optional `: ReturnType` annotation, and the block body. Sets `is_arrow: false`.
 pub(super) fn parse_closure(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -201,6 +210,9 @@ pub(super) fn parse_closure(
     ))
 }
 
+/// Parses a PHP arrow function: `fn(...) => expr`.
+/// Consumes the `fn` keyword and parameter list, optional `: ReturnType`, then the `=>` and body expression.
+/// Wraps the body expression in a `Return` statement. Sets `is_arrow: true`, `captures: []`.
 pub(super) fn parse_arrow_closure(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -238,6 +250,8 @@ pub(super) fn parse_arrow_closure(
     ))
 }
 
+/// Parses the optional `: ReturnType` clause after a closure's parameter list.
+/// Returns `Some(TypeExpr)` if a colon is present, otherwise `None`.
 fn parse_optional_closure_return_type(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -251,6 +265,9 @@ fn parse_optional_closure_return_type(
     }
 }
 
+/// Parses the comma-separated parameter list inside a closure's `(` `)`.
+/// Consumes typed parameters, by-reference `&`, variadic `...`, default values, and PHP 8.0 parameter attributes.
+/// Returns the parameter list and an optional variadic parameter name.
 fn parse_closure_params(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -332,6 +349,9 @@ fn parse_closure_params(
     Ok((params, variadic))
 }
 
+/// Parses a named expression that could be a constant reference, function call, buffer_new<T>, ptr_cast<T>, or static/class method access.
+/// Disambiguates based on the token that follows the name: `(` for calls, `<T>` for buffer_new/ptr_cast, `::` for static access.
+/// On `new` after a name, delegates to `parse_new_object`; otherwise returns a `ConstRef` if no suffix matches.
 pub(super) fn parse_named_expr(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -480,6 +500,9 @@ pub(super) fn parse_named_expr(
     }
 }
 
+/// Parses a PHP `new` object construction: `new Class(...)`, `new self(...)`, `new static(...)`, or `new parent(...)`.
+/// Consumes the `new` keyword, then handles late-static-binding receivers (`self`/`static`/`parent`) separately from class-name construction.
+/// Returns `NewScopedObject` for the former and `NewObject` for the latter.
 pub(super) fn parse_new_object(
     tokens: &[(Token, Span)],
     pos: &mut usize,

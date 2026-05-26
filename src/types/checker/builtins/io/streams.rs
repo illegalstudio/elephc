@@ -15,6 +15,17 @@ use crate::types::{PhpType, TypeEnv};
 use super::common::{ensure_stream_resource, BuiltinResult};
 use super::super::super::Checker;
 
+/// Type-checks stream I/O builtins: `fopen`, `fclose`, `fread`, `fwrite`, `fgets`, `feof`,
+/// `readline`, `fseek`, `ftell`, `rewind`, `fgetcsv`, `fputcsv`, `ftruncate`, `fsync`,
+/// `fflush`, `fdatasync`, `fgetc`, `fpassthru`, `flock`, and `tmpfile`.
+///
+/// Matches `name` against known stream builtins, validates arity and argument types via
+/// `checker.infer_type()` using `env`, and returns `Some(PhpType)` on match or `None` if
+/// `name` is not a recognized stream function. Errors are reported at `span`.
+///
+/// Notable behaviors: `flock` requires a variable (not arbitrary expression) for its
+/// optional third `$would_block` parameter; `fgetc` returns `Str|Bool` on EOF; `fopen`
+/// and `tmpfile` return `stream_resource|Bool` to reflect PHP's false-on-failure pattern.
 pub(super) fn check_builtin(
     checker: &mut Checker,
     name: &str,
@@ -199,6 +210,12 @@ pub(super) fn check_builtin(
     }
 }
 
+/// Returns `true` if `args` contains exactly one element that is a `...[...]` spread
+/// of an empty array literal.
+///
+/// PHP allows `tmpfile(...[])` as a no-argument call. This helper distinguishes that
+/// valid form from `tmpfile()` with zero arguments by checking for a single `Spread`
+/// node wrapping an `ArrayLiteral([])`. Returns `false` for all other argument shapes.
 fn is_empty_static_array_spread(args: &[Expr]) -> bool {
     let [arg] = args else {
         return false;

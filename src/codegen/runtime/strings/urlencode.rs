@@ -109,6 +109,9 @@ pub fn emit_urlencode(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits x86_64 Linux–specific urlencode runtime helper.
+/// Consumes source string in rax/rdx, writes percent-encoded output to the concat buffer,
+/// updates `_concat_off`, and returns the result pointer/length in rax/rdx.
 fn emit_urlencode_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: urlencode ---");

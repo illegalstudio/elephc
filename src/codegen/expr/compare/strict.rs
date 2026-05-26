@@ -19,6 +19,22 @@ use crate::parser::ast::{BinOp, ExprKind};
 
 use super::super::{emit_expr, expr_result_heap_ownership};
 
+/// Emits strict equality (`===`) or inequality (`!==`) comparison.
+///
+/// Both operands are evaluated and pushed to the temporary comparison stack before
+/// comparison. The function dispatches based on the static type of the left operand:
+/// - **Int/Bool/Void/Never/Resource**: integer comparison via `cmp` + `cset`/`set`
+/// - **Float**: floating-point comparison via `fcmp`/`ucomisd` + `cset`/`set`
+/// - **Str**: byte-by-byte comparison via `__rt_str_eq` runtime helper
+/// - **Array/AssocArray/Iterable/Callable/Object/Buffer/Pointer**: pointer identity comparison
+/// - **Mixed/Union**: boxed mixed comparison via `__rt_mixed_strict_eq` runtime helper
+///
+/// When `types_match` is false (incompatible static types), returns false for `===` and
+/// true for `!==` without emitting comparison code. The function preserves PHP semantics
+/// where a compile-time type mismatch means the comparison result is known at compile time.
+///
+/// Returns `PhpType::Bool` as the result type. The function handles ownership cleanup for
+/// boxed mixed operands via `__rt_decref_mixed` after the comparison helper returns.
 pub(in crate::codegen::expr) fn emit_strict_compare(
     left: &Expr,
     op: &BinOp,
@@ -307,6 +323,13 @@ pub(in crate::codegen::expr) fn emit_strict_compare(
     PhpType::Bool
 }
 
+/// Peeks the static `PhpType` of an expression from its compile-time type environment.
+///
+/// Returns `Some(PhpType)` for expressions with known static types (literals, variables).
+/// Returns `None` for expressions whose type cannot be determined at compile time
+/// (function calls, complex binops, etc.). This is used to decide whether two operands
+/// have "types match" at codegen time, enabling direct comparison instead of the
+/// general mixed comparison path.
 fn peek_expr_type(expr: &Expr, ctx: &Context) -> Option<PhpType> {
     match &expr.kind {
         ExprKind::IntLiteral(_) => Some(PhpType::Int),
@@ -319,6 +342,11 @@ fn peek_expr_type(expr: &Expr, ctx: &Context) -> Option<PhpType> {
     }
 }
 
+/// Returns true if the expression produces an owned `Mixed` or `Union` result.
+///
+/// An operand is "owned" when the comparison expression is responsible for releasing
+/// its refcount after the comparison helper returns. This determines whether
+/// `__rt_decref_mixed` must be emitted during cleanup for each operand.
 fn owned_mixed_operand(expr: &Expr, ty: &PhpType) -> bool {
     matches!(ty, PhpType::Mixed | PhpType::Union(_))
         && expr_result_heap_ownership(expr) == HeapOwnership::Owned

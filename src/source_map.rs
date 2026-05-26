@@ -11,6 +11,12 @@
 use std::fs;
 use std::path::Path;
 
+/// Parses assembly comments in the form `@src line=<php_line> col=<php_col>` emitted
+/// by codegen, builds a JSON source map mapping each assembly line to its PHP source
+/// position, and writes the result to `output_path`.
+///
+/// `asm` is the full generated assembly text. `source_path` is the original PHP file.
+/// The output JSON uses the format `elephc-source-map-v1`.
 pub fn write_source_map(
     asm: &str,
     source_path: &Path,
@@ -59,6 +65,8 @@ pub fn write_source_map(
         .map_err(|err| format!("failed to write source map '{}': {}", output_path.display(), err))
 }
 
+/// Escapes a string for use inside a JSON value: backslashes, quotes, and control
+/// characters are prefixed with backslashes so the result is valid JSON text.
 fn escape_json(value: &str) -> String {
     value
         .replace('\\', "\\\\")

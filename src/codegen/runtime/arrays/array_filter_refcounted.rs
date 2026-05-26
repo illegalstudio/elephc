@@ -11,9 +11,13 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_filter_refcounted: filter a refcounted array using a callback, returning a new array.
-/// Input: x0 = callback function address, x1 = source array pointer, x2 = optional callback environment pointer
-/// Output: x0 = pointer to new filtered array
+/// Emits `__rt_array_filter_refcounted` for ARM64: filters a refcounted array using a callback, producing a new array.
+/// ABI (ARM64): x0 = callback fn ptr, x1 = source array ptr, x2 = optional callback environment ptr. Returns array ptr in x0.
+/// Each source element is passed to the callback; truthy return keeps the element in the destination array.
+/// String elements use a ptr+len (16-byte) ABI; refcounted scalars use a single pointer register.
+/// The destination array grows automatically via `__rt_array_push_refcounted` or `__rt_array_push_str` as elements are kept.
+/// Preserves all callee-saved registers (x19-x21, x29-x30).
+/// Does not increment refcounts of source elements; destination array takes ownership of kept payloads.
 pub fn emit_array_filter_refcounted(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_filter_refcounted_linux_x86_64(emitter);
@@ -105,6 +109,13 @@ pub fn emit_array_filter_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return filtered array
 }
 
+/// Emits `__rt_array_filter_refcounted` for x86_64 Linux: filters a refcounted array using a callback, producing a new array.
+/// ABI (x86_64 SysV): rdi = callback fn ptr, rsi = source array ptr, rdx = optional callback environment ptr. Returns array ptr in rax.
+/// Each source element is passed to the callback; truthy return keeps the element in the destination array.
+/// String elements use a ptr+len (16-byte) ABI; refcounted scalars use a single pointer register.
+/// The destination array grows automatically via `__rt_array_push_refcounted` or `__rt_array_push_str` as elements are kept.
+/// Preserves all callee-saved registers (r12-r14, rbp).
+/// Does not increment refcounts of source elements; destination array takes ownership of kept payloads.
 fn emit_array_filter_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_filter_refcounted ---");

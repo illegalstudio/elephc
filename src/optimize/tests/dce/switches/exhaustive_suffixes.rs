@@ -11,6 +11,7 @@
 use super::*;
 
 #[test]
+// Verifies DCE prunes the strict-true case when a negated-strict-eq guard guarantees the condition is false.
 fn test_eliminate_dead_code_prunes_negated_strict_switch_true_case() {
     let negated_strict_eq = Expr::new(
         ExprKind::Not(Box::new(Expr::binop(
@@ -69,6 +70,7 @@ fn test_eliminate_dead_code_prunes_negated_strict_switch_true_case() {
 }
 
 #[test]
+// Verifies DCE removes the default branch when a switch on `true` has a case and its negated form (A and !A, where A is a conjunction).
 fn test_eliminate_dead_code_prunes_exhaustive_negated_and_switch_true_default() {
     let conjunction = Expr::binop(Expr::var("a"), BinOp::And, Expr::var("b"));
     let negated_conjunction = Expr::new(ExprKind::Not(Box::new(conjunction.clone())), Span::dummy());
@@ -112,6 +114,7 @@ fn test_eliminate_dead_code_prunes_exhaustive_negated_and_switch_true_default() 
 }
 
 #[test]
+// Verifies DCE removes the default branch when a switch on `true` has a case and its negation as patterns (A or B) and !(A or B).
 fn test_eliminate_dead_code_prunes_exhaustive_negated_or_switch_true_default() {
     let disjunction = Expr::binop(Expr::var("a"), BinOp::Or, Expr::var("b"));
     let negated_disjunction = Expr::new(ExprKind::Not(Box::new(disjunction.clone())), Span::dummy());
@@ -155,6 +158,7 @@ fn test_eliminate_dead_code_prunes_exhaustive_negated_or_switch_true_default() {
 }
 
 #[test]
+// Verifies DCE removes the default and other patterns when a switch on `true` has a multi-pattern case covering flag and !flag.
 fn test_eliminate_dead_code_prunes_switch_true_suffix_after_exhaustive_multi_pattern_case() {
     let exhaustive_patterns = vec![
         Expr::var("flag"),
@@ -202,6 +206,7 @@ fn test_eliminate_dead_code_prunes_switch_true_suffix_after_exhaustive_multi_pat
 }
 
 #[test]
+// Verifies DCE removes case label 1 and case 3 when the outer if guarantees x==2 and the switch cases cover [1,2] exhaustively.
 fn test_eliminate_dead_code_prunes_scalar_switch_suffix_after_exhaustive_multi_pattern_case() {
     let exhaustive_patterns = vec![Expr::int_lit(1), Expr::int_lit(2)];
     let program = vec![Stmt::new(

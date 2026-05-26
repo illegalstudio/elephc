@@ -11,9 +11,16 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// implode: join array elements with glue string.
-/// Input: x1/x2=glue, x3=array_ptr
-/// Output: x1=result_ptr, x2=result_len
+/// Emits the `__rt_implode` runtime helper for joining array elements with a glue string.
+/// Dispatches to platform-specific implementations (x86_64 Linux vs ARM64).
+///
+/// Input registers (ARM64): x1=glue_ptr, x2=glue_len, x3=array_ptr
+/// Output registers (ARM64): x1=result_ptr, x2=result_len
+/// Input registers (x86_64 Linux): rdi=glue_ptr, rsi=glue_len, rdx=array_ptr
+/// Output registers (x86_64 Linux): rax=result_ptr, rdx=result_len
+///
+/// The result is written into the shared concat buffer and _concat_off is updated
+/// to reflect the bytes consumed by this call.
 pub fn emit_implode(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_implode_linux_x86_64(emitter);
@@ -120,6 +127,14 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_implode`.
+/// Implements the same join logic as the ARM64 path but uses x86_64 System V ABI
+/// registers and x86_64 assembly conventions (r8-r11, rdx for length, rax for pointer).
+///
+/// Input registers: rdi=glue_ptr, rsi=glue_len, rdx=array_ptr
+/// Output registers: rax=result_ptr, rdx=result_len
+///
+/// The result is written into the shared concat buffer and _concat_off is updated.
 fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: implode ---");

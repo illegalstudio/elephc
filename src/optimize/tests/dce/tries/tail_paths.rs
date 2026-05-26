@@ -11,6 +11,9 @@
 use super::*;
 
 #[test]
+// Verifies that DCE does not eliminate statements that follow a `try` block when the
+// try has no强制性 finally body and control can fall through past it. Statements
+// after a fallthrough try must be preserved because execution reaches them unconditionally.
 fn test_eliminate_dead_code_keeps_statements_after_fallthrough_try() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -50,6 +53,10 @@ fn test_eliminate_dead_code_keeps_statements_after_fallthrough_try() {
 }
 
 #[test]
+// Verifies that DCE sinks a tail statement (echo) into the try body when the try has no catch
+// that can interrupt control flow. A call that may throw followed by a fallthrough statement
+// means the tail can be reached via the non-exception path, so DCE rewrites the try to include
+// the tail as a sinked statement while the potentially-throwing call remains in the try body.
 fn test_eliminate_dead_code_sinks_tail_into_try_fallthrough_paths() {
     let may_throw = Expr::new(
         ExprKind::FunctionCall {

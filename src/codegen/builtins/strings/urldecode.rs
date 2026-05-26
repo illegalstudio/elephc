@@ -16,6 +16,12 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a PHP `urldecode()` call, decoding a percent-encoded query string argument.
+///
+/// Unused `name` parameter supports PHP case-insensitive builtin dispatch.
+/// Arguments: args[0] must be a PHP string to decode.
+/// Emits: expression evaluation for args[0], then a target-aware call to `__rt_urldecode`.
+/// Returns: `Some(PhpType::Str)` — the result is an owned runtime string allocation.
 pub fn emit(
     _name: &str,
     args: &[Expr],

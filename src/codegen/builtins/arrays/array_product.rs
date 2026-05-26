@@ -17,6 +17,16 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code to compute the product of all numeric values in a PHP array.
+///
+/// Arguments:
+/// - `args[0]` must be the array expression (already emitted by caller).
+///
+/// ABI:
+/// - x86_64: passes array pointer via `rdi`, returns product in `rax` as `PhpType::Int`.
+/// - ARM64: calls `__rt_array_product` runtime helper, returns product in `x0` as `PhpType::Int`.
+///
+/// Side effects: calls `__rt_array_product` runtime routine which iterates the array.
 pub fn emit(
     _name: &str,
     args: &[Expr],

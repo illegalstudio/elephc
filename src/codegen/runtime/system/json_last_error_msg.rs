@@ -54,6 +54,13 @@ pub(crate) fn emit_json_last_error_msg(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the borrowed (ptr,len) message slice
 }
 
+/// Emits the x86_64-specific implementation of `__rt_json_last_error_msg`.
+///
+/// Loads the current JSON error code, bounds-checks it against the message-table
+/// cardinality, clamps out-of-range codes to zero, indexes into the (ptr, len) table,
+/// and returns the message slice via `rax` (pointer) and `rdx` (length).
+///
+/// ABI: rax = string ptr, rdx = string len (string_result_regs)
 fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_last_error_msg ---");

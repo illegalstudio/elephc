@@ -12,7 +12,8 @@ use super::*;
 
 #[test]
 fn test_attribute_open_token() {
-    // `#[` is a single token; the following identifier and `]` lex normally.
+    // `#[` is a single `AttrOpen` token; the following identifier and `]`
+    // lex normally. Regression guard for the PHP 8 attributes proposal.
     let t = tokens("<?php #[Foo] class C {}");
     assert_eq!(t[1], Token::AttrOpen);
     assert_eq!(t[2], Token::Identifier("Foo".into()));
@@ -22,6 +23,8 @@ fn test_attribute_open_token() {
 
 #[test]
 fn test_attribute_with_arguments() {
+    // An attribute with parenthesized arguments tokenizes as
+    // `AttrOpen Identifier LParen ... RParen RBracket`.
     let t = tokens("<?php #[Bar(1, \"two\")]");
     assert_eq!(t[1], Token::AttrOpen);
     assert_eq!(t[2], Token::Identifier("Bar".into()));
@@ -35,6 +38,8 @@ fn test_attribute_with_arguments() {
 
 #[test]
 fn test_multiple_attributes_in_one_group() {
+    // A single attribute group can contain multiple comma-separated attributes.
+    // Verifies that `AttrOpen` is followed by `Identifier`, `Comma`, `Identifier`.
     let t = tokens("<?php #[A, B(1)]");
     assert_eq!(t[1], Token::AttrOpen);
     assert_eq!(t[2], Token::Identifier("A".into()));
@@ -61,8 +66,8 @@ fn test_php_hash_line_comment_is_skipped() {
 
 #[test]
 fn test_hash_immediately_followed_by_bracket_is_attribute() {
-    // No space between `#` and `[` must still produce AttrOpen, not a
-    // line comment.
+    // No space between `#` and `[` must still produce `AttrOpen`, not a
+    // line comment. Verifies the lexer does not treat `# [` as a comment.
     let t = tokens("<?php #[X]\necho 1;");
     assert_eq!(t[1], Token::AttrOpen);
     assert_eq!(t[2], Token::Identifier("X".into()));
@@ -73,6 +78,7 @@ fn test_hash_immediately_followed_by_bracket_is_attribute() {
 #[test]
 fn test_qualified_attribute_name() {
     // PHP allows fully-qualified attribute names like `#[\Symfony\Required]`.
+    // Verifies `AttrOpen Backslash Identifier Backslash Identifier RBracket`.
     let t = tokens("<?php #[\\Symfony\\Required]");
     assert_eq!(t[1], Token::AttrOpen);
     assert_eq!(t[2], Token::Backslash);
@@ -84,8 +90,8 @@ fn test_qualified_attribute_name() {
 
 #[test]
 fn test_hash_bracket_inside_double_quoted_string_is_literal() {
-    // The lexer scans string literals atomically — `#[` inside a string is
-    // just text and must NOT produce an AttrOpen token.
+    // The lexer scans string literals atomically — `#[` inside a double-
+    // quoted string is plain text and must NOT produce an `AttrOpen` token.
     let t = tokens("<?php $s = \"look ma #[NotAttr]\";");
     let attr_count = t.iter().filter(|t| matches!(t, Token::AttrOpen)).count();
     assert_eq!(attr_count, 0, "no AttrOpen should appear inside a string");
@@ -98,7 +104,8 @@ fn test_hash_bracket_inside_double_quoted_string_is_literal() {
 
 #[test]
 fn test_hash_bracket_inside_heredoc_is_literal() {
-    // Heredoc body is also scanned atomically — `#[` is not an attribute.
+    // Heredoc body is scanned atomically — `#[` inside a heredoc is plain text
+    // and must NOT produce an `AttrOpen` token.
     let src = "<?php $s = <<<EOT\nthis #[NotAttr] is text\nEOT;\n";
     let t = tokens(src);
     let attr_count = t.iter().filter(|t| matches!(t, Token::AttrOpen)).count();
@@ -107,6 +114,8 @@ fn test_hash_bracket_inside_heredoc_is_literal() {
 
 #[test]
 fn test_hash_bracket_inside_single_quoted_string_is_literal() {
+    // Single-quoted strings are scanned atomically — `#[` inside a single-
+    // quoted string is plain text and must NOT produce an `AttrOpen` token.
     let t = tokens("<?php $s = 'see #[here]';");
     let attr_count = t.iter().filter(|t| matches!(t, Token::AttrOpen)).count();
     assert_eq!(attr_count, 0);
@@ -114,8 +123,9 @@ fn test_hash_bracket_inside_single_quoted_string_is_literal() {
 
 #[test]
 fn test_hash_at_end_of_file_does_not_panic() {
-    // A bare `#` with no newline and no following `[` was a corner case for
-    // the lexer's comment loop — must produce a clean token stream.
+    // A bare `#` with no newline and no following `[` was a corner case in
+    // the lexer's comment loop. The resulting token stream must be clean
+    // with no panic and `Eof` at the end.
     let t = tokens("<?php echo 1; #");
     let last_real = t
         .iter()

@@ -16,6 +16,26 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `str_split` PHP builtin as a target-aware runtime call.
+///
+/// Loads the source string into string argument registers (`x1`/`x2` on AArch64, `rax`/`rdx` on x86_64),
+/// evaluates the optional chunk-length expression (defaulting to 1), preserves the string registers
+/// across the chunk-length evaluation, then calls `__rt_str_split` to produce a PHP array of string
+/// chunks.
+///
+/// # Inputs
+/// - `args[0]`: source string expression
+/// - `args[1]` (optional): integer chunk length, defaults to 1
+///
+/// # Outputs
+/// - Returns `Some(PhpType::Array(Box::new(PhpType::Str)))` representing the PHP array of string chunks.
+///   The runtime helper allocates the returned array and its string elements.
+///
+/// # ABI details
+/// - The source string pointer/length must survive the optional chunk-length evaluation, so the
+///   string registers are saved to the stack on entry and restored before the runtime call.
+/// - AArch64: source string in `x1`/`x2`, chunk length in `x3`, helper reads `x1`/`x2`/`x3`.
+/// - x86_64: source string in `rax`/`rdx`, chunk length in `rdi`, helper reads `rax`/`rdx`/`rdi`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

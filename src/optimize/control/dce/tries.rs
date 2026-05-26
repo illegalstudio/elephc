@@ -14,6 +14,13 @@ use super::state::GuardState;
 use super::tail::append_tail_to_fallthrough_path;
 use super::writes::{invalidated_guards_for_finally_paths, invalidated_guards_for_throw_paths};
 
+/// Applies DCE to a `try` statement, processing try-body, catch clauses, and finally-body
+/// with appropriate guard state.
+///
+/// Guard state is propagated into each block; catch blocks additionally clear guards for
+/// the caught exception variable since it is only bound if the catch is entered. Catch clauses
+/// are normalized and pruned when the try-body cannot throw. Returns the try statement with
+/// dead code removed, or a simplified structure when catches/finally are redundant.
 pub(super) fn dce_try_stmt(
     try_body: Vec<Stmt>,
     catches: Vec<crate::parser::ast::CatchClause>,
@@ -85,6 +92,12 @@ pub(super) fn dce_try_stmt(
     )]
 }
 
+/// Applies DCE to a `try` statement with a tail: statements that follow the try in the same block.
+///
+/// The tail is appended to all fallthrough paths from the try/catch/finally structure when
+/// safe: when there is no finally, or when the tail can legally sink into a finally block.
+/// When the tail cannot be merged, it is emitted after the try statement only if the try
+/// falls through. Delegatesto `dce_try_stmt` when the tail is empty.
 pub(super) fn dce_try_stmt_with_tail(
     try_body: Vec<Stmt>,
     catches: Vec<crate::parser::ast::CatchClause>,

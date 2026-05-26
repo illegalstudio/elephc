@@ -11,10 +11,27 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// hash: compute hash of data using named algorithm.
-/// Input: x1/x2=algorithm name, x3/x4=data ptr/len
-/// Output: x1/x2=hex string in concat_buf
-/// Supports: "md5" (CC_MD5, 16 bytes), "sha1" (CC_SHA1, 20 bytes), "sha256" (CC_SHA256, 32 bytes)
+/// Emits the `__rt_hash` runtime helper for the `hash()` built-in.
+///
+/// Dispatches to the correct CommonCrypto digest (MD5, SHA1, SHA256) based on
+/// the algorithm name passed in x1/x2 (pointer/length). On x86_64 Linux, delegates
+/// to `emit_hash_linux_x86_64`. On ARM64, falls through to the native implementation.
+///
+/// Input registers (ARM64 calling convention):
+///   x1 = algorithm name string pointer
+///   x2 = algorithm name string length
+///   x3 = data string pointer
+///   x4 = data string length
+///
+/// Output registers:
+///   x1 = pointer to hex string in `_concat_buf`
+///   x2 = hex string length
+///
+/// Supports: `"md5"` (16 bytes → 32 hex chars), `"sha1"` (20 bytes → 40 hex chars),
+/// `"sha256"` (32 bytes → 64 hex chars). Unknown algorithm returns an empty string
+/// (zero-length slice at the current concat buffer offset).
+///
+/// The frame pointer (x29) and link register (x30) are saved and restored.
 pub fn emit_hash(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_linux_x86_64(emitter);
@@ -125,6 +142,21 @@ pub fn emit_hash(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_hash` runtime helper.
+///
+/// Receives arguments in the System V AMD64 ABI registers:
+///   rdi = data string pointer
+///   rsi = data string length
+///   rdx = algorithm name length
+///   rax = algorithm name pointer
+///
+/// Output registers:
+///   rax = pointer to hex string in `_concat_buf`
+///   rdx = hex string length
+///
+/// Dispatches to CC_MD5, CC_SHA1, or CC_SHA256 via CommonCrypto based on the
+/// algorithm name. Unknown algorithm returns an empty string (zero-length slice
+/// at the current concat buffer offset). Frame pointer (rbp) is preserved.
 fn emit_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash ---");

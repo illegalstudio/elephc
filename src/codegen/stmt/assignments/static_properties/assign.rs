@@ -20,6 +20,8 @@ use crate::names::static_property_symbol;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::types::PhpType;
 
+/// Lowers direct assignment to a static property: `Class::$prop = value`.
+/// Handles null-coalesce targets, type coercion to the property's declared type, and late-bound receiver dispatch.
 pub(crate) fn emit_static_property_assign_stmt(
     receiver: &StaticReceiver,
     property: &str,

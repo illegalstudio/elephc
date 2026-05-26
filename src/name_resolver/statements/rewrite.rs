@@ -13,6 +13,21 @@ use crate::parser::ast::{Stmt, StmtKind};
 
 use super::context::ResolveContext;
 
+/// Rewrites an ordinary non-declaration statement under the active namespace/import context.
+///
+/// Recursively applies expression rewriting (`ctx.expr`), statement-list rewriting
+/// (`ctx.stmt_list`), type-expression rewriting (`ctx.type_expr`), and catch-clause
+/// rewriting (`ctx.catch_clause`) to all child nodes. Statement structure and
+/// identifiers (variable names, property names, labels) are preserved unchanged.
+/// Unrecognized `StmtKind` variants are returned as-is.
+///
+/// # Arguments
+/// * `stmt` - the statement to rewrite
+/// * `ctx` - the resolution context carrying namespace/use state
+///
+/// # Returns
+/// A rewritten `Stmt` with all contained names canonicalized, or a `CompileError`
+/// if any child expression or statement rewriting fails.
 pub(super) fn resolve_regular_stmt(
     stmt: &Stmt,
     ctx: ResolveContext<'_>,

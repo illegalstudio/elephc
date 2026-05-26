@@ -13,6 +13,17 @@ use crate::codegen::platform::Arch;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
+/// Emits the `__rt_incref` runtime helper.
+///
+/// Increments the refcount of a heap-allocated value passed in `x0`/`rax`.
+/// Guards against null pointers, non-heap pointers, persistent storage, and freed blocks
+/// (when heap-debug is enabled). Skips all validation for values outside the managed heap.
+///
+/// On ARM64: range-checks the pointer against `_heap_buf`/`_heap_off`, optionally calls
+/// `__rt_heap_debug_check_live`, then loads the 32-bit refcount from `[x0, #-12]`, increments it,
+/// and stores it back.
+///
+/// On x86_64 Linux: delegates to `emit_incref_linux_x86_64`.
 pub fn emit_incref(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_incref_linux_x86_64(emitter);
@@ -56,6 +67,7 @@ pub fn emit_incref(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_incref` runtime helper.
 fn emit_incref_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: incref ---");

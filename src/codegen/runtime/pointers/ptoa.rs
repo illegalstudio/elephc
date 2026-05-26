@@ -10,9 +10,15 @@
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
-/// __rt_ptoa: convert pointer address to hex string "0x...".
-/// Input:  x0 = pointer value (64-bit address)
-/// Output: x1 = string pointer (in concat_buf), x2 = string length
+/// Emits the `__rt_ptoa` runtime helper that formats a pointer address as a lowercase hex string.
+///
+/// Input: x0 = pointer value (64-bit address)
+/// Output: x1 = pointer to string in concat_buf, x2 = string length
+///
+/// Formats the pointer as "0x" followed by hexadecimal digits, skipping leading zeros.
+/// Null pointers are formatted as "0x0". Uses a loop to emit each nibble, converting
+/// values 0-9 to '0'-'9' and 10-15 to 'a'-'f'. Dispatches to the x86_64 Linux
+/// implementation when targeting that architecture.
 pub(crate) fn emit_ptoa(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_ptoa_linux_x86_64(emitter);
@@ -78,6 +84,15 @@ pub(crate) fn emit_ptoa(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux implementation of the `__rt_ptoa` runtime helper.
+///
+/// Mirrors the ARM64 logic but uses x86_64 registers and instruction encoding.
+/// Preserves the incoming pointer in r11 since the call site passes it in rax (the
+/// integer result register). Formats the pointer as "0x" followed by lowercase hex
+/// digits, with null pointers rendered as "0x0". Uses BSR to find the highest set
+/// bit, then shifts and masks to emit each nibble in a loop.
+///
+/// Output: rax = pointer to string in concat_buf, rdx = string length
 fn emit_ptoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ptoa (pointer to hex string) ---");

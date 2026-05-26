@@ -18,6 +18,16 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits codegen for PHP `shuffle($array)` which mutates the array argument in place.
+///
+/// The emitted sequence is:
+/// 1. Evaluate and emit the array expression (result in x1:x2)
+/// 2. Call `ensure_unique_arg` to prepare the array for COW (copy-on-write) semantics
+/// 3. Call `store_mutating_arg` to write the array pointer back to caller storage
+///    (shuffle can reorder elements, so the array pointer itself may change)
+/// 4. Call `__rt_shuffle` runtime helper which reorders elements in place
+///
+/// Returns `PhpType::Void` because PHP's shuffle() returns bool (ignored by the compiler).
 pub fn emit(
     _name: &str,
     args: &[Expr],

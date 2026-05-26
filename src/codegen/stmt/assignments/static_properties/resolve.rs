@@ -13,6 +13,8 @@ use crate::codegen::emit::Emitter;
 use crate::parser::ast::StaticReceiver;
 use crate::types::PhpType;
 
+/// Resolves a static property access to its declaring class, property type, and declaration status.
+/// Returns `(class_name, declaring_class, prop_ty, declared)` or `None` if the property is not defined.
 pub(super) fn resolve_static_property(
     receiver: &StaticReceiver,
     property: &str,

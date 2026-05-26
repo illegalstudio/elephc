@@ -17,6 +17,23 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `array_pad($array, $target_size, $pad_value)` builtin call.
+///
+/// Saves the input array pointer, evaluates `$target_size` and `$pad_value` from left to right,
+/// then calls the appropriate runtime helper (`__rt_array_pad` or `__rt_array_pad_refcounted`).
+/// The chosen runtime path depends on whether the input array is refcounted.
+/// Returns the type of the resulting padded array (preserves the inner type for Array inputs).
+///
+/// # Arguments
+/// * `_name` - Unused; present to match the builtin emitter signature.
+/// * `args` - Three expressions: the input array, the target size, and the pad value.
+/// * `emitter` - The assembly emitter for the target architecture.
+/// * `ctx` - Compilation context (types, locals, etc.).
+/// * `data` - Data section for relocations and constants.
+///
+/// # Architecture
+/// - **x86_64**: Uses `push`/`pop` to preserve registers across argument evaluation.
+/// - **ARM64**: Uses pre-decrement store/load to push arguments onto the stack.
 pub fn emit(
     _name: &str,
     args: &[Expr],

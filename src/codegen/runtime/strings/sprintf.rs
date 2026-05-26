@@ -13,15 +13,18 @@ use crate::codegen::platform::Arch;
 
 use super::sprintf_x86_64::emit_sprintf_linux_x86_64;
 
-/// sprintf: format a string with typed arguments from the stack.
-/// Input: x0=arg_count, x1=fmt_ptr, x2=fmt_len, args on stack (16 bytes each)
-/// Output: x1=result_ptr, x2=result_len
-/// Each stack arg is: [value, type_tag] where type_tag: 0=int, 1=str(len<<8), 2=float, 3=bool
-/// The runtime pops arg_count*16 bytes from the caller's stack after processing.
+/// Emits the `__rt_sprintf` global runtime helper for sprintf-style formatting.
+/// Uses x0=arg_count, x1=fmt_ptr, x2=fmt_len on entry; args pushed on stack (16 bytes each).
+/// Returns x1=result_ptr, x2=result_len in concat_buf. Updates `_concat_off` atomically.
 ///
-/// This implementation delegates each format specifier to libc's snprintf for
-/// correct handling of width, precision, padding, and alignment modifiers.
-/// On Apple ARM64, snprintf variadic arguments are passed on the stack at [sp].
+/// Each stack argument is [value, type_tag] where type_tag: 0=int, 1=str(len<<8), 2=float, 3=bool.
+/// The runtime pops arg_count*16 bytes from the caller's stack before returning.
+///
+/// Callee-saved registers used: x19=fmt_ptr, x20=fmt_remaining_len, x21=arg_index,
+/// x22=args_base, x23=dest_ptr, x24=result_start, x25=concat_off_ptr, x26=arg_count.
+///
+/// Delegates format specifier processing (flags, width, precision, type char) to libc snprintf
+/// for correct handling. On Apple ARM64, variadic arguments for snprintf are passed at [sp].
 pub fn emit_sprintf(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_sprintf_linux_x86_64(emitter);

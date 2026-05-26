@@ -10,6 +10,8 @@
 use super::*;
 
 #[test]
+// Verifies that `<?php echo $a ?: $b;` parses as a `ShortTernary` with `value=$a` and `default=$b`.
+// The short ternary is PHP's null-coalesce-style ternary (elvis operator).
 fn test_short_ternary_expression() {
     let stmts = parse_source("<?php echo $a ?: $b;");
     let expected = Stmt::echo(Expr::new(
@@ -23,6 +25,9 @@ fn test_short_ternary_expression() {
 }
 
 #[test]
+// Verifies short ternary has lower precedence than symbolic `||` (logical or).
+// Input: `<?php echo $a || $b ?: $c;` → parses as `($a || $b) ?: $c`.
+// The short ternary's value is the entire `||` expression, not just `$a`.
 fn test_short_ternary_lower_than_symbolic_or() {
     let stmts = parse_source("<?php echo $a || $b ?: $c;");
     let expected = Stmt::echo(Expr::new(
@@ -36,6 +41,9 @@ fn test_short_ternary_lower_than_symbolic_or() {
 }
 
 #[test]
+// Verifies short ternary's default branch accepts a null coalesce expression.
+// Input: `<?php echo $a ?: $b ?? $c;` → parses as `$a ?: ($b ?? $c)`.
+// The short ternary default slot wraps the full null coalesce subtree.
 fn test_short_ternary_default_accepts_null_coalesce() {
     let stmts = parse_source("<?php echo $a ?: $b ?? $c;");
     let expected = Stmt::echo(Expr::new(
@@ -55,6 +63,8 @@ fn test_short_ternary_default_accepts_null_coalesce() {
 }
 
 #[test]
+// Verifies short ternary can appear as the else branch of a full ternary.
+// Input: `<?php echo $a ? $b : $c ?: $d;` → the `?: $d` branch is a `ShortTernary`.
 fn test_short_ternary_can_nest_in_full_ternary_else_branch() {
     let stmts = parse_source("<?php echo $a ? $b : $c ?: $d;");
     match &stmts[0].kind {
@@ -69,6 +79,8 @@ fn test_short_ternary_can_nest_in_full_ternary_else_branch() {
 }
 
 #[test]
+// Verifies null coalesce `??` parses as `ExprKind::NullCoalesce`.
+// Input: `<?php echo $x ?? 0;` → top-level echo wraps a single NullCoalesce.
 fn test_null_coalesce_parse() {
     let stmts = parse_source("<?php echo $x ?? 0;");
     assert_eq!(stmts.len(), 1);
@@ -84,6 +96,8 @@ fn test_null_coalesce_parse() {
 }
 
 #[test]
+// Verifies null coalesce assignment `??=` parses correctly.
+// Input: `<?php $x ??= 10;` → Assign with name=`x` and value=`NullCoalesce($x, 10)`.
 fn test_null_coalesce_assignment_parse() {
     let stmts = parse_source("<?php $x ??= 10;");
     assert_eq!(stmts.len(), 1);
@@ -103,6 +117,8 @@ fn test_null_coalesce_assignment_parse() {
 }
 
 #[test]
+// Verifies null coalesce assignment's RHS can itself be a null coalesce expression.
+// Input: `<?php $x ??= $fallback ?? 10;` → value is outer NullCoalesce($fallback, 10).
 fn test_null_coalesce_assignment_rhs_is_expression() {
     let stmts = parse_source("<?php $x ??= $fallback ?? 10;");
     match &stmts[0].kind {
@@ -119,6 +135,8 @@ fn test_null_coalesce_assignment_rhs_is_expression() {
 // --- Spaceship operator ---
 
 #[test]
+// Verifies that `<?php echo 1 <=> 2;` parses as a `Spaceship` binary operation.
+// The spaceship operator returns -1, 0, or 1 for three-way comparison.
 fn test_spaceship_parse() {
     let stmts = parse_source("<?php echo 1 <=> 2;");
     let expected = Stmt::echo(Expr::binop(

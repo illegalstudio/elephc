@@ -10,6 +10,13 @@
 
 use crate::types::{ClassInfo, InterfaceInfo};
 
+/// Emits the global `instanceof` target lookup table used by `__rt_dynamic_instanceof`
+/// at runtime. Each entry contains a pointer to a name string, its length, the class/interface
+/// id, and a flag indicating whether the entry is a class (0) or interface (1).
+///
+/// The table is sorted by `sorted_classes` followed by `sorted_interfaces` so that linear scans
+/// produce deterministic results. Entries appear in pairs: first the plain name, then the
+/// name prefixed with a backslash (the "absolute" form used for namespace-qualified lookups).
 pub(super) fn emit_instanceof_target_lookup_data(
     out: &mut String,
     sorted_interfaces: &[(&String, &InterfaceInfo)],
@@ -81,10 +88,20 @@ pub(super) fn emit_instanceof_target_lookup_data(
     out.push_str("    .p2align 3\n");
 }
 
+/// Converts a string to an assembly-friendly ASCII escape sequence, delegating to `escaped_bytes`.
+/// Handles newlines (`\n`), tabs (`\t`), backslashes (`\\`), double quotes (`\"`), and any byte
+/// outside the printable ASCII range (32–126) by encoding it as a 3-digit octal escape (`\NNN`).
 pub(super) fn escaped_ascii(value: &str) -> String {
     escaped_bytes(value.as_bytes())
 }
 
+/// Converts a byte slice into an ASCII escape sequence string for use in `.ascii` directives.
+/// Printable ASCII (0x20–0x7e) is emitted as-is; special bytes are replaced with:
+/// - `\n` for newline
+/// - `\t` for tab
+/// - `\\` for backslash
+/// - `\"` for double quote
+/// - `\NNN` (3-digit octal) for any other byte, including null and high bytes
 pub(super) fn escaped_bytes(bytes: &[u8]) -> String {
     let mut escaped = String::new();
     for &byte in bytes {

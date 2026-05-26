@@ -12,6 +12,16 @@ use crate::errors::CompileWarning;
 use crate::parser::ast::{Stmt, StmtKind};
 use crate::termination::stmt_guarantees_termination as shared_stmt_guarantees_termination;
 
+/// Recursively scans nested statement lists to detect unreachable code.
+///
+/// Visits all control-flow structures (if/elseif/else, while, do-while, for,
+/// foreach, switch, try/catch/finally, function decls, class/trait/interface
+/// methods, namespace blocks) and propagates termination state downward.
+/// When a terminating statement is encountered, all subsequent statements in
+/// the same block are flagged as unreachable.
+///
+/// Uses `collect_unreachable_in_block` to flag unreachable code within each
+/// block, then recurses into nested bodies of control-flow statements.
 pub(super) fn collect_unreachable_recursive(stmts: &[Stmt], warnings: &mut Vec<CompileWarning>) {
     collect_unreachable_in_block(stmts, warnings);
     for stmt in stmts {
@@ -92,6 +102,12 @@ pub(super) fn collect_unreachable_recursive(stmts: &[Stmt], warnings: &mut Vec<C
     }
 }
 
+/// Flags individual statements that follow a terminating statement in a linear block.
+///
+/// Iterates statements in order, setting `terminated = true` when a statement
+/// that guarantees termination is found. Any statement visited after that point
+/// generates an "Unreachable code" warning. Does not recurse into nested bodies
+/// — use `collect_unreachable_recursive` for full traversal.
 fn collect_unreachable_in_block(stmts: &[Stmt], warnings: &mut Vec<CompileWarning>) {
     let mut terminated = false;
     for stmt in stmts {
@@ -105,6 +121,10 @@ fn collect_unreachable_in_block(stmts: &[Stmt], warnings: &mut Vec<CompileWarnin
     }
 }
 
+/// Delegates to the shared `stmt_guarantees_termination` helper from the termination module.
+///
+/// This wrapper exists to allow unreachable analysis to call the shared logic
+/// without importing the internal path directly.
 fn stmt_guarantees_termination(stmt: &Stmt) -> bool {
     shared_stmt_guarantees_termination(stmt)
 }

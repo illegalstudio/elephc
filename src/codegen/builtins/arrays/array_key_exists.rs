@@ -17,6 +17,17 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `array_key_exists($key, $array)` builtin call.
+///
+/// Dispatches to a different runtime helper based on the array's PHP type:
+/// - `AssocArray`: pushes the hash-table pointer, emits the key as a normalized string,
+///   then restores both into ABI registers and calls `__rt_hash_get` to check key presence.
+/// - Indexed array: pushes the array pointer, evaluates the integer key, then restores both
+///   into helper registers and calls `__rt_array_key_exists` to check bounds.
+///
+/// Preserves evaluation order by using the stack to save the first argument while computing
+/// the second, then materializes all arguments into ABI registers before the call.
+/// Returns `PhpType::Bool` in the integer result register on both paths.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -48,6 +48,9 @@ pub(in crate::parser::stmt) fn parse_incdec_stmt(
     Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
 }
 
+/// Parses a `global $var, ...;` declaration statement.
+/// Consumes the `global` keyword, then collects a comma-separated list of variable names
+/// until a semicolon. Returns a `StmtKind::Global` node.
 pub(in crate::parser::stmt) fn parse_global(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -75,6 +78,9 @@ pub(in crate::parser::stmt) fn parse_global(
     Ok(Stmt::new(StmtKind::Global { vars }, span))
 }
 
+/// Parses a `static $var = expr;` declaration statement.
+/// Consumes the `static` keyword, then expects a single variable name followed by `=` and an
+/// initializer expression. Returns a `StmtKind::StaticVar` node.
 pub(in crate::parser::stmt) fn parse_static_var(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -101,6 +107,9 @@ pub(in crate::parser::stmt) fn parse_static_var(
     Ok(Stmt::new(StmtKind::StaticVar { name, init }, span))
 }
 
+/// Returns true if the token sequence at `pos` looks like a typed local assignment:
+/// a type expression followed by a variable name. Performs a lookahead parse of the type
+/// expression only; does not consume any tokens.
 pub(in crate::parser::stmt) fn looks_like_typed_assign(tokens: &[(Token, Span)], pos: usize) -> bool {
     let mut probe = pos;
     match parse_type_expr(tokens, &mut probe, tokens[pos].1) {
@@ -109,6 +118,9 @@ pub(in crate::parser::stmt) fn looks_like_typed_assign(tokens: &[(Token, Span)],
     }
 }
 
+/// Parses a typed local assignment: `Type $var = expr;`
+/// Consumes a type expression, a variable name, the `=` token, and an initializer expression.
+/// Returns a `StmtKind::TypedAssign` node.
 pub(in crate::parser::stmt) fn parse_typed_assign(
     tokens: &[(Token, Span)],
     pos: &mut usize,

@@ -14,6 +14,13 @@ use super::exprs::walk_expr;
 use super::stmts::walk_program;
 use super::Pass;
 
+/// Walks a class property, applying `pass` to its default-value expression if present.
+///
+/// - `prop`: The class property to walk.
+/// - `pass`: The pass (visitor) to apply to child expressions.
+///
+/// Returns a new `ClassProperty` with the default expression replaced by the result
+/// of walking it, or the original default if none existed. Other fields are preserved unchanged.
 pub(in crate::magic_constants) fn walk_class_property<P: Pass>(
     prop: ClassProperty,
     pass: &mut P,
@@ -24,6 +31,16 @@ pub(in crate::magic_constants) fn walk_class_property<P: Pass>(
     }
 }
 
+/// Walks a class method, applying `pass` to parameter defaults and the method body.
+///
+/// Calls `pass.enter_method` before walking and `pass.leave_method` after, so the pass
+/// can track method entry/exit for context (e.g., `__METHOD__` constant).
+///
+/// - `method`: The class method to walk.
+/// - `pass`: The pass (visitor) to apply to expressions and statements.
+///
+/// Returns a new `ClassMethod` with defaults and body walked; declaration metadata (name,
+/// visibility, static, etc.) is preserved unchanged.
 pub(in crate::magic_constants) fn walk_class_method<P: Pass>(
     method: ClassMethod,
     pass: &mut P,

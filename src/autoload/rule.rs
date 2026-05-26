@@ -16,6 +16,11 @@ use crate::names::{canonical_name_for_decl, php_symbol_key};
 use crate::parser::ast::{BinOp, Expr, ExprKind, Program, Stmt, StmtKind};
 
 #[derive(Clone, Debug)]
+/// Autoload rule extracted from a `spl_autoload_register` call.
+///
+/// Stores the parameter name that receives the candidate class name
+/// (typically "name" or "class") and the closure body to execute symbolically
+/// at class-load time.
 pub struct AutoloadRule {
     /// Name of the closure parameter that receives the candidate class name
     /// (typically "name" or "class").
@@ -25,9 +30,10 @@ pub struct AutoloadRule {
 }
 
 impl PartialEq for AutoloadRule {
-    /// Two rules are equal when their parameter name and body AST match.
-    /// Used by `spl_autoload_unregister` to remove a previously registered
-    /// closure.
+    /// Compares two rules by parameter name and body AST.
+    ///
+    /// Used by `spl_autoload_unregister` to find and remove a previously
+    /// registered rule from the chain.
     fn eq(&self, other: &Self) -> bool {
         self.param_name == other.param_name && self.body == other.body
     }
@@ -142,43 +148,53 @@ pub fn collect_register_calls(
 }
 
 #[derive(Clone)]
+/// Holds an autoload rule extracted from a top-level function declaration
+/// along with the statement index of the declaration itself.
 struct FunctionSource {
     rule: AutoloadRule,
     decl_idx: usize,
 }
 
 #[derive(Clone)]
+/// Tracks a variable binding where the right-hand side is a closure
+/// that may be used as an autoload rule.
 struct VarBinding {
     rule: AutoloadRule,
 }
 
-/// Resolve a closure literal, a variable reference, or a string literal
-/// (function name) to an `AutoloadRule`. Returns the rule plus an
-/// optional consumption tag identifying the source so it can be stripped.
+/// Result of classifying a `spl_autoload_register` or `spl_autoload_unregister`
+/// call. Carries the extracted rule (if any), whether to prepend or append
+/// in `Register` variants, and source-tracking info to strip the definition.
 enum CallKind {
+    /// A conforming `spl_autoload_register` call. `prepend` controls chain order.
     Register {
         rule: AutoloadRule,
         prepend: bool,
         consumes: ConsumesSource,
     },
+    /// A `spl_autoload_unregister` call. Removes the first chain entry whose
+    /// body equals the rule's body.
     Unregister {
         rule: AutoloadRule,
         consumes: ConsumesSource,
     },
-    /// Closure literal first arg that didn't satisfy the rule constraints
-    /// (captures, multi-param, …). Strip the call itself but record
-    /// nothing in the chain. The reason is surfaced as a compile-time
-    /// warning so the user understands why their autoloader isn't
-    /// firing.
+    /// First argument is a closure literal that failed rule constraints
+    /// (captures, multi-param, etc.). The call is stripped and a compile-time
+    /// warning is emitted, but no rule is added to the chain.
     StripUnmatchedClosure { reason: &'static str },
 }
 
 #[derive(Clone, Default)]
+/// Tracks which source (function name or variable name) provided the
+/// closure for an autoload rule so that the definition can be stripped
+/// from the program along with the call.
 struct ConsumesSource {
     function_name: Option<String>,
     var_name: Option<String>,
 }
 
+/// Classify a statement as an autoload register/unregister call and
+/// update the chain accordingly. Returns true if the statement was consumed.
 #[allow(clippy::too_many_arguments)]
 fn classify_and_process(
     stmt: &Stmt,
@@ -238,6 +254,8 @@ fn classify_and_process(
     true
 }
 
+/// Records which source (function or variable) the autoload rule came from
+/// so its definition can be removed from the program alongside the call.
 fn mark_consumed(
     consumes: ConsumesSource,
     consumed_functions: &mut HashSet<String>,
@@ -251,6 +269,9 @@ fn mark_consumed(
     }
 }
 
+/// Classifies a statement as a `spl_autoload_register` or
+/// `spl_autoload_unregister` call. Returns `Some(CallKind)` if it matches,
+/// `None` otherwise.
 fn classify_call(
     stmt: &Stmt,
     current_namespace: Option<&str>,
@@ -300,6 +321,9 @@ fn classify_call(
     }
 }
 
+/// Checks whether `name` refers to the given built-in autoload function.
+/// Matching is case-insensitive. Returns `false` if a user-defined function
+/// with the same name exists in the current namespace scope.
 fn is_builtin_autoload_call(
     name: &crate::names::Name,
     current_namespace: Option<&str>,
@@ -322,12 +346,17 @@ fn is_builtin_autoload_call(
     !local_functions.contains(&php_symbol_key(&local_name))
 }
 
+/// Collects the canonical PHP symbol keys of all top-level function
+/// declarations in the program, including those inside namespace blocks.
 fn collect_declared_function_keys(program: &[Stmt]) -> HashSet<String> {
     let mut out = HashSet::new();
     collect_declared_function_keys_in(program, None, &mut out);
     out
 }
 
+/// Recursively walks `program` statements, updating `current_namespace`
+/// on `NamespaceDecl` / `NamespaceBlock` nodes and inserting canonical
+/// function keys into `out` for every `FunctionDecl` encountered.
 fn collect_declared_function_keys_in(
     program: &[Stmt],
     mut current_namespace: Option<String>,
@@ -354,22 +383,31 @@ fn collect_declared_function_keys_in(
     }
 }
 
+/// Result of resolving the first argument of `spl_autoload_register`.
+/// Indicates whether a valid rule was extracted, the call should be
+/// stripped because the closure didn't conform, or the call should be
+/// left for the runtime stub.
 enum Resolved {
-    /// Successfully extracted a rule.
+    /// Successfully resolved to an autoload rule, with source-tracking
+    /// for stripping.
     Rule {
         rule: AutoloadRule,
         consumes: ConsumesSource,
     },
-    /// First arg is a closure literal whose constraints didn't match;
-    /// strip the call but contribute nothing. Carries the reason for
-    /// surfacing as a compile-time warning.
+    /// First arg is a closure literal that failed rule constraints
+    /// (captures, multi-param, etc.). The call is stripped; the static
+    /// string reason is surfaced as a compile-time warning.
     StripUnmatched(&'static str),
-    /// First arg is something we don't know how to handle (a method
-    /// callable, a non-string-non-closure expression, …). Leave the call
-    /// alone so the runtime stub takes over.
+    /// First arg is something that cannot be resolved at compile time
+    /// (method callable, complex expression, etc.). Leave the call for
+    /// the runtime stub.
     Unknown,
 }
 
+/// Resolves the first argument of `spl_autoload_register` to an
+/// `AutoloadRule`. Handles closure literals, variable references
+/// bound to closures, and string literals naming a function.
+/// Returns `Resolved` indicating the outcome.
 fn resolve_callable(
     arg: &Expr,
     var_bindings: &HashMap<String, VarBinding>,
@@ -410,6 +448,9 @@ fn resolve_callable(
     }
 }
 
+/// Inspects `stmt` and, if it is an assignment of a conforming closure to
+/// a variable, updates `bindings` to record the rule. Non-conforming or
+/// non-closure assignments remove any earlier binding for that variable.
 fn update_var_bindings(stmt: &Stmt, _idx: usize, bindings: &mut HashMap<String, VarBinding>) {
     let StmtKind::Assign { name, value } = &stmt.kind else {
         return;
@@ -426,10 +467,12 @@ fn update_var_bindings(stmt: &Stmt, _idx: usize, bindings: &mut HashMap<String, 
     }
 }
 
+/// Returns `true` if `expr` is a `Closure` expression node.
 fn is_closure_literal(expr: &Expr) -> bool {
     matches!(expr.kind, ExprKind::Closure { .. })
 }
 
+/// Extract an AutoloadRule from a closure expression, or an error string on failure.
 fn extract_closure_rule(closure_arg: &Expr) -> Result<AutoloadRule, &'static str> {
     let ExprKind::Closure {
         params,
@@ -447,6 +490,7 @@ fn extract_closure_rule(closure_arg: &Expr) -> Result<AutoloadRule, &'static str
     build_rule(params, variadic.as_deref(), body)
 }
 
+/// Build an AutoloadRule from closure parameters and body if it meets the constraints.
 fn build_rule(
     params: &[(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)],
     variadic: Option<&str>,
@@ -467,6 +511,7 @@ fn build_rule(
     })
 }
 
+/// Evaluate a literal boolean expression (bool or non-zero int literal).
 fn literal_bool(kind: &ExprKind) -> bool {
     match kind {
         ExprKind::BoolLiteral(b) => *b,
@@ -506,11 +551,18 @@ fn flatten_foldable_ifs(program: Program) -> Program {
 }
 
 enum BranchOutcome {
+    /// The condition evaluated to a known boolean at compile time and the
+    /// corresponding branch's statements should replace the `if` statement.
     Taken(Vec<Stmt>),
+    /// The condition evaluated to `false` and no `else` branch exists.
     None,
+    /// The condition could not be evaluated at compile time; the `if`
+    /// statement is left unchanged.
     Unfoldable,
 }
 
+/// Evaluates the condition of an `if` statement at compile time,
+/// returning which branch should be taken, if determinable.
 fn select_taken_branch(
     condition: &Expr,
     then_body: &[Stmt],
@@ -569,6 +621,8 @@ fn fold_compile_time_bool(expr: &Expr) -> Option<bool> {
     }
 }
 
+/// Represents a literal value that can be determined at compile time.
+/// Used by `fold_compile_time_value` to compare operands of binary expressions.
 #[derive(PartialEq, Eq)]
 enum FoldedValue {
     Str(String),
@@ -577,6 +631,8 @@ enum FoldedValue {
     Null,
 }
 
+/// Attempts to evaluate `expr` to a `FoldedValue` at compile time.
+/// Handles string, integer, boolean, and null literals only.
 fn fold_compile_time_value(expr: &Expr) -> Option<FoldedValue> {
     match &expr.kind {
         ExprKind::StringLiteral(s) => Some(FoldedValue::Str(s.clone())),

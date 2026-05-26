@@ -16,6 +16,10 @@ use crate::parser;
 use crate::parser::ast::Stmt;
 use crate::span::Span;
 
+/// Resolves a relative include path against a base directory.
+///
+/// Returns the path unchanged if already absolute, otherwise joins it
+/// with `base_dir`. The path string is not validated for existence.
 pub(super) fn resolve_path(path: &str, base_dir: &Path) -> PathBuf {
     let p = Path::new(path);
     if p.is_absolute() {
@@ -25,6 +29,10 @@ pub(super) fn resolve_path(path: &str, base_dir: &Path) -> PathBuf {
     }
 }
 
+/// Parses an included PHP source file, returning its AST.
+///
+/// Reads the file contents from disk, tokenizes, and parses to a `Vec<Stmt>`.
+/// Errors include the original `include_span` for diagnostics tracing.
 pub(super) fn parse_file(path: &Path, include_span: Span) -> Result<Vec<Stmt>, CompileError> {
     let source = std::fs::read_to_string(path).map_err(|e| {
         CompileError::new(

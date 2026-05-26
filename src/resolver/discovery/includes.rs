@@ -22,6 +22,27 @@ use super::super::files::{parse_file, resolve_path};
 use super::super::include_path::fold_include_path;
 use super::super::state::ResolveState;
 
+/// Processes a statically resolvable `include`/`require` statement.
+///
+/// Parses the included file, discovers declarations and function variants within it,
+/// and registers them with `output`. Handles `include_once`/`require_once` semantics
+/// by tracking `loaded_paths`. Detects circular includes and reports them as errors
+/// unless the include is `once`-guarded (in which case it returns early silently).
+///
+/// Inputs:
+/// - `path`: path expression evaluated via `fold_include_path`
+/// - `once`: if true, the file is included at most once per program
+/// - `required`: if true, missing files cause a compile error
+/// - `base_dir`: directory used to resolve relative paths
+/// - `loaded_paths`: canonical paths already included (accumulator)
+/// - `include_chain`: current inclusion stack for circular include detection
+/// - `state`: resolver state passed through (namespace/imports saved and restored)
+/// - `output`: discovery output accumulator
+///
+/// Side effects:
+/// - Pushes to/pops from `include_chain`
+/// - Inserts into `loaded_paths`
+/// - Saves and restores `state.namespace` and `state.const_imports`
 pub(super) fn discover_include(
     path: &Expr,
     once: bool,

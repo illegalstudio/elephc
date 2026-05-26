@@ -11,9 +11,22 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_column_str: extract a string column from an array of associative arrays.
-/// Input: x0=outer array (Array of AssocArray), x1=column key ptr, x2=column key len
-/// Output: x0=new array containing the string column values (elem_size=16)
+/// Emits `__rt_array_column_str` for the host architecture.
+/// Iterates over an array of associative arrays, looks up `column_key` in each inner hash,
+/// and collects matching string values into a new indexed array.
+///
+/// # Inputs
+/// - `x0`: pointer to outer `Array` (vec of `AssocArray` handles)
+/// - `x1`: column key string pointer
+/// - `x2`: column key string length
+///
+/// # Outputs
+/// - `x0`: new `Array` with `elem_size=16` containing extracted string values
+///
+/// # ABI notes
+/// - Preserves all callee-saved registers.
+/// - Result array uses 16-byte slots (string ptr + length).
+/// - Returns the result array even when no keys are found (empty array).
 pub fn emit_array_column_str(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_column_str_linux_x86_64(emitter);
@@ -89,6 +102,22 @@ pub fn emit_array_column_str(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits `__rt_array_column_str` for the x86_64 Linux ABI.
+/// Iterates over an array of associative arrays, looks up `column_key` in each inner hash,
+/// and collects matching string values into a new indexed array.
+///
+/// # Inputs
+/// - `rdi`: outer indexed-array pointer
+/// - `rsi`: column key string pointer
+/// - `rdx`: column key string length
+///
+/// # Outputs
+/// - `rax`: result indexed array with 16-byte string slots
+///
+/// # ABI notes
+/// - Uses System V AMD64 ABI conventions.
+/// - Clobbers `r10`, `r11`, `r8`, `r9` as temporaries.
+/// - Preserves `rbp` and restores `rsp` exactly.
 fn emit_array_column_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_column_str ---");

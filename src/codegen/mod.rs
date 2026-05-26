@@ -14,6 +14,7 @@ pub(crate) mod callable_descriptor;
 pub(crate) mod callable_dispatch;
 mod callables;
 mod class_methods;
+/// Codegen context module.
 pub mod context;
 mod data_section;
 mod driver_support;
@@ -24,6 +25,7 @@ mod function_variants;
 mod functions;
 mod interface_wrappers;
 mod main_emission;
+/// Platform module.
 pub mod platform;
 mod prescan;
 mod program_usage;
@@ -47,28 +49,39 @@ thread_local! {
     static DECLARED_TRAIT_USES: RefCell<HashMap<String, Vec<String>>> = RefCell::new(HashMap::new());
 }
 
+/// Sets the number of autoload rules registered.
 pub fn set_autoload_rule_count(n: usize) {
     AUTOLOAD_RULE_COUNT.with(|c| c.set(n));
 }
 
+/// Returns the number of autoload rules registered.
 pub fn autoload_rule_count() -> usize {
     AUTOLOAD_RULE_COUNT.with(|c| c.get())
 }
 
+/// Stores the declaration order of classes, interfaces, and traits so that
+/// `declared_class_names()` / `declared_interface_names()` / `declared_trait_names()`
+/// can reproduce it for class-id ordering in user assembly.
 fn set_declared_name_order(classes: Vec<String>, interfaces: Vec<String>, traits: Vec<String>) {
     DECLARED_CLASS_NAMES.with(|names| *names.borrow_mut() = classes);
     DECLARED_INTERFACE_NAMES.with(|names| *names.borrow_mut() = interfaces);
     DECLARED_TRAIT_NAMES.with(|names| *names.borrow_mut() = traits);
 }
 
+/// Returns the ordered list of class names declared in the program,
+/// including internal classes prepended by the compiler.
 pub(crate) fn declared_class_names() -> Vec<String> {
     DECLARED_CLASS_NAMES.with(|names| names.borrow().clone())
 }
 
+/// Returns the ordered list of interface names declared in the program,
+/// including internal interfaces prepended by the compiler.
 pub(crate) fn declared_interface_names() -> Vec<String> {
     DECLARED_INTERFACE_NAMES.with(|names| names.borrow().clone())
 }
 
+/// Returns the ordered list of trait names declared in the program,
+/// including internal traits prepended by the compiler.
 pub(crate) fn declared_trait_names() -> Vec<String> {
     DECLARED_TRAIT_NAMES.with(|names| names.borrow().clone())
 }
@@ -111,6 +124,8 @@ use program_usage::{
     program_has_dynamic_instanceof,
 };
 
+/// Generates user-code assembly for the target.
+/// Returns the raw assembly string.
 pub fn generate_user_asm(
     program: &Program,
     global_env: &TypeEnv,
@@ -273,6 +288,9 @@ pub fn generate_user_asm(
     )
 }
 
+/// Collects user-declared class and enum names from the program AST, merges them
+/// with internal class names, and returns the combined list in declaration order
+/// with internal names prepended and sorted.
 fn collect_declared_class_names(
     program: &Program,
     classes: &HashMap<String, ClassInfo>,
@@ -293,6 +311,9 @@ fn collect_declared_class_names(
     prepend_internal_names(classes.keys(), &user_names)
 }
 
+/// Collects user-declared interface names from the program AST, merges them
+/// with internal interface names, and returns the combined list in declaration
+/// order with internal names prepended and sorted.
 fn collect_declared_interface_names(
     program: &Program,
     interfaces: &HashMap<String, InterfaceInfo>,
@@ -311,6 +332,8 @@ fn collect_declared_interface_names(
     prepend_internal_names(interfaces.keys(), &user_names)
 }
 
+/// Recursively collects user-declared trait names from the program AST,
+/// including those inside namespace blocks, and returns them in declaration order.
 fn collect_declared_trait_names(program: &Program) -> Vec<String> {
     let mut names = Vec::new();
     for stmt in program {
@@ -356,6 +379,10 @@ fn collect_declared_trait_uses(program: &Program) -> HashMap<String, Vec<String>
     uses
 }
 
+/// Helper for collecting declared names of a specific AST statement kind.
+/// Walks the program (recursing into namespace blocks), asks the `pick` callback
+/// to extract a name from each statement, and outputs it only if it exists in
+/// `known` and hasn't been seen before (deduplicated by PHP symbol key).
 fn collect_program_declared_names<T>(
     program: &Program,
     known: &HashMap<String, T>,
@@ -381,6 +408,9 @@ fn collect_program_declared_names<T>(
     }
 }
 
+/// Splits `known_names` into internal-only and user-declared by checking against
+/// `user_names` (matched by PHP symbol key), sorts the internal names, and
+/// appends the user names in their original order.
 fn prepend_internal_names<'a>(
     known_names: impl Iterator<Item = &'a String>,
     user_names: &[String],
@@ -403,6 +433,11 @@ fn is_internal_synthetic_class_name(name: &str) -> bool {
     crate::names::php_symbol_key(name).starts_with("__elephc")
 }
 
+/// Returns the set of class names that should be emitted in the x86_64
+/// user-asm section. Starts from required classes, unconditionally includes
+/// the throwable hierarchy (needed by runtime JSON helpers), reflection
+/// classes, and attribute factories, then expands to cover the full
+/// inheritance and implementation dependency chain.
 fn collect_x86_emitted_class_names(
     program: &Program,
     classes: &HashMap<String, ClassInfo>,
@@ -448,6 +483,10 @@ fn collect_x86_emitted_class_names(
     names
 }
 
+/// Repeatedly expands `names` by adding parent classes and all
+/// method-implementation classes (both instance and static) until a
+/// fixed point is reached, ensuring emitted vtables and interface
+/// tables are complete.
 fn expand_emitted_class_dependencies(
     names: &mut HashSet<String>,
     classes: &HashMap<String, ClassInfo>,
@@ -481,6 +520,8 @@ fn expand_emitted_class_dependencies(
     }
 }
 
+/// Generates complete target assembly including runtime.
+/// Returns tuple of (user_asm, full_asm_with_runtime).
 #[allow(dead_code)]
 pub fn generate(
     program: &Program,

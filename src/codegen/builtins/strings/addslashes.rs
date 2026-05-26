@@ -16,6 +16,15 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code to escape single quotes, double quotes, backslashes, and NUL bytes
+/// in the first argument using the `__rt_addslashes` runtime helper.
+///
+/// # Arguments
+/// - `args[0]` is evaluated and passed as the string to escape.
+/// - Calls `__rt_addslashes` through the active target ABI.
+///
+/// # Returns
+/// `PhpType::Str` — the escaped string as an owned runtime value.
 pub fn emit(
     _name: &str,
     args: &[Expr],

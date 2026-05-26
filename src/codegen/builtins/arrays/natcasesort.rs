@@ -18,6 +18,19 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a call to the `natcasesort` runtime helper, which sorts the input array
+/// in place using case-insensitive natural order. The array argument is evaluated
+/// once, made unique (COW), and then a pointer to the potentially-reallocated array
+/// is written back to caller storage before the sort routine is invoked.
+///
+/// Arguments:
+/// - `args[0]`: the array to sort (must be an indexed integer-array for the runtime helper)
+/// - `emitter`: writes the call sequence
+/// - `ctx`: provides variable layout and mutating-arg storage info
+/// - `data`: data section for literals and runtime metadata
+///
+/// Returns: `Some(PhpType::Void)` — the function has no PHP-visible return value,
+/// but the call sequence produces side effects on the array argument.
 pub fn emit(
     _name: &str,
     args: &[Expr],

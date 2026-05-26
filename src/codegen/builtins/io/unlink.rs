@@ -16,6 +16,8 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `unlink(path)` builtin.
+/// Consumes the path argument, calls the runtime helper `__rt_unlink`, and returns a bool (true on success, false on failure).
 pub fn emit(
     _name: &str,
     args: &[Expr],

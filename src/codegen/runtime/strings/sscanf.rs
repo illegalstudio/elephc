@@ -11,11 +11,13 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// sscanf: parse a string according to a format, returning matched values as string array.
-/// Input: x1/x2=input string, x3/x4=format string
-/// Output: x0=array pointer (array of strings)
-/// Supports: %d (digits), %s (non-whitespace word), %% (literal %)
-/// Literal chars in format must match input exactly.
+/// Parses the input string according to the format string, returning matched substrings as a string array.
+///
+/// dispatches to the x86_64 Linux variant; for ARM64 emits the scan loop inline.
+/// Input: x1/x2 = input string (ptr, len), x3/x4 = format string (ptr, len)
+/// Output: x0 = array pointer containing matched string slices
+/// Supports: %d (optional sign + digits), %s (non-whitespace word), %% (literal percent)
+/// Literal characters in the format must match the input exactly; mismatches terminate parsing early.
 pub fn emit_sscanf(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_sscanf_linux_x86_64(emitter);
@@ -150,6 +152,12 @@ pub fn emit_sscanf(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// x86_64 Linux sscanf implementation: parses input according to format, pushes matched slices to a result array.
+///
+/// Uses System V AMD64 ABI: input (rdi, rsi), format (rdx, rcx), result array pointer returned in rax.
+/// Frame spill slots at [rbp-8..rbp-40] preserve pointer/length state across helper calls.
+/// Supports: %d (optional leading minus + ASCII digit run), %s (non-whitespace byte run), %% (literal percent).
+/// Unknown specifiers are skipped without aborting; literal mismatches terminate the scan loop early.
 fn emit_sscanf_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: sscanf ---");

@@ -16,6 +16,14 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `rmdir` PHP builtin call.
+///
+/// Arguments (evaluated left-to-right):
+/// - `args[0]`: path string to the directory to remove
+/// - `args[1]`: context resource (ignored, reserved for stream context)
+///
+/// Calls `__rt_rmdir` with the path pointer/length in x1/x2, then returns bool.
+/// Sets errno and returns false if the directory cannot be removed (not empty, permissions, etc.).
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -16,6 +16,19 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `rawurldecode` builtin call.
+///
+/// Arguments:
+/// - `args[0]`: the string to decode (evaluated and pushed as the runtime argument)
+///
+/// Behavior:
+/// - Emits `args[0]` expression to obtain the source string.
+/// - Calls `__rt_urldecode` runtime helper which percent-decodes the string.
+/// - The helper allocates and returns a new PHP-owned string; the caller receives
+///   ownership of the returned value.
+///
+/// Returns:
+/// - `PhpType::Str` indicating the result is a PHP string type.
 pub fn emit(
     _name: &str,
     args: &[Expr],

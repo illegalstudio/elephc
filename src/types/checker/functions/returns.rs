@@ -14,6 +14,8 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::Checker;
 
+/// Holds the inferred type and whether a return statement provided a value.
+/// Used by return-type checking to collect return type information across all paths.
 #[derive(Clone)]
 pub(crate) struct ReturnInfo {
     pub ty: PhpType,
@@ -21,6 +23,9 @@ pub(crate) struct ReturnInfo {
 }
 
 impl Checker {
+    /// Recursively collects ReturnInfo from all return statements in `stmt` and its
+    /// nested blocks (if/while/try/etc.), appending each to `returns`. Untyped or unresolvable
+    /// expressions are skipped silently — only well-typed returns contribute to the vector.
     pub(crate) fn collect_return_infos(
         &mut self,
         stmt: &Stmt,
@@ -180,10 +185,15 @@ impl Checker {
         }
     }
 
+    /// Returns true if `body` contains at least one Return statement at any nesting depth,
+    /// including inside conditionals, loops, try/catch, switch, or synthetic blocks.
     pub(crate) fn body_contains_return(body: &[Stmt]) -> bool {
         body.iter().any(Self::stmt_contains_return)
     }
 
+    /// Checks that a function or closure body ends with a return on every control-flow path
+    /// when the declared return type is not Void or Never. Uses `block_guarantees_function_exit`
+    /// to determine if the body always exits; emits a "must return a value" error if not.
     pub(crate) fn require_declared_return_coverage(
         &self,
         declared_ret: &PhpType,
@@ -205,6 +215,11 @@ impl Checker {
         }
     }
 
+    /// Checks that an actual return type is compatible with the declared return type.
+    /// Handles three cases: void-returning functions (no value allowed), value-returning
+    /// functions (value required and must be assignable to `expected`), and nullability
+    /// via `return_type_accepts_null`. Delegates to `require_compatible_arg_type` for
+    /// the final assignability check.
     pub(crate) fn require_compatible_return_type(
         &self,
         expected: &PhpType,
@@ -240,6 +255,8 @@ impl Checker {
         self.require_compatible_arg_type(expected, actual, span, context)
     }
 
+    /// Returns true if `ty` can accept a null/void value — covers PhpType::Mixed,
+    /// PhpType::Void, and PhpType::Union types where any member accepts null.
     fn return_type_accepts_null(ty: &PhpType) -> bool {
         match ty {
             PhpType::Mixed => true,
@@ -249,6 +266,9 @@ impl Checker {
         }
     }
 
+    /// Returns true if `stmt` or any nested statement within it contains a Return.
+    /// Recurses through If, While, DoWhile, For, Foreach, Try, Switch, Synthetic,
+    /// NamespaceBlock, and IfDef. Used by `body_contains_return` for control-flow analysis.
     fn stmt_contains_return(stmt: &Stmt) -> bool {
         match &stmt.kind {
             StmtKind::Return(_) => true,
@@ -317,6 +337,10 @@ impl Checker {
         }
     }
 
+    /// Computes the wider of two PHP types for return-type merging:
+    /// - If equal, returns a clone.
+    /// - Str + anything → Str; Float + anything → Float.
+    /// - Void or Never resolves to the other type; otherwise → Mixed.
     pub(crate) fn wider_type(a: &PhpType, b: &PhpType) -> PhpType {
         match (a, b) {
             _ if a == b => a.clone(),

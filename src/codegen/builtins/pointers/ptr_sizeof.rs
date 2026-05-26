@@ -15,6 +15,17 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
+/// Emits the `ptr_sizeof` builtin call: returns the static byte size of a low-level type.
+///
+/// The type name is resolved from the first argument's string literal (`"int"`, `"float"`,
+/// `"bool"`, `"string"`, `"ptr"`, or a class name). For class names, the size is computed
+/// as `[8] + [properties.len() * 16] + [optional 8 bytes for dynamic properties]`.
+///
+/// On success, the computed size (as `usize`) is materialized in the integer result register
+/// (`x0` on AArch64, `rax` on x86_64). On failure (non-literal argument or unknown type),
+/// zero is placed in the result register.
+///
+/// Returns `PhpType::Int` to indicate the result is an integer value.
 pub fn emit(
     _name: &str,
     args: &[Expr],

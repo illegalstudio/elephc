@@ -16,6 +16,20 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a `sqrt($arg)` builtin call as target-native square-root instructions.
+///
+/// Consumes the first argument expression, promoting integer operands to float before
+/// the square-root operation. Emits `fsqrt d0, d0` on AArch64 or `sqrtsd xmm0, xmm0` on
+/// x86_64. The floating-point result is left in the ABI return register (`d0`/`xmm0`).
+///
+/// Returns `Some(PhpType::Float)` since `sqrt` always produces a float in PHP.
+///
+/// # Arguments
+/// * `_name` — unused; present for dispatcher uniformity
+/// * `args` — must contain exactly one argument (checked by the type checker)
+/// * `emitter` — target assembly emitter
+/// * `ctx` — codegen context (variable layout, ownership state)
+/// * `data` — data section for any emitted constants
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -16,6 +16,20 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits PHP `shell_exec` builtin calls.
+///
+/// # Arguments
+/// - `_name`: Unused; the builtin name is hardcoded as `shell_exec`.
+/// - `args`: Single argument — the command string to execute.
+///
+/// # Behavior
+/// Evaluates the command string argument in source order, then calls the runtime
+/// helper `__rt_shell_exec` to execute the command and capture stdout as a string.
+/// Returns `PhpType::Str` as the captured output.
+///
+/// # ABI
+/// The runtime call uses target-aware ABI helpers to materialize arguments and
+/// capture the ptr/len result in registers per the target convention.
 pub fn emit(
     _name: &str,
     args: &[Expr],

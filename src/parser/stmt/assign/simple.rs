@@ -17,7 +17,23 @@ use crate::span::Span;
 
 use super::super::expect_semicolon;
 
-/// Handle statements starting with $variable: assignment, array ops, or post-increment.
+/// Parses statements that begin with a PHP variable token (`$name`).
+///
+/// Dispatches to postfix assignment, post-increment/decrement, property access with
+/// compound assignment, closure calls, or regular/compound assignment based on the
+/// token that follows the variable.
+///
+/// # Arguments
+/// - `tokens` — the token stream
+/// - `pos` — current position (mutated by parsing)
+/// - `span` — source span of the statement
+///
+/// # Returns
+/// `Stmt` with `StmtKind::PostIncrement`, `PostDecrement`, `PropertyAssign`,
+/// `ExprStmt`, or compound/regular assignment variants.
+///
+/// # Panics
+/// Unreachable if the first token is not `Token::Variable`.
 pub(in crate::parser::stmt) fn parse_variable_stmt(
     tokens: &[(Token, Span)],
     pos: &mut usize,

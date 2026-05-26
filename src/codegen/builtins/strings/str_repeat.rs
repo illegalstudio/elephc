@@ -16,6 +16,26 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `str_repeat` builtin call.
+///
+/// Marshals the string operand (args[0]) and integer repeat count (args[1]) into
+/// platform-specific argument registers, then calls `__rt_str_repeat` to produce
+/// a repeated PHP string. Returns `PhpType::Str` indicating the result is a PHP string.
+///
+/// # Arguments
+/// - `_name`: Ignored; present for dispatcher signature consistency.
+/// - `args[0]`: The string to repeat.
+/// - `args[1]`: The integer repeat count.
+/// - `emitter`: Target-aware assembly emitter; receives register allocations and instructions.
+/// - `ctx`: Codegen context carrying variable layout and function metadata.
+/// - `data`: Data section for relocatable literals and runtime symbols.
+///
+/// # Register usage
+/// - AArch64: string ptr/len in x1/x2, repeat count in x3; result ptr/len returned in x1/x2.
+/// - x86_64: string ptr/len in rax/rdx, repeat count in rdi; result ptr/len returned in x1/x2.
+///
+/// # Side effects
+/// - Caller-saves registers are clobbered by the runtime helper.
 pub fn emit(
     _name: &str,
     args: &[Expr],

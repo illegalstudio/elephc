@@ -16,6 +16,19 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `fnmatch` PHP builtin call.
+///
+/// Evaluates three arguments in source order (pattern, filename, flags), marshaling
+/// each as a string pointer/length pair. On ARM64 uses `x1`/`x2` for the pattern and
+/// `x3`/`x4` for the filename; on x86_64 uses `rax`/`rdx` and `rdi`/`rsi`. Arguments
+/// are preserved on the stack during evaluation to allow correct ordering. Calls the
+/// target-aware runtime helper `__rt_fnmatch` and returns `PhpType::Bool`.
+///
+/// # Arguments
+/// * `_name` — unused, matches the dispatcher signature
+/// * `args[0]` — pattern (string)
+/// * `args[1]` — filename (string)
+/// * `args[2]` — optional flags; defaults to 0 if absent
 pub fn emit(
     _name: &str,
     args: &[Expr],

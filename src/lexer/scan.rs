@@ -14,6 +14,14 @@ use super::token::Token;
 use crate::errors::CompileError;
 use crate::span::Span;
 
+/// Scans the full PHP source into a stream of `(Token, Span)` pairs.
+///
+/// Requires `<?php` as the first five characters. Dispatches to `literals` for
+/// strings (which may contain interpolation), heredoc/nowdoc, numbers, variables,
+/// and keywords. Returns `Token::Eof` at end-of-input.
+///
+/// # Errors
+/// Returns `CompileError` if the file does not open with `<?php`.
 pub fn scan_tokens(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
     let mut cursor = Cursor::new(source);
     let mut tokens = Vec::new();
@@ -59,6 +67,9 @@ pub fn scan_tokens(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
     Ok(tokens)
 }
 
+/// Skips all whitespace, `//` line comments, `#` line comments (but not `#[` attribute
+/// groups), and `/* */` block comments. Uses `continue` to re-check after each comment
+/// type so adjacent comment forms are all skipped.
 fn skip_whitespace_and_comments(cursor: &mut Cursor) {
     loop {
         while let Some(ch) = cursor.peek() {
@@ -104,6 +115,13 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor) {
     }
 }
 
+/// Dispatches token scanning based on the current character.
+///
+/// Multi-character operators (`?->`, `??`, `??=`, `:`, `::`, `=>`, `<=>`, `->>`,
+/// `<<`, `>>`, `...`, compound assignments, etc.) are recognized before returning.
+/// Delegates to `literals` for single-quoted strings, double-quoted strings (in the
+/// outer loop), heredoc/nowdoc (in the outer loop), numbers, variables, and keywords.
+/// Returns `Token::Eof` when `cursor.peek()` is `None`.
 fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
     let ch = match cursor.peek() {
         Some(c) => c,

@@ -11,9 +11,17 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_reverse: create a reversed copy of an integer array.
-/// Input: x0 = array pointer
-/// Output: x0 = pointer to new reversed array
+/// Emits the `__rt_array_reverse` runtime helper for ARM64.
+///
+/// Allocates a new array with the same capacity as the source, then copies
+/// source elements in reverse order into the destination. The source array is
+/// not modified; a new array is always returned.
+///
+/// Input: x0 = pointer to source array header (length at offset 0, data at offset 24)
+/// Output: x0 = pointer to new reversed array header (same length, reversed element order)
+///
+/// Preserves: x29 (frame pointer), x30 (link register)
+/// Clobbers: x0-x9 (caller-saved registers used for loop bookkeeping and allocation)
 pub fn emit_array_reverse(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_reverse_linux_x86_64(emitter);
@@ -68,6 +76,16 @@ pub fn emit_array_reverse(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = new reversed array
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_array_reverse` runtime helper.
+///
+/// Allocates a new indexed array via `__rt_array_new`, then copies source elements
+/// in reverse order into the destination. The source array is not modified.
+///
+/// Input: rdi = pointer to source indexed-array header (length at offset 0, data at offset 24)
+/// Output: rax = pointer to new reversed indexed-array header (same length, reversed element order)
+///
+/// Preserves: rbp (frame pointer)
+/// Clobbers: rax, rcx, r8, r9, r10, r11, and caller-saved registers used for loop bookkeeping
 fn emit_array_reverse_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_reverse ---");

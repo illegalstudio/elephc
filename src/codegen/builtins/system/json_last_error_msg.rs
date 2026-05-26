@@ -15,6 +15,12 @@ use crate::codegen::emit::Emitter;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `json_last_error_msg()` builtin, which returns the error message
+/// from the last `json_encode()`, `json_decode()`, or `json_validate()` call.
+///
+/// Calls the runtime routine `__rt_json_last_error_msg`, which reads the runtime-global
+/// JSON error state and returns a pointer/length string to the appropriate error description.
+/// Returns `PhpType::Str`. Arguments are ignored (the function takes no parameters).
 pub fn emit(
     _name: &str,
     _args: &[Expr],

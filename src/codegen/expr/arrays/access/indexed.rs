@@ -21,6 +21,12 @@ use crate::types::PhpType;
 use super::object;
 use super::string_offset::emit_string_offset_index;
 
+/// Emits indexed or associative array element read with nullable/Mixed result support.
+/// Dispatches to `object::emit_offset_get` for ArrayAccess objects, otherwise evaluates
+/// the array expression and routes to `emit_array_access_with_loaded_base` with the
+/// resulting type.
+///
+/// Returns the element type of the accessed value (including Mixed for nullable/boxed bases).
 pub(crate) fn emit_array_access(
     array: &Expr,
     index: &Expr,
@@ -36,6 +42,13 @@ pub(crate) fn emit_array_access(
     emit_array_access_with_loaded_base(&arr_ty, index, emitter, ctx, data, false)
 }
 
+/// Emits array access with an already-loaded base type, supporting buffers and nullable boxing.
+/// Routes to target-specific buffer access, string indexing, Mixed dispatch, associative array
+/// lookup, or indexed array access depending on `arr_ty`. The `box_nullable_base` flag causes
+/// nullable array bases to be boxed into Mixed results and enables runtime null-sentinel fallbacks
+/// for out-of-bounds access.
+///
+/// Returns the element type after any boxing or conversion.
 pub(crate) fn emit_array_access_with_loaded_base(
     arr_ty: &PhpType,
     index: &Expr,
@@ -484,6 +497,13 @@ pub(crate) fn emit_array_access_with_loaded_base(
     if boxed_indexed_base { PhpType::Mixed } else { elem_ty }
 }
 
+/// Determines the element type for indexed array access and whether the base requires boxing.
+/// For `PhpType::Array(elem_ty)`, returns the element type with `boxed=false`. For unions,
+/// extracts the first Array variant's element type or defaults to `PhpType::Int`; the second
+/// return value is `box_nullable_base` when the union contains a nullable base. For unknown
+/// types, defaults to `PhpType::Int` with `boxed=false`.
+///
+/// Returns a tuple of `(element_type, requires_boxing)`.
 fn indexed_array_element_type(arr_ty: &PhpType, box_nullable_base: bool) -> (PhpType, bool) {
     match arr_ty {
         PhpType::Array(elem_ty) => (*elem_ty.clone(), false),
@@ -504,6 +524,10 @@ fn indexed_array_element_type(arr_ty: &PhpType, box_nullable_base: bool) -> (Php
     }
 }
 
+/// Emits a boxed null for nullable array access. Materializes the runtime null sentinel
+/// (i64::MAX - 1) into the integer result register and boxes it as a Mixed value using
+/// `emit_box_current_value_as_mixed`. Used for out-of-bounds indexed access and nullable
+/// associative array misses when the result must be a Mixed cell.
 fn objects_boxed_null_for_array_access(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(
         emitter,

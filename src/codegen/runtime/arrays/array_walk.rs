@@ -11,9 +11,11 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_walk: call a callback on each element of an integer array (no return value).
-/// Input: x0 = callback function address, x1 = source array pointer, x2 = optional callback environment pointer
-/// Output: none (void)
+/// Emits `__rt_array_walk` for the current target.
+/// Dispatches to x86_64 Linux or falls through to the default ARM64 implementation.
+/// Inputs: x0 = callback address, x1 = source array pointer, x2 = optional callback environment pointer.
+/// The callback receives (element, env) when env is non-null, else (element) only.
+/// Return value from callback is discarded. Callee-saved registers are preserved.
 pub fn emit_array_walk(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_walk_linux_x86_64(emitter);
@@ -72,6 +74,10 @@ pub fn emit_array_walk(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return (void)
 }
 
+/// Emits `__rt_array_walk` for Linux x86_64 using the System V AMD64 ABI.
+/// Inputs: rdi = callback address, rsi = source array pointer, rdx = optional callback environment pointer.
+/// Callback receives (element, env) when env is non-null, else (element) only.
+/// Return value from callback is discarded. Callee-saved registers (r12, r13, r14, rbp) are preserved.
 fn emit_array_walk_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_walk ---");

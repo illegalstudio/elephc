@@ -10,6 +10,8 @@
 
 use super::*;
 
+/// Extracts a filtered constant environment containing only the captured variable names.
+/// Returns a new `ConstantEnv` with entries for each name in `captures` that exists in `env`.
 pub(crate) fn captured_constant_env(captures: &[String], env: &ConstantEnv) -> ConstantEnv {
     captures
         .iter()
@@ -17,6 +19,10 @@ pub(crate) fn captured_constant_env(captures: &[String], env: &ConstantEnv) -> C
         .collect()
 }
 
+/// Recursively propagates constant facts through an expression, substituting known scalar
+/// variables with their constant values. Clears the environment when local writes are detected
+/// to prevent incorrect propagation across assignments. Returns a new expression with
+/// substitutions applied, followed by constant folding.
 pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
     let empty_env;
     let env = if expr_local_writes(&expr).is_some_and(|writes| !writes.is_empty()) {
@@ -276,6 +282,8 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
     fold_expr(Expr { kind, span })
 }
 
+/// Propagates constants into the target of an instanceof expression. If the target is a bare
+/// expression (not a class name), recursively applies constant propagation to it.
 fn propagate_instanceof_target(
     target: InstanceOfTarget,
     env: &ConstantEnv,
@@ -288,6 +296,9 @@ fn propagate_instanceof_target(
     }
 }
 
+/// Propagates constants into a callable target. Only the `Method` variant contains an
+/// expression (the object) that may hold a substitutable variable; `Function` and `StaticMethod`
+/// targets are returned unchanged since they contain no propagatable sub-expressions.
 pub(crate) fn propagate_callable_target(target: CallableTarget, env: &ConstantEnv) -> CallableTarget {
     match target {
         CallableTarget::Function(name) => CallableTarget::Function(name),
@@ -301,6 +312,9 @@ pub(crate) fn propagate_callable_target(target: CallableTarget, env: &ConstantEn
     }
 }
 
+/// Applies constant propagation to a list of call arguments. When `env` is `Some`,
+/// propagates into all arguments normally. When `env` is `None` (side-effecting call),
+/// uses an empty environment so no constants are propagated into arguments.
 pub(crate) fn propagate_args(args: Vec<Expr>, env: Option<&ConstantEnv>) -> Vec<Expr> {
     match env {
         Some(env) => args.into_iter().map(|arg| propagate_expr(arg, env)).collect(),
@@ -313,6 +327,10 @@ pub(crate) fn propagate_args(args: Vec<Expr>, env: Option<&ConstantEnv>) -> Vec<
     }
 }
 
+/// Constructs an if/elseif/else statement from its components, performing local
+/// restructuring optimizations: collapses adjacent else-if chains when the else body
+/// contains only a single if statement, and simplifies consecutive ternary-like
+/// conditions into combined conditions using `combine_if_conditions` or `combine_if_chain_conditions`.
 pub(crate) fn build_if_stmt(
     condition: Expr,
     then_body: Vec<Stmt>,

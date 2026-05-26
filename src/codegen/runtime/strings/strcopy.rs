@@ -11,9 +11,19 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// strcopy: copy a string to concat_buf (for in-place modification).
-/// Input:  x1=ptr, x2=len
-/// Output: x1=new_ptr (in concat_buf), x2=len (unchanged)
+/// Emits the `__rt_strcopy` runtime helper.
+///
+/// Copies a PHP byte-string into the concatenation buffer so it can be safely
+/// modified in-place. The source string is copied to `_concat_buf + _concat_off`.
+/// Updates `_concat_off` to reflect the bytes copied.
+///
+/// # Input (ARM64 calling convention)
+/// - `x1`: source string pointer
+/// - `x2`: source string length
+///
+/// # Output (ARM64 calling convention)
+/// - `x1`: new pointer to the copy in concat_buf
+/// - `x2`: length (unchanged from input)
 pub fn emit_strcopy(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_strcopy_linux_x86_64(emitter);
@@ -58,6 +68,15 @@ pub fn emit_strcopy(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_strcopy`.
+///
+/// Identical behavior to the ARM64 path but uses x86_64 System V ABI registers:
+/// - `rax`: source string pointer (input, preserved as return value)
+/// - `rdx`: source string length (input, preserved as return value)
+/// - `r8`/`r9`/`r10`/`r11`/`rcx`/`rsi`: temporaries for copy loop and concat offset tracking
+///
+/// After the copy, `_concat_off` is advanced by the string length. The new pointer
+/// is returned in `rax` and the length in `rdx`.
 fn emit_strcopy_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strcopy ---");

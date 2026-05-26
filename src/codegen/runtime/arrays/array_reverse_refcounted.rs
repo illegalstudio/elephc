@@ -11,9 +11,23 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_reverse_refcounted: create a reversed copy of a refcounted array.
-/// Input: x0 = array pointer
-/// Output: x0 = pointer to new reversed array
+/// Creates a new array containing the same elements as the source but in reverse order.
+///
+/// Allocates a fresh array via `__rt_array_new`, then iterates the source from tail to
+/// head, appending each element to the destination via `__rt_array_push_refcounted`.
+/// The source array is never modified; this is a non-mutating clone with O(n) allocation
+/// and element copies.
+///
+/// # ABI (ARM64)
+/// - Input: x0 = source array pointer
+/// - Output: x0 = pointer to newly allocated reversed array
+///
+/// # ABI (x86_64 Linux, System V)
+/// - Input: rdi = source array pointer
+/// - Output: rax = pointer to newly allocated reversed array
+///
+/// # Calling convention
+/// Destroys caller-saved registers; preserves callee-saved registers.
 pub fn emit_array_reverse_refcounted(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_reverse_refcounted_linux_x86_64(emitter);
@@ -62,6 +76,11 @@ pub fn emit_array_reverse_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return reversed array
 }
 
+/// x86_64 Linux implementation of `emit_array_reverse_refcounted`.
+/// Uses the System V AMD64 ABI: source array in rdi, result in rax.
+/// Preserves rbp, clobbers caller-saved registers (rax, rcx, rdx, rsi, rdi, r8-r11).
+/// Maintains a reverse-copy index and re-loads source length on each loop iteration to
+/// handle the case where `__rt_array_push_refcounted` may grow the destination array.
 fn emit_array_reverse_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_reverse_refcounted ---");

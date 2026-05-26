@@ -10,6 +10,7 @@
 
 use std::time::{Duration, Instant};
 
+/// Compile timing collector for optional performance profiling.
 pub(crate) struct CompileTimings {
     enabled: bool,
     started_at: Instant,
@@ -18,6 +19,11 @@ pub(crate) struct CompileTimings {
 }
 
 impl CompileTimings {
+    /// Creates a new timing collector.
+    ///
+    /// `enabled` controls whether timing data is actually recorded and reported.
+    /// When disabled (the common case), all methods are no-ops so callers need
+    /// not branch on the flag. The internal timer starts immediately.
     pub(crate) fn new(enabled: bool) -> Self {
         Self {
             enabled,
@@ -27,18 +33,31 @@ impl CompileTimings {
         }
     }
 
+    /// Records the elapsed time since `started_at` for the named phase.
+    ///
+    /// No-op when timing collection is disabled. The duration is computed
+    /// immediately at call time via `Instant::elapsed()`.
     pub(crate) fn record_since(&mut self, phase: &'static str, started_at: Instant) {
         if self.enabled {
             self.phases.push((phase, started_at.elapsed()));
         }
     }
 
+    /// Appends an arbitrary informational note to the timing report.
+    ///
+    /// No-op when timing collection is disabled. The note is printed verbatim
+    /// in order at the top of the report, before any phase timings.
     pub(crate) fn note(&mut self, note: impl Into<String>) {
         if self.enabled {
             self.notes.push(note.into());
         }
     }
 
+    /// Prints the collected timing report to stderr.
+    ///
+    /// Output is gated behind the `enabled` flag. The report includes all notes
+    /// in insertion order, each phase with its duration in milliseconds, and a
+    /// total elapsed time from when the collector was constructed.
     pub(crate) fn report(&self) {
         if !self.enabled {
             return;

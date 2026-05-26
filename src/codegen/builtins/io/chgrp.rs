@@ -16,6 +16,19 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `chgrp` builtin call for both string group names and integer GIDs.
+///
+/// # Arguments
+/// - `args[0]`: path (string) — pointer in x1/rax, length in x2/rdx
+/// - `args[1]`: group — string → `__rt_chgrp_group` (resolves name via libc); int → `__rt_chown` with uid=-1
+///
+/// # ABI details
+/// The path pointer/length (x1/x2 or rax/rdx) are preserved on the stack while the group
+/// argument is evaluated, then restored before the runtime call. Integer GIDs pass through
+/// the tertiary register (x4/rsi) with uid set to -1 to affect only the group ownership.
+///
+/// # Returns
+/// `PhpType::Bool` — true on success, false on failure (matching PHP semantics).
 pub fn emit(
     _name: &str,
     args: &[Expr],

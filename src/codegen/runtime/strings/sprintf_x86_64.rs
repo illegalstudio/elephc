@@ -10,6 +10,31 @@
 
 use crate::codegen::emit::Emitter;
 
+/// Emits the `__rt_sprintf` runtime helper for Linux x86_64.
+///
+/// ## Register contract on entry
+/// - `rax`: pointer to the current format string
+/// - `rdx`: remaining format string length in bytes
+/// - `rdi`: packed variadic argument count
+/// - `rsi`: pointer to caller-owned packed variadic argument records on the stack
+///
+/// ## Register contract on exit
+/// - `rax`: pointer to the formatted string within the concat buffer
+/// - `rdx`: length of the formatted string in bytes
+///
+/// ## Operation
+/// Scans the format string byte-by-byte. Literal bytes are copied directly to the concat
+/// buffer. `'%'` introduces a specifier: flags, width, precision, and type are parsed into a
+/// local mini format string, then `snprintf` is invoked to format one argument. The result is
+/// copied into the concat buffer and the format scan resumes.
+///
+/// Supported type characters: `%f`, `%e`, `%g` (float via `xmm0`), `%s` (string), `%c` (char),
+/// and integer-like types via `snprintf`. `%%` emits a literal `'%'`.
+///
+/// The concat-buffer write cursor is advanced and published to the `_concat_off` symbol so
+///串联 `printf` calls accumulate into a single output buffer. Callee-saved registers
+/// (`rbx`, `r12`–`r15`, `rbp`) are preserved across the helper; `r11` and `rcx` are used as
+/// temporaries. Caller-owned tagged variadic records are discarded before returning.
 pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: sprintf ---");

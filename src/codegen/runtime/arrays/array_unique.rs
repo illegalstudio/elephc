@@ -85,6 +85,12 @@ pub fn emit_array_unique(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = deduplicated array
 }
 
+/// x86_64 Linux variant of `emit_array_unique`.
+///
+/// Uses x86_64 calling conventions: source array pointer in `rdi`, result returned in `rax`.
+/// Register usage: `r10` = source length, `r8` = source array data base, `r9` = dest array data base,
+/// `rcx` = source cursor, `rdx` = dest scan cursor, `r10d` = dest length.
+/// Frame: `rbp`-relative spill slots at `[rbp-8]`, `[rbp-16]`, `[rbp-24]`.
 fn emit_array_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_unique ---");

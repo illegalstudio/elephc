@@ -10,9 +10,20 @@
 
 use crate::codegen::emit::Emitter;
 
-/// gc_note_child_ref: record one heap-to-heap incoming reference for a live refcounted child.
-/// Input: x0 = child pointer
-/// Output: none
+/// Emits `__rt_gc_note_child_ref`, which records one heap-to-heap incoming edge for
+/// cycle-aware GC. Skips null pointers, out-of-range pointers, freed blocks, and
+/// non-refcounted kinds (strings/raw buffers). For valid refcounted array/hash/object
+/// children, bumps the transient incoming-edge counter stored in the high 32 bits of
+/// the child block's kind word.
+///
+/// # Inputs
+/// - `x0`: child block pointer (a heap-allocated refcounted array/hash/object)
+///
+/// # Outputs
+/// - None (registers `x0`–`x14` are clobbered)
+///
+/// # ABI
+/// - AAPCS64: caller-saved registers `x0`–`x17` may be clobbered
 pub fn emit_gc_note_child_ref(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: gc_note_child_ref ---");

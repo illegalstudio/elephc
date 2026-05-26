@@ -17,6 +17,27 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `array_chunk($array, $size, $preserve_keys)` builtin call.
+///
+/// Splits `$array` into chunks of `$size` elements, returning an array of arrays.
+/// Calls `__rt_array_chunk` (scalar arrays) or `__rt_array_chunk_refcounted` (refcounted
+/// arrays such as those containing strings or nested arrays) via the platform ABI.
+///
+/// ## Arguments
+/// - `args[0]`: source array to chunk
+/// - `args[1]`: chunk size (positive integer)
+///
+/// ## Return type
+/// `PhpType::Array(Array(inner))` — an array of arrays preserving the inner element type.
+/// If the input type cannot be determined, defaults to `Array(Array(Int))`.
+///
+/// ## Runtime helpers
+/// - `__rt_array_chunk`: for scalar indexed arrays (int/float-only elements)
+/// - `__rt_array_chunk_refcounted`: for arrays with refcounted elements (strings, objects, nested arrays)
+///
+/// ## ABI notes
+/// - x86_64: preserves source array in `rax` during size evaluation, passes array in `rdi`, size in `rsi`
+/// - ARM64: pushes array pointer on stack, passes size in `x1`, restores array in `x0`
 pub fn emit(
     _name: &str,
     args: &[Expr],

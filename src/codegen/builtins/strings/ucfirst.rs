@@ -16,6 +16,18 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the PHP `ucfirst` builtin.
+///
+/// Evaluates `args[0]` as a string expression, copies it via `__rt_strcopy`, then
+/// uppercases the first byte in-place if it falls in the ASCII lowercase range ('a'-'z').
+/// Returns `PhpType::Str`.
+///
+/// # Arguments
+/// * `_name` — unused; the builtin name is always `ucfirst`
+/// * `args` — must contain exactly one string/scalar argument
+/// * `emitter` — target-aware instruction emitter
+/// * `ctx` — variable layout and metadata context
+/// * `data` — data section for relocations and constants
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -11,6 +11,10 @@
 use crate::errors::CompileWarning;
 use crate::parser::ast::{ClassMethod, Stmt, StmtKind, Visibility};
 
+/// Recursively walks statements to collect OOP-related warnings.
+///
+/// Visits `ClassDecl`, `TraitDecl`, `NamespaceBlock`, and `IncludeOnceGuard` nodes,
+/// delegating modifier validation to `collect_method_modifier_warnings` for each class/trait.
 pub(super) fn collect_oop_warnings(stmts: &[Stmt], warnings: &mut Vec<CompileWarning>) {
     for stmt in stmts {
         match &stmt.kind {
@@ -24,6 +28,10 @@ pub(super) fn collect_oop_warnings(stmts: &[Stmt], warnings: &mut Vec<CompileWar
     }
 }
 
+/// Checks each class/trait method for invalid modifier combinations and emits warnings.
+///
+/// Currently warns when a non-constructor private method is marked `final`, since private
+/// methods cannot be overridden and the `final` qualifier has no effect in that context.
 fn collect_method_modifier_warnings(methods: &[ClassMethod], warnings: &mut Vec<CompileWarning>) {
     for method in methods {
         if method.is_final

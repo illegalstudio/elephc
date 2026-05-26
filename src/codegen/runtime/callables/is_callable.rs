@@ -13,6 +13,8 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Emits all `is_callable()` runtime helpers for the current target.
+/// Dispatches to x86_64 or ARM64 emitters based on `emitter.target.arch`.
 pub(crate) fn emit_is_callable_runtime(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_x86_64(emitter);
@@ -21,6 +23,7 @@ pub(crate) fn emit_is_callable_runtime(emitter: &mut Emitter) {
     emit_aarch64(emitter);
 }
 
+/// Emits all ARM64 `is_callable()` runtime helpers for the current program.
 fn emit_aarch64(emitter: &mut Emitter) {
     emit_string_aarch64(emitter);
     emit_method_name_aarch64(emitter);
@@ -32,6 +35,10 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emit_heap_aarch64(emitter);
 }
 
+/// Emits the ARM64 runtime helper for string callable lookup.
+/// Scans builtin names (case-insensitive), user functions (exact match),
+/// then checks for `Class::method` format via `__rt_is_callable_static_method_name`.
+/// Input: x0=string pointer, x1=string length. Output: x0=1 (true) or 0 (false).
 fn emit_string_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_callable_string ---");
@@ -158,6 +165,9 @@ fn emit_string_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result in x0
 }
 
+/// Emits the ARM64 runtime helper for object method callable lookup.
+/// Looks up a named public method on an object via the class's public-method name table.
+/// Input: x0=object pointer, x1=method name pointer, x2=method name length. Output: x0=1 (true) or 0 (false).
 fn emit_method_name_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_callable_method_name ---");
@@ -211,6 +221,10 @@ fn emit_method_name_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result in x0
 }
 
+/// Emits the ARM64 runtime helper for static method callable lookup.
+/// Compares the given class name and method name against the global static method table
+/// (both compared case-insensitively). Handles leading backslash normalization.
+/// Input: x0=class name ptr, x1=class name len, x2=method name ptr, x3=method name len. Output: x0=1 or 0.
 fn emit_static_method_name_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_callable_static_method_name ---");
@@ -287,6 +301,9 @@ fn emit_static_method_name_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result in x0
 }
 
+/// Emits the ARM64 runtime helper for invokable object lookup.
+/// Delegates to `__rt_is_callable_method_name` with the `"__invoke"` method name.
+/// Input: x0=object pointer. Output: x0=1 (true) or 0 (false).
 fn emit_object_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_callable_object ---");
@@ -303,6 +320,10 @@ fn emit_object_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the method lookup result
 }
 
+/// Emits the ARM64 runtime helper for indexed-array callable lookup.
+/// Validates exactly 2 slots; dispatches Mixed slots (receiver unboxed to object or string)
+/// and raw string slots (treated as [class-name, static-method] pair).
+/// Input: x0=indexed array pointer. Output: x0=1 (true) or 0 (false).
 fn emit_array_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_callable_array ---");
@@ -385,6 +406,10 @@ fn emit_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result in x0
 }
 
+/// Emits the ARM64 runtime helper for associative-array callable lookup.
+/// Extracts the receiver (key 0, unboxed if Mixed) and method name (key 1, unboxed if Mixed),
+/// then dispatches to instance method or static method lookup based on receiver type.
+/// Input: x0=associative array pointer. Output: x0=1 (true) or 0 (false).
 fn emit_assoc_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_callable_assoc ---");
@@ -484,6 +509,11 @@ fn emit_assoc_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result in x0
 }
 
+/// Emits the ARM64 runtime helper for boxed Mixed callable dispatch.
+/// Unboxes the Mixed payload and dispatches by runtime tag:
+/// string → `__rt_is_callable_string`, array → `__rt_is_callable_array`,
+/// assoc → `__rt_is_callable_assoc`, object → `__rt_is_callable_object`.
+/// Input: x0=Mixed pointer. Output: x0=1 (true) or 0 (false).
 fn emit_mixed_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_callable_mixed ---");
@@ -530,6 +560,10 @@ fn emit_mixed_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result in x0
 }
 
+/// Emits the ARM64 runtime helper for erased heap-kind callable dispatch.
+/// Probes the heap kind via `__rt_heap_kind` and delegates to the appropriate
+/// array/object/mixed helper. Used for FFI-safe opaque heap pointers.
+/// Input: x0=heap pointer. Output: x0=1 (true) or 0 (false).
 fn emit_heap_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_callable_heap ---");
@@ -576,6 +610,7 @@ fn emit_heap_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result in x0
 }
 
+/// Emits all x86_64 `is_callable()` runtime helpers for the current program.
 fn emit_x86_64(emitter: &mut Emitter) {
     emit_string_x86_64(emitter);
     emit_method_name_x86_64(emitter);
@@ -587,6 +622,10 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emit_heap_x86_64(emitter);
 }
 
+/// Emits the x86_64 runtime helper for string callable lookup.
+/// Scans builtin names (case-insensitive), user functions (exact match),
+/// then checks for `Class::method` format via `__rt_is_callable_static_method_name`.
+/// Input: rdi=string pointer, rsi=string length. Output: rax=1 (true) or 0 (false).
 fn emit_string_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_callable_string ---");
@@ -717,6 +756,9 @@ fn emit_string_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result in rax
 }
 
+/// Emits the x86_64 runtime helper for object method callable lookup.
+/// Looks up a named public method on an object via the class's public-method name table.
+/// Input: rdi=object pointer, rsi=method name pointer, rdx=method name length. Output: rax=1 (true) or 0 (false).
 fn emit_method_name_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_callable_method_name ---");
@@ -771,6 +813,10 @@ fn emit_method_name_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result in rax
 }
 
+/// Emits the x86_64 runtime helper for static method callable lookup.
+/// Compares the given class name and method name against the global static method table
+/// (both compared case-insensitively). Handles leading backslash normalization.
+/// Input: rdi=class name ptr, rsi=class name len, rdx=method name ptr, rcx=method name len. Output: rax=1 or 0.
 fn emit_static_method_name_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_callable_static_method_name ---");
@@ -849,6 +895,9 @@ fn emit_static_method_name_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result in rax
 }
 
+/// Emits the x86_64 runtime helper for invokable object lookup.
+/// Delegates to `__rt_is_callable_method_name` with the `"__invoke"` method name.
+/// Input: rdi=object pointer. Output: rax=1 (true) or 0 (false).
 fn emit_object_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_callable_object ---");
@@ -863,6 +912,10 @@ fn emit_object_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return delegated method lookup result
 }
 
+/// Emits the x86_64 runtime helper for indexed-array callable lookup.
+/// Validates exactly 2 slots; dispatches Mixed slots (receiver unboxed to object or string)
+/// and raw string slots (treated as [class-name, static-method] pair).
+/// Input: rdi=indexed array pointer. Output: rax=1 (true) or 0 (false).
 fn emit_array_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_callable_array ---");
@@ -944,6 +997,10 @@ fn emit_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result in rax
 }
 
+/// Emits the x86_64 runtime helper for associative-array callable lookup.
+/// Extracts the receiver (key 0, unboxed if Mixed) and method name (key 1, unboxed if Mixed),
+/// then dispatches to instance method or static method lookup based on receiver type.
+/// Input: rdi=associative array pointer. Output: rax=1 (true) or 0 (false).
 fn emit_assoc_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_callable_assoc ---");
@@ -1044,6 +1101,11 @@ fn emit_assoc_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result in rax
 }
 
+/// Emits the x86_64 runtime helper for boxed Mixed callable dispatch.
+/// Unboxes the Mixed payload and dispatches by runtime tag:
+/// string → `__rt_is_callable_string`, array → `__rt_is_callable_array`,
+/// assoc → `__rt_is_callable_assoc`, object → `__rt_is_callable_object`.
+/// Input: rdi=Mixed pointer. Output: rax=1 (true) or 0 (false).
 fn emit_mixed_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_callable_mixed ---");
@@ -1085,6 +1147,10 @@ fn emit_mixed_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result in rax
 }
 
+/// Emits the x86_64 runtime helper for erased heap-kind callable dispatch.
+/// Probes the heap kind via `__rt_heap_kind` and delegates to the appropriate
+/// array/object/mixed helper. Used for FFI-safe opaque heap pointers.
+/// Input: rdi=heap pointer. Output: rax=1 (true) or 0 (false).
 fn emit_heap_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_callable_heap ---");

@@ -11,6 +11,10 @@
 use super::*;
 
 #[test]
+// Verifies that a strict-bool guard (`flag === true`) inside an outer if-body
+// is NOT eliminated when the outer condition uses the same guard expression.
+// A local assignment to `flag` inside the outer if-body invalidates the guard
+// assumption for the nested if, so the inner conditional must remain live.
 fn test_eliminate_dead_code_invalidates_outer_strict_bool_guard_after_local_write() {
     let strict_true = Expr::new(
         ExprKind::BinaryOp {

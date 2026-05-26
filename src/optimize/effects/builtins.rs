@@ -8,6 +8,27 @@
 //! Key details:
 //! - Effect summaries must account for globals, heap/runtime state, output, throws, and by-reference mutation.
 
+/// Returns `true` if the named PHP builtin function is both pure (no side effects)
+/// and non-throwing (does not emit warnings or fatal errors that could alter control flow).
+///
+/// Pure non-throwing builtins are safe to eliminate via dead-code elimination, fold as
+/// constant expressions when all arguments are constant, and reorder freely relative to
+/// other statements. The list intentionally excludes builtins that read/write shared runtime
+/// state (`json_*`), produce observable side effects (output, filesystem, globals, heap
+/// mutation), or can throw/fatal (pointer helpers, etc.).
+///
+/// # Arguments
+/// * `name` - Lowercase ASCII builtin function name (case-insensitive PHP builtins use
+///   lowercase in the catalog; callers must normalize before calling).
+///
+/// # Returns
+/// `true` if the builtin is pure and non-throwing; `false` otherwise.
+///
+/// # Notes
+/// `json_encode`/`json_decode`/`json_validate`/`json_last_error`/`json_last_error_msg`
+/// are excluded because they read/write the shared `_json_last_error` runtime symbol.
+/// Pointer memory helpers (`ptr_read16`, `ptr_write16`, `ptr_read_string`, `ptr_write_string`)
+/// are excluded because raw memory access can null-dereference or fatal.
 pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
     matches!(
         name,

@@ -22,6 +22,9 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::runtime::generators::frame as gen_frame;
 
+/// Loads an integer value from `src` into `dest_reg` on ARM64.
+/// Supports literal values, generator frame slots, binary operations (add/sub/mul/div),
+/// and integer function calls. For x86_64, delegates to `emit_load_int_source_x86_64`.
 pub(super) fn emit_load_int_source(emitter: &mut Emitter, dest_reg: &str, src: &IntSource) {
     if emitter.target.arch == Arch::X86_64 {
         emit_load_int_source_x86_64(emitter, dest_reg, src);
@@ -60,6 +63,9 @@ pub(super) fn emit_load_int_source(emitter: &mut Emitter, dest_reg: &str, src: &
     }
 }
 
+/// x86_64-specific integer loading. Handles the same `IntSource` variants as
+/// the ARM64 path but uses r12-based frame addressing and r11/r10 scratch
+/// registers instead of x12/x13.
 fn emit_load_int_source_x86_64(emitter: &mut Emitter, dest_reg: &str, src: &IntSource) {
     match src {
         IntSource::Literal(n) => {
@@ -112,8 +118,9 @@ fn emit_load_int_source_x86_64(emitter: &mut Emitter, dest_reg: &str, src: &IntS
     }
 }
 
-/// Evaluate `args` into a temporary stack stash, pop them into
-/// `x0..x{n-1}`, then `bl <fn_name>`. The return value remains in `x0`.
+/// Evaluates `args` into a 16-byte-aligned stack stash, then pops them into
+/// ABI integer registers (`x0..x{n-1}` on ARM64, `rdi..r9` on x86_64) before
+/// branching to `fn_name`. The return value remains in `x0`/`rax`.
 pub(super) fn emit_int_function_call(emitter: &mut Emitter, fn_name: &str, args: &[IntSource]) {
     if emitter.target.arch == Arch::X86_64 {
         emit_int_function_call_x86_64(emitter, fn_name, args);
@@ -139,6 +146,9 @@ pub(super) fn emit_int_function_call(emitter: &mut Emitter, fn_name: &str, args:
     }
 }
 
+/// x86_64-specific integer function call. Overflow arguments (beyond `rdi..r9`)
+/// are stashed on the stack with an additional alignment reservation before
+/// being placed in their outgoing stack slots.
 fn emit_int_function_call_x86_64(emitter: &mut Emitter, fn_name: &str, args: &[IntSource]) {
     let n = args.len();
     let stash_bytes = if n == 0 { 0 } else { ((n * 8) + 15) & !15 };
@@ -221,6 +231,8 @@ pub(super) fn emit_box_mixed_source(emitter: &mut Emitter, src: &MixedSource) {
     }
 }
 
+/// x86_64-specific Mixed-cell boxing. Matches the behavior of `emit_box_mixed_source`
+/// but uses r12-based frame addressing and System V ABI register conventions (`rdi`, `rsi`, `rax`).
 fn emit_box_mixed_source_x86_64(emitter: &mut Emitter, src: &MixedSource) {
     match src {
         MixedSource::Null => {
@@ -251,10 +263,11 @@ fn emit_box_mixed_source_x86_64(emitter: &mut Emitter, src: &MixedSource) {
     }
 }
 
-/// Allocate an indexed array of int values on the heap, populate it, and
-/// box the resulting pointer as a Mixed cell with the array tag (4).
-/// Layout matches `__rt_array_new`: 24-byte header (length, capacity,
-/// reserved) followed by 8-byte slots.
+/// Allocates a heap buffer for an integer array literal, writes the 24-byte
+/// header (kind=1, length, capacity, reserved=0), stores each `i64` element
+/// at its offset, then boxes the pointer as a Mixed cell with tag 4 (indexed array).
+/// On x86_64, stamps the heap header with `X86_64_HEAP_MAGIC_HI32` to distinguish
+/// from ARM64 allocations.
 fn emit_box_int_array_literal(emitter: &mut Emitter, values: &[i64]) {
     if emitter.target.arch == Arch::X86_64 {
         emit_box_int_array_literal_x86_64(emitter, values);
@@ -284,6 +297,8 @@ fn emit_box_int_array_literal(emitter: &mut Emitter, values: &[i64]) {
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = boxed Mixed pointer
 }
 
+/// x86_64-specific array literal boxing. Same semantics as `emit_box_int_array_literal`
+/// but emits x86_64 instructions with rax-based addressing and `call` instead of `bl`.
 fn emit_box_int_array_literal_x86_64(emitter: &mut Emitter, values: &[i64]) {
     let n = values.len();
     let payload_bytes = 24 + n * 8;
@@ -304,6 +319,11 @@ fn emit_box_int_array_literal_x86_64(emitter: &mut Emitter, values: &[i64]) {
     emitter.instruction("call __rt_mixed_from_value");                          // rax = boxed Mixed pointer
 }
 
+/// Boxes the yield key into a Mixed cell for the generator frame's `last_key` slot.
+/// When `key` is `None`, generates an auto-incrementing integer key: loads the
+/// counter from the frame, increments it atomically, boxes the old value, and
+/// stores the result in `x0`/`rax`. ARM64 uses `x19`-relative addressing; x86_64
+/// uses `r12`-relative addressing.
 pub(super) fn emit_compute_key(emitter: &mut Emitter, key: Option<&MixedSource>) {
     match key {
         Some(src) => emit_box_mixed_source(emitter, src),
@@ -359,10 +379,10 @@ pub(super) fn emit_replace_mixed_slot(
     }
 }
 
-/// Reused by `yields::emit_yield_assign_unbox_int` and friends — shared
-/// branch that emits a comparison branch when a condition holds. Kept in
-/// `values.rs` because it shares register conventions with the boxing
-/// helpers.
+/// Emits a conditional branch to `false_label` when the comparison `cond` evaluates
+/// to false. Evaluates both operands using `emit_load_int_source` / `emit_load_int_source_x86_64`,
+/// preserving them across evaluation, then emits the appropriate compare and branch
+/// using inverted condition codes. The branch is a no-op when the condition is true.
 pub(super) fn emit_branch_if_false(emitter: &mut Emitter, cond: &BoolExpr, false_label: &str) {
     if emitter.target.arch == Arch::X86_64 {
         emit_load_int_source_x86_64(emitter, "r10", &cond.left);

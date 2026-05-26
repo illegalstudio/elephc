@@ -16,6 +16,22 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `ceil(number)` builtin call, rounding its operand toward positive infinity.
+///
+/// # Arguments
+/// - `_name`: Unused; the builtin name is hardcoded as `ceil`.
+/// - `args`: Single expression giving the number to round.
+/// - `emitter`: Target-specific instruction emitter.
+/// - `ctx`: Codegen context carrying variable layout and arch info.
+/// - `data`: Data section for relocations and constant storage.
+///
+/// # Returns
+/// `Some(PhpType::Float)` — `ceil` always returns a float in PHP.
+///
+/// # Codegen behavior
+/// - Converts integer operands to float before rounding (SCVTF on ARM64, CVTSI2SD on x86_64).
+/// - Uses `frintp` (ARM64) or `roundsd` with mode 2 (x86_64) to round toward +infinity.
+/// - NaN and infinity inputs follow IEEE-754 rounding semantics.
 pub fn emit(
     _name: &str,
     args: &[Expr],

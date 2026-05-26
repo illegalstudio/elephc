@@ -16,6 +16,36 @@ use super::super::Checker;
 
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
+/// Type-checks numeric and type-inspection PHP builtins.
+///
+/// Validates argument count, argument types, and special cases (e.g., `buffer_free`
+/// restriction on `$this`, locals-only) for the builtin functions in the numeric
+/// family. Returns the inferred `PhpType` on success, or a `CompileError` on type/
+/// arity mismatch.
+///
+/// ## Supported builtins
+/// - Type checks: `is_bool`, `boolval`, `is_callable`, `is_null`, `is_float`, `is_int`,
+///   `is_iterable`, `is_string`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`
+/// - Numeric: `abs`, `floor`, `ceil`, `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,
+///   `sinh`, `cosh`, `tanh`, `log2`, `log10`, `exp`, `deg2rad`, `rad2deg`, `atan2`, `hypot`,
+///   `pi`, `round`, `pow`, `intdiv`, `fmod`, `fdiv`, `log`
+/// - Random: `rand`, `mt_rand`, `random_int`
+/// - Cast/retype: `floatval`, `settype`, `gettype`
+/// - Array/string helpers: `min`, `max`, `number_format`
+/// - Control: `exit`, `die`, `empty`
+/// - Unset: `unset`
+/// - Buffers: `buffer_len`, `buffer_free`
+///
+/// ## Arguments
+/// - `checker`: mutable checker state for inference
+/// - `name`: lowercase builtin name (case-insensitive lookup is handled by caller)
+/// - `args`: parsed argument expressions
+/// - `span`: source span for error reporting
+/// - `env`: current type environment
+///
+/// ## Returns
+/// `Ok(Some(PhpType))` with the inferred return type, `Ok(None)` for unknown builtins
+/// (caller falls through), or `Err(CompileError)` on validation failure.
 pub(super) fn check_builtin(
     checker: &mut Checker,
     name: &str,

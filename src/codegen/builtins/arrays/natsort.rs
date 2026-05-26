@@ -18,6 +18,9 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the `natsort()` builtin, which sorts an array in place using natural order.
+/// Takes a single array argument, ensures it is COW-safe, stores the array pointer for mutation,
+/// then calls `__rt_natsort` to perform the actual sort. Returns `PhpType::Void`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

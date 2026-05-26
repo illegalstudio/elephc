@@ -46,6 +46,9 @@ pub fn emit_mixed_instanceof(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the boolean instanceof result in x0
 }
 
+/// x86_64/Linux implementation of `emit_mixed_instanceof`.
+/// Input: rdi=boxed mixed cell, rsi=target id, rdx=0 class / 1 interface
+/// Output: rax=1 when the boxed payload is an object matching the target, else 0
 fn emit_mixed_instanceof_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_instanceof ---");

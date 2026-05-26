@@ -16,6 +16,28 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `ctype_alnum` builtin call.
+///
+/// Loads the string argument (pointer in `x1`/`rax`, length in `x2`/`rdx` after
+/// `emit_expr`), then scans every byte checking whether it falls into one of
+/// the three ASCII alnum ranges: `A-Z`, `a-z`, or `0-9`.  Returns `true` in
+/// `x0`/`rax` when all bytes pass; `false` when the string is empty or any byte
+/// fails the predicate.
+///
+/// # Arguments
+/// * `_name` – unused, matching the builtin emitter signature
+/// * `args`  – must contain exactly one expression evaluating to a PHP string
+/// * `emitter` – target-specific instruction emission
+/// * `ctx`    – label name generation (`next_label`)
+/// * `data`   – data section for relocations (unused here)
+///
+/// # Returns
+/// `Some(PhpType::Bool)` to indicate the result type.
+///
+/// # Assembly behavior
+/// - AArch64: pointer in `x1`, length in `x2`; result in `x0`.
+/// - x86_64:  pointer in `rax`, length in `rdx`; result in `rax`.
+/// - Empty strings jump directly to the `fail_label`, returning `false`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

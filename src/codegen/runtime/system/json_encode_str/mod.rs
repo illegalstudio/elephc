@@ -14,10 +14,15 @@ use crate::codegen::platform::Arch;
 mod aarch64;
 mod x86_64;
 
-/// __rt_json_encode_str: JSON-encode a string (add quotes, escape special chars).
-/// Input:  x1 = string ptr, x2 = string len  (ARM64)
-///         rax = string ptr, rdx = string len (x86_64)
-/// Output: x1/rax = result ptr (in concat_buf), x2/rdx = result len
+/// Dispatches to the target-specific `__rt_json_encode_str` emitter.
+///
+/// Writes the `__rt_json_encode_str` global label and all associated helpers
+/// to `emitter`.  Input/outputABI:
+/// - ARM64:  x1=src ptr,  x2=src len  →  x1=result ptr (in concat_buf), x2=result len
+/// - x86_64: rax=src ptr, rdx=src len → rax=result ptr (in concat_buf), rdx=result len
+///
+/// The emitted helper is callable from generated code after `emit_json_encode_str`
+/// has been output.  The symbol name `__rt_json_encode_str` is stable for all call sites.
 pub(crate) fn emit_json_encode_str(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         x86_64::emit(emitter);

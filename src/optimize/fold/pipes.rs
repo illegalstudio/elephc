@@ -15,6 +15,33 @@
 use crate::parser::ast::{CallableTarget, Expr, ExprKind};
 use crate::string_bytes;
 
+/// Attempts to constant-fold a `literal |> fn(...)` pipe expression when the
+/// right-hand side is a first-class callable to a pure, built-in function whose
+/// result depends only on the literal value.
+///
+/// Returns `Some(ExprKind)` with the folded constant result, or `None` if the
+/// pipe cannot be folded at compile time (e.g., the callable is not a
+/// `Function` target, or the value is outside the safe-folding domain such as
+/// NaN floats, non-ASCII strings, or overflow cases like `i64::MIN.abs()`).
+///
+/// Only `CallableTarget::Function` names are considered; `Method` and
+/// `StaticMethod` targets are returned as `None` because their behavior depends
+/// on the receiver at runtime.
+///
+/// Folded operations include:
+/// - `strlen` on string literals
+/// - `intval`/`floatval` on int/float literals
+/// - `abs` on int/float literals (with overflow check for `i64::MIN`)
+/// - `floor`/`ceil`/`round` on float/int literals (NaN/infinity skipped)
+/// - `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_array`
+/// - `is_numeric` on int/float/bool/null literals
+/// - `gettype` on all literal types
+/// - `strtoupper`/`strtolower`/`strrev`/`ucfirst`/`lcfirst` on ASCII strings
+/// - `trim` on string literals (using PHP's default whitespace set)
+///
+/// # Arguments
+/// * `value` - The left-hand side literal expression being piped
+/// * `callable` - The right-hand side callable expression
 pub(super) fn try_fold_pure_pipe(value: &Expr, callable: &Expr) -> Option<ExprKind> {
     let target = match &callable.kind {
         ExprKind::FirstClassCallable(target) => target,

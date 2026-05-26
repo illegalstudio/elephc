@@ -10,6 +10,23 @@
 
 use super::*;
 
+/// Prunes an if/elseif/else chain by evaluating known condition values.
+///
+/// Takes the condition, then body, elseif clauses, and optional else body.
+/// Returns a pruned vector of statements:
+///
+/// - If the condition is statically truthy, returns the pruned then body.
+/// - If the condition is statically falsy, delegates to `prune_else_if_chain`.
+/// - If the condition is dynamic:
+///   - If the then body is empty and there is a fallback chain, inverts the
+///     condition and emits the fallback chain wrapped in a single `if`.
+///   - If the then body equals the canonical else body, emits the condition
+///     as an effect followed by the then body.
+///   - Otherwise emits a normalized `if` statement with the pruned bodies.
+///
+/// Takes ownership of all inputs. Preserves any terminal effects, switch
+/// fallthrough, and exception paths by delegating to `prune_block` and
+/// `expr_to_effect_stmt` rather than discarding them.
 pub(crate) fn prune_if_chain(
     condition: Expr,
     then_body: Vec<Stmt>,
@@ -64,6 +81,15 @@ pub(crate) fn prune_if_chain(
     }
 }
 
+/// Prunes an elseif/else chain when the parent condition is known false.
+///
+/// Iterates clauses in order. When a clause condition is statically truthy,
+/// returns the pruned body immediately (short-circuit). When falsy, skips it
+/// and continues. When dynamic, emits a normalized `if` for that clause with
+/// the remaining chain as its canonical else body.
+///
+/// If no clause is truthy, returns the pruned else body or empty vec.
+/// Takes ownership of all inputs.
 pub(crate) fn prune_else_if_chain(
     elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
     else_body: Option<Vec<Stmt>>,
@@ -93,6 +119,14 @@ pub(crate) fn prune_else_if_chain(
     else_body.map(prune_block).unwrap_or_default()
 }
 
+/// Filters an elseif/else chain, dropping statically-false conditions.
+///
+/// Iterates clauses in order. Truthy conditions stop the walk and include the
+/// pruned body in the returned else body. Falsy conditions are dropped.
+/// Dynamic conditions are retained with their pruned bodies. The else body is
+/// pruned and wrapped in `normalize_optional_block` in all cases.
+///
+/// Returns the kept dynamic clauses paired with the final else body option.
 pub(crate) fn prune_remaining_elseif_chain(
     elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
     else_body: Option<Vec<Stmt>>,

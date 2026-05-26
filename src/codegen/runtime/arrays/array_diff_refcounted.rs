@@ -79,6 +79,11 @@ pub fn emit_array_diff_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return result array
 }
 
+/// x86_64 Linux-specific implementation of `emit_array_diff_refcounted`.
+/// Uses the System V AMD64 ABI: arr1 in `rdi`, arr2 in `rsi`, result returned in `rax`.
+/// Preserves all callee-saved registers (rbp, rbx, r12–r15) and uses a 32-byte spill area
+/// for bookkeeping (first input pointer at [rbp-8], second input pointer at [rbp-16],
+/// result pointer at [rbp-24], outer loop index at [rbp-32]).
 fn emit_array_diff_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_diff_refcounted ---");

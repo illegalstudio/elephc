@@ -19,6 +19,29 @@ use crate::types::PhpType;
 
 use super::ArrayAssignTarget;
 
+/// Lowers associative array element assignment with normalized keys and hash writes.
+/// Evaluates the index expression and value expression, coerces the value to the target
+/// element type when needed, and emits a runtime call to insert or update the entry.
+///
+/// # Arguments
+/// - `target`: the array variable being assigned into (carries offset, element type, and ref flag)
+/// - `index`: the string-key expression (will be normalized via `emit_normalized_hash_key`)
+/// - `value`: the right-hand side expression to evaluate and store
+/// - `emitter`: controls output and target architecture
+/// - `ctx`: variable layout, ownership state, and compilation metadata
+/// - `data`: data section for inline string literals and constants
+///
+/// # Behavior
+/// - Preserves the hash-table pointer and computed key across expression evaluation via stack pushes
+/// - Handles copy-on-write for shared arrays before mutation
+/// - Persists owned strings via `__rt_str_persist` before transferring ownership to the hash table
+/// - Boxes and retains borrowed heap results for `Mixed`/`Union` containers per ownership rules
+/// - Calls `__rt_hash_set` to perform the actual insert/update; the runtime may reallocate the table
+/// - On by-reference targets, reloads and stores through the reference slot after the call
+///
+/// # ABI Notes
+/// - AArch64: hash-set helper receives table ptr (x0), key ptr/length (x1/x2), value (x3/x4), tag (x5)
+/// - X86_64: hash-set helper receives table ptr (rdi), key ptr/length (rsi/rdx), value (rcx/r8), tag (r9)
 pub(super) fn emit_assoc_array_assign(
     target: &ArrayAssignTarget<'_>,
     index: &Expr,

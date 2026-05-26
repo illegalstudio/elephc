@@ -16,6 +16,21 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the `buffer_len` builtin call.
+///
+/// Validates the argument is a buffer type (emits a warning if not), then calls
+/// the runtime helper `__rt_buffer_len` to extract the logical element count from
+/// the buffer header. Returns `PhpType::Int` unconditionally.
+///
+/// # Arguments
+/// * `name` - Unused, present for dispatcher signature uniformity.
+/// * `args` - Must contain exactly one expression evaluating to a buffer.
+/// * `emitter` - Target-aware assembly emitter.
+/// * `ctx` - Codegen context carrying variable layouts and metadata.
+/// * `data` - Data section for constants and metadata tables.
+///
+/// # Returns
+/// Always returns `Some(PhpType::Int)` representing the buffer's element count.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -25,12 +25,19 @@ use crate::names::php_symbol_key;
 use crate::types::{AttrArgValue, ClassInfo, PhpType};
 
 #[derive(Clone)]
+/// Factory record for compile-time reflection attribute metadata.
+/// `id` is assigned sequentially and must match across all compilation units
+/// so `ReflectionAttribute::newInstance()` and codegen agree on the factory index.
 pub(crate) struct ReflectionAttributeFactory {
     pub(crate) id: i64,
     pub(crate) class_name: String,
     pub(crate) args: Vec<AttrArgValue>,
 }
 
+/// Looks up `class_name` in `classes` using PHPsymbol-key normalization
+/// (leading-backslash stripping and case-insensitive comparison).
+/// Returns the canonical class name string from the HashMap key, or `None`
+/// if the class is not registered.
 pub(crate) fn resolve_class_name<'a>(
     classes: &'a HashMap<String, ClassInfo>,
     class_name: &str,
@@ -42,6 +49,9 @@ pub(crate) fn resolve_class_name<'a>(
         .map(String::as_str)
 }
 
+/// Scans every class in `classes` and collects all distinct class-level,
+/// method-level, and property-level attribute name/argument pairs into a
+/// sorted vector of `ReflectionAttributeFactory` records with sequential ids.
 pub(crate) fn collect_attribute_factories(
     classes: &HashMap<String, ClassInfo>,
 ) -> Vec<ReflectionAttributeFactory> {
@@ -76,6 +86,9 @@ pub(crate) fn collect_attribute_factories(
         .collect()
 }
 
+/// Returns the factory id for the given attribute `attr_name` with
+/// `attr_args`. Returns 0 if the class cannot be resolved or no matching
+/// factory exists.
 pub(crate) fn attribute_factory_id(
     classes: &HashMap<String, ClassInfo>,
     attr_name: &str,
@@ -91,6 +104,11 @@ pub(crate) fn attribute_factory_id(
         .unwrap_or(0)
 }
 
+/// Allocates and populates a PHP indexed array of `ReflectionAttribute`
+/// objects for the given attribute names and argument lists. Each attribute
+/// is constructed by allocating a `ReflectionAttribute` via `emit_new_object`,
+/// then overwriting its `$__name`, `$__args`, and `$__factory` properties.
+/// Returns the emitted array type stamp (`array<ReflectionAttribute>`).
 pub(crate) fn emit_reflection_attribute_array(
     attr_names: &[String],
     attr_args: &[Option<Vec<AttrArgValue>>],
@@ -171,7 +189,7 @@ pub(crate) fn emit_reflection_attribute_array(
     PhpType::Array(Box::new(PhpType::Object("ReflectionAttribute".to_string())))
 }
 
-/// Overwrite the freshly-allocated ReflectionAttribute's `$__name` slot
+/// Overwrites the freshly-allocated ReflectionAttribute's `$__name` slot
 /// with a heap-persisted copy of `attr_name`. The object pointer is
 /// expected at the top of the temporary stack; the helper leaves it there.
 fn emit_set_name_property(
@@ -207,9 +225,10 @@ fn emit_set_name_property(
     }
 }
 
-/// Overwrite the freshly-allocated ReflectionAttribute's `$__args` slot
-/// with a fresh `array<mixed>` built from `attr_arg_list`. The object
-/// pointer is expected at the top of the temporary stack and is left there.
+/// Overwrites the `$__args` slot with a freshly allocated `array<mixed>`
+/// built from `attr_arg_list`. Decrements the refcount of the previously
+/// default empty array. The object pointer is expected at the top of the
+/// temporary stack and is left there.
 fn emit_set_args_property(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -285,6 +304,9 @@ fn emit_set_args_property(
     }
 }
 
+/// Overwrites the `$__factory` property of the object at the top of the
+/// temporary stack with the given `factory_id`. Clears the unused high word
+/// of the int property slot to preserve runtime invariants.
 fn emit_set_factory_property(
     emitter: &mut Emitter,
     factory_id: i64,
@@ -306,6 +328,10 @@ fn emit_set_factory_property(
     }
 }
 
+/// Emits a boxed `Mixed` cell for `arg` using ARM64 calling conventions.
+/// Loads the runtime tag into `x0`, the low payload into `x1`, and the
+/// high payload into `x2`, then calls `__rt_mixed_from_value` to
+/// produce an owned boxed cell returned in `x0`.
 fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut DataSection) {
     match arg {
         AttrArgValue::Null => {
@@ -334,6 +360,10 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
     emitter.instruction("bl __rt_mixed_from_value");                            // box the captured payload into an owned mixed cell
 }
 
+/// Emits a boxed `Mixed` cell for `arg` using x86_64 System V calling conventions.
+/// Loads the runtime tag into `rax`, the low payload into `rdi`, and the
+/// high payload into `rsi`, then calls `__rt_mixed_from_value` to
+/// produce an owned boxed cell returned in `rax`.
 fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut DataSection) {
     match arg {
         AttrArgValue::Null => {
@@ -362,6 +392,9 @@ fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Dat
     emitter.instruction("call __rt_mixed_from_value");                          // box the captured payload into an owned mixed cell
 }
 
+/// Iterates over parallel `names` and `args` slices and inserts each
+/// resolved (class-name, args) pair into `unique`. Skips entries where
+/// args is `None` or the class name cannot be resolved.
 fn collect_from_attribute_lists(
     classes: &HashMap<String, ClassInfo>,
     names: &[String],

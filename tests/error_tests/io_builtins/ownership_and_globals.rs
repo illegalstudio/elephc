@@ -9,6 +9,9 @@
 
 use super::*;
 
+// Verifies that `chmod()`, `chown()`, and `chgrp()` reject invalid principal types.
+// `chmod()` requires an integer mode; `chown()`/`chgrp()` require int or string owner/group.
+// Uses `expect_error()` to assert the correct diagnostic message for each case.
 #[test]
 fn test_error_file_ownership_builtins_reject_invalid_principals() {
     expect_error(
@@ -25,6 +28,8 @@ fn test_error_file_ownership_builtins_reject_invalid_principals() {
     );
 }
 
+// Verifies that `umask()` rejects calls with more than 1 argument.
+// `umask()` accepts 0 or 1 arguments; extra positional arguments must be rejected.
 #[test]
 fn test_error_umask_wrong_args() {
     expect_error("<?php umask(1, 2);", "umask() takes 0 or 1 arguments");
@@ -32,6 +37,8 @@ fn test_error_umask_wrong_args() {
 
 // --- v0.6: switch/match/array errors ---
 
+// Verifies that the `global` keyword produces an error when no variable follows it.
+// The parser must emit "Expected variable after 'global'" for `global ;`.
 #[test]
 fn test_error_global_missing_var() {
     expect_error("<?php global ;", "Expected variable after 'global'");

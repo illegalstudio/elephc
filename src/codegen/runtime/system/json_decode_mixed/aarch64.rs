@@ -10,9 +10,34 @@
 
 use crate::codegen::emit::Emitter;
 
-/// ARM64 implementation of `__rt_json_decode_mixed`. Emits the structural
-/// dispatcher routine; the recursive array/object helpers it calls live
-/// in `super::arrays` and `super::objects`.
+/// Emits the AArch64 `__rt_json_decode_mixed` structural dispatcher routine.
+///
+/// Inputs (ARM64 calling convention):
+///   x0 = source pointer, x1 = source length
+///
+/// Outputs (ARM64 calling convention):
+///   x0 = boxed `Mixed*` on success, 0 on error (error recorded via `__rt_json_throw_error`)
+///
+/// Frame layout (112 bytes, anchored at x29 = sp + 96):
+///   [sp + 0..8]    = saved source ptr (used for classification and trimming)
+///   [sp + 8..16]   = saved source len
+///   [sp + 16..24]  = first non-whitespace byte (for value classification)
+///   [sp + 24..32]  = decoded slice ptr (returned from legacy decoder)
+///   [sp + 32..40]  = decoded slice len
+///   [sp + 40..72]  = 32-byte scratch buffer (null-terminated number text for `atof`)
+///   [sp + 72..80]  = trimmed raw pointer (value slice, whitespace stripped)
+///   [sp + 80..88]  = trimmed raw length
+///   [sp + 88..96]  = result saved across `depth_exit` calls
+///
+/// Behavior:
+///   - Skips leading whitespace, classifies the first byte, trims trailing whitespace once
+///   - Runs the legacy `__rt_json_decode` on the trimmed slice for string unescaping
+///   - Dispatches to `__rt_json_decode_mixed_string`, `_true`, `_false`, `_null`,
+///     `_array`, `_object`, or `_number` based on the first byte
+///   - Integer overflow is resolved by `JSON_BIGINT_AS_STRING` flag:
+///     set → preserve digits as `Mixed(string)`, clear → coerce to `Mixed(float)`
+///   - All containers invoke `__rt_json_depth_enter`/`__rt_json_depth_exit` to bound nesting
+///   - Recursive array/object decoding delegates to `super::arrays` and `super::objects`
 pub(super) fn emit(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_decode_mixed ---");

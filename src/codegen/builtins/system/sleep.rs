@@ -15,6 +15,19 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `sleep($seconds)` builtin.
+///
+/// Evaluates the seconds argument into `x0` then calls the libc `sleep` helper.
+/// Returns an integer indicating whether sleep completed normally (0) or was
+/// interrupted (non-zero), following PHP's `sleep` semantics.
+///
+/// Inputs:
+/// - `args[0]`: seconds to sleep, must evaluate to an integer
+/// - `emitter`: assembly emitter for writing instructions
+/// - `ctx`: current.codegen context (scope, locals, etc.)
+/// - `data`: data section for relocations and constants
+///
+/// ABI: `x0` holds the argument (seconds); return value in `x0`
 pub fn emit(
     _name: &str,
     args: &[Expr],

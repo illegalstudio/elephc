@@ -16,6 +16,8 @@ use crate::span::Span;
 
 use super::super::expect_semicolon;
 
+/// Compound assignment operators: plain assignment (`=`), compound binary operators
+/// (`+=`, `-=`, `*=`, etc.), and null coalesce assignment (`??=`).
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum AssignmentOperator {
     Assign,
@@ -23,6 +25,14 @@ pub(super) enum AssignmentOperator {
     NullCoalesce,
 }
 
+/// Parses a direct variable compound assignment statement (`$x += 1`, `$x ??= 2`, etc.).
+///
+/// Consumes the variable name token, then the assignment operator, then the RHS expression.
+/// If the RHS ends with `and`/`or`/`xor` (bitwise assignment with expression chain), falls back
+/// to a full expression parse and emits an `ExprStmt` instead.
+///
+/// Returns the parsed `Assign` statement wrapping the target variable and the computed value
+/// expression, or an `ExprStmt` for the bitwise-chain fallback case.
 pub(super) fn parse_assign(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -61,6 +71,9 @@ pub(super) fn parse_assign(
     Ok(Stmt::new(StmtKind::Assign { name, value }, span))
 }
 
+/// Converts a lexer `Token` into an `AssignmentOperator` variant.
+///
+/// Returns `None` for tokens that are not assignment operators.
 pub(super) fn assignment_operator(token: &Token) -> Option<AssignmentOperator> {
     match token {
         Token::Assign => Some(AssignmentOperator::Assign),
@@ -81,6 +94,13 @@ pub(super) fn assignment_operator(token: &Token) -> Option<AssignmentOperator> {
     }
 }
 
+/// Builds the value expression for an assignment.
+///
+/// - Plain `Assign`: returns the RHS unchanged.
+/// - `Compound(BinOp)`: wraps `target op= rhs` as a `BinaryOp` node (`target` on the left,
+///   `rhs` on the right) so the codegen emits read-modify-write for the target variable.
+/// - `NullCoalesce`: wraps as a `NullCoalesce` node with `target` as the value and `rhs` as
+///   the default, preserving the short-circuit semantics of `??`.
 pub(super) fn assignment_value(
     target: Expr,
     op: AssignmentOperator,

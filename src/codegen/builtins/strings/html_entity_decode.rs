@@ -16,6 +16,18 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a call to the `html_entity_decode` runtime helper.
+///
+/// Arguments:
+/// - `args[0]`: the input string to decode (already emitted)
+///
+/// Behavior:
+/// - Emits the input expression, then calls `__rt_html_entity_decode` to decode HTML entities.
+/// - Return type is `PhpType::Str` — caller receives an owned PHP string.
+///
+/// ABI:
+/// - Caller is responsible for managing input expression lifecycle.
+/// - Returned string pointer/length is an owned runtime value.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -10,9 +10,25 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// mixed_is_empty: implement PHP empty() semantics for boxed mixed values.
-/// Input:  x0 = boxed mixed pointer
-/// Output: x0 = 1 when the payload is empty, else 0
+/// Emits `__rt_mixed_is_empty` which implements PHP `empty()` semantics for boxed mixed values.
+///
+/// Input:  `x0` = boxed mixed pointer (may be null or wrap another mixed box)
+/// Output: `x0` = 1 when the payload is empty, else 0
+///
+/// Behavior:
+/// - Null/zeroed boxed pointers return 1 (empty like null).
+/// - Nested mixed boxes are recursively unwrapped until a concrete payload tag is reached.
+/// - Concrete payload dispatch:
+///   - Tag 0 (int): empty when value equals 0.
+///   - Tag 1 (string): empty when length is zero OR the single-byte string equals "0".
+///   - Tag 2 (float): empty when value equals 0.0.
+///   - Tag 3 (bool): empty when value is false.
+///   - Tag 4 or 5 (indexed/assoc array): empty when element count is zero.
+///   - Tag 6 (object): never empty (returns 0).
+///   - Tag 7 (nested mixed): unbox and dispatch on the inner payload.
+///   - null/unknown tags: returns 1 (empty).
+///
+/// ABI: ARM64 calling convention — result in `x0`, argument in `x0`.
 pub fn emit_mixed_is_empty(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_is_empty_linux_x86_64(emitter);
@@ -99,6 +115,17 @@ pub fn emit_mixed_is_empty(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // finish empty() evaluation
 }
 
+/// Emits the x86_64 Linux variant of `__rt_mixed_is_empty`.
+///
+/// Uses `__rt_mixed_unbox` to normalize nested mixed boxes to a concrete runtime tag,
+/// then dispatches on the unboxed tag in `rax` with payload words in `rdi`/`rdx`.
+///
+/// Output: `eax` = 1 when the payload is empty, else 0
+///
+/// Same empty() semantics as the ARM64 variant, but uses the x86_64 System V ABI:
+/// - Integers in `rdi`, strings in `rdi` (ptr) + `rdx` (len), floats in `xmm0`, arrays in `rdi`.
+///
+/// ABI: x86_64 System V — result in `eax`, arguments in `rdi`, `rdx`, `xmm0`.
 fn emit_mixed_is_empty_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_is_empty ---");

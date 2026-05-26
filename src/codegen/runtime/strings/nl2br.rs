@@ -11,8 +11,15 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// nl2br: insert "<br />\n" before each newline.
-/// Input: x1/x2=string. Output: x1/x2=result.
+/// Emits the `__rt_nl2br` runtime helper for the nl2br PHP builtin.
+///
+/// Dispatches to the platform-specific implementation (x86_64 Linux or ARM64).
+/// On ARM64 the helper reads the input string from x1 (ptr) and x2 (len), scans each
+/// byte, and inserts the literal `<br />` before every `0x0A` newline. The result
+/// pointer/length are returned in x1/x2. The concat-buffer write offset (`_concat_off`)
+/// is advanced by the total bytes written.
+///
+/// Traps: none. Clobbers: x6-x13, x8. Preserves: x0-x5, x29, x30.
 pub fn emit_nl2br(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_nl2br_linux_x86_64(emitter);
@@ -62,6 +69,14 @@ pub fn emit_nl2br(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_nl2br` runtime helper.
+///
+/// Reads the input string from rax (ptr) and rdx (len). Scans each byte and inserts
+/// the literal `<br />` before every `0x0A` newline. The result pointer/length are
+/// returned in rax/rdx. The concat-buffer write offset (`_concat_off`) is advanced
+/// by the total bytes written.
+///
+/// Clobbers: r8-r11, rcx, rsi, rdx. Preserves: rbx, rbp, r12-r15.
 fn emit_nl2br_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: nl2br ---");

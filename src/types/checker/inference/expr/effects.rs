@@ -16,6 +16,28 @@ use super::super::super::Checker;
 use super::super::syntactic::wider_type_syntactic;
 
 impl Checker {
+    /// Infers the type of an expression while tracking assignment effects through the environment.
+    ///
+    /// Handles expression forms where variable assignments within sub-expressions must be
+    /// visible to later parts of the same expression (e.g., `$a = 1, $a + 2` in ternary/loop contexts).
+    /// For most expressions, simply delegates to `infer_type`; for control-flow expressions
+    /// (ternary, null coalesce, match), clones the environment to isolate branch-specific bindings
+    /// from influencing other branches.
+    ///
+    /// # Arguments
+    /// * `expr` - The expression to infer
+    /// * `env` - The type environment, mutated in-place for side-effectful sub-expressions
+    ///
+    /// # Returns
+    /// The inferred `PhpType` on success, or a `CompileError` if type checking fails.
+    ///
+    /// # Key details
+    /// - Assignment expressions call `check_assignment_expression` to properly register the binding.
+    /// - Binary `&&`/`||` clone the environment before the right branch to prevent assignments
+    ///   in the left branch from leaking into the right branch (PHP semantics).
+    /// - Ternary, null coalesce, and match clone the environment per branch; the result type is
+    ///   the wider of all branch types via `wider_type_syntactic`.
+    /// - `preg_replace_callback` argument at index 1 is skipped (special handling for capture groups).
     pub(crate) fn infer_type_with_assignment_effects(
         &mut self,
         expr: &Expr,

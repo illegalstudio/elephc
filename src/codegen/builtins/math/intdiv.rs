@@ -16,6 +16,26 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a PHP `intdiv()` builtin call.
+///
+/// Lowers two argument expressions to integer values, performs signed integer
+/// division, and returns the result in `x0` (AArch64) or `rax` (x86_64).
+///
+/// # Arguments
+/// - `_name`: Unused; the caller dispatches by name.
+/// - `args`: Two expressions evaluated left-to-right; dividend first, divisor second.
+///
+/// # Behavior
+/// - Evaluates `args[0]` (dividend) and preserves it across evaluation of `args[1]` (divisor).
+/// - On x86_64, the preserved dividend is held in `r11` during divisor evaluation, then moved
+///   into `rax` before `idiv` (which uses the fixed `rax:rdx` pair for the dividend).
+/// - Checks for division by zero; if the divisor is zero, emits a fatal error message to stderr
+///   and terminates the process with exit code 1.
+/// - On success, returns `PhpType::Int`.
+///
+/// # ABI constraints
+/// - AArch64: dividend in `x0`, divisor consumed into `x0`, result returned in `x0`.
+/// - x86_64: dividend moved through `r11` → `rax`, divisor held in `r10`, quotient left in `rax`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

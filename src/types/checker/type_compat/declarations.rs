@@ -16,10 +16,16 @@ use super::super::inference::syntactic::infer_expr_type_syntactic;
 use super::super::{Checker, FnDecl};
 
 impl Checker {
+    /// Applies the callable-wrapper transformation to `sig`, producing a new `FunctionSig`
+    /// with an additional `$wrapper` closure parameter prepended. This allows first-class
+    /// callable syntax on user-defined functions to be dispatched through the runtime's
+    /// closure-invocation mechanism.
     pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
         callable_wrapper_sig(sig)
     }
 
+    /// Resolves a parameter type hint from a `TypeExpr` to a `PhpType`, validating that
+    /// the type is valid for a parameter context. Rejects `void` and types containing `never`.
     pub(crate) fn resolve_declared_param_type_hint(
         &self,
         type_expr: &TypeExpr,
@@ -40,6 +46,8 @@ impl Checker {
         }
     }
 
+    /// Resolves a return type hint from a `TypeExpr` to a `PhpType`. Unlike parameter hints,
+    /// `never` is allowed here as a standalone return type but not nested inside other types.
     pub(crate) fn resolve_declared_return_type_hint(
         &self,
         type_expr: &TypeExpr,
@@ -55,6 +63,8 @@ impl Checker {
         self.resolve_type_expr(type_expr, span)
     }
 
+    /// Resolves a local variable type hint from a `TypeExpr` to a `PhpType`, rejecting
+    /// types containing `never`.
     pub(crate) fn resolve_declared_local_type_hint(
         &self,
         type_expr: &TypeExpr,
@@ -71,6 +81,8 @@ impl Checker {
         Ok(ty)
     }
 
+    /// Resolves a property type hint from a `TypeExpr` to a `PhpType`, rejecting
+    /// `void`, `never`, and `callable`.
     pub(crate) fn resolve_declared_property_type_hint(
         &self,
         type_expr: &TypeExpr,
@@ -99,6 +111,7 @@ impl Checker {
         Ok(ty)
     }
 
+    /// Returns true if `ty` is or contains a `PhpType::Callable` anywhere in its structure.
     fn type_contains_callable(ty: &PhpType) -> bool {
         match ty {
             PhpType::Callable => true,
@@ -111,6 +124,7 @@ impl Checker {
         }
     }
 
+    /// Returns true if `ty` is or contains a `PhpType::Never` anywhere in its structure.
     fn type_contains_never(ty: &PhpType) -> bool {
         match ty {
             PhpType::Never => true,
@@ -123,6 +137,7 @@ impl Checker {
         }
     }
 
+    /// Returns true if `type_expr` is or contains a `TypeExpr::Never` anywhere in its structure.
     fn type_expr_contains_never(type_expr: &TypeExpr) -> bool {
         match type_expr {
             TypeExpr::Never => true,
@@ -134,6 +149,11 @@ impl Checker {
         }
     }
 
+    /// Validates that `actual_ty` is suitable storage for a by-reference parameter whose
+    /// declared type is `PhpType::Mixed` (including union/nullable variants of Mixed).
+    /// Returns an error if `actual_ty` is a concrete non-Mixed type — such types cannot be
+    /// stored in the mixed-by-ref slot because their live interval would be ambiguous for
+    /// the compiler's register allocator.
     pub(crate) fn require_boxed_by_ref_storage(
         &self,
         expected_ty: &PhpType,
@@ -155,6 +175,8 @@ impl Checker {
         Ok(())
     }
 
+    /// Validates that a default value expression is compatible with the declared type it is
+    /// being assigned to. Checks using `require_compatible_arg_type`.
     pub(crate) fn validate_declared_default_type(
         &self,
         expected_ty: &PhpType,
@@ -169,6 +191,9 @@ impl Checker {
         Ok(())
     }
 
+    /// Builds the initial parameter type list for a function declaration, resolving type hints,
+    /// validating defaults, and inferring types for untyped parameters. Adds variadic parameter
+    /// type as `PhpType::Array(Int)` if the function is variadic.
     pub(crate) fn initial_function_param_types(
         &self,
         name: &str,
@@ -204,6 +229,8 @@ impl Checker {
         Ok(param_types)
     }
 
+    /// Returns a bitvec indicating which parameters of a method have declared type hints.
+    /// Looks up the method by `method_name` and `is_static` in `class_info.method_decls`.
     pub(crate) fn declared_method_param_flags(
         class_info: &ClassInfo,
         method_name: &str,
@@ -227,6 +254,8 @@ impl Checker {
             .unwrap_or_default()
     }
 
+    /// Adjusts a function signature so that parameters without declared type hints are marked
+    /// as `PhpType::Mixed`. Untyped parameters become `Mixed` to allow flexible runtime dispatch.
     pub(crate) fn callable_sig_for_declared_params(
         sig: &FunctionSig,
         declared_flags: &[bool],
@@ -241,6 +270,9 @@ impl Checker {
         effective_sig
     }
 
+    /// Temporarily replaces the checker's active ref params, globals, and statics stacks with
+    /// the given values while running `f`. Saves and restores all state afterward to avoid
+    /// leaking context across nested checks.
     pub(crate) fn with_local_storage_context<T, F>(
         &mut self,
         ref_param_names: Vec<String>,

@@ -11,9 +11,11 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// implode_int: join integer array elements with glue string, converting each to string.
-/// Input: x1/x2=glue, x3=array_ptr
-/// Output: x1=result_ptr, x2=result_len
+/// Emits runtime helper for PHP `implode()` with integer array elements.
+/// Dispatches to x86_64 variant; ARM64 uses the main implementation below.
+/// ABI: x1/x2=glue_ptr/glue_len, x3=array_ptr → x1=result_ptr, x2=result_len.
+/// Uses the shared concat buffer; updates `_concat_off` to reflect written bytes.
+/// Side effects: writes to concat_buf, advances concat_off global.
 pub fn emit_implode_int(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_implode_int_linux_x86_64(emitter);
@@ -108,6 +110,11 @@ pub fn emit_implode_int(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits `__rt_implode_int` runtime helper for Linux x86_64.
+/// ABI: rdi/rsi=glue_ptr/glue_len, rdx=array_ptr → rax=result_ptr, rdx=result_len.
+/// Copies glue and each integer element (converted via `__rt_itoa`) into the shared concat buffer.
+/// Advances `_concat_off` by the total bytes written.
+/// Stack frame: 64 bytes of spill slots for glue, array, destination cursor, length, and loop index.
 fn emit_implode_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: implode_int ---");

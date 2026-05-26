@@ -17,6 +17,11 @@ use crate::types::PhpType;
 use super::stat_result::box_stat_array_or_false_result;
 use super::stream_arg::emit_stream_fd_arg;
 
+/// Emits the `fstat` builtin call.
+///
+/// Unboxes the stream resource in `args[0]` to extract the raw file descriptor,
+/// calls `__rt_fstat_array` to build a PHP-compatible fstat array, and boxes the
+/// result. Returns `PhpType::Mixed` to represent either an array or `false` on failure.
 pub fn emit(
     _name: &str,
     args: &[Expr],

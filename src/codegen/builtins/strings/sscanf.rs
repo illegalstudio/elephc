@@ -16,6 +16,21 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `sscanf` builtin call.
+///
+/// `sscanf($string, $format)` parses the input string according to a format specifier
+/// and returns an array of matched values as strings. This emitter evaluates the input
+/// string first, then the format string, before invoking the `__rt_sscanf` runtime helper.
+///
+/// Arguments:
+/// - `args[0]`: the input string to parse (string pointer in x1/rax, length in x2/rdx)
+/// - `args[1]`: the format specifier string (string pointer in x1/rax, length in x2/rdx)
+///
+/// ABI behavior:
+/// - AArch64: saves input string to stack via `stp x1, x2, [sp, #-16]!`, emits format args into x3/x4, restores input via `ldp x1, x2, [sp], #16`
+/// - X86_64: saves input string via `push_reg_pair` to stack, emits format args into rdi/rsi, restores input via `pop_reg_pair`
+///
+/// Returns: `Some(PhpType::Array(Box::new(PhpType::Str)))` indicating an array of strings.
 pub fn emit(
     _name: &str,
     args: &[Expr],

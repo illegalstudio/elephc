@@ -9,6 +9,9 @@
 
 use super::*;
 
+// Verifies that checking multiple classes with conflicting magic method contracts
+// (private vs public `__toString`) produces at least two distinct errors.
+// Uses `check_source_full` to collect and flatten all diagnostics.
 #[test]
 fn test_error_magic_method_contracts_collect_multiple_errors() {
     let error = check_source_full(
@@ -23,6 +26,8 @@ fn test_error_magic_method_contracts_collect_multiple_errors() {
     );
 }
 
+// Verifies that a `try` block without a `catch` or `finally` clause
+// reports "Expected at least one catch or a finally block after try".
 #[test]
 fn test_error_try_requires_catch_or_finally() {
     expect_error(
@@ -31,11 +36,15 @@ fn test_error_try_requires_catch_or_finally() {
     );
 }
 
+// Verifies that `throw 123` (non-object operand) reports
+// "throw requires an object value".
 #[test]
 fn test_error_throw_requires_object() {
     expect_error("<?php throw 123;", "throw requires an object value");
 }
 
+// Verifies that `new Color()` on a backed enum reports
+// "Cannot instantiate enum: Color".
 #[test]
 fn test_error_enum_cannot_be_instantiated() {
     expect_error(
@@ -44,6 +53,9 @@ fn test_error_enum_cannot_be_instantiated() {
     );
 }
 
+// Verifies that a backed enum case without an explicit value
+// (e.g., `case Red;` in `enum Color: int`) reports
+// "Backed enum cases must declare a value".
 #[test]
 fn test_error_backed_enum_case_requires_value() {
     expect_error(
@@ -52,6 +64,9 @@ fn test_error_backed_enum_case_requires_value() {
     );
 }
 
+// Verifies that a pure (unbacked) enum case with a backing value
+// (e.g., `case Hearts = 1`) reports
+// "Pure enum cases cannot declare a backing value".
 #[test]
 fn test_error_pure_enum_case_cannot_have_backing_value() {
     expect_error(
@@ -60,6 +75,9 @@ fn test_error_pure_enum_case_cannot_have_backing_value() {
     );
 }
 
+// Verifies that a backed enum with two cases sharing the same backing value
+// (e.g., `case Red = 1; case Crimson = 1`) reports
+// "Duplicate enum backing value".
 #[test]
 fn test_error_enum_duplicate_backing_value() {
     expect_error(
@@ -68,6 +86,8 @@ fn test_error_enum_duplicate_backing_value() {
     );
 }
 
+// Verifies that calling `Suit::from(1)` on a pure enum reports
+// "Undefined method: Suit::from" (backed enums only get `from`).
 #[test]
 fn test_error_pure_enum_has_no_from_method() {
     expect_error(
@@ -76,6 +96,9 @@ fn test_error_pure_enum_has_no_from_method() {
     );
 }
 
+// Verifies that throwing a class that does not implement `Throwable`
+// (e.g., `class PlainObject {}`) reports
+// "throw requires an object implementing Throwable".
 #[test]
 fn test_error_throw_requires_throwable() {
     expect_error(
@@ -84,6 +107,9 @@ fn test_error_throw_requires_throwable() {
     );
 }
 
+// Verifies that a throw expression in a null-coalescing chain
+// (`$value = null ?? throw 123`) with a non-object operand reports
+// "throw requires an object value".
 #[test]
 fn test_error_throw_expression_requires_object() {
     expect_error(
@@ -92,6 +118,8 @@ fn test_error_throw_expression_requires_object() {
     );
 }
 
+// Verifies that a private `__toString` method reports
+// "Magic method must be public: User::__toString".
 #[test]
 fn test_error_magic_tostring_must_be_public() {
     expect_error(
@@ -100,6 +128,8 @@ fn test_error_magic_tostring_must_be_public() {
     );
 }
 
+// Verifies that `__toString` with a parameter reports
+// "Magic method must take 0 arguments: User::__toString".
 #[test]
 fn test_error_magic_tostring_must_take_zero_arguments() {
     expect_error(
@@ -108,6 +138,8 @@ fn test_error_magic_tostring_must_take_zero_arguments() {
     );
 }
 
+// Verifies that `__toString` returning an integer reports
+// "Magic method must return string: User::__toString".
 #[test]
 fn test_error_magic_tostring_must_return_string() {
     expect_error(
@@ -116,6 +148,8 @@ fn test_error_magic_tostring_must_return_string() {
     );
 }
 
+// Verifies that `__get` with no parameters reports
+// "Magic method must take 1 argument: Bag::__get".
 #[test]
 fn test_error_magic_get_must_take_one_argument() {
     expect_error(
@@ -124,6 +158,8 @@ fn test_error_magic_get_must_take_one_argument() {
     );
 }
 
+// Verifies that a private `__set` method reports
+// "Magic method must be public: Bag::__set".
 #[test]
 fn test_error_magic_set_must_be_public() {
     expect_error(
@@ -132,6 +168,8 @@ fn test_error_magic_set_must_be_public() {
     );
 }
 
+// Verifies that `__set` with only one parameter reports
+// "Magic method must take 2 arguments: Bag::__set".
 #[test]
 fn test_error_magic_set_must_take_two_arguments() {
     expect_error(
@@ -140,6 +178,8 @@ fn test_error_magic_set_must_take_two_arguments() {
     );
 }
 
+// Verifies that `__call` with only one parameter reports
+// "Magic method must take 2 arguments: Proxy::__call".
 #[test]
 fn test_error_magic_call_must_take_two_arguments() {
     expect_error(
@@ -148,6 +188,8 @@ fn test_error_magic_call_must_take_two_arguments() {
     );
 }
 
+// Verifies that a private `__call` method reports
+// "Magic method must be public: Proxy::__call".
 #[test]
 fn test_error_magic_call_must_be_public() {
     expect_error(
@@ -156,6 +198,8 @@ fn test_error_magic_call_must_be_public() {
     );
 }
 
+// Verifies that a private `__invoke` method reports
+// "Magic method must be public: Handler::__invoke".
 #[test]
 fn test_error_magic_invoke_must_be_public() {
     expect_error(
@@ -164,6 +208,8 @@ fn test_error_magic_invoke_must_be_public() {
     );
 }
 
+// Verifies that `catch (MissingException $e)` with an undefined class
+// reports "Undefined class: MissingException".
 #[test]
 fn test_error_catch_requires_defined_class() {
     expect_error(
@@ -172,6 +218,9 @@ fn test_error_catch_requires_defined_class() {
     );
 }
 
+// Verifies that catching a plain class not implementing `Throwable`
+// (e.g., `catch (PlainObject $e)`) reports
+// "Catch type must extend or implement Throwable: PlainObject".
 #[test]
 fn test_error_catch_requires_throwable_type() {
     expect_error(
@@ -180,6 +229,8 @@ fn test_error_catch_requires_throwable_type() {
     );
 }
 
+// Verifies that redeclaring the built-in `Exception` class
+// reports "Cannot redeclare built-in type: Exception".
 #[test]
 fn test_error_cannot_redeclare_builtin_exception_type() {
     expect_error(
@@ -188,6 +239,8 @@ fn test_error_cannot_redeclare_builtin_exception_type() {
     );
 }
 
+// Verifies that redeclaring the built-in `Error` class
+// reports "Cannot redeclare built-in type: Error".
 #[test]
 fn test_error_cannot_redeclare_builtin_error_type() {
     expect_error(
@@ -196,6 +249,8 @@ fn test_error_cannot_redeclare_builtin_error_type() {
     );
 }
 
+// Verifies that directly instantiating the `Throwable` interface
+// (`$e = new Throwable();`) reports "Cannot instantiate interface: Throwable".
 #[test]
 fn test_error_cannot_instantiate_throwable_interface() {
     expect_error(

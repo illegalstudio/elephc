@@ -16,6 +16,9 @@ use crate::codegen::expr::{coerce_to_string, emit_expr};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Evaluates `arg`, coerces it to a string operand, and leaves the result in the
+/// pointer/length register pair expected by string builtin callers.
+/// Emits `__rt_mixed_cast_string` for non-string types; preserves temporary ownership.
 pub(super) fn emit_string_arg(
     arg: &Expr,
     emitter: &mut Emitter,
@@ -26,6 +29,8 @@ pub(super) fn emit_string_arg(
     coerce_to_string(emitter, ctx, data, &ty);
 }
 
+/// Evaluates `arg`, coerces it to `PhpType::Int` if needed, and pushes the result
+/// onto the argument stack in ABI order. Returns the resolved type.
 pub(super) fn push_int_arg(
     arg: &Expr,
     emitter: &mut Emitter,
@@ -41,6 +46,9 @@ pub(super) fn push_int_arg(
     )
 }
 
+/// Evaluates `arg`, pushes it as `PhpType::Int`, then pops the result into the
+/// designated integer result register (e.g., `x0` on ARM64, `rax` on x86_64).
+/// Returns the resolved type.
 pub(super) fn emit_int_arg(
     arg: &Expr,
     emitter: &mut Emitter,
@@ -52,6 +60,8 @@ pub(super) fn emit_int_arg(
     ty
 }
 
+/// Evaluates `arg`, coerces it to `PhpType::Float` if needed, and pushes the result
+/// onto the argument stack in ABI order. Returns the resolved type.
 pub(super) fn push_float_arg(
     arg: &Expr,
     emitter: &mut Emitter,

@@ -10,6 +10,24 @@
 
 use crate::codegen::emit::Emitter;
 
+/// Emits the `__rt_date` runtime helper for arm64.
+///
+/// Input registers:
+/// - `x0`: timestamp (i64), or -1 for current time
+/// - `x1`: format string pointer
+/// - `x2`: format string length
+///
+/// Output registers:
+/// - `x1`: pointer to formatted result in concat buffer
+/// - `x2`: length of formatted result
+///
+/// The function scans the format string, dispatching on each character.
+/// Supported format specifiers: Y, m, d, H, i, s, j, n, G, g, N, A, a, U, l, D, F, M.
+/// Literal characters are copied unchanged. Output is written to the concat buffer
+/// and `_concat_off` is updated to reflect the bytes appended.
+///
+/// Uses a 96-byte stack frame with saved x29/x30 and local variables for
+/// timestamp, format ptr/len, tm pointer, output position, and format index.
 pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: date ---");
@@ -437,6 +455,10 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 
     // -- helper: write 2-digit zero-padded number from x0 to output --
+    //
+    // Input: x0 = value (0-99)
+    // Output: writes two ASCII digits to concat buffer at current position,
+    //         advances output position by 2, stores updated position to [sp, #32]
     emitter.label("__rt_date_write_2digit");
     emitter.instruction("ldr x9, [sp, #32]");                                   // load output position
     emitter.instruction("mov x3, #10");                                         // divisor = 10
@@ -451,6 +473,10 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 
     // -- helper: write 4-digit number from x0 to output --
+    //
+    // Input: x0 = value (0-9999)
+    // Output: writes four ASCII digits to concat buffer at current position,
+    //         advances output position by 4, stores updated position to [sp, #32]
     emitter.label("__rt_date_write_4digit");
     emitter.instruction("ldr x9, [sp, #32]");                                   // load output position
     emitter.instruction("mov x3, #1000");                                       // divisor for thousands
@@ -475,6 +501,10 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 
     // -- helper: write number without padding from x0 to output (1-99) --
+    //
+    // Input: x0 = value (1-99)
+    // Output: writes one or two ASCII digits to concat buffer at current position,
+    //         advances output position, stores updated position to [sp, #32]
     emitter.label("__rt_date_write_num");
     emitter.instruction("ldr x9, [sp, #32]");                                   // load output position
     emitter.instruction("cmp x0, #10");                                         // check if single digit

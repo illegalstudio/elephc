@@ -11,9 +11,17 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_ensure_unique: split a shared array before mutation.
-/// Input:  x0 = candidate array pointer
-/// Output: x0 = unique array pointer (original or cloned)
+/// Splits a shared array before mutation using copy-on-write (COW) semantics.
+///
+/// Null arrays (x0=0) are returned immediately as they are trivially unique.
+/// For non-null arrays: if refcount > 1, clones the array and decrements the
+/// original's refcount; if refcount <= 1, returns the array unchanged.
+///
+/// Dispatches to `emit_array_ensure_unique_linux_x86_64` on x86_64; emits
+/// inline ARM64 code on ARM64 targets.
+///
+/// Input:  x0 = candidate array pointer (ARM64) / rdi = candidate array pointer (x86_64)
+/// Output: x0 = unique array pointer (ARM64) / rax = unique array pointer (x86_64)
 pub fn emit_array_ensure_unique(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_ensure_unique_linux_x86_64(emitter);
@@ -49,6 +57,14 @@ pub fn emit_array_ensure_unique(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = a unique array pointer
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_array_ensure_unique`.
+///
+/// Mirrors the ARM64 logic: null inputs return immediately; shared arrays
+/// (refcount > 1) are cloned via `__rt_array_clone_shallow` and the original's
+/// refcount is decremented; unique arrays (refcount <= 1) are returned unchanged.
+///
+/// Input:  rdi = candidate indexed-array pointer
+/// Output: rax = unique indexed-array pointer
 fn emit_array_ensure_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_ensure_unique ---");

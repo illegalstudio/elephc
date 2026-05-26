@@ -11,8 +11,10 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// urldecode: decode %XX hex sequences and '+' to space.
-/// Input: x1/x2=string. Output: x1/x2=result in concat_buf.
+/// Decodes URL-encoded byte sequences in a PHP byte-string.
+/// Input: x1=source pointer, x2=source length (ARM64). Output: x1=result pointer, x2=result length.
+/// Writes the decoded string into `_concat_buf` and advances `_concat_off`.
+/// Dispatches to x86_64 or ARM64 implementation based on `emitter.target`.
 pub fn emit_urldecode(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_urldecode_linux_x86_64(emitter);
@@ -102,6 +104,11 @@ pub fn emit_urldecode(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// x86_64 Linux implementation of URL decoding.
+/// Input: rax=source pointer, rdx=source length. Output: rax=result pointer, rdx=result length.
+/// Writes decoded bytes into `_concat_buf` at the current `_concat_off` offset, then advances `_concat_off`.
+/// Handles '+' → space substitution and '%XX' hex decoding (both uppercase and lowercase hex digits).
+/// Incomplete '%' escapes at end of input are copied literally.
 fn emit_urldecode_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: urldecode ---");

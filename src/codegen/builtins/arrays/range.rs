@@ -17,6 +17,21 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `range($start, $end)` builtin call.
+///
+/// Evaluates the `$start` and `$end` expressions, calls the `__rt_range` runtime helper,
+/// and returns an `array` of integers from `$start` to `$end` (inclusive).
+///
+/// # Architecture-specific ABI
+/// - **x86_64**: Evaluates `$start` into `rax`, pushes it onto the stack, evaluates
+///   `$end` into `rax`, then arranges arguments into `rdi` (start) and `rsi` (end)
+///   before calling `__rt_range`.
+/// - **ARM64**: Pushes `$start` onto the stack, evaluates `$end` into `x0`, pops the
+///   saved start into `x0`, and moves end to `x1` (AAPCS64 register ordering) before
+///   calling `__rt_range`.
+///
+/// # Return type
+/// Always returns `array` of `int` (`PhpType::Array(Box::new(PhpType::Int))`).
 pub fn emit(
     _name: &str,
     args: &[Expr],

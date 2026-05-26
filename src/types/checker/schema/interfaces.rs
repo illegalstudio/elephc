@@ -20,6 +20,19 @@ use super::super::InterfaceDeclInfo;
 use super::validation::{build_method_sig, validate_signature_compatibility};
 use crate::types::traits::FlattenedClass;
 
+/// Recursively builds interface metadata by flattening inheritance and collecting methods,
+/// properties, and constants. Detects circular inheritance, validates signature compatibility
+/// across parents, and stores the final `InterfaceInfo` in the checker's interface map.
+///
+/// - `interface_name`: Name of the interface to build.
+/// - `interface_map`: Raw parsed interface declarations from the schema pass.
+/// - `class_map`: Flattened class map for validating that interfaces do not extend classes.
+/// - `checker`: Mutable checker state; result is written to `checker.interfaces`.
+/// - `next_interface_id`: monotonically increasing ID assigned to each processed interface.
+/// - `building`: Tracks interfaces currently being processed to detect cycles.
+///
+/// Returns `Ok(())` on success or a `CompileError` for circular inheritance, unknown parents,
+/// duplicate declarations, or incompatible method signatures across parent interfaces.
 pub(crate) fn build_interface_info_recursive(
     interface_name: &str,
     interface_map: &HashMap<String, InterfaceDeclInfo>,
@@ -268,6 +281,10 @@ pub(crate) fn build_interface_info_recursive(
     Ok(())
 }
 
+/// Validates a single interface property declaration for syntactic correctness.
+/// Checks that the property is public, non-static, non-readonly, and has at least one hook.
+///
+/// Returns `Ok(())` if the property is valid, or a `CompileError` describing the violation.
 fn validate_interface_property_syntax(
     interface_name: &str,
     property: &ClassProperty,
@@ -311,6 +328,11 @@ fn validate_interface_property_syntax(
     Ok(())
 }
 
+/// Builds a `PropertyHookContract` for a single interface property declaration.
+/// Resolves the declared type hint (or `PhpType::Mixed` if none) and extracts get/set hook
+/// requirements and by-ref semantics from the property's hook list.
+///
+/// Returns the contract or a `CompileError` if type resolution fails.
 pub(crate) fn build_property_contract(
     checker: &Checker,
     declaring_type: &str,
@@ -336,6 +358,12 @@ pub(crate) fn build_property_contract(
     })
 }
 
+/// Merges an incoming property contract into an existing one, checking type compatibility
+/// for both get and set hooks. When types are mutually compatible, the incoming contract
+/// widens the existing one. When they are incompatible, returns an error.
+///
+/// `context` is used in error messages to describe where the merge is happening (e.g.,
+/// "combining interface parent" or "redeclaring interface").
 pub(crate) fn merge_property_contract(
     existing: &mut PropertyHookContract,
     incoming: &PropertyHookContract,

@@ -12,6 +12,13 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Emits the `__rt_mixed_array_set` runtime helper for writing into boxed Mixed arrays.
+///
+/// Dispatches to the target-specific implementation. On ARM64 the helper receives
+/// arguments via registers `x0`–`x3`; on x86_64 it uses the SysV convention (`rdi`, `rsi`,
+/// `rdx`, `rcx`). The key tuple encoding matches `emit_normalized_hash_key`: integer keys
+/// use `key_hi = -1`. The helper consumes the boxed Mixed value pointer when the write
+/// succeeds, releasing it if the target is null or the payload type is incompatible.
 pub fn emit_mixed_array_set(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_array_set_x86_64(emitter);
@@ -20,6 +27,22 @@ pub fn emit_mixed_array_set(emitter: &mut Emitter) {
     emit_mixed_array_set_aarch64(emitter);
 }
 
+/// ARM64 implementation of the `__rt_mixed_array_set` runtime helper.
+///
+/// Input registers:
+/// - `x0`: pointer to the target boxed `Mixed` cell (nullable)
+/// - `x1`: key low word (array index or normalized hash low word)
+/// - `x2`: key high word (integer-key sentinel `0xFFFF_FFFF` or hash high word)
+/// - `x3`: pointer to the boxed `Mixed` value being written
+///
+/// Behavior:
+/// - If `x0` is null or the payload is neither indexed array (tag 4) nor assoc array (tag 5),
+///   the value is released via `__rt_decref_mixed` and the helper returns.
+/// - For indexed arrays the slot is mutated directly; for assoc arrays `__rt_hash_set` is called.
+/// - Array capacity is grown via `__rt_array_grow` if the target index exceeds current capacity.
+/// - Overwriting an existing slot releases the previous `Mixed` cell.
+/// - Extending the logical length zero-fills all gap slots before the written position.
+/// - The helper frame is 80 bytes; callee-saved registers `x29`/`x30` are preserved.
 fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_array_set ---");
@@ -149,6 +172,16 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to generated code
 }
 
+/// x86_64 implementation of the `__rt_mixed_array_set` runtime helper.
+///
+/// Input registers (SysV ABI):
+/// - `rdi`: pointer to the target boxed `Mixed` cell (nullable)
+/// - `rsi`: key low word (array index or normalized hash low word)
+/// - `rdx`: key high word (integer-key sentinel `-1` or hash high word)
+/// - `rcx`: pointer to the boxed `Mixed` value being written
+///
+/// Behavior mirrors the ARM64 version with x86_64-specific register and instruction encoding.
+/// The helper frame is 64 bytes; callee-saved register `rbp` is preserved.
 fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_array_set ---");

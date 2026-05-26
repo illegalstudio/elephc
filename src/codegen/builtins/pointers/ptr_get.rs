@@ -16,6 +16,8 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `ptr_get` builtin: loads a machine-word (8 bytes) through a pointer.
+/// Checks the pointer is non-null before loading; returns `PhpType::Int`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -16,6 +16,18 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `ptr_is_null` builtin, which tests whether a raw pointer is null.
+///
+/// # Arguments
+/// - `args[0]`: the pointer expression to test (already emitted into the result register).
+///
+/// # Result
+/// Returns `PhpType::Bool`: 1 if the pointer is null (sentinel `0x0`), 0 otherwise.
+/// The result is materialized in the integer register convention (`x0` on AArch64, `rax` on x86_64).
+///
+/// # ABI
+/// The pointer payload is assumed to already reside in the integer result register (`x0`/`rax`).
+/// The null comparison and boolean materialization are emitted inline using `cmp`/`cset` or `test`/`sete`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

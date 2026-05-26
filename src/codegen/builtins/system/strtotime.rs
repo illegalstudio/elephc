@@ -16,6 +16,15 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `strtotime` builtin call.
+///
+/// Parses a date/time string and returns a Unix timestamp (seconds since epoch).
+/// The first argument (date string) is evaluated and passed as a runtime string
+/// to `__rt_strtotime`. On x86_64, the string pointer and length are loaded into
+/// the SysV string-argument registers (rdi, rsi) before the call.
+///
+/// # Returns
+/// `PhpType::Int` — the parsed timestamp, or -1 on parse failure (matching PHP behavior).
 pub fn emit(
     _name: &str,
     args: &[Expr],

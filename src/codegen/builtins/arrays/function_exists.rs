@@ -19,6 +19,23 @@ use crate::types::PhpType;
 
 use super::super::callable_lookup::{lookup_function, FunctionLookup};
 
+/// Emits a `function_exists` check for builtins, user functions, and include variants.
+///
+/// # Arguments
+/// - `args[0]` must be a `StringLiteral` containing the function name to check.
+///   The function name is resolved case-insensitively per PHP semantics.
+///
+/// # Behavior
+/// - For include variants: emits code that loads and compares the variant's active-symbol
+///   pointer at runtime, returning true only when an include has activated that variant.
+/// - For builtins, externs, and user functions: emits constant `1` (function exists).
+/// - For unknown names: emits constant `0`.
+///
+/// # Returns
+/// Always `PhpType::Bool`.
+///
+/// # Panics
+/// If `args[0]` is not a `StringLiteral`.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -55,6 +72,19 @@ pub fn emit(
     Some(PhpType::Bool)
 }
 
+/// Emits code to check whether a named include-variant function is currently active.
+///
+/// # Arguments
+/// - `func_name`: the variant function name (e.g. `variant_foo__include_1`).
+///
+/// # Behavior
+/// - Reserves 8 bytes of BSS for the variant's active-symbol pointer via `data.add_comm`.
+/// - Loads the symbol address into `int_result_reg`.
+/// - On ARM64: compares to 0 and uses `cset` to produce a boolean (1 = active, 0 = inactive).
+/// - On x86_64: uses `test`/`setne`/`movzx` to produce a widened integer boolean.
+///
+/// # Output
+/// Writes a 0/1 integer result to `int_result_reg` per the target ABI.
 fn emit_variant_function_exists(
     func_name: &str,
     emitter: &mut Emitter,

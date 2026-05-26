@@ -12,14 +12,16 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// iterable_write_stdout: write a PHP-compatible string representation of an
-/// iterable value to stdout. Iterable values are raw heap pointers; this helper
-/// inspects the heap kind and emits the literal `Array` for indexed-array (kind 2)
-/// and hash-table (kind 3) payloads, matching PHP's `echo $array;` behavior.
-/// Object payloads (kind 4) and any other heap kind are silently skipped, mirroring
-/// elephc's current echo behavior for Object/Array operands at the type-system level.
+/// Emits the `__rt_iterable_write_stdout` runtime helper.
 ///
-/// Input: x0/rax = iterable pointer.
+/// Dispatches to the x86_64 Linux variant on that target; on ARM64 emits directly.
+/// Writes the literal `"Array"` to stdout for indexed-array (kind 2) and hash-table
+/// (kind 3) iterable payloads. Object payloads (kind 4) and all other heap kinds are
+/// silently skipped, matching PHP's `echo $array;` behavior.
+///
+/// Input: x0/rax = iterable heap pointer.
+/// Output: writes `"Array"` to stdout for array-like iterables; no output otherwise.
+/// Preserves: x29, x30 on ARM64; rbp on x86_64 are saved/restored across the helper call.
 pub fn emit_iterable_write_stdout(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_iterable_write_stdout_linux_x86_64(emitter);
@@ -53,6 +55,13 @@ pub fn emit_iterable_write_stdout(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller
 }
 
+/// Emits the Linux x86_64 variant of `__rt_iterable_write_stdout`.
+///
+/// Saves and restores rbp as the frame pointer. Identical dispatch logic to the
+/// ARM64 variant: writes `"Array"` for heap kinds 2 and 3, silent no-op otherwise.
+///
+/// Input: rax = iterable heap pointer.
+/// Output: writes `"Array"` to stdout for array-like iterables; no output otherwise.
 fn emit_iterable_write_stdout_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: iterable_write_stdout ---");

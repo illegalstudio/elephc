@@ -119,6 +119,15 @@ pub fn emit_pathinfo_str(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return component slice in x1/x2
 }
 
+/// x86_64 Linux pathinfo (single-flag form): returns one component of a path as a string.
+///
+/// ABI: `rax` = path pointer, `rdx` = path length, `rdi` = flag → `rax/rdx` = result.
+/// Flag values match the ARM64 convention: 1=DIRNAME, 2=BASENAME, 4=EXTENSION, 8=FILENAME.
+///
+/// Shares the same component-selection order, fail-closed PATHINFO_ALL guard, and
+/// PHP-compatible basename/extension/filename semantics as the ARM64 emitter.
+/// dirname is called with the path pointer/length in the same registers per the
+/// x86_64 System V ABI.
 fn emit_pathinfo_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: pathinfo (single-flag form) ---");

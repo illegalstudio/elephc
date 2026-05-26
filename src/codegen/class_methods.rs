@@ -20,6 +20,10 @@ use crate::types::{
     InterfaceInfo, PackedClassInfo, PhpType,
 };
 
+/// Emits all non-abstract method bodies for a class, interface, enum, or trait.
+///
+/// Skips abstract methods. For `ReflectionAttribute::newInstance`, synthesizes a
+/// dispatch body that routes to attribute factories based on `this->__factory`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_class_methods(
     emitter: &mut Emitter,
@@ -82,6 +86,9 @@ pub(super) fn emit_class_methods(
     }
 }
 
+/// Builds a synthetic if-else-if body for `ReflectionAttribute::newInstance` that
+/// dispatches to the appropriate attribute factory constructor based on `this->__factory`.
+/// Each branch returns a `new FactoryClass(...)` expression; the final else returns null.
 fn build_reflection_attribute_new_instance_body(
     classes: &HashMap<String, ClassInfo>,
 ) -> Vec<Stmt> {
@@ -117,6 +124,7 @@ fn build_reflection_attribute_new_instance_body(
     )]
 }
 
+/// Creates a condition expression `this->__factory === factory_id` for dispatch routing.
 fn factory_condition(factory_id: i64) -> Expr {
     let span = crate::span::Span::dummy();
     Expr::new(
@@ -135,6 +143,8 @@ fn factory_condition(factory_id: i64) -> Expr {
     )
 }
 
+/// Converts an `AttrArgValue` (Null/Int/Bool/Str) into the corresponding `ExprKind`
+/// for use in synthesized attribute factory constructor calls.
 fn attr_arg_expr(arg: &AttrArgValue) -> Expr {
     let span = crate::span::Span::dummy();
     let kind = match arg {
@@ -146,10 +156,18 @@ fn attr_arg_expr(arg: &AttrArgValue) -> Expr {
     Expr::new(kind, span)
 }
 
+/// Converts a fully-qualified class name with `\` separators into a `Name` qualified
+/// vec suitable for use in synthesized `NewObject` expressions.
 fn name_from_canonical(class_name: &str) -> Name {
     Name::qualified(class_name.split('\\').map(str::to_string).collect())
 }
 
+/// Builds the symbol label and `FunctionSig` for a static method.
+///
+/// The signature prepends a hidden `__elephc_called_class_id: Int` parameter for
+/// static dispatch, then merges the declared parameters. Falls back to inferring
+/// parameter types and defaults from the AST method declaration when no resolved
+/// signature is available in `class_info.static_methods`.
 fn build_static_method_codegen_sig(
     class_name: &str,
     class_info: &ClassInfo,
@@ -223,6 +241,12 @@ fn build_static_method_codegen_sig(
     )
 }
 
+/// Builds the symbol label and `FunctionSig` for an instance method.
+///
+/// The signature prepends a `this: Object<class_name>` receiver parameter, then
+/// merges declared parameters. Falls back to inferring parameter types and defaults
+/// from the AST method declaration when no resolved signature is available in
+/// `class_info.methods`.
 fn build_instance_method_codegen_sig(
     class_name: &str,
     class_info: &ClassInfo,

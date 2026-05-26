@@ -17,6 +17,11 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a `list($a, $b, ...) = $array` unpack from a source indexed-array expression.
+/// Loads each element from the source array by numeric index and stores it into the
+/// corresponding destination variable's stack slot. The source array pointer is preserved
+/// on the stack across all assignments. Element types are inferred from the source array's
+/// element type; unknown types default to integer. Clobbers `x0`/`rax`, `x9`/`r11`.
 pub(super) fn emit_list_unpack_stmt(
     vars: &[String],
     value: &Expr,

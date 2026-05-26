@@ -22,6 +22,21 @@ pub(crate) fn emit_weekdays(emitter: &mut Emitter) {
     emit_weekdays_arm64(emitter);
 }
 
+/// Emits the weekdays sub-routine for ARM64 — handles `next/last/this <weekday>` and bare weekday names (kind 6..8 and 10..16).
+///
+/// **Inputs** (registers from caller):
+/// - `x9` = kind (6=next, 7=last, 8=this; 10..16=direct weekday where 10=Sunday).
+/// - `x10` = bytes consumed by the preceding modifier word (modifier path only).
+///
+/// **Modifier path** (kinds 6..8): saves kind, parses the following weekday via `__rt_strtotime_match_word`, validates kind 10..16, then computes delta.
+/// **Direct path** (kinds 10..16): uses implicit `this` modifier (kind 8).
+///
+/// **Delta computation**: `(target_wday - current_wday + 7) mod 7`, adjusted per modifier:
+/// - `next`: if delta==0, use 7 instead.
+/// - `last`: if delta==0, use -7 instead.
+/// - `this`: delta may be 0 (same day).
+///
+/// **Exit**: jumps to `__rt_strtotime_ret` with x0 = Unix timestamp; jumps to `__rt_strtotime_fail` on malformed input.
 fn emit_weekdays_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: weekdays (next/last/this <weekday>) sub-routine ---");
@@ -123,6 +138,24 @@ fn emit_weekdays_arm64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_strtotime_ret");                                // return
 }
 
+/// Emits the weekdays sub-routine for x86_64 Linux — handles `next/last/this <weekday>` and bare weekday names (kind 6..8 and 10..16).
+///
+/// **Inputs** (registers from caller):
+/// - `rdx` = kind (6=next, 7=last, 8=this; 10..16=direct weekday where 10=Sunday).
+/// - `rax` = bytes consumed by the preceding modifier word (modifier path only).
+///
+/// **Modifier path** (kinds 6..8): saves kind to `[rsp+84]`, advances cursor past modifier word, skips whitespace, lowercases next 16 bytes via `__rt_strtotime_lc_cursor`, then calls `__rt_strtotime_match_word` to parse the weekday. Validates kind 10..16, checks for trailing junk, then computes delta.
+/// **Direct path** (kinds 10..16): saves target_wday, sets implicit modifier to 8 (`this`).
+///
+/// **Stack layout**:
+/// - `[rsp+12]` = tm_mday (day of month), mutated in place then passed to `mktime`.
+/// - `[rsp+24]` = tm_wday (read to get current weekday).
+/// - `[rsp+80]` = target_wday (saved across `today_tm` call).
+/// - `[rsp+84]` = modifier kind.
+///
+/// **Delta computation** mirrors ARM64: `(target_wday - current_wday + 7) mod 7`, adjusted per modifier (next→+7 on zero, last→-7 on zero, this→allow zero).
+///
+/// **Exit**: jumps to `__rt_strtotime_ret_linux_x86_64` with rax = Unix timestamp; jumps to `__rt_strtotime_fail_linux_x86_64` on malformed input.
 fn emit_weekdays_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: weekdays sub-routine ---");

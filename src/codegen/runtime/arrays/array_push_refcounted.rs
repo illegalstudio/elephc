@@ -11,9 +11,25 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_push_refcounted: push a borrowed refcounted payload into an array.
-/// Input:  x0 = array pointer, x1 = borrowed heap pointer
-/// Output: x0 = array pointer (may differ if array was reallocated)
+/// Emits the `__rt_array_push_refcounted` runtime helper for ARM64.
+///
+/// Pushes a borrowed refcounted heap payload into a PHP array, transferring ownership
+/// via incremented reference count. Handles COW splitting of the destination array before
+/// mutation, determines the appropriate runtime `value_type` tag from the child's heap kind,
+/// updates the destination's packed kind word, and delegates the actual append to `__rt_array_push_int`.
+///
+/// # Inputs
+/// - `x0`: destination array pointer
+/// - `x1`: borrowed child heap pointer
+///
+/// # Outputs
+/// - `x0`: array pointer (may differ if the array was reallocated during COW split)
+///
+/// # Side effects
+/// - Calls `__rt_array_ensure_unique` to split shared destination arrays (COW)
+/// - Calls `__rt_incref` on the child payload
+/// - Calls `__rt_array_push_int` to perform the actual append
+/// - Updates the destination array's packed kind word with the appropriate `value_type` tag
 pub fn emit_array_push_refcounted(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_push_refcounted_linux_x86_64(emitter);
@@ -80,6 +96,24 @@ pub fn emit_array_push_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return array pointer from __rt_array_push_int
 }
 
+/// Emits the `__rt_array_push_refcounted` runtime helper for x86_64 Linux.
+///
+/// Identical in behavior to the ARM64 variant but uses the x86_64 System V ABI.
+/// Preserves the destination array and child pointers across helper calls using
+/// aligned spill slots at `[rbp - 8]` and `[rbp - 16]`.
+///
+/// # Inputs
+/// - `rdi`: destination indexed-array pointer
+/// - `rsi`: borrowed child heap pointer
+///
+/// # Outputs
+/// - `rax`: updated indexed-array pointer after append
+///
+/// # Side effects
+/// - Calls `__rt_array_ensure_unique` to split shared destination arrays (COW)
+/// - Calls `__rt_incref` on the child payload
+/// - Calls `__rt_array_push_int` to perform the actual append
+/// - Updates the destination's packed kind word with the appropriate `value_type` tag
 fn emit_array_push_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_push_refcounted ---");

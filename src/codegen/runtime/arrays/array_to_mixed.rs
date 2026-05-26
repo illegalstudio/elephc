@@ -12,6 +12,9 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// x86_64 heap kind magic: upper 32 bits of the ELEPHC signature baked into
+/// boxed Mixed heap words. Combined with low byte 5 at runtime to form the
+/// full x86_64 heap kind word.
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// array_to_mixed: convert an indexed array payload to boxed Mixed cells.
@@ -106,6 +109,11 @@ pub fn emit_array_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the Mixed cell pointer
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_array_to_mixed`.
+/// Dispatches from `emit_array_to_mixed` when `target.arch == Arch::X86_64`.
+/// Uses the System V AMD64 ABI: array pointer in rdi, value_type tag in rsi,
+/// result returned in rax. Converts each typed slot to a boxed Mixed cell and
+/// stamps the array with value_type tag 7.
 fn emit_array_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_to_mixed ---");

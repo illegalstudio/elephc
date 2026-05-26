@@ -17,6 +17,9 @@ use crate::span::Span;
 
 use super::{expect_token, name_starts_at, parse_block, parse_name};
 
+/// Parses a `function` declaration: name, parameters, optional return type, and body.
+/// Consumes the `function` keyword at `*pos` and advances past the closing `}` of the body.
+/// Returns `StmtKind::FunctionDecl` with params, variadic, return_type, and body.
 pub(super) fn parse_function_decl(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -61,6 +64,10 @@ pub(super) fn parse_function_decl(
     ))
 }
 
+/// Returns `true` if the token stream at `pos` begins with a type expression that could
+/// be a parameter type annotation, `false` otherwise.
+/// Checks for nullable/union types, pointer/buffer generics, and that the token sequence
+/// ultimately resolves to a variable token (possibly after `&` or `...` markers).
 pub(crate) fn looks_like_typed_param(tokens: &[(Token, Span)], pos: usize) -> bool {
     let mut probe = pos;
     match parse_type_expr(tokens, &mut probe, tokens[pos].1) {
@@ -77,6 +84,10 @@ pub(crate) fn looks_like_typed_param(tokens: &[(Token, Span)], pos: usize) -> bo
     }
 }
 
+/// Parses a type expression: atomic type, nullable shorthand, or union of pipe-separated types.
+/// Advances `*pos` past the consumed type tokens. Returns `TypeExpr::Atomic`, `Nullable`,
+/// `Union`, `Ptr`, or `Buffer`. Does not resolve names — emits `TypeExpr::Named` with a
+/// `Name` for class/interface/enum types.
 pub(crate) fn parse_type_expr(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -112,6 +123,9 @@ pub(crate) fn parse_type_expr(
     }
 }
 
+/// Parses a single (non-union) type expression: builtin keyword, `ptr<T>`, `buffer<T>`,
+/// or a qualified/unqualified name. Does not handle `?T` (nullable) — that is handled by
+/// the caller `parse_type_expr`. Advances `*pos` past the consumed token(s).
 fn parse_atomic_type_expr(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -201,12 +215,19 @@ fn parse_atomic_type_expr(
     }
 }
 
+/// Returns `true` if `name` matches any of the `keywords` case-insensitively.
 fn ident_matches(name: &str, keywords: &[&str]) -> bool {
     keywords
         .iter()
         .any(|keyword| name.eq_ignore_ascii_case(keyword))
 }
 
+/// Parses a parenthesized parameter list (not including the surrounding `(` and `)`).
+/// Handles typed parameters, defaults, `&` by-reference markers, `...` variadic markers,
+/// and PHP 8.0 `#[...]` attributes. Returns a vec of `(name, type, default, is_ref)` tuples
+/// and an optional variadic parameter name. Advances `*pos` to the token after `)`.
+/// Errors if a variadic parameter appears after another parameter or if a typed variadic
+/// is present.
 pub(super) fn parse_params(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -284,6 +305,9 @@ pub(super) fn parse_params(
     Ok((params, variadic))
 }
 
+/// Parses a comma-separated list of `Name`s until a token that does not start a name is
+/// seen. `first_error` is used when the list is empty; a more specific error is used when
+/// a comma is found but no name follows. Advances `*pos` to the first non-name token.
 pub(super) fn parse_name_list(
     tokens: &[(Token, Span)],
     pos: &mut usize,

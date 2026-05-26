@@ -12,6 +12,19 @@ use crate::codegen::context::{Context, DeferredFiberWrapper};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{fibers, PhpType};
 
+/// Registers a fiber wrapper entry point for a callable used as a Fiber start routine.
+///
+/// Dispatches on `callable_expr` to extract the signature and capture metadata:
+/// - `ExprKind::Closure`: uses deferred closure signature, hidden params, and return analysis
+/// - `ExprKind::FirstClassCallable`: uses deferred closure signature directly
+/// - `ExprKind::Variable`: looks up closure captures and signatures, searches deferred closures for matching params/captures
+///
+/// On success, pushes a `DeferredFiberWrapper` to `ctx.deferred_fiber_wrappers` and returns
+/// the unique label for the wrapper entry point. Returns `None` if validation fails or
+/// the callable kind is unsupported.
+///
+/// # Panics
+/// Panics if `ctx.deferred_closures` is empty when processing a closure or first-class callable.
 pub(super) fn prepare_fiber_wrapper(callable_expr: &Expr, ctx: &mut Context) -> Option<String> {
     let (mut sig, visible_param_count, hidden_arg_types) = match &callable_expr.kind {
         ExprKind::Closure {
@@ -100,6 +113,10 @@ pub(super) fn prepare_fiber_wrapper(callable_expr: &Expr, ctx: &mut Context) -> 
     Some(label)
 }
 
+/// Maps a closure capture tuple to the `PhpType` used for the hidden argument passing slot.
+///
+/// Reference captures are encoded as `PhpType::Int` in the hidden arg type vector
+/// because they are passed as integer pointers in the ABI.
 fn hidden_capture_arg_type((_, ty, by_ref): &(String, PhpType, bool)) -> PhpType {
     if *by_ref {
         PhpType::Int

@@ -16,6 +16,29 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `ctype_digit()` builtin.
+///
+/// Reads the string argument (x1/x2 on AArch64, rax/rdx on x86_64), iterates over each byte,
+/// and returns PHP `true` if all bytes are decimal digits (`0`-`9`), otherwise `false`.
+/// Empty strings return `false` per the PHP ctype contract.
+///
+/// # Arguments
+/// - `_name`: Unused name field (present for builtin dispatcher signature uniformity).
+/// - `args`: Single argument expression to evaluate into a string.
+/// - `emitter`: Target-aware instruction emission.
+/// - `ctx`: Compiler context providing labels and architecture.
+/// - `data`: Data section for any emitted constants.
+///
+/// # Returns
+/// `Some(PhpType::Bool)` — the PHP boolean result.
+///
+/// # ABI Behavior (AArch64)
+/// Input: x1 = string pointer, x2 = string length
+/// Output: x0 = 0 (false) or 1 (true)
+///
+/// # ABI Behavior (x86_64)
+/// Input: rax = string pointer, rdx = string length
+/// Output: rax = 0 (false) or 1 (true)
 pub fn emit(
     _name: &str,
     args: &[Expr],

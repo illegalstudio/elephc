@@ -38,6 +38,21 @@ use crate::codegen::emit::Emitter;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Dispatches a typePredicate/conversion/variableState builtin call to its leaf emitter.
+///
+/// Looks up `name` in the builtin dispatch table and delegates to the corresponding
+/// leaf emitter. Returns `None` if `name` is not a recognized type builtin, allowing
+/// callers to try other dispatch paths.
+///
+/// # Arguments
+/// - `name`   - lowercase builtin name (e.g. `"is_bool"`, `"floatval"`);
+/// - `args`   - call arguments as AST expressions;
+/// - `emitter` - code emitter accumulating assembly;
+/// - `ctx`    - codegen context (variable layout, class metadata, target);
+/// - `data`   - data section for read-only constants and runtime symbols.
+///
+/// # Returns
+/// `Some(PhpType)` with the result type if the builtin is handled here, `None` if unknown.
 pub fn emit(
     name: &str,
     args: &[Expr],

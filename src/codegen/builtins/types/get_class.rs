@@ -17,6 +17,27 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits `get_class()` or `get_parent_class()` as a static-type string literal.
+///
+/// `get_class()` with no arguments returns the current class name from `ctx.current_class`.
+/// With an argument, evaluates the argument for side effects and extracts the class name
+/// if the argument resolves to an object type; otherwise returns an empty string.
+///
+/// `get_parent_class()` resolves the parent of the given or current class by consulting
+/// `ctx.classes`. Returns an empty string if no class is available or the class has no parent.
+///
+/// The resolved class name is emitted as a string literal into the data section, and its
+/// address/length are published via ABI string-result registers (`x1`/`x2` on ARM64).
+///
+/// # Arguments
+/// * `name` — `"get_class"` or `"get_parent_class"`
+/// * `args` — call arguments (empty for no-arg variant, one argument otherwise)
+/// * `emitter` — code emitter
+/// * `ctx` — codegen context (provides `current_class` and `classes` map)
+/// * `data` — data section for string literal emission
+///
+/// # Returns
+/// `Some(PhpType::Str)` — the result type is always a string
 pub fn emit(
     name: &str,
     args: &[Expr],
@@ -50,6 +71,16 @@ pub fn emit(
     Some(PhpType::Str)
 }
 
+/// Returns the parent class name for `class_name`, consulting `ctx.classes`.
+///
+/// Returns an empty string if `class_name` is empty or the class has no parent entry.
+///
+/// # Arguments
+/// * `class_name` — fully or partially qualified class name
+/// * `ctx` — codegen context providing the class metadata map
+///
+/// # Returns
+/// Parent class name as a `String`, or empty string if unavailable
 fn parent_of(class_name: &str, ctx: &Context) -> String {
     if class_name.is_empty() {
         return String::new();

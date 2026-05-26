@@ -10,8 +10,25 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// heap_debug_check_live: fail if a heap pointer refers to a freed block.
-/// Input: x0 = heap user pointer
+/// Checks whether a heap block appears to have been freed.
+///
+/// Runs a debug-only integrity check: verifies that the heap block's refcount field
+/// (located 12 bytes before the user pointer, in the uniform heap header) is non-zero.
+/// A zero refcount indicates the block may have been freed while still referenced —
+/// in that case this function jumps to `__rt_heap_debug_fail` which prints the bad-refcount
+/// debug message and terminates.
+///
+/// # Inputs
+/// - `x0` (ARM64) / `rax` (x86_64): the heap user pointer to check.
+///
+/// # Outputs
+/// - Returns normally when the block's refcount is non-zero (block appears live).
+/// - Jumps to `__rt_heap_debug_fail` (never returns) when the refcount is zero.
+///
+/// # ABI details
+/// - The uniform heap header places the refcount 12 bytes before the user pointer.
+/// - The refcount field is 4 bytes wide.
+/// - Caller-saved registers may be clobbered on the failure path.
 pub fn emit_heap_debug_check_live(emitter: &mut Emitter) {
     let msg = "Fatal error: heap debug detected bad refcount\n";
 

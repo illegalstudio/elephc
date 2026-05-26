@@ -17,6 +17,24 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Lowers the PHP `array_column($input, $column_key)` call to a target-specific runtime routine.
+///
+/// # Arguments
+/// * `args[0]` — the input array of associative arrays
+/// * `args[1]` — the column key (string) to extract from each row
+///
+/// # Type inference
+/// - If `$input` is `PhpType::Array(AssocArray { value, .. })`, uses `value` as the result element type.
+/// - Otherwise defaults to `PhpType::Str` for the result element type.
+///
+/// # Runtime dispatch
+/// Calls one of `__rt_array_column_str`, `__rt_array_column_mixed`, `__rt_array_column_ref`,
+/// or `__rt_array_column` depending on the inferred value type. Each routine allocates a new
+/// indexed array, preserving refcounts for retained payloads.
+///
+/// # ABI constraints
+/// Pushes/pops the outer array pointer and column key string registers to survive `emit_expr`
+/// evaluation order (source-order evaluation, ABI materialization in parameter order).
 pub fn emit(
     _name: &str,
     args: &[Expr],

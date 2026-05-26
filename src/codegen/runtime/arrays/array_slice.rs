@@ -11,10 +11,19 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_slice: extract a slice of an integer array into a new array.
-/// Input: x0 = array pointer, x1 = offset, x2 = length (-1 means to end)
-/// Output: x0 = pointer to new sliced array
-/// Handles negative offset (counts from end of array).
+/// Emits the `__rt_array_slice` runtime helper for ARM64.
+/// Extracts a contiguous slice from an integer array, returning a new array.
+///
+/// # ABI (ARM64)
+/// - Input: x0 = source array pointer, x1 = byte offset, x2 = slice length
+///   - x2 = -1 indicates "read to end of array"
+/// - Output: x0 = pointer to newly allocated sliced array
+///
+/// # Behavior
+/// - Negative offset counts from end (e.g., -2 means length-2)
+/// - Offset is clamped to [0, array_len]; if offset >= length, returns empty array
+/// - Length is clamped to [0, remaining_elements_from_offset]
+/// - Calls `__rt_array_new` to allocate the result array
 pub fn emit_array_slice(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_slice_linux_x86_64(emitter);
@@ -94,6 +103,7 @@ pub fn emit_array_slice(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = empty array
 }
 
+/// Emits the `__rt_array_slice` runtime helper for x86_64 Linux.
 fn emit_array_slice_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_slice ---");

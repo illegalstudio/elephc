@@ -18,12 +18,33 @@ use super::abi;
 use super::data_section::DataSection;
 use super::emit::Emitter;
 
+/// Walks the program AST and collects all `FunctionVariantGroup` nodes into a map
+/// keyed by group name. Each group maps to the ordered list of variant names
+/// discovered in that group.
+///
+/// Called from:
+/// - `emit_function_variant_dispatcher` to build the variant dispatch table
 pub(crate) fn collect_function_variant_groups(program: &Program) -> HashMap<String, Vec<String>> {
     let mut groups = HashMap::new();
     collect_from_stmts(program, &mut groups);
     groups
 }
 
+/// Emits a thunk that dispatches to the active function variant for a given name.
+///
+/// The dispatcher is a global symbol named after the PHP function. It checks an
+/// active-symbol slot (initialized by include loading) and tail-dispatches to the
+/// loaded variant. If no variant is active, it writes a "undefined function" diagnostic
+/// to stderr and exits with code 1.
+///
+/// Arguments:
+/// - `emitter` — target code emitter
+/// - `data` — data section for constants and strings
+/// - `name` — PHP function name (used to derive symbol and active-symbol names)
+///
+/// ABI notes:
+/// - AArch64: uses `cbz` to test the active-symbol pointer, then `br` to tail-dispatch
+/// - X86_64: uses `test`/`je` to test and `jmp` to tail-dispatch
 pub(crate) fn emit_function_variant_dispatcher(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -74,6 +95,11 @@ pub(crate) fn emit_function_variant_dispatcher(
     }
 }
 
+/// Recursively walks a statement list and populates `groups` with any
+/// `FunctionVariantGroup` declarations found.
+///
+/// Handles `StmtKind::FunctionVariantGroup` directly, and recurses into
+/// `Synthetic`, `NamespaceBlock`, and `IncludeOnceGuard` bodies to find nested groups.
 fn collect_from_stmts(stmts: &[Stmt], groups: &mut HashMap<String, Vec<String>>) {
     for stmt in stmts {
         match &stmt.kind {

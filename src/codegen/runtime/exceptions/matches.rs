@@ -11,6 +11,21 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Emits the `__rt_exception_matches` runtime helper.
+///
+/// Dispatches to the target-specific implementation based on `emitter.target`.
+///
+/// Inputs (ARM64): x0 = thrown object pointer, x1 = catch class/interface id, x2 = interface flag (0=class, ≠0=interface).
+/// Inputs (x86_64): rdi = thrown object pointer, rsi = catch class/interface id, rdx = interface flag.
+/// Output: x0 (ARM64) / eax (x86_64) = 1 if the thrown object matches the catch target, 0 otherwise.
+///
+/// For class catches: walks the parent-id chain from the thrown object's class up to the root,
+/// checking each ancestor against the catch class_id. Sentinel `-1` marks root classes.
+///
+/// For interface catches: indexes into the per-class interface metadata table (`_class_interface_ptrs`)
+/// and scans the `[interface_id, impl_ptr]` pairs until a match or end-of-list.
+/// The caller is responsible for pre-allocating the required stack frame and saving callee-saved registers
+/// according to the target ABI before calling this helper.
 pub fn emit_exception_matches(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_exception_matches_linux_x86_64(emitter);
@@ -76,6 +91,13 @@ pub fn emit_exception_matches(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // finish the instanceof-style catch test
 }
 
+/// x86_64/Linux implementation of `__rt_exception_matches`.
+///
+/// Inputs: rdi = thrown object pointer, rsi = catch class/interface id, rdx = interface flag (0=class, ≠0=interface).
+/// Output: eax = 1 if the thrown object matches the catch target, 0 otherwise.
+///
+/// Identical logic to the ARM64 variant but expressed in x86_64 System V ABI conventions.
+/// Uses callee-saved registers r8–r12 and follows the x86_64 unwind/cleanup ABI expectations.
 fn emit_exception_matches_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: exception_matches ---");

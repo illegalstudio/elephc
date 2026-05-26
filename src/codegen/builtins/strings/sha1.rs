@@ -16,6 +16,21 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `sha1()` builtin.
+///
+/// Arguments:
+/// - `args[0]` is evaluated and pushed onto the stack as the input string.
+/// - `emitter` accumulates the emitted assembly instructions.
+/// - `ctx` provides variable layout and codegen state.
+/// - `data` provides the data section for string literals and metadata.
+///
+/// Returns `PhpType::Str` to indicate the result is a PHP string.
+///
+/// Effect:
+/// - Calls the target-aware runtime helper `__rt_sha1` which computes the SHA-1 digest
+///   of the input string and returns it as a lowercase hexadecimal string.
+/// - The returned string pointer/length pair must be treated as an owned runtime value
+///   when the helper allocates; the caller is responsible for freeing or transferring ownership.
 pub fn emit(
     _name: &str,
     args: &[Expr],

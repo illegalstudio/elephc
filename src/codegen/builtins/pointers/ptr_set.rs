@@ -16,6 +16,8 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `ptr_set` builtin: writes a machine-word integer through a pointer.
+/// Checks non-null, coerces the value to integer. Returns `PhpType::Void`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

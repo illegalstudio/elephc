@@ -16,6 +16,20 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `file_put_contents` builtin call.
+///
+/// Saves the path argument (args[0]) on the stack/caller-saved registers, evaluates
+/// the data argument (args[1]) in source order, then materializes all four string-argument
+/// registers and calls `__rt_file_put_contents`. Returns `PhpType::Int` (byte count or false).
+///
+/// # Arguments
+/// - `_name`: ignored (always `file_put_contents`)
+/// - `args[0]`: path string
+/// - `args[1]`: data string
+///
+/// # Side effects
+/// - Performs observable filesystem writes via the runtime helper.
+/// - Clobbers caller-saved registers (`x0`-`x7`/`rdi`-`rsi` pairs) per ABI.
 pub fn emit(
     _name: &str,
     args: &[Expr],

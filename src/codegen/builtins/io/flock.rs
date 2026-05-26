@@ -19,6 +19,14 @@ use crate::types::PhpType;
 
 use super::stream_arg::emit_stream_fd_arg;
 
+/// Emits code for the PHP `flock(stream, operation, &$would_block?)` builtin.
+///
+/// Validates the stream argument and extracts its file descriptor. Emits the lock
+/// operation expression, then places both fd (in x0/rax) and operation (in x1/rdx)
+/// into the standard integer argument registers before calling `__rt_flock`. On return,
+/// optionally stores the runtime's `$would_block` output into the caller's variable.
+///
+/// Returns `PhpType::Bool` unconditionally.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -47,6 +55,13 @@ pub fn emit(
     Some(PhpType::Bool)
 }
 
+/// Emits code to store the `$would_block` output from `__rt_flock` into the variable
+/// represented by `arg`.
+///
+/// Uses a push/pop cycle to preserve the `flock()` return value across the store.
+/// On ARM64 the runtime writes `would_block` to x1; on x86_64 it writes to rdx.
+/// In both cases the value is moved to the standard scalar result register (x0/rax)
+/// before calling `emit_store_would_block_result`.
 fn emit_store_would_block(arg: &Expr, emitter: &mut Emitter, ctx: &mut Context) {
     let ExprKind::Variable(name) = &arg.kind else {
         return;
@@ -68,6 +83,15 @@ fn emit_store_would_block(arg: &Expr, emitter: &mut Emitter, ctx: &mut Context) 
     }
 }
 
+/// Stores the `would_block` boolean result into the variable identified by `name`.
+///
+/// Resolves the variable's storage location:
+/// - **Global variable**: uses `__rt_flock`'s page-relative `would_block` output via a global symbol
+/// - **Ref parameter** (passed by reference): loads the parameter's stack address and stores through it
+/// - **Local stack variable**: stores directly at the variable's stack offset
+///
+/// Updates the variable's type to `PhpType::Int` (0 or 1) and marks it `NonHeap`.
+/// Panics if a ref param lacks a stack slot.
 fn emit_store_would_block_result(name: &str, emitter: &mut Emitter, ctx: &mut Context) {
     if ctx.global_vars.contains(name) || (ctx.in_main && ctx.all_global_var_names.contains(name)) {
         let label = format!("_gvar_{}", name);

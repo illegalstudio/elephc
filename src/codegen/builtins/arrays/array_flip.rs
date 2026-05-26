@@ -17,6 +17,28 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::{array_key_type_from_value_type, PhpType};
 
+/// Emits code for the PHP `array_flip` builtin, which exchanges array keys and values.
+///
+/// # Arguments
+/// - `_name`: Unused; matches the dispatcher signature (builtin name is resolved via catalog).
+/// - `args`: Must contain exactly one expression producing an array.
+/// - `emitter`: Target-aware instruction emitter.
+/// - `ctx`: Codegen context (types, locals, class metadata).
+/// - `data`: Data section for relocations and static data.
+///
+/// # Returns
+/// `Some(PhpType)` describing the flipped array type:
+/// - `Array<Str>` → `AssocArray<Int, Int>` (string keys flipped to integer values)
+/// - `AssocArray<K, V>` → `AssocArray<V, K>` (swaps key and value types)
+/// - Other arrays → `AssocArray<Int, Int>` (homogeneous fallback)
+///
+/// # Runtime helpers
+/// - `__rt_array_flip_string`: Used when flipping an `Array<Str>` (all string keys).
+/// - `__rt_array_flip`: Used for all other array types.
+///
+/// # ABI notes
+/// - ARM64: passes array pointer in `x0`, result returned in `x0` via `bl helper`.
+/// - x86_64: moves array pointer to `rdi` before calling, result in `rax`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -11,7 +11,15 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// strrpos: find last occurrence of needle. Returns position or -1.
+/// Emits the `__rt_strrpos` runtime helper for finding the last occurrence of a needle
+/// in a haystack (PHP semantics). On x86_64 Linux dispatches to the x86_64 variant;
+/// on other targets emits ARM64 assembly.
+///
+/// Inputs: x0 = haystack ptr, x1 = haystack len, x2 = needle ptr, x3 = needle len.
+/// Output: x0 = byte offset of last match, or -1 if not found. Empty needle returns haystack len.
+///
+/// PHP semantics: empty needle returns the last valid starting position (haystack len),
+/// needle longer than haystack returns -1 immediately.
 pub fn emit_strrpos(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_strrpos_linux_x86_64(emitter);
@@ -60,6 +68,11 @@ pub fn emit_strrpos(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_strrpos` runtime helper.
+/// Inputs: rdi = haystack ptr, rsi = haystack len, rdx = needle ptr, rcx = needle len.
+/// Output: rax = byte offset of last match, or -1 if not found.
+///
+/// Uses System V AMD64 ABI conventions. Empty needle returns haystack len (sisi).
 fn emit_strrpos_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strrpos ---");

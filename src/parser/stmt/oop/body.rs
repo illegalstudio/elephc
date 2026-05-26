@@ -22,6 +22,9 @@ use super::super::{expect_semicolon, expect_token, parse_block};
 use super::method_params::parse_method_params;
 use super::traits::parse_trait_use;
 
+/// Parses an `interface` declaration, including its name, `extends` clause, and body.
+/// Consumes the `interface` keyword and expects a name followed by optional `extends` parents
+/// and a body containing constants, properties, and method signatures.
 pub(in crate::parser::stmt) fn parse_interface_decl(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -81,7 +84,8 @@ pub(in crate::parser::stmt) fn parse_interface_decl(
     ))
 }
 
-/// Parse a trait declaration: trait Name { use OtherTrait; properties and methods }
+/// Parses a `trait` declaration, consuming the `trait` keyword, name, and body.
+/// Trait bodies support `use` trait statements, properties, methods, and constants.
 pub(in crate::parser::stmt) fn parse_trait_decl(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -115,6 +119,12 @@ pub(in crate::parser::stmt) fn parse_trait_decl(
     ))
 }
 
+/// Parses the body of a class, trait, or abstract class.
+/// Returns four vectors: trait uses, properties, methods, and constants.
+/// Handles modifiers (visibility, static, readonly, abstract, final), property hooks,
+/// promoted constructor properties, and member attributes.
+/// `owner_kind` is used only for error messages (e.g., "class", "trait").
+/// `enclosing_is_abstract` controls whether abstract property declarations are permitted.
 pub(in crate::parser::stmt) fn parse_class_like_body(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -350,6 +360,9 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
     Ok((trait_uses, properties, methods, constants))
 }
 
+/// Appends promoted constructor properties to the class properties list.
+/// Validates that no property with the same name already exists in the class,
+/// returning an error on duplicate declaration.
 fn append_promoted_properties(
     properties: &mut Vec<ClassProperty>,
     promoted_properties: Vec<ClassProperty>,
@@ -366,6 +379,9 @@ fn append_promoted_properties(
     Ok(())
 }
 
+/// Parses an optional type expression for class properties.
+/// Returns `None` if the next token is a variable (no type given), or a `Some(TypeExpr)` otherwise.
+/// Does not consume the variable token itself; the caller handles that.
 fn parse_optional_property_type(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -383,6 +399,8 @@ fn parse_optional_property_type(
     Ok(Some(parse_type_expr(tokens, pos, span)?))
 }
 
+/// Holds parsed member modifiers for class-like members: visibility, static, readonly, abstract, final.
+/// Used internally during class-like body parsing to collect modifiers before processing a member declaration.
 pub(super) struct MemberModifiers {
     visibility: Visibility,
     is_static: bool,
@@ -391,6 +409,9 @@ pub(super) struct MemberModifiers {
     is_final: bool,
 }
 
+/// Scans tokens to collect member modifiers (visibility, static, readonly, abstract, final).
+/// Consumes any matching modifier tokens and returns a `MemberModifiers` struct.
+/// Default visibility is `Public` if no visibility modifier is present.
 fn parse_member_modifiers(tokens: &[(Token, Span)], pos: &mut usize) -> MemberModifiers {
     let mut visibility = Visibility::Public;
     let mut is_static = false;
@@ -441,6 +462,11 @@ fn parse_member_modifiers(tokens: &[(Token, Span)], pos: &mut usize) -> MemberMo
     }
 }
 
+/// Parses a method declaration inside a class-like body (class, trait, interface).
+/// Consumes the `function` keyword, name, parameters, optional return type, and body.
+/// Returns the `ClassMethod` and any promoted constructor properties found in the parameters.
+/// Modifier flags (visibility, static, abstract, final) are passed in and stored on the method;
+/// the function itself only consumes the `function` keyword and subsequent syntax.
 fn parse_class_like_method(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -517,6 +543,9 @@ fn parse_class_like_method(
     }, promoted_properties))
 }
 
+/// Parses the body of an `interface` declaration.
+/// Interface bodies may only contain constants, hooked properties, and method signatures (no bodies).
+/// All properties are implicitly abstract and public; modifiers are validated but not stored as-is.
 fn parse_interface_body(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -675,6 +704,10 @@ fn parse_interface_body(
     Ok((properties, methods, constants))
 }
 
+/// Parses a property hook block (`{ get; set; }`) following a class property declaration.
+/// Returns a `PropertyHooks` indicating which hooks are present (`get`, `set`, by-ref variants).
+/// Consumes the opening `{`, hook declarations, and closing `}`.
+/// Returns an error if no hook declarations appear or if the block is malformed.
 fn parse_property_hooks(
     tokens: &[(Token, Span)],
     pos: &mut usize,

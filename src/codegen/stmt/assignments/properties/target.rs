@@ -12,14 +12,32 @@ use crate::codegen::context::Context;
 use crate::codegen::emit::Emitter;
 use crate::types::PhpType;
 
+/// The resolved physical slot for a property assignment: the class that
+/// owns the property, the byte offset of the slot within the object,
+/// the PHP type of the property, whether the slot must be dereferenced
+/// before use (for extern/packed pointers), and whether the property
+/// is a PHP reference (so the cell address is stored rather than the value).
 pub(super) struct PropertyAssignTarget {
+    /// The fully-qualified class name that declares this property.
     pub(super) class_name: String,
+    /// Byte offset of the property's slot within the object layout.
     pub(super) offset: usize,
+    /// PHP type of the stored value (controls register/Stack slot selection).
     pub(super) prop_ty: PhpType,
+    /// True for extern/packed pointers: load through the pointer before reading
+    /// or writing the field value.
     pub(super) needs_deref: bool,
+    /// True when the property is declared `&$name`; the slot holds a `PhpRef`
+    /// cell pointer rather than a direct value.
     pub(super) is_reference: bool,
 }
 
+/// The result of resolving a property assignment target. `Resolved` means
+/// the property has a concrete storage slot. `UseMagicSet` means the
+/// property is undeclared but the class has a `__set` magic method. `UseDynamicProperty`
+/// means the class has `#[\AllowDynamicProperties]` and the write should route
+/// through the per-object hashtable. `Abort` means resolution failed and
+/// assignment cannot proceed.
 pub(super) enum PropertyAssignResolution {
     Resolved(PropertyAssignTarget),
     UseMagicSet(String),
@@ -33,6 +51,12 @@ pub(super) enum PropertyAssignResolution {
     Abort,
 }
 
+/// Resolves the assignment target for a property write. Returns
+/// `Resolved(PropertyAssignTarget)` for concrete slots, `UseMagicSet(class_name)`
+/// when the property is unset but the class has `__set`, `UseDynamicProperty`
+/// when the class has `#[\AllowDynamicProperties]`, or `Abort` for invalid
+/// or unsupported targets. Handles `Object`, `Pointer<extern>` (FFI fields),
+/// and `Pointer<packed>` (packed struct fields).
 pub(super) fn resolve_property_assign_target(
     obj_ty: &PhpType,
     property: &str,
@@ -61,6 +85,14 @@ pub(super) fn resolve_property_assign_target(
     }
 }
 
+/// Resolves a property assignment target for a declared `Object` class.
+/// Looks up the property in `class_info.properties`. If not found and
+/// `magic_set_class` is provided, returns `UseMagicSet`. If the class
+/// has `#[\AllowDynamicProperties]`, returns `UseDynamicProperty` with the
+/// slot offset computed as `8 + num_props * 16` (pointing past the object
+/// header and existing named-property slots). Otherwise emits a warning
+/// and returns `Abort`. On success returns `Resolved` with `needs_deref=false`
+/// and `is_reference` set from `class_info.reference_properties`.
 fn resolve_object_property_target(
     class_name: &str,
     property: &str,
@@ -108,6 +140,10 @@ fn resolve_object_property_target(
     })
 }
 
+/// Resolves a property assignment target for an `extern` (FFI) class field.
+/// Looks up the field by name in `ctx.extern_classes[class_name].fields`.
+/// Returns `Resolved` with `needs_deref=true` and the field's offset and type,
+/// or `Abort` if the class or field is not found.
 fn resolve_extern_field_target(
     class_name: &str,
     property: &str,
@@ -137,6 +173,10 @@ fn resolve_extern_field_target(
     })
 }
 
+/// Resolves a property assignment target for a `packed` struct field.
+/// Looks up the field by name in `ctx.packed_classes[class_name].fields`.
+/// Returns `Resolved` with `needs_deref=true` and the field's offset and type,
+/// or `Abort` if the class or field is not found.
 fn resolve_packed_field_target(
     class_name: &str,
     property: &str,

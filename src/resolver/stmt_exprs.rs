@@ -19,6 +19,35 @@ use super::engine::resolve_isolated;
 use super::exprs::{resolve_expr, resolve_method_exprs, resolve_params, resolve_properties};
 use super::state::ResolveState;
 
+/// Resolves expressions nested within a statement after include/declaration handling.
+///
+/// This is a dispatcher that walks the statement AST and calls [`resolve_expr`] on each
+/// expression node. It preserves statement structure unchanged and only rewrites the
+/// expression children. For statements containing nested bodies (e.g. `IncludeOnceGuard`,
+/// `Synthetic`), resolution happens in an isolated context via [`resolve_isolated`].
+///
+/// # Arguments
+///
+/// * `stmt`            - The statement whose expressions are to be resolved.
+/// * `base_dir`        - Base directory for resolving relative include paths.
+/// * `declared_once`    - Tracks files already included once to avoid duplicate processing.
+/// * `include_chain`    - Current include resolution stack for cycle detection.
+/// * `state`           - Shared resolver state (imports, constants, etc.).
+/// * `function_variants` - Registry tracking include-loaded function variants.
+///
+/// # Returns
+///
+/// Returns the statement with all expressions resolved, or a [`CompileError`] if any
+/// expression resolution fails.
+///
+/// # Variants handled
+///
+/// - Expression-bearing statements (`Echo`, `Throw`, `ExprStmt`, `Return`, `Assign`, etc.)
+///   recursively resolve their expression children.
+/// - Body-bearing statements (`IncludeOnceGuard`, `Synthetic`) use [`resolve_isolated`].
+/// - Declaration statements (`FunctionDecl`, `ClassDecl`, etc.) delegate to specialized
+///   resolvers for params, properties, and methods.
+/// - Flow-control, declaration markers, and include guards are left unchanged.
 pub(super) fn resolve_stmt_exprs(
     stmt: Stmt,
     base_dir: &Path,

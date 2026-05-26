@@ -16,6 +16,14 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
+/// Emits the `buffer_free` builtin call, releasing a runtime buffer and
+/// nullifying its local stack slot.
+///
+/// - Loads the buffer handle via `emit_expr` (pointer in x1, length in x2).
+/// - Calls `__rt_heap_free` to release the header and contiguous payload.
+/// - For local variable targets (not ref params, globals, or statics), zeros
+///   the stack slot so subsequent use trips the null-buffer fatal helper.
+/// - Returns `Some(PhpType::Void)`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

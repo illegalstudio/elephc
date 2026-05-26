@@ -11,10 +11,11 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_unshift: prepend an integer value to the front of an array.
-/// Input: x0 = array pointer, x1 = value to prepend
+/// Emits `__rt_array_unshift` for the native target.
+/// Input: x0 = array pointer, x1 = integer value to prepend
 /// Output: x0 = new array length
-/// Mutates the array in place: shifts all elements right, inserts at index 0.
+/// Behavior: shifts all existing elements right by one position, inserts value at index 0,
+/// and increments the array length. Respects COW: the caller ensures the array is unique.
 pub fn emit_array_unshift(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_unshift_linux_x86_64(emitter);
@@ -50,6 +51,11 @@ pub fn emit_array_unshift(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits `__rt_array_unshift` for the x86_64 Linux ABI.
+/// Input: rdi = array pointer, rsi = integer value to prepend
+/// Output: rax = new array length
+/// Behavior: identical to the ARM64 variant — shifts existing elements right,
+/// inserts at index 0, and increments length. Empty arrays skip the shift loop correctly.
 fn emit_array_unshift_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_unshift ---");

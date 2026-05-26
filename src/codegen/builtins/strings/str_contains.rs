@@ -16,6 +16,19 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `str_contains(haystack, needle)` builtin call.
+///
+/// Saves the haystack pointer/length before evaluating the needle, then calls
+/// the shared `__rt_strpos` runtime helper and normalizes the signed position result
+/// to a PHP boolean (true if needle is found at any position including 0).
+///
+/// # Arguments
+/// - `args[0]`: haystack string expression
+/// - `args[1]`: needle string expression
+///
+/// # Returns
+/// `PhpType::Bool` — always returns a boolean regardless of whether the needle was
+/// found at position 0 or not found at all, distinguishing PHP false from integer 0.
 pub fn emit(
     _name: &str,
     args: &[Expr],

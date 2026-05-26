@@ -9,6 +9,10 @@
 
 use super::*;
 
+// Parses a `TraitDecl` node from `trait A { ... }` and a `ClassDecl` node with a trait use
+// that adapts `A::foo` to a private alias `bar`. Verifies AST shape: trait name, empty
+// trait_uses on the trait decl, single method `foo`, and the alias adaptation with private
+// visibility on the class's trait use.
 #[test]
 fn test_parse_trait_decl_and_use_adaptations() {
     let stmts = parse_source(
@@ -69,6 +73,8 @@ fn test_parse_trait_decl_and_use_adaptations() {
     }
 }
 
+// Parses a class that uses a trait with `A::foo as protected` (visibility adaptation, no alias).
+// Verifies the `TraitAdaptation::Alias` variant has `alias = None` and `visibility = Protected`.
 #[test]
 fn test_parse_trait_use_as_protected() {
     let stmts = parse_source(
@@ -97,6 +103,9 @@ fn test_parse_trait_use_as_protected() {
     }
 }
 
+// Parses a class using two traits `A, B` with an `A::foo insteadof B` conflict resolution.
+// Verifies the `TraitAdaptation::InsteadOf` variant with `trait_name = A`, `method = foo`,
+// and `instead_of = vec!["B"]`.
 #[test]
 fn test_parse_trait_use_insteadof() {
     let stmts = parse_source(
@@ -123,6 +132,7 @@ fn test_parse_trait_use_insteadof() {
     }
 }
 
+// Parses `echo __TRAIT__;` and asserts the expression is `ExprKind::MagicConstant(MagicConstant::Trait)`.
 #[test]
 fn test_parse_dunder_trait_magic_constant() {
     let stmts = parse_source("<?php echo __TRAIT__;");

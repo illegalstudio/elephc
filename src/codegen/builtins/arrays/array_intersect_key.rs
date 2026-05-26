@@ -17,6 +17,22 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `array_intersect_key($arr1, $arr2)` builtin call.
+///
+/// Reduces `$arr1` to only keys present in `$arr2` using runtime helper
+/// `__rt_array_intersect_key`. Preserves the first array's type as return type.
+///
+/// ## Arguments
+/// - `args[0]`: the base associative array to filter
+/// - `args[1]`: the mask associative array whose keys define the intersection
+///
+/// ## Register/ABI usage
+/// - On AArch64: first array pointer in `x0`, second in `x1`, result pointer in `x0`
+/// - On x86_64: first array pointer in `rdi`, second in `rsi`, result pointer in `rax`
+///
+/// ## Side effects
+/// - Re-evaluates both argument expressions (caller must ensure side-effect order)
+/// - Clobbers caller-saved registers used for array pointer transport
 pub fn emit(
     _name: &str,
     args: &[Expr],

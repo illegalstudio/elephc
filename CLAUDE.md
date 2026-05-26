@@ -295,6 +295,16 @@ For test files, use the same structure but describe the test surface instead of 
 
 Keep preambles concise and factual. Do not include refactor history, stale line numbers, or broad architecture prose that belongs in `docs/internals/`.
 
+### Rust function docblock policy
+
+Every explicit Rust function in repo-owned Rust source files must have a concise docblock explaining what that function does. This applies equally to public functions, restricted-visibility functions (`pub(crate)`, `pub(super)`, etc.), private helper functions, impl methods, trait methods, and test functions.
+
+Use `///` Rustdoc comments immediately before the function item or its item attributes. Keep the docblock specific to the function's actual responsibility, inputs, outputs, side effects, ownership/ABI/runtime constraints, and failure behavior when those details matter. Do not use vague filler such as "handles logic" or "processes data".
+
+When documenting test functions, describe the behavior or regression being verified and any important fixture/platform assumptions. For explanatory comments inside a function body, use normal `//` comments, not `///`; Rustdoc comments inside function bodies produce warnings or errors because they do not document an item.
+
+Adding or updating function docblocks must not change code behavior. Do not alter function signatures, visibility, attributes, derives, module declarations, control-flow braces, strings, assembly instructions, or instruction-comment alignment while adding documentation. If a doc-only change causes `cargo check`, `cargo check --tests`, or `git diff --check` to fail, fix the documentation placement or comment style rather than changing code to fit the comment.
+
 ### Codegen conventions (target-aware)
 
 - Prefer helpers from `src/codegen/abi/` for registers, stack slots, frame layout, argument materialization, symbol addresses, and calls.

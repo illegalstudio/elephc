@@ -9,6 +9,7 @@
 
 use super::*;
 
+// Verifies `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR` tokenize as runtime constant tokens.
 #[test]
 fn test_runtime_constant_tokens() {
     let t = tokens("<?php PHP_EOL PHP_OS DIRECTORY_SEPARATOR");
@@ -20,6 +21,7 @@ fn test_runtime_constant_tokens() {
 
 // --- STDIN / STDOUT / STDERR ---
 
+// Verifies `__DIR__` tokenizes as `DunderDir`.
 #[test]
 fn test_dunder_dir_token() {
     let t = tokens("<?php __DIR__;");
@@ -29,6 +31,7 @@ fn test_dunder_dir_token() {
     );
 }
 
+// Verifies `__FILE__` tokenizes as `DunderFile`.
 #[test]
 fn test_dunder_file_token() {
     let t = tokens("<?php __FILE__;");
@@ -38,6 +41,7 @@ fn test_dunder_file_token() {
     );
 }
 
+// Verifies `__LINE__` tokenizes as `DunderLine`.
 #[test]
 fn test_dunder_line_token() {
     let t = tokens("<?php __LINE__;");
@@ -47,6 +51,7 @@ fn test_dunder_line_token() {
     );
 }
 
+// Verifies `__FUNCTION__` tokenizes as `DunderFunction`.
 #[test]
 fn test_dunder_function_token() {
     let t = tokens("<?php __FUNCTION__;");
@@ -56,6 +61,7 @@ fn test_dunder_function_token() {
     );
 }
 
+// Verifies `__CLASS__` tokenizes as `DunderClass`.
 #[test]
 fn test_dunder_class_token() {
     let t = tokens("<?php __CLASS__;");
@@ -65,6 +71,7 @@ fn test_dunder_class_token() {
     );
 }
 
+// Verifies `__METHOD__` tokenizes as `DunderMethod`.
 #[test]
 fn test_dunder_method_token() {
     let t = tokens("<?php __METHOD__;");
@@ -74,6 +81,7 @@ fn test_dunder_method_token() {
     );
 }
 
+// Verifies `__NAMESPACE__` tokenizes as `DunderNamespace`.
 #[test]
 fn test_dunder_namespace_token() {
     let t = tokens("<?php __NAMESPACE__;");
@@ -83,6 +91,7 @@ fn test_dunder_namespace_token() {
     );
 }
 
+// Verifies `__TRAIT__` tokenizes as `DunderTrait`.
 #[test]
 fn test_dunder_trait_token() {
     let t = tokens("<?php __TRAIT__;");
@@ -92,6 +101,7 @@ fn test_dunder_trait_token() {
     );
 }
 
+// Verifies `__dir__` (lowercase) still tokenizes as `DunderDir` (magic constant case-insensitive).
 #[test]
 fn test_dunder_lowercase_is_magic_constant() {
     let t = tokens("<?php __dir__;");
@@ -101,6 +111,7 @@ fn test_dunder_lowercase_is_magic_constant() {
     );
 }
 
+// Verifies `__FuNcTiOn__` (mixed case) still tokenizes as `DunderFunction`.
 #[test]
 fn test_dunder_mixed_case_is_magic_constant() {
     let t = tokens("<?php __FuNcTiOn__;");

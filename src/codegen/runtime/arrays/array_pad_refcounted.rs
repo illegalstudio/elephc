@@ -11,9 +11,10 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_pad_refcounted: pad a refcounted array to a specified size with a borrowed payload.
-/// Input: x0 = array pointer, x1 = size (negative = pad left), x2 = borrowed pad payload
-/// Output: x0 = pointer to new padded array
+/// Emits the `__rt_array_pad_refcounted` runtime helper.
+/// Input: x0 = array pointer, x1 = size (negative = pad left), x2 = borrowed pad payload.
+/// Output: x0 = pointer to new padded array.
+/// Dispatches to the x86_64 Linux variant; ARM64 uses the native implementation below.
 pub fn emit_array_pad_refcounted(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_pad_refcounted_linux_x86_64(emitter);
@@ -118,6 +119,10 @@ pub fn emit_array_pad_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return padded array
 }
 
+/// Emits the x86_64 Linux variant of `__rt_array_pad_refcounted`.
+/// Input: rdi = array pointer, rsi = signed size (negative = pad left), rdx = borrowed pad payload.
+/// Output: rax = pointer to new padded array.
+/// Uses System V AMD64 ABI: caller-saved registers r10/r11 are used as scratch; rbp frames the spill region.
 fn emit_array_pad_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_pad_refcounted ---");

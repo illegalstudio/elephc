@@ -9,6 +9,9 @@
 //! Key details:
 //! - Values must match PHP's `ext/json` constants exactly for bitmask and error-code parity.
 
+/// Tuple of `(name, value)` pairs for every `ext/json` integer constant.
+///
+/// Example entries: `("JSON_HEX_TAG", 1)`, `("JSON_ERROR_NONE", 0)`.
 pub(crate) const JSON_INT_CONSTANTS: &[(&str, i64)] = &[
     // Encoding flags (bitmask passed to json_encode).
     ("JSON_HEX_TAG", 1),
@@ -46,6 +49,7 @@ pub(crate) const JSON_INT_CONSTANTS: &[(&str, i64)] = &[
 mod tests {
     use super::*;
 
+    /// Verifies `JSON_PRETTY_PRINT` equals 128, matching PHP's ext/json value.
     #[test]
     fn json_pretty_print_is_128() {
         let entry = JSON_INT_CONSTANTS
@@ -55,6 +59,7 @@ mod tests {
         assert_eq!(entry.1, 128);
     }
 
+    /// Asserts no duplicate names exist in `JSON_INT_CONSTANTS`.
     #[test]
     fn no_duplicate_constant_names() {
         let mut names: Vec<&str> = JSON_INT_CONSTANTS.iter().map(|(n, _)| *n).collect();

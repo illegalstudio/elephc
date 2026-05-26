@@ -29,10 +29,13 @@ use tail::dce_stmt_with_tail;
 use tries::dce_try_stmt;
 use writes::*;
 
+/// Applies DCE to a statement block with default guard state.
 pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
     dce_block_with_guards(body, GuardState::default())
 }
 
+/// Core DCE loop for a statement block. Iterates statements, applies per-statement DCE,
+/// tracks guard state, handles tail-sinking for if/switch/try, and breaks early on terminal control flow.
 fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
     let mut eliminated = Vec::new();
     let mut stmts = body.into_iter().peekable();
@@ -66,6 +69,7 @@ fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
     eliminated
 }
 
+/// Converts a GuardLiteral to a ScalarValue for guard-based constant resolution.
 fn guard_literal_to_scalar(value: &GuardLiteral) -> ScalarValue {
     match value {
         GuardLiteral::Bool(value) => ScalarValue::Bool(*value),
@@ -76,6 +80,9 @@ fn guard_literal_to_scalar(value: &GuardLiteral) -> ScalarValue {
     }
 }
 
+/// Attempts to resolve a known scalar value for a subject expression.
+/// First checks if the expression is a compile-time constant; otherwise looks up
+/// the variable in guard state for a known exact guard value.
 fn known_scalar_subject_value(subject: &Expr, guards: &GuardState) -> Option<ScalarValue> {
     scalar_value(subject).or_else(|| match &subject.kind {
         ExprKind::Variable(name) => known_exact_guard(guards, name).map(guard_literal_to_scalar),
@@ -83,6 +90,8 @@ fn known_scalar_subject_value(subject: &Expr, guards: &GuardState) -> Option<Sca
     })
 }
 
+/// Determines whether a subject expression is known to be true or false.
+/// Resolves via known scalar value or via guard membership (bool_true/false_vars, truthy/falsy_vars).
 fn known_subject_truthiness(subject: &Expr, guards: &GuardState) -> Option<bool> {
     if let Some(subject_value) = known_scalar_subject_value(subject, guards) {
         let guard_literal = match subject_value {
@@ -114,10 +123,15 @@ fn known_subject_truthiness(subject: &Expr, guards: &GuardState) -> Option<bool>
     None
 }
 
+/// Applies DCE to a single statement with default guard state.
 pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
     dce_stmt_with_guards(stmt, &GuardState::default())
 }
 
+/// Main statement dispatcher for DCE. For each statement kind, prunes expressions,
+/// recursively applies DCE to nested blocks with updated guard state, and drops
+/// side-effect-free expression statements. Guard state is propagated and invalidated
+/// based on writes and branch structure.
 fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
     let span = stmt.span;
     match stmt.kind {

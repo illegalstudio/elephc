@@ -135,6 +135,12 @@ pub fn emit_hash_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = cloned hash pointer
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_hash_clone_shallow` runtime helper.
+/// Mirrors the ARM64 logic but uses x86_64 SysV ABI registers and calling conventions.
+/// Preserves copy-on-write semantics: keys and string values are re-persisted for the
+/// cloned owner, refcounted values are retained, and insertion order is preserved.
+/// Input:  rdi = source hash pointer
+/// Output: rax = cloned hash pointer
 fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_clone_shallow ---");

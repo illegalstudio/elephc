@@ -11,12 +11,14 @@
 use crate::names::php_symbol_key;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Form of intrinsic call.
 pub enum IntrinsicCallForm {
     Instance,
     Static,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Kind of intrinsic call.
 pub enum IntrinsicCallKind {
     FiberStart,
     FiberResume,
@@ -79,6 +81,7 @@ pub enum IntrinsicCallKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Intrinsic call representation.
 pub struct IntrinsicCall {
     kind: IntrinsicCallKind,
     form: IntrinsicCallForm,
@@ -86,6 +89,8 @@ pub struct IntrinsicCall {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Static specification for a compiler-recognized intrinsic method.
+/// Contains the class/method identity and the corresponding runtime helper name.
 struct IntrinsicSpec {
     kind: IntrinsicCallKind,
     form: IntrinsicCallForm,
@@ -384,6 +389,7 @@ const INTRINSICS: &[IntrinsicSpec] = &[
     },
 ];
 
+/// Constructs an instance-method intrinsic spec for a Spl class.
 const fn spl_instance_spec(
     class_key: &'static str,
     class_name: &'static str,
@@ -401,6 +407,7 @@ const fn spl_instance_spec(
     }
 }
 
+/// Constructs a static-method intrinsic spec for a Spl class.
 const fn spl_static_spec(
     class_key: &'static str,
     class_name: &'static str,
@@ -419,35 +426,46 @@ const fn spl_static_spec(
 }
 
 impl IntrinsicCall {
+    /// Looks up an instance method as an intrinsic, returning the call descriptor if found.
+    /// Matching is case-insensitive per PHP method lookup rules.
     pub fn instance_method(class_name: &str, method: &str) -> Option<Self> {
         resolve(IntrinsicCallForm::Instance, class_name, method)
     }
 
+    /// Looks up a static method as an intrinsic, returning the call descriptor if found.
+    /// Matching is case-insensitive per PHP method lookup rules.
     pub fn static_method(class_name: &str, method: &str) -> Option<Self> {
         resolve(IntrinsicCallForm::Static, class_name, method)
     }
 
+    /// Returns the specific kind of intrinsic call (e.g., FiberStart, GeneratorCurrent).
     pub fn kind(self) -> IntrinsicCallKind {
         self.kind
     }
 
+    /// Returns whether this intrinsic is called on an instance or statically.
     pub fn form(self) -> IntrinsicCallForm {
         self.form
     }
 
+    /// Returns the PHP class name this intrinsic is registered under.
     pub fn class_name(self) -> &'static str {
         INTRINSICS[self.spec_index].class_name
     }
 
+    /// Returns the lowercase method key used for intrinsic lookup.
     pub fn method_key(self) -> &'static str {
         INTRINSICS[self.spec_index].method_key
     }
 
+    /// Returns the name of the runtime helper that implements this intrinsic,
+    /// or None if the intrinsic has no separate helper (shouldn't happen in practice).
     pub fn runtime_helper(self) -> Option<&'static str> {
         INTRINSICS[self.spec_index].runtime_helper
     }
 }
 
+/// Looks up an intrinsic by call form, PHP class name, and method name.
 fn resolve(form: IntrinsicCallForm, class_name: &str, method: &str) -> Option<IntrinsicCall> {
     let class_key = php_symbol_key(class_name);
     let method_key = php_symbol_key(method);

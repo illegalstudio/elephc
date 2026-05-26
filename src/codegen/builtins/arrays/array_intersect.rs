@@ -17,6 +17,25 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `array_intersect` builtin call.
+///
+/// Computes the value-based intersection of two arrays, returning a new array
+/// containing all entries from the first array whose values appear in the second.
+///
+/// # Arguments
+/// * `_name` - Unused; present to match the builtin emitter signature convention.
+/// * `args` - Two expressions: the base array and the array to intersect against.
+/// * `emitter` - Target-specific assembly emitter.
+/// * `ctx` - Codegen context (types, locals, etc.).
+/// * `data` - Data section for literals and runtime metadata.
+///
+/// # Returns
+/// `Some(PhpType::Array(...))` matching the input array's inner type, or `Array(Int)` for non-array inputs.
+///
+/// # ABI / Runtime Behavior
+/// - **x86_64**: preserves first array in `rax` while evaluating second argument (push/pop via `rdi`/`rsi` registers); calls `__rt_array_intersect` or `__rt_array_intersect_refcounted`.
+/// - **ARM64**: pushes first array to stack, evaluates second argument into `x0`, pops first array into `x0`; calls `__rt_array_intersect` or `__rt_array_intersect_refcounted`.
+/// - Picks the refcounted runtime variant when the input array holds refcounted values (objects or arrays); otherwise uses the non-refcounted variant.
 pub fn emit(
     _name: &str,
     args: &[Expr],

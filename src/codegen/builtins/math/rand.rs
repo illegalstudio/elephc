@@ -17,6 +17,26 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `rand(min, max)` or `rand()` builtin.
+///
+/// With two arguments `min` and `max`, generates a uniformly distributed random
+/// integer in the inclusive range `[min, max]`. With no arguments, returns a
+/// non-negative random integer in `[0, 2^32-1]` via `__rt_random_u32`.
+///
+/// # Arguments
+/// - `name`: The builtin function name (unused beyond comments).
+/// - `args`: Either two expressions evaluating to integers (min, max), or empty.
+/// - `emitter`: Target-aware assembly emitter.
+/// - `ctx`: Codegen context carrying variable layout and metadata.
+/// - `data`: Data section for relocatable constants.
+///
+/// # Returns
+/// Always `Some(PhpType::Int)`. The result is in the standard integer result
+/// register (`x0` on ARM64, `rax` on x86_64).
+///
+/// # Side effects
+/// Calls `__rt_random_uniform` or `__rt_random_u32` at runtime; both are
+/// effectful and must not be reordered or eliminated by the optimizer.
 pub fn emit(
     name: &str,
     args: &[Expr],

@@ -11,9 +11,16 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_hash_union: PHP array union for indexed-left and associative-right operands.
-/// Input:  x0=left indexed-array pointer, x1=right hash pointer
-/// Output: x0=result hash pointer
+/// Emits the `__rt_array_hash_union` runtime helper.
+///
+/// PHP array union: the left operand's indexed entries `0..len-1` occupy those
+/// integer keys and block any matching integer keys from the right operand.
+/// Right-side entries whose keys do not conflict are copied into the result.
+///
+/// ABI (ARM64): x0 = left indexed-array pointer, x1 = right hash pointer,
+///              returns x0 = result hash pointer.
+/// ABI (x86_64): rdi = left indexed-array pointer, rsi = right hash pointer,
+///               returns rax = result hash pointer.
 pub fn emit_array_hash_union(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_hash_union_linux_x86_64(emitter);
@@ -164,6 +171,9 @@ pub fn emit_array_hash_union(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to generated code
 }
 
+/// x86_64/Linux variant of `emit_array_hash_union`.
+/// Uses the System V AMD64 ABI: rdi = left indexed-array, rsi = right hash,
+/// returns rax = result hash.
 fn emit_array_hash_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_hash_union ---");

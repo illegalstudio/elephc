@@ -11,9 +11,16 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_rand: return a random key (index) from an integer array.
-/// Input: x0 = array pointer
-/// Output: x0 = random index in [0, length)
+/// Emits the `__rt_array_rand` runtime helper.
+///
+/// Loads the array length from the header at `[x0]`, calls `__rt_random_uniform` to
+/// sample a uniform index in the half-open range `[0, length)`, and returns the index in `x0`.
+/// On x86_64 this delegates to the platform-specific `emit_array_rand_linux_x86_64`.
+///
+/// # ABI
+/// - ARM64: x0 = array pointer (pointer to array header where length is at offset 0)
+/// - ARM64: x0 = random index in `[0, length)` on return
+/// - x86_64: rdi = array pointer, rax = random index on return
 pub fn emit_array_rand(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_rand_linux_x86_64(emitter);
@@ -39,6 +46,9 @@ pub fn emit_array_rand(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = random index
 }
 
+/// x86_64/Linux-specific emitter for `__rt_array_rand`.
+/// Loads the array length from `[rdi]` into `rdi`, calls `__rt_random_uniform`, and returns
+/// the sampled index in `rax`.
 fn emit_array_rand_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_rand ---");

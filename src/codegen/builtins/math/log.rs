@@ -16,6 +16,18 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits PHP `log($num)` or `log($num, $base)` as a call to libc `log()`.
+///
+/// For a single argument, computes the natural logarithm directly. For two
+/// arguments, computes `log($num) / log($base)` (change of base formula).
+///
+/// Integer operands are normalized to floating-point before the libc call via
+/// `emit_int_result_to_float_result`. The result is always `PhpType::Float`.
+/// Both the numerator and denominator are preserved across the second `log()`
+/// call using a stack push/pop on both architectures.
+///
+/// ABI: SysV on x86_64 (scalar float args in `xmm0`-`xmm7`), AAPCS on AArch64
+/// (scalar float args in `d0`-`d7`). Return value in `xmm0` / `d0`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

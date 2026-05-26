@@ -17,6 +17,17 @@ use crate::types::{ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo, FunctionSig
 
 use super::super::Checker;
 
+/// Propagates concrete return types from overrides to their abstract parent declarations.
+///
+/// Iterates classes in reverse class-ID order so that subclasses override before their parents.
+/// For each instance and static method in a class, walks up the inheritance chain until it finds
+/// a parent that does NOT have an implementation for that method — the abstract declaration that
+/// needs the return type filled in. Skips parents that already have explicit implementations.
+///
+/// Inputs:
+/// - `checker.classes`: populated class metadata including methods, static_methods, parent chain
+///
+/// Side effects: Mutates `parent_sig.return_type` on abstract method signatures in checker.classes.
 pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
     let mut sorted_classes: Vec<(String, u64)> = checker
         .classes
@@ -77,6 +88,27 @@ pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
     }
 }
 
+/// Validates and builds metadata for a single enum declaration.
+///
+/// Checks for duplicate class/enum/interface names, validates backing type (int or string only),
+/// ensures pure enums have no case values and backed enums require values, rejects duplicate
+/// case names and duplicate backing values, and constructs the `EnumInfo` plus a parallel `ClassInfo`
+/// with synthesized `cases()`, `from()`, and `tryFrom()` static methods.
+///
+/// Inputs:
+/// - `name`: enum identifier
+/// - `backing_type`: optional `TypeExpr` for backed enums
+/// - `cases`: parsed enum case declarations
+/// - `span`: source location for error reporting
+/// - `checker`: type checker state (classes, interfaces, enums, resolve_type_expr)
+/// - `next_class_id`: incrementing class ID counter
+///
+/// Returns: `Ok(())` on success, `CompileError` for invalid declarations.
+///
+/// Side effects:
+/// - Inserts `ClassInfo` into `checker.classes` with synthesized methods
+/// - Inserts `EnumInfo` into `checker.enums`
+/// - Increments `*next_class_id`
 pub(crate) fn build_enum_info(
     name: &str,
     backing_type: Option<&crate::parser::ast::TypeExpr>,

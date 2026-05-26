@@ -10,9 +10,22 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// base64_encode: standard base64 encoding (3 input bytes -> 4 output chars).
-/// Input: x1/x2=string. Output: x1/x2=result in concat_buf.
-/// Uses _b64_encode_tbl data section for the lookup table.
+/// Emits the `__rt_base64_encode` runtime helper for PHP's `base64_encode()`.
+///
+/// # Input (ARM64: x0/x1, x86_64: rax/rdx)
+/// - x0/rax: source string pointer
+/// - x1/rdx: source string byte length
+///
+/// # Output (ARM64: x0/x1, x86_64: rax/rdx)
+/// - x0/rax: encoded string pointer in the concat buffer
+/// - x1/rdx: encoded string byte length
+///
+/// # ABI details
+/// - ARM64: appends to the shared concat buffer; advances `_concat_off` by the result length
+/// - x86_64 Linux: same concat-buffer semantics using `_concat_buf` / `_concat_off`
+/// - Uses `_b64_encode_tbl` lookup table for the base64 alphabet (A-Z, a-z, 0-9, +, /)
+/// - Handles 0, 1, or 2 remainder bytes with `=` padding per RFC 4648
+/// - Does not null-terminate the output
 pub fn emit_base64_encode(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_base64_encode_linux_x86_64(emitter);
@@ -130,6 +143,12 @@ pub fn emit_base64_encode(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits the x86_64 Linux variant of `__rt_base64_encode`.
+///
+/// Uses the System V AMD64 ABI: source pointer in `rax`, length in `rdx`.
+/// Output is returned in `rax` (pointer) and `rdx` (length) via the concat buffer.
+/// Operates identically to the ARM64 variant but uses x86_64 registers and instructions.
+/// Local labels are prefixed with `_linux_x86_64` to avoid collisions with the ARM64 path.
 fn emit_base64_encode_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: base64_encode ---");

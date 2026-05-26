@@ -11,9 +11,26 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// hash_array_union: PHP array union for associative-left and indexed-right operands.
-/// Input:  x0=left hash pointer, x1=right indexed-array pointer
-/// Output: x0=result hash pointer
+/// Emits the `__rt_hash_array_union` runtime helper.
+///
+/// Performs PHP array union (`$left + $right`) where the left operand is an
+/// associative hash and the right operand is an indexed array. The left hash
+/// is cloned, then every right indexed entry whose normalized integer key is
+/// absent from the cloned left is copied into the result. Duplicate keys retain
+/// the left value and skip the right entry.
+///
+/// # Inputs
+/// - `x0`: left hash pointer (preserved semantics; result hash is returned in `x0`)
+/// - `x1`: right indexed-array pointer
+///
+/// # Output
+/// - `x0`: result hash pointer (owned clone of left, augmented with missing right entries)
+///
+/// # Calling convention
+/// Uses `__rt_hash_clone_shallow`, `__rt_hash_get`, `__rt_hash_set`,
+/// `__rt_incref` (for refcounted payloads), and `__rt_str_persist` (for strings).
+/// Clobbers `x0`–`x5`, `x9`–`x13` and caller-saved registers on ARM64; `rax`,
+/// `rcx`, `rdx`, `rsi`, `rdi`, `r8`–`r12` on x86_64.
 pub fn emit_hash_array_union(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_array_union_linux_x86_64(emitter);
@@ -107,6 +124,23 @@ pub fn emit_hash_array_union(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to generated code
 }
 
+/// x86_64/Linux implementation of `__rt_hash_array_union`.
+///
+/// Identical in behavior to the ARM64 path but emits x86_64 machine code
+/// using the System V ABI callee/caller conventions. The function entry point
+/// is still named `__rt_hash_array_union`; the platform dispatcher in the
+/// public `emit_hash_array_union` routes here based on `Arch::X86_64`.
+///
+/// # Inputs
+/// - `rsi`: right indexed-array pointer
+/// - `rax` (on entry): left hash pointer (passes through to clone helper)
+///
+/// # Output
+/// - `rax`: result hash pointer
+///
+/// # Clobbered registers
+/// `rax`, `rcx`, `rdx`, `rsi`, `rdi`, `r8`–`r12`, `r15`; preserves `rbx`,
+/// `rbp`, `r12`–`r14`.
 fn emit_hash_array_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_array_union ---");

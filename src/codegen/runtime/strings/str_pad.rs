@@ -125,6 +125,11 @@ pub fn emit_str_pad(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// x86_64 Linux-specific implementation of the str_pad runtime helper.
+/// Uses the System V AMD64 ABI: rdi=input_ptr, rdx=input_len, rsi=pad_str_ptr,
+/// rcx=target_len, r8=pad_type (0=left, 1=right, 2=both).
+/// Output: rax=result_ptr, rdx=result_len.
+/// Writes the padded result into the concat-buffer and advances `_concat_off`.
 fn emit_str_pad_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_pad ---");

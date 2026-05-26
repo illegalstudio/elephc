@@ -10,6 +10,13 @@
 
 use super::*;
 
+// Verifies that DCE eliminates the default branch when a `switch(true)` has exhaustive
+// complementary guards (e.g., `flag` and `!flag`) covering all paths.
+//
+// Input: `switch(true) { case flag: echo 7; break; case !flag: echo 8; break; default: echo 9; }`
+// Expected: default is pruned, both case guards remain.
+//
+// Called from: `cargo test`
 #[test]
 fn test_eliminate_dead_code_prunes_exhaustive_switch_true_default_from_cumulative_guards() {
     let program = vec![Stmt::new(
@@ -62,6 +69,13 @@ fn test_eliminate_dead_code_prunes_exhaustive_switch_true_default_from_cumulativ
     assert!(default.is_none());
 }
 
+// Verifies that DCE propagates cumulative switch guards into nested case bodies,
+// eliminating branches whose composite guard implies falsification by an outer condition.
+//
+// Input: `if (d) { switch(true) { case (a && b) || c && d: echo 1; break; case !c: if (a && b) echo 2 else echo 3; break; default: echo 4; } }`
+// Expected: default is pruned, inner if's else branch is pruned (a&&b is implied false by case guard).
+//
+// Called from: `cargo test`
 #[test]
 fn test_eliminate_dead_code_uses_cumulative_switch_true_guards_inside_case_body() {
     let ab = Expr::binop(Expr::var("a"), BinOp::And, Expr::var("b"));

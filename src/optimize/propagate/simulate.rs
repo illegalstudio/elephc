@@ -10,6 +10,11 @@
 
 use super::*;
 
+/// Intersects multiple constant environments, retaining only variable assignments
+/// that are identical across every path. Returns an empty map if no paths are provided.
+///
+/// - `paths`: Vector of constant environments from different control-flow paths
+/// - Returns: A merged environment where each variable must have the same value in all input paths
 pub(crate) fn merge_constant_env_paths(mut paths: Vec<ConstantEnv>) -> ConstantEnv {
     let Some(first) = paths.pop() else {
         return HashMap::new();
@@ -21,6 +26,12 @@ pub(crate) fn merge_constant_env_paths(mut paths: Vec<ConstantEnv>) -> ConstantE
         .collect()
 }
 
+/// Simulates a straight-line statement sequence, updating the constant environment
+/// after each statement. Stops early if a statement does not fall through (e.g., return, break).
+///
+/// - `body`: Statement block to simulate
+/// - `env`: Initial constant environment
+/// - Returns: The updated constant environment after processing the block
 pub(crate) fn simulate_block_constant_env(body: &[Stmt], mut env: ConstantEnv) -> ConstantEnv {
     for stmt in body {
         env = propagate_stmt(stmt.clone(), env).1;
@@ -32,6 +43,9 @@ pub(crate) fn simulate_block_constant_env(body: &[Stmt], mut env: ConstantEnv) -
 }
 
 #[derive(Default)]
+/// Summarizes the constant environments that flow out of a loop block via different
+/// control-flow paths: fallthrough (loop body completes), break, continue, and whether
+/// the block exits (return, throw, or non-break/continue transfer).
 pub(crate) struct ConstantLoopPathSummary {
     pub(crate) fallthrough_paths: Vec<ConstantEnv>,
     pub(crate) break_paths: Vec<ConstantEnv>,
@@ -40,6 +54,7 @@ pub(crate) struct ConstantLoopPathSummary {
 }
 
 impl ConstantLoopPathSummary {
+    /// Merges another summary's path vectors into this one, combining all outcome paths.
     fn append(&mut self, mut other: ConstantLoopPathSummary) {
         self.fallthrough_paths.append(&mut other.fallthrough_paths);
         self.break_paths.append(&mut other.break_paths);
@@ -48,6 +63,8 @@ impl ConstantLoopPathSummary {
     }
 }
 
+/// Entry point for loop constant-path simulation. Takes a single incoming environment
+/// and delegates to `simulate_loop_block_constant_paths_from`.
 pub(crate) fn simulate_loop_block_constant_paths(
     body: &[Stmt],
     env: ConstantEnv,
@@ -55,6 +72,13 @@ pub(crate) fn simulate_loop_block_constant_paths(
     simulate_loop_block_constant_paths_from(body, vec![env])
 }
 
+/// Internal variant of `simulate_loop_block_constant_paths` that accepts multiple
+/// active environments, simulating the loop body across all paths until they converge
+/// or empty out.
+///
+/// - `body`: Loop body statements
+/// - `active_paths`: Vector of constant environments representing different path contexts
+/// - Returns: A summary aggregating fallthrough, break, continue, and exit paths
 fn simulate_loop_block_constant_paths_from(
     body: &[Stmt],
     mut active_paths: Vec<ConstantEnv>,
@@ -80,6 +104,8 @@ fn simulate_loop_block_constant_paths_from(
     summary
 }
 
+/// Simulates a single loop-body statement, classifying its outcome as fallthrough,
+/// break, continue, or block-exit based on statement kind and terminal effect.
 fn simulate_loop_stmt_constant_paths(stmt: &Stmt, env: ConstantEnv) -> ConstantLoopPathSummary {
     match &stmt.kind {
         StmtKind::Break(1) => ConstantLoopPathSummary {
@@ -150,6 +176,15 @@ fn simulate_loop_stmt_constant_paths(stmt: &Stmt, env: ConstantEnv) -> ConstantL
     }
 }
 
+/// Simulates an if-statement within a loop context, evaluating the condition against
+/// the incoming environment and routing to the appropriate branch path(s).
+///
+/// - `condition`: The if condition expression
+/// - `then_body`: Statements in the then branch
+/// - `elseif_clauses`: Optional elseif chain
+/// - `else_body`: Optional else branch
+/// - `env`: Incoming constant environment
+/// - Returns: Summary of all paths flowing out of the if statement
 fn simulate_loop_if_constant_paths(
     condition: &Expr,
     then_body: &[Stmt],
@@ -179,6 +214,13 @@ fn simulate_loop_if_constant_paths(
     }
 }
 
+/// Recursively simulates an elseif chain within a loop, processing each condition
+/// and body pair until a matching branch is found or the else body is reached.
+///
+/// - `elseif_clauses`: Remaining elseif conditions and bodies
+/// - `else_body`: Optional else branch
+/// - `base_env`: Base constant environment for branch evaluation
+/// - Returns: Summary of all paths flowing out of the elseif chain
 fn simulate_loop_elseif_constant_paths(
     elseif_clauses: &[(Expr, Vec<Stmt>)],
     else_body: Option<&[Stmt]>,
@@ -218,6 +260,12 @@ fn simulate_loop_elseif_constant_paths(
     }
 }
 
+/// Simulates a catch clause by removing the caught exception variable from the
+/// environment (it is undefined in the block scope) and then simulating the catch body.
+///
+/// - `catch`: The catch clause containing variable name and body statements
+/// - `env`: Incoming constant environment
+/// - Returns: Updated environment after processing the catch body
 pub(crate) fn simulate_catch_constant_env(
     catch: &crate::parser::ast::CatchClause,
     mut env: ConstantEnv,
@@ -228,6 +276,14 @@ pub(crate) fn simulate_catch_constant_env(
     simulate_block_constant_env(&catch.body, env)
 }
 
+/// Merges the constant environments from a try-catch-finally structure by
+/// simulating each block and intersecting environments from all fallthrough paths.
+///
+/// - `try_body`: Statements in the try block
+/// - `catches`: Array of catch clauses
+/// - `finally_body`: Optional finally block
+/// - `incoming_env`: Initial constant environment before the try block
+/// - Returns: Merged constant environment after processing all reachable paths
 pub(crate) fn merge_try_constant_env_paths(
     try_body: &[Stmt],
     catches: &[crate::parser::ast::CatchClause],
@@ -262,12 +318,21 @@ pub(crate) fn merge_try_constant_env_paths(
     }
 }
 
+/// Represents the possible constant-environment outcomes of simulating a switch body:
+/// fallthrough (no break encountered), break (break statement reached), or
+/// exits-current-block (return, throw, or other terminating transfer).
 pub(crate) enum SwitchConstantPathOutcome {
     FallsThrough(ConstantEnv),
     Breaks(ConstantEnv),
     ExitsCurrentBlock,
 }
 
+/// Simulates the statements within a switch body, updating the constant environment
+/// until a break is encountered or the block exits.
+///
+/// - `body`: Switch case body statements
+/// - `env`: Initial constant environment at switch entry
+/// - Returns: One of three outcomes depending on terminal effect of the body
 pub(crate) fn simulate_switch_body_constant_env(
     body: &[Stmt],
     mut env: ConstantEnv,
@@ -286,6 +351,14 @@ pub(crate) fn simulate_switch_body_constant_env(
     SwitchConstantPathOutcome::FallsThrough(env)
 }
 
+/// Simulates switch entry starting from a specific case index or from the default,
+/// then computes the resulting constant environment that flows out of the switch.
+///
+/// - `cases`: All switch cases with their expressions and bodies
+/// - `default`: Optional default case body
+/// - `entry_case`: Starting case index (None means start from default after all cases)
+/// - `incoming_env`: Constant environment before the switch
+/// - Returns: Some(updated env) if execution can reach a terminal point, None if block exits
 pub(crate) fn simulate_switch_entry_constant_env(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: Option<&[Stmt]>,
@@ -314,6 +387,15 @@ pub(crate) fn simulate_switch_entry_constant_env(
     }
 }
 
+/// Merges constant environments across all paths through a switch statement by
+/// simulating entry from each case index and from the default, then intersecting
+/// the resulting environments.
+///
+/// - `subject`: The switch subject expression
+/// - `cases`: All switch cases
+/// - `default`: Optional default case body
+/// - `incoming_env`: Constant environment before the switch
+/// - Returns: Merged constant environment representing all reachable paths
 pub(crate) fn merge_switch_constant_env_paths(
     subject: &Expr,
     cases: &[(Vec<Expr>, Vec<Stmt>)],
@@ -341,6 +423,15 @@ pub(crate) fn merge_switch_constant_env_paths(
     merge_constant_env_paths(fallthrough_paths)
 }
 
+/// Internal helper for when the switch subject has a known constant value.
+/// Classifies each case pattern against the subject value and simulates only the
+/// matching path(s), short-circuiting if a definite match is found.
+///
+/// - `subject`: The known constant scalar value being switched on
+/// - `cases`: All switch cases with patterns and bodies
+/// - `default`: Optional default case body
+/// - `incoming_env`: Constant environment before the switch
+/// - Returns: Merged constant environment from the matching case(s) and default
 fn merge_known_switch_constant_env_paths(
     subject: &ScalarValue,
     cases: &[(Vec<Expr>, Vec<Stmt>)],

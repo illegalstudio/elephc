@@ -17,6 +17,11 @@ use crate::parser::ast::Expr;
 use crate::types::PhpType;
 use super::stat_result::box_stat_int_or_false_result;
 
+/// Emits code for the PHP `fileinode(path)` builtin.
+///
+/// Evaluates `path` as the sole argument, calls the target-aware runtime helper
+/// `__rt_fileinode` to retrieve the inode number via `stat`, then boxes the result
+/// as a PHP `Mixed` value (either an integer inode or `false` on failure).
 pub fn emit(
     _name: &str,
     args: &[Expr],

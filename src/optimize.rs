@@ -38,14 +38,17 @@ thread_local! {
     static ACTIVE_CALLABLE_ALIAS_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
 }
 
+/// Folds constant expressions to their compile-time values.
 pub fn fold_constants(program: Program) -> Program {
     program.into_iter().map(fold_stmt).collect()
 }
 
+/// Propagates scalar constants across statements and control flow.
 pub fn propagate_constants(program: Program) -> Program {
     propagate_block(program, HashMap::new()).0
 }
 
+/// Normalizes control flow structures (ifs, switches, try/catch) for easier optimization.
 pub fn normalize_control_flow(program: Program) -> Program {
     let (function_effects, static_method_effects, private_instance_method_effects) =
         compute_program_callable_effects(&program);
@@ -57,6 +60,7 @@ pub fn normalize_control_flow(program: Program) -> Program {
     )
 }
 
+/// Prunes branches with constant conditions that cannot be reached.
 pub fn prune_constant_control_flow(program: Program) -> Program {
     let (function_effects, static_method_effects, private_instance_method_effects) =
         compute_program_callable_effects(&program);
@@ -68,8 +72,8 @@ pub fn prune_constant_control_flow(program: Program) -> Program {
     )
 }
 
+/// Eliminates code with no observable side effects.
 type ConstantEnv = HashMap<String, ScalarValue>;
-
 pub fn eliminate_dead_code(program: Program) -> Program {
     let (function_effects, static_method_effects, private_instance_method_effects) =
         compute_program_callable_effects(&program);
@@ -81,6 +85,7 @@ pub fn eliminate_dead_code(program: Program) -> Program {
     )
 }
 
+/// Effect describes whether a callable or expression has observable runtime behavior.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Effect {
     has_side_effects: bool,
@@ -88,21 +93,25 @@ struct Effect {
 }
 
 impl Effect {
+    /// Pure effect: no side effects and cannot throw.
     const PURE: Self = Self {
         has_side_effects: false,
         may_throw: false,
     };
 
+    /// Marks this effect as having side effects.
     fn with_side_effects(mut self) -> Self {
         self.has_side_effects = true;
         self
     }
 
+    /// Marks this effect as possibly throwing.
     fn with_may_throw(mut self) -> Self {
         self.may_throw = true;
         self
     }
 
+    /// Combines two effects. The result is observable if either operand is observable.
     fn combine(self, other: Self) -> Self {
         Self {
             has_side_effects: self.has_side_effects || other.has_side_effects,
@@ -110,23 +119,27 @@ impl Effect {
         }
     }
 
+    /// Returns true if this effect has side effects or may throw.
     fn is_observable(self) -> bool {
         self.has_side_effects || self.may_throw
     }
 }
 
+/// Carries class resolution context for private instance method effect analysis.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ClassEffectContext {
     class_name: String,
     parent_name: Option<String>,
 }
 
+/// Holds the body and never-return metadata for a function during effect analysis.
 #[derive(Clone, Debug)]
 struct FunctionEffectBody {
     body: Vec<Stmt>,
     declared_never: bool,
 }
 
+/// Holds the body, class context, and never-return metadata for a static method during effect analysis.
 #[derive(Clone, Debug)]
 struct StaticMethodBody {
     context: ClassEffectContext,
@@ -134,6 +147,11 @@ struct StaticMethodBody {
     declared_never: bool,
 }
 
+/// Maps names to scalar constants during constant propagation.
+
+/// Installs function, static method, and private instance method effect maps for the closure's
+/// duration, then restores the previous maps. Effect analysis uses thread-local state so
+/// `block_effect` and `stmt_effect` can recursively query effects of nested callables.
 fn with_callable_effects<R>(
     function_effects: HashMap<String, Effect>,
     static_method_effects: HashMap<String, Effect>,
@@ -157,6 +175,8 @@ fn with_callable_effects<R>(
     })
 }
 
+/// Installs a class effect context for private instance method effect analysis, then restores
+/// the previous context.
 fn with_class_effect_context<R>(context: Option<ClassEffectContext>, f: impl FnOnce() -> R) -> R {
     ACTIVE_CLASS_EFFECT_CONTEXT.with(|slot| {
         let previous = slot.replace(context);
@@ -166,6 +186,7 @@ fn with_class_effect_context<R>(context: Option<ClassEffectContext>, f: impl FnO
     })
 }
 
+/// Installs callable alias effects for the closure's duration, then restores the previous map.
 fn with_callable_alias_effects<R>(
     alias_effects: HashMap<String, Effect>,
     f: impl FnOnce() -> R,
@@ -178,10 +199,14 @@ fn with_callable_alias_effects<R>(
     })
 }
 
+/// Returns the currently active callable alias effect map, or an empty map if none is set.
 fn current_callable_alias_effects() -> HashMap<String, Effect> {
     ACTIVE_CALLABLE_ALIAS_EFFECTS.with(|slot| slot.borrow().clone().unwrap_or_default())
 }
 
+/// Computes the effect for every function, static method, and private instance method in the
+/// program. Uses a fixed-point iteration: effects start as PURE and are refined by examining
+/// bodies, accounting for nested calls.
 fn compute_program_callable_effects(
     program: &[Stmt],
 ) -> (
@@ -273,6 +298,7 @@ fn compute_program_callable_effects(
     }
 }
 
+/// Collects all top-level and namespace-scoped function bodies into `out` for effect analysis.
 fn collect_program_function_bodies(stmts: &[Stmt], out: &mut HashMap<String, FunctionEffectBody>) {
     for stmt in stmts {
         match &stmt.kind {
@@ -296,6 +322,7 @@ fn collect_program_function_bodies(stmts: &[Stmt], out: &mut HashMap<String, Fun
     }
 }
 
+/// Collects all static method bodies in classes into `out` for effect analysis.
 fn collect_program_static_method_bodies(
     stmts: &[Stmt],
     out: &mut HashMap<String, StaticMethodBody>,
@@ -331,6 +358,7 @@ fn collect_program_static_method_bodies(
     }
 }
 
+/// Collects all private instance method bodies in classes into `out` for effect analysis.
 fn collect_program_private_instance_method_bodies(
     stmts: &[Stmt],
     out: &mut HashMap<String, StaticMethodBody>,
@@ -371,14 +399,19 @@ fn collect_program_private_instance_method_bodies(
     }
 }
 
+/// Builds the map key for a method effect entry, using PHP symbol keying for the method name.
 fn method_effect_key(class_name: &str, method_name: &str) -> String {
     format!("{class_name}::{}", php_symbol_key(method_name))
 }
 
+/// Returns true if the type expression is `Never`.
 fn is_never_return_type(return_type: &Option<TypeExpr>) -> bool {
     matches!(return_type, Some(TypeExpr::Never))
 }
 
+/// Adjusts an effect when the callable has a `never` return type. A `never` function is
+/// considered to have side effects because it exits abruptly (e.g., via exit/die or an
+/// infinite loop) and the PHP-visible control flow never continues past it.
 fn never_declared_effect(declared_never: bool, effect: Effect) -> Effect {
     if declared_never {
         effect.with_side_effects()

@@ -17,6 +17,13 @@ use crate::parser::ast::Expr;
 use crate::types::PhpType;
 use super::stat_result::box_stat_int_or_false_result;
 
+/// Emits code for the PHP `filegroup()` builtin.
+///
+/// `filegroup()` returns the group ID of the file at `args[0]`, or `false` if
+/// the file cannot be stat'd. The path expression is emitted first, then the
+/// runtime helper `__rt_filegroup` is called to populate `st_gid` from the OS
+/// stat buffer. The integer result (or `false` sentinel) is boxed into a
+/// `PhpType::Mixed` and returned.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -29,9 +29,12 @@ use crate::codegen::{emit::Emitter, platform::Arch};
 
 pub(crate) use data::emit_strtotime_data;
 
-/// `__rt_strtotime`: parse a date/time string into a Unix timestamp.
-/// Input:  `x1=string ptr, x2=string len`   (`rdi`/`rsi` on x86_64)
-/// Output: `x0=Unix timestamp` (or `-1` on failure)   (`rax` on x86_64)
+/// Emits the `__rt_strtotime` runtime entry point, dispatcher, and all strategy emitters
+/// (ISO date, time-only, offsets, keywords, weekdays, shared helpers) for the current target.
+///
+/// Dispatches to ARM64 or x86_64 strategy emitters based on `emitter.target.arch`.
+/// Each strategy is emitted as a labeled subroutine that the dispatcher branches to;
+/// strategies return via the shared epilogue labels (`__rt_strtotime_ret` / `__rt_strtotime_fail`).
 pub(crate) fn emit_strtotime(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_dispatcher_linux_x86_64(emitter);
@@ -55,6 +58,18 @@ pub(crate) fn emit_strtotime(emitter: &mut Emitter) {
     emit_epilogue_arm64(emitter);
 }
 
+/// Emits the ARM64 dispatcher for `__rt_strtotime`.
+///
+/// Sets up a 128-byte stack frame, saves input ptr/len, trims whitespace,
+/// lowercases the first 16 bytes into `[sp+64..79]`, then classifies the first
+/// character and branches to the appropriate strategy entry point:
+/// - digit → time/ISO/offsets entry
+/// - '+' / '-' → offsets entry
+/// - alpha (a-z) → keyword table match, then weekdays or offsets
+/// - otherwise → fail
+///
+/// Strategy entry points are emitted by sub-modules and must return via
+/// `__rt_strtotime_ret` (success) or `__rt_strtotime_fail` (failure).
 fn emit_dispatcher_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strtotime ---");
@@ -147,6 +162,12 @@ fn emit_dispatcher_arm64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_strtotime_weekdays_entry");                     // → weekdays strategy
 }
 
+/// Emits the shared ARM64 epilogue: `__rt_strtotime_fail` and `__rt_strtotime_ret`.
+///
+/// `__rt_strtotime_fail` sets `x0 = -1` then falls through to `__rt_strtotime_ret`,
+/// which restores `x29/x30`, deallocates the 128-byte frame, and returns.
+///
+/// Strategy emitters branch here instead of emitting their own epilogue.
 fn emit_epilogue_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: shared epilogue ---");
@@ -159,6 +180,15 @@ fn emit_epilogue_arm64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux dispatcher for `__rt_strtotime`.
+///
+/// Sets up a 128-byte stack frame via `rbp/rsp`, saves input ptr/len, trims whitespace,
+/// lowercases the first 16 bytes into `[rbp-64..rbp-49]`, then classifies the first
+/// character and branches to the appropriate strategy entry point (suffixed `_linux_x86_64`).
+/// Mirrors the ARM64 dispatcher logic but uses x86_64 calling conventions and register names.
+///
+/// Strategy entry points are emitted by sub-modules and must return via
+/// `__rt_strtotime_ret_linux_x86_64` (success) or `__rt_strtotime_fail_linux_x86_64` (failure).
 fn emit_dispatcher_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strtotime ---");
@@ -254,6 +284,12 @@ fn emit_dispatcher_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_strtotime_weekdays_entry_linux_x86_64");      // yes → weekdays
 }
 
+/// Emits the shared x86_64 Linux epilogue: `__rt_strtotime_fail_linux_x86_64` and `__rt_strtotime_ret_linux_x86_64`.
+///
+/// `__rt_strtotime_fail_linux_x86_64` sets `rax = -1` then falls through to `__rt_strtotime_ret_linux_x86_64`,
+/// which deallocates the 128-byte frame, restores `rbp`, and returns.
+///
+/// Strategy emitters branch here instead of emitting their own epilogue.
 fn emit_epilogue_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: shared epilogue ---");

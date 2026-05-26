@@ -12,6 +12,9 @@ use super::super::*;
 use super::expr::{expr_has_side_effects, prune_expr};
 use super::loop_exit::block_contains_loop_exit;
 
+/// Recursively processes a block of statements, pruning each one and stopping early
+/// if a statement has a terminal effect (return, throw, break, etc.) that prevents
+/// fallthrough. Preserves effectful statements even when they produce unused results.
 pub(crate) fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
     let mut pruned = Vec::new();
     for stmt in body {
@@ -27,6 +30,11 @@ pub(crate) fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
     pruned
 }
 
+/// Rewrites a single statement, recursively pruning expressions and child blocks.
+/// For If/While/DoWhile/For/Switch/Try, applies constant folding to conditions and
+/// bodies while preserving required side-effect evaluations. Removes effect-free
+/// expression statements. Returns a vec to allow statement expansion (e.g., a
+/// do-while with false condition becoming just its body).
 pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
     let span = stmt.span;
     match stmt.kind {
@@ -357,6 +365,9 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
     }
 }
 
+/// Rewrites a class method body with class context set for effect tracking, then
+/// applies prune_block to the body. The class_name and parent_name are stored in
+/// ClassEffectContext to correctly model inherited member effects.
 pub(crate) fn prune_method(
     method: ClassMethod,
     class_name: &str,
@@ -372,6 +383,8 @@ pub(crate) fn prune_method(
     }
 }
 
+/// Rewrites a class method body without class context, used for interfaces and traits
+/// where inherited effects cannot be resolved. Sets ClassEffectContext to None.
 pub(crate) fn prune_method_without_context(method: ClassMethod) -> ClassMethod {
     ClassMethod {
         body: with_class_effect_context(None, || prune_block(method.body)),
@@ -379,6 +392,8 @@ pub(crate) fn prune_method_without_context(method: ClassMethod) -> ClassMethod {
     }
 }
 
+/// Prunes a for-loop clause (init/condition/update) by applying prune_stmt and
+/// returning the first resulting statement, or None if the clause was pruned away.
 pub(crate) fn prune_for_clause(stmt: Option<Box<Stmt>>) -> Option<Box<Stmt>> {
     let stmt = stmt?;
     prune_stmt(*stmt).into_iter().next().map(Box::new)

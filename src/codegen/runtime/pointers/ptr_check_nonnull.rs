@@ -10,9 +10,13 @@
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
-/// __rt_ptr_check_nonnull: abort with a fatal error on null pointer dereference.
+/// Emits the `__rt_ptr_check_nonnull` runtime helper that aborts on null pointer dereference.
+///
+/// Dispatches to the platform-specific x86_64 Linux implementation. For ARM64, emits
+/// the null-check logic inline with a write+exit syscall sequence on failure.
+///
 /// Input:  x0 = pointer value
-/// Output: x0 unchanged on success; process exits on null
+/// Output: x0 unchanged on success; process exits with code 1 on null
 pub(crate) fn emit_ptr_check_nonnull(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_ptr_check_nonnull_linux_x86_64(emitter);
@@ -42,6 +46,12 @@ pub(crate) fn emit_ptr_check_nonnull(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // pointer is valid, return to caller
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_ptr_check_nonnull`.
+///
+/// Uses the native Linux syscall convention: pointer in `rax`, syscall numbers 1 (write) and 60 (exit).
+///
+/// Input:  rax = pointer value
+/// Output: rax unchanged on success; process exits with code 1 on null
 fn emit_ptr_check_nonnull_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ptr_check_nonnull ---");

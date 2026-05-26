@@ -21,8 +21,13 @@ use super::platform::{Arch, Target};
 use super::runtime;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
+/// Sentinel value written to typed static properties that have no initializer expression,
+/// signaling that the property has never been accessed at runtime.
 pub(crate) const UNINITIALIZED_TYPED_PROPERTY_SENTINEL: i64 = 0x7fff_ffff_ffff_fffd;
 
+/// Emits a write syscall for a labeled literal string to stderr, using the given
+/// label (from the data section) and its byte length. Handles target-specific
+/// register conventions for the write syscall arguments.
 pub(super) fn emit_write_literal_stderr(emitter: &mut Emitter, label: &str, len: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -42,6 +47,8 @@ pub(super) fn emit_write_literal_stderr(emitter: &mut Emitter, label: &str, len:
     }
 }
 
+/// Emits a write syscall for the current string in result registers to stderr.
+/// Loads pointer/length from the appropriate ABI registers for the target.
 pub(super) fn emit_write_current_string_stderr(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -59,6 +66,7 @@ pub(super) fn emit_write_current_string_stderr(emitter: &mut Emitter) {
     }
 }
 
+/// Assembles the complete runtime assembly string for a given heap size and target.
 pub fn generate_runtime(heap_size: usize, target: Target) -> String {
     let mut emitter = Emitter::new(target);
     emitter.emit_text_prelude();
@@ -69,6 +77,7 @@ pub fn generate_runtime(heap_size: usize, target: Target) -> String {
     output
 }
 
+/// Emits global singleton initializers for all enum cases in sorted order.
 pub(super) fn emit_enum_singleton_initializers(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -135,6 +144,7 @@ pub(super) fn emit_enum_singleton_initializers(
     }
 }
 
+/// Emits initialization for static properties, including uninitialized sentinels.
 pub(super) fn emit_static_property_initializers(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -203,6 +213,7 @@ pub(super) fn emit_static_property_initializers(
     }
 }
 
+/// Emits all deferred closures, fiber wrappers, and callback wrappers into the output.
 pub(super) fn emit_deferred_closures(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -259,6 +270,7 @@ pub(super) fn emit_deferred_closures(
     }
 }
 
+/// Emits code to push the main function's exception cleanup activation record.
 pub(super) fn emit_main_activation_record_push(
     emitter: &mut Emitter,
     ctx: &Context,
@@ -287,6 +299,7 @@ pub(super) fn emit_main_activation_record_push(
     abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
 }
 
+/// Emits code to pop and restore the previous exception cleanup frame on main exit.
 pub(super) fn emit_main_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
     let prev_offset = ctx
         .activation_prev_offset
@@ -298,6 +311,7 @@ pub(super) fn emit_main_activation_record_pop(emitter: &mut Emitter, ctx: &Conte
     abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
 }
 
+/// Emits the main cleanup callback label and body for exception unwinding.
 pub(super) fn emit_main_cleanup_callback(
     emitter: &mut Emitter,
     cleanup_label: &str,
@@ -310,6 +324,7 @@ pub(super) fn emit_main_cleanup_callback(
     emitter.blank();
 }
 
+/// Returns the runtime value tag byte for a PhpType (used in heap header encoding).
 pub(crate) fn runtime_value_tag(ty: &PhpType) -> u8 {
     match ty {
         PhpType::Int => 0,
@@ -328,6 +343,7 @@ pub(crate) fn runtime_value_tag(ty: &PhpType) -> u8 {
     }
 }
 
+/// Boxes raw register-based value components into a runtime Mixed cell via __rt_mixed_from_value.
 pub(crate) fn emit_box_runtime_payload_as_mixed(
     emitter: &mut Emitter,
     value_tag_reg: &str,
@@ -350,6 +366,10 @@ pub(crate) fn emit_box_runtime_payload_as_mixed(
     }
 }
 
+/// Boxes the current expression result in the ABI result registers (x0/d0 or rax) into
+/// a runtime Mixed cell, dispatching on the PHP type to emit the appropriate tag and
+/// payload word setup. Ownership is not tracked here; callers must ensure the value
+/// is safe to box (e.g., not a borrowed temporary that may be invalidated).
 pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Mixed | PhpType::Union(_) => {}
@@ -429,6 +449,7 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
     }
 }
 
+/// Boxes the current expression result as Mixed, applying ownership-aware handling for containers.
 pub(crate) fn emit_box_current_expr_value_as_mixed_for_container(
     emitter: &mut Emitter,
     expr: &Expr,
@@ -452,6 +473,7 @@ pub(crate) fn emit_box_current_expr_value_as_mixed_for_container(
     }
 }
 
+/// Releases the pushed temporary refcounted value after an array push operation.
 pub(crate) fn emit_release_pushed_refcounted_temp_after_array_push(
     emitter: &mut Emitter,
     ty: &PhpType,
@@ -479,6 +501,10 @@ pub(crate) fn emit_release_pushed_refcounted_temp_after_array_push(
     }
 }
 
+/// Boxes an owned string from x1/x2 (AArch64) or rax/rdx (x86_64) into a Mixed cell
+/// while preserving and releasing the original string pointer/length after the Mixed
+/// helper copies the payload. The original string is released via `__rt_heap_free_safe`
+/// after the boxed copy is made.
 fn emit_box_current_owned_string_as_mixed_for_container(emitter: &mut Emitter, ty: &PhpType) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -502,6 +528,10 @@ fn emit_box_current_owned_string_as_mixed_for_container(emitter: &mut Emitter, t
     }
 }
 
+/// Boxes an owned refcounted value from the result register into a Mixed cell while
+/// preserving the original heap pointer, boxing it, releasing the original via
+/// decref, and restoring the boxed result. Used for owned arrays and objects that
+/// must be transferred into a Mixed container without double-freeing.
 fn emit_box_current_owned_refcounted_as_mixed_for_container(emitter: &mut Emitter, ty: &PhpType) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -525,6 +555,7 @@ fn emit_box_current_owned_refcounted_as_mixed_for_container(emitter: &mut Emitte
     }
 }
 
+/// Converts an Iterable to Mixed, returning true if the conversion was applied.
 pub(crate) fn emit_box_iterable_value_for_mixed_container(
     emitter: &mut Emitter,
     ty: &mut PhpType,
@@ -537,6 +568,10 @@ pub(crate) fn emit_box_iterable_value_for_mixed_container(
     true
 }
 
+/// Probes the iterable's heap kind via `__rt_heap_kind`, maps it to the corresponding
+/// Mixed tag (array→4, assoc→5, object→6), and boxes the iterable into a Mixed cell
+/// via `__rt_mixed_from_value`. Preserves the iterable pointer across the kind probe
+/// using a stack spill slot. Falls back to mixed tag 8 for unknown kinds.
 fn emit_box_iterable_as_mixed(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -576,6 +611,7 @@ fn emit_box_iterable_as_mixed(emitter: &mut Emitter) {
     }
 }
 
+/// Emits code to normalize an array key expression into the hash ABI (key_lo, key_hi registers).
 pub(crate) fn emit_normalized_hash_key(
     expr: &Expr,
     emitter: &mut Emitter,
@@ -662,10 +698,15 @@ pub(crate) fn emit_normalized_hash_key(
     key_ty
 }
 
+/// Rounds `n` up to the nearest 16-byte boundary. Used to align stack frame sizes
+/// and heap allocation sizes to the 16-byte ABI requirement on both AArch64 and x86_64.
 pub(super) fn align16(n: usize) -> usize {
     (n + 15) & !15
 }
 
+/// Materializes an immediate i64 value into the given register via the target-aware
+/// ABI helper (`emit_load_int_immediate`). Handles large immediates that may require
+/// multiple instructions on the target architecture.
 fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
     abi::emit_load_int_immediate(emitter, reg, value);                          // materialize the immediate through the shared target-aware helper
 }

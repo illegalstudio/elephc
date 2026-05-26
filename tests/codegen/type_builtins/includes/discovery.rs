@@ -10,6 +10,7 @@
 use super::*;
 
 #[test]
+    // Verifies `require` inside a function triggers declaration discovery before the function is called.
 fn test_include_declaration_discovery_inside_function() {
     let out = compile_and_run_files(
         &[
@@ -42,6 +43,7 @@ function later() {
 }
 
 #[test]
+    // Verifies a chain of requires (main → a.php → b.php) allows calling a function declared in the leaf file.
 fn test_include_graph_declaration_discovery_inside_function() {
     let out = compile_and_run_files(
         &[
@@ -65,6 +67,7 @@ echo deep();
 }
 
 #[test]
+    // Verifies a function loaded via require can itself contain a nested require; the inner function is callable.
 fn test_discovered_function_body_resolves_nested_include() {
     let out = compile_and_run_files(
         &[
@@ -96,6 +99,7 @@ function from_lib() {
 }
 
 #[test]
+    // Verifies `require` inside a function discovers interface, trait, and class declarations; polymorphism via trait and interface works.
 fn test_include_declaration_discovery_for_class_interface_and_trait() {
     let out = compile_and_run_files(
         &[
@@ -136,6 +140,7 @@ class Box implements Labelled {
 }
 
 #[test]
+    // Verifies `require_once` triggers class alias registration; `class_exists()` and `new` resolve the alias.
 fn test_require_once_discovers_top_level_class_alias() {
     let out = compile_and_run_files(
         &[
@@ -169,6 +174,7 @@ class_alias("OriginalInsideInclude", "AliasInsideInclude");
 }
 
 #[test]
+    // Verifies declarations inside a namespace block loaded via require do not leak into the caller's namespace.
 fn test_discovered_namespaced_declarations_do_not_leak_to_caller() {
     let out = compile_and_run_files(
         &[
@@ -205,6 +211,7 @@ function label() {
 }
 
 #[test]
+    // Verifies `use` imports inside a file loaded via require do not leak into the caller's scope.
 fn test_discovered_use_imports_do_not_leak_to_caller() {
     let out = compile_and_run_files(
         &[
@@ -241,6 +248,7 @@ function imported_alias_name() {
 }
 
 #[test]
+    // Verifies two separate include loads maintain independent namespace scopes; no cross-contamination.
 fn test_discovered_namespaces_do_not_leak_between_included_files() {
     let out = compile_and_run_files(
         &[
@@ -288,6 +296,7 @@ function b() {
 }
 
 #[test]
+    // Verifies re-including the same file via regular `include` reports a duplicate declaration error.
 fn test_regular_reinclude_still_reports_duplicate_declaration() {
     assert!(compile_files_fails(
         &[
@@ -305,6 +314,7 @@ include 'lib.php';
 }
 
 #[test]
+    // Verifies mutually exclusive includes (runtime branch) discover declarations once (deterministic branch coverage).
 fn test_regular_include_same_file_in_exclusive_branches_discovers_once() {
     let out = compile_and_run_files(
         &[

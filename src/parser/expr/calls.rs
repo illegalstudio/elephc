@@ -15,6 +15,12 @@ use crate::span::Span;
 
 use super::parse_args;
 
+/// Parses the `::` suffix of a scoped static access (static method call, static property
+/// access, class constant, or scoped constant access) after the initial receiver has been
+/// consumed. Consumes the `::` token, then dispatches on the following token to produce the
+/// appropriate `ExprKind` variant. Returns a static method call if a `(` follows, a static
+/// property access if a variable follows, a class constant if `class` follows, or a scoped
+/// constant access otherwise.
 pub(super) fn parse_scoped_static_call(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -84,6 +90,10 @@ pub(super) fn parse_scoped_static_call(
     }
 }
 
+/// Checks whether `...)` appears at the current position, indicating PHP's first-class callable
+/// syntax `Name::method(...)`. Returns `true` and consumes both the ellipsis and `)` tokens if
+/// found; returns `false` and advances nothing otherwise. Called after the initial `(` of a
+/// method-call-like form has already been consumed by the caller.
 pub(super) fn parse_first_class_callable_parens(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -98,6 +108,9 @@ pub(super) fn parse_first_class_callable_parens(
     Ok(false)
 }
 
+/// Peeks ahead to detect a PHP cast expression `(type)` where the middle token is an
+/// identifier matching a valid cast type name. Does not consume any tokens. Returns the
+/// matching `CastType` variant or `None` if the three-token window does not form a cast.
 pub(super) fn peek_cast(tokens: &[(Token, Span)], pos: usize) -> Option<CastType> {
     if pos + 2 >= tokens.len() {
         return None;
@@ -121,6 +134,7 @@ pub(super) fn peek_cast(tokens: &[(Token, Span)], pos: usize) -> Option<CastType
     }
 }
 
+/// Returns `true` if `name` matches any of the `keywords` case-insensitively.
 fn matches_case_insensitive(name: &str, keywords: &[&str]) -> bool {
     keywords
         .iter()

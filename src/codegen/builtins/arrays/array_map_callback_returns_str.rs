@@ -14,7 +14,27 @@ use crate::types::PhpType;
 
 use super::array_map_expr_is_str::expr_is_str;
 
-/// Infer whether a callback returns a string type from its AST.
+/// Infers whether an `array_map` callback returns a PHP `string` type.
+///
+/// Examines the callback expression's AST to determine if its return type is
+/// guaranteed to be `PhpType::Str`. This drives whether the result array's
+/// element storage can be sized for string payloads.
+///
+/// ## Expression handling
+///
+/// - **Closure**: Scans the body for a terminal `return` statement and delegates
+///   to `expr_is_str` on the returned expression. Returns `false` if no return
+///   is found (conservative: ambiguous returns default to non-string).
+/// - **StringLiteral**: Looks up the function signature by name and checks
+///   `return_type == PhpType::Str`.
+/// - **Variable**: Looks up the closure signature stored under the variable name
+///   in `ctx.closure_sigs` and checks the return type.
+/// - **FirstClassCallable**: Dispatches to function, static method, or instance
+///   method lookup via `ctx.functions`, `ctx.classes`, and contextual type
+///   inference.
+///
+/// Returns `false` for any unrecognized or dynamic callback form, preserving
+/// conservative runtime array layout behavior.
 pub(super) fn callback_returns_str(args: &[Expr], ctx: &Context) -> bool {
     match &args[0].kind {
         ExprKind::Closure { body, .. } => {

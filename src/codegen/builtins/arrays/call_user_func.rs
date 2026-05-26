@@ -20,6 +20,25 @@ use super::callable_forms;
 use super::call_user_func_array;
 use super::super::callable_lookup::{lookup_function, FunctionLookup};
 
+/// Emits `call_user_func($callback, ...$args)` builtin calls.
+///
+/// Dispatches to extern/builtin when the first argument is a string literal known
+/// at compile time. Otherwise, materializes the callback address, evaluates all
+/// remaining arguments in PHP source order (including by-reference and default
+/// parameter padding), pushes captures as hidden arguments, then emits the call
+/// via `blr`.
+///
+/// Arguments:
+/// - `args[0]`: callback (string literal function name, closure, or first-class callable)
+/// - `args[1..]`: arguments to pass through to the callback
+///
+/// Returns the inferred return type from the callback's signature, defaulting to `Int`
+/// when the signature cannot be determined.
+///
+/// ABI constraints:
+/// - Callback address is placed in `call_reg` before `blr`.
+/// - Arguments are materialized as outgoing args via `materialize_outgoing_args`.
+/// - On x86_64, concat offset is saved/restored around the nested call.
 pub fn emit(
     _name: &str,
     args: &[Expr],

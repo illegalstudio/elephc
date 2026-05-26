@@ -13,6 +13,18 @@ use crate::codegen::platform::Arch;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
+/// Emits the `__rt_decref_object` runtime helper for ARM64.
+///
+/// Takes an object pointer in `x0`. Performs null check, heap-range validation,
+/// and optional heap-debug liveness check. Decrements the refcount field stored at
+/// `[x0 - 12]` in the uniform heap header. On zero refcount, tail-calls
+/// `__rt_object_free_deep`. On non-zero refcount, may invoke the GC cycle collector
+/// unless `_gc_release_suppressed` or `_gc_collecting` is set, then returns.
+///
+/// ## ABI constraints
+/// - Input: `x0` = object pointer
+/// - Output: `x0` preserved (returned unchanged)
+/// - Clobbers: `x9`, `x10`, `x30` (link register preserved across collector call)
 pub fn emit_decref_object(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_decref_object_linux_x86_64(emitter);
@@ -73,6 +85,17 @@ pub fn emit_decref_object(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the `__rt_decref_object` runtime helper for x86_64 Linux.
+///
+/// Takes an object pointer in `rax`. Performs null check, heap-range validation
+/// using the x86_64 heap magic header word at `[rax - 8]`, and refcount decrement
+/// at `[rax - 12]`. On zero refcount, tail-jumps to `__rt_object_free_deep`. On
+/// non-zero refcount, may call the GC cycle collector unless suppressed, then returns.
+///
+/// ## ABI constraints
+/// - Input: `rax` = object pointer
+/// - Output: `rax` preserved
+/// - Clobbers: `r10`, `r11`, caller-saved registers
 fn emit_decref_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: decref_object ---");

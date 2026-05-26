@@ -10,10 +10,14 @@
 
 use super::super::*;
 
+/// Returns true if the statement list contains a break or continue, considering
+/// nested ifdef, if, try, and switch guards recursively.
 pub(super) fn block_contains_loop_exit(body: &[Stmt]) -> bool {
     body.iter().any(stmt_contains_loop_exit)
 }
 
+/// Returns true if the statement contains a break or continue at any nesting
+/// level, recursing into ifdef, if, try, and switch statement bodies.
 fn stmt_contains_loop_exit(stmt: &Stmt) -> bool {
     match &stmt.kind {
         StmtKind::Break(_) | StmtKind::Continue(_) => true,

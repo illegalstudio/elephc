@@ -34,7 +34,22 @@ use engine::resolve_stmts;
 use state::ResolveState;
 
 /// Resolves all include/require statements by inlining the referenced files.
-/// Runs between parsing and type checking.
+///
+/// Inputs: `program` is the parsed AST; `base_dir` is the directory used for
+/// resolving relative include paths.
+///
+/// Runs between parsing and type checking. Skips processing entirely if the
+/// program contains no include/require statements (fast path).
+///
+/// Outputs: Returns the program with all includes inlined. If any included files
+/// declared functions or classes, they are prepended as a `NamespaceBlock`
+/// prelude so declarations are visible before the rest of the program.
+///
+/// Side effects: Populates `declared_once` (set of `__FILE__`-resolved paths for
+/// `include_once`/`require_once` guards), `include_chain` (stack of files being
+/// processed for cycle detection), and `ResolveState` (per-file state
+/// including discovered function variants). The `discovery` phase performs
+/// filesystem I/O to locate included files before any AST rewriting occurs.
 pub fn resolve(program: Program, base_dir: &Path) -> Result<Program, CompileError> {
     if !has_includes(&program) {
         return Ok(program);

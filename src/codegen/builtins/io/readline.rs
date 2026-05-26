@@ -16,6 +16,14 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `readline([prompt])` builtin.
+///
+/// Takes one optional argument: the prompt string to write to stdout before reading.
+/// When a prompt is provided, emits a `write` syscall (AArch64) or libc `write` call (x86_64)
+/// to stdout before reading. Always reads one line from stdin via `__rt_fgets`.
+///
+/// Returns `Some(PhpType::Str)` with the line excluding the trailing newline.
+/// The runtime helper distinguishes PHP `false` (on EOF) from empty string.
 pub fn emit(
     _name: &str,
     args: &[Expr],

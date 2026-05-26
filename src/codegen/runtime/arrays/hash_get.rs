@@ -11,9 +11,11 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// hash_get: look up a value by normalized int/string key in the hash table.
-/// Input:  x0=hash_table_ptr, x1=key_lo, x2=key_hi (-1 means integer key)
-/// Output: x0=found (1 or 0), x1=value_lo, x2=value_hi, x3=value_tag
+/// Emits the `__rt_hash_get` runtime helper using linear probing with typed key comparison.
+/// Uses `__rt_hash_key_hash` to compute the initial slot and `__rt_hash_key_eq` for equality checks.
+/// Falls through to `__rt_hash_get_not_found` when the table is null, empty, or the key is absent.
+/// Input:  x0=hash_table_ptr, x1=key_lo, x2=key_hi (key_hi=-1 means integer key, otherwise string key with key_lo=ptr, key_hi=len)
+/// Output: x0=found (1 or 0), x1=value_lo, x2=value_hi, x3=value_tag (PhpType tag; null tag on miss)
 pub fn emit_hash_get(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_get_linux_x86_64(emitter);
@@ -127,6 +129,9 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_hash_get`.
+/// Uses SysV ABI: rdi=hash_table_ptr, rsi=key_lo, rdx=key_hi (key_hi=-1 means integer key, otherwise string key with rsi=ptr, rdx=len).
+/// Returns: rax=found (1 or 0), rdi=value_lo, rsi=value_hi, rcx=value_tag.
 fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_get ---");

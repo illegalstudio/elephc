@@ -9,6 +9,8 @@
 
 use super::*;
 
+// Parses `function fail(): never { throw new \Exception(); }` and verifies the
+// `StmtKind::FunctionDecl` carries `return_type = Some(TypeExpr::Never)`.
 #[test]
 fn test_parse_never_return_type() {
     let stmts = parse_source("<?php function fail(): never { throw new \\Exception(); }");
@@ -25,6 +27,8 @@ fn test_parse_never_return_type() {
     }
 }
 
+// Parses `function fail(): NEVER { ... }` (all caps) and verifies the parser
+// normalizes it to `TypeExpr::Never`, confirming case-insensitive handling.
 #[test]
 fn test_parse_never_return_type_is_case_insensitive() {
     let stmts = parse_source("<?php function fail(): NEVER { throw new \\Exception(); }");
@@ -36,6 +40,8 @@ fn test_parse_never_return_type_is_case_insensitive() {
     }
 }
 
+// Parses a class with `public function fail(): never { ... }` and asserts the
+// method name, return type, and that `is_static = false`.
 #[test]
 fn test_parse_never_return_type_on_instance_method() {
     let stmts = parse_source(
@@ -53,6 +59,8 @@ fn test_parse_never_return_type_on_instance_method() {
     }
 }
 
+// Parses a class with `public static function fail(): never { ... }` and asserts
+// the method name, return type, and that `is_static = true`.
 #[test]
 fn test_parse_never_return_type_on_static_method() {
     let stmts = parse_source(
@@ -70,6 +78,8 @@ fn test_parse_never_return_type_on_static_method() {
     }
 }
 
+// Parses an interface with `public function fail(): never;` and verifies the
+// `InterfaceDecl` method name and `TypeExpr::Never` return type.
 #[test]
 fn test_parse_never_return_type_on_interface_method() {
     let stmts = parse_source(

@@ -17,6 +17,7 @@ use crate::names::enum_case_symbol;
 use crate::parser::ast::Expr;
 use crate::types::{EnumCaseValue, EnumInfo, PhpType};
 
+/// Lowers `EnumName::method(...)` by routing through builtin enum helpers.
 pub(super) fn emit_enum_static_method_call(
     enum_name: &str,
     method: &str,
@@ -42,6 +43,13 @@ pub(super) fn emit_enum_static_method_call(
     }
 }
 
+/// Emits the `EnumName::cases()` static method, which returns an array of all
+/// enum case singleton objects in declaration order.
+///
+/// Each case singleton is loaded from the data section via `enum_case_symbol`
+/// and stored into the payload of a newly allocated array. The array capacity
+/// is set to the exact case count (or 4 for enums with no cases). The returned
+/// type is `Array<Object(EnumName)>`.
 fn emit_enum_cases(
     enum_name: &str,
     enum_info: &EnumInfo,
@@ -84,6 +92,13 @@ fn emit_enum_cases(
     PhpType::Array(Box::new(PhpType::Object(enum_name.to_string())))
 }
 
+/// Emits the `EnumName::from(value)` or `EnumName::tryFrom(value)` static method.
+///
+/// `from` aborts if no case matches. `tryFrom` returns `null` (boxed as `Void`)
+/// when no case matches and yields a `EnumName|Void` union type. Backing type
+/// must be `Int` or `Str`. For `Str` backing, the input string is preserved on
+/// the temporary stack across candidate comparisons and cleaned up on both the
+/// success and "no match" paths.
 fn emit_enum_from_like(
     enum_name: &str,
     enum_info: &EnumInfo,
@@ -210,6 +225,9 @@ fn emit_enum_from_like(
     }
 }
 
+/// Materialises the shared null sentinel value (a known non-null pointer bit
+/// pattern) into the active integer result register. Used by `tryFrom` to
+/// represent a null return before boxing it as `Void`.
 fn emit_null_into_x0(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(
         emitter,
@@ -218,6 +236,9 @@ fn emit_null_into_x0(emitter: &mut Emitter) {
     ); // materialize the shared null sentinel in the active integer result register
 }
 
+/// Materialises a 64-bit signed integer immediate into the specified register
+/// via `abi::emit_load_int_immediate`. Used only for enum backing value
+/// comparisons in `emit_enum_from_like`.
 fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
     abi::emit_load_int_immediate(emitter, reg, value);                          // materialize the immediate through the shared target-aware helper
 }

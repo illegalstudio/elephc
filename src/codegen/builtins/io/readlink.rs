@@ -18,8 +18,16 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Magic high 32 bits of the x86_64 heap-cell marker word, forming
+/// `(X86_64_HEAP_MAGIC_HI32 << 32) | kind` together with the runtime kind.
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
+/// Lowers a PHP `readlink()` call into target assembly.
+///
+/// Evaluates the path argument, calls the `__rt_readlink` runtime helper,
+/// then boxes the raw result (owned string pointer/length or 0/0 on failure)
+/// into a `Mixed` cell so PHP's `=== false` and string-echo semantics work
+/// correctly. Returns `PhpType::Mixed`.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -34,6 +42,14 @@ pub fn emit(
     Some(PhpType::Mixed)
 }
 
+/// Boxes the raw `__rt_readlink` result into a `Mixed` cell.
+///
+/// On success the runtime helper returns `(ptr, len)` in registers (x1/x2 on
+/// ARM64, rax/rdx on x86_64); this function allocates a heap cell, stamps it
+/// with the string tag, and stores the pointer/length words without copying
+/// the owned buffer. On failure the helper returns a null pointer; this path
+/// jumps to `__rt_mixed_from_value` to box PHP's `false` value. Both paths
+/// converge at `done_label`.
 fn box_readlink_result(emitter: &mut Emitter, ctx: &mut Context) {
     let false_label = ctx.next_label("readlink_false");
     let done_label = ctx.next_label("readlink_done");

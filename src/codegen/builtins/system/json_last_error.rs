@@ -15,6 +15,14 @@ use crate::codegen::emit::Emitter;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `json_last_error()` builtin call.
+///
+/// Loads the last JSON error code from the runtime's `_json_last_error` BSS symbol
+/// into the ABI-defined integer result register and returns `PhpType::Int`.
+///
+/// The symbol is updated by `json_encode`/`json_decode`/`json_validate` runtime
+/// routines and zeroed on each successful entry; until those wirings land it
+/// stays at 0 (JSON_ERROR_NONE).
 pub fn emit(
     _name: &str,
     _args: &[Expr],

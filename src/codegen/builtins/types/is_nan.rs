@@ -16,6 +16,27 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a PHP `is_nan()` type predicate call.
+///
+/// Compares the first argument against itself using an unordered floating-point
+/// comparison. NaN is the only value that does not equal itself, so the comparison
+/// result directly indicates whether the value is NaN.
+///
+/// # Arguments
+/// * `_name` — builtin name (unused, dispatch is by caller)
+/// * `args` — argument expressions; `args[0]` is the value to test
+/// * `emitter` — target-specific assembly emitter
+/// * `ctx` — codegen context (types, locals, etc.)
+/// * `data` — data section for literals and jump tables
+///
+/// # Returns
+/// `Some(PhpType::Bool)` — the predicate result type
+///
+/// # ABI / Runtime behavior
+/// - Non-float inputs are first normalized into the float register via `emit_int_result_to_float_result`.
+/// - AArch64: `fcmp d0, d0` sets the unordered flag for NaN; `cset x0, vs` materializes the bool.
+/// - x86_64: `ucomisd xmm0, xmm0` sets the parity flag for NaN; `setp al` / `movzx` materializes the bool.
+/// - Result is returned in the canonical integer register (`x0` on AArch64, `rax` on x86_64).
 pub fn emit(
     _name: &str,
     args: &[Expr],

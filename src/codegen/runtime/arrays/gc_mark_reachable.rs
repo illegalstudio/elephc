@@ -11,9 +11,25 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// gc_mark_reachable: recursively mark a live refcounted heap block and its children.
-/// Input: x0 = heap-backed value pointer
-/// Output: none
+/// Emits the `__rt_gc_mark_reachable` runtime helper.
+///
+/// Recursively traverses the PHP heap graph from a root value pointer, marking every
+/// transitively reachable refcounted heap block as `reachable` by setting bit 16 in the
+/// heap kind word. Already-marked nodes are skipped to avoid infinite recursion on cycles.
+///
+/// # Arguments
+/// * `emitter` — target-specific assembly emitter
+///
+/// # ABI (ARM64)
+/// * Input: x0 = heap-backed value pointer (caller-saved)
+/// * Output: none (void — side effect only: reachable bits written to heap header)
+///
+/// # Invariants
+/// * Null, non-heap, freed, and non-refcounted pointers are rejected early and return immediately.
+/// * Only heap kinds 2–5 (indexed array, hash, object, boxed mixed) are traversed.
+/// * Array traversal only recurses into refcounted payloads (value_type 4–7).
+/// * Hash traversal only recurses into entries whose runtime value_tag is heap-backed (4–7).
+/// * Object traversal consults the emitted per-class `_class_gc_desc_ptrs` table.
 pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_gc_mark_reachable_linux_x86_64(emitter);
@@ -218,6 +234,25 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_gc_mark_reachable` runtime helper.
+ ///
+ /// Identical in behavior to `emit_gc_mark_reachable` but targets the x86_64 SYS-V ABI.
+ /// Uses callee-saved frame pointer (rbp) and a 48-byte traversal frame instead of ARM64's
+ /// caller-saved register convention.
+ ///
+ /// # Arguments
+ /// * `emitter` — x86_64 assembly emitter
+ ///
+ /// # ABI (x86_64 SYS-V)
+ /// * Input: rax = heap-backed value pointer (caller-saved, clobbered by recursive calls)
+ /// * Output: none (void — side effect only: reachable bits written to heap header)
+ ///
+ /// # Invariants
+ /// * Same traversal invariants as ARM64 variant: null, non-heap, freed, and non-refcounted
+ ///   pointers are rejected early. Only heap kinds 2–5 are traversed.
+ /// * Reachable bit is bit 16 (0x10000) inside the heap kind word at offset -8 from the pointer.
+ /// * Recursive traversal frame: `[rbp - 8]` = node, `[rbp - 16]` = kind word, `[rbp - 24]` = loop bound,
+ ///   `[rbp - 32]` = loop index, `[rbp - 40]` = descriptor pointer.
 fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: gc_mark_reachable ---");

@@ -20,37 +20,62 @@ use crate::types::PhpType;
 
 use super::{arrays, calls, objects};
 
+/// Represents a flattened left-to-right chain of property, method, array, and callable segments.
+/// The `base` is the leftmost receiver; segments are ordered from innermost to outermost access.
 struct Chain<'a> {
+    /// The leftmost expression in the chain (e.g., `$obj` in `$obj->foo()->bar`).
     base: &'a Expr,
+    /// Ordered list of access segments from innermost to outermost.
     segments: Vec<Segment<'a>>,
 }
 
+/// A single step in a postfix access chain (property, method, array, or callable).
 enum Segment<'a> {
+    /// Ordinary (`->property`) or nullsafe (`?->property`) property access.
     Property {
+        /// The full expression for this segment.
         expr: &'a Expr,
+        /// The receiver expression on the left side of the access.
         receiver: &'a Expr,
+        /// The property name as a string.
         property: &'a str,
+        /// Whether this is a nullsafe (`?.`) access.
         nullsafe: bool,
     },
+    /// Ordinary (`->method()`) or nullsafe (`?->method()`) method call.
     Method {
+        /// The full expression for this segment.
         expr: &'a Expr,
+        /// The receiver expression on the left side of the call.
         receiver: &'a Expr,
+        /// The method name as a string.
         method: &'a str,
+        /// The call arguments.
         args: &'a [Expr],
+        /// Whether this is a nullsafe (`?.`) call.
         nullsafe: bool,
     },
+    /// Array element access (`$arr[$idx]`).
     Array {
+        /// The full expression for this segment.
         expr: &'a Expr,
+        /// The array expression on the left side of the access.
         array: &'a Expr,
+        /// The index expression.
         index: &'a Expr,
     },
+    /// Expression-callable invocation (`$fn($args)`).
     ExprCall {
+        /// The full expression for this segment.
         expr: &'a Expr,
+        /// The callee expression (must resolve to a callable).
         callee: &'a Expr,
+        /// The call arguments.
         args: &'a [Expr],
     },
 }
 
+/// Emits a postfix chain that contains at least one nullsafe (`?.`) property or method access.
 pub(super) fn emit_nullsafe_postfix_chain(
     expr: &Expr,
     emitter: &mut Emitter,
@@ -149,13 +174,18 @@ pub(super) fn emit_nullsafe_postfix_chain(
     }
 }
 
+/// Outcome of emitting a single chain segment, used to track type, short-circuiting, and control flow.
 struct SegmentOutcome {
+    /// The PHP type produced by this segment.
     ty: PhpType,
+    /// Whether this segment can short-circuit (null-propagate) the chain.
     can_short_circuit: bool,
+    /// Whether the normal (non-null) path is guaranteed to terminate (e.g., always returns null).
     terminated_normal_path: bool,
 }
 
 impl SegmentOutcome {
+    /// Creates a normal (non-terminating) outcome with the given type and short-circuit flag.
     fn normal(ty: PhpType, can_short_circuit: bool) -> Self {
         Self {
             ty,
@@ -164,6 +194,8 @@ impl SegmentOutcome {
         }
     }
 
+    /// Creates an outcome indicating the normal path always yields null.
+    /// The chain will short-circuit and `terminated_normal_path` is set to true.
     fn always_null() -> Self {
         Self {
             ty: PhpType::Void,
@@ -174,6 +206,7 @@ impl SegmentOutcome {
 }
 
 impl Segment<'_> {
+    /// Returns true if this segment is a nullsafe property or method access.
     fn is_nullsafe_member(&self) -> bool {
         matches!(
             self,
@@ -188,6 +221,10 @@ impl Segment<'_> {
     }
 }
 
+/// Flattens a postfix expression tree into a `Chain` by walking from the outermost access
+/// inward, collecting property, method, array, and callable segments. Returns `None` if the
+/// expression contains no postfix accesses. Segments are stored in reverse order (innermost
+/// first) and reversed after the walk so they are ordered from base to outermost.
 fn flatten_postfix_chain(expr: &Expr) -> Option<Chain<'_>> {
     let mut base = expr;
     let mut segments = Vec::new();
@@ -268,6 +305,10 @@ fn flatten_postfix_chain(expr: &Expr) -> Option<Chain<'_>> {
     Some(Chain { base, segments })
 }
 
+/// Emits a single property-access segment, handling both ordinary and nullsafe (`?.`) forms.
+/// Updates the current type, short-circuit flag, and normal-path termination flag in the
+/// returned `SegmentOutcome`. May emit a jump to `null_label` for nullsafe chains when the
+/// receiver is statically null or the access fails at runtime.
 fn emit_property_segment(
     expr: &Expr,
     receiver: &Expr,
@@ -335,6 +376,10 @@ fn emit_property_segment(
     }
 }
 
+/// Emits a single method-call segment, handling both ordinary and nullsafe (`?.`) forms.
+/// On nullsafe calls with a statically-null receiver, jumps to `null_label`. For ordinary
+/// calls on `Mixed` types, emits a fatal error if the receiver is null. Returns the method's
+/// return type and short-circuit flag in `SegmentOutcome`.
 fn emit_method_segment(
     expr: &Expr,
     receiver: &Expr,
@@ -380,6 +425,10 @@ fn emit_method_segment(
     SegmentOutcome::normal(return_ty, false)
 }
 
+/// Emits a method call where the receiver is already loaded on the ABI's result register.
+/// Saves the receiver register before emitting arguments, then dispatches to the method.
+/// Falls back to `__call` if the method is not defined, passing the original method name as
+/// the first magic argument. Returns the method's return type.
 fn emit_loaded_method_call(
     class_name: &str,
     method: &str,
@@ -420,6 +469,9 @@ fn emit_loaded_method_call(
     )
 }
 
+/// Emits a runtime null check for a nullsafe chain's receiver. Unboxes the receiver if it is
+/// `Mixed`, compares it against the null tag, and jumps to `null_label` if it is null. Returns
+/// `true` if a short-circuit jump was emitted; `false` if the type cannot be null at this point.
 fn emit_nullsafe_receiver_check(
     current_ty: &PhpType,
     null_label: &str,
@@ -450,10 +502,17 @@ fn emit_nullsafe_receiver_check(
     }
 }
 
+/// Returns true if either the current runtime type or the statically-inferred receiver type
+/// is `Void` (PHP null). Used to determine if a nullsafe chain can short-circuit at compile
+/// time without emitting a runtime null check.
 fn receiver_is_static_null(current_ty: &PhpType, receiver_ty: &PhpType) -> bool {
     matches!(current_ty.codegen_repr(), PhpType::Void) || matches!(receiver_ty, PhpType::Void)
 }
 
+/// Attempts to resolve the receiver class name from either the statically-inferred receiver
+/// type or the current runtime type. Tries `receiver_ty` first, then falls back to `current_ty`.
+/// Returns the class name as an `Option<String>`, or `None` if the type cannot be resolved to a
+/// single concrete class (e.g., `Mixed` or a union type).
 fn singular_receiver_class(receiver_ty: &PhpType, current_ty: &PhpType) -> Option<String> {
     functions::singular_object_class(receiver_ty)
         .or_else(|| functions::singular_object_class(current_ty))

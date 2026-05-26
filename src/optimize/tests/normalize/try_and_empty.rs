@@ -11,6 +11,8 @@
 use super::*;
 
 #[test]
+    // Converts an empty then-body into an ExprStmt of the condition when the
+    // condition contains a side-effecting call, preserving observable semantics.
 fn test_normalize_control_flow_replaces_empty_if_with_effectful_condition_eval() {
     let call = Expr::new(
         ExprKind::FunctionCall {
@@ -38,6 +40,7 @@ fn test_normalize_control_flow_replaces_empty_if_with_effectful_condition_eval()
 }
 
 #[test]
+    // Eliminates an IfDef with both branches empty, yielding zero statements.
 fn test_normalize_control_flow_drops_empty_ifdef_shell() {
     let program = vec![Stmt::new(
         StmtKind::IfDef {
@@ -54,6 +57,8 @@ fn test_normalize_control_flow_drops_empty_ifdef_shell() {
 }
 
 #[test]
+    // Converts an empty switch to an ExprStmt of the subject when the
+    // subject contains a side-effecting call, preserving observable semantics.
 fn test_normalize_control_flow_replaces_empty_switch_with_subject_eval() {
     let call = Expr::new(
         ExprKind::FunctionCall {
@@ -80,6 +85,8 @@ fn test_normalize_control_flow_replaces_empty_switch_with_subject_eval() {
 }
 
 #[test]
+    // Inlines the finally body when a try has an empty body and a finally clause,
+    // dropping the try wrapper entirely.
 fn test_normalize_control_flow_inlines_empty_try_finally_body() {
     let program = vec![Stmt::new(
         StmtKind::Try {
@@ -100,6 +107,8 @@ fn test_normalize_control_flow_inlines_empty_try_finally_body() {
 }
 
 #[test]
+    // Inlines the default body when a switch has no cases and a default clause,
+    // dropping the switch wrapper entirely.
 fn test_normalize_control_flow_inlines_default_only_switch() {
     let program = vec![Stmt::new(
         StmtKind::Switch {
@@ -116,6 +125,8 @@ fn test_normalize_control_flow_inlines_default_only_switch() {
 }
 
 #[test]
+    // When the initial then-body is empty, inverts the condition and nests
+    // the elseif chain plus else body inside the new then-body.
 fn test_normalize_control_flow_nests_elseif_chain_after_empty_head() {
     let program = vec![Stmt::new(
         StmtKind::If {
@@ -158,6 +169,8 @@ fn test_normalize_control_flow_nests_elseif_chain_after_empty_head() {
 }
 
 #[test]
+    // Drops the catch clause when the try body is proven non-throwing,
+    // emitting only the try body statements.
 fn test_normalize_control_flow_inlines_non_throwing_try_catch() {
     let program = vec![Stmt::new(
         StmtKind::Try {
@@ -178,6 +191,8 @@ fn test_normalize_control_flow_inlines_non_throwing_try_catch() {
 }
 
 #[test]
+    // Emits try body followed by finally body when the try is non-throwing
+    // and a finally clause exists, preserving execution order.
 fn test_normalize_control_flow_inlines_non_throwing_try_finally_fallthrough() {
     let program = vec![Stmt::new(
         StmtKind::Try {
@@ -194,6 +209,8 @@ fn test_normalize_control_flow_inlines_non_throwing_try_finally_fallthrough() {
 }
 
 #[test]
+    // Preserves the full try/finally structure when the try body contains
+    // a return, since the finally must still execute on the return path.
 fn test_normalize_control_flow_keeps_non_throwing_try_finally_with_return() {
     let program = vec![Stmt::new(
         StmtKind::Try {
@@ -214,6 +231,8 @@ fn test_normalize_control_flow_keeps_non_throwing_try_finally_with_return() {
 }
 
 #[test]
+    // Folds outer finally into inner try when the inner try body throws
+    // and is caught locally, eliminating the outer try wrapper.
 fn test_normalize_control_flow_folds_outer_finally_into_single_inner_try() {
     let program = vec![Stmt::new(
         StmtKind::Try {
@@ -285,6 +304,8 @@ fn test_normalize_control_flow_folds_outer_finally_into_single_inner_try() {
 }
 
 #[test]
+    // Hoists non-throwing statements that precede a throwing statement
+    // out of the try body, emitting them before the try structure.
 fn test_normalize_control_flow_hoists_non_throwing_try_prefix() {
     let program = vec![Stmt::new(
         StmtKind::Try {

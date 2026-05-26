@@ -18,6 +18,16 @@ use crate::parser::ast::Expr;
 use crate::types::{array_key_type_from_value_type, PhpType};
 use super::hash_value_type_tag::hash_value_type_tag;
 
+/// Emits the `array_combine(keys, values)` builtin call.
+///
+/// Keys are emitted first and preserved (x86_64: pushed to stack; ARM64: stored to `[sp]`).
+/// Values are then emitted into `x0`/`rax`, and the appropriate runtime helper is called:
+/// - `__rt_array_combine` for non-refcounted value types (int, float)
+/// - `__rt_array_combine_refcounted` for refcounted value types (string, array, object)
+/// On ARM64 keys are passed in `x0`, values in `x1`, and the type tag in `x2`.
+/// On x86_64 keys are passed in `rdi`, values in `rsi`, and the type tag in `rdx`.
+///
+/// Returns `PhpType::AssocArray` with the combined key/value element types.
 pub fn emit(
     _name: &str,
     args: &[Expr],

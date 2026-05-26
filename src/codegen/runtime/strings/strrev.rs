@@ -11,7 +11,13 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// strrev: reverse a string into concat_buf.
+/// Emits `__rt_strrev` which reverses a PHP byte-string into the concat buffer.
+///
+/// Input (ARM64 ABI): `x0` = concat buffer write offset ptr, `x1` = string ptr, `x2` = string length.
+/// Output (ARM64 ABI): `x1` = pointer to reversed string start, `x2` = unchanged length.
+/// Side effect: advances `_concat_off` by the string length.
+///
+/// Falls through to `emit_strrev_linux_x86_64` on x86_64; otherwise emits portable ARM64 assembly.
 pub fn emit_strrev(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_strrev_linux_x86_64(emitter);
@@ -49,6 +55,11 @@ pub fn emit_strrev(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits `__rt_strrev` for the Linux x86_64 target.
+///
+/// Input (x86_64 System V ABI): `rax` = string ptr, `rdx` = string length.
+/// Output (x86_64 System V ABI): `rax` = pointer to reversed string, `rdx` = length.
+/// Side effect: advances `_concat_off` by the string length.
 fn emit_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strrev ---");

@@ -11,6 +11,7 @@ use crate::support::*;
 
 // --- Phase 12: v0.6 — Associative arrays, switch, match ---
 
+// Compiles a PHP script with two static string-keyed entries and verifies the first value is echoed.
 #[test]
 fn test_assoc_array_basic() {
     let out = compile_and_run(
@@ -22,6 +23,7 @@ echo $m["name"];
     assert_eq!(out, "Alice");
 }
 
+// Compiles a PHP script with three static string keys mapping to integer values and verifies addition.
 #[test]
 fn test_assoc_array_int_values() {
     let out = compile_and_run(
@@ -33,6 +35,7 @@ echo $m["a"] + $m["b"] + $m["c"];
     assert_eq!(out, "6");
 }
 
+// Compiles a PHP script that creates an assoc array with one entry then appends a second key and verifies both values are summed.
 #[test]
 fn test_assoc_array_assign() {
     let out = compile_and_run(
@@ -45,6 +48,7 @@ echo $m["x"] + $m["y"];
     assert_eq!(out, "30");
 }
 
+// Compiles a PHP script that creates an assoc array, overwrites its sole key, and verifies the new value is returned.
 #[test]
 fn test_assoc_array_update() {
     let out = compile_and_run(
@@ -57,6 +61,7 @@ echo $m["key"];
     assert_eq!(out, "new");
 }
 
+// Compiles a PHP script that populates an assoc array using a loop with dynamic concatenated keys ("k" . $i) and verifies count and boundary access.
 #[test]
 fn test_assoc_array_dynamic_string_key_assignment_loop_counts() {
     let out = compile_and_run(
@@ -71,6 +76,7 @@ echo count($a) . ":" . $a["k0"] . ":" . $a["k4"];
     assert_eq!(out, "5:0:4");
 }
 
+// Compiles a PHP script that assigns both string and integer values to an assoc array and verifies both scalar payloads are preserved and concatenated.
 #[test]
 fn test_assoc_array_mixed_assignment_access_preserves_scalar_payloads() {
     let out = compile_and_run(
@@ -84,6 +90,7 @@ echo $a["Host"] . "|" . $a["Port"];
     assert_eq!(out, "example.com|80");
 }
 
+// Compiles a PHP script with a function that builds an assoc array using dynamic string keys in a loop, returns it, and verifies count and boundary access from the caller.
 #[test]
 fn test_assoc_array_dynamic_string_key_assignment_inside_function() {
     let out = compile_and_run(
@@ -102,6 +109,7 @@ echo count($a) . ":" . $a["k0"] . ":" . $a["k4"];
     assert_eq!(out, "5:0:4");
 }
 
+// Compiles a PHP script that initializes an indexed array then adds a dynamic string-keyed entry alongside numeric indices, verifying the integer keys are preserved.
 #[test]
 fn test_assoc_array_dynamic_string_key_after_indexed_literal_preserves_int_keys() {
     let out = compile_and_run(
@@ -114,6 +122,7 @@ echo count($a) . ":" . $a[0] . ":" . $a[1] . ":" . $a["k2"];
     assert_eq!(out, "3:10:20:30");
 }
 
+// Compiles a PHP script with assoc keys using integer, numeric string, and leading-zero string forms and verifies PHP's key normalization and lookup behavior.
 #[test]
 fn test_assoc_array_integer_and_numeric_string_keys() {
     let out = compile_and_run(
@@ -125,6 +134,7 @@ echo $m[1] . "|" . $m["1"] . "|" . $m[2] . "|" . $m["01"];
     assert_eq!(out, "one|one|two|leading");
 }
 
+// Compiles a PHP script exercising boundary cases for numeric string keys: "0", "00", "-1", "-0", PHP_INT_MAX, PHP_INT_MAX+1, PHP_INT_MIN, PHP_INT_MIN-1. Verifies key normalization and overflow/underflow behavior.
 #[test]
 fn test_assoc_array_numeric_string_key_boundaries() {
     let out = compile_and_run(
@@ -150,6 +160,7 @@ echo $m[PHP_INT_MIN] . "|" . $m["-9223372036854775809"];
     );
 }
 
+// Compiles a PHP script that assigns via integer key, then updates via numeric string keys ("1", "01") and verifies count and lookup behavior reflects PHP's key normalization.
 #[test]
 fn test_assoc_array_numeric_string_assignment_updates_integer_key() {
     let out = compile_and_run(
@@ -163,6 +174,7 @@ echo count($m) . ":" . $m[1] . ":" . $m["01"];
     assert_eq!(out, "2:right:leading");
 }
 
+// Compiles a PHP script that sparsely populates an array with non-contiguous integer keys and verifies iteration produces only the assigned integer keys.
 #[test]
 fn test_sparse_integer_key_assignment_uses_php_array_keys() {
     let out = compile_and_run(
@@ -179,6 +191,7 @@ foreach ($a as $k => $v) {
     assert_eq!(out, "2|3=x;5=y;");
 }
 
+// Compiles a PHP script that performs array union (+) with two assoc arrays sharing a key "a" and verifies the left operand's value is retained for the duplicate key.
 #[test]
 fn test_assoc_array_union_keeps_left_duplicate_keys() {
     let out = compile_and_run(
@@ -195,6 +208,7 @@ foreach ($result as $k => $v) {
     assert_eq!(out, "3:a=left b=keep c=new ");
 }
 
+// Compiles a PHP script that performs array union with integer key on the left and numeric string key on the right that refer to the same PHP key, and verifies normalization keeps left value.
 #[test]
 fn test_assoc_array_union_normalizes_numeric_string_duplicates() {
     let out = compile_and_run(
@@ -208,6 +222,7 @@ echo count($result) . ":" . $result[1] . ":" . $result[2];
     assert_eq!(out, "2:left:new");
 }
 
+// Compiles a PHP script that performs array union with string-keyed assoc arrays containing integer values and verifies the sum of retained values.
 #[test]
 fn test_assoc_array_union_int_values() {
     let out = compile_and_run(
@@ -221,6 +236,7 @@ echo $result["a"] + $result["b"] + $result["c"];
     assert_eq!(out, "6");
 }
 
+// Compiles a PHP script that performs array union where both operands are assoc builtins (array_fill_keys, array_combine) and verifies the sum of retained values.
 #[test]
 fn test_assoc_array_union_with_assoc_builtin_operands() {
     let out = compile_and_run(
@@ -234,6 +250,7 @@ echo $result["a"] + $result["b"] + $result["c"];
     assert_eq!(out, "5");
 }
 
+// Compiles a PHP script that performs array union where the left operand is the result of array_diff_key and verifies the sum of retained values.
 #[test]
 fn test_assoc_array_union_with_key_filter_builtin_operand() {
     let out = compile_and_run(
@@ -247,6 +264,7 @@ echo $result["b"] + $result["c"];
     assert_eq!(out, "5");
 }
 
+// Compiles a PHP script that performs array union with a left indexed array and right assoc array sharing integer and string keys, verifying the shared key space produces the expected count and iteration order.
 #[test]
 fn test_indexed_plus_assoc_array_union_uses_shared_key_space() {
     let out = compile_and_run(
@@ -267,6 +285,7 @@ echo "|" . $result[0] . "|" . $result[1] . "|" . $result["01"] . "|" . $result[2
     );
 }
 
+// Compiles a PHP script that performs array union with a left assoc array (string and "0"/"01" keys) and a right indexed array, verifying the shared key space produces the expected count and iteration order.
 #[test]
 fn test_assoc_plus_indexed_array_union_uses_shared_key_space() {
     let out = compile_and_run(
@@ -287,6 +306,7 @@ echo "|" . $result[0] . "|" . $result[1] . "|" . $result["01"] . "|" . $result[2
     );
 }
 
+// Compiles a PHP script that performs array union with mixed indexed and assoc arrays containing nested arrays, then unsets the operands and verifies the result retains nested values.
 #[test]
 fn test_mixed_representation_array_union_retains_nested_values() {
     let out = compile_and_run(
@@ -302,6 +322,7 @@ echo $result[0][0] . "|" . $result[1][0] . "|" . $result["meta"][0];
     assert_eq!(out, "10|20|30");
 }
 
+// Compiles a PHP script that performs array union inside a function with indexed left and assoc right, then iterates via foreach, verifying key/value preservation.
 #[test]
 fn test_indexed_plus_assoc_array_union_inside_function_foreach() {
     let out = compile_and_run(
@@ -320,6 +341,7 @@ render();
     assert_eq!(out, "0=zero;1=one;name=alice;");
 }
 
+// Compiles a PHP script that performs array union inside a function with assoc left and indexed right, then iterates via foreach, verifying key/value preservation.
 #[test]
 fn test_assoc_plus_indexed_array_union_inside_function_foreach() {
     let out = compile_and_run(
@@ -338,6 +360,7 @@ render();
     assert_eq!(out, "0=zero-left;name=left;1=one-right;");
 }
 
+// Compiles a PHP script that iterates an assoc array using key=>value foreach syntax and verifies both key and value are emitted correctly.
 #[test]
 fn test_assoc_foreach_key_value() {
     let out = compile_and_run(
@@ -351,6 +374,7 @@ foreach ($m as $k => $v) {
     assert_eq!(out, "a=1 b=2 ");
 }
 
+// Compiles a PHP script that iterates an assoc array by reference, mutating each value in-place, then iterates again by value to verify mutations were applied.
 #[test]
 fn test_assoc_foreach_value_by_reference_mutates_values() {
     let out = compile_and_run(
@@ -367,6 +391,7 @@ foreach ($m as $k => $x) {
     assert_eq!(out, "a=11;b=12;");
 }
 
+// Compiles a PHP script that iterates an assoc array by reference, then reuses the same variable name `$v` in a second loop by value, verifying the reference loop's effect is not carried over.
 #[test]
 fn test_assoc_foreach_value_by_reference_reuse_value_name_in_next_loop() {
     let out = compile_and_run(
@@ -383,6 +408,7 @@ foreach ($m as $k => $v) {
     assert_eq!(out, "a=11;b=11;");
 }
 
+// Compiles a PHP script that iterates an assoc array by reference, then assigns to the reference variable after the loop and verifies the last element is mutated while the reference variable holds the assigned value.
 #[test]
 fn test_assoc_foreach_value_by_reference_post_assignment_mutates_last_element() {
     let out = compile_and_run(
@@ -401,6 +427,7 @@ echo "|" . $v;
     assert_eq!(out, "a=11;b=99;|99");
 }
 
+// Compiles a PHP script that iterates an assoc array with mixed integer and string keys (including leading zeros) and verifies the key type is preserved as written.
 #[test]
 fn test_assoc_foreach_mixed_integer_and_string_keys() {
     let out = compile_and_run(
@@ -414,6 +441,7 @@ foreach ($m as $k => $v) {
     assert_eq!(out, "1=a;02=b;");
 }
 
+// Compiles a PHP script that overwrites an existing key in an assoc array and verifies iteration order is preserved (original key order maintained with updated value).
 #[test]
 fn test_assoc_foreach_preserves_order_after_overwrite() {
     let out = compile_and_run(
@@ -428,6 +456,7 @@ foreach ($m as $k => $v) {
     assert_eq!(out, "a=3 b=2 ");
 }
 
+// Compiles a PHP script that grows an assoc array from 1 to 13 entries and verifies iteration order is preserved across growth.
 #[test]
 fn test_assoc_foreach_preserves_order_after_growth() {
     let out = compile_and_run(
@@ -456,6 +485,7 @@ foreach ($m as $k => $v) {
     );
 }
 
+// Compiles a PHP script that iterates a plain indexed array using key=>value foreach syntax and verifies the auto-incremented integer keys are emitted correctly.
 #[test]
 fn test_indexed_foreach_key_value() {
     let out = compile_and_run(
@@ -469,6 +499,7 @@ foreach ($arr as $i => $v) {
     assert_eq!(out, "0:10 1:20 2:30 ");
 }
 
+// Compiles a PHP switch statement with integer case values and verifies the correct branch is selected and "two" is echoed.
 #[test]
 fn test_switch_basic() {
     let out = compile_and_run(
@@ -490,6 +521,7 @@ switch ($x) {
     assert_eq!(out, "two");
 }
 
+// Compiles a PHP switch statement with a default branch and verifies "other" is echoed when no case matches.
 #[test]
 fn test_switch_default() {
     let out = compile_and_run(
@@ -508,6 +540,7 @@ switch ($x) {
     assert_eq!(out, "other");
 }
 
+// Compiles a PHP switch statement with a fallthrough case (case 1 falls through to case 2) and verifies both branches execute producing "ab".
 #[test]
 fn test_switch_fallthrough() {
     let out = compile_and_run(
@@ -528,6 +561,7 @@ switch ($x) {
     assert_eq!(out, "ab");
 }
 
+// Compiles a PHP switch statement with string case values and verifies the correct branch is selected.
 #[test]
 fn test_switch_string() {
     let out = compile_and_run(
@@ -549,6 +583,7 @@ switch ($s) {
     assert_eq!(out, "B");
 }
 
+// Compiles a PHP match expression with integer arms and verifies the correct arm is returned.
 #[test]
 fn test_match_basic() {
     let out = compile_and_run(
@@ -566,6 +601,7 @@ echo $result;
     assert_eq!(out, "two");
 }
 
+// Compiles a PHP match expression where no arm matches and verifies the default arm is returned.
 #[test]
 fn test_match_default() {
     let out = compile_and_run(

@@ -11,9 +11,11 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// natsort / natcasesort: natural order sort.
-/// For int arrays, natural order is the same as numeric order,
-/// so these delegate to the existing sort routine.
+/// Emits `__rt_natsort` and `__rt_natcasesort` runtime helpers.
+///
+/// On ARM64/macOS: branches to `__rt_sort_int` (integer arrays use numeric order,
+/// which satisfies natural-order semantics).
+/// On x86_64/Linux: delegates to `emit_natsort_linux_x86_64`.
 pub fn emit_natsort(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_natsort_linux_x86_64(emitter);
@@ -35,6 +37,10 @@ pub fn emit_natsort(emitter: &mut Emitter) {
     emitter.instruction("b __rt_sort_int");                                     // tail-call to sort_int (ascending)
 }
 
+/// Emits x86_64/Linux variants of `__rt_natsort` and `__rt_natcasesort`.
+///
+/// Both labels unconditionally jump to `__rt_sort_int` because integer payloads
+/// already satisfy natural-order sorting; case-folding is irrelevant for numeric values.
 fn emit_natsort_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: natsort (natural order sort, delegates to numeric sort) ---");

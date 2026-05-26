@@ -23,6 +23,14 @@ use crate::codegen::stmt::helpers;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Lowers `$obj->prop[] = $value` (array push through an object property).
+/// The property must be a declared `array` or `T[]` typed property; otherwise
+/// this function returns early with a warning comment. Evaluates the receiver
+/// first, resolves the property slot, boxes the value as needed for the element
+/// type, and calls the runtime array-push helper. On ARM64 the result lands in
+/// `x0`; on x86_64 it lands in `rax`. The receiver pointer is preserved across
+/// the call so the updated array handle can be written back to the property
+/// slot on return.
 pub(crate) fn emit_property_array_push_stmt(
     object: &Expr,
     property: &str,

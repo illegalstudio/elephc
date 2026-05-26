@@ -23,6 +23,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Parsing "linux-aarch64", "linux-x86_64", and "aarch64-apple-darwin" returns the correct Platform+Arch pair.
     fn test_target_parse() {
         assert_eq!(
             Target::parse("linux-aarch64").unwrap(),
@@ -39,6 +40,7 @@ mod tests {
     }
 
     #[test]
+    /// "adrp x9, _global_argc@PAGE" strips the @PAGE suffix (Linux has no PAGE relocations).
     fn test_transform_relocation_page() {
         let input = "    adrp x9, _global_argc@PAGE";
         let result = transform_relocation(input).unwrap();
@@ -46,6 +48,7 @@ mod tests {
     }
 
     #[test]
+    /// "add x9, x9, _global_argc@PAGEOFF" becomes ":lo12:" form on Linux.
     fn test_transform_relocation_pageoff() {
         let input = "    add x9, x9, _global_argc@PAGEOFF";
         let result = transform_relocation(input).unwrap();
@@ -53,6 +56,7 @@ mod tests {
     }
 
     #[test]
+    /// "ldr d0, [x9, _pi_const@PAGEOFF]" converts to :lo12: form for Linux.
     fn test_transform_relocation_ldr_pageoff() {
         let input = "    ldr d0, [x9, _pi_const@PAGEOFF]";
         let result = transform_relocation(input).unwrap();
@@ -60,12 +64,14 @@ mod tests {
     }
 
     #[test]
+    /// "mov x0, #1" contains no relocation markers so returns None unchanged.
     fn test_no_relocation() {
         let input = "    mov x0, #1";
         assert!(transform_relocation(input).is_none());
     }
 
     #[test]
+    /// "mov x16, #4" extracts 4; "mov x0, #1" returns None (wrong register).
     fn test_parse_syscall_mov() {
         assert_eq!(parse_syscall_mov("mov x16, #4"), Some(4));
         assert_eq!(parse_syscall_mov("mov x16, #338"), Some(338));
@@ -73,6 +79,7 @@ mod tests {
     }
 
     #[test]
+    /// macOS syscall numbers 1, 4, 5, 128, 338 map to Linux aarch64 syscall numbers 93, 64, 56, 38, 79.
     fn test_map_syscall() {
         assert_eq!(map_syscall(1), 93);
         assert_eq!(map_syscall(4), 64);
@@ -82,6 +89,9 @@ mod tests {
     }
 
     #[test]
+    /// "bl _snprintf" becomes "bl snprintf" (known C symbol, underscore stripped).
+    /// "bl __rt_itoa" returns None (runtime internal, not a C symbol).
+    /// "bl _sin" becomes "bl sin". "bl _CC_MD5" becomes "bl MD5" (CommonCrypto remap).
     fn test_transform_c_call() {
         assert_eq!(
             transform_c_call("bl _snprintf"),
@@ -93,6 +103,7 @@ mod tests {
     }
 
     #[test]
+    /// Non-syscall "mov x16, #0" is preserved as-is when transforming to Linux.
     fn test_non_syscall_x16_preserved() {
         let macos_asm = "    mov x16, #0\n    str x16, [sp]\n";
         let linux_asm = transform_for_linux(macos_asm);
@@ -100,6 +111,8 @@ mod tests {
     }
 
     #[test]
+    /// Full end-to-end transform: _main → main, @PAGE/@PAGEOFF → :lo12:, svc #0x80 → svc #0,
+    /// x16 syscall numbers → x8 Linux numbers, bl _snprintf → bl snprintf.
     fn test_full_linux_transform() {
         let macos_asm = "\
 .globl _main
@@ -127,6 +140,7 @@ _main:
     }
 
     #[test]
+    /// "mov x16, #5" (macOS openat) emits argument shifts to reorder path/flags/dirfd for Linux's newfstatat.
     fn test_openat_arg_shift() {
         let macos_asm = "    mov x16, #5\n    svc #0x80\n";
         let linux_asm = transform_for_linux(macos_asm);
@@ -138,6 +152,7 @@ _main:
     }
 
     #[test]
+    /// Linux libc (glibc) and musl differ in struct field widths; Platform methods expose the correct offsets and instructions per target.
     fn test_linux_libc_layout_offsets() {
         assert_eq!(Platform::MacOS.dirent_name_offset(), 21);
         assert_eq!(Platform::Linux.dirent_name_offset(), 19);

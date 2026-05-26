@@ -18,13 +18,19 @@ use crate::types::{
     PackedClassInfo, PhpType,
 };
 
+/// Global counter for generating unique labels across all codegen contexts.
+/// Uses sequential atomic increments to ensure label uniqueness.
 static GLOBAL_LABEL_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+/// Size of the pre-allocated try handler slot (224 bytes).
 pub(crate) const TRY_HANDLER_SLOT_SIZE: usize = 224;
+/// Offset within the try handler slot for the diagnostic depth field (16 bytes from slot start).
 pub(crate) const TRY_HANDLER_DIAG_DEPTH_OFFSET: usize = 16;
+/// Offset within the try handler slot for the `jmp_buf` field (24 bytes from slot start).
 pub(crate) const TRY_HANDLER_JMP_BUF_OFFSET: usize = 24;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Heap ownership tracking.
 pub enum HeapOwnership {
     NonHeap,
     Owned,
@@ -33,6 +39,7 @@ pub enum HeapOwnership {
 }
 
 impl HeapOwnership {
+    /// Returns the heap ownership for a given PHP type.
     pub fn for_type(ty: &PhpType) -> Self {
         if ty.is_refcounted() || matches!(ty, PhpType::Str) {
             HeapOwnership::MaybeOwned
@@ -41,6 +48,7 @@ impl HeapOwnership {
         }
     }
 
+    /// Returns the local owner heap ownership for a given PHP type.
     pub fn local_owner_for_type(ty: &PhpType) -> Self {
         if ty.is_refcounted() || matches!(ty, PhpType::Str) {
             HeapOwnership::Owned
@@ -49,6 +57,7 @@ impl HeapOwnership {
         }
     }
 
+    /// Returns the borrowed alias heap ownership for a given PHP type.
     pub fn borrowed_alias_for_type(ty: &PhpType) -> Self {
         if ty.is_refcounted() || matches!(ty, PhpType::Str) {
             HeapOwnership::Borrowed
@@ -57,6 +66,7 @@ impl HeapOwnership {
         }
     }
 
+    /// Merges two ownership states conservatively.
     pub fn merge(self, other: Self) -> Self {
         use HeapOwnership::*;
         match (self, other) {
@@ -71,8 +81,14 @@ impl HeapOwnership {
 }
 
 /// A closure body to be emitted after the current function.
+///
+/// Deferred closures capture variables from the enclosing scope and are stored
+/// until the enclosing function's epilogue, at which point their wrapper and
+/// body are emitted. The `needed` flag controls whether the full body or a
+/// minimal `ret`-only stub is emitted.
 #[allow(dead_code)]
 pub struct DeferredClosure {
+    /// Unique label for the closure body.
     pub label: String,
     pub params: Vec<String>,
     pub body: Vec<Stmt>,
@@ -91,6 +107,9 @@ pub struct DeferredClosure {
 }
 
 /// A Fiber entry wrapper emitted next to deferred closure bodies.
+///
+/// Fiber wrappers adapt user functions for `Fiber::call()` invocation, exposing
+/// a known calling convention with visible and hidden parameters.
 pub struct DeferredFiberWrapper {
     pub label: String,
     pub sig: FunctionSig,
@@ -99,6 +118,10 @@ pub struct DeferredFiberWrapper {
 }
 
 /// A callback wrapper that adapts callback builtins to closures with hidden captures.
+///
+/// Callback wrappers bridge PHP closures to C callback interfaces (e.g., `array_walk`).
+/// They inject hidden capture parameters populated by the builtin and forward
+/// visible arguments to the wrapped closure.
 pub struct DeferredCallbackWrapper {
     pub label: String,
     pub visible_arg_types: Vec<PhpType>,
@@ -106,6 +129,13 @@ pub struct DeferredCallbackWrapper {
     pub capture_types: Vec<PhpType>,
 }
 
+/// Carries mutable codegen state while lowering expressions, statements, functions, and wrappers.
+///
+/// Context tracks local variable stack slots, loop labels, class/interface/enum metadata,
+/// deferred closure/fiber/callback wrapper emission, ownership facts, and control-flow
+/// continuation state for `finally` blocks. All fields are public for direct access by
+/// codegen emitters; ownership states must remain conservative across branches, temporaries,
+/// and cleanup paths.
 pub struct Context {
     pub variables: HashMap<String, VarInfo>,
     pub stack_offset: usize,
@@ -201,6 +231,7 @@ pub struct Context {
     pub finally_stack: Vec<FinallyContext>,
 }
 
+/// Metadata for a local variable tracked during codegen.
 pub struct VarInfo {
     pub ty: PhpType,
     pub static_ty: PhpType,
@@ -209,12 +240,21 @@ pub struct VarInfo {
     pub epilogue_cleanup_safe: bool,
 }
 
+/// Metadata for a compiler-created local reference cell flag.
+///
+/// A non-zero flag indicates the variable's reference slot owns a 16-byte heap cell
+/// instead of borrowing storage from a caller, global, or array element.
 pub struct LocalRefCellFlag {
     pub variable: String,
     pub offset: usize,
     pub value_ty: Option<PhpType>,
 }
 
+/// Labels and stack-adjustment info for a loop or switch construct.
+///
+/// `continue_label` is the target for `continue` statements; `break_label` is the target
+/// for `break` statements. `sp_adjust` indicates bytes pushed to the stack by the loop
+/// entry (e.g., switch tables) so `return` inside the loop can pop before branching.
 pub struct LoopLabels {
     pub continue_label: String,
     pub break_label: String,
@@ -223,6 +263,11 @@ pub struct LoopLabels {
     pub sp_adjust: usize,
 }
 
+/// Metadata for an active `finally` block during codegen.
+///
+/// `entry_label` marks the start of the finally block's code, used by `pending_action`
+/// and `pending_target` to route `return`/`break`/`continue` through the finally before
+/// reaching the actual target.
 #[derive(Debug, Clone)]
 pub struct FinallyContext {
     pub entry_label: String,
@@ -235,6 +280,12 @@ impl Default for Context {
 }
 
 impl Context {
+    // Inherits module-level doc from `Context` struct.
+
+    /// Creates a default `Context` for top-level (non-function) codegen.
+    ///
+    /// All maps and vectors are empty; `in_main` is `false`; `return_type` is `Void`.
+    /// Use `crate::codegen::generate()` to obtain a fully initialized context for a program.
     pub fn new() -> Self {
         Self {
             variables: HashMap::new(),
@@ -287,10 +338,12 @@ impl Context {
         }
     }
 
+    /// Allocates a local variable slot on the stack.
     pub fn alloc_var(&mut self, name: &str, ty: PhpType) -> usize {
         self.alloc_var_with_static_type(name, ty.clone(), ty)
     }
 
+    /// Allocates a local variable with a distinct static type.
     pub fn alloc_var_with_static_type(
         &mut self,
         name: &str,
@@ -313,15 +366,18 @@ impl Context {
         offset
     }
 
+    /// Allocates a hidden stack slot of the given size.
     pub fn alloc_hidden_slot(&mut self, size: usize) -> usize {
         self.stack_offset += size;
         self.stack_offset
     }
 
+    /// Generates a key for a local reference cell flag from variable name and span.
     pub fn foreach_local_ref_cell_flag_key(name: &str, span: Span) -> String {
         format!("{}:{}:{}", name, span.line, span.col)
     }
 
+    /// Ensures a local reference cell flag exists for the given key, allocating a hidden slot if needed.
     pub fn ensure_local_ref_cell_flag(&mut self, key: String, name: &str) -> usize {
         if let Some(flag) = self.local_ref_cell_flags.get(&key) {
             return flag.offset;
@@ -338,30 +394,35 @@ impl Context {
         offset
     }
 
+    /// Sets the value type for a local reference cell flag.
     pub fn set_local_ref_cell_flag_type(&mut self, key: &str, value_ty: PhpType) {
         if let Some(flag) = self.local_ref_cell_flags.get_mut(key) {
             flag.value_ty = Some(value_ty);
         }
     }
 
+    /// Sets the heap ownership for the named variable, overwriting the previous value.
     pub fn set_var_ownership(&mut self, name: &str, ownership: HeapOwnership) {
         if let Some(var) = self.variables.get_mut(name) {
             var.ownership = ownership;
         }
     }
 
+    /// Marks a variable as not safe for epilogue cleanup.
     pub fn disable_epilogue_cleanup(&mut self, name: &str) {
         if let Some(var) = self.variables.get_mut(name) {
             var.epilogue_cleanup_safe = false;
         }
     }
 
+    /// Marks a variable as safe for epilogue cleanup.
     pub fn enable_epilogue_cleanup(&mut self, name: &str) {
         if let Some(var) = self.variables.get_mut(name) {
             var.epilogue_cleanup_safe = true;
         }
     }
 
+    /// Updates both the runtime type and heap ownership for a variable.
     pub fn update_var_type_and_ownership(
         &mut self,
         name: &str,
@@ -388,6 +449,7 @@ impl Context {
         }
     }
 
+    /// Updates the runtime type, static type, and heap ownership for a variable.
     pub fn update_var_type_static_and_ownership(
         &mut self,
         name: &str,
@@ -402,6 +464,7 @@ impl Context {
         }
     }
 
+    /// Finds the most specific common object type between two class names.
     pub fn common_object_type(&self, left: &str, right: &str) -> Option<PhpType> {
         if left == right {
             return Some(PhpType::Object(left.to_string()));
@@ -460,6 +523,7 @@ impl Context {
         false
     }
 
+    /// Checks if a type (class or interface) implements a given interface.
     pub(crate) fn object_type_implements_interface(
         &self,
         type_name: &str,
@@ -495,11 +559,13 @@ impl Context {
         })
     }
 
+    /// Generates a unique label with the given prefix.
     pub fn next_label(&mut self, prefix: &str) -> String {
         let id = GLOBAL_LABEL_COUNTER.fetch_add(1, Ordering::SeqCst);
         format!("_{}_{}", prefix, id)
     }
 
+    /// Returns the next pre-allocated try handler slot offset.
     pub fn next_try_slot(&mut self) -> usize {
         let offset = *self
             .try_slot_offsets

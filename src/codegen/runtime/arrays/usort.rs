@@ -100,6 +100,11 @@ pub fn emit_usort(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return (void, array sorted in place)
 }
 
+/// x86_64 Linux implementation of the usort runtime helper.
+///
+/// Inputs (cdecl): rdi = callback, rsi = array ptr, rdx = optional capture env
+/// Uses bubble sort; arrays with < 2 elements are already sorted.
+/// Emits `__rt_usort` as a global label.
 fn emit_usort_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: usort ---");

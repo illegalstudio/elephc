@@ -16,6 +16,14 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a call to the `is_file` builtin.
+///
+/// # Arguments
+/// - `args[0]`: the path expression to check (evaluated and passed to the runtime helper)
+/// - `_name`: unused; matches the dispatcher signature
+///
+/// # Output
+/// Emits the path argument, calls `__rt_is_file`, and returns `Some(PhpType::Bool)`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

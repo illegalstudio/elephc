@@ -13,6 +13,12 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Dispatches to the target-specific `__rt_mixed_array_get` emitter.
+///
+/// Checks `emitter.target.arch` and routes to either `emit_mixed_array_get_x86_64`
+/// (SysV ABI) or `emit_mixed_array_get_aarch64` (AAPCS64). The helper is emitted
+/// once into the runtime object and is called by generated code for `$mixed[$key]`
+/// access on a boxed `Mixed` value.
 pub fn emit_mixed_array_get(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_array_get_x86_64(emitter);
@@ -21,6 +27,22 @@ pub fn emit_mixed_array_get(emitter: &mut Emitter) {
     emit_mixed_array_get_aarch64(emitter);
 }
 
+/// Emits `__rt_mixed_array_get` for ARM64 (AAPCS64 ABI).
+///
+/// Inputs arrive in `x0` = mixed_ptr, `x1` = key_lo, `x2` = key_hi.
+/// Returns a pointer to a boxed `Mixed` cell in `x0`.
+///
+/// The function dispatches on the mixed value's tag:
+/// - Tag 4 → indexed array path
+/// - Tag 5 → associative array path
+/// - Tag 6 → stdClass object path
+/// - All others → null (boxed `Mixed(null)`)
+///
+/// For indexed arrays the key must be integer (`key_hi == -1` sentinel); string keys
+/// return null. For objects only `stdClass` with a string key is supported; int keys
+/// and non-stdClass objects return null. Missing keys return null. All paths that
+/// produce a value box it through `__rt_mixed_from_value` except when the hash entry
+/// already holds a boxed `Mixed` pointer (tag 7), which is returned directly.
 fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_array_get ---");
@@ -162,6 +184,18 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in x0
 }
 
+/// Emits `__rt_mixed_array_get` for x86_64 (SysV ABI).
+///
+/// Inputs arrive in `rdi` = mixed_ptr, `rsi` = key_lo, `rdx` = key_hi.
+/// Returns a pointer to a boxed `Mixed` cell in `rax`.
+///
+/// Same dispatch and return semantics as `emit_mixed_array_get_aarch64`:
+/// - Tag 4 → indexed array, tag 5 → associative array, tag 6 → stdClass object
+/// - Integer keys on indexed arrays required (`key_hi == -1`); string keys return null
+/// - Objects: only `stdClass` with string key supported; int keys return null
+/// - Missing keys and unsupported payloads return boxed `Mixed(null)`
+/// - Hash entries already holding a boxed `Mixed` (tag 7) are returned directly;
+///   all other values are boxed through `__rt_mixed_from_value`
 fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_array_get ---");

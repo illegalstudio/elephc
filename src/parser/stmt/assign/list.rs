@@ -20,6 +20,9 @@ mod lower;
 
 use lower::lower_list_unpack;
 
+/// Parses a `list([]) = $x;` destructuring assignment statement.
+/// Consumes the opening `[`, parses the bracket-enclosed pattern, expects `=`, parses the
+/// right-hand side expression, and consumes the trailing semicolon. Returns the lowered statement.
 pub(in crate::parser::stmt) fn parse_list_unpack(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -40,6 +43,9 @@ pub(in crate::parser::stmt) fn parse_list_unpack(
     Ok(lower_list_unpack(pattern, value, span))
 }
 
+/// Parses a `list() = $x;` destructuring assignment statement using the `list()` construct syntax.
+/// Consumes the `list` keyword, parses the parenthesized pattern, expects `=`, parses the
+/// right-hand side expression, and consumes the trailing semicolon. Returns the lowered statement.
 pub(in crate::parser::stmt) fn parse_list_construct_unpack(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -60,11 +66,13 @@ pub(in crate::parser::stmt) fn parse_list_construct_unpack(
     Ok(lower_list_unpack(pattern, value, span))
 }
 
+/// Represents a list destructuring pattern with ordered entries.
 #[derive(Debug, Clone)]
 struct ListPattern {
     entries: Vec<ListEntry>,
 }
 
+/// A single entry in a list pattern: either skipped, or a keyed/unkeyed target.
 #[derive(Debug, Clone)]
 enum ListEntry {
     Skip,
@@ -74,6 +82,7 @@ enum ListEntry {
     },
 }
 
+/// The target of a list pattern entry: a plain expression, an append target (`$x[]`), or a nested list.
 #[derive(Debug, Clone)]
 enum ListTarget {
     Expr(Expr),
@@ -81,6 +90,8 @@ enum ListTarget {
     Nested(ListPattern),
 }
 
+/// Parses a bracket-enclosed list pattern (`[...]`). Delegates to `parse_delimited_list_pattern`
+/// with `[` and `]` tokens.
 fn parse_bracket_list_pattern(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -89,6 +100,8 @@ fn parse_bracket_list_pattern(
     parse_delimited_list_pattern(tokens, pos, span, Token::LBracket, Token::RBracket, "]")
 }
 
+/// Parses a `list(...)` construct pattern (parenthesized `list` keyword). Consumes `list`,
+/// then delegates to `parse_delimited_list_pattern` with `(` and `)` tokens.
 fn parse_list_construct_pattern(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -98,6 +111,9 @@ fn parse_list_construct_pattern(
     parse_delimited_list_pattern(tokens, pos, span, Token::LParen, Token::RParen, ")")
 }
 
+/// Parses the interior of a delimited list pattern (bracket or parenthesized). Expects the opening
+/// delimiter at `*pos`, finds the matching close, slices the interior tokens, and calls
+/// `parse_list_pattern_content`. Advances `*pos` past the closing delimiter.
 fn parse_delimited_list_pattern(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -123,6 +139,9 @@ fn parse_delimited_list_pattern(
     Ok(pattern)
 }
 
+/// Splits the token slice by top-level commas (respecting bracket/paren/brace nesting),
+/// converts each segment to a `ListEntry`, and validates the resulting pattern.
+/// Returns a `ListPattern` or an error if the pattern is malformed.
 fn parse_list_pattern_content(
     tokens: &[(Token, Span)],
     span: Span,
@@ -165,6 +184,8 @@ fn parse_list_pattern_content(
     Ok(pattern)
 }
 
+/// Converts a single comma-separated segment of a list pattern into a `ListEntry`.
+/// Empty segment → `Skip`. Top-level `=>` present → keyed `Target`. Otherwise → unkeyed `Target`.
 fn parse_list_pattern_segment(
     segment: &[(Token, Span)],
     span: Span,
@@ -194,6 +215,9 @@ fn parse_list_pattern_segment(
     })
 }
 
+/// Parses the target (right-hand side of `=>` or whole segment) into a `ListTarget`.
+/// Handles nested `list()` constructs, bracket-wrapped nested patterns, append targets (`$x[]`),
+/// and ordinary destructuring targets (variable, property, static property, or array access).
 fn parse_list_target_from_slice(
     tokens: &[(Token, Span)],
     span: Span,
@@ -234,6 +258,8 @@ fn parse_list_target_from_slice(
     }
 }
 
+/// Convenience wrapper around `parse_expr` that parses a full token slice and verifies all tokens
+/// were consumed. Returns the parsed `Expr` or an error if parsing fails or tokens remain.
 fn parse_expr_from_slice(tokens: &[(Token, Span)], span: Span) -> Result<Expr, CompileError> {
     let mut pos = 0usize;
     let expr = parse_expr(tokens, &mut pos)?;
@@ -243,6 +269,8 @@ fn parse_expr_from_slice(tokens: &[(Token, Span)], span: Span) -> Result<Expr, C
     Ok(expr)
 }
 
+/// Validates a parsed `ListPattern`: must have at least one target, and keyed entries may not
+/// be mixed with unkeyed entries within the same list. Returns `Ok(())` or a compile error.
 fn validate_list_pattern(pattern: &ListPattern, span: Span) -> Result<(), CompileError> {
     if list_pattern_target_count(pattern) == 0 {
         return Err(CompileError::new(span, "Cannot use empty list"));
@@ -268,6 +296,8 @@ fn validate_list_pattern(pattern: &ListPattern, span: Span) -> Result<(), Compil
     Ok(())
 }
 
+/// Counts the number of leaf destructuring targets in a nested `ListPattern`, recursing into
+/// nested patterns. Skipped entries contribute 0; each `Target` contributes 1.
 fn list_pattern_target_count(pattern: &ListPattern) -> usize {
     pattern
         .entries
@@ -283,6 +313,8 @@ fn list_pattern_target_count(pattern: &ListPattern) -> usize {
         .sum()
 }
 
+/// Scans tokens for the top-level `=>` (double arrow) that is not inside brackets, parentheses,
+/// or braces. Returns the token index of the arrow, or `None` if no top-level arrow exists.
 fn find_top_level_double_arrow(tokens: &[(Token, Span)]) -> Option<usize> {
     let mut bracket_depth = 0usize;
     let mut paren_depth = 0usize;
@@ -304,6 +336,8 @@ fn find_top_level_double_arrow(tokens: &[(Token, Span)]) -> Option<usize> {
     None
 }
 
+/// Scans tokens starting at `open_pos` for the matching close delimiter, tracking nesting depth.
+/// Returns the index of the matching close token, or `None` if no match is found.
 fn find_matching_delimiter(
     tokens: &[(Token, Span)],
     open_pos: usize,
@@ -324,6 +358,9 @@ fn find_matching_delimiter(
     None
 }
 
+/// Returns `true` if the token slice starting at `open_pos` opens with the given `open` token
+/// and closes with the matching `close` token, with no inner tokens consuming the wrapper.
+/// Uses `find_matching_delimiter` to verify the slice is a single balanced pair.
 fn is_wrapped_by(tokens: &[(Token, Span)], open_pos: usize, open: Token, close: Token) -> bool {
     if tokens.get(open_pos).map(|(token, _)| token) != Some(&open) {
         return false;
@@ -331,6 +368,9 @@ fn is_wrapped_by(tokens: &[(Token, Span)], open_pos: usize, open: Token, close: 
     find_matching_delimiter(tokens, open_pos, &open, &close) == Some(tokens.len() - 1)
 }
 
+/// Returns `true` if the token slice begins with a case-insensitive `list` identifier followed
+/// by a parenthesized expression (i.e., `list(...)`). Checks the first token is `Identifier("list")`
+/// and the second is `LParen`; the wrapper check `is_wrapped_by` validates balanced parens.
 fn is_list_construct_slice(tokens: &[(Token, Span)]) -> bool {
     matches!(
         tokens,
@@ -339,6 +379,8 @@ fn is_list_construct_slice(tokens: &[(Token, Span)]) -> bool {
     ) && is_wrapped_by(tokens, 1, Token::LParen, Token::RParen)
 }
 
+/// Returns `true` if the expression is a valid list destructuring target: a variable,
+/// property access, static property access, or an array access whose array is one of those forms.
 fn is_list_destructuring_target(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Variable(_)
@@ -354,6 +396,8 @@ fn is_list_destructuring_target(expr: &Expr) -> bool {
     }
 }
 
+/// Returns `true` if the expression is a valid base for an append target (`$x[] = ...`).
+/// Must be a variable, property access, or static property access.
 fn is_append_target_base(expr: &Expr) -> bool {
     matches!(
         &expr.kind,
@@ -363,6 +407,7 @@ fn is_append_target_base(expr: &Expr) -> bool {
     )
 }
 
+/// Maps bracket and parenthesis open tokens to their textual label for error messages.
 fn open_label(token: &Token) -> &'static str {
     match token {
         Token::LBracket => "[",

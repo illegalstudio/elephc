@@ -10,6 +10,8 @@
 use super::*;
 
 #[test]
+// Verifies that `<?php echo $name[1];` parses as an `ArrayAccess` expression with an integer
+// index. String indexing in PHP uses the same `ArrayAccess` AST node as array indexing.
 fn test_parse_string_indexing_uses_array_access_ast() {
     let stmts = parse_source("<?php echo $name[1];");
     assert_eq!(stmts.len(), 1);
@@ -26,6 +28,7 @@ fn test_parse_string_indexing_uses_array_access_ast() {
 }
 
 #[test]
+// Verifies that `<?php $m = ["a" => 1];` parses to an `Assign` with an `ArrayLiteralAssoc` value.
 fn test_parse_assoc_array() {
     let stmts = parse_source("<?php $m = [\"a\" => 1];");
     assert_eq!(stmts.len(), 1);
@@ -39,6 +42,8 @@ fn test_parse_assoc_array() {
 // --- Switch ---
 
 #[test]
+// Verifies that `<?php $x = match(1) { 1 => "a" };` parses to an `Assign` with a `Match`
+// expression. The `match` arm subject and single arm are preserved in the AST.
 fn test_parse_match() {
     let stmts = parse_source("<?php $x = match(1) { 1 => \"a\" };");
     assert_eq!(stmts.len(), 1);

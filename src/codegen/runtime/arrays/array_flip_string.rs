@@ -84,6 +84,10 @@ pub fn emit_array_flip_string(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = destination hash table
 }
 
+/// x86_64 Linux variant of `emit_array_flip_string`.
+/// Uses the System V AMD64 ABI: source array pointer in `rdi`, result returned in `rax`.
+/// Allocates a hash table with doubled capacity for low load factor, then iterates the
+/// source indexed string array, normalizing keys and inserting flipped key/value pairs.
 fn emit_array_flip_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_flip_string ---");

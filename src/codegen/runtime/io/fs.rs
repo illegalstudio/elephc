@@ -10,8 +10,12 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// File system operations: unlink, mkdir, rmdir, chdir, rename, copy.
-/// All path inputs are x1/x2=string. Return x0=1 on success, 0 on failure.
+/// Emits all filesystem runtime helpers: `__rt_unlink`, `__rt_mkdir`, `__rt_rmdir`,
+/// `__rt_chdir`, `__rt_rename`, and `__rt_copy`.
+///
+/// Dispatches to `emit_fs_linux_x86_64` on x86_64 Linux; emits ARM64 syscall-based
+/// helpers on all other targets. Each helper takes PHP string path arguments (x1=ptr,
+/// x2=len) and returns x0=1 on success, 0 on failure.
 pub fn emit_fs(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_fs_linux_x86_64(emitter);
@@ -203,6 +207,9 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits x86_64 Linux variants of all filesystem helpers using libc calls.
+/// Uses a stack-based frame (rbp/rsp convention) instead of the ARM64 link-register frame.
+/// Return value convention matches `emit_fs`: x0=1 on success, 0 on failure.
 fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: unlink ---");
@@ -273,6 +280,12 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
 
 }
 
+/// Emits a leaf helper for single-path libc filesystem functions on x86_64.
+///
+/// Takes an optional setup instruction string inserted before the libc call to populate
+/// extra arguments (e.g., mode for `mkdir`). The C path is passed via `__rt_cstr`
+/// output in `rax`; the libc result is compared against 0 and returned as 1 (success) or
+/// 0 (failure) in `rax`.
 fn emit_single_path_libc_bool_helper(emitter: &mut Emitter, symbol: &str, extra_setup: Option<&str>) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while the helper makes libc calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the call-aligned helper body

@@ -38,9 +38,32 @@ const X86_64_INITIAL_FRAME_BYTES: i32 = X86_64_SWITCH_SAVE_BYTES + 8;
 /// Offset within the Linux x86_64 initial frame where the resume address lives.
 const X86_64_INITIAL_FRAME_RIP_OFFSET: i32 = X86_64_SWITCH_SAVE_BYTES;
 
-/// __rt_fiber_switch: cooperative context switch.
-/// Input:  x0 = target Fiber* (NULL = switch back to main thread)
-/// Output: control returns when the *current* context is later switched back to.
+/// Emits `__rt_fiber_switch`: a cooperative context switch between Fiber execution contexts.
+///
+/// # Input
+/// - `x0`: target `Fiber*` — NULL switches back to the main thread, non-NULL switches to that fiber.
+/// - Callee-saved registers and floating-point state of the *source* context are saved to the source's stack.
+/// - Global `_fiber_current`, `_exc_handler_top`, and `_exc_call_frame_top` are updated to track the source's
+///   suspended state so exception unwinding and stack-frame cleanup remain correct across switches.
+///
+/// # Output
+/// - Control does not return from this function normally. When the current context is later switched back to,
+///   execution resumes immediately after the `ret` instruction with all state fully restored.
+///
+/// # Behavior
+/// - When `x0` is NULL: the source's SP, exception chain, and call-frame chain are saved to the main-thread
+///   globals (`_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame`), then the
+///   main thread's saved context is restored and execution resumes on the main stack.
+/// - When `x0` is non-NULL: the source's state is persisted into the source `Fiber` object at offsets
+///   `FIBER_SAVED_SP_OFFSET`, `FIBER_OWN_EXC_HEAD_OFFSET`, and `FIBER_OWN_CALL_FRAME_OFFSET`; the target
+///   fiber's saved state is loaded and restored, adopting the target's stack.
+///
+/// # ABI Notes
+/// - ARM64: saves x19–x28, x29, x30, d8–d15 (160 bytes, 16-aligned) to the source stack, then restores the
+///   same register set from the target's stack before returning.
+/// - x86_64: uses the matched helper `emit_x86_64` which saves/restores rbx, rbp, r12–r15 per the SysV ABI.
+///
+/// Called from `emit_fiber_switch` on ARM64 targets.
 pub fn emit_fiber_switch(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_x86_64(emitter);
@@ -124,7 +147,13 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // resume the target context where it last yielded
 }
 
-/// Number of bytes a freshly-prepared fiber stack reserves for the entry frame.
+/// Returns the total bytes reserved on a freshly-created fiber stack for the entry frame.
+///
+/// ARM64: equal to `AARCH64_SWITCH_SAVE_BYTES` (160 bytes, 16-aligned).
+/// x86_64: equal to `X86_64_INITIAL_FRAME_BYTES` (56 bytes, including the resume address slot).
+///
+/// Used during fiber creation to allocate the initial stack area so the first switch into the fiber
+/// can restore registers without reading uninitialized memory.
 pub(crate) fn fiber_initial_stack_frame_bytes(arch: Arch) -> i32 {
     match arch {
         Arch::AArch64 => AARCH64_SWITCH_SAVE_BYTES,
@@ -132,7 +161,15 @@ pub(crate) fn fiber_initial_stack_frame_bytes(arch: Arch) -> i32 {
     }
 }
 
-/// Offset within the initial frame where the entry trampoline address is stored.
+/// Returns the offset within a fiber's initial stack frame where the entry trampoline address is stored.
+///
+/// ARM64: offset 88 — the entry trampoline lives 88 bytes below the frame base (within the 160-byte save area,
+/// at the slot previously used by the saved x30/LR, which is the resume address for a new fiber).
+/// x86_64: `X86_64_INITIAL_FRAME_RIP_OFFSET` — the resume address occupies the 8-byte slot immediately
+/// after the saved GPRs, at offset 48 in a 56-byte initial frame.
+///
+/// Used when creating a fiber to write the entry-point address into the correct slot so the first switch
+/// to that fiber jumps to the fiber's trampoline.
 pub(crate) fn fiber_initial_entry_offset(arch: Arch) -> i32 {
     match arch {
         Arch::AArch64 => 88,
@@ -140,6 +177,19 @@ pub(crate) fn fiber_initial_entry_offset(arch: Arch) -> i32 {
     }
 }
 
+/// Emits the x86_64 SysV ABI variant of `__rt_fiber_switch`.
+///
+/// Saves the source context's callee-saved registers (rbx, rbp, r12–r15) and resume address to its own stack,
+/// persists SP and exception/call-frame chain heads into either the source Fiber object or the main-thread
+/// globals, then restores the target context's state and returns into it.
+///
+/// # Differences from ARM64
+/// - Saves 6 GPRs (48 bytes) + 1 resume address (8 bytes) = 56-byte frame, excluding the call-return address
+///   that sits above the frame (handled by `ret`).
+/// - Uses a `push`/`pop` sequence rather than a contiguous store; the return address is implicit in the `ret`.
+/// - Entry trampoline address is stored at `X86_64_INITIAL_FRAME_RIP_OFFSET` (48) in the initial frame.
+///
+/// Called from `emit_fiber_switch` when `emitter.target.arch == Arch::X86_64`.
 fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_switch ---");

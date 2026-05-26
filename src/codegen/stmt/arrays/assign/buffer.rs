@@ -18,6 +18,29 @@ use crate::types::PhpType;
 
 use super::ArrayAssignTarget;
 
+/// Emits machine code to assign a value to a typed buffer element at a given index.
+///
+/// # Arguments
+/// - `target`: the buffer local slot and its element type
+/// - `index`: expression yielding the element index (coerced to `i64`)
+/// - `value`: expression yielding the assigned value (coerced to `target.elem_ty`)
+///
+/// # Generated sequence
+/// 1. Loads the buffer header pointer (respects `target.is_ref` for ref slots)
+/// 2. Evaluates `index`, pushes the result, evaluates `value`, pushes the value
+/// 3. Reloads the preserved index and buffer pointer from the stack
+/// 4. Guards against use-after-free: aborts via `__rt_buffer_use_after_free` if the
+///    buffer header pointer is null (nulled by `buffer_free()`)
+/// 5. Guards against out-of-bounds: rejects negative indices and index ≥ logical length,
+///    aborts via `__rt_buffer_bounds_fail` with the index and length arguments
+/// 6. Computes the element address as `buffer_base + 16 + index * stride`
+/// 7. Pops the preserved value and stores it directly to the element slot
+/// 8. Cleans up the two preserved slots (index and buffer pointer)
+///
+/// # Register usage
+/// - `buffer_reg`: scratch symbol register holding the buffer header pointer
+/// - `index_reg`: temporary integer register for the scaled index
+/// - `len_reg`: fixed by architecture (`x11` on AArch64, `rcx` on x86_64) for the length/stride
 pub(super) fn emit_buffer_array_assign(
     target: &ArrayAssignTarget<'_>,
     index: &Expr,

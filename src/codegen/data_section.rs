@@ -16,6 +16,13 @@ pub enum DataWord {
     Symbol(String),
 }
 
+/// Tracks constants and common symbols for the assembly `.data` section.
+///
+/// - `entries`: string constants as `(label, bytes)` pairs
+/// - `float_entries`: float constants as `(label, IEEE-754 bits)` pairs
+/// - `comm_entries`: common symbols as `(label, size)` pairs
+/// - `counter`: monotonically increasing integer for generating unique labels
+/// - `dedup`/`float_dedup`/`comm_dedup`: deduplication maps to avoid emitting duplicate constants
 pub struct DataSection {
     entries: Vec<(String, Vec<u8>)>,
     float_entries: Vec<(String, u64)>,
@@ -29,6 +36,7 @@ pub struct DataSection {
 }
 
 impl DataSection {
+    /// Creates a new empty data section. All collections start empty; the counter is zero.
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -43,6 +51,8 @@ impl DataSection {
         }
     }
 
+    /// Looks up `value` in the float deduplication map; if found, returns the existing label.
+    /// Otherwise generates `_float_N`, stores the IEEE-754 bit representation, and returns the new label.
     pub fn add_float(&mut self, value: f64) -> String {
         let bits = value.to_bits();
         if let Some(label) = self.float_dedup.get(&bits) {
@@ -55,6 +65,8 @@ impl DataSection {
         label
     }
 
+    /// Looks up `bytes` in the string deduplication map; if found, returns the existing label and length.
+    /// Otherwise generates `_str_N`, clones the bytes into `entries`, and returns the new label and length.
     pub fn add_string(&mut self, bytes: &[u8]) -> (String, usize) {
         if let Some(label) = self.dedup.get(bytes) {
             return (label.clone(), bytes.len());
@@ -68,6 +80,8 @@ impl DataSection {
         (label, bytes.len())
     }
 
+    /// Looks up `label` in the common-symbol deduplication map; if found, returns the existing label.
+    /// Otherwise inserts `label` into `comm_entries` with the given `size` and returns `label` unchanged.
     pub fn add_comm(&mut self, label: String, size: usize) -> String {
         if let Some(existing) = self.comm_dedup.get(&label) {
             return existing.clone();
@@ -89,6 +103,9 @@ impl DataSection {
         label
     }
 
+    /// Serializes all entries into a GNU assembly `.data` section string.
+    /// Returns an empty string when no entries have been collected.
+    /// Emits `.comm` directives first, then `.ascii` string literals, then `.p2align 3`/`quad` float entries.
     pub fn emit(&self) -> String {
         if self.entries.is_empty()
             && self.float_entries.is_empty()

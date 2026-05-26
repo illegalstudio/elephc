@@ -15,6 +15,15 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `ltrim` builtin.
+///
+/// Handles two arities:
+/// - 1-arg: strips ASCII whitespace from the left of the input string, calling `__rt_ltrim`.
+/// - 2-arg: strips characters in the given mask from the left, calling `__rt_ltrim_mask`.
+///   For the 2-arg variant, the source string is preserved on the stack while the mask
+///   argument is evaluated, then the registers are restored before the call.
+///
+/// Returns `PhpType::Str` as the result is always a new allocated string.
 pub fn emit(
     _name: &str,
     args: &[Expr],

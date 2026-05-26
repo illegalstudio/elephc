@@ -16,6 +16,17 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `chown($path, $owner)` builtin call.
+///
+/// `args[0]` is the path (string expression) and `args[1]` is the owner principal,
+/// which may be a string (user name) or integer (UID). GID is unconditionally set to
+/// `-1` to leave the group unchanged.
+///
+/// On AArch64: path pointer/length in `x1`/`x2`, owner in `x3`/`x4` (string) or `x3` (int).
+/// On x86_64: path pointer/length in `rax`/`rdx`, owner in `rdi`/`rsi` (string) or `rdi` (int).
+///
+/// Calls `__rt_chown` for numeric UID or `__rt_chown_user` for string user name.
+/// Returns `PhpType::Bool` (true = success, false = failure from runtime).
 pub fn emit(
     _name: &str,
     args: &[Expr],

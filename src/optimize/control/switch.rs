@@ -10,6 +10,13 @@
 
 use super::*;
 
+/// Optimizes a `switch` statement by folding known subject values, pruning unreachable cases,
+/// and rewriting level-sensitive switches that cannot be safely normalized.
+///
+/// - `subject` is pruned before analysis.
+/// - Cases and default branch are normalized and pruned.
+/// - Returns the execution path for a known subject value, or the original switch if
+///   level-sensitive exits prevent safe rewriting, or if the subject is not scalar.
 pub(crate) fn prune_switch_stmt(
     subject: Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
@@ -100,6 +107,11 @@ pub(crate) fn prune_switch_stmt(
     }
 }
 
+/// Optimizes a `match` expression by folding a known scalar subject value into the arms.
+///
+/// Returns the result expression for the first matching arm, the default expression if
+/// the subject matches no arms, or the original `ExprKind::Match` if any arm classification
+/// is unknown or the subject is non-scalar.
 pub(crate) fn try_prune_match_expr(
     subject: Expr,
     arms: Vec<(Vec<Expr>, Expr)>,
@@ -139,6 +151,10 @@ pub(crate) fn try_prune_match_expr(
     }
 }
 
+/// Removes `match` arms whose patterns are already covered by earlier arms.
+///
+/// Duplicates are detected via structural equality of expressions.
+/// Arms with empty pattern lists are skipped.
 fn drop_shadowed_match_arms(arms: Vec<(Vec<Expr>, Expr)>) -> Vec<(Vec<Expr>, Expr)> {
     let mut normalized = Vec::new();
     let mut seen_patterns: Vec<Expr> = Vec::new();
@@ -163,19 +179,32 @@ fn drop_shadowed_match_arms(arms: Vec<(Vec<Expr>, Expr)>) -> Vec<(Vec<Expr>, Exp
     normalized
 }
 
+/// Classification of how a switch/case pattern matches a subject value.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CaseMatch {
+    /// The subject value provably matches this pattern.
     Matches,
+    /// The subject value provably does not match this pattern.
     NoMatch,
+    /// Whether the subject matches cannot be determined at compile time.
     Unknown,
 }
 
+/// Comparison mode for switch/case pattern matching, affecting type coercion behavior.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CaseComparison {
+    /// Strict equality: booleans match only booleans, null matches only null.
     Strict,
+    /// Loose PHP-style switch comparison: int/float coerce to same numeric value,
+    /// strings compare by value, mixed types yield Unknown.
     LooseSwitch,
 }
 
+/// Classifies whether a scalar subject value matches, does not match, or is indeterminate
+/// relative to a list of case patterns under the given comparison mode.
+///
+/// Iterates over patterns and returns early on the first definite match or unknown.
+/// Returns `Unknown` if any pattern yields `None` from `pattern_matches_scalar`.
 pub(crate) fn classify_case_patterns(
     subject: &ScalarValue,
     patterns: &[Expr],
@@ -196,6 +225,10 @@ pub(crate) fn classify_case_patterns(
     }
 }
 
+/// Determines if a case pattern matches a scalar subject value under the given comparison mode.
+///
+/// Returns `Some(true)` if the pattern matches, `Some(false)` if it does not,
+/// or `None` if the result cannot be determined (e.g., float compared to string).
 pub(crate) fn pattern_matches_scalar(
     subject: &ScalarValue,
     pattern: &Expr,
@@ -208,6 +241,10 @@ pub(crate) fn pattern_matches_scalar(
     }
 }
 
+/// Strict equality comparison between two scalar values.
+///
+/// Returns `Some(true)` for matching pairs, `Some(false)` for mismatched pairs,
+/// or `Some(false)` for cross-type comparisons (e.g., int vs string).
 pub(crate) fn compare_scalar_strict(left: &ScalarValue, right: &ScalarValue) -> Option<bool> {
     match (left, right) {
         (ScalarValue::Null, ScalarValue::Null) => Some(true),
@@ -219,6 +256,11 @@ pub(crate) fn compare_scalar_strict(left: &ScalarValue, right: &ScalarValue) -> 
     }
 }
 
+/// Loose PHP-style switch comparison between two scalar values.
+///
+/// String compares by value; float compares by numeric value; int is extracted via
+/// `scalar_dispatch_int`. Cross-type comparisons between string/float and other types
+/// yield `None` (indeterminate).
 pub(crate) fn compare_scalar_switch(left: &ScalarValue, right: &ScalarValue) -> Option<bool> {
     match (left, right) {
         (ScalarValue::String(left), ScalarValue::String(right)) => Some(left == right),
@@ -229,6 +271,10 @@ pub(crate) fn compare_scalar_switch(left: &ScalarValue, right: &ScalarValue) -> 
     }
 }
 
+/// Converts a scalar value to an integer for switch dispatch purposes.
+///
+/// Returns `Some(i64)` for Null (as 0), Bool (0/1), and Int values.
+/// Returns `None` for Float and String, which cannot be safely coerced in this context.
 pub(crate) fn scalar_dispatch_int(value: &ScalarValue) -> Option<i64> {
     match value {
         ScalarValue::Null => Some(0),

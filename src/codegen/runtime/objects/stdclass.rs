@@ -117,6 +117,11 @@ pub fn emit_stdclass_set(emitter: &mut Emitter) {
 
 // AArch64 -----------------------------------------------------------------
 
+/// ARM64 code emitter for `__rt_json_encode_stdclass`.
+///
+/// Reads hash entry count at `[x0]`. Zero entries → emits `"{}"` directly
+/// into `_concat_buf` and returns `(ptr, len)` via string ABI. Non-zero
+/// entries → tail-calls `__rt_json_encode_assoc`.
 fn emit_json_encode_stdclass_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_stdclass ---");
@@ -145,6 +150,11 @@ fn emit_json_encode_stdclass_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return (ptr, len) to the caller via the ABI string registers
 }
 
+/// ARM64 code emitter for `__rt_stdclass_new`.
+///
+/// Allocates a 16-byte heap block, stamps it as heap kind 4 (object),
+/// writes the compile-time `_stdclass_class_id` at offset 0, allocates an
+/// 8-slot empty hash at offset 8, and returns the obj pointer in `x0`.
 fn emit_stdclass_new_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stdclass_new ---");
@@ -177,6 +187,11 @@ fn emit_stdclass_new_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return obj pointer in x0
 }
 
+/// ARM64 code emitter for `__rt_stdclass_from_hash`.
+///
+/// Inputs: `x0` = pre-allocated hash pointer. Allocates a 16-byte heap block,
+/// stamps it as heap kind 4 (object), writes `_stdclass_class_id` at offset 0,
+/// stores the incoming hash pointer at offset 8, and returns the obj pointer in `x0`.
 fn emit_stdclass_from_hash_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stdclass_from_hash ---");
@@ -204,6 +219,12 @@ fn emit_stdclass_from_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return obj pointer in x0
 }
 
+/// ARM64 code emitter for `__rt_stdclass_get`.
+///
+/// Inputs: `x0` = obj, `x1` = name_ptr, `x2` = name_len. Loads the hash from
+/// `obj+8`, calls `__rt_hash_get(key_lo=name_ptr, key_hi=name_len)`. On hit
+/// returns the boxed Mixed pointer in `x0`. On miss, boxes a null Mixed via
+/// `__rt_mixed_from_value` and returns the result in `x0`.
 fn emit_stdclass_get_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stdclass_get ---");
@@ -240,6 +261,11 @@ fn emit_stdclass_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in x0
 }
 
+/// ARM64 code emitter for `__rt_stdclass_set`.
+///
+/// Inputs: `x0` = obj, `x1` = name_ptr, `x2` = name_len, `x3` = mixed_ptr.
+/// Lazily allocates the property hash if `obj+8` is null, then calls
+/// `__rt_hash_set` to insert the boxed Mixed under the given key. No return value.
 fn emit_stdclass_set_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stdclass_set ---");
@@ -288,6 +314,12 @@ fn emit_stdclass_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return (no return value)
 }
 
+/// ARM64 code emitter for `__rt_mixed_property_get`.
+///
+/// Inputs: `x0` = mixed_ptr, `x1` = name_ptr, `x2` = name_len. Unboxes the
+/// Mixed, validates the tag is 6 (object) and the class_id matches `_stdclass_class_id`,
+/// then delegates to `__rt_stdclass_get`. Non-object or mismatched class → null result
+/// via `__rt_mixed_from_value`. Returns the result Mixed pointer in `x0`.
 fn emit_mixed_property_get_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_property_get ---");
@@ -331,6 +363,12 @@ fn emit_mixed_property_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in x0
 }
 
+/// ARM64 code emitter for `__rt_mixed_property_set`.
+///
+/// Inputs: `x0` = mixed_ptr, `x1` = name_ptr, `x2` = name_len, `x3` = value_mixed_ptr.
+/// Unboxes the Mixed, validates the tag is 6 (object) and the class_id matches
+/// `_stdclass_class_id`, then delegates to `__rt_stdclass_set`. Non-stdClass payloads
+/// silently drop the write (no return value).
 fn emit_mixed_property_set_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_property_set ---");
@@ -371,6 +409,11 @@ fn emit_mixed_property_set_aarch64(emitter: &mut Emitter) {
 
 // x86_64 ------------------------------------------------------------------
 
+/// x86_64 code emitter for `__rt_json_encode_stdclass`.
+///
+/// Reads hash entry count at `[rax]`. Zero entries → emits `"{}"` directly
+/// into `_concat_buf` and returns `(rax, rdx)` via string ABI. Non-zero
+/// entries → tail-calls `__rt_json_encode_assoc`.
 fn emit_json_encode_stdclass_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_stdclass ---");
@@ -395,6 +438,11 @@ fn emit_json_encode_stdclass_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return (ptr, len) to the caller via the ABI string registers
 }
 
+/// x86_64 code emitter for `__rt_stdclass_new`.
+///
+/// Allocates a 16-byte heap block, stamps it with the ELPH/object-kind marker,
+/// writes the compile-time `_stdclass_class_id` at offset 0, allocates an
+/// 8-slot empty hash at offset 8, and returns the obj pointer in `rax`.
 fn emit_stdclass_new_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stdclass_new ---");
@@ -426,6 +474,12 @@ fn emit_stdclass_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return obj pointer in rax
 }
 
+/// x86_64 code emitter for `__rt_stdclass_from_hash`.
+///
+/// Input: `rdi` = pre-allocated hash pointer. Allocates a 16-byte heap block,
+/// stamps it with the ELPH/object-kind marker, writes `_stdclass_class_id` at
+/// offset 0, stores the incoming hash pointer at offset 8, and returns the
+/// obj pointer in `rax`.
 fn emit_stdclass_from_hash_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stdclass_from_hash ---");
@@ -453,6 +507,12 @@ fn emit_stdclass_from_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return obj pointer in rax
 }
 
+/// x86_64 code emitter for `__rt_stdclass_get`.
+///
+/// Inputs (SysV): `rdi` = obj, `rsi` = name_ptr, `rdx` = name_len. Loads the
+/// hash from `obj+8`, calls `__rt_hash_get(key_lo=name_ptr, key_hi=name_len)`.
+/// On hit returns the boxed Mixed pointer in `rax`. On miss, boxes a null
+/// Mixed via `__rt_mixed_from_value` and returns the result in `rax`.
 fn emit_stdclass_get_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stdclass_get ---");
@@ -493,6 +553,13 @@ fn emit_stdclass_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in rax
 }
 
+/// x86_64 code emitter for `__rt_mixed_property_get`.
+///
+/// Inputs (SysV): `rdi` = mixed_ptr, `rsi` = name_ptr, `rdx` = name_len.
+/// Unboxes the Mixed, validates the tag is 6 (object) and the class_id matches
+/// `_stdclass_class_id`, then delegates to `__rt_stdclass_get`. Non-object or
+/// mismatched class → null result via `__rt_mixed_from_value`. Returns the
+/// result Mixed pointer in `rax`.
 fn emit_mixed_property_get_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_property_get ---");
@@ -537,6 +604,12 @@ fn emit_mixed_property_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in rax
 }
 
+/// x86_64 code emitter for `__rt_mixed_property_set`.
+///
+/// Inputs (SysV): `rdi` = mixed_ptr, `rsi` = name_ptr, `rdx` = name_len,
+/// `rcx` = value_mixed_ptr. Unboxes the Mixed, validates the tag is 6 (object)
+/// and the class_id matches `_stdclass_class_id`, then delegates to
+/// `__rt_stdclass_set`. Non-stdClass payloads silently drop the write (no return value).
 fn emit_mixed_property_set_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_property_set ---");
@@ -576,6 +649,11 @@ fn emit_mixed_property_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return (no return value)
 }
 
+/// x86_64 code emitter for `__rt_stdclass_set`.
+///
+/// Inputs (SysV): `rdi` = obj, `rsi` = name_ptr, `rdx` = name_len, `rcx` = mixed_ptr.
+/// Lazily allocates the property hash if `obj+8` is null, then calls
+/// `__rt_hash_set` to insert the boxed Mixed under the given key. No return value.
 fn emit_stdclass_set_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stdclass_set ---");

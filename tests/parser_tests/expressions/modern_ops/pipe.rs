@@ -11,6 +11,7 @@
 
 use super::*;
 
+// Extracts the sole `Echo` expression from `stmts[0]`, panicking if the first stmt is not `Echo`.
 fn unwrap_echo(stmts: &[Stmt]) -> &Expr {
     match &stmts[0].kind {
         StmtKind::Echo(expr) => expr,
@@ -18,6 +19,8 @@ fn unwrap_echo(stmts: &[Stmt]) -> &Expr {
     }
 }
 
+// Parses `$x |> foo(...)` and verifies a first-class callable is the pipe target.
+// Fixture: variable `$x` as pipe value, first-class callable `foo(...)` as callable.
 #[test]
 fn test_pipe_basic_first_class_callable() {
     let stmts = parse_source("<?php echo $x |> foo(...);");
@@ -34,6 +37,8 @@ fn test_pipe_basic_first_class_callable() {
     }
 }
 
+// Parses `$x |> f(...) |> g(...)` and verifies the AST nests left-associatively.
+// Outer pipe's callable is `g(...)`; its value is the inner pipe `{ $x, f(...) }`.
 #[test]
 fn test_pipe_chains_left_associative() {
     let stmts = parse_source("<?php echo $x |> f(...) |> g(...);");
@@ -58,9 +63,9 @@ fn test_pipe_chains_left_associative() {
     }
 }
 
+// Parses `5 + 2 |> f(...)` and verifies pipe binds looser than `+` (arithmetic groups first).
 #[test]
 fn test_pipe_lower_precedence_than_arithmetic() {
-    // `5 + 2 |> f(...)` must parse as `(5 + 2) |> f(...)`.
     let stmts = parse_source("<?php echo 5 + 2 |> f(...);");
     let expr = unwrap_echo(&stmts);
     match &expr.kind {
@@ -72,9 +77,10 @@ fn test_pipe_lower_precedence_than_arithmetic() {
     }
 }
 
+// Parses `'beep' |> f(...) == 4` and verifies pipe binds tighter than `==` (comparison on RHS).
+// The outer binary op is `Eq`; its left operand is the full pipe expression.
 #[test]
 fn test_pipe_higher_precedence_than_comparison() {
-    // `'beep' |> f(...) == 4` must parse as `('beep' |> f(...)) == 4`.
     let stmts = parse_source("<?php echo 'beep' |> f(...) == 4;");
     let expr = unwrap_echo(&stmts);
     match &expr.kind {
@@ -85,9 +91,9 @@ fn test_pipe_higher_precedence_than_comparison() {
     }
 }
 
+// Parses `$id |> get(...) ?? 'd'` and verifies pipe binds tighter than null-coalesce.
 #[test]
 fn test_pipe_higher_precedence_than_null_coalesce() {
-    // `$id |> get(...) ?? 'd'` must parse as `($id |> get(...)) ?? 'd'`.
     let stmts = parse_source("<?php echo $id |> get(...) ?? 'd';");
     let expr = unwrap_echo(&stmts);
     match &expr.kind {
@@ -98,9 +104,9 @@ fn test_pipe_higher_precedence_than_null_coalesce() {
     }
 }
 
+// Parses `"a" . "b" |> f(...)` and verifies pipe binds looser than `.` (concat groups first).
 #[test]
 fn test_pipe_lower_precedence_than_concat() {
-    // `"a" . "b" |> f(...)` must parse as `("a" . "b") |> f(...)`.
     let stmts = parse_source(r#"<?php echo "a" . "b" |> f(...);"#);
     let expr = unwrap_echo(&stmts);
     match &expr.kind {
@@ -118,9 +124,9 @@ fn test_pipe_lower_precedence_than_concat() {
     }
 }
 
+// Parses `1 << 2 |> f(...)` and verifies pipe binds looser than shift operators.
 #[test]
 fn test_pipe_lower_precedence_than_shift() {
-    // `1 << 2 |> f(...)` must parse as `(1 << 2) |> f(...)`.
     let stmts = parse_source("<?php echo 1 << 2 |> f(...);");
     let expr = unwrap_echo(&stmts);
     match &expr.kind {
@@ -132,9 +138,9 @@ fn test_pipe_lower_precedence_than_shift() {
     }
 }
 
+// Parses `$x |> f(...) ? 1 : 0` and verifies pipe binds tighter than ternary (pipe is condition).
 #[test]
 fn test_pipe_higher_precedence_than_ternary() {
-    // `$x |> f(...) ? 1 : 0` must parse as `($x |> f(...)) ? 1 : 0`.
     let stmts = parse_source("<?php echo $x |> f(...) ? 1 : 0;");
     let expr = unwrap_echo(&stmts);
     match &expr.kind {
@@ -145,9 +151,9 @@ fn test_pipe_higher_precedence_than_ternary() {
     }
 }
 
+// Parses `$x |> f(...) && $ok` and verifies pipe binds tighter than `&&` (pipe on LHS of And).
 #[test]
 fn test_pipe_higher_precedence_than_logical() {
-    // `$x |> f(...) && $ok` must parse as `($x |> f(...)) && $ok`.
     let stmts = parse_source("<?php echo $x |> f(...) && $ok;");
     let expr = unwrap_echo(&stmts);
     match &expr.kind {
@@ -158,9 +164,9 @@ fn test_pipe_higher_precedence_than_logical() {
     }
 }
 
+// Parses `$out = $x |> f(...)` and verifies pipe binds tighter than assignment (pipe is RHS value).
 #[test]
 fn test_pipe_higher_precedence_than_assignment() {
-    // `$out = $x |> f(...)` must parse as `$out = ($x |> f(...))`.
     let stmts = parse_source("<?php echo $out = $x |> f(...);");
     let expr = unwrap_echo(&stmts);
     match &expr.kind {
@@ -172,6 +178,7 @@ fn test_pipe_higher_precedence_than_assignment() {
     }
 }
 
+// Parses `$x |> $cb` and verifies a bare variable can be the pipe callable.
 #[test]
 fn test_pipe_with_variable_callable() {
     let stmts = parse_source("<?php echo $x |> $cb;");
@@ -185,6 +192,7 @@ fn test_pipe_with_variable_callable() {
     }
 }
 
+// Parses `$x |> A::m(...)` and verifies a static method first-class callable is a valid pipe target.
 #[test]
 fn test_pipe_with_static_method_callable() {
     let stmts = parse_source("<?php echo $x |> A::m(...);");
@@ -203,11 +211,13 @@ fn test_pipe_with_static_method_callable() {
     }
 }
 
+// Parses `1 |> fn($v) => $v + 1` and verifies unparenthesized arrow function target is rejected.
 #[test]
 fn test_pipe_rejects_unparenthesized_arrow_function_target() {
     assert!(parse_fails("<?php echo 1 |> fn($v) => $v + 1;"));
 }
 
+// Parses `1 |> static fn($v) => $v + 1` and verifies unparenthesized static arrow function target is rejected.
 #[test]
 fn test_pipe_rejects_unparenthesized_static_arrow_function_target() {
     assert!(parse_fails("<?php echo 1 |> static fn($v) => $v + 1;"));

@@ -11,16 +11,20 @@ use super::*;
 
 #[test]
 fn test_error_missing_open_tag() {
+    // PHP code starting outside an open tag produces a "missing open tag" error.
     expect_error("echo \"hi\";", "<?php");
 }
 
 #[test]
 fn test_error_unterminated_string() {
+    // A double-quoted string that is never closed produces an "Unterminated string" error.
     expect_error("<?php \"no end", "Unterminated string");
 }
 
 #[test]
 fn test_error_invalid_unicode_string_escape() {
+    // A UTF-8 codepoint escape (`\u{NNNNN}`) outside the valid Unicode range (0x10FFFF) produces
+    // "Invalid UTF-8 codepoint escape sequence". Regression test for \u{110000} specifically.
     expect_error(
         r#"<?php echo "\u{110000}";"#,
         "Invalid UTF-8 codepoint escape sequence",
@@ -29,31 +33,38 @@ fn test_error_invalid_unicode_string_escape() {
 
 #[test]
 fn test_error_empty_variable() {
+    // A bare `$` followed by a semicolon (no variable name) produces "Expected variable name".
     expect_error("<?php $;", "Expected variable name");
 }
 
 #[test]
 fn test_error_bare_identifier() {
+    // An unquoted identifier with no matching constant definition produces
+    // "Undefined constant: foo". The lexer treats `foo` as a name token, not a variable.
     expect_error("<?php foo;", "Undefined constant: foo");
 }
 
 #[test]
 fn test_error_unexpected_character() {
+    // A backtick outside any expression context is an unexpected character error.
     expect_error("<?php `", "Unexpected character");
 }
 
 #[test]
 fn test_error_empty_list_destructuring_pattern() {
+    // `list()` with no entries (`[]`) on the left side of an assignment is forbidden.
     expect_error("<?php [] = [1];", "Cannot use empty list");
 }
 
 #[test]
 fn test_error_list_destructuring_all_skipped() {
+    // `list()` with only skip placeholders (`[, ,]`) is not allowed.
     expect_error("<?php [, ,] = [1, 2];", "Cannot use empty list");
 }
 
 #[test]
 fn test_error_list_destructuring_mixes_keyed_and_unkeyed_entries() {
+    // `list()` cannot mix keyed (`"id" => $id`) and unkeyed (`$a`) entries in the same destructuring.
     expect_error(
         "<?php [$a, \"id\" => $id] = [1, \"id\" => 2];",
         "Cannot mix keyed and unkeyed list entries",
@@ -62,6 +73,7 @@ fn test_error_list_destructuring_mixes_keyed_and_unkeyed_entries() {
 
 #[test]
 fn test_error_list_destructuring_requires_writable_target() {
+    // The list pattern left-hand side must be writable; an expression like `1 + 2` is invalid.
     expect_error("<?php [1 + 2] = [3];", "Invalid list destructuring target");
 }
 
@@ -69,6 +81,7 @@ fn test_error_list_destructuring_requires_writable_target() {
 
 #[test]
 fn test_error_unterminated_attribute_group() {
+    // An attribute group opened with `#[` but missing the closing `]` produces an error.
     expect_error(
         "<?php #[Foo class C {}",
         "Expected ',' or ']' between attributes",
@@ -77,11 +90,13 @@ fn test_error_unterminated_attribute_group() {
 
 #[test]
 fn test_error_empty_attribute_group() {
+    // An empty attribute group `#[]` before a class declaration is rejected.
     expect_error("<?php #[] class C {}", "Empty attribute group");
 }
 
 #[test]
 fn test_error_attribute_missing_identifier() {
+    // An attribute whose first entry is a numeric literal (not an identifier) is rejected.
     expect_error(
         "<?php #[123] class C {}",
         "Expected attribute name (identifier)",
@@ -90,6 +105,7 @@ fn test_error_attribute_missing_identifier() {
 
 #[test]
 fn test_error_attribute_starts_with_comma() {
+    // An attribute group whose first entry is a comma (not an identifier) is rejected.
     expect_error(
         "<?php #[, A] class C {}",
         "Expected attribute name (identifier)",
@@ -98,6 +114,7 @@ fn test_error_attribute_starts_with_comma() {
 
 #[test]
 fn test_error_attribute_qualifier_dangling_backslash() {
+    // An attribute name that is a lone backslash is rejected as an invalid identifier.
     expect_error(
         "<?php #[\\] class C {}",
         "Expected attribute name (identifier)",
@@ -106,7 +123,7 @@ fn test_error_attribute_qualifier_dangling_backslash() {
 
 #[test]
 fn test_error_attribute_unterminated_arguments() {
-    // An attribute argument list opened with `(` but never closed must fail.
+    // An attribute opened with `(` but never closed (missing `)`) produces an error.
     expect_error(
         "<?php #[Foo(1, 2 class C {}",
         "Expected ',' between arguments",
@@ -115,8 +132,7 @@ fn test_error_attribute_unterminated_arguments() {
 
 #[test]
 fn test_error_attribute_on_echo_statement_is_rejected() {
-    // PHP only allows attributes on declarations; an `echo` statement must
-    // be rejected when preceded by `#[Foo]`.
+    // PHP only allows attributes on declarations; an `echo` statement is not a valid target.
     expect_error(
         "<?php #[Foo] echo 1;",
         "Attributes are only allowed before declarations",
@@ -125,6 +141,7 @@ fn test_error_attribute_on_echo_statement_is_rejected() {
 
 #[test]
 fn test_error_attribute_on_assignment_is_rejected() {
+    // Attributes are only permitted before declaration statements; an assignment is rejected.
     expect_error(
         "<?php #[Foo] $x = 1;",
         "Attributes are only allowed before declarations",
@@ -133,6 +150,7 @@ fn test_error_attribute_on_assignment_is_rejected() {
 
 #[test]
 fn test_error_attribute_on_if_is_rejected() {
+    // Attributes are only permitted before declaration statements; an `if` control flow is rejected.
     expect_error(
         "<?php #[Foo] if (true) { echo 1; }",
         "Attributes are only allowed before declarations",
@@ -143,71 +161,87 @@ fn test_error_attribute_on_if_is_rejected() {
 
 #[test]
 fn test_error_explicit_octal_invalid_digit() {
+    // Explicit octal literals (`0o`) using a digit outside 0-7 (e.g., `0o78`) produces an error.
     expect_error("<?php $x = 0o78;", "after octal literal");
 }
 
 #[test]
 fn test_error_explicit_octal_empty() {
+    // An explicit octal literal with no digits (`0o`) produces "Expected octal digits".
     expect_error("<?php $x = 0o;", "Expected octal digits");
 }
 
 #[test]
 fn test_error_explicit_octal_separator_after_prefix() {
+    // An underscore immediately after the `0o` prefix (e.g., `0o_77`) is rejected.
     expect_error("<?php $x = 0o_77;", "Expected octal digits");
 }
 
 #[test]
 fn test_error_legacy_octal_invalid_digit() {
+    // Legacy octal literals (starting with `0` followed by digits) that contain 8 or 9 produce
+    // "Invalid octal literal". E.g., `078` contains the digit 8.
     expect_error("<?php $x = 078;", "Invalid octal literal");
 }
 
 #[test]
 fn test_error_legacy_octal_separator_invalid_digit() {
+    // A legacy octal literal with a digit 8 or 9 after the leading zero and separator (e.g.,
+    // `0_778`) is rejected as an invalid octal digit, not as a separator placement error.
     expect_error("<?php $x = 0_778;", "Invalid octal literal");
 }
 
 #[test]
 fn test_error_hex_empty() {
+    // A hex literal with no digits (`0x`) produces "Expected hex digits".
     expect_error("<?php $x = 0x;", "Expected hex digits");
 }
 
 #[test]
 fn test_error_hex_invalid_trailing() {
+    // A hex literal with a non-hex character after valid digits (e.g., `0xfg`) produces an error.
     expect_error("<?php $x = 0xfg;", "after hex literal");
 }
 
 #[test]
 fn test_error_hex_separator_after_prefix() {
+    // An underscore immediately after the `0x` prefix (e.g., `0x_FF`) is rejected.
     expect_error("<?php $x = 0x_FF;", "Expected hex digits");
 }
 
 #[test]
 fn test_error_binary_empty() {
+    // A binary literal with no digits (`0b`) produces "Expected binary digits".
     expect_error("<?php $x = 0b;", "Expected binary digits");
 }
 
 #[test]
 fn test_error_binary_invalid_digit() {
+    // A binary literal using a digit outside 0-1 (e.g., `0b12`) produces an error.
     expect_error("<?php $x = 0b12;", "after binary literal");
 }
 
 #[test]
 fn test_error_binary_separator_after_prefix() {
+    // An underscore immediately after the `0b` prefix (e.g., `0b_10`) is rejected.
     expect_error("<?php $x = 0b_10;", "Expected binary digits");
 }
 
 #[test]
 fn test_error_decimal_trailing_underscore() {
+    // A decimal literal with a trailing underscore (e.g., `1_`) produces an error.
     expect_error("<?php $x = 1_;", "after decimal literal");
 }
 
 #[test]
 fn test_error_decimal_double_underscore() {
+    // A decimal literal with consecutive underscores (e.g., `1__0`) produces an error.
     expect_error("<?php $x = 1__0;", "after decimal literal");
 }
 
 #[test]
 fn test_error_control_requires_operand() {
+    // The error-suppression operator `@` requires an expression operand; bare `@;` is rejected.
     expect_error(
         "<?php @;",
         "Unexpected token",
@@ -216,21 +250,25 @@ fn test_error_control_requires_operand() {
 
 #[test]
 fn test_error_print_requires_operand() {
+    // The `print` keyword requires an expression operand; bare `print;` is rejected.
     expect_error("<?php print;", "Unexpected token");
 }
 
 #[test]
 fn test_error_echo_trailing_comma_requires_argument() {
+    // `echo` with a trailing comma but no following expression (e.g., `echo "A",;`) is rejected.
     expect_error("<?php echo \"A\",;", "Unexpected token");
 }
 
 #[test]
 fn test_error_break_level_must_be_positive() {
+    // The `break` level argument must be a positive integer; `break 0;` is rejected.
     expect_error("<?php while (1) { break 0; }", "accepts only positive integers");
 }
 
 #[test]
 fn test_error_continue_level_must_be_integer_literal() {
+    // The `continue` level must be an integer literal (not a variable); `continue $n;` is rejected.
     expect_error(
         "<?php $n = 1; while (1) { continue $n; }",
         "requires an integer literal level",
@@ -239,11 +277,13 @@ fn test_error_continue_level_must_be_integer_literal() {
 
 #[test]
 fn test_error_single_ampersand() {
+    // A standalone `&` token (not part of a binop, ref param, or `include`) is rejected.
     expect_error("<?php &;", "Unexpected token");
 }
 
 #[test]
 fn test_error_single_pipe() {
+    // A standalone `|` token (not part of a binop) is rejected.
     expect_error("<?php |;", "Unexpected token");
 }
 
@@ -251,46 +291,55 @@ fn test_error_single_pipe() {
 
 #[test]
 fn test_error_missing_semicolon() {
+    // An `echo` statement without a terminating semicolon produces "Expected ';'".
     expect_error("<?php echo \"hi\"", "Expected ';'");
 }
 
 #[test]
 fn test_error_missing_equals() {
+    // An assignment without an `=` between variable and expression produces "Expected '='".
     expect_error("<?php $x \"hi\";", "Expected '='");
 }
 
 #[test]
 fn test_error_unclosed_paren() {
+    // An unclosed parenthesis in an expression (e.g., missing `)`) produces "Expected closing ')'".
     expect_error("<?php echo (1 + 2;", "Expected closing ')'");
 }
 
 #[test]
 fn test_error_unexpected_token_in_expr() {
+    // A bare semicolon in expression position (e.g., `echo ;`) produces "Unexpected token".
     expect_error("<?php echo ;", "Unexpected token");
 }
 
 #[test]
 fn test_error_unexpected_token_in_stmt() {
+    // A bare expression statement (e.g., `42;`) in statement position produces "Unexpected token".
     expect_error("<?php 42;", "Unexpected token");
 }
 
 #[test]
 fn test_error_missing_function_name() {
+    // A `function` keyword without a following name produces "Expected function name".
     expect_error("<?php function () { }", "Expected function name");
 }
 
 #[test]
 fn test_error_missing_function_paren() {
+    // A function declaration missing the opening `(` after the name produces "Expected '(' after function name".
     expect_error("<?php function foo { }", "Expected '(' after function name");
 }
 
 #[test]
 fn test_error_missing_if_paren() {
+    // An `if` statement missing the opening `(` after `if` produces "Expected '(' after 'if'".
     expect_error("<?php if 1 { }", "Expected '(' after 'if'");
 }
 
 #[test]
 fn test_error_ifdef_requires_symbol_name() {
+    // `ifdef` without a symbol name after it produces "Expected symbol name after 'ifdef'".
     expect_error(
         "<?php ifdef { echo 1; }",
         "Expected symbol name after 'ifdef'",
@@ -299,11 +348,13 @@ fn test_error_ifdef_requires_symbol_name() {
 
 #[test]
 fn test_error_ifdef_requires_braced_body() {
+    // `ifdef` with a symbol but no braced body produces "Expected '{'".
     expect_error("<?php ifdef DEBUG echo 1;", "Expected '{'");
 }
 
 #[test]
 fn test_error_missing_while_paren() {
+    // A `while` statement missing the opening `(` after `while` produces "Expected '(' after 'while'".
     expect_error("<?php while 1 { }", "Expected '(' after 'while'");
 }
 
@@ -311,11 +362,14 @@ fn test_error_missing_while_paren() {
 
 #[test]
 fn test_error_switch_missing_paren() {
+    // A `switch` statement missing the opening `(` after `switch` produces "Expected '(' after 'switch'".
     expect_error("<?php switch $x {}", "Expected '(' after 'switch'");
 }
 
 #[test]
 fn test_error_foreach_key_by_reference() {
+    // In `foreach`, the key element cannot be by-reference (`&$k`); this produces
+    // "Key element cannot be a reference in foreach".
     expect_error(
         "<?php foreach ($a as &$k => $v) {}",
         "Key element cannot be a reference in foreach",
@@ -324,16 +378,19 @@ fn test_error_foreach_key_by_reference() {
 
 #[test]
 fn test_error_match_missing_paren() {
+    // A `match` expression missing the opening `(` after `match` produces "Expected '(' after 'match'".
     expect_error("<?php $x = match $x {};", "Expected '(' after 'match'");
 }
 
 #[test]
 fn test_error_arrow_function_missing_arrow() {
+    // An arrow function (`fn`) without `=>` after the parameter list produces "Expected '=>'".
     expect_error(r#"<?php $f = fn($x) $x * 2;"#, "Expected '=>'");
 }
 
 #[test]
 fn test_error_arrow_function_missing_lparen() {
+    // An arrow function (`fn`) without `(` before parameters produces "Expected '(' after 'fn'".
     expect_error(r#"<?php $f = fn $x => $x * 2;"#, "Expected '(' after 'fn'");
 }
 
@@ -341,6 +398,7 @@ fn test_error_arrow_function_missing_lparen() {
 
 #[test]
 fn test_error_heredoc_unterminated() {
+    // A heredoc opened with `<<<EOT` but never closed produces "Unterminated heredoc".
     expect_error("<?php echo <<<EOT\nHello", "Unterminated heredoc");
 }
 
@@ -348,6 +406,8 @@ fn test_error_heredoc_unterminated() {
 
 #[test]
 fn test_error_extern_missing_function() {
+    // `extern` without a valid keyword after it (`badkw`) produces an error describing valid forms:
+    // 'function', string literal, 'class', or 'global'.
     expect_error(
         "<?php extern badkw;",
         "Expected 'function', string literal, 'class', or 'global' after 'extern'",

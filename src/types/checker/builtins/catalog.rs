@@ -315,19 +315,27 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "wordwrap",
 ];
 
+/// Checks if the exact (lowercase) name is in the supported builtin list.
+/// Does not perform case folding; use `is_supported_builtin_function` for case-insensitive lookup.
 fn is_supported_builtin_function_exact(name: &str) -> bool {
     SUPPORTED_BUILTIN_FUNCTIONS.contains(&name)
 }
 
+/// Returns the static slice of all supported builtin function names.
+/// Used by name resolution and `function_exists` to enumerate or verify builtins.
 pub(crate) fn supported_builtin_function_names() -> &'static [&'static str] {
     SUPPORTED_BUILTIN_FUNCTIONS
 }
 
+/// Converts a function name to lowercase and returns it if it is a supported builtin.
+/// Returns `None` if the name is not in the catalog. Implements PHP's case-insensitive builtin lookup.
 pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
     let canonical = name.to_ascii_lowercase();
     is_supported_builtin_function_exact(&canonical).then_some(canonical)
 }
 
+/// Returns `true` if the name is a supported builtin function (case-insensitive).
+/// Delegates to `canonical_builtin_function_name` and checks for `Some`.
 pub(crate) fn is_supported_builtin_function(name: &str) -> bool {
     canonical_builtin_function_name(name).is_some()
 }

@@ -11,9 +11,31 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_combine_refcounted: create an associative array from string keys and refcounted values.
-/// Input:  x0=keys_array (string array), x1=values_array (refcounted payload array)
-/// Output: x0=new hash table
+/// Emits `__rt_array_combine_refcounted`, creating an associative array from string keys
+/// and refcounted values.
+///
+/// # Arguments
+/// * `emitter` — target-specific assembly emitter
+///
+/// # ABI (ARM64)
+/// * `x0` — keys array (string array, non-null)
+/// * `x1` — values array (refcounted payload array, non-null)
+/// * `x2` — value_type tag for result hash elements
+///
+/// # ABI (x86_64)
+/// * `rdi` — keys array (string array, non-null)
+/// * `rsi` — values array (refcounted payload array, non-null)
+/// * `rdx` — value_type tag for result hash elements
+///
+/// # Output
+/// * `x0` / `rax` — newly allocated hash table
+///
+/// # Behavior
+/// * Allocates result hash with `__rt_hash_new` using `max(keys_count * 2, 16)` capacity.
+/// * Normalizes each key via `__rt_hash_normalize_key` before insertion.
+/// * Increfs each value via `__rt_incref` before `__rt_hash_set` takes ownership.
+/// * Dispatches to `emit_array_combine_refcounted_linux_x86_64` on x86_64; ARM64 falls through
+///   to the inline implementation below.
 pub fn emit_array_combine_refcounted(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_combine_refcounted_linux_x86_64(emitter);
@@ -83,6 +105,25 @@ pub fn emit_array_combine_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return result hash
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_array_combine_refcounted`.
+///
+/// # Arguments
+/// * `emitter` — x86_64 assembly emitter
+///
+/// # ABI (x86_64)
+/// * `rdi` — keys array (string array, non-null)
+/// * `rsi` — values array (refcounted payload array, non-null)
+/// * `rdx` — value_type tag for result hash elements
+///
+/// # Output
+/// * `rax` — newly allocated hash table
+///
+/// # Behavior
+/// * Mirrors the ARM64 `emit_array_combine_refcounted` path: same hash allocation strategy,
+///   key normalization, incref-before-ownership-transfer, and loop structure.
+/// * Uses System V AMD64 ABI: caller-saved registers clobbered by helper calls are reloaded
+///   from spill slots before reuse.
+/// * Stack is 16-byte aligned after reserving 64 bytes for spill slots.
 fn emit_array_combine_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_combine_refcounted ---");

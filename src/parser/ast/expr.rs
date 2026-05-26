@@ -16,12 +16,14 @@ use super::{BinOp, Stmt, TypeExpr};
 // --- Expressions ---
 
 #[derive(Debug, Clone)]
+/// Expression AST node.
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Expression kind.
 pub enum ExprKind {
     StringLiteral(String),
     IntLiteral(i64),
@@ -196,6 +198,7 @@ pub enum ExprKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
+/// Magic constant.
 pub enum MagicConstant {
     Dir,
     File,
@@ -207,6 +210,7 @@ pub enum MagicConstant {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Cast type.
 pub enum CastType {
     Int,
     Float,
@@ -216,6 +220,7 @@ pub enum CastType {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Static receiver.
 pub enum StaticReceiver {
     Named(Name),
     Self_,
@@ -224,12 +229,14 @@ pub enum StaticReceiver {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// InstanceOf target.
 pub enum InstanceOfTarget {
     Name(Name),
     Expr(Box<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Callable target.
 pub enum CallableTarget {
     Function(Name),
     StaticMethod {
@@ -243,6 +250,8 @@ pub enum CallableTarget {
 }
 
 impl PartialEq for Expr {
+    /// Compares two expressions by comparing their `ExprKind`s only.
+    /// Spans are not considered in equality.
     fn eq(&self, other: &Self) -> bool {
         self.kind == other.kind
     }
@@ -250,26 +259,34 @@ impl PartialEq for Expr {
 
 #[allow(dead_code)] // Constructors used by test crate
 impl Expr {
+    /// Constructs an expression with the given kind and span.
+    /// Typically used by parsers; test code may also use this directly.
     pub fn new(kind: ExprKind, span: Span) -> Self {
         Self { kind, span }
     }
 
+    /// Constructs a string literal expression with the given value.
     pub fn string_lit(s: impl Into<String>) -> Self {
         Self::new(ExprKind::StringLiteral(s.into()), Span::dummy())
     }
 
+    /// Constructs an integer literal expression with the given value.
     pub fn int_lit(n: i64) -> Self {
         Self::new(ExprKind::IntLiteral(n), Span::dummy())
     }
 
+    /// Constructs a float literal expression with the given value.
     pub fn float_lit(f: f64) -> Self {
         Self::new(ExprKind::FloatLiteral(f), Span::dummy())
     }
 
+    /// Constructs a variable expression with the given name.
     pub fn var(name: impl Into<String>) -> Self {
         Self::new(ExprKind::Variable(name.into()), Span::dummy())
     }
 
+    /// Constructs a binary operation expression with the given left operand, operator, and right operand.
+    /// Both operands are boxed and evaluated left-to-right (PHP evaluation order).
     pub fn binop(left: Expr, op: BinOp, right: Expr) -> Self {
         Self::new(
             ExprKind::BinaryOp {
@@ -281,6 +298,8 @@ impl Expr {
         )
     }
 
+    /// Constructs an `instanceof` expression with a static class name target.
+    /// The target is resolved at type-check time.
     pub fn instance_of(value: Expr, target: Name) -> Self {
         Self::new(
             ExprKind::InstanceOf {
@@ -291,6 +310,8 @@ impl Expr {
         )
     }
 
+    /// Constructs a dynamic `instanceof` expression where the target is an expression
+    /// evaluated at runtime rather than a static class name.
     pub fn dynamic_instance_of(value: Expr, target: Expr) -> Self {
         Self::new(
             ExprKind::InstanceOf {
@@ -301,10 +322,12 @@ impl Expr {
         )
     }
 
+    /// Constructs a negation expression for the given expression.
     pub fn negate(inner: Expr) -> Self {
         Self::new(ExprKind::Negate(Box::new(inner)), Span::dummy())
     }
 
+    /// Constructs a `print` expression that outputs the given expression's value.
     pub fn print(inner: Expr) -> Self {
         Self::new(ExprKind::Print(Box::new(inner)), Span::dummy())
     }

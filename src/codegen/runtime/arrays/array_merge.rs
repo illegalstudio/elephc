@@ -11,9 +11,20 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_merge: merge two integer arrays into a new array.
-/// Input: x0 = first array pointer, x1 = second array pointer
-/// Output: x0 = pointer to new merged array
+/// Emits the `__rt_array_merge` runtime helper for merging two integer-indexed arrays.
+///
+/// Allocates a new array with combined capacity, copies all elements from the first array
+/// followed by all elements from the second array (preserving order), then returns the
+/// merged result. Both source arrays must be valid integer-indexed arrays with 24-byte
+/// headers followed by 8-byte scalar payload slots.
+///
+/// Dispatches to the x86_64 Linux variant when targeting that architecture.
+///
+/// ABI (ARM64): x0 = first array ptr, x1 = second array ptr → x0 = merged array ptr
+/// ABI (x86_64): rdi = first array ptr, rsi = second array ptr → rax = merged array ptr
+///
+/// Stack frame: 64 bytes allocated, frame pointer at sp+48. Clobbers caller-saved registers
+/// used by the copy loops. The new array length is written to the returned array header.
 pub fn emit_array_merge(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_merge_linux_x86_64(emitter);
@@ -89,6 +100,15 @@ pub fn emit_array_merge(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = merged array
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_array_merge` runtime helper.
+///
+/// Uses rbp-based frame layout with 48 bytes of spill space for source pointers,
+/// lengths, and the merged result pointer across the constructor call. Caller-saved
+/// registers (rax, rcx, rdx, r8–r11) are used for copy loop state.
+///
+/// ABI: rdi = first array ptr, rsi = second array ptr → rax = merged array ptr
+/// Clobbers: rax, rcx, rdx, r8–r11, rbp
+/// Stack: 48 bytes reserved at rbp-48 for spills; rbp is preserved and restored
 fn emit_array_merge_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_merge ---");

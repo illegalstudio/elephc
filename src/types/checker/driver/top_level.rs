@@ -17,6 +17,12 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::Checker;
 
 impl Checker {
+    /// Runs the top-level type-checking pass over the full program.
+    ///
+    /// Processes each statement in order, maintaining a shared `global_env` that accumulates
+    /// declarations across the entire program. Each statement is checked in a fresh `top_level_env`
+    /// cloned from the current global state. Returns the final `TypeEnv` and a vector of error
+    /// vectors (one per statement) for structured diagnostics.
     pub(super) fn check_top_level_program(
         &mut self,
         program: &Program,
@@ -35,6 +41,11 @@ impl Checker {
         (global_env, all_errors)
     }
 
+    /// Determines whether top-level errors for a statement can be suppressed.
+    ///
+    /// Suppression is allowed when errors exist and the statement contains at least one method
+    /// call or property access, and all error messages are in the suppressible set. This relaxes
+    /// type-checking strictness for code that may define classes later in the file.
     pub(super) fn can_suppress_initial_top_level_errors(
         stmt: &Stmt,
         errors: &[CompileError],
@@ -47,6 +58,10 @@ impl Checker {
                 .all(|error| Self::is_suppressible_initial_top_level_error(&error.message))
     }
 
+    /// Returns `true` if the given error message is in the suppressible set for initial top-level errors.
+    ///
+    /// Suppressible messages include array-index, property-access, and callable-related diagnostics
+    /// that commonly arise when a class is referenced before its definition.
     fn is_suppressible_initial_top_level_error(message: &str) -> bool {
         matches!(
             message,
@@ -56,6 +71,11 @@ impl Checker {
         ) || (message.starts_with("Cannot call $") && message.contains("not a callable"))
     }
 
+    /// Builds the initial `TypeEnv` with built-in globals `$argc`, `$argv`, and external globals.
+    ///
+    /// `$argc` is typed as `Int`; `$argv` is typed as `Array<Str>`. External globals from
+    /// `self.extern_globals` are inserted verbatim. The returned environment serves as the
+    /// starting point for top-level type checking.
     fn seed_global_env(&self) -> TypeEnv {
         let mut global_env: TypeEnv = HashMap::new();
         global_env.insert("argc".to_string(), PhpType::Int);
@@ -66,6 +86,11 @@ impl Checker {
         global_env
     }
 
+    /// Returns `true` if the statement contains a method call anywhere in its expression tree.
+    ///
+    /// Recursively walks `StmtKind` variants that carry expressions, delegating to
+    /// `expr_contains_method_call` for expression-level traversal. Used to detect whether
+    /// a top-level statement may reference a class not yet defined, enabling error suppression.
     fn stmt_contains_method_call(stmt: &Stmt) -> bool {
         match &stmt.kind {
             StmtKind::Synthetic(stmts) => stmts.iter().any(Self::stmt_contains_method_call),
@@ -110,6 +135,11 @@ impl Checker {
         }
     }
 
+    /// Returns `true` if the expression tree contains a method call.
+    ///
+    /// Recursively traverses all `ExprKind` variants, returning `true` for `MethodCall` and
+    /// `NullsafeMethodCall`, and recursing into sub-expressions for container variants.
+    /// Returns `false` for literal and variable expressions that cannot contain calls.
     fn expr_contains_method_call(expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::MethodCall { object, args, .. }
@@ -240,6 +270,11 @@ impl Checker {
         }
     }
 
+    /// Returns `true` if the statement contains a property access anywhere in its expression tree.
+    ///
+    /// Recursively walks `StmtKind` variants that carry expressions, delegating to
+    /// `expr_contains_property_access` for expression-level traversal. Used to detect whether
+    /// a top-level statement may reference a class not yet defined, enabling error suppression.
     fn stmt_contains_property_access(stmt: &Stmt) -> bool {
         match &stmt.kind {
             StmtKind::Synthetic(stmts) => stmts.iter().any(Self::stmt_contains_property_access),
@@ -275,6 +310,11 @@ impl Checker {
         }
     }
 
+    /// Returns `true` if the expression tree contains a property access.
+    ///
+    /// Recursively traverses all `ExprKind` variants, returning `true` for `PropertyAccess`,
+    /// `NullsafePropertyAccess`, `DynamicPropertyAccess`, and `NullsafeDynamicPropertyAccess`,
+    /// and recursing into sub-expressions for container variants.
     fn expr_contains_property_access(expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::PropertyAccess { .. }
@@ -403,6 +443,10 @@ impl Checker {
         }
     }
 
+    /// Returns `true` if the `InstanceOfTarget` contains a property access.
+    ///
+    /// `InstanceOfTarget::Name` returns `false`; `InstanceOfTarget::Expr` delegates to
+    /// `expr_contains_property_access`.
     fn instanceof_target_contains_property_access(target: &InstanceOfTarget) -> bool {
         match target {
             InstanceOfTarget::Name(_) => false,
@@ -410,6 +454,10 @@ impl Checker {
         }
     }
 
+    /// Returns `true` if the `InstanceOfTarget` contains a method call.
+    ///
+    /// `InstanceOfTarget::Name` returns `false`; `InstanceOfTarget::Expr` delegates to
+    /// `expr_contains_method_call`.
     fn instanceof_target_contains_method_call(target: &InstanceOfTarget) -> bool {
         match target {
             InstanceOfTarget::Name(_) => false,

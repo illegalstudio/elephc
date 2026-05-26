@@ -55,6 +55,9 @@ fn validate_no_trailing_alnum(cursor: &Cursor, base_label: &str) -> Result<(), C
     Ok(())
 }
 
+/// Converts a digit string in `digits` (all valid for `radix`) to an f64 by
+/// accumulating `value = value * radix + digit` for each character.
+/// Panics if `digits` contains any character not valid for `radix`.
 fn radix_digits_to_float(digits: &str, radix: u32) -> f64 {
     let radix_float = radix as f64;
     let mut value = 0.0;
@@ -67,6 +70,9 @@ fn radix_digits_to_float(digits: &str, radix: u32) -> f64 {
     value
 }
 
+/// Parses a radix-prefixed digit string as either an `i64` integer or an `f64`
+/// float (on positive overflow). Returns `Token::IntLiteral` or `Token::FloatLiteral`.
+/// On a parse error unrelated to overflow, returns the provided error message.
 fn parse_radix_int_or_float(
     cursor: &Cursor,
     digits: &str,
@@ -82,6 +88,9 @@ fn parse_radix_int_or_float(
     }
 }
 
+/// Parses a decimal digit string as either an `i64` integer or an `f64` float
+/// (on positive overflow). Returns `Token::IntLiteral` or `Token::FloatLiteral`.
+/// On any other parse error returns "Invalid integer literal".
 fn parse_decimal_int_or_float(cursor: &Cursor, digits: &str) -> Result<Token, CompileError> {
     match digits.parse::<i64>() {
         Ok(value) => Ok(Token::IntLiteral(value)),
@@ -95,6 +104,10 @@ fn parse_decimal_int_or_float(cursor: &Cursor, digits: &str) -> Result<Token, Co
     }
 }
 
+/// Scans a numeric literal from the cursor: hex (`0x`), octal (`0o`), binary (`0b`),
+/// decimal, or float (including scientific notation). Validates no trailing
+/// alphanumeric characters remain. Returns `Token::IntLiteral` or `Token::FloatLiteral`.
+/// Handles PHP 7.4+ underscore numeric separators and legacy octal forms.
 pub(in crate::lexer) fn scan_number(cursor: &mut Cursor) -> Result<Token, CompileError> {
     if cursor.peek() == Some('0') {
         let remaining = cursor.remaining();

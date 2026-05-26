@@ -19,6 +19,10 @@ use super::{ExpandedTrait, ImportedMethod, TraitDeclInfo};
 use super::merge::{merge_imported_method_set, merge_methods, merge_properties, merge_property_into};
 use super::validation::validate_direct_members;
 
+/// Recursively expands a single trait, applying its trait_uses, then merging
+/// all inherited and direct members. Uses `cache` to memoize results and `stack`
+/// to detect circular composition. Returns the fully expanded property/method set
+/// or a `CompileError` on circular reference, unknown trait, or validation failure.
 fn expand_trait(
     trait_name: &str,
     trait_map: &HashMap<String, TraitDeclInfo>,
@@ -79,6 +83,14 @@ fn expand_trait(
     Ok(expanded)
 }
 
+/// For each `TraitUse` in `trait_uses`, expands the referenced traits, applies
+/// insteadof/alias adaptations, resolves visibility overrides, selects the
+/// dominant method from each `HashMap` of candidates, and accumulates all
+/// imported properties and methods into `all_properties` and `all_methods`.
+///
+/// `owner_label` is a human-readable context string (e.g., `"class Foo"` or
+/// `"trait Bar"`) used only in error messages. `owner_span` is the source span
+/// used for error location. Returns `([ClassProperty], [ClassMethod])` on success.
 pub(super) fn resolve_trait_uses(
     trait_uses: &[TraitUse],
     trait_map: &HashMap<String, TraitDeclInfo>,
@@ -245,6 +257,12 @@ pub(super) fn resolve_trait_uses(
     Ok((all_properties, all_methods))
 }
 
+/// Filters `candidates` using `suppressed` trait-of-origin, applies visibility
+/// overrides from `visibility_overrides`, appends aliased methods from
+/// `alias_methods`, and returns the final selected method list.
+///
+/// Ambiguity (multiple non-suppressed candidates for the same method key) is
+/// a fatal error; the caller must have already emitted insteadof to disambiguate.
 fn select_methods(
     mut candidates: HashMap<String, Vec<ImportedMethod>>,
     method_order: Vec<String>,
@@ -297,6 +315,11 @@ fn select_methods(
     Ok(selected_methods)
 }
 
+/// Resolves the source trait for a trait adaptation (insteadof or alias).
+///
+/// If `explicit_trait` is provided, validates that the method exists on that
+/// trait and returns it. If not provided and exactly one candidate remains,
+/// returns that candidate's trait. Otherwise returns an ambiguity error.
 fn resolve_adaptation_source(
     explicit_trait: Option<&str>,
     method: &str,

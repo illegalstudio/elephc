@@ -15,6 +15,20 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a call to the libc `usleep` function, suspending execution for the given number of microseconds.
+///
+/// # Arguments
+/// - `_name`: unused, always `"usleep"`
+/// - `args[0]`: evaluated and placed in `x0` (ARM64 integer return register) as the sleep duration in microseconds
+/// - `emitter`: controls output assembly
+/// - `ctx`: carries codegen state
+/// - `data`: data section for literals/constants
+///
+/// # Returns
+/// `Some(PhpType::Void)` — PHP `usleep` has no return value
+///
+/// # Side effects
+/// Invokes the `usleep` libc routine, which blocks the calling thread for the specified duration.
 pub fn emit(
     _name: &str,
     args: &[Expr],

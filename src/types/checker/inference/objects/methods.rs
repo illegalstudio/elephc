@@ -17,6 +17,12 @@ use super::super::super::Checker;
 use super::super::syntactic::wider_type_syntactic;
 
 impl Checker {
+    /// Infers the type of a method call expression (`$obj->method(...)`).
+    ///
+    /// Dispatches to `infer_method_call_on_class_type` for `Object` types,
+    /// `infer_method_call_on_interface_type` for interface types, and
+    /// handles nullable union receivers. Returns `PhpType::Int` as a fallback
+    /// for unhandled types (e.g. `Mixed` without specific handler).
     pub(crate) fn infer_method_call_type(
         &mut self,
         object: &Expr,
@@ -57,6 +63,10 @@ impl Checker {
         Ok(PhpType::Int)
     }
 
+    /// Infers the type of a nullsafe method call expression (`$obj?->method(...)`).
+    ///
+    /// Returns `PhpType::Void` for invalid receivers. For valid nullable object
+    /// unions, returns a union of the method's return type with `void`.
     pub(crate) fn infer_nullsafe_method_call_type(
         &mut self,
         object: &Expr,
@@ -83,6 +93,11 @@ impl Checker {
         }
     }
 
+    /// Infers the type of a method call on an interface type.
+    ///
+    /// Looks up the method in the interface schema, validates arguments via
+    /// `normalize_named_call_args` and `check_known_callable_call`, and
+    /// returns the declared return type.
     pub(crate) fn infer_method_call_on_interface_type(
         &mut self,
         interface_name: &str,
@@ -120,6 +135,13 @@ impl Checker {
         Ok(sig.return_type)
     }
 
+    /// Infers the type of a method call on a class type.
+    ///
+    /// Looks up the method in the class schema, checks deprecation warnings,
+    /// validates visibility, normalizes named arguments, validates the
+    /// callable signature, and updates the method's parameter types from
+    /// argument types (for local type inference). Handles `__call` magic
+    /// methods and falls back to `PhpType::Int`.
     pub(crate) fn infer_method_call_on_class_type(
         &mut self,
         class_name: &str,
@@ -269,6 +291,10 @@ impl Checker {
         Ok(PhpType::Int)
     }
 
+    /// Builds synthetic `__call` arguments: `[method_name, [args...]]`.
+    ///
+    /// Constructs a `StringLiteral` for the method name and an `ArrayLiteral`
+    /// of the original arguments, used when forwarding to `__call`.
     fn magic_call_args(method: &str, args: &[Expr], span: crate::span::Span) -> Vec<Expr> {
         vec![
             Expr::new(ExprKind::StringLiteral(method.to_string()), span),
@@ -276,6 +302,13 @@ impl Checker {
         ]
     }
 
+    /// Specializes `__call`'s second parameter (the args array) type based on
+    /// the actual call arguments' inferred types.
+    ///
+    /// Merges all argument types into an element type, then updates the
+    /// `__call` signature's params[1] (the array parameter) accordingly,
+    /// respecting `declared_flags` and avoiding widening to `Mixed` when
+    /// the declared type is already `Mixed`.
     fn specialize_magic_call_signature(
         &mut self,
         class_name: &str,
@@ -328,6 +361,11 @@ impl Checker {
         Ok(())
     }
 
+    /// Merges two types for `__call` argument type inference.
+    ///
+    /// Returns `right` when `left` is `Never`, `left` when `right` is `Never`,
+    /// `left` when equal, and `PhpType::Mixed` otherwise. Used to compute the
+    /// element type of the synthetic args array.
     fn merge_magic_call_arg_type(left: PhpType, right: PhpType) -> PhpType {
         if left == right {
             return left;
@@ -341,6 +379,11 @@ impl Checker {
         PhpType::Mixed
     }
 
+    /// Relaxes a `__call` signature for validation-only use.
+    ///
+    /// Sets the first parameter to `PhpType::Str` and the second to
+    /// `PhpType::Array(PhpType::Mixed)`, bypassing strict type checking so
+    /// arbitrary arguments can be forwarded without false validation errors.
     fn relax_magic_call_validation_sig(sig: &mut crate::types::FunctionSig) {
         if let Some(param) = sig.params.get_mut(0) {
             param.1 = PhpType::Str;
@@ -350,6 +393,13 @@ impl Checker {
         }
     }
 
+    /// Infers the type of a static method call expression (`Foo::method()`, `self::`, `parent::`, `static::`).
+    ///
+    /// Resolves the receiver to a class name, checks deprecation and visibility,
+    /// validates arguments via `normalize_named_call_args` and `check_known_callable_call`,
+    /// and updates parameter types from argument types for local type inference.
+    /// Handles enum static calls, `parent::`/`self::` forwarding to instance methods,
+    /// and falls back to `PhpType::Int`.
     pub(crate) fn infer_static_method_call_type(
         &mut self,
         receiver: &StaticReceiver,

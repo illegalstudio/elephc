@@ -18,6 +18,8 @@ use crate::types::PhpType;
 
 use super::super::Checker;
 
+/// Returns a synthetic `ClassProperty` AST node for the `message` property of builtin Exception classes.
+/// The property is public, typed `string`, with an empty string default value.
 pub(super) fn builtin_exception_message_property() -> ClassProperty {
     ClassProperty {
         name: "message".to_string(),
@@ -38,6 +40,8 @@ pub(super) fn builtin_exception_message_property() -> ClassProperty {
     }
 }
 
+/// Returns a synthetic `ClassMethod` AST node for the `__construct` method of builtin Exception classes.
+/// Takes `message` (string, default `""`) and `code` (int, default `0`) parameters and assigns them to the corresponding properties.
 pub(super) fn builtin_exception_constructor_method() -> ClassMethod {
     ClassMethod {
         name: "__construct".to_string(),
@@ -97,6 +101,8 @@ pub(super) fn builtin_exception_constructor_method() -> ClassMethod {
     }
 }
 
+/// Returns a synthetic `ClassProperty` AST node for the `code` property of builtin Exception classes.
+/// The property is protected, typed `int`, with a `0` default value.
 pub(super) fn builtin_exception_code_property() -> ClassProperty {
     ClassProperty {
         name: "code".to_string(),
@@ -117,6 +123,8 @@ pub(super) fn builtin_exception_code_property() -> ClassProperty {
     }
 }
 
+/// Returns a synthetic `ClassMethod` for `Exception::getCode()`.
+/// Body returns `$this->code` cast to `int`.
 pub(super) fn builtin_exception_get_code_method() -> ClassMethod {
     concrete_throwable_method(
         "getCode",
@@ -131,6 +139,8 @@ pub(super) fn builtin_exception_get_code_method() -> ClassMethod {
     )
 }
 
+/// Returns a synthetic `ClassMethod` for `Exception::getMessage()`.
+/// Body returns `$this->message` typed as `string`.
 pub(super) fn builtin_exception_get_message_method() -> ClassMethod {
     concrete_throwable_method(
         "getMessage",
@@ -145,6 +155,8 @@ pub(super) fn builtin_exception_get_message_method() -> ClassMethod {
     )
 }
 
+/// Returns a synthetic `ClassMethod` for `Exception::getFile()`.
+/// Body returns a dummy empty string; the real file path is injected at runtime by the compiler.
 pub(super) fn builtin_exception_get_file_method() -> ClassMethod {
     concrete_throwable_method(
         "getFile",
@@ -156,6 +168,8 @@ pub(super) fn builtin_exception_get_file_method() -> ClassMethod {
     )
 }
 
+/// Returns a synthetic `ClassMethod` for `Exception::getLine()`.
+/// Body returns a dummy `0`; the real line number is injected at runtime by the compiler.
 pub(super) fn builtin_exception_get_line_method() -> ClassMethod {
     concrete_throwable_method(
         "getLine",
@@ -164,6 +178,8 @@ pub(super) fn builtin_exception_get_line_method() -> ClassMethod {
     )
 }
 
+/// Returns a synthetic `ClassMethod` for `Exception::getTrace()`.
+/// Body returns an empty array; the real backtrace is built at runtime by the compiler.
 pub(super) fn builtin_exception_get_trace_method() -> ClassMethod {
     concrete_throwable_method(
         "getTrace",
@@ -172,6 +188,8 @@ pub(super) fn builtin_exception_get_trace_method() -> ClassMethod {
     )
 }
 
+/// Returns a synthetic `ClassMethod` for `Exception::getTraceAsString()`.
+/// Body returns a dummy empty string; the real trace string is built at runtime by the compiler.
 pub(super) fn builtin_exception_get_trace_as_string_method() -> ClassMethod {
     concrete_throwable_method(
         "getTraceAsString",
@@ -183,6 +201,8 @@ pub(super) fn builtin_exception_get_trace_as_string_method() -> ClassMethod {
     )
 }
 
+/// Returns a synthetic `ClassMethod` for `Exception::getPrevious()`.
+/// Return type is `?Throwable`; body returns `null` in the dummy AST.
 pub(super) fn builtin_exception_get_previous_method() -> ClassMethod {
     concrete_throwable_method(
         "getPrevious",
@@ -191,6 +211,8 @@ pub(super) fn builtin_exception_get_previous_method() -> ClassMethod {
     )
 }
 
+/// Returns a synthetic `ClassMethod` for `Exception::__toString()`.
+/// Body returns `$this->message` cast to `string`.
 pub(super) fn builtin_exception_to_string_method() -> ClassMethod {
     concrete_throwable_method(
         "__toString",
@@ -205,6 +227,8 @@ pub(super) fn builtin_exception_to_string_method() -> ClassMethod {
     )
 }
 
+/// Returns the list of abstract `ClassMethod` nodes for the Throwable interface methods:
+/// getMessage, getCode, getFile, getLine, getTrace, getTraceAsString, getPrevious, __toString.
 pub(super) fn builtin_throwable_methods() -> Vec<ClassMethod> {
     vec![
         abstract_throwable_method("getMessage", TypeExpr::Str),
@@ -218,6 +242,7 @@ pub(super) fn builtin_throwable_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds a concrete (body-bearing) throwable method with the given name, return type, and return value expression.
 fn concrete_throwable_method(name: &str, return_type: TypeExpr, value: Expr) -> ClassMethod {
     ClassMethod {
         name: name.to_string(),
@@ -238,6 +263,7 @@ fn concrete_throwable_method(name: &str, return_type: TypeExpr, value: Expr) -> 
     }
 }
 
+/// Builds an abstract method declaration for the Throwable interface with the given name and return type.
 fn abstract_throwable_method(name: &str, return_type: TypeExpr) -> ClassMethod {
     ClassMethod {
         name: name.to_string(),
@@ -255,14 +281,19 @@ fn abstract_throwable_method(name: &str, return_type: TypeExpr) -> ClassMethod {
     }
 }
 
+/// Returns a `TypeExpr::Named("array")` used as the return type for `getTrace()`.
 fn array_type() -> TypeExpr {
     TypeExpr::Named(Name::unqualified("array"))
 }
 
+/// Returns a nullable `TypeExpr` wrapping `Throwable`; used as the return type for `getPrevious()`.
 fn nullable_throwable_type() -> TypeExpr {
     TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified("Throwable"))))
 }
 
+/// Patches the checker metadata for the Throwable interface and all builtin exception classes.
+/// Updates return types for getter methods and the `__construct` parameter types for Error, TypeError,
+/// ValueError, Exception, RuntimeException, JsonException, and FiberError.
 pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
     let nullable_throwable =
         checker.normalize_union_type(vec![PhpType::Object("Throwable".to_string()), PhpType::Void]);

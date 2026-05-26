@@ -14,6 +14,23 @@ use crate::codegen::{abi, platform::Arch};
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
+/// Boxes a stat-family integer result into a Mixed cell, or returns PHP `false` on failure.
+///
+/// ## ARM64 register contract
+/// - `x0`: stat integer payload on entry; holds box result on exit
+/// - `x1`: success flag (non-zero = success, zero = failure)
+/// - `x2`: unused for integers (high word = 0)
+/// - Calls `__rt_mixed_from_value` to box int (tag 0) or bool false (tag 3)
+///
+/// ## x86_64 register contract
+/// - `rax`: stat integer payload on entry; holds box result on exit
+/// - `rdx`: success flag (non-zero = success, zero = failure)
+/// - `rdi`: payload for `__rt_mixed_from_value`
+/// - `esi`: 0 (high word unused for integers)
+/// - `eax`: runtime tag (0 = int, 3 = bool false)
+///
+/// ## Ownership
+/// Neither path retains the input registers as owners — the callee helper takes ownership.
 pub(super) fn box_stat_int_or_false_result(emitter: &mut Emitter, ctx: &mut Context) {
     let false_label = ctx.next_label("stat_int_false");
     let done_label = ctx.next_label("stat_int_done");
@@ -51,6 +68,24 @@ pub(super) fn box_stat_int_or_false_result(emitter: &mut Emitter, ctx: &mut Cont
     }
 }
 
+/// Boxes a stat-family string result into a Mixed cell, or returns PHP `false` on failure.
+///
+/// The string is assumed to be null-terminated with length in a separate register.
+///
+/// ## ARM64 register contract
+/// - `x0`: null pointer means failure; otherwise holds box result
+/// - `x1`: success flag (non-zero = success, zero = failure)
+/// - Calls `__rt_mixed_from_value` to box string (tag 1) or bool false (tag 3)
+///
+/// ## x86_64 register contract
+/// - `rax`: null pointer means failure; otherwise holds the string pointer
+/// - `rdx`: string length
+/// - `rdi`: string pointer for `__rt_mixed_from_value`
+/// - `rsi`: string length for `__rt_mixed_from_value`
+/// - `eax`: runtime tag (1 = string, 3 = bool false)
+///
+/// ## Ownership
+/// The callee helper takes ownership of the string pointer.
 pub(super) fn box_stat_string_or_false_result(emitter: &mut Emitter, ctx: &mut Context) {
     let false_label = ctx.next_label("stat_string_false");
     let done_label = ctx.next_label("stat_string_done");
@@ -86,6 +121,25 @@ pub(super) fn box_stat_string_or_false_result(emitter: &mut Emitter, ctx: &mut C
     }
 }
 
+/// Boxes a stat-family associative-array result into a Mixed cell, or returns PHP `false` on failure.
+///
+/// Allocates a heap mixed cell with tag 5 (associative array) and stores the hash pointer as the payload.
+/// The false path uses `__rt_mixed_from_value` (tag 3) to box a bool false.
+///
+/// ## ARM64 register contract
+/// - `x0`: null pointer means failure; otherwise holds the freshly built hash pointer
+/// - `x9`: scratch used to stamp heap kind and runtime tag
+/// - `x10`: scratch for reloading the hash pointer after allocation
+/// - Calls `__rt_heap_alloc` to allocate 24-byte mixed cell, then `__rt_mixed_from_value` for false
+///
+/// ## x86_64 register contract
+/// - `rax`: null pointer means failure; otherwise holds the freshly built hash pointer
+/// - `r10`: scratch for heap kind stamping and reloading hash pointer
+/// - Uses `X86_64_HEAP_MAGIC_HI32` marker in the heap kind stamp
+/// - Calls `__rt_heap_alloc` to allocate 24-byte mixed cell, then `__rt_mixed_from_value` for false
+///
+/// ## Ownership
+/// The allocated mixed cell owns the hash payload. The false path transfers no ownership.
 pub(super) fn box_stat_array_or_false_result(emitter: &mut Emitter, ctx: &mut Context) {
     let false_label = ctx.next_label("stat_array_false");
     let done_label = ctx.next_label("stat_array_done");

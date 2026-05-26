@@ -15,6 +15,16 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 use super::super::super::{Checker, FnDecl};
 
 impl Checker {
+    /// Re-specializes a previously resolved function's signature when call-site type
+    /// information allows more precise parameter types than the original declaration.
+    ///
+    /// For resolved (builtin or user-defined) functions, this performs call-site
+    /// specialization: it infers actual argument types and updates the stored signature
+    /// if the function was declared with inferred parameter types. For functions with
+    /// multiple variants, all variants are updated to have identical signatures.
+    ///
+    /// Returns `Ok(true)` if specialization occurred, `Ok(false)` if the function
+    /// was not found or no specialization was needed.
     pub(crate) fn respecialize_resolved_function_params_if_needed(
         &mut self,
         name: &str,
@@ -93,6 +103,14 @@ impl Checker {
         Ok(true)
     }
 
+    /// Specializes an untyped user-defined function's signature from the actual argument
+    /// types at a specific call site.
+    ///
+    /// For functions that were declared without explicit parameter type annotations,
+    /// this infers concrete types from the call-site arguments and updates the stored
+    /// signature in place. Handles both regular parameters and variadic parameters,
+    /// including the special case of unknown-named variadic arguments which widen
+    /// the variadic element type to `Iterable`.
     pub(crate) fn specialize_untyped_function_params(
         &mut self,
         name: &str,
@@ -147,6 +165,16 @@ impl Checker {
         Ok(())
     }
 
+    /// Infers concrete parameter types from actual argument types at a call site and
+    /// returns them if they differ from the stored signature.
+    ///
+    /// This is the core specialization logic used by `respecialize_resolved_function_params_if_needed`.
+    /// For each argument position with an inferred `Callable` type, it records the callable's
+    /// signature against the parameter name for later use. For undeclared parameters with `Int`
+    /// as a fallback type, it replaces the fallback with the actual argument type when the
+    /// actual type is not itself `Int`, `Bool`, or `Void`.
+    ///
+    /// Returns `Some(param_types)` if any changes were made, `None` otherwise.
     fn respecialized_param_types_for_call(
         &mut self,
         name: &str,
@@ -194,10 +222,21 @@ impl Checker {
     }
 }
 
+/// Returns true if an undeclared parameter with `Int` fallback type should be replaced
+/// with the actual argument type during call-site specialization.
+///
+/// Types that should NOT trigger replacement: `Int`, `Bool`, `Void`.
+/// All other types trigger replacement of the `Int` fallback.
 fn should_replace_int_fallback_param(actual_ty: &PhpType) -> bool {
     !matches!(actual_ty, PhpType::Int | PhpType::Bool | PhpType::Void)
 }
 
+/// Extracts parameter types from a generic `param_types` list, mapping them to the
+/// parameter names declared in `decl`.
+///
+/// Positions are matched by index: positional parameters map directly, and if `decl`
+/// has a variadic parameter, the final entry in `param_types` maps to it. Parameters
+/// in `decl` that have no corresponding entry in `param_types` are omitted.
 fn param_types_for_decl(
     decl: &FnDecl,
     param_types: &[(String, PhpType)],

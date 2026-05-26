@@ -17,6 +17,20 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the PHP `system()` builtin call.
+///
+/// Executes a command string via the C `system()` libc call. The command
+/// output is written directly to stdout by the C library. This function
+/// evaluates the command argument, null-terminates it via `__rt_cstr`,
+/// calls `system()`, and returns an empty string since output is already
+/// streamed to stdout.
+///
+/// # Arguments
+/// * `_name` — unused builtin name (the module dispatches by function name)
+/// * `args` — must contain exactly one expression yielding the command string
+///
+/// # Return
+/// Always returns `PhpType::Str` (empty string), matching PHP `system()` semantics.
 pub fn emit(
     _name: &str,
     args: &[Expr],

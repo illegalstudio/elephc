@@ -17,6 +17,15 @@ use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 use super::driver_support::emit_box_current_value_as_mixed;
 use super::{abi, platform};
 
+/// Emits return wrappers for interface methods whose implementation returns a concrete type
+/// but the interface signature declares `Mixed`. Wrappers box the concrete return value so the
+/// interface dispatcher can handle heterogeneous return types.
+///
+/// # Arguments
+/// * `emitter` - Assembly emitter
+/// * `interfaces` - Map of interface name → metadata including method order and signatures
+/// * `classes` - Map of class name → metadata including implemented interfaces and method signatures
+/// * `emitted_class_names` - Optional filter; only classes in this set receive wrappers
 pub(super) fn emit_interface_return_wrappers(
     emitter: &mut Emitter,
     interfaces: &HashMap<String, InterfaceInfo>,
@@ -43,6 +52,19 @@ pub(super) fn emit_interface_return_wrappers(
     }
 }
 
+/// Emits all return wrappers for a single class's interface implementations.
+///
+/// Iterates over every interface the class declares it implements, then each method in the
+/// interface's method order. For each method whose implementation returns a concrete type but the
+/// interface declares `Mixed`, emits a wrapper that boxes the return value before returning to the
+/// interface caller.
+///
+/// # Arguments
+/// * `emitter` - Assembly emitter
+/// * `class_name` - Name of the class receiving wrappers
+/// * `class_info` - Class metadata (interfaces, method impl classes, class ID)
+/// * `interfaces` - Map of all known interfaces
+/// * `classes` - Map of all known classes with their method signatures
 fn emit_class_interface_return_wrappers(
     emitter: &mut Emitter,
     class_name: &str,
@@ -112,6 +134,17 @@ fn emit_class_interface_return_wrappers(
     }
 }
 
+/// Returns true if an interface method implementation needs a return wrapper.
+///
+/// A wrapper is required when the interface declares a `Mixed` return type but the concrete
+/// implementation returns a narrower type. The wrapper bridges the ABI gap by boxing the concrete
+/// value into a `Mixed` cell so the interface vtable dispatch can handle it uniformly.
+///
+/// # Arguments
+/// * `interface_info` - Interface metadata including the declared method signature
+/// * `method_name` - Name of the method to check
+/// * `impl_class` - Name of the class that implements the method
+/// * `classes` - Map of all known classes with their method signatures
 fn interface_method_needs_return_wrapper(
     interface_info: &InterfaceInfo,
     method_name: &str,

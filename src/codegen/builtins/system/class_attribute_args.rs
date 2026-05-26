@@ -18,16 +18,14 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{AttrArgValue, PhpType};
 
-/// `class_attribute_args($class, $attr_name)`: return the positional
-/// literal arguments of the named attribute attached to `$class` as an
-/// indexed `array<mixed>`. Strings, ints, booleans, and null literals are
-/// preserved with their original PHP types; the checker rejects calls that
-/// would require unsupported metadata before codegen reaches this emitter.
+/// Emits code for `class_attribute_args($class, $attr_name)`.
 ///
-/// Both arguments must be compile-time string literals — at codegen time
-/// we look up `ClassInfo.attribute_args` and emit a sequence of
-/// `__rt_mixed_from_value` + `__rt_array_push_int` calls. If the attribute
-/// is not present on the class, the result is the empty array.
+/// Returns `PhpType::Array(Box::new(PhpType::Mixed))` on success; on error
+/// (non-literal args, missing class, or absent attribute) returns early with
+/// the same type so the caller can proceed.  `ctx` provides the class lookup
+/// via `ctx.classes`; attribute arguments are matched case-insensitively and
+/// then boxed into mixed cells and pushed onto a newly allocated indexed array.
+/// On x86_64 the result register is `rax`; on AArch64 it is `x0`.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -117,6 +115,13 @@ pub fn emit(
     Some(PhpType::Array(Box::new(PhpType::Mixed)))
 }
 
+/// Emits AArch64 instructions to box `arg` into a runtime mixed cell.
+///
+/// Sets `x0` = runtime tag, `x1` = low word, `x2` = high word per the
+/// mixed-cell ABI, then calls `__rt_mixed_from_value`.  Caller saves the
+/// array pointer on the stack before this call (see call site in `emit`).
+/// For `Str` args the string is added to `data` as a literal and the symbol
+/// address is materialized into `x1`; `data` is only mutated for `Str`.
 fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut DataSection) {
     // Set (tag in x0, lo in x1, hi in x2) per the mixed-cell ABI, then call
     // __rt_mixed_from_value. The helper persists strings and retains
@@ -149,6 +154,13 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
     emitter.instruction("bl __rt_mixed_from_value");                            // box the captured payload into an owned mixed cell
 }
 
+/// Emits x86_64 instructions to box `arg` into a runtime mixed cell.
+///
+/// Sets `rax` = runtime tag, `rdi` = low word, `rsi` = high word per the
+/// mixed-cell ABI, then calls `__rt_mixed_from_value`.  Caller saves the
+/// array pointer on the stack before this call (see call site in `emit`).
+/// For `Str` args the string is added to `data` as a literal and the symbol
+/// address is materialized into `rdi`; `data` is only mutated for `Str`.
 fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut DataSection) {
     // Set (tag in rax, lo in rdi, hi in rsi) per the mixed-cell ABI on x86_64.
     match arg {

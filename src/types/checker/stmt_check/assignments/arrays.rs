@@ -18,6 +18,17 @@ use crate::types::{
 
 use super::super::super::Checker;
 
+/// Validates and updates the type environment for `$array[$index] = $value` assignments.
+///
+/// Validates that the target is not a string, merges element types for arrays/assoc-arrays,
+/// checks buffer index type and element type compatibility, and requires ArrayAccess for objects.
+/// Updates `env` with the merged key/value types; returns an error for invalid targets or type mismatches.
+///
+/// Errors:
+/// - Undefined variable
+/// - String offset assignment
+/// - Buffer element type mismatch or packed buffer assignment via index
+/// - Object assignment without ArrayAccess
 pub(super) fn check_array_assign(
     checker: &mut Checker,
     array: &str,
@@ -126,6 +137,16 @@ pub(super) fn check_array_assign(
     Ok(())
 }
 
+/// Validates a nested array assignment like `$arr[$i] = $value` where the target itself is an array access.
+///
+/// Type-checks the array, index, and value expressions, then validates that the array type supports
+/// nested offset assignment. Allows `Mixed` and objects implementing `ArrayAccess`; rejects strings
+/// and plain arrays.
+///
+/// Errors:
+/// - Target is not an array access expression
+/// - Target is a string (string offset assignment not supported)
+/// - Target type does not support nested assignment (not `Mixed` or `ArrayAccess`)
 pub(super) fn check_nested_array_assign(
     checker: &mut Checker,
     target: &Expr,
@@ -158,6 +179,17 @@ pub(super) fn check_nested_array_assign(
     }
 }
 
+/// Validates and updates the type environment for `$array[] = $value` (push) assignments.
+///
+/// Type-checks the value, then merges it into the element type of the array.
+/// For `PhpType::Array`, updates the element type in `env` to the merged type.
+/// For buffers, returns an error (buffers do not support push).
+/// For objects implementing `ArrayAccess`, allows the push without element type merging.
+///
+/// Errors:
+/// - Undefined variable
+/// - Buffer push (buffers require `buffer_new<T>(len)` for allocation)
+/// - Object push without `ArrayAccess`
 pub(super) fn check_array_push(
     checker: &mut Checker,
     array: &str,

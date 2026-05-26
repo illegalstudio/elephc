@@ -183,6 +183,13 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the failure sentinel
 }
 
+/// Emits `__rt_stat_array`, `__rt_lstat_array`, and `__rt_fstat_array` for the Linux x86_64 ABI.
+///
+/// Uses the libc `stat`, `lstat`, and `fstat` calls rather than raw syscalls, unlike the ARM64
+/// path. Frame layout (rbp-relative): hash pointer slot at `[rbp - 8]`, stat buffer at
+/// `[rbp - buf_neg]`. On failure each helper returns a null hash pointer (rax = 0) so builtin
+/// codegen can box PHP `false`. Called exclusively from `emit_stat_array` when
+/// `emitter.target.arch == Arch::X86_64`.
 fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
     let stat_buf = 144usize;
     let mode_off = 24usize;

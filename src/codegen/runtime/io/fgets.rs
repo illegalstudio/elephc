@@ -10,10 +10,18 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// fgets: read one line from a file descriptor.
-/// Input:  x0=fd
-/// Output: x1=string pointer (in concat_buf), x2=string length (including \n if present)
-/// Side effect: sets _eof_flags[fd] if EOF reached
+/// Reads one line from a file descriptor into the concat buffer.
+/// dispatches to `emit_fgets_linux_x86_64` on x86_64; falls through to ARM64
+/// path otherwise.
+///
+/// ABI contract:
+///   - input:  x0 = file descriptor (non-negative for valid fds, negative for
+///             errors such as failed fopen)
+///   - output: x1 = pointer to line start in `_concat_buf`, x2 = line length
+///             (includes trailing `\n` if one was present before EOF)
+///   - side effect: sets `_eof_flags[fd] = 1` when the stream is exhausted
+///   - concat buffer offsets are advanced atomically; a line may be partial
+///     if EOF or read error interrupts the stream
 pub fn emit_fgets(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_fgets_linux_x86_64(emitter);
@@ -102,6 +110,10 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// x86_64-specific fgets: mirrors the ARM64 path using x86_64 System V ABI.
+/// Input:  rdi = file descriptor
+/// Output: rax = line start pointer in _concat_buf, rdx = line length
+/// Side effect: sets _eof_flags[fd] = 1 when stream is exhausted
 fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fgets ---");

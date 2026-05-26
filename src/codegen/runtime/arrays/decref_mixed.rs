@@ -13,6 +13,22 @@ use crate::codegen::platform::Arch;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
+/// Emits the `__rt_decref_mixed` runtime helper for the current target.
+///
+/// # Arguments
+/// * `emitter` - The assembly emitter to write instructions into.
+///
+/// # Behavior
+/// - On ARM64: validates the pointer lies within the managed heap, decrements the refcount
+///   from the mixed cell header, and triggers GC cycle collection for boxed arrays/objects/mixed
+///   when the refcount reaches zero. Calls `__rt_mixed_free_deep` to release the payload.
+/// - On x86_64: validates the pointer is in-bounds with the correct heap magic header,
+///   decrements the refcount, triggers cycle collection for heap-backed children (tags 4–7),
+///   and tail-calls `__rt_mixed_free_deep` on zero refcount.
+///
+/// # ABI
+/// - ARM64: input pointer in `x0`; clobbers `x9`, `x10`; preserves `x30` (link register).
+/// - x86_64: input pointer in `rax`; clobbers `r10`, `r11`.
 pub fn emit_decref_mixed(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_decref_mixed_linux_x86_64(emitter);
@@ -74,6 +90,21 @@ pub fn emit_decref_mixed(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // nothing to release
 }
 
+/// Emits the `__rt_decref_mixed` runtime helper for the x86_64 Linux ABI.
+///
+/// # Arguments
+/// * `emitter` - The assembly emitter to write instructions into.
+///
+/// # Behavior
+/// - Skips null pointers and values below the managed heap base.
+/// - Validates the pointer is within the live heap window and carries the
+///   x86_64 heap magic marker in the high 32 bits of the header word.
+/// - Decrements the refcount and performs GC cycle collection for heap-backed
+///   boxed children (tags 4–7) when the refcount reaches zero.
+/// - Tail-calls `__rt_mixed_free_deep` on zero refcount.
+///
+/// # ABI
+/// - Input pointer in `rax`; clobbers `r10`, `r11`; returns via `ret`.
 fn emit_decref_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: decref_mixed ---");

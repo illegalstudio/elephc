@@ -149,6 +149,9 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// x86_64 Linux variant of `emit_hash_insert_owned`. Targets the x86_64 SysV ABI.
+/// Input: rdi=hash_table_ptr, rsi=key_ptr, rdx=key_len, rcx=value_lo, r8=value_hi, r9=value_tag
+/// Output: rax=hash_table_ptr
 fn emit_hash_insert_owned_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_insert_owned ---");

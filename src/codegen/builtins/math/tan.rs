@@ -16,6 +16,25 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a PHP `tan` numeric builtin call backed by the platform libc `tan` routine.
+///
+/// # Arguments
+/// * `_name` — Unused name parameter (保留 for dispatcher signature compatibility).
+/// * `args` — Single argument: the operand to compute tangent on.
+/// * `emitter` — Target assembly emitter.
+/// * `ctx` — Codegen context carrying variable layout and class metadata.
+/// * `data` — Mutable data section for constant pools.
+///
+/// # Behavior
+/// - Emits the operand expression and captures its type.
+/// - If the operand is not `PhpType::Float`, emits an integer-to-float normalization
+///   via `emit_int_result_to_float_result` so the floating-point register holds the value
+///   before the libc call.
+/// - Emits a `bl tan` (AArch64) or `call tan` (x86_64) instruction to invoke the
+///   platform's libm tangent function.
+///
+/// # Returns
+/// Always returns `Some(PhpType::Float)` — `tan` produces a floating-point result.
 pub fn emit(
     _name: &str,
     args: &[Expr],

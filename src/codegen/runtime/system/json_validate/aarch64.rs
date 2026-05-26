@@ -10,6 +10,11 @@
 
 use crate::codegen::emit::Emitter;
 
+/// Emits the `__rt_json_validate` entry point and all JSON validator helper
+/// routines. On entry `x0` holds the source pointer and `x1` holds the source
+/// length; on exit `x0` is 1 on success or 0 on failure. Syntax errors and UTF-16
+/// surrogate errors are recorded in `_json_last_error` and thrown via
+/// `__rt_json_throw_error` when `JSON_THROW_ON_ERROR` is set.
 pub(super) fn emit(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_validate ---");
@@ -69,6 +74,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emit_object_parser_aarch64(emitter);
 }
 
+/// Emits `__rt_json_validate_skip_ws`: advances the source index past all
+/// RFC 8259 whitespace bytes (space, tab, LF, CR). Uses `_json_validate_idx`
+/// as a persistent cursor; on exit the index has passed the last whitespace
+/// byte or reached the end of input.
 fn emit_skip_ws_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_skip_ws");
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save linkage
@@ -100,6 +109,10 @@ fn emit_skip_ws_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 }
 
+/// Emits `__rt_json_validate_value`: reads the byte at `_json_validate_idx`
+/// and dispatches to the appropriate literal/object/array/number/string parser.
+/// Returns 1 in `x0` on success, 0 on failure. Syntax errors jump to
+/// `__rt_json_validate_value_syntax` which calls `__rt_json_throw_error`.
 fn emit_value_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_value");
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save linkage
@@ -169,6 +182,11 @@ fn emit_value_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 }
 
+/// Emits a literal-match helper (`__rt_json_validate_match_<suffix>`) that
+/// validates exactly `lit.len()` bytes against the supplied character sequence.
+/// On success updates `_json_validate_idx` and returns 1; on mismatch or
+/// truncated input jumps to the fail label which calls `__rt_json_throw_error`
+/// with JSON_ERROR_SYNTAX and returns 0.
 fn emit_match_literal_aarch64(emitter: &mut Emitter, suffix: &str, lit: &[char]) {
     let label = format!("__rt_json_validate_match_{}", suffix);
     let fail_label = format!("__rt_json_validate_match_{}_fail", suffix);
@@ -205,6 +223,13 @@ fn emit_match_literal_aarch64(emitter: &mut Emitter, suffix: &str, lit: &[char])
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 }
 
+/// Emits `__rt_json_validate_string`: parses a JSON string from the source
+/// starting at `_json_validate_idx` (expects the opening `"`). Validates all
+/// escape sequences including `\uXXXX` and UTF-16 surrogate pairs per RFC 8259.
+/// On success advances `_json_validate_idx` past the closing `"` and returns 1.
+/// On syntax/UTF-16 error commits the failure index to `_json_validate_idx`,
+/// sets `_json_last_error` to JSON_ERROR_SYNTAX (4) or JSON_ERROR_UTF16 (10),
+/// and returns 0.
 fn emit_string_parser_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_string");
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // store updated JSON validator state
@@ -386,6 +411,12 @@ fn emit_uhex_loop_aarch64(emitter: &mut Emitter, suffix: &str, error_label: &str
     emitter.label(&format!("__rt_json_validate_uhex_done_{suffix}"));
 }
 
+/// Emits `__rt_json_validate_number`: parses a JSON number from the source
+/// starting at `_json_validate_idx`. Accepts an optional leading `-`, a
+/// non-zero digit for the integer part (or `0` alone), an optional fractional
+/// part, and an optional exponent (`e`/`E` with optional `+`/`-`). On success
+/// advances `_json_validate_idx` past the last digit and returns 1. On invalid
+/// syntax returns 0 and calls `__rt_json_throw_error`.
 fn emit_number_parser_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_number");
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // store updated JSON validator state
@@ -511,6 +542,14 @@ fn emit_number_parser_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 }
 
+/// Emits `__rt_json_validate_array`: parses a JSON array beginning at
+/// `_json_validate_idx` (expects `[`). Increments `_json_active_depth` and
+/// checks against `_json_depth_limit` before descending; on overflow jumps
+/// to `__rt_json_validate_array_depth` which sets `_json_last_error` to
+/// JSON_ERROR_DEPTH (1) and calls `__rt_json_throw_error`. Recursively parses
+/// elements with `__rt_json_validate_value`. On success decrements depth,
+/// advances `_json_validate_idx` past `]`, and returns 1. On any failure
+/// propagates 0 to the caller without writing depth (the caller cleans up).
 fn emit_array_parser_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_array");
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // store updated JSON validator state
@@ -595,6 +634,14 @@ fn emit_array_parser_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 }
 
+/// Emits `__rt_json_validate_object`: parses a JSON object beginning at
+/// `_json_validate_idx` (expects `{`). Increments `_json_active_depth` and
+/// checks against `_json_depth_limit` before descending; on overflow jumps
+/// to `__rt_json_validate_object_depth` which sets `_json_last_error` to
+/// JSON_ERROR_DEPTH (1) and calls `__rt_json_throw_error`. Each member must be
+/// a string key followed by `:`, then a value parsed with `__rt_json_validate_value`.
+/// On success decrements depth, advances `_json_validate_idx` past `}`, and returns 1.
+/// On any failure propagates 0 to the caller without writing depth (the caller cleans up).
 fn emit_object_parser_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_object");
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // store updated JSON validator state

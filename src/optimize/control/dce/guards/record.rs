@@ -18,6 +18,11 @@ use super::eval::{
 use super::super::*;
 use super::super::state::{ConditionGuard, ExactGuard, GuardLiteral, GuardState};
 
+/// Removes all guard entries associated with a variable name.
+///
+/// Clears the variable from `truthy_vars`, `falsy_vars`, `bool_true_vars`,
+/// `bool_false_vars`, `exact_guards`, `excluded_guards`, and any `condition_guards`
+/// that track the named variable. Called when a variable is reassigned.
 pub(in crate::optimize::control::dce) fn clear_guards_for_name(guards: &mut GuardState, name: &str) {
     guards.truthy_vars.retain(|known| known != name);
     guards.falsy_vars.retain(|known| known != name);
@@ -29,12 +34,19 @@ pub(in crate::optimize::control::dce) fn clear_guards_for_name(guards: &mut Guar
         .condition_guards
         .retain(|known| !known.names.iter().any(|known_name| known_name == name));
 }
+/// Pushes a variable name into the tracker list if not already present.
+///
+/// deduplicates against existing entries to keep the names list unique.
 fn push_guard_name(names: &mut Vec<String>, name: &str) {
     if !names.iter().any(|known| known == name) {
         names.push(name.to_string());
     }
 }
 
+/// Records that a variable is known to be truthy or falsy.
+///
+/// Removes the variable from both `truthy_vars` and `falsy_vars` first to ensure
+/// consistency, then adds it to the appropriate set based on `known_truthy`.
 fn record_truthy_guard(guards: &mut GuardState, name: &str, known_truthy: bool) {
     guards.truthy_vars.retain(|known| known != name);
     guards.falsy_vars.retain(|known| known != name);
@@ -45,6 +57,11 @@ fn record_truthy_guard(guards: &mut GuardState, name: &str, known_truthy: bool) 
     }
 }
 
+/// Records an exact literal value for a variable and updates related guard sets.
+///
+/// Clears all existing guards for the name, then adds the exact value to `exact_guards`,
+/// records the variable as bool-true/false if the value is boolean, and calls
+/// `record_truthy_guard` with the literal's truthiness.
 fn record_exact_literal_guard(guards: &mut GuardState, name: &str, value: GuardLiteral) {
     clear_guards_for_name(guards, name);
     if let GuardLiteral::Bool(value) = &value {
@@ -61,6 +78,11 @@ fn record_exact_literal_guard(guards: &mut GuardState, name: &str, value: GuardL
     record_truthy_guard(guards, name, guard_literal_truthy(&value));
 }
 
+/// Extracts the variable name and value from a strict-equality guard when the branch is taken.
+///
+/// Unpacks `strict_scalar_guard` and returns the binding when the branch taken is consistent
+/// with the guard (true-branch for `===`, false-branch for `!==`, or the inverse).
+/// Returns `None` when the branch taken contradicts the guard.
 fn exact_literal_from_guard_branch(condition: &Expr, branch_taken: bool) -> Option<(&str, GuardLiteral)> {
     let (name, compared_value, expects_equal) = strict_scalar_guard(condition)?;
     match (expects_equal, branch_taken) {
@@ -70,6 +92,11 @@ fn exact_literal_from_guard_branch(condition: &Expr, branch_taken: bool) -> Opti
     }
 }
 
+/// Extracts the excluded variable name and value from a strict-equality guard when the branch is NOT taken.
+///
+/// Unpacks `strict_scalar_guard` and returns the binding when the branch taken is inconsistent
+/// with the guard (false-branch for `===`, true-branch for `!==`).
+/// Returns `None` when the branch taken is consistent with the guard.
 fn excluded_literal_from_guard_branch(
     condition: &Expr,
     branch_taken: bool,
@@ -82,6 +109,10 @@ fn excluded_literal_from_guard_branch(
     }
 }
 
+/// Records a literal value as impossible for a variable.
+///
+/// Adds the value to `excluded_guards` only if not already recorded, establishing
+/// that the variable provably cannot equal this value.
 fn record_excluded_literal_guard(guards: &mut GuardState, name: &str, value: GuardLiteral) {
     if !guards
         .excluded_guards
@@ -95,6 +126,12 @@ fn record_excluded_literal_guard(guards: &mut GuardState, name: &str, value: Gua
     }
 }
 
+/// Collects all variable names referenced in a condition expression.
+///
+/// Recursively traverses `Variable`, `Not`/`Negate`/`BitNot`, and `BinaryOp` nodes
+/// to collect every tracked variable name. Returns `true` if all subexpressions
+/// are trackable (variables or literals); returns `false` for expressions containing
+/// function calls, objects, or other side-effecting or untrackable constructs.
 fn collect_trackable_condition_names(expr: &Expr, names: &mut Vec<String>) -> bool {
     match &expr.kind {
         ExprKind::Variable(name) => {
@@ -117,6 +154,10 @@ fn collect_trackable_condition_names(expr: &Expr, names: &mut Vec<String>) -> bo
     }
 }
 
+/// Returns the logical inverse of a comparison operator.
+///
+/// Maps `==` <-> `!=`, `===` <-> `!==`, `<` <-> `>=`, `>` <-> `<=`.
+/// Used to generate alternative forms of a guard condition.
 fn inverse_comparison_op(op: &BinOp) -> Option<BinOp> {
     match op {
         BinOp::Eq => Some(BinOp::NotEq),
@@ -131,10 +172,21 @@ fn inverse_comparison_op(op: &BinOp) -> Option<BinOp> {
     }
 }
 
+/// Returns `true` if the inverse of the comparison is also a total function (no NaN edge cases).
+///
+/// True only for `==`, `!=`, `===`, `!==` — where inverting the comparison never
+/// introduces special-case behavior. False for `<`, `<=`, `>`, `>=` due to NaN
+/// comparisons where `x < y` does not imply `!(x >= y)`.
 fn comparison_inverse_is_total(op: &BinOp) -> bool {
     matches!(op, BinOp::Eq | BinOp::NotEq | BinOp::StrictEq | BinOp::StrictNotEq)
 }
 
+/// Generates logically equivalent alternative forms of a condition guard.
+///
+/// Produces alternative guard forms including the inverse comparison operator
+/// (e.g., `$x > 3` becomes `$x <= 3` when value=false) and De Morgan equivalents
+/// of `Not(And)`/`Not(Or)`. Skips forms that would introduce undefined behavior
+/// for floating-point comparisons.
 fn condition_guard_forms(condition: &Expr, value: bool) -> Vec<(Expr, bool)> {
     let mut forms = Vec::new();
 
@@ -197,6 +249,10 @@ fn condition_guard_forms(condition: &Expr, value: bool) -> Vec<(Expr, bool)> {
     forms
 }
 
+/// Inserts or updates a `ConditionGuard` entry in the guard state.
+///
+/// If an entry with the same condition expression already exists, updates its `value`
+/// and `names`. Otherwise, pushes a new `ConditionGuard` entry.
 fn upsert_condition_guard(
     guards: &mut GuardState,
     condition: Expr,
@@ -220,6 +276,11 @@ fn upsert_condition_guard(
     });
 }
 
+/// Records a condition guard with its known boolean value.
+///
+/// Checks that the condition has no side effects and does not throw before recording.
+/// Collects trackable variable names and upserts the condition guard, then also
+/// records all logically equivalent alternative forms via `condition_guard_forms`.
 fn record_condition_guard(guards: &mut GuardState, condition: &Expr, value: bool) {
     let effect = expr_effect(condition);
     if effect.has_side_effects || effect.may_throw {
@@ -241,6 +302,12 @@ fn record_condition_guard(guards: &mut GuardState, condition: &Expr, value: bool
     }
 }
 
+/// Extends guard state for a switch case when the case matches.
+///
+/// When a single-pattern match succeeds:
+/// - For `bool` subject literals: records the pattern match outcome as a condition guard
+/// - For variable subjects: records the pattern's boolean value as a truthy/falsy guard
+/// - Otherwise: returns the guard state unchanged.
 pub(in crate::optimize::control::dce) fn extend_guards_for_switch_case(subject: &Expr, patterns: &[Expr], guards: &GuardState) -> GuardState {
     let [pattern] = patterns else {
         return guards.clone();
@@ -259,6 +326,11 @@ pub(in crate::optimize::control::dce) fn extend_guards_for_switch_case(subject: 
     }
 }
 
+/// Extends guard state for switch case fallthrough when the subject boolean does not match patterns.
+///
+/// Given a known boolean subject value and a list of patterns, records that the subject
+/// is provably not equal to each pattern by folding the guards with `branch_taken=false`
+/// for each pattern. Only handles `ScalarValue::Bool` subjects; returns clone for other types.
 pub(in crate::optimize::control::dce) fn extend_guards_for_switch_case_no_match(
     subject_value: &ScalarValue,
     patterns: &[Expr],
@@ -273,6 +345,12 @@ pub(in crate::optimize::control::dce) fn extend_guards_for_switch_case_no_match(
     })
 }
 
+/// Extends guard state for switch case fallthrough when the subject value is unknown.
+///
+/// When the subject's scalar value is not known, falls back to:
+/// - For variable subjects: records each pattern's boolean negation as a truthy guard
+/// - For non-boolean patterns: records the pattern value as an excluded guard
+/// Returns clone if the subject is not a simple variable.
 pub(in crate::optimize::control::dce) fn extend_guards_for_switch_case_no_match_subject(
     subject: &Expr,
     patterns: &[Expr],
@@ -303,6 +381,11 @@ pub(in crate::optimize::control::dce) fn extend_guards_for_switch_case_no_match_
     })
 }
 
+/// Main guard extension dispatcher for a branch taken at a conditional point.
+///
+/// Recursively handles `Not`, `And`, and `Or` conditions, then records exact literal
+/// constraints, excluded values, condition guards, and variable truthiness based on
+/// the `branch_taken` flag. Returns a new `GuardState` with all inferred facts added.
 pub(in crate::optimize::control::dce) fn extend_guards(guards: &GuardState, condition: &Expr, branch_taken: bool) -> GuardState {
     let mut next = if let ExprKind::Not(inner) = &condition.kind {
         extend_guards(guards, inner, !branch_taken)

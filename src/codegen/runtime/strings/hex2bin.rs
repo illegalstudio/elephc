@@ -10,8 +10,11 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// hex2bin: convert hex string to binary.
-/// Input: x1/x2=hex_string. Output: x1/x2=result (half length).
+/// Emits the `__rt_hex2bin` runtime helper for converting a hex string to binary.
+/// Dispatches to the target-specific implementation (x86_64 Linux calls
+/// `emit_hex2bin_linux_x86_64`; other targets use the inline ARM64 fallback).
+/// Input: x1=hex string pointer, x2=hex string length. Output: x1/x2=result (pointer/length).
+/// The decoded bytes are appended to the shared concat buffer; the concat buffer offset is updated atomically.
 pub fn emit_hex2bin(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hex2bin_linux_x86_64(emitter);
@@ -77,6 +80,9 @@ pub fn emit_hex2bin(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits the x86_64 Linux variant of `__rt_hex2bin`. Uses the System V AMD64 ABI:
+/// input: rax=hex string pointer, rdx=hex string length; output: rax/rdx=result (pointer/length).
+/// Appends decoded bytes to the shared concat buffer and updates `_concat_off`.
 fn emit_hex2bin_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hex2bin ---");

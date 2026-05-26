@@ -11,9 +11,26 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_intersect_refcounted: return elements present in both arrays for refcounted payload arrays.
-/// Input:  x0=arr1, x1=arr2
-/// Output: x0=new array containing retained elements found in both arrays
+/// Emits the `__rt_array_intersect_refcounted` runtime helper.
+///
+/// Computes the set intersection of two refcounted arrays using pointer identity comparison.
+/// Allocates a new result array with the same capacity as the first input, then iterates over
+/// each element in arr1, checking membership in arr2 via linear scan. Matching elements are
+/// appended to the result via `__rt_array_push_refcounted`.
+///
+/// On ARM64: saves inputs and frame state to the stack, allocates the result array, then runs
+///   a double-loop: outer loop walks arr1 by index, inner loop scans arr2 for each candidate.
+///   Pointer identity (`cmp x6, x10` / `b.eq`) determines a match. The result pointer is reloaded
+///   after each push since the append helper may reallocate. On completion, restores frame and
+///   returns the result array in `x0`.
+///
+/// On x86_64: uses aligned stack slots (`rbp - 8/16/24/32`) for bookkeeping and caller-saved
+///   registers (`r8-r11`, `rcx`, `r9`) for loop indices and payloads. Same double-loop logic,
+///   same push-after-match behavior, result pointer persisted after each append.
+///
+/// Input:  `x0` (ARM64) / `rdi` (x86_64) = first input array
+///         `x1` (ARM64) / `rsi` (x86_64) = second input array
+/// Output: `x0` (ARM64) / `rax` (x86_64) = new array containing elements present in both inputs
 pub fn emit_array_intersect_refcounted(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_intersect_refcounted_linux_x86_64(emitter);
@@ -79,6 +96,15 @@ pub fn emit_array_intersect_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return result array
 }
 
+/// Emits the x86_64 Linux variant of `__rt_array_intersect_refcounted`.
+///
+/// Identical algorithm to the ARM64 variant (set intersection via pointer-identity double-loop)
+/// but emits x86_64 syscall conventions and register conventions instead.
+/// Uses `rbp`-based frame with fixed spill slots at `[rbp-8]`, `[rbp-16]`, `[rbp-24]`, `[rbp-32]`
+/// for the two input array pointers, the result array pointer, and the outer loop index.
+/// Caller-saved registers `r8-r11`, `rcx`, `r9` carry loop state and payloads.
+///
+/// Uses the shared `__rt_array_new` constructor and `__rt_array_push_refcounted` append helper.
 fn emit_array_intersect_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_intersect_refcounted ---");

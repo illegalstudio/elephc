@@ -11,6 +11,7 @@
 use crate::codegen::{abi, emit::Emitter};
 use crate::codegen::platform::Arch;
 
+/// Emits the `__rt_exception_cleanup_frames` runtime helper.
 pub fn emit_exception_cleanup_frames(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_exception_cleanup_frames_linux_x86_64(emitter);
@@ -53,6 +54,11 @@ pub fn emit_exception_cleanup_frames(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the throw helper after unwound-frame cleanup
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_exception_cleanup_frames` runtime helper.
+///
+/// Uses the System V AMD64 ABI: target activation in `rdi`, walks `_exc_call_frame_top`
+/// linked list via `r13`, invokes cleanup callbacks with the unwound frame pointer in `rdi`,
+/// and restores callee-saved registers `r12`/`r13` before returning.
 fn emit_exception_cleanup_frames_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: exception_cleanup_frames ---");

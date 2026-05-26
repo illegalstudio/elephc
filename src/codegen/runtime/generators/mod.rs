@@ -23,6 +23,9 @@ use crate::codegen::platform::Arch;
 
 use frame as f;
 
+/// Emits all `__rt_gen_*` runtime helpers for the current target.
+/// Routes to x86_64-specific emitters when on that architecture,
+/// otherwise emits the default ARM64 implementations.
 pub(crate) fn emit_generator_runtime(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_generator_runtime_x86_64(emitter);
@@ -39,6 +42,9 @@ pub(crate) fn emit_generator_runtime(emitter: &mut Emitter) {
     emit_gen_get_return(emitter);
 }
 
+/// Emits all `__rt_gen_*` helpers for the x86_64 target.
+/// Corresponds one-to-one with the ARM64 emitters but uses System V ABI
+/// register conventions (rdi, rsi, rdx, rcx, r8, r9 for arguments).
 fn emit_generator_runtime_x86_64(emitter: &mut Emitter) {
     emit_gen_current_x86_64(emitter);
     emit_gen_key_x86_64(emitter);
@@ -83,6 +89,9 @@ fn emit_gen_current(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the owned Mixed pointer from current()
 }
 
+/// `key(): mixed` — returns the boxed Mixed pointer stashed by the most
+/// recent yield. Increfs the cell so the caller receives an owned reference
+/// independent of the generator's frame slot.
 fn emit_gen_key(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_key ---");
@@ -133,6 +142,9 @@ fn emit_gen_send(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// `rewind(): void` — rewinds the generator to the first yield if not
+/// already rewound. On ARM64 the frame pointer is passed in `x0`; the
+/// sent value slot is ignored since PHP's rewind() discards it.
 fn emit_gen_rewind(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_rewind ---");
@@ -167,6 +179,10 @@ fn emit_gen_throw(emitter: &mut Emitter) {
     emitter.instruction("b __rt_throw_current");                                // tail-call the unwinder; never returns
 }
 
+/// `getReturn(): mixed` — returns the value supplied to `return` in the
+/// generator body. Increfs the boxed return value so the caller owns an
+/// independent reference. Available only after the generator has exited
+/// (PHP mandates a warning if called on an active generator).
 fn emit_gen_get_return(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_get_return ---");
@@ -175,6 +191,8 @@ fn emit_gen_get_return(emitter: &mut Emitter) {
     emitter.instruction("b __rt_incref");                                       // tail-call incref so the caller owns a fresh refcount on the cell
 }
 
+/// `current(): mixed` — x86_64 port. Identical behavior to `emit_gen_current`
+/// but uses System V ABI: generator frame in `rdi`, value argument in `rsi`.
 fn emit_gen_current_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_current ---");
@@ -200,6 +218,8 @@ fn emit_gen_current_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the owned Mixed pointer from current()
 }
 
+/// `key(): mixed` — x86_64 port. Identical behavior to `emit_gen_key` but
+/// uses System V ABI: generator frame in `rdi`.
 fn emit_gen_key_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_key ---");
@@ -208,6 +228,7 @@ fn emit_gen_key_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_incref");                                     // tail-call incref so the caller owns a fresh refcount on the cell
 }
 
+/// `valid(): bool` — x86_64 port. Returns 1 unless the TERMINATED flag is set.
 fn emit_gen_valid_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_valid ---");
@@ -219,6 +240,8 @@ fn emit_gen_valid_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the validity flag
 }
 
+/// `next(): void` — x86_64 port. Advances the generator past the current
+/// yield; no-op if already terminated. Uses System V ABI: frame in `rdi`.
 fn emit_gen_next_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_next ---");
@@ -232,6 +255,9 @@ fn emit_gen_next_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // already terminated — return immediately
 }
 
+/// `send($value): mixed` — x86_64 port. Stashes the boxed sent value from
+/// `rsi` in the frame's sent_value slot, then resumes the body. Returns null
+/// if the generator is already terminated.
 fn emit_gen_send_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_send ---");
@@ -247,6 +273,8 @@ fn emit_gen_send_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// `rewind(): void` — x86_64 port. Sets REWOUND flag and resumes the
+/// generator from its initial state if not already rewound.
 fn emit_gen_rewind_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_rewind ---");
@@ -262,6 +290,9 @@ fn emit_gen_rewind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // already rewound — return immediately
 }
 
+/// `throw($exc)` — x86_64 port. Marks the generator terminated, stores
+/// the exception object (in `rsi`) in the global `_exc_value` slot, then
+/// tail-calls `__rt_throw_current` for longjmp-based unwinding.
 fn emit_gen_throw_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_throw ---");
@@ -273,6 +304,8 @@ fn emit_gen_throw_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_throw_current");                              // tail-call the unwinder; never returns
 }
 
+/// `getReturn(): mixed` — x86_64 port. Identical behavior to `emit_gen_get_return`
+/// but uses System V ABI: generator frame in `rdi`. Increfs the return value.
 fn emit_gen_get_return_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_get_return ---");

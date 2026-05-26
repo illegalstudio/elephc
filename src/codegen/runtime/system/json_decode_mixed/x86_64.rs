@@ -10,9 +10,32 @@
 
 use crate::codegen::emit::Emitter;
 
-/// x86_64 implementation of `__rt_json_decode_mixed`. Mirrors the ARM64
-/// dispatcher in `super::aarch64`; the recursive array/object helpers
-/// live in `super::arrays` and `super::objects`.
+/// Emits x86_64 assembly for `__rt_json_decode_mixed`, the entry point that
+/// decodes any JSON value into a boxed `Mixed` runtime value.
+///
+/// Input (caller preserved in rax/rdx):
+///   - `rax`: source pointer
+///   - `rdx`: source length
+///
+/// Output:
+///   - `rax`: boxed `Mixed*` on success, 0 on error
+///
+/// Behavior:
+///   1. Skips leading whitespace, captures the first non-whitespace byte.
+///   2. Trims the raw slice to the exact JSON value (strips trailing ws).
+///   3. Calls `__rt_json_decode` (legacy path) for string unescaping; result
+///      parked at `[rbp-32]` (ptr) and `[rbp-40]` (len).
+///   4. Classifies on the first byte and dispatches to the appropriate helper:
+///      `"` → string   `t` → true   `f` → false   `n` → null
+///      `[` → array    `{` → object  `-`/`0`-`9` → number
+///   5. Each branch validates the token, boxes the result via `__rt_mixed_from_value`,
+///      and jumps to `__rt_json_decode_mixed_done`.
+///   6. Depth tracking via `__rt_json_depth_enter`/`__rt_json_depth_exit` guards
+///      array/object nesting.  Empty containers skip recursive helpers.
+///   7. Integer overflow: lex-compares against `PHP_INT_MAX`/`PHP_INT_MIN` threshold
+///      strings; `JSON_BIGINT_AS_STRING` selects string vs. float coercion.
+///   8. Float path: copies the decoded slice into a 32-byte scratch buffer with
+///      a trailing NUL, then calls libc `atof` via `bl_c`.
 pub(super) fn emit(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_decode_mixed ---");

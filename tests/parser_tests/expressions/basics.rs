@@ -10,6 +10,8 @@
 use super::*;
 
 #[test]
+// Verifies that `<?php echo @file_get_contents("missing.txt");` parses to an `Echo` of an
+// `ErrorSuppress` wrapping a `FunctionCall`. The `@` prefix must not affect parsing.
 fn test_parse_error_control_expression() {
     let stmts = parse_source("<?php echo @file_get_contents(\"missing.txt\");");
     assert_eq!(stmts.len(), 1);
@@ -29,6 +31,8 @@ fn test_parse_error_control_expression() {
 }
 
 #[test]
+// Verifies that `<?php @file_get_contents("missing.txt");` parses as an `ExprStmt` of an
+// `ErrorSuppress` wrapping a `FunctionCall`. Error suppression is valid on expression statements.
 fn test_parse_error_control_expression_statement() {
     let stmts = parse_source("<?php @file_get_contents(\"missing.txt\");");
     assert_eq!(stmts.len(), 1);
@@ -48,6 +52,8 @@ fn test_parse_error_control_expression_statement() {
 }
 
 #[test]
+// Verifies that `<?php echo @$x + 1;` parses as `(@$x) + 1` (not `@($x + 1)`).
+// Error suppression has higher precedence than addition, so the `@` applies only to `$x`.
 fn test_error_control_has_unary_precedence() {
     let stmts = parse_source("<?php echo @$x + 1;");
     assert_eq!(stmts.len(), 1);
@@ -65,6 +71,8 @@ fn test_error_control_has_unary_precedence() {
 }
 
 #[test]
+// Verifies that `<?php echo "A", 2, $x;` (multi-argument echo) lowers to a `Synthetic`
+// node containing three separate `Echo` statements, preserving source order.
 fn test_parse_multi_argument_echo_lowers_to_synthetic_echoes() {
     let stmts = parse_source("<?php echo \"A\", 2, $x;");
     assert_eq!(stmts.len(), 1);
@@ -89,6 +97,8 @@ fn test_parse_multi_argument_echo_lowers_to_synthetic_echoes() {
 }
 
 #[test]
+// Verifies that `<?php ifdef DEBUG { echo 1; }` parses to an `IfDef` node with symbol "DEBUG"
+// and a then_body containing one echo statement.
 fn test_parse_ifdef_statement() {
     let stmts = parse_source("<?php ifdef DEBUG { echo 1; }");
     assert_eq!(
@@ -105,6 +115,8 @@ fn test_parse_ifdef_statement() {
 }
 
 #[test]
+// Verifies that `<?php ifdef DEBUG { echo 1; } else { echo 2; }` parses to an `IfDef` with
+// both then_body and else_body populated.
 fn test_parse_ifdef_else_statement() {
     let stmts = parse_source("<?php ifdef DEBUG { echo 1; } else { echo 2; }");
     assert_eq!(
@@ -121,6 +133,8 @@ fn test_parse_ifdef_else_statement() {
 }
 
 #[test]
+// Verifies that `<?php echo -7;` parses as `Stmt::echo(Expr::negate(Expr::int_lit(7)))`.
+// Negative integer literals use a unary negation node, not a literal with embedded sign.
 fn test_negative_integer() {
     let stmts = parse_source("<?php echo -7;");
     assert_eq!(stmts, vec![Stmt::echo(Expr::negate(Expr::int_lit(7)))]);
@@ -129,6 +143,8 @@ fn test_negative_integer() {
 // --- Operator precedence ---
 
 #[test]
+// Verifies that `<?php echo (2 + 3) * 4;` parses as `(2 + 3) * 4` — parentheses force
+// addition to be evaluated before multiplication, matching PHP's parenthesized precedence.
 fn test_parenthesized_expr() {
     let stmts = parse_source("<?php echo (2 + 3) * 4;");
     let expected = Stmt::echo(Expr::binop(
@@ -140,6 +156,8 @@ fn test_parenthesized_expr() {
 }
 
 #[test]
+// Verifies that `<?php echo 1 - 2 - 3;` parses as `(1 - 2) - 3` (left-associative),
+// not `1 - (2 - 3)`. Subtraction is left-associative in PHP.
 fn test_left_associativity() {
     let stmts = parse_source("<?php echo 1 - 2 - 3;");
     let expected = Stmt::echo(Expr::binop(
@@ -151,6 +169,8 @@ fn test_left_associativity() {
 }
 
 #[test]
+// Verifies that `<?php function f() { return 42; }` parses with a `Return(Some(...))` stmt
+// inside the function body.
 fn test_return_value_parses() {
     let stmts = parse_source("<?php function f() { return 42; }");
     if let StmtKind::FunctionDecl { body, .. } = &stmts[0].kind {
@@ -159,6 +179,7 @@ fn test_return_value_parses() {
 }
 
 #[test]
+// Verifies that `<?php function f() { return; }` parses with a `Return(None)` stmt (void return).
 fn test_return_void_parses() {
     let stmts = parse_source("<?php function f() { return; }");
     if let StmtKind::FunctionDecl { body, .. } = &stmts[0].kind {
@@ -167,12 +188,16 @@ fn test_return_void_parses() {
 }
 
 #[test]
+// Verifies that `<?php echo (int)3.14;` parses to a `Cast` expression with target `Int`.
+// PHP cast syntax `(int)` must be recognized as a unary cast operator.
 fn test_cast_int_parses() {
     let stmts = parse_source("<?php echo (int)3.14;");
     assert_eq!(stmts.len(), 1);
 }
 
 #[test]
+// Verifies that `<?php echo (INTEGER)3.14;` parses to a `Cast` expression with target `Int`.
+// PHP cast keywords are case-insensitive.
 fn test_cast_keywords_are_case_insensitive() {
     let stmts = parse_source("<?php echo (INTEGER)3.14;");
     match &stmts[0].kind {
@@ -187,6 +212,8 @@ fn test_cast_keywords_are_case_insensitive() {
 }
 
 #[test]
+// Verifies that `<?php echo (1 + 2);` parses as a parenthesized expression, NOT as a cast.
+// Parentheses around an arithmetic expression must not be interpreted as cast syntax.
 fn test_cast_not_confused_with_parens() {
     // (1 + 2) should NOT be parsed as a cast
     let stmts = parse_source("<?php echo (1 + 2);");
@@ -196,12 +223,15 @@ fn test_cast_not_confused_with_parens() {
 // --- Float ---
 
 #[test]
+// Verifies that `<?php echo 3.14;` parses as `Stmt::echo(Expr::float_lit(3.14))`.
 fn test_float_literal() {
     let stmts = parse_source("<?php echo 3.14;");
     assert_eq!(stmts, vec![Stmt::echo(Expr::float_lit(3.14))]);
 }
 
 #[test]
+// Verifies that `<?php echo -3.14;` parses as `Stmt::echo(Expr::negate(Expr::float_lit(3.14)))`.
+// Negative float literals use a unary negation node, mirroring negative integer behavior.
 fn test_negative_float() {
     let stmts = parse_source("<?php echo -3.14;");
     assert_eq!(stmts, vec![Stmt::echo(Expr::negate(Expr::float_lit(3.14)))]);
@@ -210,6 +240,8 @@ fn test_negative_float() {
 // --- Associative arrays ---
 
 #[test]
+// Verifies that `<?php ?int|string $value = null;` fails to parse.
+// The nullable shorthand `?T` cannot be combined with a union type; it is a parse error.
 fn test_parse_nullable_shorthand_cannot_be_combined_with_union() {
     assert!(parse_fails("<?php ?int|string $value = null;"));
 }

@@ -13,6 +13,19 @@ use crate::codegen::platform::Arch;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
+/// Emits the `__rt_decref_hash` runtime helper.
+///
+/// Decrements the refcount of a heap-allocated PHP hash table.
+/// Input: hash pointer in `x0` (ARM64) or `rax` (x86_64).
+/// Behavior:
+/// - Skips null, non-heap, and sentinel pointers immediately.
+/// - Decrements refcount; if zero, tail-calls `__rt_hash_free_deep` for deep release.
+/// - If refcount remains non-zero and GC is not suppressed/running, checks for cyclic
+///   values via `__rt_hash_may_have_cyclic_values`; if found, triggers `__rt_gc_collect_cycles`.
+/// - On x86_64, additionally validates the heap magic marker before any operation.
+///
+/// ABI: preserves all caller-saved registers except `x0`/`rax` used for the optional
+/// collector return value when a collection pass runs.
 pub fn emit_decref_hash(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_decref_hash_linux_x86_64(emitter);
@@ -78,6 +91,16 @@ pub fn emit_decref_hash(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux-specific path of `__rt_decref_hash`.
+///
+/// Target-specific lowering for x86_64; called from `emit_decref_hash` when
+/// `emitter.target.arch == Arch::X86_64`.
+/// Input: hash pointer in `rax`.
+/// Differences from ARM64:
+/// - Uses the x86_64 heap magic marker in the high 32 bits of the header word to
+///   distinguish foreign pointers from eligphc-owned hash tables.
+/// - Does not use a frame pointer or callee-saved registers; preserves `rbx`, `r12`–`r15`.
+/// - `__rt_hash_free_deep` and GC helpers are called with `call` instead of `bl`.
 fn emit_decref_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: decref_hash ---");

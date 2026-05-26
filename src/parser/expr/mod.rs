@@ -19,10 +19,15 @@ use crate::lexer::Token;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 
+/// Parses a PHP expression using a Pratt parser, starting at binding power 0.
+/// Returns the parsed expression or a compile error if syntax is invalid.
 pub fn parse_expr(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, CompileError> {
     pratt::parse_expr_bp(tokens, pos, 0)
 }
 
+/// Parses an assignment-value expression (binding power 7), used in argument
+/// positions, return statements, and other contexts where full expressions are
+/// permitted. Assignment expressions are allowed here per PHP grammar rules.
 pub(crate) fn parse_assignment_value_expr(
     tokens: &[(Token, Span)],
     pos: &mut usize,

@@ -17,6 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::codegen;
 use crate::codegen::platform::{Platform, Target};
 
+/// Runtime cache hit/miss status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeCacheStatus {
     Hit,
@@ -24,6 +25,7 @@ pub enum RuntimeCacheStatus {
 }
 
 impl RuntimeCacheStatus {
+    /// Returns a static string slice describing the cache status.
     pub fn as_str(&self) -> &'static str {
         match self {
             RuntimeCacheStatus::Hit => "hit",
@@ -32,12 +34,18 @@ impl RuntimeCacheStatus {
     }
 }
 
+/// Prepared runtime object with cache status.
 #[derive(Debug)]
 pub struct PreparedRuntimeObject {
+    /// Path to the cached runtime object file.
     pub path: PathBuf,
+    /// Whether the object was found in the cache (hit) or built now (miss).
     pub status: RuntimeCacheStatus,
 }
 
+/// Builds (or retrieves from cache) the runtime object file for the given heap size and target.
+/// On cache miss, generates runtime assembly, assembles it to an object file, and caches the result.
+/// The cache key includes compiler version, target, heap size, and a hash of the runtime assembly.
 pub fn prepare_runtime_object(heap_size: usize, target: Target) -> Result<PreparedRuntimeObject, String> {
     let cache_dir = runtime_cache_dir();
     fs::create_dir_all(&cache_dir)
@@ -120,6 +128,7 @@ pub fn prepare_runtime_object(heap_size: usize, target: Target) -> Result<Prepar
     }
 }
 
+/// Returns the platform-specific cache directory path for runtime objects.
 fn runtime_cache_dir() -> PathBuf {
     if let Some(path) = env::var_os("XDG_CACHE_HOME") {
         PathBuf::from(path).join("elephc")
@@ -130,6 +139,7 @@ fn runtime_cache_dir() -> PathBuf {
     }
 }
 
+/// Builds the cache file name for a runtime object.
 fn runtime_cache_file_name(heap_size: usize, target: Target, runtime_hash: u64) -> String {
     format!(
         "runtime-v{}-{}-rt{:016x}-heap{}.o",
@@ -140,6 +150,7 @@ fn runtime_cache_file_name(heap_size: usize, target: Target, runtime_hash: u64) 
     )
 }
 
+/// Computes a 64-bit FNV-1a hash of the given assembly string.
 fn runtime_asm_hash(asm: &str) -> u64 {
     let mut hash = 0xcbf29ce484222325u64;
     for byte in asm.bytes() {

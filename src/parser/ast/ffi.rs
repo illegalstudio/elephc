@@ -1,5 +1,5 @@
 //! Purpose:
-//! Defines AST records for elephc extern declarations and packed data layouts.
+//! Defines AST records for elephantsc extern declarations and packed data layouts.
 //! Represents C-facing scalar, pointer, buffer, function, global, and struct field metadata.
 //!
 //! Called from:
@@ -14,7 +14,7 @@ use super::TypeExpr;
 
 // --- FFI ---
 
-/// C type annotation for extern declarations
+/// C type annotation for extern declarations.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CType {
     Int,
@@ -27,20 +27,21 @@ pub enum CType {
     Callable,               // function pointer
 }
 
-/// Parameter in an extern function declaration
+/// A parameter in an extern function declaration, with a name and C type.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExternParam {
     pub name: String,
     pub c_type: CType,
 }
 
-/// Field in an extern class (C struct) declaration
+/// A field in an extern class (C struct) declaration, with a name and C type.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExternField {
     pub name: String,
     pub c_type: CType,
 }
 
+/// A field within a `packed class` layout, with a name, type expression, and source span.
 #[derive(Debug, Clone)]
 pub struct PackedField {
     pub name: String,
@@ -49,6 +50,7 @@ pub struct PackedField {
 }
 
 impl PartialEq for PackedField {
+    /// Compares two `PackedField`s by name and type expression, ignoring span.
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name && self.type_expr == other.type_expr
     }

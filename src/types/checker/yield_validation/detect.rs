@@ -14,15 +14,23 @@
 
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 
-/// Returns `true` if the given function body contains any `yield` /
-/// `yield from` expression at the top level — i.e. inside the function's own
-/// statements, but **not** inside any nested closure (a closure with its own
-/// yield is its own generator). Used by the type checker to override the
-/// declared return type of a generator function to `Object("Generator")`.
+/// Scans the top-level statements of a function body for `yield` or `yield from`.
+/// Returns `true` on the first yield found at the generator's own scope.
+/// Closures are skipped entirely — their yields belong to a different generator
+/// and are not propagated to the enclosing function's return type.
+///
+/// Used by the type checker to coerce a generator function's return type to
+/// `Object("Generator")` and by codegen to route the function through the
+/// generator pipeline.
 pub(crate) fn body_contains_yield(body: &[Stmt]) -> bool {
     body.iter().any(stmt_contains_yield)
 }
 
+/// Recursively checks each statement variant for `yield` or `yield from`.
+/// Skips nested `FunctionDecl`, `ClassDecl`, `TraitDecl`, and `InterfaceDecl`
+/// boundaries — a yield inside any of these is its own generator.
+/// Handles all statement kinds that can recursively contain other statements
+/// or expressions.
 fn stmt_contains_yield(stmt: &Stmt) -> bool {
     match &stmt.kind {
         // Closures form a fresh generator scope — don't peek into them.
@@ -134,6 +142,11 @@ fn stmt_contains_yield(stmt: &Stmt) -> bool {
     }
 }
 
+/// Recursively checks each expression variant for `yield` or `yield from`.
+/// Skips `Closure` expressions — a yield inside a closure belongs to that
+/// closure's generator scope. Handles all expression kinds that can contain
+/// nested expressions.
+/// Returns `true` on the first match.
 fn expr_contains_yield(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Yield { .. } | ExprKind::YieldFrom(_) => true,
@@ -217,6 +230,7 @@ mod tests {
     use crate::parser::ast::{CallableTarget, Expr, ExprKind, Stmt, StmtKind};
     use crate::span::Span;
 
+    /// Constructs a `Yield { key: None, value: Some(value) }` expression for testing.
     fn yield_expr(value: i64) -> Expr {
         Expr::new(
             ExprKind::Yield {
@@ -227,6 +241,7 @@ mod tests {
         )
     }
 
+    /// Constructs a `Pipe { value, callable }` expression wrapped in an `ExprStmt` for testing.
     fn pipe_expr(value: Expr, callable: Expr) -> Stmt {
         Stmt::new(
             StmtKind::ExprStmt(Expr::new(
@@ -240,6 +255,7 @@ mod tests {
         )
     }
 
+    /// Constructs a first-class callable expression `id` for testing.
     fn callable_expr() -> Expr {
         Expr::new(
             ExprKind::FirstClassCallable(CallableTarget::Function("id".into())),
@@ -248,6 +264,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies that a yield appearing in the value position of a Pipe expression is detected.
     fn detects_yield_in_pipe_value() {
         let stmt = pipe_expr(yield_expr(1), callable_expr());
 
@@ -255,6 +272,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies that a yield appearing in the callable position of a Pipe expression is detected.
     fn detects_yield_in_pipe_callable() {
         let stmt = pipe_expr(Expr::int_lit(1), yield_expr(2));
 

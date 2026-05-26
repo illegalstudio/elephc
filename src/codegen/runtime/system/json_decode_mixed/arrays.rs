@@ -10,17 +10,34 @@
 
 use crate::codegen::emit::Emitter;
 
-/// __rt_json_decode_mixed_array_real (ARM64): recursive-descent parser for
-/// non-empty JSON arrays. Walks the slice between the leading `[` and
-/// trailing `]`, finds each element's boundary using a depth-and-string
-/// aware scanner, then recursively calls __rt_json_decode_mixed on the
-/// element sub-slice. Mixed pointers are pushed into a fresh
-/// __rt_array_new(cap=4, elem_size=8) array; the array is finally boxed
-/// as Mixed(tag=4) and returned.
+/// Emits ARM64 runtime assembly for `__rt_json_decode_mixed_array_real`, a
+/// recursive-descent parser for non-empty JSON arrays. Walks the slice between
+/// the leading `[` and trailing `]`, finds each element boundary using a
+/// depth-and-string-aware scanner, then recursively calls `__rt_json_decode_mixed`
+/// on each element sub-slice. Mixed pointers are pushed into a fresh array
+/// created by `__rt_array_new(cap=4, elem_size=8)`; the array is finally boxed
+/// as `Mixed(tag=4)` and returned.
 ///
-/// Input:  x1 = slice ptr (with leading `[` and trailing `]`),
-///         x2 = slice length
-/// Output: x0 = Mixed* on success, 0 on parse error after recording JSON state
+/// # Frame layout (64 bytes, sp-relative)
+/// - `[sp + 0..8]`   = slice_ptr
+/// - `[sp + 8..16]`  = slice_len
+/// - `[sp + 16..24]` = cursor (running scan position)
+/// - `[sp + 24..32]` = arr_ptr (allocated via `__rt_array_new`, may grow on push)
+/// - `[sp + 32..40]` = elem_start (saved across the recursive decode call)
+/// - `[sp + 40..48]` = after_comma flag
+/// - `[sp + 48..56]` = saved x29
+/// - `[sp + 56..64]` = saved x30
+///
+/// # Input registers
+/// - `x1` = slice ptr (with leading `[` and trailing `]`)
+/// - `x2` = slice length
+///
+/// # Output registers
+/// - `x0` = `Mixed*` on success; `0` on parse error (error recorded via `__rt_json_throw_error`)
+///
+/// # Error handling
+/// - Unterminated values, trailing bytes after `]`, and trailing commas all
+///   yield `JSON_ERROR_SYNTAX` via `__rt_json_throw_error`.
 pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_decode_mixed_array_real ---");
@@ -210,11 +227,28 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON decoder helper
 }
 
-/// __rt_json_decode_mixed_array_real (x86_64): mirrors the ARM64 recursive
-/// array parser. See the ARM64 docstring for the parser's semantics.
+/// Emits x86_64 (System V ABI) runtime assembly for `__rt_json_decode_mixed_array_real`,
+/// a recursive-descent parser for non-empty JSON arrays. Identical semantics to the
+/// ARM64 version; see `emit_aarch64` for the full parser description.
 ///
-/// Input:  rax = slice ptr, rdx = slice length
-/// Output: rax = Mixed* on success, 0 on parse error
+/// # Frame layout (48 bytes, rbp-relative)
+/// - `[rbp - 8]`   = slice_ptr
+/// - `[rbp - 16]`  = slice_len
+/// - `[rbp - 24]`  = cursor
+/// - `[rbp - 32]`  = arr_ptr
+/// - `[rbp - 40]`  = elem_start
+/// - `[rbp - 48]`  = after_comma flag
+///
+/// # Input registers (System V ABI)
+/// - `rax` = slice ptr
+/// - `rdx` = slice length
+///
+/// # Output registers
+/// - `rax` = `Mixed*` on success; `0` on parse error (error recorded via `__rt_json_throw_error`)
+///
+/// # Error handling
+/// - Unterminated values, trailing bytes after `]`, and trailing commas all
+///   yield `JSON_ERROR_SYNTAX` via `__rt_json_throw_error`.
 pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_decode_mixed_array_real ---");

@@ -12,6 +12,12 @@ use super::*;
 use super::guards::{extend_guards, known_condition_value};
 use super::state::GuardState;
 
+/// Recursively collapses an if/elseif/else chain into its tail.
+///
+/// Returns the statements that represent the final reachable branch of the
+/// chain after pruning empty bodies and inverting conditions appropriately.
+/// The `elseif_clauses` are processed in order; each clause is either emitted
+/// as-is (if non-empty) or converted to an inverted condition guarding the rest.
 fn dce_if_tail(
     mut elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
     else_body: Option<Vec<Stmt>>,
@@ -45,6 +51,13 @@ fn dce_if_tail(
         )]
     }
 }
+/// Applies DCE to a full if/elseif/else statement.
+///
+/// Uses guard state to determine which branches are reachable. When the
+/// condition is statically known, only the reachable branch is returned.
+/// When branches are unreachable or empty, they are removed; the result
+/// may be simplified to a single effect statement, an inverted condition,
+/// or a pruned if/else chain.
 pub(super) fn dce_if_stmt(
     condition: Expr,
     then_body: Vec<Stmt>,
@@ -142,6 +155,12 @@ pub(super) fn dce_if_stmt(
     )]
 }
 
+/// Computes which basic blocks are directly entered from the condition of an if statement.
+///
+/// Scans the top-level condition and each elseif condition, collecting the index
+/// of every branch whose condition is not statically false (i.e., may be entered).
+/// Returns the reachable entry block indices and a flag indicating whether the
+/// else branch is reachable.
 fn direct_if_entry_blocks(
     condition: &Expr,
     elseif_clauses: &[(Expr, Vec<Stmt>)],
@@ -169,6 +188,14 @@ fn direct_if_entry_blocks(
     (entry_blocks, has_else)
 }
 
+/// Removes unreachable if/elseif/else branches using CFG reachability analysis.
+///
+/// Builds a control-flow graph for the if statement, marks which blocks are
+/// reachable from the entry, and filters out any branches whose entry block
+/// is unreachable. If all branches become unreachable, returns a `false`
+/// literal with empty bodies so the surrounding DCE pass can eliminate the
+/// entire if. Otherwise returns the pruned condition, then body, elseif clauses,
+/// and else body.
 fn prune_unreachable_if_entries(
     condition: Expr,
     then_body: Vec<Stmt>,
@@ -224,6 +251,12 @@ fn prune_unreachable_if_entries(
     (condition, then_body, remaining_clauses, else_body)
 }
 
+/// Handles the false branch of an if statement when the condition is known false.
+///
+/// Adds `condition = false` to the guard state and either processes the next
+/// elseif clause recursively or applies DCE to the else body with the updated
+/// guards. Returns the statements from the first reachable branch in the
+/// false path, or an empty vector if no else clause exists.
 fn dce_if_false_path(
     condition: Expr,
     mut elseif_clauses: Vec<(Expr, Vec<Stmt>)>,

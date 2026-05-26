@@ -16,6 +16,23 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Lowers PHP `link(oldpath, newpath)` into a `__rt_link` libc call.
+///
+/// Marshals two string arguments (old path, new path) according to target ABI.
+/// On both ARM64 and x86_64 the evaluation order preserves source semantics:
+/// the old path is evaluated and preserved on the stack or in callee-saved registers
+/// before the new path is evaluated, then both are loaded into argument registers
+/// in the order `link(oldpath, newpath)` expects before the runtime wrapper is called.
+///
+/// # Arguments
+/// - `_name`: Unused — the builtin name is not needed at emission time.
+/// - `args`: Exactly two expressions: `args[0]` = old path, `args[1]` = new path.
+/// - `emitter`: Assembly emitter.
+/// - `ctx`: Codegen context (used by `emit_expr`).
+/// - `data`: Data section for string literals.
+///
+/// # Return
+/// Always returns `PhpType::Bool` (the call result is a libc `int` converted to bool).
 pub fn emit(
     _name: &str,
     args: &[Expr],

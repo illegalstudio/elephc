@@ -18,6 +18,9 @@ use super::super::Checker;
 
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
+/// Type-checks a system builtin call by name, validating arity, argument types,
+/// and return type. Returns `Ok(Some(PhpType))` for handled builtins, `Ok(None)`
+/// for unknown system builtins, or an error for misuse.
 pub(super) fn check_builtin(
     checker: &mut Checker,
     name: &str,
@@ -427,6 +430,9 @@ pub(super) fn check_builtin(
     }
 }
 
+/// Resolves a class name to its canonical key in the checker's class table.
+/// Returns `Some(canonical_name)` if the class exists, `None` otherwise.
+/// The lookup is case-insensitive per PHP rules.
 fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a str> {
     let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
     checker
@@ -436,6 +442,8 @@ fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a 
         .map(String::as_str)
 }
 
+/// Returns `true` if `ty` is a valid type for the JSON string argument in
+/// `json_decode` / `json_validate` / `json_encode` (scalar types and `Mixed`).
 fn is_json_string_arg_type(ty: &PhpType) -> bool {
     match ty {
         PhpType::Str
@@ -449,6 +457,8 @@ fn is_json_string_arg_type(ty: &PhpType) -> bool {
     }
 }
 
+/// Returns `true` if `ty` is a valid type for the associative argument in
+/// `json_decode` (bool-compatible types plus `Mixed`).
 fn is_json_associative_arg_type(ty: &PhpType) -> bool {
     match ty {
         PhpType::Bool
@@ -462,6 +472,9 @@ fn is_json_associative_arg_type(ty: &PhpType) -> bool {
     }
 }
 
+/// Attempts to evaluate an expression as a static integer at compile time.
+/// Supports literals, known constants, negation, and bitwise ops.
+/// Returns `Some(value)` if the expression is statically computable, `None` otherwise.
 fn json_static_int_value(expr: &Expr) -> Option<i64> {
     match &expr.kind {
         ExprKind::IntLiteral(value) => Some(*value),
@@ -483,6 +496,8 @@ fn json_static_int_value(expr: &Expr) -> Option<i64> {
     }
 }
 
+/// Returns `true` if the named attribute on the class uses argument metadata
+/// that the compiler does not yet support (i.e., `attribute_args` slot is `None`).
 fn class_attribute_args_unsupported(checker: &Checker, class_name: &str, attr_name: &str) -> bool {
     let Some(resolved_class) = resolve_class_name(checker, class_name) else {
         return false;
@@ -499,6 +514,8 @@ fn class_attribute_args_unsupported(checker: &Checker, class_name: &str, attr_na
         .is_some_and(|(idx, _)| !matches!(class_info.attribute_args.get(idx), Some(Some(_))))
 }
 
+/// Returns `true` if the class has any attribute whose argument metadata is not
+/// fully supported (slot count mismatch or any `None` slot in `attribute_args`).
 fn class_get_attributes_unsupported(checker: &Checker, class_name: &str) -> bool {
     let Some(resolved_class) = resolve_class_name(checker, class_name) else {
         return false;

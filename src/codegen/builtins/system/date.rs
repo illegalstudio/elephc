@@ -16,6 +16,26 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `date(format[, timestamp])` builtin.
+///
+/// Compiles `date()` to a call into `__rt_date` with the format string pointer/length
+/// in the first string-argument registers and the timestamp in the first integer register.
+/// When the timestamp argument is omitted, `-1` is passed to signal the runtime to use
+/// the current wall-clock time.
+///
+/// # Arguments
+/// - `_name`: unused, matched for dispatcher routing
+/// - `args`: first arg is the format string, optional second arg is the Unix timestamp
+/// - `emitter`: target-aware instruction emitter
+/// - `ctx`: current codegen context (used by `emit_expr`)
+/// - `data`: data section for relocatable strings/labels
+///
+/// # Returns
+/// `Some(PhpType::Str)` since `date()` always returns a string.
+///
+/// # Architecture behavior
+/// - **AArch64**: format ptr/length in x1/x2, timestamp in x0, result in x0
+/// - **x86_64**: format ptr/length in rdi/rsi, timestamp in rax, result in rax
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -15,6 +15,10 @@ use crate::types::{FunctionSig, PhpType};
 
 use super::super::Checker;
 
+/// Builds a `FunctionSig` from a parsed class method, resolving parameter and return type
+/// annotations through the checker. Parameters without type hints default to `PhpType::Int`.
+/// Validates that each declared parameter's default value is compatible with its resolved type.
+/// Infers return type from method body when no return annotation is present.
 pub(crate) fn build_method_sig(
     checker: &Checker,
     method: &ClassMethod,
@@ -95,6 +99,9 @@ pub(crate) fn extract_deprecation(
     None
 }
 
+/// Returns `true` if `attr` is a global builtin attribute matching `builtin` by name.
+/// Fully-qualified names must match exactly (case-insensitive); unqualified names
+/// match the last segment case-insensitively. Used to detect `#[\Deprecated]` and similar.
 pub(crate) fn matches_global_builtin_attribute(attr: &Attribute, builtin: &str) -> bool {
     let name = attr.name.as_canonical();
     if attr.name.is_fully_qualified() {
@@ -103,6 +110,10 @@ pub(crate) fn matches_global_builtin_attribute(attr: &Attribute, builtin: &str) 
     attr.name.is_unqualified() && name.eq_ignore_ascii_case(builtin)
 }
 
+/// Builds a mapping from constructor parameter index to property name for each parameter.
+/// For each parameter, searches constructor body for `PropertyAssign` statements where
+/// the right-hand side is a Variable with the same name as the parameter; if found,
+/// returns `Some(property_name)`, otherwise `None`. Returns empty vec if no constructor.
 pub(crate) fn build_constructor_param_map(methods: &[ClassMethod]) -> Vec<Option<String>> {
     let mut param_to_prop = Vec::new();
     if let Some(constructor) = methods
@@ -132,6 +143,8 @@ pub(crate) fn build_constructor_param_map(methods: &[ClassMethod]) -> Vec<Option
     param_to_prop
 }
 
+/// Returns a numeric rank for visibility levels: `private=0`, `protected=1`, `public=2`.
+/// Used to enforce that overriding methods are not less visible than the parent method.
 pub(crate) fn visibility_rank(visibility: &Visibility) -> u8 {
     match visibility {
         Visibility::Private => 0,
@@ -140,6 +153,8 @@ pub(crate) fn visibility_rank(visibility: &Visibility) -> u8 {
     }
 }
 
+/// Counts how many parameters in `sig` are required (have no default).
+/// The variadic parameter, if present, is never considered required even if it has no default.
 pub(crate) fn required_param_count(sig: &FunctionSig) -> usize {
     sig.defaults
         .iter()
@@ -153,6 +168,9 @@ pub(crate) fn required_param_count(sig: &FunctionSig) -> usize {
         .count()
 }
 
+/// Validates that `child_sig` is compatible with `parent_sig` for override purposes.
+/// Checks parameter count, ref params, defaults layout, variadic flag, and required param count.
+/// Reports errors with `context` and `kind` (e.g., "overriding method") in the message.
 pub(crate) fn validate_signature_compatibility(
     span: crate::span::Span,
     owner_name: &str,
@@ -225,6 +243,9 @@ pub(crate) fn validate_signature_compatibility(
     Ok(())
 }
 
+/// Returns `true` if `actual` is a compatible declared return type for `expected`.
+/// Allows `PhpType::Never` (unreachable) as a wildcard match. Otherwise delegates to
+/// `checker.type_accepts(expected, actual)` for standard subtype checking.
 pub(crate) fn declared_return_type_compatible(
     checker: &Checker,
     expected: &PhpType,
@@ -233,6 +254,10 @@ pub(crate) fn declared_return_type_compatible(
     matches!(actual, PhpType::Never) || checker.type_accepts(expected, actual)
 }
 
+/// Validates that `method` can override `parent_sig` in class `class_name`.
+/// Builds the child signature via `build_method_sig`, skips validation for `__construct`,
+/// checks signature compatibility, and ensures the child does not remove a declared
+/// return type when the parent has one or make it incompatible.
 pub(crate) fn validate_override_signature(
     checker: &Checker,
     class_name: &str,

@@ -16,6 +16,24 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `dirname(path)` or `dirname(path, levels)` builtin call.
+///
+/// For the single-argument form, calls `__rt_dirname` which strips the final path component.
+/// For the two-argument form, calls `__rt_dirname_levels` which applies `dirname()` iteratively
+/// `levels` times.
+///
+/// # Arguments
+/// * `args[0]` - the path string (passed in ABI registers for the path pointer/length)
+/// * `args[1]` - optional recursion depth (only present for 2-argument call)
+///
+/// # Output
+/// * Returns `PhpType::Str` on success; the runtime helper returns null on failure which is
+///   handled by the false-on-failure semantics in the caller.
+///
+/// # ABI details
+/// * AArch64: path in `x1`/`x2`, levels in `x3`
+/// * x86_64: path in `rax`/`rdx`, levels in `rdi`
+/// * Preserves path registers across the levels expression evaluation.
 pub fn emit(
     _name: &str,
     args: &[Expr],

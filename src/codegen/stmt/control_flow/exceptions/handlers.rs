@@ -14,6 +14,10 @@ use crate::codegen::emit::Emitter;
 use crate::parser::ast::CatchClause;
 use crate::types::PhpType;
 
+/// Emits code to push a new try handler onto `_exc_handler_top`, saving the
+/// previous handler pointer, activation record address, and diagnostic
+/// suppression depth into the handler's spill area. `handler_offset` must
+/// point to the base of the allocated try slot in the current frame.
 pub(super) fn emit_try_handler_push(emitter: &mut Emitter, ctx: &Context, handler_offset: usize) {
     let activation_prev_offset = ctx
         .activation_prev_offset
@@ -31,6 +35,8 @@ pub(super) fn emit_try_handler_push(emitter: &mut Emitter, ctx: &Context, handle
     abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_handler_top", 0);
 }
 
+/// Emits code to pop a try handler from `_exc_handler_top`, reloading the
+/// previously saved handler pointer from the handler's spill area.
 pub(super) fn emit_try_handler_pop(emitter: &mut Emitter, handler_offset: usize) {
     let scratch = abi::temp_int_reg(emitter.target);
     emitter.comment("pop exception handler");
@@ -38,10 +44,15 @@ pub(super) fn emit_try_handler_pop(emitter: &mut Emitter, handler_offset: usize)
     abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_handler_top", 0);
 }
 
+/// Computes the address of the `jmp_buf` region within a try handler slot
+/// and writes it to `dest_reg`. This address is passed to `setjmp` to
+/// establish the exception recovery point.
 pub(super) fn emit_handler_jmpbuf_address(emitter: &mut Emitter, handler_offset: usize, dest_reg: &str) {
     abi::emit_frame_slot_address(emitter, dest_reg, handler_offset - TRY_HANDLER_JMP_BUF_OFFSET); // compute the jmp_buf base address inside this try slot
 }
 
+/// Restores the runtime diagnostic-suppression depth that was captured when the
+/// try handler was pushed, by reloading it from the handler's spill area.
 pub(super) fn emit_restore_diagnostic_suppression(
     emitter: &mut Emitter,
     handler_offset: usize,
@@ -55,6 +66,11 @@ pub(super) fn emit_restore_diagnostic_suppression(
     abi::emit_store_reg_to_symbol(emitter, scratch, "_rt_diag_suppression", 0);
 }
 
+/// Binds the caught exception value to the catch variable slot. If the slot
+/// previously held a string or refcounted value, that value is decremented.
+/// The exception is then moved from `_exc_value` into the variable slot and
+/// the global exception slot is zeroed. No-op if the catch clause has no
+/// variable. Panics if the variable was not pre-allocated by the resolver.
 pub(super) fn bind_catch_variable(catch_clause: &CatchClause, emitter: &mut Emitter, ctx: &Context) {
     let Some(variable) = &catch_clause.variable else {
         return;
@@ -77,6 +93,10 @@ pub(super) fn bind_catch_variable(catch_clause: &CatchClause, emitter: &mut Emit
     abi::emit_store(emitter, &var.ty, var.stack_offset);                            // move the caught exception into the catch variable slot
 }
 
+/// Resolves a raw exception class or interface name to a runtime `(class_id, kind)`
+/// pair. `kind` is 0 for a class and 1 for an interface. Handles `self` and
+/// `parent` keywords using the current class context. Panics if the name is
+/// not a known class or interface after resolution.
 pub(super) fn resolve_catch_match_target(ctx: &Context, raw_name: &str) -> (u64, u64) {
     let resolved_name = match raw_name {
         "self" => ctx.current_class.as_deref().unwrap_or(raw_name),

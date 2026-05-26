@@ -16,6 +16,18 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `lcfirst` builtin call.
+///
+/// Emits `args[0]` as a string expression, then copies the result into concat
+/// storage and lowercases its first byte in place when that byte is an uppercase
+/// ASCII letter (A–Z). Non-ASCII or non-uppercase first bytes are left unchanged.
+/// Returns `PhpType::Str` as the result type.
+///
+/// - **args**: single expression producing the input string (panics if empty)
+/// - **emitter**: target-specific instruction emission
+/// - **ctx**: codegen context carrying variable layout and metadata
+/// - **data**: data section for relocatable string constants
+/// - **returns**: `Some(PhpType::Str)` indicating the builtin produces a string
 pub fn emit(
     _name: &str,
     args: &[Expr],

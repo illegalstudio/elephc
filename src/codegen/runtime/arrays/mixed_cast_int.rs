@@ -11,9 +11,21 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, platform::Arch};
 
-/// mixed_cast_int: cast a boxed mixed payload to int using the current scalar rules.
-/// Input:  x0 = boxed mixed pointer
-/// Output: x0 = integer result
+/// Emits the `__rt_mixed_cast_int` runtime helper for casting a boxed Mixed cell to int.
+///
+/// Dispatches to the x86_64 variant when targeting Linux on x86_64; otherwise emits the
+/// ARM64 variant. The ARM64 path uses `__rt_mixed_unbox` to extract the tag (x0) and
+/// payload words (x1, x2), then switches on the tag to apply PHP's scalar cast rules:
+/// int → direct forward, string → `__rt_atoi`, float → truncate-to-zero, bool → 0/1 payload,
+/// array/resource → element count or display id, null/unsupported → 0.
+///
+/// # Input
+/// - ARM64: x0 holds the boxed mixed pointer on entry
+/// - x86_64: rdi holds the boxed mixed pointer on entry
+///
+/// # Output
+/// - ARM64: integer result returned in x0
+/// - x86_64: integer result returned in rax
 pub fn emit_mixed_cast_int(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_cast_int_linux_x86_64(emitter);
@@ -80,6 +92,16 @@ pub fn emit_mixed_cast_int(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the integer cast result in x0
 }
 
+/// Emits the x86_64 Linux variant of `__rt_mixed_cast_int`.
+///
+/// Uses the System V AMD64 ABI: unbox via `__rt_mixed_unbox` (returns tag in rax,
+/// payload in rdi/rdx), then dispatches on tag using je jumps to type-specific handlers.
+/// Results are returned in rax.
+///
+/// # ABI
+/// - Input: rdi = boxed mixed pointer
+/// - Output: rax = integer result
+/// - Clobbers: rax, rdi, rdx, xmm0, rsp; preserves rbp
 fn emit_mixed_cast_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_cast_int ---");

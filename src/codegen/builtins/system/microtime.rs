@@ -15,6 +15,17 @@ use crate::codegen::emit::Emitter;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the `microtime([get_as_float])` builtin.
+///
+/// `microtime()` returns the current Unix timestamp with microsecond precision as a
+/// float when `get_as_float` is true. The arguments are ignored—callers always invoke
+/// `__rt_microtime` regardless of argument values.
+///
+/// Calls the target-aware runtime helper `__rt_microtime`, which is effectful
+/// (reads wall-clock state) and non-deterministic. The result is returned in the
+/// native float register.
+///
+/// Returns `PhpType::Float` unconditionally.
 pub fn emit(
     _name: &str,
     _args: &[Expr],

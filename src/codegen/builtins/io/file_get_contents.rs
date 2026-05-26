@@ -18,6 +18,12 @@ use crate::types::PhpType;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
+/// Emits code for the PHP `file_get_contents` builtin.
+///
+/// `args[0]` is evaluated and pushed as the filename argument, then `__rt_file_get_contents`
+/// is called. On AArch64 the filename is passed in `x0`; on x86_64 in `rdi`. The result is
+/// always boxed into `PhpType::Mixed` — a successful read yields a string (tag 1), while
+/// failure yields bool false (tag 3). Returns `PhpType::Mixed` unconditionally.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -32,6 +38,12 @@ pub fn emit(
     Some(PhpType::Mixed)
 }
 
+/// Boxes the raw string result (pointer + length) into a `PhpType::Mixed` cell.
+///
+/// On AArch64 the runtime helper places the string pointer in `x1` and length in `x2`;
+/// on x86_64 in `rax` and `rdx`. A null pointer signals failure — this path emits bool
+/// false (tag 3) via `__rt_mixed_from_value`. On success, the string pointer/length are
+/// stored directly into a heap-allocated mixed cell (tag 1) without copying the buffer.
 fn box_file_get_contents_result(emitter: &mut Emitter, ctx: &mut Context) {
     let false_label = ctx.next_label("fgc_false");
     let done_label = ctx.next_label("fgc_done");

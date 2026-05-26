@@ -15,6 +15,18 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for PHP's `chr(int $codepoint): string` function.
+///
+/// Converts an integer ASCII/code-point value to a single-character string.
+/// The argument is evaluated and loaded into a register via `emit_int_arg`,
+/// then the target-aware runtime helper `__rt_chr` is called, which writes
+/// one byte into concat storage and returns it as a PHP string.
+///
+/// # Arguments
+/// * `args[0]` — integer expression producing the character code
+///
+/// # Returns
+/// `PhpType::Str` — a single-character PHP string
 pub fn emit(
     _name: &str,
     args: &[Expr],

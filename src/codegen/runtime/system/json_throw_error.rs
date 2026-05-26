@@ -11,15 +11,22 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// __rt_json_throw_error: record a JSON error code and, when
-/// `JSON_THROW_ON_ERROR` is set in `_json_active_flags`, allocate a
-/// JsonException with a PHP-compatible message and throw it via
-/// `__rt_throw_current`. When the flag is clear, only the
-/// `_json_last_error` slot is updated and control returns to the caller.
+/// Emits `__rt_json_throw_error`: records a JSON error code and, when
+/// `JSON_THROW_ON_ERROR` is set in `_json_active_flags`, allocates a
+/// JsonException with a PHP-compatible message and throws it via
+/// `__rt_throw_current`. When the flag is clear, only the `_json_last_error`
+/// slot is updated and control returns to the caller.
 ///
 /// Input:
 ///   ARM64: x0 = JSON_ERROR_* code
 ///   x86_64: rax = JSON_ERROR_* code
+///
+/// Side effects:
+///   - `_json_last_error` is always updated with the error code.
+///   - When `JSON_THROW_ON_ERROR` is set: `_exc_value` is written, heap is
+///     allocated for a JsonException object, and control does not return
+///     (tail-calls `__rt_throw_current`).
+///   - Clobbers: x9-x13 (ARM64), r10-r11 (x86_64), and scratch stack frame.
 pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_json_throw_error_linux_x86_64(emitter);
@@ -94,6 +101,10 @@ pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller without throwing
 }
 
+/// x86_64 Linux implementation of `emit_json_throw_error`.
+///
+/// Input:
+///   rax = JSON_ERROR_* code
 fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_throw_error ---");

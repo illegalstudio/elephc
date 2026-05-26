@@ -94,6 +94,10 @@ pub fn emit_array_merge_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return merged array in x0
 }
 
+/// x86_64 Linux-specific implementation of `__rt_array_merge_refcounted`.
+/// Takes source array pointers in rdi (first) and rsi (second), returns merged array pointer in rax.
+/// Uses `__rt_array_push_refcounted` to append elements, which handles capacity growth implicitly.
+/// Preserves caller frame pointer and maintains 16-byte stack alignment for helper calls.
 fn emit_array_merge_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_merge_refcounted ---");

@@ -14,10 +14,20 @@ use super::exprs::walk_expr;
 use super::members::{walk_class_method, walk_class_property};
 use super::Pass;
 
+/// Applies a magic-constant pass to a sequence of top-level statements.
+///
+/// Iterates through `stmts`, applies [`walk_stmt`] to each, and collects the results
+/// into a new vector. This is the entry point for walking a program or block's statements.
 pub(in crate::magic_constants) fn walk_program<P: Pass>(stmts: Vec<Stmt>, pass: &mut P) -> Vec<Stmt> {
     stmts.into_iter().map(|s| walk_stmt(s, pass)).collect()
 }
 
+/// Applies a magic-constant pass to a single statement.
+///
+/// Dispatches on [`StmtKind`] variant, rebuilding the statement with pass hooks invoked
+/// at the appropriate lexical scope boundaries (function, class, trait, namespace).
+/// For expression-bearing variants, delegates to [`walk_expr`][super::exprs::walk_expr].
+/// Statements with no expression children are returned unchanged.
 pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
     let span = stmt.span;
     let attributes = stmt.attributes.clone();

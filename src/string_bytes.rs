@@ -14,6 +14,15 @@
 const ESCAPED_BYTE_BASE: u32 = 0xe000;
 const ESCAPED_BYTE_END: u32 = ESCAPED_BYTE_BASE + 0xff;
 
+/// Appends the literal representation of `byte` to `out`.
+///
+/// ASCII bytes are emitted as their char equivalent. Non-ASCII bytes are encoded
+/// as a private-use char in the range U+E000–U+E0FF, preserving the byte value
+/// through the PHP compilation pipeline where Rust strings must be valid UTF-8.
+///
+/// # Parameters
+/// - `byte`: The raw byte to emit.
+/// - `out`: The growing literal string buffer.
 pub(crate) fn push_escaped_byte(byte: u8, out: &mut String) {
     if byte.is_ascii() {
         out.push(byte as char);
@@ -22,6 +31,15 @@ pub(crate) fn push_escaped_byte(byte: u8, out: &mut String) {
     }
 }
 
+/// Appends the literal representation of `ch` to `out`.
+///
+/// If `ch` is in the private-use marker range U+E000–U+E0FF it is UTF-8 encoded
+/// and each resulting byte is passed through `push_escaped_byte` to avoid
+/// colliding with the encoding scheme. Otherwise `ch` is pushed directly.
+///
+/// # Parameters
+/// - `ch`: The character to emit.
+/// - `out`: The growing literal string buffer.
 pub(crate) fn push_literal_char(ch: char, out: &mut String) {
     let codepoint = ch as u32;
     if (ESCAPED_BYTE_BASE..=ESCAPED_BYTE_END).contains(&codepoint) {
@@ -34,6 +52,17 @@ pub(crate) fn push_literal_char(ch: char, out: &mut String) {
     }
 }
 
+/// Decodes a literal string into its raw PHP byte representation.
+///
+/// Private-use marker chars (U+E000–U+E0FF) are decoded back to single bytes;
+/// all other chars are UTF-8 decoded and emitted as-is. The result has the same
+/// length in bytes as the original PHP source literal.
+///
+/// # Parameters
+/// - `value`: A Rust string that may contain private-use marker chars.
+///
+/// # Returns
+/// A `Vec<u8>` containing the raw bytes of the PHP literal.
 pub(crate) fn literal_bytes(value: &str) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(value.len());
     for ch in value.chars() {
@@ -48,6 +77,17 @@ pub(crate) fn literal_bytes(value: &str) -> Vec<u8> {
     bytes
 }
 
+/// Computes the PHP byte length of a literal string.
+///
+/// Each private-use marker char (U+E000–U+E0FF) counts as 1 byte; all other
+/// chars count as their UTF-8 encoded length. This is equivalent to
+/// `literal_bytes(value).len()` but avoids allocating.
+///
+/// # Parameters
+/// - `value`: A Rust string that may contain private-use marker chars.
+///
+/// # Returns
+/// The number of bytes the PHP literal would occupy.
 pub(crate) fn literal_byte_len(value: &str) -> usize {
     value
         .chars()

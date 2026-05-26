@@ -16,6 +16,18 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `str_ends_with` builtin call.
+///
+/// Arguments:
+///   - `args[0]`: haystack string (AArch64: pointer in x1, length in x2; X86_64: pointer in rdi, length in rdx)
+///   - `args[1]`: suffix string to search for at the haystack end
+///
+/// ABI behavior:
+///   - AArch64: pushes haystack to stack, evaluates suffix into x3/x4, restores haystack from stack into x1/x2
+///   - X86_64: saves haystack in rax/rdx, evaluates suffix into rcx/rdx, pops haystack into rdi/rsi
+///   - Calls `__rt_str_ends_with` runtime helper that returns position or false
+///
+/// Returns: `PhpType::Bool` — PHP false when suffix is not found, otherwise a truthy position value
 pub fn emit(
     _name: &str,
     args: &[Expr],

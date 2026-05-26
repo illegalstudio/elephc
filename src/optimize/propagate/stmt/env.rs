@@ -10,6 +10,16 @@
 
 use super::*;
 
+/// Updates the constant environment after a scalar variable assignment `$name = $value`.
+///
+/// Clears the environment if `value` has side effects (preserving correctness across observable
+/// boundaries). Otherwise extracts a scalar constant from `value` and inserts it; if `value` is
+/// not a scalar constant, removes `name` from the environment.
+///
+/// - `env`: current constant environment
+/// - `name`: variable being assigned
+/// - `value`: RHS expression
+/// Returns the updated environment.
 pub(super) fn env_after_scalar_assign(mut env: ConstantEnv, name: &str, value: &Expr) -> ConstantEnv {
     if expr_effect(value).has_side_effects {
         env.clear();
@@ -22,6 +32,16 @@ pub(super) fn env_after_scalar_assign(mut env: ConstantEnv, name: &str, value: &
     env
 }
 
+/// Updates the constant environment after a `list($vars) = $value` unpacking assignment.
+///
+/// Clears the environment if `value` has side effects. For each variable in `vars`, removes it
+/// from the environment. If `value` is an array literal whose elements correspond to the variables,
+/// extracts scalar constants from each element and inserts them into the environment.
+///
+/// - `env`: current constant environment
+/// - `vars`: list of variables being assigned
+/// - `value`: RHS expression producing the array to unpack
+/// Returns the updated environment.
 pub(super) fn env_after_list_unpack(mut env: ConstantEnv, vars: &[String], value: &Expr) -> ConstantEnv {
     if expr_effect(value).has_side_effects {
         env.clear();

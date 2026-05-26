@@ -22,6 +22,8 @@ pub(super) fn body_must_not_use_this(body: &[Stmt], span: Span) -> Result<(), Co
     Ok(())
 }
 
+/// Recursively checks a statement and its children, rejecting any `$this` usage.
+/// Used to enforce the PHP rule that static closures cannot capture `$this`.
 fn stmt_must_not_use_this(stmt: &Stmt, span: Span) -> Result<(), CompileError> {
     match &stmt.kind {
         StmtKind::Echo(e)
@@ -146,6 +148,9 @@ fn stmt_must_not_use_this(stmt: &Stmt, span: Span) -> Result<(), CompileError> {
     }
 }
 
+/// Recursively checks an expression and its children, rejecting any `$this` usage.
+/// Traverses all expression variants including nested expressions, call arguments,
+/// array elements, and closure bodies. Returns an error if a `This` expression is found.
 fn expr_must_not_use_this(expr: &Expr, span: Span) -> Result<(), CompileError> {
     match &expr.kind {
         ExprKind::This => Err(CompileError::new(
@@ -260,6 +265,8 @@ fn expr_must_not_use_this(expr: &Expr, span: Span) -> Result<(), CompileError> {
     }
 }
 
+/// Checks a callable target, rejecting `$this` if the target is a method call with an object expression.
+/// Static method and bare function targets are always allowed since they have no `$this` binding.
 fn callable_target_must_not_use_this(
     target: &CallableTarget,
     span: Span,
@@ -270,6 +277,8 @@ fn callable_target_must_not_use_this(
     }
 }
 
+/// Checks an instanceof target, rejecting `$this` if the target is a dynamic expression.
+/// Name-only targets (class identifiers) are always allowed since they have no `$this` binding.
 fn instanceof_target_must_not_use_this(
     target: &InstanceOfTarget,
     span: Span,

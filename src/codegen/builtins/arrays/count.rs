@@ -18,6 +18,15 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `count` builtin call.
+///
+/// Dispatches based on the argument's type:
+/// - Objects implementing `Countable`: calls the instance method via `emit_dispatch_instance_method`
+/// - `Mixed` type: calls runtime helper `__rt_mixed_count` which reads the array/hash header
+/// - Owned refcounted arrays/hashes: reads element count directly from header at offset 0
+/// - Borrowed refcounted arrays/hashes: increments refcount before reading to prevent aliasing
+///
+/// Returns `PhpType::Int` on success. Does not consume or mutate the counted value.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -69,6 +78,7 @@ pub fn emit(
     Some(PhpType::Int)
 }
 
+/// Returns `true` if the given class implements the `Countable` interface.
 fn class_implements_countable(class_name: &str, ctx: &Context) -> bool {
     ctx.classes
         .get(class_name)

@@ -15,6 +15,22 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `str_pad(input, target_length, pad_string, pad_type)` builtin.
+///
+/// Evaluates all arguments in source order, preserving registers across argument
+/// evaluation using a stack-based save/restore pattern. Defaults to a single space
+/// for `pad_string` and `STR_PAD_RIGHT` (1) for `pad_type` when those arguments are
+/// omitted. Calls the target-aware `__rt_str_pad` runtime helper and returns a PHP string.
+///
+/// # Arguments
+/// * `_name` — builtin name (unused, dispatch is already done)
+/// * `args` — `[input, target_length, pad_string?, pad_type?]`
+/// * `emitter` — assembly emitter
+/// * `ctx` — codegen context (types, scope)
+/// * `data` — data section for string literals
+///
+/// # Returns
+/// `Some(PhpType::Str)` — the padded result string
 pub fn emit(
     _name: &str,
     args: &[Expr],

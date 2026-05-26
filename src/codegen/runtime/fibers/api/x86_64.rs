@@ -24,6 +24,9 @@ use super::super::{
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
+/// Emits `__rt_fiber_throw_state_error` which constructs a FiberError from a static message
+/// string and unwinds through `__rt_throw_current`. Takes rdi=message bytes pointer, rsi=byte length.
+/// Does not return; `__rt_throw_current` must not return here (defensive `ud2` follows the call).
 pub(super) fn emit_throw_state_error_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_throw_state_error ---");
@@ -49,6 +52,10 @@ pub(super) fn emit_throw_state_error_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ud2");                                                 // defensive trap: __rt_throw_current must not return here
 }
 
+/// Emits `__rt_fiber_construct` which allocates and initialises a Fiber object.
+/// Takes rdi=callable pointer, rsi=Fiber class_id, rdx=generated Fiber wrapper pointer.
+/// Returns a pointer to the freshly built Fiber object in rax.
+/// On stack allocation failure branches to `__rt_fiber_throw_state_error` (no return).
 pub(super) fn emit_construct_x86_64(emitter: &mut Emitter) {
     let initial_frame_bytes = fiber_initial_stack_frame_bytes(emitter.target.arch);
     let initial_entry_offset = fiber_initial_entry_offset(emitter.target.arch);
@@ -129,6 +136,9 @@ pub(super) fn emit_construct_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ud2");                                                 // defensive trap: the throw helper must not return
 }
 
+/// Emits `__rt_fiber_start` which transitions a NotStarted fiber to Running and switches to it.
+/// Takes rdi=fiber object pointer. Returns the yielded or terminated transfer value as a Mixed in rax.
+/// Validates the fiber is in NotStarted state; raises FiberError via `__rt_fiber_throw_state_error` otherwise.
 pub(super) fn emit_start_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_start ---");
@@ -167,6 +177,10 @@ pub(super) fn emit_start_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the harvested value to the caller
 }
 
+/// Emits `__rt_fiber_resume` which transitions a Suspended fiber back to Running and switches to it.
+/// Takes rdi=fiber object pointer, rsi=boxed Mixed value to deliver on resume.
+/// Returns the next yielded or terminated transfer value as a Mixed in rax.
+/// Validates the fiber is in Suspended state; raises FiberError via `__rt_fiber_throw_state_error` otherwise.
 pub(super) fn emit_resume_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_resume ---");
@@ -207,6 +221,11 @@ pub(super) fn emit_resume_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the harvested value to the caller
 }
 
+/// Emits `__rt_fiber_suspend` which yields control from a running Fiber back to its caller.
+/// Takes rdi=boxed Mixed value to yield. Requires the caller is executing inside a Fiber
+/// (checks `_fiber_current` is non-NULL); raises FiberError via `__rt_fiber_throw_state_error` otherwise.
+/// On return, `_fiber_current` is the resuming Fiber and rax holds the value it delivered.
+/// If `Fiber->throw()` scheduled a pending exception, re-raises it via `__rt_throw_current`.
 pub(super) fn emit_suspend_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_suspend ---");
@@ -245,6 +264,11 @@ pub(super) fn emit_suspend_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the resumer-delivered value
 }
 
+/// Emits `__rt_fiber_throw` which delivers a Throwable to a Suspended fiber at its suspend point.
+/// Takes rdi=fiber object pointer, rsi=Throwable pointer to deliver.
+/// Returns the yielded or terminated transfer value as a Mixed in rax.
+/// Validates the fiber is in Suspended state; raises FiberError via `__rt_fiber_throw_state_error` otherwise.
+/// The Throwable is parked in `pending_throw` so the fiber's try/catch machinery raises it on resume.
 pub(super) fn emit_throw_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_throw ---");
@@ -285,6 +309,9 @@ pub(super) fn emit_throw_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the value yielded by the fiber
 }
 
+/// Emits `__rt_fiber_get_current` which returns the currently executing Fiber object.
+/// Reads `_fiber_current`; returns a boxed object for a Fiber pointer or boxed PHP null for main thread.
+/// Returns a Mixed in rax via `__rt_mixed_from_value` tail-call.
 pub(super) fn emit_get_current_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_get_current ---");
@@ -303,6 +330,11 @@ pub(super) fn emit_get_current_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_from_value");                           // tail-call the boxer so the caller's return address is preserved
 }
 
+/// Emits `__rt_fiber_get_return` which retrieves the transfer value from a terminated fiber.
+/// Takes rdi=fiber object pointer. Returns the captured transfer value as a Mixed in rax.
+/// Validates the fiber is in Terminated state; raises FiberError via `__rt_fiber_throw_state_error` otherwise.
+/// Increments the refcount of the transfer value before returning so the caller owns it independently.
+/// Returns 0 (tag=0) for NULL receiver as a safe default bypassing type checking.
 pub(super) fn emit_get_return_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_get_return ---");
@@ -334,6 +366,9 @@ pub(super) fn emit_get_return_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // hand the captured value back to the caller
 }
 
+/// Emits `__rt_fiber_state_eq` which tests whether a fiber's state matches a given predicate.
+/// Takes rdi=fiber object pointer, rsi=state predicate value to compare against.
+/// Returns 1 in eax if the fiber's state equals rsi; 0 otherwise. NULL fiber always returns false.
 pub(super) fn emit_state_getter_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_state_eq ---");
@@ -351,6 +386,10 @@ pub(super) fn emit_state_getter_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return false to the caller
 }
 
+/// Checks whether a fiber terminated with an escaped exception and re-raises it on the caller's
+/// stack if so. Used after `start`, `resume`, and `throw` to handle exceptions that left the
+/// fiber boundary. `prefix` names the calling operation to generate unique labels.
+/// Clears `pending_throw` before re-raising; branches to `__rt_fiber_<prefix>_no_escape` if clean.
 fn emit_check_escape_x86_64(emitter: &mut Emitter, prefix: &str) {
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = current fiber state
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_TERMINATED));       // is the fiber terminated?

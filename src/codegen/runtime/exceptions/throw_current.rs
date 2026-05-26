@@ -12,6 +12,12 @@ use crate::codegen::{abi, emit::Emitter};
 use crate::codegen::context::TRY_HANDLER_JMP_BUF_OFFSET;
 use crate::codegen::platform::Arch;
 
+/// Emits `__rt_throw_current`, the runtime helper that propagates an exception upward through
+/// the handler stack. Saves callee-saved registers, retrieves the top handler record from
+/// `_exc_handler_top`, runs `__rt_exception_cleanup_frames` to unwind all activation frames,
+/// then calls `longjmp` with return value 1 to resume at the nearest catch block. If no handler
+/// is registered, falls through to `__rt_throw_current_uncaught`, which writes a 32-byte fatal
+/// message to stderr and terminates the process with exit code 1.
 pub fn emit_throw_current(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_throw_current_linux_x86_64(emitter);
@@ -47,6 +53,12 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     emitter.syscall(1);
 }
 
+/// Emits `__rt_throw_current` for Linux x86_64. Uses the System V AMD64 ABI: preserves rbp as
+/// frame pointer, saves r12/r13 callee-saved registers, loads `_exc_handler_top` into r12,
+/// checks for null handler to branch to the uncaught path, calls
+/// `__rt_exception_cleanup_frames` for frame unwinding, then invokes `longjmp` to transfer
+/// control to the saved catch resume point. The uncaught path writes 32 bytes to stderr via
+/// syscall 1 (write) and terminates via syscall 60 (exit).
 fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: throw_current ---");

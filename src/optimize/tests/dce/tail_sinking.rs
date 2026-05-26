@@ -11,6 +11,11 @@
 use super::*;
 
 #[test]
+// Verifies that when an if/elseif/else chain has identical effectful bodies (both calling
+// pure builtins), the elseif collapses into a negated condition on the first branch,
+// eliminating the second effectful call and reducing the chain to a single conditional check.
+// The elseif condition `tap()` is preserved as the else-branch body, and `touch()` becomes
+// the negated condition of the outer if.
 fn test_eliminate_dead_code_reduces_empty_if_chain_to_needed_condition_checks() {
     let touch = Expr::new(
         ExprKind::FunctionCall {
@@ -75,6 +80,9 @@ fn test_eliminate_dead_code_reduces_empty_if_chain_to_needed_condition_checks() 
 }
 
 #[test]
+// Verifies that when an if statement with an explicit else is followed by a statement
+// (`echo 9`), that trailing statement sinks into the else branch (since the if then-branch
+// terminates with return). The else body becomes `[echo 8, echo 9]`.
 fn test_eliminate_dead_code_sinks_tail_into_if_fallthrough_branch() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -124,6 +132,9 @@ fn test_eliminate_dead_code_sinks_tail_into_if_fallthrough_branch() {
 }
 
 #[test]
+// Verifies that when an if without an else is followed by a statement (`echo 9`), and the
+// then-branch terminates with return, the trailing statement sinks into a synthesized else
+// branch. The result is an if with `else_body: Some([echo 9])`.
 fn test_eliminate_dead_code_sinks_tail_into_implicit_else_path() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -173,6 +184,10 @@ fn test_eliminate_dead_code_sinks_tail_into_implicit_else_path() {
 }
 
 #[test]
+// Verifies that when an IfDef with a return in the else branch is followed by a statement
+// (`echo 9`), that trailing statement sinks into the then branch of the IfDef (since the
+// else branch terminates with return). The then_body becomes `[echo 7, echo 9]` and the
+// else branch remains `[return 8]`.
 fn test_eliminate_dead_code_sinks_tail_into_ifdef_fallthrough_paths() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -220,6 +235,9 @@ fn test_eliminate_dead_code_sinks_tail_into_ifdef_fallthrough_paths() {
 }
 
 #[test]
+// Verifies that when both branches of an if statement have identical pure effectful bodies
+// (same `strlen` call), the if collapses to just the condition expression (`touch()`),
+// dropping both branches entirely. Pure calls with no side effects are dead code.
 fn test_eliminate_dead_code_reduces_empty_if_to_effectful_condition_eval() {
     let touch = Expr::new(
         ExprKind::FunctionCall {

@@ -24,6 +24,13 @@ use super::callback_env;
 use super::callable_forms;
 use super::super::callable_lookup::{lookup_function, FunctionLookup};
 
+/// Stamps the heap header of a runtime array with a runtime value-type tag derived from
+/// `elem_ty`. Used by `call_user_func_array` to mark variadic tail arrays so the runtime
+/// can distinguish element types without compile-time layout information.
+///
+/// - `array_reg`: register holding the array pointer.
+/// - `elem_ty`: the element type whose runtime tag is written into the packed array kind word.
+/// Preserves the indexed-array kind and persistent COW flag from the heap header.
 fn emit_array_value_type_stamp(emitter: &mut Emitter, array_reg: &str, elem_ty: &PhpType) {
     let value_type_tag = match elem_ty {
         PhpType::Float => 2,
@@ -65,6 +72,16 @@ pub(crate) enum LoadedArraySource {
     TemporaryStackSlot(usize),
 }
 
+/// Emits code for the `call_user_func_array($callback, $args)` builtin.
+/// Dispatches to extern/builtin call handlers when the callback is statically resolvable,
+/// otherwise falls through to full callback resolution, array element extraction, argument
+/// materialization, and indirect call via the resolved function address.
+///
+/// - `$callback` (args[0]): a string naming a function, a Closure, a first-class callable,
+///   or any other expression the resolver can materialize into a function pointer + signature.
+/// - `$args` (args[1]): an array whose elements are unpacked as positional call arguments.
+///
+/// Returns the return type of the invoked callback, or `PhpType::Void` if unresolvable.
 pub fn emit(
     _name: &str,
     args: &[Expr],

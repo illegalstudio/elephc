@@ -10,6 +10,7 @@
 
 use crate::parser::ast::{CatchClause, Expr, Stmt, StmtKind};
 
+/// Terminal effect of a statement for control flow analysis.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TerminalEffect {
     FallsThrough,
@@ -18,14 +19,17 @@ pub(crate) enum TerminalEffect {
     TerminatesMixed,
 }
 
+/// Checks if a statement guarantees termination (return, throw, etc).
 pub(crate) fn stmt_guarantees_termination(stmt: &Stmt) -> bool {
     !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough)
 }
 
+/// Checks if a block guarantees function exit.
 pub(crate) fn block_guarantees_function_exit(stmts: &[Stmt]) -> bool {
     stmts.iter().any(stmt_guarantees_function_exit)
 }
 
+/// Computes the terminal effect of a block of statements.
 pub(crate) fn block_terminal_effect(stmts: &[Stmt]) -> TerminalEffect {
     stmts
         .iter()
@@ -34,6 +38,7 @@ pub(crate) fn block_terminal_effect(stmts: &[Stmt]) -> TerminalEffect {
         .unwrap_or(TerminalEffect::FallsThrough)
 }
 
+/// Computes the terminal effect of a single statement.
 pub(crate) fn stmt_terminal_effect(stmt: &Stmt) -> TerminalEffect {
     match &stmt.kind {
         StmtKind::Synthetic(stmts) => block_terminal_effect(stmts),
@@ -70,6 +75,8 @@ pub(crate) fn stmt_terminal_effect(stmt: &Stmt) -> TerminalEffect {
     }
 }
 
+/// Returns true if the given statement guarantees that the current function will exit.
+/// Walks into synthetic blocks, namespace blocks, and expressions (for `throw`, `exit`, `die`).
 fn stmt_guarantees_function_exit(stmt: &Stmt) -> bool {
     match &stmt.kind {
         StmtKind::Synthetic(stmts) | StmtKind::NamespaceBlock { body: stmts, .. } => {
@@ -127,6 +134,8 @@ fn stmt_guarantees_function_exit(stmt: &Stmt) -> bool {
     }
 }
 
+/// Returns true if the given expression guarantees that the current function will exit.
+/// Recognizes `throw`, `exit`/`die` function calls, and expressions wrapping these.
 fn expr_guarantees_function_exit(expr: &Expr) -> bool {
     match &expr.kind {
         crate::parser::ast::ExprKind::Throw(_) => true,
@@ -138,6 +147,8 @@ fn expr_guarantees_function_exit(expr: &Expr) -> bool {
     }
 }
 
+/// Returns true if a try/catch/finally block guarantees function exit.
+/// Exit is guaranteed if the finally body exits, or if the try body and all catch bodies exit.
 fn try_guarantees_function_exit(
     try_body: &[Stmt],
     catches: &[CatchClause],
@@ -156,6 +167,9 @@ fn try_guarantees_function_exit(
             .all(|catch| block_guarantees_function_exit(&catch.body))
 }
 
+/// Returns true if a switch block guarantees function exit.
+/// The switch exits only if all cases and the default exit, and no case body may
+/// break out of the switch before reaching an exit.
 fn switch_guarantees_function_exit(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: &Option<Vec<Stmt>>,
@@ -176,6 +190,8 @@ fn switch_guarantees_function_exit(
     )
 }
 
+/// Returns true if the expression is a truthy literal constant.
+/// Recognizes bool, int, float, and non-empty non-"0" string literals.
 fn expr_is_truthy_literal(expr: &Expr) -> bool {
     match &expr.kind {
         crate::parser::ast::ExprKind::BoolLiteral(value) => *value,
@@ -186,12 +202,16 @@ fn expr_is_truthy_literal(expr: &Expr) -> bool {
     }
 }
 
+/// Returns true if any statement in the block may break out of the current loop
+/// at the given breakable depth.
 fn block_may_break_current_loop(stmts: &[Stmt]) -> bool {
     stmts
         .iter()
         .any(|stmt| stmt_may_break_current_loop(stmt, 1))
 }
 
+/// Returns true if any statement in the block may leave the current switch before
+/// a function exit is reached, blocking guaranteed exit analysis.
 fn block_may_leave_current_switch_before_function_exit(stmts: &[Stmt]) -> bool {
     for stmt in stmts {
         if stmt_guarantees_function_exit(stmt) {
@@ -204,6 +224,8 @@ fn block_may_leave_current_switch_before_function_exit(stmts: &[Stmt]) -> bool {
     false
 }
 
+/// Returns true if the statement may break out of `breakable_depth_to_loop` or more
+/// enclosing loops. `break(1)` at depth 1 matches one loop, `break(2)` requires two.
 fn stmt_may_break_current_loop(stmt: &Stmt, breakable_depth_to_loop: usize) -> bool {
     match &stmt.kind {
         StmtKind::Break(level) => *level >= breakable_depth_to_loop,
@@ -294,6 +316,8 @@ fn stmt_may_break_current_loop(stmt: &Stmt, breakable_depth_to_loop: usize) -> b
     }
 }
 
+/// Returns true if the statement may break or continue out of `breakable_depth_to_switch`
+/// or more enclosing switch levels.
 fn stmt_may_leave_current_switch(stmt: &Stmt, breakable_depth_to_switch: usize) -> bool {
     match &stmt.kind {
         StmtKind::Break(level) | StmtKind::Continue(level) => {
@@ -386,6 +410,9 @@ fn stmt_may_leave_current_switch(stmt: &Stmt, breakable_depth_to_switch: usize) 
     }
 }
 
+/// Computes the terminal effect of a try/catch/finally block.
+/// If a finally body is present and does not fall through, its effect takes precedence.
+/// Otherwise merges the effects of the try body and all catch bodies.
 fn try_terminal_effect(
     try_body: &[Stmt],
     catches: &[CatchClause],
@@ -404,6 +431,9 @@ fn try_terminal_effect(
     )
 }
 
+/// Computes the terminal effect of an if/ifndef branch structure.
+/// Requires an else branch; returns FallsThrough if absent.
+/// Merges the else branch first, then then/elseif branches.
 fn combine_branch_effects(
     branch_effects: impl Iterator<Item = TerminalEffect>,
     else_effect: Option<TerminalEffect>,
@@ -415,6 +445,9 @@ fn combine_branch_effects(
     merge_terminal_effects(std::iter::once(else_effect).chain(branch_effects))
 }
 
+/// Merges a sequence of terminal effects into a single result.
+/// Any FallsThrough short-circuits the merge. TerminatesMixed results if both Breaks
+/// and ExitsCurrentBlock are seen, or if any input is TerminatesMixed.
 fn merge_terminal_effects(effects: impl Iterator<Item = TerminalEffect>) -> TerminalEffect {
     let mut saw_any = false;
     let mut saw_break = false;
@@ -444,6 +477,9 @@ fn merge_terminal_effects(effects: impl Iterator<Item = TerminalEffect>) -> Term
     }
 }
 
+/// Computes the terminal effect of a switch statement.
+/// Returns ExitsCurrentBlock only if a default exists and all cases (iterated in reverse)
+/// also exit the current block. Breaks or TerminatesMixed in any case body invalidates exit.
 fn switch_terminal_effect(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: &Option<Vec<Stmt>>,

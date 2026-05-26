@@ -11,9 +11,11 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// rtrim_mask: strip characters in mask from right of string.
-/// Input: x1=str_ptr, x2=str_len, x3=mask_ptr, x4=mask_len
-/// Output: x1=str_ptr (unchanged), x2=adjusted_len
+/// Emits the `__rt_rtrim_mask` runtime helper.
+/// Dispatches to the target-specific implementation after emitting the common label.
+///
+/// ABI (ARM64): x1=str_ptr, x2=str_len, x3=mask_ptr, x4=mask_len; returns x1 unchanged, x2=adjusted_len
+/// ABI (x86_64 Linux): rax=str_ptr, rdx=str_len, rdi=mask_ptr, rsi=mask_len; returns rax unchanged, rdx=adjusted_len
 pub fn emit_rtrim_mask(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_rtrim_mask_linux_x86_64(emitter);
@@ -50,6 +52,9 @@ pub fn emit_rtrim_mask(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with adjusted x2
 }
 
+/// Emits the x86_64 Linux variant of `__rt_rtrim_mask`.
+///
+/// ABI: rax=str_ptr, rdx=str_len, rdi=mask_ptr, rsi=mask_len; returns rax unchanged, rdx=adjusted_len
 fn emit_rtrim_mask_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: rtrim_mask ---");

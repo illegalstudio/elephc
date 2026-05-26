@@ -16,6 +16,12 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a `cos` builtin call for a single numeric argument.
+///
+/// Loads the argument into the native floating-point argument register, calls
+/// the platform's libc `cos` function, and returns `PhpType::Float`. Integer
+/// operands are normalized into the floating-point result register before the call.
+/// On AArch64 the scalar argument is in `d0`; on x86_64 it is in the SysV FP register.
 pub fn emit(
     _name: &str,
     args: &[Expr],

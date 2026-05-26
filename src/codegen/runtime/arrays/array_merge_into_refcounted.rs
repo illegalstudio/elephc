@@ -11,9 +11,13 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_merge_into_refcounted: append all elements from source array to dest array (in-place).
-/// Input: x0 = dest array pointer, x1 = source array pointer
+/// Emits the `__rt_array_merge_into_refcounted` runtime helper for appending all elements
+/// from a source array to a destination array in-place.
+///
+/// ABI (ARM64): x0 = dest array pointer, x1 = source array pointer.
 /// Both arrays must contain 8-byte refcounted payloads (array/hash/object pointers).
+/// The destination array is grown if needed; source elements are incref'd before copying.
+/// Returns the (possibly relocated) destination array pointer in x0.
 pub fn emit_array_merge_into_refcounted(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_merge_into_refcounted_linux_x86_64(emitter);
@@ -96,6 +100,12 @@ pub fn emit_array_merge_into_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_array_merge_into_refcounted`.
+///
+/// ABI (x86_64 SysV): rdi = dest array pointer, rsi = source array pointer.
+/// Same semantics as the ARM64 variant: appends all source elements to dest in-place,
+/// growing dest if needed, incref'ing each source element before transfer.
+/// Returns the (possibly relocated) destination array pointer in rax.
 fn emit_array_merge_into_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_merge_into_refcounted ---");

@@ -19,10 +19,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static TEST_PROJECT_ID: AtomicUsize = AtomicUsize::new(0);
 
+// Runs the full frontend pipeline (tokenize → parse → conditional → autoload → name-resolve → optimize → type-check)
+// on `src` and returns `Ok` if no errors were reported.
 fn check_source(src: &str) -> Result<(), String> {
     check_source_with_defines(src, &[])
 }
 
+// Like [`check_source`] but also applies conditional defines from `defines` before type-checking.
 fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> {
     let tokens = tokenize(src).map_err(|e| e.message.clone())?;
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;

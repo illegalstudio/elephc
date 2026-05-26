@@ -11,7 +11,9 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// Emit the keyword strategy sub-routines (kw_entry dispatcher + per-keyword bodies + today_tm helper).
+/// Dispatches to the target-specific keyword emitter based on `emitter.target.arch`.
+/// `x9` (ARM64) or `rdx` (x86_64) holds the keyword kind (0=now, 1=today, 2=tomorrow,
+/// 3=yesterday, 4=midnight, 5=noon) as returned by `match_word`.
 pub(crate) fn emit_keywords(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_keywords_linux_x86_64(emitter);
@@ -21,6 +23,13 @@ pub(crate) fn emit_keywords(emitter: &mut Emitter) {
     emit_keywords_arm64(emitter);
 }
 
+/// Emits ARM64 keyword strategy sub-routines: `__rt_strtotime_kw_entry` dispatcher,
+/// per-keyword bodies (`kw_now`, `kw_today`, `kw_tomorrow`, `kw_yesterday`, `kw_noon`),
+/// plus the `__rt_strtotime_today_tm` and `__rt_strtotime_now_tm` helpers.
+/// Uses `__rt_strtotime_ret` as the shared return point. Expects `x9` to hold the
+/// keyword kind on entry. The today_tm helper allocates a 16-byte sub-frame and saves
+/// the link register; the struct tm fields land in the caller's `[sp+0..36]` which
+/// maps to `[sp+16..52]` while the sub-frame is live.
 fn emit_keywords_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: keyword strategy dispatcher ---");
@@ -86,6 +95,12 @@ fn emit_keywords_arm64(emitter: &mut Emitter) {
     emit_now_tm_arm64(emitter);
 }
 
+/// Emits ARM64 `__rt_strtotime_today_tm`: a non-leaf helper that materializes today's
+/// localtime fields at `[sp+0..36]` with `tm_sec`, `tm_min`, `tm_hour` zeroed, and
+/// `tm_isdst=-1`. Allocates a 16-byte sub-frame (saves link register at `[sp+0]`);
+/// while the sub-frame is active the caller's tm is accessible at `[sp+16..52]`.
+/// Calls `__rt_time` and `localtime`; restores link register and deallocates sub-frame
+/// before returning to the caller (strategy body) via `ret`.
 fn emit_today_tm_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: populate [sp+0..36] with today @ midnight struct tm ---");
@@ -116,6 +131,11 @@ fn emit_today_tm_arm64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller (strategy body)
 }
 
+/// Emits ARM64 `__rt_strtotime_now_tm`: a non-leaf helper identical to `emit_today_tm_arm64`
+/// except that `tm_sec`, `tm_min`, `tm_hour` are preserved (not zeroed). Used by the
+/// offsets strategy where the base time is "now", not "today midnight". Same sub-frame
+/// protocol: 16-byte allocation, link register saved at `[sp+0]`, tm accessible at
+/// `[sp+16..52]` while sub-frame is live. Returns via `ret`.
 fn emit_now_tm_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: populate [sp+0..36] with NOW (preserve current h/m/s) ---");
@@ -141,6 +161,13 @@ fn emit_now_tm_arm64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits x86_64 Linux keyword strategy sub-routines: `__rt_strtotime_kw_entry_linux_x86_64`
+/// dispatcher, per-keyword bodies (`kw_now`, `kw_today`, `kw_tomorrow`, `kw_yesterday`,
+/// `kw_noon` with `_linux_x86_64` suffix), plus the `__rt_strtotime_today_tm_linux_x86_64`
+/// and `__rt_strtotime_now_tm_linux_x86_64` helpers. Uses `__rt_strtotime_ret_linux_x86_64`
+/// as the shared return point. Expects `rdx` to hold the keyword kind on entry.
+/// The today_tm helper allocates an 8-byte sub-frame and preserves `rbp`-relative
+/// addressing so the caller's struct tm at `[rbp-128..rbp-92]` remains accessible.
 fn emit_keywords_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: keyword strategy dispatcher ---");
@@ -205,6 +232,12 @@ fn emit_keywords_linux_x86_64(emitter: &mut Emitter) {
     emit_now_tm_linux_x86_64(emitter);
 }
 
+/// Emits x86_64 Linux `__rt_strtotime_today_tm_linux_x86_64`: a non-leaf helper that
+/// materializes today's localtime fields into the caller's struct tm at `[rbp-128..rbp-92]`
+/// with `tm_sec`, `tm_min`, `tm_hour` zeroed and `tm_isdst=-1`. Allocates an 8-byte
+/// sub-frame via `sub rsp, 8` (keeps rsp 16-aligned for nested libc calls); does NOT
+/// touch `rbp` so the caller's scratch remains accessible via `rbp`-relative addressing.
+/// Calls `__rt_time` and `localtime`; releases sub-frame via `add rsp, 8` before returning.
 fn emit_today_tm_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: populate dispatcher tm with today @ midnight ---");
@@ -237,6 +270,11 @@ fn emit_today_tm_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to strategy body
 }
 
+/// Emits x86_64 Linux `__rt_strtotime_now_tm_linux_x86_64`: a non-leaf helper identical
+/// to `emit_today_tm_linux_x86_64` except that `tm_sec`, `tm_min`, `tm_hour` are preserved
+/// (not zeroed). Used by the offsets strategy where the base time is "now", not "today
+/// midnight". Same sub-frame and `rbp`-relative addressing protocol; releases sub-frame
+/// via `add rsp, 8` before returning.
 fn emit_now_tm_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: populate dispatcher tm with NOW (preserve h/m/s) ---");

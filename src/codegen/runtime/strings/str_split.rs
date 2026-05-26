@@ -11,8 +11,18 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// str_split: split string into array of chunks.
-/// Input: x1/x2=string, x3=chunk_length. Output: x0=array pointer.
+/// Emits the `__rt_str_split` runtime helper that splits a byte string into an array of fixed-length chunks.
+///
+/// ## ABI
+/// - **AArch64**: x1=ptr, x2=len, x3=chunk_len → x0=array_ptr
+/// - **x86_64 Linux**: rdi=ptr, rsi=len, rdx=chunk_len → rax=array_ptr
+///
+/// ## Behavior
+/// - Iterates through the string in chunk_len increments, copying each chunk as a new string entry.
+/// - The final chunk may be shorter if the remaining bytes are less than chunk_len.
+/// - Delegates to `__rt_array_push_str` for array growth and element appending.
+/// - Allocates initial array with capacity 16, elem_size 16 (ptr+len slots).
+/// - Caller-saved registers are preserved across the internal loop.
 pub fn emit_str_split(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_str_split_linux_x86_64(emitter);
@@ -68,6 +78,16 @@ pub fn emit_str_split(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// x86_64 Linux-specific implementation of the `__rt_str_split` runtime helper.
+///
+/// ## ABI
+/// - Input: rdi=ptr, rsi=len, rdx=chunk_len
+/// - Output: rax=array_ptr
+///
+/// ## Stack frame
+/// - Saves rax/rdx/rdi across calls to `__rt_array_new` and `__rt_array_push_str`.
+/// - Uses rbp-8/16/24 for ptr/len/chunk_len; rbp-32/40 for array ptr and cursor.
+/// - Preserves all caller-saved registers except rax (used for return values).
 fn emit_str_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_split ---");

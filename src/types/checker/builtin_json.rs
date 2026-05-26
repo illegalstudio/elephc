@@ -60,6 +60,8 @@ pub(crate) fn inject_builtin_json_interfaces(
     Ok(())
 }
 
+/// Builds the synthetic `jsonSerialize(): mixed` method declaration used
+/// to populate the `JsonSerializable` interface entry in `inject_builtin_json_interfaces`.
 fn json_serialize_method() -> ClassMethod {
     ClassMethod {
         name: "jsonSerialize".to_string(),

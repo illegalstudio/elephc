@@ -11,11 +11,15 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// hash_union: PHP associative-array union.
-/// Duplicate keys are kept from the left operand; missing keys are appended from
-/// the right operand in insertion order.
+/// Emits the `__rt_hash_union` runtime helper for PHP associative-array union.
+/// Clones the left operand, then walks the right operand in insertion order,
+/// copying only keys that are absent from the result. Duplicate keys keep the
+/// left value. Handles ownership transfer for strings and increments refcounts
+/// for refcounted payloads before insertion.
+///
 /// Input:  x0=left_hash_ptr, x1=right_hash_ptr
 /// Output: x0=result_hash_ptr
+/// Calls: `__rt_hash_clone_shallow`, `__rt_hash_iter_next`, `__rt_hash_get`, `__rt_str_persist`, `__rt_incref`, `__rt_hash_set`
 pub fn emit_hash_union(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_union_linux_x86_64(emitter);
@@ -99,6 +103,8 @@ pub fn emit_hash_union(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to generated code
 }
 
+/// x86_64 variant of `emit_hash_union`. Mirrors the ARM64 logic but uses
+/// the System V AMD64 ABI: parameters arrive in rdi, rsi, return value in rax.
 fn emit_hash_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_union ---");

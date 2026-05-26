@@ -12,6 +12,9 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Emits the `__rt_buffer_bounds_fail` runtime helper for the current target.
+/// Writes a fixed 40-byte buffer-bounds error message to stderr and terminates
+/// the process with exit code 70 (EX_SOFTWARE).
 pub fn emit_buffer_bounds_fail(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_buffer_bounds_fail_linux_x86_64(emitter);
@@ -30,6 +33,9 @@ pub fn emit_buffer_bounds_fail(emitter: &mut Emitter) {
     emitter.syscall(1);
 }
 
+/// Emits the Linux x86_64 variant of `__rt_buffer_bounds_fail`.
+/// Uses syscall 1 (write) to emit the error message to stderr, then syscall 60 (exit)
+/// to terminate with exit code 70.
 fn emit_buffer_bounds_fail_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_bounds_fail ---");

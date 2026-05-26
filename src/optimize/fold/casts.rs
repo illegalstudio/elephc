@@ -11,6 +11,12 @@
 use super::super::*;
 use super::scalar::{scalar_value, ScalarValue};
 
+/// Attempts to constant-fold a cast expression.
+ ///
+ /// Returns `Some(ExprKind)` with the folded literal if the target and operand are
+ /// both scalar and the cast result is unambiguous; `None` otherwise.
+ /// Ambiguous cases (float → string, non-finite floats, out-of-range truncations)
+ /// return `None` so the cast is evaluated at runtime.
 pub(super) fn try_fold_cast(target: &CastType, expr: &Expr) -> Option<ExprKind> {
     let value = scalar_value(expr)?;
     match target {
@@ -22,6 +28,10 @@ pub(super) fn try_fold_cast(target: &CastType, expr: &Expr) -> Option<ExprKind> 
     }
 }
 
+/// Folds a scalar `ScalarValue` to an integer literal via `(int)` cast.
+ ///
+ /// Returns `None` for float values that would truncate to out-of-range or non-finite
+ /// values, and for strings that do not parse as i64 or f64 with a representable truncation.
 fn try_fold_cast_int(value: ScalarValue) -> Option<ExprKind> {
     match value {
         ScalarValue::Null => Some(ExprKind::IntLiteral(0)),
@@ -32,6 +42,10 @@ fn try_fold_cast_int(value: ScalarValue) -> Option<ExprKind> {
     }
 }
 
+/// Folds a scalar `ScalarValue` to a float literal via `(float)` cast.
+ ///
+ /// Returns `None` for strings that fail to parse as f64 and contain non-alphabetic
+ /// characters, preserving runtime evaluation.
 fn try_fold_cast_float(value: ScalarValue) -> Option<ExprKind> {
     match value {
         ScalarValue::Null => Some(ExprKind::FloatLiteral(0.0)),
@@ -42,6 +56,10 @@ fn try_fold_cast_float(value: ScalarValue) -> Option<ExprKind> {
     }
 }
 
+/// Folds a scalar `ScalarValue` to a string literal via `(string)` cast.
+ ///
+ /// Floats are not folded because `(string)1.5` in PHP produces `"1.5"`, not a shortcut.
+ /// Null folds to empty string; bool folds to `"1"` or `""`.
 fn try_fold_cast_string(value: ScalarValue) -> Option<ExprKind> {
     match value {
         ScalarValue::Null => Some(ExprKind::StringLiteral(String::new())),
@@ -56,6 +74,8 @@ fn try_fold_cast_string(value: ScalarValue) -> Option<ExprKind> {
     }
 }
 
+/// Truncates an f64 to i64, returning `None` if the value is non-finite or outside
+ /// the i64 range. Used by `(int)` cast folding to avoid undefined truncation behavior.
 fn truncate_float_to_i64(value: f64) -> Option<i64> {
     if !value.is_finite() {
         return None;
@@ -67,6 +87,11 @@ fn truncate_float_to_i64(value: f64) -> Option<i64> {
     Some(truncated as i64)
 }
 
+/// Parses a string value for `(int)` cast folding.
+ ///
+ /// Tries i64 parse first, then f64 parse with truncation, then falls back to
+ /// all-alphabetic strings (which PHP treats as `0`). Returns `None` for strings
+ /// that contain digits or mixed digit/alpha content that fail numeric parsing.
 fn parse_string_cast_int(value: &str) -> Option<i64> {
     if let Ok(parsed) = value.parse::<i64>() {
         return Some(parsed);
@@ -80,6 +105,11 @@ fn parse_string_cast_int(value: &str) -> Option<i64> {
     None
 }
 
+/// Parses a string value for `(float)` cast folding.
+ ///
+ /// Tries f64 parse first; if that fails and all characters are alphabetic, returns `0.0`.
+ /// Any other pattern (mixed digits/alpha, punctuation, etc.) returns `None` so the
+ /// cast is evaluated at runtime.
 fn parse_string_cast_float(value: &str) -> Option<f64> {
     if let Ok(parsed) = value.parse::<f64>() {
         return Some(parsed);

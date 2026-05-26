@@ -15,6 +15,8 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `ptr_null` builtin: materializes a null pointer sentinel.
+/// Returns `PhpType::Pointer(None)` — the raw address 0x0.
 pub fn emit(
     _name: &str,
     _args: &[Expr],

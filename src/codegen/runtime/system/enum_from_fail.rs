@@ -10,6 +10,17 @@
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
+/// Emits the `__rt_enum_from_fail` runtime helper.
+///
+/// Writes a 33-byte diagnostic message to stderr (fd 2) then terminates the
+/// process with exit status 70 (`EX_SOFTWARE`). Used when a `From` impl for an
+/// enum fails — preserving PHP's fatal-throw semantics at the libc boundary.
+///
+/// - AArch64: uses `syscall 4` (write) then `syscall 1` (exit)
+/// - X86_64: uses `syscall 1` (write) then `syscall 60` (exit)
+///
+/// # Arguments
+/// * `emitter` — target-aware assembly emitter
 pub fn emit_enum_from_fail(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: enum_from_fail ---");

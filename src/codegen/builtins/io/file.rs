@@ -16,6 +16,20 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `file` builtin call.
+///
+/// Reads an entire file into an array of lines, each line as a string.
+/// Uses `__rt_file` runtime helper which returns a refcounted array of strings.
+///
+/// # Arguments
+/// * `args[0]` - Path or stream expression to read from
+///
+/// # Returns
+/// `PhpType::Array(Box::new(PhpType::Str))` on success; runtime helper handles
+/// PHP false (file not found/empty) by returning an empty array.
+///
+/// # ABI
+/// Calls `__rt_file` which materializes the path arg and returns the allocated array.
 pub fn emit(
     _name: &str,
     args: &[Expr],

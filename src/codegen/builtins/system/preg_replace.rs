@@ -16,6 +16,18 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `preg_replace` builtin call.
+///
+/// Evaluates arguments in PHP source order (pattern=arg[0], replacement=arg[1], subject=arg[2]),
+/// then materializes them into ABI registers and calls `__rt_preg_replace`.
+///
+/// # Arguments
+/// - `args[0]`: pattern string expression
+/// - `args[1]`: replacement string expression
+/// - `args[2]`: subject string expression
+///
+/// # Return
+/// Always returns `Some(PhpType::Str)` — the result is a PHP string.
 pub fn emit(
     _name: &str,
     args: &[Expr],

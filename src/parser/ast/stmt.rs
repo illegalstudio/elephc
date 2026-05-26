@@ -1,5 +1,5 @@
 //! Purpose:
-//! Defines statement AST nodes for PHP programs and elephc statement-level extensions.
+//! Defines statement AST nodes for PHP programs and elefc statement-level extensions.
 //! Carries declarations, control flow, includes, namespace/use statements, and source spans.
 //!
 //! Called from:
@@ -19,6 +19,7 @@ use super::{
 // --- Statements ---
 
 #[derive(Debug, Clone)]
+/// Statement AST node.
 pub struct Stmt {
     pub kind: StmtKind,
     pub span: Span,
@@ -29,10 +30,12 @@ pub struct Stmt {
 }
 
 impl Stmt {
+    /// Creates a `Stmt` with the given kind and source span, with an empty attribute list.
     pub fn new(kind: StmtKind, span: Span) -> Self {
         Stmt { kind, span, attributes: Vec::new() }
     }
 
+    /// Creates a `Stmt` with the given kind, source span, and PHP attribute list.
     pub fn with_attributes(
         kind: StmtKind,
         span: Span,
@@ -43,6 +46,8 @@ impl Stmt {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Catch clause. Holds exception type names, optional variable name,
+/// and the statements in the catch body.
 pub struct CatchClause {
     pub exception_types: Vec<Name>,
     pub variable: Option<String>,
@@ -50,6 +55,7 @@ pub struct CatchClause {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Kind of a use statement: class, function, or const.
 pub enum UseKind {
     Class,
     Function,
@@ -57,6 +63,7 @@ pub enum UseKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Use item. Represents a single imported name with optional alias.
 pub struct UseItem {
     pub kind: UseKind,
     pub name: Name,
@@ -64,6 +71,7 @@ pub struct UseItem {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Statement kind enumerates all PHP and elefc statement forms.
 pub enum StmtKind {
     Echo(Expr),
     Assign {
@@ -279,10 +287,12 @@ impl PartialEq for Stmt {
 
 #[allow(dead_code)] // Constructors used by test crate
 impl Stmt {
+    /// Creates an `Echo` statement with the given expression.
     pub fn echo(expr: Expr) -> Self {
         Self::new(StmtKind::Echo(expr), Span::dummy())
     }
 
+    /// Creates an `Assign` statement for the given variable name and value expression.
     pub fn assign(name: impl Into<String>, value: Expr) -> Self {
         Self::new(
             StmtKind::Assign {
@@ -294,4 +304,5 @@ impl Stmt {
     }
 }
 
+/// Type alias for a program as a vector of statements.
 pub type Program = Vec<Stmt>;

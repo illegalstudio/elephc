@@ -24,6 +24,14 @@ use super::state::{
 };
 use super::stmt_exprs::resolve_stmt_exprs;
 
+/// Resolves a list of statements, expanding include/require effects and tracking
+/// constants, namespaces, and function variants.
+///
+/// For control-flow statements (If, While, For, etc.), the body is resolved in
+/// isolation so include/constant state does not leak across branches. Class and
+/// interface method bodies are likewise resolved in isolation. Include statements
+/// are expanded inline; const declarations and `define()` calls populate `state.constants`.
+/// Namespace and use declarations update `state` for subsequent statements.
 pub(super) fn resolve_stmts(
     stmts: Vec<Stmt>,
     base_dir: &Path,
@@ -446,6 +454,12 @@ pub(super) fn resolve_stmts(
     Ok(result)
 }
 
+/// Resolves statements in an isolated scope by cloning `state` so that include
+/// and constant effects do not leak back to the caller.
+///
+/// Used for function bodies, method bodies, and control-structure branches
+/// (If/While/For/etc.) where each branch should see a clean view of constants
+/// and includes accumulated up to that point.
 pub(super) fn resolve_isolated(
     stmts: Vec<Stmt>,
     base_dir: &Path,
@@ -465,6 +479,8 @@ pub(super) fn resolve_isolated(
     )
 }
 
+/// Resolves the body of each class method in isolation, cloning `state` for each
+/// method so that include/constant effects inside one method do not leak to others.
 fn resolve_methods(
     methods: &[ClassMethod],
     base_dir: &Path,

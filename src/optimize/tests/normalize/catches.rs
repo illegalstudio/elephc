@@ -11,6 +11,8 @@
 use super::*;
 
 #[test]
+    // Verifies that two adjacent catch clauses with identical bodies but different
+    // exception types are merged into a single clause with both exception types combined.
 fn test_normalize_control_flow_merges_adjacent_identical_catches() {
     let program = vec![Stmt::new(
         StmtKind::Try {
@@ -60,6 +62,8 @@ fn test_normalize_control_flow_merges_adjacent_identical_catches() {
 }
 
 #[test]
+    // Verifies that when two catch clauses with overlapping exception types are merged,
+    // duplicate exception types are removed while preserving all unique types.
 fn test_normalize_control_flow_deduplicates_merged_catch_exception_types() {
     let program = vec![Stmt::new(
         StmtKind::Try {
@@ -113,6 +117,8 @@ fn test_normalize_control_flow_deduplicates_merged_catch_exception_types() {
 }
 
 #[test]
+    // Verifies that exception types within a merged catch clause are sorted alphabetically
+    // to produce deterministic ordering regardless of input sequence.
 fn test_normalize_control_flow_sorts_catch_exception_types() {
     let program = vec![Stmt::new(
         StmtKind::Try {

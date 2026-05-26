@@ -11,10 +11,9 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::{Arch, Platform};
 
-/// __rt_time: get current Unix timestamp.
-/// macOS ARM64 routes through libc `time(NULL)` so that libsystem's lazy TLS/errno init runs before any subsequent libc call (notably `localtime`).
-/// Linux ARM64 uses the raw `gettimeofday` syscall — there is no comparable init hazard on glibc.
-/// Output: x0 = seconds since epoch
+/// Emits the `__rt_time` runtime helper for the current platform.
+/// Routes to `emit_time_macos_arm64`, `emit_time_linux_arm64`, or `emit_time_linux_x86_64`
+/// depending on target. Output: x0 (ARM64) or rax (x86_64) = seconds since Unix epoch.
 pub(crate) fn emit_time(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_time_linux_x86_64(emitter);
@@ -29,6 +28,10 @@ pub(crate) fn emit_time(emitter: &mut Emitter) {
     emit_time_linux_arm64(emitter);
 }
 
+/// Emits `__rt_time` for macOS ARM64. Routes through libc `time(NULL)` so that
+/// libsystem's lazy TLS/errno init runs before any subsequent libc call (notably `localtime`).
+/// Raw syscalls bypass that init path and reproducibly crash when `tzset` first reads `environ`.
+/// Output: x0 = seconds since Unix epoch.
 fn emit_time_macos_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: time ---");
@@ -48,6 +51,9 @@ fn emit_time_macos_arm64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits `__rt_time` for Linux ARM64 using the raw `gettimeofday` syscall.
+/// No comparable TLS init hazard on glibc, so a raw syscall is safe.
+/// Output: x0 = seconds since Unix epoch.
 fn emit_time_linux_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: time ---");
@@ -72,6 +78,9 @@ fn emit_time_linux_arm64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits `__rt_time` for Linux x86_64 via libc `gettimeofday`.
+/// Allocates a temporary timeval on the stack, passes it to `gettimeofday`, and returns tv_sec.
+/// Output: rax = seconds since Unix epoch.
 fn emit_time_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: time ---");

@@ -11,9 +11,11 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_diff_key: return entries from hash1 whose keys are NOT in hash2.
-/// Input:  x0=hash1, x1=hash2
-/// Output: x0=new hash table with entries from hash1 not found in hash2
+/// Emits the `__rt_array_diff_key` runtime helper for computing array_diff_key.
+/// Iterates hash1 entries and copies those whose keys are absent from hash2 into a new hash table.
+/// ARM64 calling convention: x0=hash1, x1=hash2; returns new hash table in x0.
+/// Strings and heap-backed values are retained via `__rt_incref` before insertion.
+/// Preserves COW semantics: entries borrowed from hash1 are retained for the new owner.
 pub fn emit_array_diff_key(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_diff_key_linux_x86_64(emitter);
@@ -112,6 +114,9 @@ pub fn emit_array_diff_key(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = result hash table
 }
 
+/// Emits the x86_64 Linux variant of `__rt_array_diff_key`.
+/// Identical behavior to the ARM64 path but uses System V ABI (rdi=hash1, rsi=hash2, rax=result).
+/// Saves/restores rbp as frame pointer and uses 80 bytes of local scratch for iteration state.
 fn emit_array_diff_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_diff_key ---");

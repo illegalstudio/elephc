@@ -19,6 +19,19 @@ use super::members::discover_params;
 use super::output::DiscoveryOutput;
 use super::super::state::ResolveState;
 
+/// Recursively discovers include effects and declarations within an expression tree.
+///
+/// Visits every `ExprKind` variant, recursing into child expressions and callable arguments.
+/// Accumulates loaded paths in `loaded_paths` to prevent duplicate includes and tracks
+/// the include chain for cycle detection. Declaration effects are accumulated in `output`.
+///
+/// # Arguments
+/// * `expr` - the expression node to walk
+/// * `base_dir` - base directory for resolving relative include paths
+/// * `loaded_paths` - mutable set of already-loaded paths; updated in-place
+/// * `include_chain` - mutable Vec tracking the current include stack for cycle detection
+/// * `state` - resolver state (conditions, function variants, etc.)
+/// * `output` - mutable discovery output accumulating includes, declarations, and errors
 pub(super) fn discover_expr(
     expr: &Expr,
     base_dir: &Path,
@@ -184,6 +197,10 @@ pub(super) fn discover_expr(
     Ok(())
 }
 
+/// Iterates over a slice of expressions, calling `discover_expr` on each.
+///
+/// Consumes the slice in order, accumulating include effects and declarations from
+/// each expression into the shared `output`. Short-circuits on the first error.
 pub(super) fn discover_exprs(
     exprs: &[Expr],
     base_dir: &Path,
@@ -198,6 +215,10 @@ pub(super) fn discover_exprs(
     Ok(())
 }
 
+/// Visits the target of an `InstanceOf` expression.
+///
+/// `InstanceOfTarget::Name` carries no expression to recurse — nothing to discover.
+/// `InstanceOfTarget::Expr` wraps an expression that must be walked for includes and declarations.
 fn discover_instanceof_target(
     target: &InstanceOfTarget,
     base_dir: &Path,

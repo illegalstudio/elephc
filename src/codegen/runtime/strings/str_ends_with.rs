@@ -11,7 +11,11 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// str_ends_with: check if haystack ends with needle.
+/// Emits the `__rt_str_ends_with` runtime helper.
+///
+/// ABI (ARM64): haystack ptr in x1, haystack len in x2, needle ptr in x3, needle len in x4.
+/// Returns x0 = 1 if haystack ends with needle, x0 = 0 otherwise.
+/// Dispatches to x86_64 variant when `target.arch == Arch::X86_64`; emits ARM64 code otherwise.
 pub fn emit_str_ends_with(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_str_ends_with_linux_x86_64(emitter);
@@ -49,6 +53,11 @@ pub fn emit_str_ends_with(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_str_ends_with`.
+///
+/// ABI (x86_64 System V): haystack ptr in rdi, haystack len in rsi, needle ptr in rdx, needle len in rcx.
+/// Returns eax = 1 if haystack ends with needle, eax = 0 otherwise.
+/// Uses r8, r9, r10 as temporaries (callee-saved by convention).
 fn emit_str_ends_with_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_ends_with ---");

@@ -10,6 +10,7 @@
 
 use super::*;
 
+// Verifies an empty class encodes as {} with no public properties.
 #[test]
 fn test_json_encode_empty_object() {
     let out = compile_and_run(
@@ -21,6 +22,7 @@ echo json_encode(new Empty1());
     assert_eq!(out, "{}");
 }
 
+// Verifies an object with a public int property encodes the property name and value.
 #[test]
 fn test_json_encode_object_int_property() {
     let out = compile_and_run(
@@ -35,6 +37,7 @@ echo json_encode(new Counter(42));
     assert_eq!(out, r#"{"value":42}"#);
 }
 
+// Verifies an object with public string, int, and bool properties encodes all of them.
 #[test]
 fn test_json_encode_object_multiple_properties() {
     let out = compile_and_run(
@@ -53,6 +56,7 @@ echo json_encode(new Item("widget", 7, true));
     assert_eq!(out, r#"{"name":"widget","qty":7,"active":true}"#);
 }
 
+// Verifies a string property value with a newline escape encodes as \n inside the JSON string.
 #[test]
 fn test_json_encode_object_string_property_escaping() {
     let out = compile_and_run(
@@ -67,6 +71,7 @@ echo json_encode(new Note("line\nbreak"));
     assert_eq!(out, r#"{"text":"line\nbreak"}"#);
 }
 
+// Verifies private properties are excluded from JSON output; only public properties appear.
 #[test]
 fn test_json_encode_object_skips_private_properties() {
     let out = compile_and_run(
@@ -81,6 +86,7 @@ echo json_encode(new Mixed1());
     assert_eq!(out, r#"{"visible":"yes"}"#);
 }
 
+// Verifies protected properties are excluded from JSON output; public properties appear.
 #[test]
 fn test_json_encode_object_skips_protected_properties() {
     let out = compile_and_run(
@@ -96,6 +102,7 @@ echo json_encode(new Box());
     assert_eq!(out, r#"{"a":1,"c":3}"#);
 }
 
+// Verifies an object with float properties encodes them as JSON numbers.
 #[test]
 fn test_json_encode_object_with_float_property() {
     let out = compile_and_run(
@@ -107,6 +114,7 @@ echo json_encode(new Vec2());
     assert_eq!(out, r#"{"x":1.5,"y":2.5}"#);
 }
 
+// Verifies nested objects (object-valued properties) encode recursively.
 #[test]
 fn test_json_encode_nested_objects() {
     let out = compile_and_run(
@@ -126,6 +134,7 @@ echo json_encode(new Outer());
     assert_eq!(out, r#"{"inner":{"x":5},"tag":"T"}"#);
 }
 
+// Verifies an array of objects encodes each object via its public properties.
 #[test]
 fn test_json_encode_array_of_objects() {
     let out = compile_and_run(
@@ -143,6 +152,7 @@ echo json_encode([new Row(1, "a"), new Row(2, "b")]);
     assert_eq!(out, r#"[{"id":1,"name":"a"},{"id":2,"name":"b"}]"#);
 }
 
+// Verifies an assoc array with object values encodes each object's public properties.
 #[test]
 fn test_json_encode_assoc_with_object_values() {
     let out = compile_and_run(

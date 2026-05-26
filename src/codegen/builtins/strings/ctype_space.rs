@@ -16,6 +16,24 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `ctype_space` builtin, which returns `true` iff every byte
+/// in the argument string is a ASCII whitespace character (space, tab, newline,
+/// carriage return, vertical tab, or form feed).
+///
+/// # Arguments
+/// - `_name`: Unused; present for dispatcher uniformity.
+/// - `args`: Must contain exactly one expression producing a PHP string (pointer in
+///   `x1`/`rax`, length in `x2`/`rdx` on ARM64/x86_64 respectively).
+/// - `emitter`: Target-specific instruction emission.
+/// - `ctx`: Label generation and codegen context.
+/// - `data`: Data section for relocations.
+///
+/// # Returns
+/// `Some(PhpType::Bool)` always; `ctype_space` never returns `null`.
+///
+/// # ABI Notes
+/// - ARM64: string pointer in `x1`, length in `x2`, result in `x0`.
+/// - x86_64: string pointer in `rax`, length in `rdx`, result in `rax`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -11,9 +11,16 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, platform::Arch};
 
-/// mixed_cast_float: cast a boxed mixed payload to float using the current scalar rules.
-/// Input:  x0 = boxed mixed pointer
-/// Output: d0 = floating-point result
+/// Emits `__rt_mixed_cast_float` which casts a boxed PhpMixed cell to a float.
+/// Uses the PhpMixed runtime tag to dispatch to per-type conversion paths:
+/// - Tag 0 (int): widens integer in x1 to float via `emit_int_result_to_float_result`
+/// - Tag 1 (string): calls `__rt_cstr` then `atof` to parse the string as a double
+/// - Tag 2 (float): moves float bits from x1 directly into d0
+/// - Tag 3 (bool): widens 0/1 bool in x1 to float
+/// - Tag >= 4 (null, unsupported): returns 0.0
+///
+/// ARM64 ABI: input in x0 (boxed pointer), output in d0 (float result). Uses a
+/// 32-byte stack frame for nested calls. Does not clobber callee-saved registers.
 pub fn emit_mixed_cast_float(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_cast_float_linux_x86_64(emitter);
@@ -46,7 +53,7 @@ pub fn emit_mixed_cast_float(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_cast_float_done");                        // return the converted integer payload
 
     emitter.label("__rt_mixed_cast_float_from_string");
-    emitter.instruction("bl __rt_cstr");                                        // materialize a null-terminated copy of the unboxed elephc string payload
+    emitter.instruction("bl __rt_cstr");                                        // materialize a null-terminated copy of the unboxed elefant string payload
     emitter.bl_c("atof");                                                       // parse the current C string payload as double
     emitter.instruction("b __rt_mixed_cast_float_done");                        // return the parsed floating-point string payload
 
@@ -64,6 +71,12 @@ pub fn emit_mixed_cast_float(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the floating-point cast result in d0
 }
 
+/// x86_64 Linux SysV ABI variant of `emit_mixed_cast_float`. Uses the SysV calling
+/// convention:
+/// - Input: rdi = boxed mixed pointer
+/// - Tag returned in rax, payload words in rdi/rdx after `__rt_mixed_unbox`
+/// - Float result returned in xmm0
+/// - Stack kept 16-byte aligned; one 16-byte scratch slot reserved for nested calls.
 fn emit_mixed_cast_float_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_cast_float ---");
@@ -92,7 +105,7 @@ fn emit_mixed_cast_float_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_float_from_string_linux_x86_64");
     emitter.instruction("mov rax, rdi");                                        // move the unboxed string pointer into the x86_64 string-result pointer register
-    abi::emit_call_label(emitter, "__rt_cstr");                                 // materialize a null-terminated copy of the unboxed elephc string payload
+    abi::emit_call_label(emitter, "__rt_cstr");                                 // materialize a null-terminated copy of the unboxed elefant string payload
     emitter.instruction("mov rdi, rax");                                        // pass the temporary C string through the SysV first integer argument register before atof()
     emitter.instruction("call atof");                                           // parse the current C string payload as double
     emitter.instruction("jmp __rt_mixed_cast_float_done_linux_x86_64");         // return the parsed floating-point string payload
@@ -106,7 +119,7 @@ fn emit_mixed_cast_float_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_int_result_to_float_result(emitter);                              // widen the 0/1 bool payload into the floating-point result register
 
     emitter.label("__rt_mixed_cast_float_done_linux_x86_64");
-    emitter.instruction("add rsp, 16");                                         // release the aligned temporary slot reserved for nested helper calls
+    emitter.instruction("add rsp, 16");                                         // release the aligned temporary slot reserved for nested calls
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return the floating-point cast result in xmm0
 }

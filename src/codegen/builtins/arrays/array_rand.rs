@@ -17,6 +17,22 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a call to the `array_rand` builtin.
+///
+/// # Arguments
+/// - `args[0]`: the input array expression; evaluated and its pointer placed in the
+///   appropriate argument register (`rdi` on x86_64, `x0` on ARM64).
+/// - `emitter`: used to emit instructions and comments.
+/// - `ctx`: carries variable layout and codegen state.
+/// - `data`: data section for relocations and constants.
+///
+/// # Returns
+/// `Some(PhpType::Int)` — the selected random array key is returned in `x0`/`rax`
+/// depending on target.
+///
+/// # Codegen behavior
+/// - x86_64: moves the array pointer from `rax` to `rdi`, calls `__rt_array_rand`.
+/// - ARM64: calls `__rt_array_rand` directly (array pointer already in `x0`).
 pub fn emit(
     _name: &str,
     args: &[Expr],

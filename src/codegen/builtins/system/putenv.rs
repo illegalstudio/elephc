@@ -16,6 +16,10 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for PHP's `putenv(KEY=VALUE)` builtin.
+/// Copies the KEY=VALUE string to the heap (putenv retains the pointer),
+/// calls the C `putenv` function, and converts its integer return (0 = success)
+/// into a PHP boolean. Falls back to the platform runtime for the actual syscall.
 pub fn emit(
     _name: &str,
     args: &[Expr],

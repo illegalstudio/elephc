@@ -16,6 +16,11 @@ use crate::span::Span;
 
 use super::super::{expect_semicolon, expect_token, parse_name};
 
+/// Parses a `use TraitName [, TraitName]*` declaration with optional `{ ... }` adaptation block.
+/// Consumes the `use` keyword, collects one or more trait names, then optionally parses an
+/// opening `{` to consume zero or more adaptation clauses (`Alias` or `InsteadOf`) terminated by
+/// `;`, and a closing `}`. Outside the block, a trailing `;` is consumed. Returns `TraitUse`
+/// with the collected trait names and any adaptations.
 pub(in crate::parser::stmt) fn parse_trait_use(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -153,6 +158,11 @@ pub(in crate::parser::stmt) fn parse_trait_use(
     })
 }
 
+/// Parses the left-hand side of a trait adaptation clause: either `TraitName::methodName`
+/// returning `(Some(trait_name), method)` or just `methodName` returning `(None, method)`.
+/// `parse_name` is called first; if a `::` follows, the next token must be an identifier
+/// representing the method name on the trait. Otherwise the name's last segment is used as
+/// the method name, allowing bare `methodName` shorthand.
 fn parse_trait_adaptation_target(
     tokens: &[(Token, Span)],
     pos: &mut usize,

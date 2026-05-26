@@ -64,6 +64,10 @@ pub fn emit_shuffle(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// x86_64 Linux-specific implementation of the Fisher-Yates shuffle.
+/// Input: `rdi` = array pointer (System V ABI).
+/// Modifies the array payload in place; no return value.
+/// Called by `emit_shuffle` when targeting Linux x86_64.
 fn emit_shuffle_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: shuffle ---");

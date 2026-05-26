@@ -77,6 +77,13 @@ pub fn emit_array_unique_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return deduplicated array
 }
 
+/// x86_64 Linux implementation of `__rt_array_unique_refcounted`.
+///
+/// Takes array pointer in `rdi`, returns deduplicated array pointer in `rax`.
+/// Uses O(n²) pairwise pointer-identity scan against a destination array,
+/// allocating worst-case capacity upfront via `__rt_array_new` and appending
+/// unique elements via `__rt_array_push_refcounted`. Caller-saved registers
+/// are clobbered by helper calls; the outer loop index is spilled to `rbp - 24`.
 fn emit_array_unique_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_unique_refcounted ---");

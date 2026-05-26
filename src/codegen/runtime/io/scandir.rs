@@ -10,9 +10,15 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// scandir: list directory entries as an array of strings.
-/// Input:  x1/x2=path string
-/// Output: x0=array pointer (array of filename strings)
+/// Emits the `__rt_scandir` runtime helper for listing directory entries.
+///
+/// Dispatches to `emit_scandir_linux_x86_64` for x86_64; generates inline ARM64
+/// assembly for all other targets.
+///
+/// Input: path string in x1/x2 (ptr/len) following the runtime string convention.
+/// Output: x0 holds an `Array` of `String` filenames, or an empty array on error.
+/// Side effects: calls `opendir`, `readdir`, `closedir` from libc; allocates
+/// runtime memory for filename persistence and result array growth.
 pub fn emit_scandir(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_scandir_linux_x86_64(emitter);
@@ -83,6 +89,12 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the `__rt_scandir` runtime helper for x86_64 Linux targets.
+ ///
+ /// Uses the System V AMD64 ABI: path in `rax/rdx`, result array returned in `rax`.
+ /// Invokes `opendir`, `readdir`, `closedir` from libc; allocates a runtime `Array`
+ /// with 128-entry initial capacity; persists each filename via `__rt_str_persist`
+ /// before the next `readdir` call clobbers the `dirent` buffer.
 fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     let name_off = emitter.platform.dirent_name_offset();
 

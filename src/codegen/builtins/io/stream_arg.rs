@@ -17,6 +17,22 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits argument expression and validates it as a stream resource.
+///
+/// Emits `arg` via `emit_expr`. If the resulting type is `Mixed` or `Union`,
+/// emits `emit_unbox_stream_or_fatal` to unbox the resource and produce a fatal
+/// TypeError at runtime if the value is not a valid stream. Returns the PHP type
+/// of the argument expression.
+///
+/// # Arguments
+/// * `function_name` - PHP builtin name used in error messages
+/// * `arg` - The argument expression to emit and validate
+/// * `emitter` - Target-specific assembly emitter
+/// * `ctx` - Codegen context (label generation)
+/// * `data` - Data section for string/constant emission
+///
+/// # Returns
+/// The `PhpType` of the emitted argument expression.
 pub(super) fn emit_stream_fd_arg(
     function_name: &str,
     arg: &Expr,
@@ -31,6 +47,18 @@ pub(super) fn emit_stream_fd_arg(
     ty
 }
 
+/// Unboxes a Mixed/Union stream value or emits a fatal TypeError.
+///
+/// Calls `__rt_mixed_unbox` to extract the runtime value, then checks the boxed
+/// payload tag (tag 9 = stream resource). On success, copies the native file
+/// descriptor from `x1`/`rdi` to the integer result register. On failure,
+/// branches to `emit_stream_type_error` for the appropriate PHP TypeError.
+///
+/// # Arguments
+/// * `function_name` - PHP builtin name used in error messages
+/// * `emitter` - Target-specific assembly emitter
+/// * `ctx` - Codegen context (label generation)
+/// * `data` - Data section for string/constant emission
 fn emit_unbox_stream_or_fatal(
     function_name: &str,
     emitter: &mut Emitter,
@@ -62,6 +90,17 @@ fn emit_unbox_stream_or_fatal(
     }
 }
 
+/// Emits a fatal TypeError for a stream argument with an unexpected PHP type.
+///
+/// Dispatches to type-specific error case labels based on the unboxed runtime
+/// tag from `__rt_mixed_unbox`. Each case calls `emit_stream_type_error_case`
+/// to emit the error message and terminate.
+///
+/// # Arguments
+/// * `function_name` - PHP builtin name used in error messages
+/// * `emitter` - Target-specific assembly emitter
+/// * `ctx` - Codegen context (label generation)
+/// * `data` - Data section for string/constant emission
 fn emit_stream_type_error(
     function_name: &str,
     emitter: &mut Emitter,
@@ -139,6 +178,18 @@ fn emit_stream_type_error(
     emit_stream_type_error_case(function_name, "unknown", &unknown_label, emitter, data);
 }
 
+/// Emits a single stream TypeError case for a given PHP type.
+///
+/// Formats the PHP TypeError message using `function_name` and `given_type`,
+/// adds it to the data section, and emits a jump to
+/// `emit_write_type_error_and_exit`.
+///
+/// # Arguments
+/// * `function_name` - PHP builtin name used in the error message
+/// * `given_type` - The PHP type that was incorrectly provided
+/// * `case_label` - Label to branch here for this type case
+/// * `emitter` - Target-specific assembly emitter
+/// * `data` - Data section for string/constant emission
 fn emit_stream_type_error_case(
     function_name: &str,
     given_type: &str,
@@ -155,6 +206,16 @@ fn emit_stream_type_error_case(
     emit_write_type_error_and_exit(&label, len, emitter);
 }
 
+/// Emits the stream TypeError diagnostic to stderr and exits with status 1.
+///
+/// Writes the formatted error message to stderr using the Linux `write` syscall,
+/// then calls `exit` with status 1. Target-specific: ARM64 uses `syscall`
+/// instruction; x86_64 uses `syscall` instruction.
+///
+/// # Arguments
+/// * `label` - Data section label for the error message string
+/// * `len` - Length of the error message string in bytes
+/// * `emitter` - Target-specific assembly emitter
 fn emit_write_type_error_and_exit(label: &str, len: usize, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {

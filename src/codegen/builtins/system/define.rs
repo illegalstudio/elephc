@@ -18,6 +18,19 @@ use crate::types::PhpType;
 const DEFINE_ALREADY_DEFINED_WARNING: &str =
     "Warning: define(): Constant already defined\n";
 
+/// Emits code for the PHP `define(name, value)` builtin.
+///
+/// Stores the constant value in the context for compile-time resolution and
+/// emits a runtime guard that checks whether the constant was already defined.
+/// On repeated defines, emits a duplicate warning and returns `false`;
+/// on first define, marks the constant as seen and returns `true`.
+///
+/// # Arguments
+/// * `name` - The builtin name (unused, dispatch is by arity/signature)
+/// * `args` - `[name_expr, value_expr]` where `name_expr` must be a string literal
+///
+/// # Returns
+/// `Some(PhpType::Bool)` — `define()` always returns a boolean in PHP
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -50,6 +63,14 @@ pub fn emit(
     Some(PhpType::Bool)
 }
 
+/// Emits the runtime portion of `define()` that guards against duplicate definitions.
+///
+/// Reads the `flag_symbol` sentinel to determine if this is the first or a repeated
+/// `define()` call at runtime. On first execution, stores `1` to the sentinel and
+/// returns `true`. On repeated execution, emits a duplicate warning and returns `false`.
+///
+/// # Arguments
+/// * `flag_symbol` - BSS symbol that tracks whether this constant has been defined
 fn emit_runtime_define_result(flag_symbol: &str, emitter: &mut Emitter, ctx: &mut Context) {
     let first_label = ctx.next_label("define_first");
     let done_label = ctx.next_label("define_done");
@@ -68,6 +89,13 @@ fn emit_runtime_define_result(flag_symbol: &str, emitter: &mut Emitter, ctx: &mu
     emitter.label(&done_label);
 }
 
+/// Constructs a unique BSS symbol name for tracking whether a constant has been defined.
+///
+/// Mangled name encodes alphanumeric characters verbatim, underscores as `_u`,
+/// backslashes as `_ns`, and all other bytes as `_xHH` hex escape sequences.
+///
+/// # Arguments
+/// * `name` - The PHP constant name to mangle into a valid assembly symbol
 fn define_seen_symbol(name: &str) -> String {
     let mut symbol = String::from("_define_seen");
     for byte in name.bytes() {
@@ -81,6 +109,12 @@ fn define_seen_symbol(name: &str) -> String {
     symbol
 }
 
+/// Emits a runtime warning for duplicate `define()` calls.
+///
+/// Loads the `_diag_define_already_defined_msg` string pointer and length
+/// into ABI argument registers and calls `__rt_diag_warning`. Target-specific:
+/// - ARM64: loads into `x1` (pointer) and `x2` (length)
+/// - x86_64: loads into `rdi` (pointer) and `esi` (length)
 fn emit_duplicate_warning(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {

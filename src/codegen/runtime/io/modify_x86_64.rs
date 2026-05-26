@@ -10,6 +10,24 @@
 
 use crate::codegen::emit::Emitter;
 
+/// Emits x86_64 Linux runtime helpers for filesystem modify operations:
+/// `__rt_chmod`, `__rt_chown`, `__rt_chown_user`, `__rt_chgrp_group`, `__rt_umask`,
+/// `__rt_ftruncate`, `__rt_fsync`, `__rt_fflush`, `__rt_fdatasync`, `__rt_touch`.
+///
+/// Each helper converts a PHP string path to a C string, calls the corresponding
+/// libc function, and returns a boolean predicate (1 on success, 0 on failure).
+/// The `__rt_touch` helper additionally handles timestamp via `utimensat` using
+/// platform-specific flags and OpenBSD-style atime/mtime masks passed via registers.
+///
+/// # Arguments
+/// * `emitter` - The assembly emitter used to write x86_64 instructions.
+///
+/// # ABI details
+/// * Path and string length arrive via `rdi`/`rsi` registers; `__rt_cstr` converts
+///   to a C string pointer returned in `rax`.
+/// * Scalar secondary arguments (mode, uid, gid, size) arrive via stack spill or
+///   secondary registers (`rdx`, `rcx`).
+/// * Boolean results are zero-extended to a full integer in `rax` before returning.
 pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     // -- chmod --
     emitter.blank();

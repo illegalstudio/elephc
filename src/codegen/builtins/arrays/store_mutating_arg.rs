@@ -14,6 +14,17 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::parser::ast::{Expr, ExprKind};
 
+/// Stores a possibly replaced array pointer back into the original mutating argument slot.
+///
+/// After COW or growth routines produce a new container pointer in `x0`/`rax`, this function
+/// writes that pointer back to the caller's slot based on argument kind:
+///
+/// - **Global variable**: stores via the global symbol address computed from `_gvar_<name>`
+/// - **By-ref parameter**: loads the reference pointer from the stack slot, then stores through it
+/// - **Local variable**: stores directly into the stack frame at the variable's offset
+///
+/// The caller is responsible for placing the updated pointer in the appropriate register
+/// before calling this function (ARM64: `x0`, x86_64: `rax`).
 pub(crate) fn emit_store_mutating_arg(emitter: &mut Emitter, ctx: &Context, arg: &Expr) {
     let ExprKind::Variable(name) = &arg.kind else {
         return;

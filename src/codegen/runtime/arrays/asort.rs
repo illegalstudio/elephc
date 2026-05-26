@@ -11,11 +11,14 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// asort / arsort: sort array by values (for indexed int arrays, same as sort/rsort).
-/// Input:  x0=array_ptr
-/// Output: array sorted in-place
-/// For indexed int arrays, sorting by value is identical to sort/rsort since
-/// there are no string keys to preserve — just delegate to existing sort routines.
+/// Emits the `__rt_asort` and `__rt_arsort` runtime helpers for sorting arrays by value.
+///
+/// For indexed integer arrays, delegates directly to `__rt_sort_int` / `__rt_rsort_int`
+/// since slot order semantics are equivalent when no string keys need preservation.
+///
+/// - Input: `x0` = array pointer
+/// - Output: array sorted in-place (mutates caller's array)
+/// - ABI: ARM64 uses `b` (branch-and-link), x86_64 uses `jmp` (tail-jump)
 pub fn emit_asort(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_asort_linux_x86_64(emitter);
@@ -37,6 +40,10 @@ pub fn emit_asort(emitter: &mut Emitter) {
     emitter.instruction("b __rt_rsort_int");                                    // tail-call to rsort_int (descending)
 }
 
+/// x86_64-specific emitter for `__rt_asort` and `__rt_arsort`.
+///
+/// Uses `jmp` (tail-jump) instead of ARM64's `b` because x86_64 lacks a direct
+/// branch-and-link equivalent; tail-jumping preserves the caller-saved register contract.
 fn emit_asort_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: asort (sort by values ascending) ---");

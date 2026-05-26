@@ -81,6 +81,15 @@ pub fn emit_realpath(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the empty-string result
 }
 
+/// x86_64 Linux-specific realpath emitter.
+///
+/// Mirrors the generic ARM64 realpath helper: calls `__rt_cstr` to null-terminate
+/// the input path, allocates a 4096-byte owned heap buffer, invokes libc `realpath(path, buf)`,
+/// scans the result for the null terminator to determine length, and returns the canonical
+/// path in `rax/rdx` (pointer/length) or the empty-string sentinel (`rax=0, rdx=0`) on failure.
+///
+/// Frame layout uses `[rbp-8]` for the C path pointer and `[rbp-16]` for the owned buffer
+/// pointer. On failure, the allocated buffer is freed via `__rt_heap_free` before returning.
 fn emit_realpath_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: realpath ---");

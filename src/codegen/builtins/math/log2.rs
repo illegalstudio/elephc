@@ -16,6 +16,10 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `log2` builtin call.
+///
+/// Evaluates `args[0]` and converts integer operands to float before the libc call.
+/// Dispatches to the target C library's `log2` function and returns `PhpType::Float`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

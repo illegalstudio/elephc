@@ -14,8 +14,31 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
 
+/// Result type for builtin type-checkers: `Ok(Some(PhpType))` on success,
+/// `Ok(None)` if the builtin name was not handled by this module,
+/// `Err(CompileError)` on type errors or arity violations.
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
+/// Type-checks pointer builtin calls.
+///
+/// Dispatches on `name` to validate arity, argument types, and constraints,
+/// then returns the inferred return `PhpType`. Returns `Ok(None)` for
+/// unrecognized names so the caller can try other builtin modules.
+///
+/// # Arguments
+/// * `checker` — mutable checker instance used for type inference and
+///   validation helpers such as `ensure_pointer_type`
+/// * `name`    — lowercase builtin name (e.g. `"ptr"`, `"ptr_offset"`);
+///   case-sensitive match against the known pointer builtin set
+/// * `args`    — call arguments as AST expressions
+/// * `span`    — source location for error reporting
+/// * `env`     — current `TypeEnv` needed by `infer_type`
+///
+/// # Return type
+/// * `Ok(Some(t))` — type-check passed; `t` is the PHP return type
+/// * `Ok(None)`    — `name` is not a pointer builtin (caller should
+///   continue searching other builtin modules)
+/// * `Err(..)`     — arity violation, type mismatch, or non-variable arg
 pub(super) fn check_builtin(
     checker: &mut Checker,
     name: &str,

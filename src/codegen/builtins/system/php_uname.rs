@@ -16,6 +16,29 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `php_uname` builtin call.
+///
+/// `php_uname()` returns a string describing the operating system PHP was built on.
+/// When no mode argument is given, it defaults to `"a"` (architecture info).
+///
+/// # Arguments
+/// * `_name` — builtin name (unused, resolved via catalog)
+/// * `args` — optional mode string argument; defaults to `"a"` if empty
+/// * `emitter` — assembly emitter for the target
+/// * `ctx` — codegen context (variable layout, ownership, class metadata)
+/// * `data` — data section for static strings/labels
+///
+/// # Returns
+/// `Some(PhpType::Str)` — the mode string result from the runtime helper.
+///
+/// # Behavior
+/// * Zero args: materializes the default `"a"` mode string in the string result registers, then calls `__rt_php_uname`.
+/// * One arg: evaluates the mode expression first, then calls `__rt_php_uname`.
+/// * The runtime helper `__rt_php_uname` handles all mode-to-result mapping.
+///
+/// # ABI
+/// * Mode string passed in `x1` (pointer) / `x2` (length) registers.
+/// * Result string returned via `x1` (pointer) / `x2` (length).
 pub fn emit(
     _name: &str,
     args: &[Expr],

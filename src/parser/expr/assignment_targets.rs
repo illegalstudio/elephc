@@ -14,6 +14,9 @@ use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::parser::stmt::can_replay_assignment_target;
 use crate::span::Span;
 
+/// Returns true if the expression is a non-local assignment target (array-access,
+/// property-access, or static-property-access). These require stabilization because
+/// the base expression may be evaluated multiple times during assignment.
 pub(super) fn is_non_local_assignment_target(expr: &Expr) -> bool {
     matches!(
         &expr.kind,
@@ -23,6 +26,9 @@ pub(super) fn is_non_local_assignment_target(expr: &Expr) -> bool {
     )
 }
 
+/// Returns true if the expression can serve as the target of an assignment expression.
+/// Valid targets are variables, property accesses, static property accesses, and
+/// nested array accesses whose base is a variable/property.
 pub(super) fn is_assignment_expression_target(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Variable(_)
@@ -33,6 +39,8 @@ pub(super) fn is_assignment_expression_target(expr: &Expr) -> bool {
     }
 }
 
+/// Returns true if the expression can be used as the base of an array assignment target.
+/// Recursively walks into array accesses to find the underlying base.
 fn is_array_assignment_base(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Variable(_)
@@ -43,6 +51,12 @@ fn is_array_assignment_base(expr: &Expr) -> bool {
     }
 }
 
+/// Stateful lowerer that classifies assignment-expression targets and generates prelude
+/// statements to preserve PHP evaluation order.
+///
+/// Tracks variable dependencies so that when the RHS may mutate the target's container
+/// (e.g., `$arr[$i] = $arr` where RHS reads `$arr`), temporaries are inserted to prevent
+/// multiple evaluation of the same expression.
 pub(super) struct AssignmentExpressionLowerer {
     span: Span,
     next_temp: usize,
@@ -50,6 +64,7 @@ pub(super) struct AssignmentExpressionLowerer {
 }
 
 impl AssignmentExpressionLowerer {
+    /// Creates a new lowerer with the given source span for generated temporary names.
     pub(super) fn new(span: Span) -> Self {
         Self {
             span,
@@ -58,10 +73,16 @@ impl AssignmentExpressionLowerer {
         }
     }
 
+    /// Stabilizes a non-local target expression (array-access, property-access,
+    /// static-property-access) by binding any sub-expressions that the RHS may
+    /// mutate. Returns a replacement expression with temporaries substituted.
     pub(super) fn stabilize_non_local_target(&mut self, target: Expr, rhs: &Expr) -> Expr {
         self.stabilize_assignment_target(target, rhs)
     }
 
+    /// Binds a value expression for use in an assignment context. If the value
+    /// can be replayed safely (no dependency conflict), returns it unchanged;
+    /// otherwise emits a temporary assignment and returns a variable reference.
     pub(super) fn bind_value(&mut self, target: &Expr, value: Expr) -> Expr {
         if can_replay_assignment_target(&value)
             && !assignment_value_reads_target_container(target, &value)
@@ -71,18 +92,27 @@ impl AssignmentExpressionLowerer {
         self.bind_temp(value)
     }
 
+    /// Binds a result value expression, always using a temporary to ensure
+    /// the result can be referenced multiple times in the result expression.
     pub(super) fn bind_result_value(&mut self, value: Expr) -> Expr {
         self.bind_temp(value)
     }
 
+    /// Reserves a temporary variable name for a value that will be bound later.
+    /// Returns the variable name string without emitting an assignment yet.
     pub(super) fn reserve_value_temp(&mut self) -> String {
         self.next_temp_name()
     }
 
+    /// Finishes lowering and returns all prelude statements that were accumulated
+    /// during the lowering process.
     pub(super) fn finish(self) -> Vec<Stmt> {
         self.prelude
     }
 
+    /// Transforms an assignment target by stabilizing any sub-expressions that
+    /// the RHS may mutate. For array accesses, recursively stabilizes the array
+    /// base and dimension index. For property accesses, stabilizes the receiver object.
     fn stabilize_assignment_target(&mut self, expr: Expr, rhs: &Expr) -> Expr {
         let span = expr.span;
         match expr.kind {
@@ -127,6 +157,8 @@ impl AssignmentExpressionLowerer {
         }
     }
 
+    /// Stabilizes a receiver expression (the object base of a property or array access)
+    /// by binding any part that the RHS may mutate, preserving PHP evaluation order.
     fn stabilize_receiver(&mut self, expr: Expr, rhs: &Expr) -> Expr {
         let span = expr.span;
         match expr.kind {
@@ -158,6 +190,8 @@ impl AssignmentExpressionLowerer {
         }
     }
 
+    /// Stabilizes a dimension index expression for an array access. If the index
+    /// may read a variable that the RHS mutates, binds it to a temporary.
     fn stabilize_dimension_index(&mut self, expr: Expr, rhs: &Expr) -> Expr {
         if self.must_bind_dimension_index(&expr, rhs) {
             self.bind_temp(expr)
@@ -166,11 +200,17 @@ impl AssignmentExpressionLowerer {
         }
     }
 
+    /// Returns true if a target sub-expression must be bound to a temporary
+    /// before the assignment proceeds. This is the case when the expression
+    /// cannot be replayed or when it reads a variable that the RHS may mutate.
     fn must_bind_target_part(&self, expr: &Expr, rhs: &Expr) -> bool {
         !can_replay_assignment_target(expr)
             || target_part_reads_mutated_dependency(expr, rhs)
     }
 
+    /// Returns true if a dimension index must be bound to a temporary.
+    /// Literal indices (variables, ints, strings, bools, null) are always safe
+    /// to reuse without binding; complex expressions require the check.
     fn must_bind_dimension_index(&self, expr: &Expr, rhs: &Expr) -> bool {
         if matches!(
             expr.kind,
@@ -187,6 +227,9 @@ impl AssignmentExpressionLowerer {
             || target_part_reads_mutated_dependency(expr, rhs)
     }
 
+    /// Emits an assignment statement to a temporary variable and returns a variable
+    /// reference to that temporary. Used when an expression's value may be needed
+    /// multiple times and must not be re-evaluated.
     fn bind_temp(&mut self, value: Expr) -> Expr {
         let name = self.next_temp_name();
         self.prelude.push(Stmt::new(
@@ -199,6 +242,9 @@ impl AssignmentExpressionLowerer {
         Expr::new(ExprKind::Variable(name), self.span)
     }
 
+    /// Generates a unique temporary variable name using the source span and a
+    /// monotonically increasing counter. Names are formatted as
+    /// `__elephc_assign_expr_{line}_{col}_{counter}`.
     fn next_temp_name(&mut self) -> String {
         let name = format!(
             "__elephc_assign_expr_{}_{}_{}",
@@ -209,6 +255,9 @@ impl AssignmentExpressionLowerer {
     }
 }
 
+/// Returns true if the assignment value may mutate a variable that the target
+/// depends on. Used to detect when stabilization is required to preserve
+/// evaluation order (e.g., `$arr[$i] = $arr[$j]` where RHS reads `$arr`).
 pub(super) fn assignment_value_may_mutate_target_dependency(
     target: &Expr,
     value: &Expr,
@@ -218,6 +267,9 @@ pub(super) fn assignment_value_may_mutate_target_dependency(
     !dependencies.is_empty() && expr_may_write_dependency(value, &dependencies)
 }
 
+/// Returns true if the assignment value expression reads the same array or object
+/// that the target writes to. This occurs in cases like `$arr[$i] = $arr` where the
+/// RHS reads the container being modified by the assignment.
 pub(super) fn assignment_value_reads_target_container(target: &Expr, value: &Expr) -> bool {
     match &target.kind {
         ExprKind::ArrayAccess { array, .. } => expr_contains_equivalent(value, array),
@@ -225,10 +277,15 @@ pub(super) fn assignment_value_reads_target_container(target: &Expr, value: &Exp
     }
 }
 
+/// Returns true if the target part may read a dependency that the assignment value
+/// could mutate. Delegates to `assignment_value_may_mutate_target_dependency`.
 fn target_part_reads_mutated_dependency(target: &Expr, value: &Expr) -> bool {
     assignment_value_may_mutate_target_dependency(target, value)
 }
 
+/// Collects all variable dependencies of an assignment target into the provided
+/// set. Walks into array accesses, property accesses, method calls, binary operations,
+/// and other expressions that may reference variables.
 fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSet<String>) {
     match &expr.kind {
         ExprKind::Variable(name) => {
@@ -345,6 +402,9 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
     }
 }
 
+/// Returns true if the expression may write to any variable in the dependency set.
+/// Checks assignment statements, increment/decrement operators, function calls
+/// with arguments that could mutate dependencies, and recursively checks nested expressions.
 fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> bool {
     match &expr.kind {
         ExprKind::Assignment {
@@ -480,6 +540,9 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
     }
 }
 
+/// Returns true if the statement may write to any variable in the dependency set.
+/// Only Assign and Synthetic (multi-statement) kinds are checked; other statement
+/// types are assumed not to write to tracked dependencies.
 fn stmt_may_write_dependency(stmt: &Stmt, dependencies: &HashSet<String>) -> bool {
     match &stmt.kind {
         StmtKind::Assign { name, value } => {
@@ -492,6 +555,9 @@ fn stmt_may_write_dependency(stmt: &Stmt, dependencies: &HashSet<String>) -> boo
     }
 }
 
+/// Returns true if the assignment target may write to any variable in the
+/// dependency set. Variables and array accesses check the container; property
+/// accesses check the object receiver.
 fn assignment_target_may_write_dependency(target: &Expr, dependencies: &HashSet<String>) -> bool {
     match &target.kind {
         ExprKind::Variable(name) => dependencies.contains(name),
@@ -505,6 +571,8 @@ fn assignment_target_may_write_dependency(target: &Expr, dependencies: &HashSet<
     }
 }
 
+/// Collects variable dependencies from an instanceof target expression.
+/// If the target is a name (class constant), no dependencies are collected.
 fn collect_instanceof_target_dependencies(
     target: &InstanceOfTarget,
     dependencies: &mut HashSet<String>,
@@ -514,6 +582,9 @@ fn collect_instanceof_target_dependencies(
     }
 }
 
+/// Returns true if an instanceof target expression may write to any variable
+/// in the dependency set. Name targets (class constants) cannot write; expression
+/// targets delegate to `expr_may_write_dependency`.
 fn instanceof_target_may_write_dependency(
     target: &InstanceOfTarget,
     dependencies: &HashSet<String>,
@@ -524,12 +595,20 @@ fn instanceof_target_may_write_dependency(
     }
 }
 
+/// Returns true if the expression contains any variable that appears in the
+/// dependency set. Collects all dependencies from the expression and checks
+/// for overlap with the provided set.
 fn expr_contains_dependency(expr: &Expr, dependencies: &HashSet<String>) -> bool {
     let mut found = HashSet::new();
     collect_assignment_target_dependencies(expr, &mut found);
     found.iter().any(|name| dependencies.contains(name))
 }
 
+/// Returns true if the expression structurally contains an equivalent node to
+/// the needle expression. Uses deep equality comparison on the expression tree,
+/// recursing into binary operations, ternaries, assignments, calls, and other
+/// composite expressions. Used to detect cases like `$arr[$i] = $arr` where
+/// the RHS contains the same array variable as the target's container.
 fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
     if expr == needle {
         return true;
@@ -664,6 +743,9 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
     }
 }
 
+/// Returns true if an instanceof target contains an expression equivalent to
+/// the needle. Name targets cannot contain equivalent expressions; expression
+/// targets delegate to `expr_contains_equivalent`.
 fn instanceof_target_contains_equivalent(target: &InstanceOfTarget, needle: &Expr) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,

@@ -11,7 +11,9 @@ use super::*;
 
 #[test]
 fn test_word_logical_and_lower_than_oror() {
-    // $a || $b and $c should parse as ($a || $b) and $c — PHP precedence
+    // Verifies PHP precedence: `and` binds looser than `||`.
+    // Input: `echo $a || $b and $c;`
+    // Expected AST: `($a || $b) and $c` — || groups before and.
     let stmts = parse_source("<?php echo $a || $b and $c;");
     let expected = Stmt::echo(Expr::binop(
         Expr::binop(Expr::var("a"), BinOp::Or, Expr::var("b")),
@@ -23,7 +25,9 @@ fn test_word_logical_and_lower_than_oror() {
 
 #[test]
 fn test_word_logical_or_lower_than_andand() {
-    // $a && $b or $c should parse as ($a && $b) or $c — PHP precedence
+    // Verifies PHP precedence: `or` binds looser than `&&`.
+    // Input: `echo $a && $b or $c;`
+    // Expected AST: `($a && $b) or $c` — && groups before or.
     let stmts = parse_source("<?php echo $a && $b or $c;");
     let expected = Stmt::echo(Expr::binop(
         Expr::binop(Expr::var("a"), BinOp::And, Expr::var("b")),
@@ -35,7 +39,9 @@ fn test_word_logical_or_lower_than_andand() {
 
 #[test]
 fn test_word_logical_xor_precedence() {
-    // $a xor $b and $c should parse as $a xor ($b and $c)
+    // Verifies PHP precedence: `xor` binds tighter than `and`.
+    // Input: `echo $a xor $b and $c;`
+    // Expected AST: `$a xor ($b and $c)` — and binds tighter than xor.
     let stmts = parse_source("<?php echo $a xor $b and $c;");
     let expected = Stmt::echo(Expr::binop(
         Expr::var("a"),
@@ -47,7 +53,9 @@ fn test_word_logical_xor_precedence() {
 
 #[test]
 fn test_word_logical_xor_higher_than_or() {
-    // $a or $b xor $c should parse as $a or ($b xor $c)
+    // Verifies PHP precedence: `xor` binds tighter than `or`.
+    // Input: `echo $a or $b xor $c;`
+    // Expected AST: `$a or ($b xor $c)` — xor binds tighter than or.
     let stmts = parse_source("<?php echo $a or $b xor $c;");
     let expected = Stmt::echo(Expr::binop(
         Expr::var("a"),
@@ -59,6 +67,7 @@ fn test_word_logical_xor_higher_than_or() {
 
 #[test]
 fn test_print_expression_binds_tighter_than_word_and() {
+    // Verifies that `print` binds tighter than `and` — `print $a and $b` parses as `(print $a) and $b`.
     let stmts = parse_source("<?php echo print $a and $b;");
     let expected = Stmt::echo(Expr::binop(
         Expr::print(Expr::var("a")),
@@ -70,6 +79,8 @@ fn test_print_expression_binds_tighter_than_word_and() {
 
 #[test]
 fn test_print_expression_operand_accepts_short_ternary() {
+    // Verifies that `print` accepts a short ternary (`?:`) as its operand.
+    // Input: `echo print $a ?: $b;`
     let stmts = parse_source("<?php echo print $a ?: $b;");
     let expected = Stmt::echo(Expr::print(Expr::new(
         ExprKind::ShortTernary {
@@ -83,6 +94,8 @@ fn test_print_expression_operand_accepts_short_ternary() {
 
 #[test]
 fn test_parse_instanceof_expression() {
+    // Verifies basic static instanceof with an unqualified class name.
+    // Input: `echo $a instanceof Foo;`
     let stmts = parse_source("<?php echo $a instanceof Foo;");
     let expected = Stmt::echo(Expr::instance_of(
         Expr::var("a"),
@@ -93,6 +106,8 @@ fn test_parse_instanceof_expression() {
 
 #[test]
 fn test_parse_dynamic_instanceof_variable_target() {
+    // Verifies dynamic instanceof where the target is a variable expression.
+    // Input: `echo $a instanceof $className;`
     let stmts = parse_source("<?php echo $a instanceof $className;");
     let expected = Stmt::echo(Expr::dynamic_instance_of(
         Expr::var("a"),
@@ -103,6 +118,8 @@ fn test_parse_dynamic_instanceof_variable_target() {
 
 #[test]
 fn test_parse_dynamic_instanceof_property_and_array_targets() {
+    // Verifies dynamic instanceof with property-access and array-access targets.
+    // Inputs: `echo $a instanceof $holder->className;` and `echo $a instanceof $names[0];`
     let stmts = parse_source("<?php echo $a instanceof $holder->className; echo $a instanceof $names[0];");
     let property_target = Expr::new(
         ExprKind::PropertyAccess {
@@ -129,6 +146,8 @@ fn test_parse_dynamic_instanceof_property_and_array_targets() {
 
 #[test]
 fn test_parse_parenthesized_dynamic_instanceof_expression_target() {
+    // Verifies that a parenthesized binary expression is accepted as a dynamic instanceof target.
+    // Input: `echo $a instanceof ($prefix . $suffix);`
     let stmts = parse_source("<?php echo $a instanceof ($prefix . $suffix);");
     let target = Expr::binop(Expr::var("prefix"), BinOp::Concat, Expr::var("suffix"));
     let expected = Stmt::echo(Expr::dynamic_instance_of(Expr::var("a"), target));
@@ -137,6 +156,9 @@ fn test_parse_parenthesized_dynamic_instanceof_expression_target() {
 
 #[test]
 fn test_instanceof_binds_tighter_than_not() {
+    // Verifies precedence: `instanceof` binds tighter than `!`.
+    // Input: `echo !$a instanceof Foo;`
+    // Expected AST: `!($a instanceof Foo)`
     let stmts = parse_source("<?php echo !$a instanceof Foo;");
     let expected = Stmt::echo(Expr::new(
         ExprKind::Not(Box::new(Expr::instance_of(
@@ -150,6 +172,9 @@ fn test_instanceof_binds_tighter_than_not() {
 
 #[test]
 fn test_instanceof_binds_tighter_than_addition() {
+    // Verifies precedence: `instanceof` binds tighter than `+`.
+    // Input: `echo 1 + $a instanceof Foo;`
+    // Expected AST: `1 + ($a instanceof Foo)`
     let stmts = parse_source("<?php echo 1 + $a instanceof Foo;");
     let expected = Stmt::echo(Expr::binop(
         Expr::int_lit(1),
@@ -161,6 +186,9 @@ fn test_instanceof_binds_tighter_than_addition() {
 
 #[test]
 fn test_dynamic_instanceof_binds_tighter_than_concat() {
+    // Verifies precedence: dynamic instanceof binds tighter than `.` (concat).
+    // Input: `echo $a instanceof $className . "!";`
+    // Expected AST: `($a instanceof $className) . "!"`
     let stmts = parse_source("<?php echo $a instanceof $className . \"!\";");
     let expected = Stmt::echo(Expr::binop(
         Expr::dynamic_instance_of(Expr::var("a"), Expr::var("className")),
@@ -172,6 +200,9 @@ fn test_dynamic_instanceof_binds_tighter_than_concat() {
 
 #[test]
 fn test_instanceof_chains_left_to_right() {
+    // Verifies left-to-right chaining of static instanceof.
+    // Input: `echo $a instanceof Foo instanceof Bar;`
+    // Expected AST: `(($a instanceof Foo) instanceof Bar)`
     let stmts = parse_source("<?php echo $a instanceof Foo instanceof Bar;");
     let expected = Stmt::echo(Expr::instance_of(
         Expr::instance_of(Expr::var("a"), Name::unqualified("Foo")),
@@ -182,6 +213,9 @@ fn test_instanceof_chains_left_to_right() {
 
 #[test]
 fn test_dynamic_instanceof_chains_left_to_right() {
+    // Verifies left-to-right chaining mixing static and dynamic instanceof.
+    // Input: `echo $a instanceof $className instanceof Foo;`
+    // Expected AST: `((($a instanceof $className) instanceof Foo)`
     let stmts = parse_source("<?php echo $a instanceof $className instanceof Foo;");
     let expected = Stmt::echo(Expr::instance_of(
         Expr::dynamic_instance_of(Expr::var("a"), Expr::var("className")),
@@ -192,6 +226,8 @@ fn test_dynamic_instanceof_chains_left_to_right() {
 
 #[test]
 fn test_instanceof_accepts_special_class_targets() {
+    // Verifies that `self`, `parent`, and `static` are accepted as instanceof targets.
+    // Inputs: `echo $a instanceof self;`, `echo $a instanceof parent;`, `echo $a instanceof static;`
     let stmts = parse_source("<?php echo $a instanceof self; echo $a instanceof parent; echo $a instanceof static;");
     assert_eq!(
         stmts,

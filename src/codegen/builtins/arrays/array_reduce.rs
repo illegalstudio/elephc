@@ -17,6 +17,22 @@ use crate::parser::ast::Expr;
 use crate::types::PhpType;
 use super::callback_env;
 
+/// Emits the `array_reduce($input, $callback, $initial)` builtin call.
+///
+/// `args[0]` (array) is evaluated first, `args[1]` (callback) second, and
+/// `args[2]` (initial) last — preserving PHP source evaluation order.
+///
+/// For non-capturing callbacks: pushes the array pointer to the temporary stack,
+/// materializes the callback address, evaluates the initial value, then calls
+/// `__rt_array_reduce` with registers set to [callback, array, initial, 0].
+///
+/// For capturing callbacks: recovers the array pointer, builds a capture
+/// environment via `callback_env::emit_captured_callback_env` (which rewrites
+/// the callback to a wrapper), then calls `__rt_array_reduce` with the wrapped
+/// callback and environment pointer. Releases the temporary stack after the call.
+///
+/// # Returns
+/// `Some(PhpType::Int)` — `array_reduce` always returns an integer in this compiler.
 pub fn emit(
     _name: &str,
     args: &[Expr],

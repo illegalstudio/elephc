@@ -21,6 +21,22 @@ use crate::types::TypeEnv;
 use super::super::Checker;
 
 impl Checker {
+    /// Validates assignment-like statements, dispatching to specialized checkers per variant.
+    ///
+    /// # Parameters
+    /// - `stmt`: The assignment statement to check
+    /// - `env`: The current type environment (mutated in place)
+    ///
+    /// # Behavior
+    /// Each `StmtKind` variant is dispatched to the appropriate sub-checker:
+    /// - Simple assignments → `locals::check_assign`
+    /// - Array operations → `arrays::*`
+    /// - Property operations → `properties::*` / `static_properties::*`
+    ///
+    /// Sub-checkers validate type compatibility, mutability, and update `env` with new bindings.
+    ///
+    /// # Panics
+    /// Panics if a non-assignment `StmtKind` reaches this function.
     pub(crate) fn check_assignment_like_stmt(
         &mut self,
         stmt: &Stmt,

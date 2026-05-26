@@ -19,6 +19,16 @@ use crate::types::{FunctionSig, PhpType};
 
 use super::args;
 
+/// Infers the return type of a closure by collecting return statement types from its body
+/// and widening them to a common supertype. Falls back to `Int` if no return statements exist.
+/// Handles generators via `body_contains_yield`.
+///
+/// - `body`: the closure body statements to inspect
+/// - `sig`: preliminary function signature used to build local inference context
+/// - `capture_types`: captured variables with their types and by-ref flags, used to allocate
+///   fake local slots so captured vars are visible to local type inference
+///
+/// Returns the inferred `PhpType`, or `PhpType::Object("Generator")` if yield is present.
 fn infer_closure_return_type(
     body: &[Stmt],
     sig: &FunctionSig,
@@ -28,6 +38,9 @@ fn infer_closure_return_type(
         return PhpType::Object("Generator".to_string());
     }
 
+    /// Recursively collects `PhpType` values from all return statements in `stmt`,
+    /// descending into if/while/do-while/for/foreach/try/switch blocks.
+    /// Uses `capture_ctx` to resolve local variable types for return expression inference.
     fn collect_return_types(
         stmt: &Stmt,
         sig: &FunctionSig,
@@ -127,6 +140,7 @@ fn infer_closure_return_type(
     result
 }
 
+/// Emits a closure literal: captures, invokable frame, and return type inference.
 pub(super) fn emit_closure(
     params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
     variadic: &Option<String>,
@@ -247,6 +261,7 @@ pub(super) fn emit_closure(
     PhpType::Callable
 }
 
+/// Emits a closure call expression, dispatching through __invoke or first-class callable rules.
 pub(super) fn emit_closure_call(
     var: &str,
     args_exprs: &[Expr],

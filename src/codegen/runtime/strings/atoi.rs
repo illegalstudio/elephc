@@ -10,9 +10,22 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// atoi: parse a string to a signed 64-bit integer.
-/// Input:  AArch64 uses x1/x2, x86_64 uses rax/rdx for ptr/len
-/// Output: AArch64 returns x0, x86_64 returns rax
+/// Emits the `__rt_atoi` runtime helper for string-to-integer parsing.
+    ///
+    /// Reads a PHP byte-string pointer/length pair and returns a signed 64-bit integer.
+    /// Handles an optional leading minus sign (`-`) for negative numbers.
+    /// Stops parsing at the first non-digit character; returns 0 for empty strings.
+    ///
+    /// # Input registers
+    /// - AArch64: x1 = string pointer, x2 = byte length
+    /// - x86_64: rdi = string pointer, rsi = byte length (System V AMD64 ABI)
+    ///
+    /// # Output registers
+    /// - AArch64: x0 = parsed integer
+    /// - x86_64: rax = parsed integer
+    ///
+    /// Dispatches to `emit_atoi_linux_x86_64` for the x86_64 target; ARM64 codegen is
+    /// emitted inline.
 pub fn emit_atoi(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_atoi_linux_x86_64(emitter);
@@ -58,6 +71,15 @@ pub fn emit_atoi(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller with result in x0
 }
 
+/// Emits the x86_64 Linux `__rt_atoi` runtime helper.
+    ///
+    /// Identical parsing semantics to the ARM64 path but uses x86_64 System V AMD64 ABI
+    /// registers: rdi = string pointer, rsi = byte length, rax = return value.
+    ///
+    /// Uses r8 as a cursor over the input bytes, rcx as a remaining-byte counter,
+    /// rax as the integer accumulator, and r9 as a negative flag.
+    /// Parses digits as `result = result * 10 + digit`, stops at the first non-digit,
+    /// and negates the result if a leading minus sign was present.
 fn emit_atoi_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: atoi ---");

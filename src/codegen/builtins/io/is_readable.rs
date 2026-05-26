@@ -16,6 +16,16 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a call to PHP's `is_readable()` builtin.
+///
+/// Evaluates `args[0]` as a filesystem path expression and calls `__rt_is_readable`
+/// to check whether the path is readable by the current process.
+///
+/// # Arguments
+/// - `args[0]`: path expression to check
+///
+/// # Returns
+/// `Some(PhpType::Bool)` — the result of the readability check
 pub fn emit(
     _name: &str,
     args: &[Expr],

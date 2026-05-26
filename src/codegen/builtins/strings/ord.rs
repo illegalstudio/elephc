@@ -16,6 +16,24 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `ord()` builtin, which returns the ASCII/UTF-8 code point
+/// of the first character in a string argument.
+///
+/// # Arguments
+/// - `_name`: Unused, always "ord" (kept for interface uniformity with other builtins).
+/// - `args`: Single argument — the string to extract the first code point from.
+/// - `emitter`: Target-aware instruction emitter.
+/// - `ctx`: Codegen context providing label generation and architecture info.
+/// - `data`: Data section for relocations (unused by this builtin).
+///
+/// # Returns
+/// `Some(PhpType::Int)` — the numeric code point of the first character.
+/// Returns 0 for empty strings (matching PHP behavior).
+///
+/// # Architecture handling
+/// - **AArch64**: Expects string pointer in `x1`, length in `x2`, returns result in `x0`.
+/// - **x86_64**: Expects string pointer in `rax`, length in `rdx`, returns result in `eax`.
+/// - Both targets set the integer register to 0 when the string is empty.
 pub fn emit(
     _name: &str,
     args: &[Expr],

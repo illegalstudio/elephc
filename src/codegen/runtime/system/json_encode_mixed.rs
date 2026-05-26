@@ -11,6 +11,23 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Emits the `__rt_json_encode_mixed` runtime helper, dispatching on the boxed `Mixed` value_tag.
+///
+/// ## Inputs
+/// - ARM64: `x0` holds the pointer to the boxed `Mixed` cell; null pointers encode as JSON null.
+/// - x86_64: `rax` holds the pointer to the boxed `Mixed` cell; null pointers encode as JSON null.
+///
+/// ## Dispatch
+/// Dispatches to the appropriate specialized encoder based on the value_tag:
+/// - `0` → integer payload → `__rt_itoa`
+/// - `1` → string payload → `__rt_json_encode_str`
+/// - `2` → float payload → `__rt_json_encode_float`
+/// - `3` → bool payload → `__rt_json_encode_bool`
+/// - `4` → indexed array payload → `__rt_json_encode_array_dynamic`
+/// - `5` → associative array payload → `__rt_json_encode_assoc`
+/// - `6` → object payload → `__rt_json_encode_object` (or `__rt_json_encode_stdclass` for stdClass)
+/// - `8` → explicit null payload → `__rt_json_encode_null`
+/// - Unknown tags → falls through to `__rt_json_encode_null` for PHP compatibility
 pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_json_encode_mixed_linux_x86_64(emitter);
@@ -86,6 +103,22 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
     emitter.instruction("b __rt_json_encode_null");                             // tail-call to JSON null encoding
 }
 
+/// x86_64-specific emission of `__rt_json_encode_mixed`, matching the ARM64 dispatcher above.
+///
+/// ## Inputs
+/// - `rax` holds the pointer to the boxed `Mixed` cell; null pointers encode as JSON null.
+///
+/// ## Dispatch
+/// Mirrors the ARM64 dispatch logic using System V AMD64 ABI register conventions:
+/// - `0` → integer → `__rt_itoa`
+/// - `1` → string → `__rt_json_encode_str` (rax=ptr, rdx=len)
+/// - `2` → float → `__rt_json_encode_float` (xmm0=float)
+/// - `3` → bool → `__rt_json_encode_bool`
+/// - `4` → indexed array → `__rt_json_encode_array_dynamic`
+/// - `5` → associative array → `__rt_json_encode_assoc`
+/// - `6` → object → `__rt_json_encode_object` or `__rt_json_encode_stdclass`
+/// - `8` → explicit null → `__rt_json_encode_null`
+/// - Unknown tags → `__rt_json_encode_null`
 fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_mixed ---");

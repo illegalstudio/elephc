@@ -48,6 +48,8 @@ const SPL_DLL_OFFSET_UNSET_TYPE_MSG_LEN: usize =
     "SplDoublyLinkedList::offsetUnset(): Argument #1 ($index) must be of type int, non-int given"
         .len();
 
+/// Emits all SplDoublyLinkedList, SplStack, and SplQueue runtime helpers for the target architecture.
+/// Entry point called by `emit_doubly_linked_list_runtime()` which routes to the correct architecture.
 pub(crate) fn emit_doubly_linked_list_runtime(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_x86_64(emitter);
@@ -56,6 +58,8 @@ pub(crate) fn emit_doubly_linked_list_runtime(emitter: &mut Emitter) {
     }
 }
 
+/// Emits all ARM64 doubly linked list runtime helpers: constructor, mutators, iterators,
+/// serialization, ArrayAccess methods, and exception helpers.
 fn emit_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: spl doubly linked list ---");
@@ -84,6 +88,9 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emit_offset_unset_aarch64(emitter);
 }
 
+/// Emits `__rt_spl_dll_new` on ARM64: allocates an SPL list object, initializes internal Mixed-array
+/// storage with capacity 4, and stores iterator index/mode at their respective offsets. Returns
+/// the initialized object pointer in x0.
 fn emit_new_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_new");
     emitter.instruction("sub sp, sp, #32");                                     // reserve constructor spill slots
@@ -114,6 +121,8 @@ fn emit_new_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the object pointer
 }
 
+/// Emits `__rt_spl_dll_count` on ARM64: loads the internal storage array and returns its length
+/// as an integer in x0.
 fn emit_count_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_count");
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load the internal storage array
@@ -121,6 +130,8 @@ fn emit_count_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return count
 }
 
+/// Emits `__rt_spl_dll_is_empty` on ARM64: reads storage length, compares to zero, and returns
+/// a boolean (1 when empty, 0 when non-empty) in x0.
 fn emit_is_empty_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_is_empty");
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load the internal storage array
@@ -130,6 +141,8 @@ fn emit_is_empty_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result
 }
 
+/// Emits `__rt_spl_dll_push` on ARM64: receiver in x0, owned Mixed value in x1. Appends the value
+/// to internal storage via `__rt_array_push_int`, handles growth, and returns void.
 fn emit_push_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_push");
     emitter.instruction("sub sp, sp, #32");                                     // reserve spill slots for receiver and return address
@@ -145,6 +158,8 @@ fn emit_push_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return void
 }
 
+/// Emits `__rt_spl_dll_pop` on ARM64: receiver in x0. Removes and returns the last owned Mixed
+/// cell, transferring ownership to the caller. Throws RuntimeException on an empty list.
 fn emit_pop_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_pop");
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
@@ -165,6 +180,9 @@ fn emit_pop_aarch64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits `__rt_spl_dll_shift` on ARM64: receiver in x0. Removes and returns the first owned
+/// Mixed cell, shifting all remaining elements left by one slot. Transfers ownership to the
+/// caller. Throws RuntimeException on an empty list.
 fn emit_shift_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_shift");
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
@@ -195,6 +213,9 @@ fn emit_shift_aarch64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits `__rt_spl_dll_unshift` on ARM64: receiver in x0, owned value in x1. Moves x1 to
+/// the insert helper's value argument and sets index to zero before tail-calling
+/// `__rt_spl_dll_insert`.
 fn emit_unshift_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_unshift");
     emitter.instruction("mov x2, x1");                                          // move value to the insert helper's value argument
@@ -202,6 +223,10 @@ fn emit_unshift_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_spl_dll_insert");                               // tail-call the shared insertion helper
 }
 
+/// Emits `__rt_spl_dll_insert` on ARM64: receiver in x0, index in x1, owned value in x2.
+/// Validates index >= 0 and index <= length, converts LIFO logical index to physical slot,
+/// grows storage if needed, shifts elements right, and stores the value. Releases the value
+/// and throws OutOfRangeException on invalid index.
 fn emit_insert_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_insert");
     emitter.instruction("sub sp, sp, #64");                                     // reserve insertion state and call frame
@@ -273,16 +298,27 @@ fn emit_insert_aarch64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits `__rt_spl_dll_top` on ARM64: receiver in x0. Loads the last occupied Mixed cell,
+/// retains it with `__rt_incref` for the caller, and returns it. Throws RuntimeException
+/// on an empty list by tail-calling `emit_peek_index_aarch64`.
 fn emit_top_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_top");
     emit_peek_index_aarch64(emitter, "__rt_spl_dll_top_null", true);
 }
 
+/// Emits `__rt_spl_dll_bottom` on ARM64: receiver in x0. Loads the first occupied Mixed cell,
+/// retains it with `__rt_incref` for the caller, and returns it. Throws RuntimeException
+/// on an empty list by tail-calling `emit_peek_index_aarch64`.
 fn emit_bottom_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_bottom");
     emit_peek_index_aarch64(emitter, "__rt_spl_dll_bottom_null", false);
 }
 
+/// Emits the shared peek helper on ARM64: receiver in x0, null_label and last flag select
+/// which element to load (last=true picks index length-1, last=false picks index 0).
+/// Retains the selected Mixed cell with `__rt_incref` before returning it. Jumps to
+/// null_label when storage is empty, which throws RuntimeException via
+/// `emit_throw_exception_aarch64`.
 fn emit_peek_index_aarch64(emitter: &mut Emitter, null_label: &str, last: bool) {
     emitter.instruction("sub sp, sp, #32");                                     // reserve frame for the incref call
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
@@ -312,6 +348,9 @@ fn emit_peek_index_aarch64(emitter: &mut Emitter, null_label: &str, last: bool) 
     );
 }
 
+/// Emits `__rt_spl_dll_set_iterator_mode` and `__rt_spl_dll_get_iterator_mode` on ARM64.
+/// Set: receiver in x0, mode bits in x1; stores x1 at the iterator mode offset and returns void.
+/// Get: receiver in x0; returns iterator mode bits in x0.
 fn emit_iterator_mode_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_set_iterator_mode");
     emitter.instruction(&format!("str x1, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // store iterator mode bits on the receiver
@@ -321,6 +360,10 @@ fn emit_iterator_mode_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return integer mode
 }
 
+/// Emits `__rt_spl_dll_serialize_array` on ARM64: receiver in x0. Copies internal storage
+/// items into a new array with retained Mixed cells, boxes iterator flags and both arrays,
+/// and returns a boxed Mixed array (tag 4) containing [boxed flags, boxed items array,
+/// boxed empty properties array] for high-level serialization.
 fn emit_serialize_array_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_serialize_array");
     emitter.instruction("sub sp, sp, #112");                                    // reserve serialization arrays, boxes, and cursor spills
@@ -400,6 +443,11 @@ fn emit_serialize_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return serialized state array
 }
 
+/// Emits `__rt_spl_dll_serialize` on ARM64: receiver in x0, pointer to serialized output
+/// buffer in x1, length in x2. Writes PHP legacy serialized form "i:<mode>;<item>..." using
+/// the global concat buffer. Returns (pointer, length) of the serialized string. Unboxes
+/// each item to detect int/string/bool/null tags and encodes accordingly. Appends to the
+/// global `_concat_buf` and updates `_concat_off`.
 fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_serialize");
     emitter.instruction("sub sp, sp, #128");                                    // reserve serialization cursor, item, and spill slots
@@ -536,6 +584,10 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emit_write_dec_aarch64(emitter);
 }
 
+/// Emits `__rt_spl_dll_write_dec` on ARM64: tail-call helper for decimal formatting.
+/// Called from the serializer with value in x0 and output cursor in x1. Writes optional '-'
+/// for negative values, then digits in base-10, using the stack to reverse digit order.
+/// Returns the advanced output cursor in x1.
 fn emit_write_dec_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_write_dec");
     emitter.instruction("sub sp, sp, #32");                                     // reserve temporary reversed digit storage
@@ -573,6 +625,10 @@ fn emit_write_dec_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to serializer
 }
 
+/// Emits `__rt_spl_dll_unserialize` on ARM64: receiver in x0, input pointer in x1,
+/// input length in x2. Clears existing storage by releasing all owned Mixed cells,
+/// parses the legacy serialized format "i:<mode>;<item>..." using `__rt_spl_dll_parse_dec`,
+/// and appends each parsed value via `__rt_spl_dll_push`. Throws on malformed input.
 fn emit_unserialize_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_unserialize");
     emitter.instruction("sub sp, sp, #144");                                    // reserve parser, cursor, and clear-loop state
@@ -730,12 +786,18 @@ fn emit_unserialize_aarch64(emitter: &mut Emitter) {
     emit_parse_dec_aarch64(emitter);
 }
 
+/// Emits the append helper on ARM64 for unserialization: moves the boxed parsed value
+/// from x0 into x1 for the push call, reloads the receiver from the stack, and tail-calls
+/// `__rt_spl_dll_push` to append the value to the list.
 fn emit_unserialize_append_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // move boxed parsed value into push value argument
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload receiver for shared list append
     emitter.instruction("bl __rt_spl_dll_push");                                // append parsed value to internal storage
 }
 
+/// Emits `__rt_spl_dll_parse_dec` on ARM64: cursor in x0, input end in x1. Parses an optional
+/// leading '-' for negative values, then reads consecutive ASCII decimal digits. Returns
+/// the parsed integer in x0 and the advanced cursor in x1. Empty input returns zero.
 fn emit_parse_dec_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_parse_dec");
     emitter.instruction("mov x9, x0");                                          // keep parser cursor in x9
@@ -769,6 +831,9 @@ fn emit_parse_dec_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to parser
 }
 
+/// Emits `__rt_spl_dll_rewind` on ARM64: receiver in x0. Resets the iterator index based on
+/// the iterator mode. FIFO mode sets index to 0. LIFO mode sets index to length-1 (the last
+/// element). Empty storage resets index to zero. Returns void.
 fn emit_rewind_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_rewind");
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
@@ -788,6 +853,9 @@ fn emit_rewind_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return void
 }
 
+/// Emits `__rt_spl_dll_next` and `__rt_spl_dll_prev` on ARM64. Both dispatch to
+/// `emit_iterator_step_aarch64` with forward=true for next and forward=false for prev.
+/// Receivers and index/mode registers are loaded in `emit_iterator_step_aarch64`.
 fn emit_next_prev_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_next");
     emit_iterator_step_aarch64(emitter, true);
@@ -795,6 +863,10 @@ fn emit_next_prev_aarch64(emitter: &mut Emitter) {
     emit_iterator_step_aarch64(emitter, false);
 }
 
+/// Emits the shared iterator step logic on ARM64. Forward=true is `next()`, false is `prev()`.
+/// Loads iterator index and mode from the receiver. Handles FIFO vs LIFO direction, delete-mode
+/// foreach (ITER_MODE_DELETE), and boundary exhaustion. For delete-mode, calls `shift()` or
+/// `pop()` and releases the removed cell. Persists the updated index and returns void.
 fn emit_iterator_step_aarch64(emitter: &mut Emitter, forward: bool) {
     let fifo_label = if forward {
         "__rt_spl_dll_next_fifo"
@@ -852,6 +924,10 @@ fn emit_iterator_step_aarch64(emitter: &mut Emitter, forward: bool) {
     }
 }
 
+/// Emits the delete-mode iterator step helper on ARM64, called from `emit_iterator_step_aarch64`
+/// when ITER_MODE_DELETE is set. If LIFO mode: calls `__rt_spl_dll_pop`, releases the cell, and
+/// sets index to the new tail. If FIFO mode: calls `__rt_spl_dll_shift`, releases the cell, and
+/// resets index to zero. Empty storage after deletion rewinds to index zero.
 fn emit_iterator_delete_step_aarch64(emitter: &mut Emitter, delete_label: &str) {
     emitter.label(delete_label);
     emitter.instruction("sub sp, sp, #32");                                     // reserve delete-mode iterator frame
@@ -883,6 +959,8 @@ fn emit_iterator_delete_step_aarch64(emitter: &mut Emitter, delete_label: &str) 
     emitter.instruction("ret");                                                 // return void
 }
 
+/// Emits `__rt_spl_dll_valid` on ARM64: receiver in x0. Reads iterator index and storage
+/// length, returns a boolean in x0 (1 when index < length, 0 otherwise).
 fn emit_valid_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_valid");
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
@@ -893,6 +971,9 @@ fn emit_valid_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result
 }
 
+/// Emits `__rt_spl_dll_current` on ARM64: receiver in x0. Loads the current Mixed cell
+/// at the iterator index, retains it with `__rt_incref`, and returns it. Returns a boxed
+/// null (via `emit_tail_boxed_null_aarch64`) when the index is out of range.
 fn emit_current_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_current");
     emitter.instruction("sub sp, sp, #32");                                     // reserve frame for the incref call
@@ -915,6 +996,9 @@ fn emit_current_aarch64(emitter: &mut Emitter) {
     emit_tail_boxed_null_aarch64(emitter);
 }
 
+/// Emits `__rt_spl_dll_key` on ARM64: receiver in x0. Reads the iterator index as the
+/// integer key, boxes it as a tagged Mixed (INT_TAG), and returns it. Returns a boxed null
+/// (via `emit_tail_boxed_null_aarch64`) when the index is out of range.
 fn emit_key_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_key");
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
@@ -929,6 +1013,10 @@ fn emit_key_aarch64(emitter: &mut Emitter) {
     emit_tail_boxed_null_aarch64(emitter);
 }
 
+/// Emits `__rt_spl_dll_offset_exists` on ARM64: receiver in x0, boxed offset in x1.
+/// Unboxes the offset, validates it is a non-negative integer within storage bounds,
+/// converts LIFO logical offset to physical slot, and returns boolean in x0.
+/// Throws TypeError for non-integer offsets.
 fn emit_offset_exists_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_exists");
     emit_offset_index_prefix_aarch64(
@@ -957,6 +1045,11 @@ fn emit_offset_exists_aarch64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits `__rt_spl_dll_offset_get` on ARM64: receiver in x0, boxed offset in x1.
+/// Unboxes the offset, validates it is a non-negative integer within storage bounds,
+/// converts LIFO logical offset to physical slot, loads the selected Mixed cell,
+/// retains it with `__rt_incref`, and returns it. Throws TypeError or OutOfRangeException
+/// on invalid offset.
 fn emit_offset_get_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_get");
     emit_offset_index_prefix_aarch64(
@@ -991,6 +1084,11 @@ fn emit_offset_get_aarch64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits the shared offset validation preamble on ARM64: receiver in x0, boxed offset in x1.
+/// Unboxes the offset, validates it is an integer and non-negative, loads storage and length,
+/// and checks bounds. Converts LIFO logical offset to physical slot using ITER_MODE_LIFO.
+/// Sets x9 = storage, x10 = physical index on success; jumps to type_label, range_label on
+/// errors. Returns with the offset helper frame established but not yet cleaned up.
 fn emit_offset_index_prefix_aarch64(
     emitter: &mut Emitter,
     type_label: &str,
@@ -1027,6 +1125,11 @@ fn emit_offset_index_prefix_aarch64(
     emitter.label(ready_label);
 }
 
+/// Emits `__rt_spl_dll_offset_set` on ARM64: receiver in x0, boxed offset in x1, owned
+/// value in x2. When offset is null, appends via `__rt_spl_dll_push`. Otherwise unboxes
+/// offset, validates it is a non-negative integer within storage bounds, releases the old
+/// Mixed cell at that slot, stores the replacement, and returns void. Converts LIFO
+/// logical offset to physical slot. Throws TypeError or OutOfRangeException on invalid offset.
 fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_set");
     emitter.instruction("sub sp, sp, #80");                                     // reserve offset-set helper frame
@@ -1104,6 +1207,10 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return void
 }
 
+/// Emits `__rt_spl_dll_offset_unset` on ARM64: receiver in x0, boxed offset in x1.
+/// Validates offset using `emit_offset_index_prefix_aarch64`, releases the old Mixed cell
+/// at that slot, compacts storage by shifting subsequent elements left, and returns void.
+/// Throws TypeError or OutOfRangeException on invalid offset.
 fn emit_offset_unset_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_unset");
     emit_offset_index_prefix_aarch64(
@@ -1158,6 +1265,8 @@ fn emit_offset_unset_aarch64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits the tail-call sequence to return a boxed null on ARM64: sets x0 to NULL_TAG (8),
+/// x1 and x2 to zero, and tail-calls `__rt_mixed_from_value` to construct the boxed null.
 fn emit_tail_boxed_null_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x0, #{}", NULL_TAG));                     // runtime tag 8 = null
     emitter.instruction("mov x1, xzr");                                         // null payload low word is empty
@@ -1165,6 +1274,8 @@ fn emit_tail_boxed_null_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_from_value");                             // tail-call boxed Mixed construction
 }
 
+/// Emits all x86_64 doubly linked list runtime helpers: constructor, mutators, iterators,
+/// serialization, ArrayAccess methods, and exception helpers.
 fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: spl doubly linked list ---");
@@ -1193,6 +1304,9 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emit_offset_unset_x86_64(emitter);
 }
 
+/// Emits `__rt_spl_dll_new` on x86_64: allocates an SPL list object, initializes internal
+/// Mixed-array storage with capacity 4, and stores iterator index/mode at their respective
+/// offsets. Returns the initialized object pointer in rax.
 fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_new");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for constructor spills
@@ -1222,6 +1336,8 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return object pointer
 }
 
+/// Emits `__rt_spl_dll_count` on x86_64: receiver in rdi. Loads the internal storage array
+/// and returns its length as an integer in rax.
 fn emit_count_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_count");
     emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
@@ -1229,6 +1345,8 @@ fn emit_count_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return count
 }
 
+/// Emits `__rt_spl_dll_is_empty` on x86_64: receiver in rdi. Reads storage length, compares
+/// to zero, and returns a widened boolean (1 when empty, 0 when non-empty) in rax.
 fn emit_is_empty_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_is_empty");
     emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
@@ -1238,6 +1356,8 @@ fn emit_is_empty_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result
 }
 
+/// Emits `__rt_spl_dll_push` on x86_64: receiver in rdi, owned Mixed value in rsi. Appends
+/// the value to internal storage via `__rt_array_push_int`, handles growth, and returns void.
 fn emit_push_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_push");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for append spill
@@ -1253,6 +1373,8 @@ fn emit_push_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return void
 }
 
+/// Emits `__rt_spl_dll_pop` on x86_64: receiver in rdi. Removes and returns the last owned
+/// Mixed cell, transferring ownership to the caller. Throws RuntimeException on an empty list.
 fn emit_pop_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_pop");
     emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
@@ -1274,6 +1396,9 @@ fn emit_pop_x86_64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits `__rt_spl_dll_shift` on x86_64: receiver in rdi. Removes and returns the first
+/// owned Mixed cell, shifting all remaining elements left by one slot. Transfers ownership
+/// to the caller. Throws RuntimeException on an empty list.
 fn emit_shift_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_shift");
     emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
@@ -1306,6 +1431,9 @@ fn emit_shift_x86_64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits `__rt_spl_dll_unshift` on x86_64: receiver in rdi, owned value in rsi. Moves rsi
+/// to rdx for the insert helper's value argument and sets rsi to zero (index zero) before
+/// tail-calling `__rt_spl_dll_insert`.
 fn emit_unshift_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_unshift");
     emitter.instruction("mov rdx, rsi");                                        // move value to insert helper's value argument
@@ -1313,6 +1441,10 @@ fn emit_unshift_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_spl_dll_insert");                             // tail-call shared insertion helper
 }
 
+/// Emits `__rt_spl_dll_insert` on x86_64: receiver in rdi, index in rsi, owned value in rdx.
+/// Validates index >= 0 and index <= length, converts LIFO logical index to physical slot,
+/// grows storage if needed, shifts elements right, and stores the value. Releases the value
+/// and throws OutOfRangeException on invalid index.
 fn emit_insert_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_insert");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for insertion state
@@ -1386,16 +1518,26 @@ fn emit_insert_x86_64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits `__rt_spl_dll_top` on x86_64: receiver in rdi. Loads the last occupied Mixed cell,
+/// retains it with `__rt_incref` for the caller, and returns it. Throws RuntimeException on an
+/// empty list by tail-calling `emit_peek_index_x86_64`.
 fn emit_top_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_top");
     emit_peek_index_x86_64(emitter, "__rt_spl_dll_top_null", true);
 }
 
+/// Emits `__rt_spl_dll_bottom` on x86_64: receiver in rdi. Loads the first occupied Mixed
+/// cell, retains it with `__rt_incref` for the caller, and returns it. Throws RuntimeException
+/// on an empty list by tail-calling `emit_peek_index_x86_64`.
 fn emit_bottom_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_bottom");
     emit_peek_index_x86_64(emitter, "__rt_spl_dll_bottom_null", false);
 }
 
+/// Emits the shared peek helper on x86_64: receiver in rdi, null_label and last flag select
+/// which element to load (last=true picks index length-1, last=false picks index 0). Retains
+/// the selected Mixed cell with `__rt_incref` before returning it. Jumps to null_label when
+/// storage is empty, which throws RuntimeException via `emit_throw_exception_x86_64`.
 fn emit_peek_index_x86_64(emitter: &mut Emitter, null_label: &str, last: bool) {
     emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // read storage length
@@ -1419,6 +1561,9 @@ fn emit_peek_index_x86_64(emitter: &mut Emitter, null_label: &str, last: bool) {
     );
 }
 
+/// Emits `__rt_spl_dll_set_iterator_mode` and `__rt_spl_dll_get_iterator_mode` on x86_64.
+/// Set: receiver in rdi, mode bits in rsi; stores rsi at the iterator mode offset and returns void.
+/// Get: receiver in rdi; returns iterator mode bits in rax.
 fn emit_iterator_mode_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_set_iterator_mode");
     emitter.instruction(&format!("mov QWORD PTR [rdi + {}], rsi", SPL_DLL_ITER_MODE_OFFSET)); // store iterator mode bits on receiver
@@ -1428,6 +1573,10 @@ fn emit_iterator_mode_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return integer mode
 }
 
+/// Emits `__rt_spl_dll_serialize_array` on x86_64: receiver in rdi. Copies internal storage
+/// items into a new array with retained Mixed cells, boxes iterator flags and both arrays,
+/// and returns a boxed Mixed array (tag 4) containing [boxed flags, boxed items array,
+/// boxed empty properties array] for high-level serialization.
 fn emit_serialize_array_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_serialize_array");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for serialization
@@ -1502,6 +1651,11 @@ fn emit_serialize_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return serialized state array
 }
 
+/// Emits `__rt_spl_dll_serialize` on x86_64: receiver in rdi, pointer to serialized output
+/// buffer in rsi, length in rdx. Writes PHP legacy serialized form "i:<mode>;<item>..." using
+/// the global concat buffer. Returns (pointer, length) of the serialized string. Unboxes
+/// each item to detect int/string/bool/null tags and encodes accordingly. Appends to the
+/// global `_concat_buf` and updates `_concat_off`.
 fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_serialize");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for legacy serialization
@@ -1642,6 +1796,9 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emit_write_dec_x86_64(emitter);
 }
 
+/// Emits `__rt_spl_dll_write_dec_x86` on x86_64: value in rax (sign-extended), output cursor
+/// in rdi. Writes optional '-' for negative values, then digits in base-10, using the stack
+/// to reverse digit order. Returns the advanced output cursor in rdi.
 fn emit_write_dec_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_write_dec_x86");
     emitter.instruction("sub rsp, 32");                                         // reserve temporary reversed digit storage
@@ -1681,6 +1838,10 @@ fn emit_write_dec_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to serializer
 }
 
+/// Emits `__rt_spl_dll_unserialize` on x86_64: receiver in rdi, input pointer in rsi,
+/// input length in rdx. Clears existing storage by releasing all owned Mixed cells,
+/// parses the legacy serialized format "i:<mode>;<item>..." using `__rt_spl_dll_parse_dec_x86`,
+/// and appends each parsed value via `__rt_spl_dll_push`. Throws on malformed input.
 fn emit_unserialize_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_unserialize");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for legacy parser
@@ -1833,12 +1994,18 @@ fn emit_unserialize_x86_64(emitter: &mut Emitter) {
     emit_parse_dec_x86_64(emitter);
 }
 
+/// Emits the append helper on x86_64 for unserialization: moves the boxed parsed value
+/// from rax into rsi for the push call, reloads the receiver from the stack at rbp-8,
+/// and calls `__rt_spl_dll_push` to append the value to the list.
 fn emit_unserialize_append_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, rax");                                        // move boxed parsed value into push value argument
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload receiver for shared list append
     emitter.instruction("call __rt_spl_dll_push");                              // append parsed value to internal storage
 }
 
+/// Emits `__rt_spl_dll_parse_dec_x86` on x86_64: cursor in rdi, input end in rsi. Parses an
+/// optional leading '-' for negative values, then reads consecutive ASCII decimal digits.
+/// Returns the parsed integer in rax and the advanced cursor in rdi. Empty input returns zero.
 fn emit_parse_dec_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_dll_parse_dec_x86");
     emitter.instruction("mov r8, rdi");                                         // keep parser cursor in r8
@@ -1871,6 +2038,9 @@ fn emit_parse_dec_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to parser
 }
 
+/// Emits `__rt_spl_dll_rewind` on x86_64: receiver in rdi. Resets the iterator index based on
+/// the iterator mode. FIFO mode sets index to 0. LIFO mode sets index to length-1 (the last
+/// element). Empty storage resets index to zero. Returns void.
 fn emit_rewind_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_rewind");
     emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
@@ -1891,6 +2061,9 @@ fn emit_rewind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return void
 }
 
+/// Emits `__rt_spl_dll_next` and `__rt_spl_dll_prev` on x86_64. Both dispatch to
+/// `emit_iterator_step_x86_64` with forward=true for next and forward=false for prev.
+/// Receivers and index/mode registers are loaded in `emit_iterator_step_x86_64`.
 fn emit_next_prev_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_next");
     emit_iterator_step_x86_64(emitter, true);
@@ -1898,6 +2071,10 @@ fn emit_next_prev_x86_64(emitter: &mut Emitter) {
     emit_iterator_step_x86_64(emitter, false);
 }
 
+/// Emits the shared iterator step logic on x86_64. Forward=true is `next()`, false is `prev()`.
+/// Loads iterator index and mode from the receiver. Handles FIFO vs LIFO direction, delete-mode
+/// foreach (ITER_MODE_DELETE), and boundary exhaustion. For delete-mode, calls `shift()` or
+/// `pop()` and releases the removed cell. Persists the updated index and returns void.
 fn emit_iterator_step_x86_64(emitter: &mut Emitter, forward: bool) {
     let fifo_label = if forward {
         "__rt_spl_dll_next_fifo"
@@ -1957,6 +2134,10 @@ fn emit_iterator_step_x86_64(emitter: &mut Emitter, forward: bool) {
     }
 }
 
+/// Emits the delete-mode iterator step helper on x86_64, called from `emit_iterator_step_x86_64`
+/// when ITER_MODE_DELETE is set. If LIFO mode: calls `__rt_spl_dll_pop`, releases the cell, and
+/// sets index to the new tail. If FIFO mode: calls `__rt_spl_dll_shift`, releases the cell, and
+/// resets index to zero. Empty storage after deletion rewinds to index zero.
 fn emit_iterator_delete_step_x86_64(emitter: &mut Emitter, delete_label: &str) {
     emitter.label(delete_label);
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for delete-mode next()
@@ -1989,6 +2170,8 @@ fn emit_iterator_delete_step_x86_64(emitter: &mut Emitter, delete_label: &str) {
     emitter.instruction("ret");                                                 // return void
 }
 
+/// Emits `__rt_spl_dll_valid` on x86_64: receiver in rdi. Reads iterator index and storage
+/// length, returns a widened boolean in rax (1 when index < length, 0 otherwise).
 fn emit_valid_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_valid");
     emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
@@ -2000,6 +2183,9 @@ fn emit_valid_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return boolean result
 }
 
+/// Emits `__rt_spl_dll_current` on x86_64: receiver in rdi. Loads the current Mixed cell
+/// at the iterator index, retains it with `__rt_incref`, and returns it. Returns a boxed
+/// null (via `emit_tail_boxed_null_x86_64`) when the index is out of range.
 fn emit_current_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_current");
     emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
@@ -2015,6 +2201,9 @@ fn emit_current_x86_64(emitter: &mut Emitter) {
     emit_tail_boxed_null_x86_64(emitter);
 }
 
+/// Emits `__rt_spl_dll_key` on x86_64: receiver in rdi. Reads the iterator index as the
+/// integer key, boxes it as a tagged Mixed (INT_TAG), and returns it. Returns a boxed null
+/// (via `emit_tail_boxed_null_x86_64`) when the index is out of range.
 fn emit_key_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_key");
     emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
@@ -2029,6 +2218,10 @@ fn emit_key_x86_64(emitter: &mut Emitter) {
     emit_tail_boxed_null_x86_64(emitter);
 }
 
+/// Emits `__rt_spl_dll_offset_exists` on x86_64: receiver in rdi, boxed offset in rsi.
+/// Unboxes the offset, validates it is a non-negative integer within storage bounds,
+/// converts LIFO logical offset to physical slot, and returns boolean in rax.
+/// Throws TypeError for non-integer offsets.
 fn emit_offset_exists_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_exists");
     emit_offset_index_prefix_x86_64(
@@ -2057,6 +2250,11 @@ fn emit_offset_exists_x86_64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits `__rt_spl_dll_offset_get` on x86_64: receiver in rdi, boxed offset in rsi.
+/// Unboxes the offset, validates it is a non-negative integer within storage bounds,
+/// converts LIFO logical offset to physical slot, loads the selected Mixed cell,
+/// retains it with `__rt_incref`, and returns it. Throws TypeError or OutOfRangeException
+/// on invalid offset.
 fn emit_offset_get_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_get");
     emit_offset_index_prefix_x86_64(
@@ -2091,6 +2289,11 @@ fn emit_offset_get_x86_64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits the shared offset validation preamble on x86_64: receiver in rdi, boxed offset in rsi.
+/// Unboxes the offset, validates it is an integer and non-negative, loads storage and length,
+/// and checks bounds. Converts LIFO logical offset to physical slot using ITER_MODE_LIFO.
+/// Sets r9 = storage, r10 = physical index on success; jumps to type_label, range_label on
+/// errors. Returns with the offset helper frame established but not yet cleaned up.
 fn emit_offset_index_prefix_x86_64(
     emitter: &mut Emitter,
     type_label: &str,
@@ -2128,6 +2331,11 @@ fn emit_offset_index_prefix_x86_64(
     emitter.label(ready_label);
 }
 
+/// Emits `__rt_spl_dll_offset_set` on x86_64: receiver in rdi, boxed offset in rsi, owned
+/// value in rdx. When offset is null, appends via `__rt_spl_dll_push`. Otherwise unboxes
+/// offset, validates it is a non-negative integer within storage bounds, releases the old
+/// Mixed cell at that slot, stores the replacement, and returns void. Converts LIFO
+/// logical offset to physical slot. Throws TypeError or OutOfRangeException on invalid offset.
 fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_set");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for offsetSet
@@ -2206,6 +2414,10 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return void
 }
 
+/// Emits `__rt_spl_dll_offset_unset` on x86_64: receiver in rdi, boxed offset in rsi.
+/// Validates offset using `emit_offset_index_prefix_x86_64`, releases the old Mixed cell
+/// at that slot, compacts storage by shifting subsequent elements left, and returns void.
+/// Throws TypeError or OutOfRangeException on invalid offset.
 fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_offset_unset");
     emit_offset_index_prefix_x86_64(
@@ -2261,6 +2473,8 @@ fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits the tail-call sequence to return a boxed null on x86_64: sets rax to NULL_TAG (8),
+/// rdi and rsi to zero, and tail-calls `__rt_mixed_from_value` to construct the boxed null.
 fn emit_tail_boxed_null_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rax, {}", NULL_TAG));                     // runtime tag 8 = null
     emitter.instruction("xor rdi, rdi");                                        // null payload low word is empty
@@ -2268,6 +2482,10 @@ fn emit_tail_boxed_null_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_from_value");                           // tail-call boxed Mixed construction
 }
 
+/// Emits the exception throw helper on ARM64: allocates a Throwable object (kind 6),
+/// stores the class id from class_id_symbol, the static message from message_symbol,
+/// the message length, and a default code of zero. Publishes the exception object to
+/// `_exc_value` and jumps to `__rt_throw_current` to enter the standard exception unwinder.
 fn emit_throw_exception_aarch64(
     emitter: &mut Emitter,
     class_id_symbol: &str,
@@ -2291,6 +2509,11 @@ fn emit_throw_exception_aarch64(
     emitter.instruction("b __rt_throw_current");                                // enter the standard exception unwinder
 }
 
+/// Emits the exception throw helper on x86_64: allocates a Throwable object (kind 6),
+/// stores the class id from class_id_symbol (via RIP-relative load), the static message
+/// from message_symbol (via RIP-relativeLEA), the message length, and a default code of zero.
+/// Publishes the exception object to `_exc_value` and jumps to `__rt_throw_current` to enter
+/// the standard exception unwinder.
 fn emit_throw_exception_x86_64(
     emitter: &mut Emitter,
     class_id_symbol: &str,

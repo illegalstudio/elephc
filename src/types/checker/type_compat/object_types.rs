@@ -17,6 +17,10 @@ use crate::types::{EnumInfo, PhpType, TypeEnv};
 use super::super::Checker;
 
 impl Checker {
+    /// Checks whether the current class context can access a member with the given visibility
+    /// declared in `declaring_class`. Public members are always accessible; protected members
+    /// are accessible if the current class is the declaring class or a subclass; private
+    /// members are only accessible if the current class is exactly the declaring class.
     pub(crate) fn can_access_member(
         &self,
         declaring_class: &str,
@@ -31,6 +35,7 @@ impl Checker {
         }
     }
 
+    /// Returns the string label ("public", "protected", "private") for a visibility level.
     pub(crate) fn visibility_label(visibility: &Visibility) -> &'static str {
         match visibility {
             Visibility::Public => "public",
@@ -39,6 +44,8 @@ impl Checker {
         }
     }
 
+    /// Returns true if `class_name` is or inherits from `ancestor_name` (excluding self equality).
+    /// Walks the parent chain via `class_info.parent`.
     pub(crate) fn is_subclass_of(&self, class_name: &str, ancestor_name: &str) -> bool {
         let mut current = self
             .classes
@@ -56,6 +63,7 @@ impl Checker {
         false
     }
 
+    /// Returns true if `class_name` directly implements `interface_name` (not via inheritance).
     pub(crate) fn class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
         self.classes.get(class_name).is_some_and(|class_info| {
             class_info
@@ -65,6 +73,8 @@ impl Checker {
         })
     }
 
+    /// Returns true if `type_name` (a class or interface) implements `interface_name`,
+    /// checking direct implementation and interface inheritance chains.
     pub(crate) fn object_type_implements_interface(
         &self,
         type_name: &str,
@@ -80,6 +90,8 @@ impl Checker {
         false
     }
 
+    /// Returns true if `interface_name` is or transitively extends `ancestor_name`.
+    /// Uses a DFS with cycle detection to walk interface parent chains.
     pub(crate) fn interface_extends_interface(
         &self,
         interface_name: &str,
@@ -107,6 +119,8 @@ impl Checker {
         false
     }
 
+    /// Returns true if `type_name` (a class or interface) implements `Throwable`,
+    /// checking both direct implementation and interface extension chains.
     pub(crate) fn object_type_implements_throwable(&self, type_name: &str) -> bool {
         if self.classes.contains_key(type_name) {
             return self.class_implements_interface(type_name, "Throwable");
@@ -117,6 +131,8 @@ impl Checker {
         false
     }
 
+    /// Returns true if `type_name` (a class or interface) implements `Iterator` or
+    /// `IteratorAggregate`, which are the interfaces that make a type usable in `foreach`.
     pub(crate) fn object_type_implements_iterable(&self, type_name: &str) -> bool {
         if type_name == "Traversable" {
             return true;
@@ -132,6 +148,8 @@ impl Checker {
         false
     }
 
+    /// Finds the most specific common ancestor object type shared by all type names in
+    /// `type_names`. Falls back to "Throwable" if no common type is found or the list is empty.
     pub(crate) fn common_catch_type_name(&self, type_names: &[String]) -> String {
         let mut iter = type_names.iter();
         let Some(first_name) = iter.next() else {
@@ -147,6 +165,8 @@ impl Checker {
         common
     }
 
+    /// Resolves a raw type name used in a `catch` clause to its concrete class name.
+    /// Handles "self" (current class), "parent" (current class's parent), or a plain name.
     pub(crate) fn resolve_catch_type_name(
         &self,
         raw_name: &crate::names::Name,
@@ -172,6 +192,8 @@ impl Checker {
         }
     }
 
+    /// Type-checks and resolves a static method call on an enum (`cases`, `from`, `tryfrom`).
+    /// Returns the resolved `PhpType` for the call or an error if argument count or types mismatch.
     pub(crate) fn check_enum_static_call(
         &mut self,
         enum_info: &EnumInfo,
@@ -241,6 +263,9 @@ impl Checker {
         }
     }
 
+    /// Finds the most specific common object type between `left` and `right` class names.
+    /// Returns `Some(PhpType::Object(...))` with the common ancestor, or `None` if they share no
+    /// common type. Checks interface relationships, class inheritance, and ancestor chains.
     pub(crate) fn common_object_type(&self, left: &str, right: &str) -> Option<PhpType> {
         if left == right {
             return Some(PhpType::Object(left.to_string()));
@@ -288,6 +313,10 @@ impl Checker {
         None
     }
 
+    /// Propagates a resolved constructor argument type into the corresponding constructor
+    /// parameter and property slot for all classes that share an inherited property from
+    /// `declaring_class`. Used to sharpen types across an inheritance hierarchy after
+    /// constructor argument type inference.
     pub(crate) fn propagate_constructor_arg_type(
         &mut self,
         instantiated_class: &str,

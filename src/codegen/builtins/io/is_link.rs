@@ -16,6 +16,23 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `is_link` builtin call for a single path argument.
+///
+/// # Arguments
+/// - `_name`: Unused; always `is_link` (case-insensitive lookup handled by catalog).
+/// - `args`: Exactly one expression yielding a path string.
+/// - `emitter`: Assembly emitter for the current function.
+/// - `ctx`: Codegen context (variable layout, class metadata).
+/// - `data`: Data section for relocations and static data.
+///
+/// # Behavior
+/// Evaluates `args[0]` (path argument), then calls `__rt_is_link` which invokes
+/// `lstat()` and checks `S_ISLNK`. Returns `PhpType::Bool` (PHP `is_link` is always bool).
+///
+/// # Safety & invariants
+/// - Filesystem state is observable; call order must match source evaluation order.
+/// - The runtime helper handles platform-specific `S_ISLNK` detection.
+/// - Result is always `Some(PhpType::Bool)`; no failure sentinel — PHP false on error.
 pub fn emit(
     _name: &str,
     args: &[Expr],

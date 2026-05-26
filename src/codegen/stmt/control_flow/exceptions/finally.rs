@@ -15,6 +15,10 @@ use crate::codegen::platform::Arch;
 
 use super::{PENDING_BRANCH, PENDING_RETURN};
 
+/// Records a pending branch (break/continue) and transfers control to the
+/// innermost active finally block. The target label is stored in the pending
+/// target slot so that finally dispatch can resume branching after the finally
+/// body executes. Panics if no finally is currently active.
 pub(crate) fn emit_branch_through_finally(emitter: &mut Emitter, ctx: &Context, target_label: &str) {
     emit_set_pending_action(emitter, ctx, PENDING_BRANCH, Some(target_label), false);
     let finally_entry = &ctx
@@ -25,6 +29,10 @@ pub(crate) fn emit_branch_through_finally(emitter: &mut Emitter, ctx: &Context, 
     abi::emit_jump(emitter, finally_entry);                                        // transfer control to the innermost finally before branching onward
 }
 
+/// Records a pending return and transfers control to the innermost active
+/// finally block. The return value is spilled to the pending return slot before
+/// branching to finally so that the value survives the handler transition.
+/// Panics if no finally is currently active.
 pub(crate) fn emit_return_through_finally(emitter: &mut Emitter, ctx: &Context) {
     emit_set_pending_action(
         emitter,
@@ -41,6 +49,12 @@ pub(crate) fn emit_return_through_finally(emitter: &mut Emitter, ctx: &Context) 
     abi::emit_jump(emitter, finally_entry);                                        // transfer control to the innermost finally before returning
 }
 
+/// Stores the pending control-flow action (return, branch, or rethrow) and an
+/// optional target label into the try handler's spill slots. If `preserve_return`
+/// is true the current return value is also spilled to the pending return slot.
+/// The action constant must be one of `PENDING_RETURN`, `PENDING_BRANCH`, or
+/// `PENDING_RETHROW`. Panics if the pending-action or pending-target slots are
+/// not allocated.
 pub(super) fn emit_set_pending_action(
     emitter: &mut Emitter,
     ctx: &Context,
@@ -70,6 +84,13 @@ pub(super) fn emit_set_pending_action(
     }
 }
 
+/// Emits the finally dispatch logic that runs after the finally body completes.
+/// Reads the pending action from the spill slot; if zero the control flows to
+/// `normal_resume_label`. If an outer finally exists, it chains to that first.
+/// Otherwise the action is compared against 1 (return), 2 (branch), and 3 (rethrow),
+/// dispatching to the corresponding label. Clears the pending action before
+/// resuming a return or branch. Re-throws for action 3. Panics if the
+/// pending-action or pending-target slots are not allocated.
 pub(super) fn emit_finally_dispatch(
     emitter: &mut Emitter,
     ctx: &Context,
@@ -128,6 +149,9 @@ pub(super) fn emit_finally_dispatch(
     abi::emit_call_label(emitter, "__rt_rethrow_current");                         // keep unwinding the current exception after finally
 }
 
+/// Restores the pending return value from the spill slot back into the
+/// appropriate return register, using `ctx.return_type` to determine the slot
+/// width and encoding. Panics if the pending return spill slot is not allocated.
 fn restore_pending_return_value(emitter: &mut Emitter, ctx: &Context) {
     let return_offset = ctx
         .pending_return_value_offset
@@ -135,10 +159,15 @@ fn restore_pending_return_value(emitter: &mut Emitter, ctx: &Context) {
     abi::emit_restore_return_value(emitter, &ctx.return_type, return_offset);
 }
 
+/// Emits the address of a local label into `dest_reg` using the target ABI's
+/// symbol-address mechanism. The address is used as a pending target for
+/// branch dispatch after a finally block.
 fn emit_label_address(emitter: &mut Emitter, label: &str, dest_reg: &str) {
     abi::emit_symbol_address(emitter, dest_reg, label);                            // materialize the local control-flow target label address for pending dispatch
 }
 
+/// Emits an indirect branch (`br` on ARM64, `jmp` on x86_64) through `reg`,
+/// used to resume branching to a finally target after the finally body completes.
 fn emit_indirect_jump(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("br {}", reg)),           // branch indirectly through the restored finally target register

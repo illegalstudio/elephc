@@ -16,6 +16,17 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 use super::super::Checker;
 
 impl Checker {
+    /// Resolves the canonical `FunctionSig` for a first-class callable expression.
+    ///
+    /// Looks up the target in this order: user-defined functions → `fn_decls` → extern functions → builtins.
+    /// Returns a wrapped signature where all parameters are marked as declared (callable syntax has no
+    /// type inference at the call site). Visibility checks are applied for static-method and instance-method targets.
+    ///
+    /// # Errors
+    /// - `Undefined function for first-class callable` when the function is not registered.
+    /// - `Undefined class` when the receiver class does not exist.
+    /// - `Cannot access <visibility> method` when the method is not accessible.
+    /// - `First-class callable syntax only supports static methods here` for non-static method names on static targets.
     pub(crate) fn resolve_first_class_callable_sig(
         &mut self,
         target: &CallableTarget,
@@ -205,6 +216,16 @@ impl Checker {
         }
     }
 
+    /// Specializes an untyped user-defined function for a first-class callable call site.
+    ///
+    /// After resolving the base signature, if any parameters are inferred (not declared),
+    /// this method normalizes named arguments, performs full type-checking via
+    /// `check_function_call_pre_normalized`, and then re-resolves the now-specialized signature.
+    /// Builtin and extern functions are returned unchanged since they cannot be specialized.
+    ///
+    /// # Errors
+    /// Propagates errors from `normalize_named_call_args`, `check_function_call_pre_normalized`,
+    /// and `specialize_untyped_function_params`.
     pub(crate) fn specialize_first_class_callable_target(
         &mut self,
         target: &CallableTarget,
@@ -257,6 +278,10 @@ impl Checker {
         self.resolve_first_class_callable_sig(target, span, env)
     }
 
+    /// Infers the return type of a first-class callable target without performing specialization.
+    ///
+    /// Delegates to `resolve_first_class_callable_sig` and extracts the `return_type` field.
+    /// Used when the callable is used in a non-invocation context (e.g., `typeof($fn)`).
     pub(crate) fn infer_first_class_callable_target(
         &mut self,
         target: &CallableTarget,

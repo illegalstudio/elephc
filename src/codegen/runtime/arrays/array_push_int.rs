@@ -11,9 +11,18 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_push_int: push an integer element to an array, growing if needed.
-/// Input:  x0 = array pointer, x1 = value
-/// Output: x0 = array pointer (may differ if array was reallocated)
+/// Emits the `__rt_array_push_int` runtime helper for ARM64 (macOS/Linux).
+///
+/// Appends a scalar integer to the end of an indexed PHP array. If the array is
+/// shared (copy-on-write), it first calls `__rt_array_ensure_unique` to detach.
+/// For freshly empty arrays, it stamps the header with scalar element metadata
+/// before the first write. Uses a fast in-place append when capacity is available;
+/// otherwise calls `__rt_array_grow` then appends.
+///
+/// Inputs:  x0 = array pointer, x1 = integer value to push
+/// Output: x0 = array pointer (may differ if reallocated), x1 = preserved (scratch after call)
+/// Preserves: x29 (frame pointer), x30 (link register)
+/// Kills: x9–x12 (scratch registers)
 pub fn emit_array_push_int(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_push_int_linux_x86_64(emitter);
@@ -78,6 +87,18 @@ pub fn emit_array_push_int(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = new array
 }
 
+/// Emits the `__rt_array_push_int` runtime helper for x86_64 (Linux).
+///
+/// Identical contract to the ARM64 variant but uses the System V AMD64 ABI:
+/// rdi = array pointer, rsi = integer value to push, rax = return array pointer.
+///
+/// Spills the scalar payload and array pointer on the stack across helper calls
+/// to preserve them across `__rt_array_ensure_unique` and `__rt_array_grow`.
+/// Uses the same shape-specialization logic for empty arrays and the same
+/// fast-path / grow-path dispatch.
+///
+/// Preserves: rbp (frame pointer)
+/// Kills: rax, r8–r12, rcx, rdx, rsi, rdi (caller-saved registers)
 fn emit_array_push_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_push_int ---");

@@ -15,6 +15,14 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits PHP `strlen` builtin call.
+///
+/// Takes one string argument and returns its length as an integer.
+/// The string argument is emitted via `emit_string_arg` using the string ABI
+/// (pointer/length pair). The result register receives the string-length value
+/// from the ABI string result registers.
+///
+/// Returns `PhpType::Int` as the result type.
 pub fn emit(
     _name: &str,
     args: &[Expr],

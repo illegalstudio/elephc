@@ -22,6 +22,21 @@ pub(crate) fn emit_time_only(emitter: &mut Emitter) {
     emit_time_only_arm64(emitter);
 }
 
+/// Emits ARM64 assembly for the `HH:MM[:SS]` time-only parsing sub-routine.
+/// Accepts `H:MM`, `HH:MM`, `H:MM:SS`, `HH:MM:SS` (single-digit hour permitted per PHP).
+///
+/// Inputs (caller-provided stack slots):
+///   - `[sp+48]` — trimmed input pointer
+///   - `[sp+56]` — trimmed input length
+///
+/// Scratch stash slots used to preserve values across the `today_tm` call:
+///   - `[sp+80]` — hour
+///   - `[sp+84]` — min
+///   - `[sp+88]` — second
+///
+/// Validation: hour 0..24, minute 0..59, second 0..60 (PHP ranges). On success,
+/// builds a `tm` struct at `[sp+0..36]` with hour/minute/second patched in,
+/// then calls `mktime` and returns through `__rt_strtotime_ret`.
 fn emit_time_only_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: HH:MM[:SS] time-only sub-routine ---");
@@ -123,6 +138,21 @@ fn emit_time_only_arm64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_strtotime_ret");                                // return through shared epilogue
 }
 
+/// Emits x86_64 Linux assembly for the `HH:MM[:SS]` time-only parsing sub-routine.
+/// Accepts `H:MM`, `HH:MM`, `H:MM:SS`, `HH:MM:SS` (single-digit hour permitted per PHP).
+///
+/// Inputs (caller-provided frame slots relative to rbp):
+///   - `[rbp-80]` — trimmed input pointer
+///   - `[rbp-72]` — trimmed input length
+///
+/// Scratch stash slots (relative to rsp — same offsets as ARM64):
+///   - `[rbp-48]` / `[rsp+80]` — hour
+///   - `[rbp-44]` / `[rsp+84]` — min
+///   - `[rbp-40]` / `[rsp+88]` — second
+///
+/// Validation: hour 0..24, minute 0..59, second 0..60 (PHP ranges). On success,
+/// builds a `tm` struct on the stack with hour/minute/second patched in,
+/// then calls `mktime` and returns through `__rt_strtotime_ret_linux_x86_64`.
 fn emit_time_only_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: HH:MM[:SS] time-only sub-routine ---");

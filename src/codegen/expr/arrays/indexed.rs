@@ -14,6 +14,10 @@ use super::super::super::emit::Emitter;
 use super::super::super::{abi, platform::Arch};
 use super::super::{emit_expr, retain_borrowed_heap_arg, Expr, ExprKind, PhpType};
 
+/// Emits a non-empty indexed array literal with no spread elements.
+/// Infers the element type from the first element, picks the allocation strategy
+/// (ARM64 vs x86_64, homogeneous vs mixed), and leaves the array pointer in the
+/// integer result register. Calls `retain_borrowed_heap_arg` for borrowed values.
 pub(crate) fn emit_array_literal(
     elems: &[Expr],
     emitter: &mut Emitter,
@@ -108,6 +112,9 @@ pub(crate) fn emit_array_literal(
     PhpType::Array(Box::new(actual_elem_ty))
 }
 
+/// x86_64-specific path for non-empty indexed array literals with no spread elements.
+/// Uses the System V ABI (rdi=rdi=rsi=elem_size) and returns the array pointer in rax.
+/// Falls back to the shared runtime allocator if the literal is empty.
 fn emit_array_literal_linux_x86_64(
     elems: &[Expr],
     literal_elem_ty: &PhpType,
@@ -189,6 +196,10 @@ fn emit_array_literal_linux_x86_64(
     PhpType::Array(Box::new(actual_elem_ty))
 }
 
+/// Emits an indexed array literal where all elements have PhpType::Mixed or the
+/// inferred element type is PhpType::Mixed. Boxes non-Mixed elements into a PhpValue::Mixed
+/// cell before storing. Stamps the array value_type as PhpType::Mixed. Dispatches to
+/// the x86_64 path on that architecture.
 fn emit_mixed_array_literal(
     elems: &[Expr],
     emitter: &mut Emitter,
@@ -228,6 +239,8 @@ fn emit_mixed_array_literal(
     PhpType::Array(Box::new(PhpType::Mixed))
 }
 
+/// x86_64-specific path for mixed array literals. Boxes each element as Mixed, stamps
+/// value_type as PhpType::Mixed, returns array pointer in rax.
 fn emit_mixed_array_literal_linux_x86_64(
     elems: &[Expr],
     emitter: &mut Emitter,
@@ -263,6 +276,10 @@ fn emit_mixed_array_literal_linux_x86_64(
     PhpType::Array(Box::new(PhpType::Mixed))
 }
 
+/// Emits an indexed array literal containing one or more spread elements (e.g. `[...$a, 1, ...$b]`).
+/// Each spread is merged via `__rt_array_merge_into` or `__rt_array_merge_into_refcounted`
+/// depending on whether the source array holds refcounted elements. Non-spread elements are pushed
+/// via typed push helpers. The array pointer is left in the integer result register.
 pub(crate) fn emit_array_literal_with_spread(
     elems: &[Expr],
     emitter: &mut Emitter,
@@ -351,6 +368,8 @@ pub(crate) fn emit_array_literal_with_spread(
     PhpType::Array(Box::new(actual_elem_ty))
 }
 
+/// x86_64-specific path for indexed array literals with spread elements. Uses the System V ABI
+/// (rdi=dest_array, rsi=src_array) and returns the array pointer in rax.
 fn emit_array_literal_with_spread_linux_x86_64(
     elems: &[Expr],
     emitter: &mut Emitter,
@@ -439,6 +458,7 @@ fn emit_array_literal_with_spread_linux_x86_64(
     PhpType::Array(Box::new(actual_elem_ty))
 }
 
+/// Writes the runtime value_type tag into the array header's packed kind word.
 pub(crate) fn emit_array_value_type_stamp(
     emitter: &mut Emitter,
     array_reg: &str,
@@ -480,6 +500,9 @@ pub(crate) fn emit_array_value_type_stamp(
     }
 }
 
+/// Infers the homogeneous element type for an indexed array literal by scanning all elements
+/// (including Spread nodes). Returns the merged type, or PhpType::Mixed when elements have
+/// heterogeneous types. Iterable types are treated as Mixed.
 fn infer_indexed_literal_element_type(elems: &[Expr], ctx: &Context) -> PhpType {
     let mut elem_ty = PhpType::Never;
     for (i, elem) in elems.iter().enumerate() {
@@ -504,6 +527,9 @@ fn infer_indexed_literal_element_type(elems: &[Expr], ctx: &Context) -> PhpType 
     elem_ty
 }
 
+/// Merges two element types from consecutive positions in an indexed array literal.
+/// Returns the broader type when types differ (e.g. int + float → Mixed), or the common
+/// type when they match. Object types are resolved via `ctx.common_object_type`.
 fn merge_indexed_literal_element_type(
     existing: &PhpType,
     next: &PhpType,

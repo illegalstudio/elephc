@@ -11,8 +11,14 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// __rt_json_encode_array_dynamic: encode an indexed array by inspecting its packed value_type tag.
-/// Input:  x0 = array pointer
+/// Emits `__rt_json_encode_array_dynamic`: encodes a PHP indexed array to a JSON array literal.
+///
+/// Pipeline: recursion-depth check → snapshot JSON_FORCE_OBJECT → emit opening `[` or `{`
+/// → iterate elements emitting commas and pretty-printing → dispatch each element through the
+/// value_type tag to the appropriate JSON helper → recurse into nested arrays/objects → emit closing
+/// delimiter → update concat-buffer offset and return the encoded slice.
+///
+/// Input:  x0 = array pointer (PhpArray)
 /// Output: x1 = result ptr, x2 = result len
 pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -269,6 +275,11 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the encoded JSON slice in x1/x2
 }
 
+/// Emits the x86_64 Linux variant of `__rt_json_encode_array_dynamic`.
+///
+/// Identical in behavior to the ARM64 emitter but uses the x86_64 System V ABI.
+/// Preserves r15 as the flag cache register and uses rbp-based frame offsets for locals.
+/// Stack layout differs slightly (64-byte frame vs 112-byte ARM64 frame) reflecting register count.
 fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_array_dynamic ---");

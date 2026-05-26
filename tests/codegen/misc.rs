@@ -11,6 +11,7 @@ use crate::support::*;
 
 // --- IIFE (Immediately Invoked Function Expression) ---
 
+// Compiles an IIFE that returns a string literal and verifies the value is echoed correctly.
 #[test]
 fn test_iife_returns_string() {
     let out = compile_and_run(
@@ -22,6 +23,7 @@ echo $result;
     assert_eq!(out, "hello");
 }
 
+// Compiles an IIFE with a parameter that doubles its argument and verifies the result is 42.
 #[test]
 fn test_iife_returns_int() {
     let out = compile_and_run(
@@ -34,12 +36,14 @@ echo (function($x) { return $x * 2; })(21);
 
 // --- Empty input / EOF handling ---
 
+// Compiles a PHP file containing only `<?php\n` and verifies no output is produced.
 #[test]
 fn test_empty_php_file() {
     let out = compile_and_run("<?php\n");
     assert_eq!(out, "");
 }
 
+// Compiles a PHP file containing only `<?php ` with no code and verifies no output.
 #[test]
 fn test_only_open_tag() {
     let out = compile_and_run("<?php ");
@@ -48,6 +52,8 @@ fn test_only_open_tag() {
 
 // --- Syntactic return type inference ---
 
+// Verifies return type inference for a function that returns mid-do-while loop with an early exit.
+// The fixpoint return type must account for the mid-loop return, not just the post-loop return.
 #[test]
 fn test_callback_return_from_dowhile() {
     let out = compile_and_run(
@@ -66,6 +72,8 @@ echo find_first([1, 3, 7, 2]);
     assert_eq!(out, "7");
 }
 
+// Verifies type widening for a function with conditional string/int returns; the declared return
+// type must be wide enough to hold both branches and the string "big" must be returned.
 #[test]
 fn test_mixed_return_types_widened() {
     let out = compile_and_run(
@@ -81,6 +89,8 @@ echo describe(200);
     assert_eq!(out, "big");
 }
 
+// Verifies null-coalescing a null variable with a string literal default allocates the string
+// and does not evaluate the default eagerly.
 #[test]
 fn test_null_coalesce_allocates_for_string_default() {
     let out = compile_and_run(
@@ -96,6 +106,8 @@ test();
     assert_eq!(out, "fallback");
 }
 
+// Verifies null-coalescing when the left-hand side evaluates to null at runtime (ternary
+// produces null) uses the string default and outputs "fallback".
 #[test]
 fn test_null_coalesce_runtime_null_to_string_default() {
     let out = compile_and_run(
@@ -108,6 +120,8 @@ echo $result;
     assert_eq!(out, "fallback");
 }
 
+// Verifies null-coalescing assignment (`??=`) assigns the right-hand side when the variable
+// is null.
 #[test]
 fn test_null_coalesce_assignment_assigns_when_null() {
     let out = compile_and_run(
@@ -120,6 +134,8 @@ echo $x;
     assert_eq!(out, "7");
 }
 
+// Verifies null-coalescing assignment (`??=`) skips the right-hand side when the variable is
+// non-null; the fallback function must not be called.
 #[test]
 fn test_null_coalesce_assignment_skips_rhs_when_non_null() {
     let out = compile_and_run(
@@ -136,6 +152,8 @@ echo $x;
     assert_eq!(out, "5");
 }
 
+// Verifies null-coalescing assignment with a typed function return keeps the int type when
+// assigned null; the null is discarded and the original value is preserved.
 #[test]
 fn test_null_coalesce_assignment_literal_null_keeps_non_null_type() {
     let out = compile_and_run(
@@ -151,6 +169,8 @@ echo $x;
     assert_eq!(out, "5");
 }
 
+// Verifies null-coalescing assignment updates a variable that is null at runtime (ternary
+// produces null) and assigns 9.
 #[test]
 fn test_null_coalesce_assignment_updates_runtime_null() {
     let out = compile_and_run(
@@ -163,6 +183,7 @@ echo $x;
     assert_eq!(out, "9");
 }
 
+// Verifies null-coalescing assignment leaves a non-null string unchanged.
 #[test]
 fn test_null_coalesce_assignment_keeps_non_null_string() {
     let out = compile_and_run(
@@ -175,6 +196,8 @@ echo $x;
     assert_eq!(out, "keep");
 }
 
+// Verifies null-coalescing assignment in a for-loop initializer: the ??= runs on the first
+// iteration and the loop then iterates 0, 1, 2.
 #[test]
 fn test_null_coalesce_assignment_in_for_init() {
     let out = compile_and_run(
@@ -188,6 +211,8 @@ for ($i ??= 0; $i < 3; $i++) {
     assert_eq!(out, "012");
 }
 
+// Verifies return type inference for a closure with branches that return different types;
+// the fixpoint return type must account for the branch return.
 #[test]
 fn test_closure_return_type_from_nested_branch() {
     let out = compile_and_run(
@@ -205,6 +230,8 @@ echo $result;
     assert_eq!(out, "positive");
 }
 
+// Verifies a function call whose result is assigned to a local variable and then echoed
+// produces the correct concatenated string output.
 #[test]
 fn test_assigned_user_function_call_string_result() {
     let out = compile_and_run(
@@ -222,6 +249,8 @@ run();
     assert_eq!(out, "Hello, World");
 }
 
+// Verifies a ternary with int/string branches allocates the wider type (string) at runtime
+// when the condition is false.
 #[test]
 fn test_ternary_allocates_for_wider_type() {
     let out = compile_and_run(
@@ -236,6 +265,8 @@ test(false);
     assert_eq!(out, "none");
 }
 
+// Verifies a ternary in a function where both branches return strings produces correct output
+// for both positive and non-positive inputs.
 #[test]
 fn test_ternary_both_branches_in_function() {
     let out = compile_and_run(

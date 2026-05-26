@@ -11,9 +11,13 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_fill_keys_refcounted: create an associative array from string keys and a borrowed refcounted payload.
-/// Input:  x0=keys_array (string array), x1=borrowed heap pointer
-/// Output: x0=new hash table
+/// Creates an associative array by filling keys from an indexed string array with a borrowed refcounted value.
+/// x0 = keys_array (indexed string array), x1 = borrowed heap pointer to fill value, x2 = value_type tag
+/// Output: x0 = newly allocated hash table with keys mapped to the retained fill value.
+/// Saves x2 to the stack (not passed through to helpers) because it must be preserved across calls.
+/// Iterates over each key, normalizes numeric-string keys to PHP integers via `__rt_hash_normalize_key`,
+/// retains the fill payload via `__rt_incref`, and inserts into the result hash via `__rt_hash_set`.
+/// Capacity is computed as max(keys_len * 2, 16); the hash table may grow during insertion.
 pub fn emit_array_fill_keys_refcounted(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_fill_keys_refcounted_linux_x86_64(emitter);
@@ -81,6 +85,12 @@ pub fn emit_array_fill_keys_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return result hash
 }
 
+/// x86_64 Linux implementation of `emit_array_fill_keys_refcounted`.
+/// Uses System V AMD64 ABI: rdi = keys array, rsi = borrowed fill payload, rdx = value_type tag.
+/// Allocates hash table with capacity max(keys_len * 2, 16), normalizes each key via `__rt_hash_normalize_key`,
+/// retains the fill payload via `__rt_incref`, and inserts via `__rt_hash_set`.
+/// Preserves hash pointer across insertions (it may grow and be reallocated).
+/// Clobbers caller-saved registers (rax, rcx, rdx, r8, r9, r10, r11) per System V ABI; preserves rbp.
 fn emit_array_fill_keys_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_fill_keys_refcounted ---");

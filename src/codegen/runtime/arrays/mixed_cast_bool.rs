@@ -12,9 +12,15 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// mixed_cast_bool: cast a boxed mixed payload to bool using the current scalar rules.
-/// Input:  x0 = boxed mixed pointer
-/// Output: x0 = boolean result
+/// Emits the `__rt_mixed_cast_bool` runtime helper.
+///
+/// Dispatches on the unboxed runtime tag to apply PHP scalar truthiness rules:
+/// integers (zero/nonzero), strings (empty/"0"/non-empty), floats (zero/nonzero),
+/// bools (direct), indexed/associative arrays (empty/non-empty), resources (always true),
+/// and null/unsupported (falsy). Calls `__rt_mixed_unbox` to拆box the input pointer.
+///
+/// ABI: ARM64 — input boxed mixed pointer in `x0`, result boolean in `x0`.
+/// ABI: x86_64 — input boxed mixed pointer in `rdi`, result boolean in `rax`.
 pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_cast_bool_linux_x86_64(emitter);
@@ -93,6 +99,10 @@ pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the boolean cast result in x0
 }
 
+/// Emits the `__rt_mixed_cast_bool` runtime helper for the x86_64 Linux target.
+/// Mirrors the ARM64 logic with x86_64 SysV ABI register conventions:
+/// input boxed mixed pointer in `rdi`, result boolean in `rax`.
+/// Uses `__rt_mixed_unbox` to拆box the input before tag-based dispatch.
 fn emit_mixed_cast_bool_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_cast_bool ---");

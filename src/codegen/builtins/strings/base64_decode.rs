@@ -16,6 +16,10 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `base64_decode` builtin call.
+///
+/// Evaluates the first argument (the base64-encoded string) and calls the runtime
+/// helper `__rt_base64_decode` to decode it. Returns `PhpType::Str` on success.
 pub fn emit(
     _name: &str,
     args: &[Expr],

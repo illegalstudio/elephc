@@ -11,10 +11,26 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// number_format: format a float with decimals and custom separators.
-/// Input:  d0 = number, x1 = decimals, x2 = dec_point char, x3 = thousands_sep char (0=none)
-/// Output: x1 = pointer to string, x2 = length
-/// Uses snprintf for decimal formatting, then inserts thousands separators.
+/// Emits the `__rt_number_format` runtime helper.
+///
+/// Formats a floating-point number with configurable decimal places and separators,
+/// writing the result into the concat buffer. Dispatches to target-specific implementations.
+///
+/// Input registers (ARM64): `d0` = number, `x1` = decimals, `x2` = dec_point char, `x3` = thousands_sep (0=none)
+/// Output registers (ARM64): `x1` = string pointer, `x2` = string length
+/// Input registers (x86_64 SysV): `xmm0` = number, `rdi` = decimals, `rsi` = dec_point, `rdx` = thousands_sep
+/// Output registers (x86_64 SysV): `rax` = string pointer, `rdx` = string length
+///
+/// Stack frame layout (ARM64, 128 bytes):
+///   `[sp+0..47]`  snprintf buffer (48 bytes)
+///   `[sp+64..68]` format string `"%.Nf\0"`
+///   `[sp+72]`     result start ptr
+///   `[sp+80]`     raw snprintf length
+///   `[sp+88]`     number (double)
+///   `[sp+96]`     decimals
+///   `[sp+100]`    dec_point char
+///   `[sp+104]`    thousands_sep char
+///   `[sp+112]`    saved x29, x30
 pub fn emit_number_format(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_number_format_linux_x86_64(emitter);
@@ -161,6 +177,7 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// ARM64 implementation of the `__rt_number_format` runtime helper.
 fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: number_format ---");

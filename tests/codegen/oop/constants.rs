@@ -12,6 +12,7 @@ use super::*;
 
 #[test]
 fn test_class_constant_int() {
+    //! Verifies integer class constant is inlined and accessible via ClassName::CONST.
     let out = compile_and_run(
         r#"<?php
 class Math {
@@ -25,6 +26,7 @@ echo Math::PI;
 
 #[test]
 fn test_class_constant_string() {
+    //! Verifies string class constant is inlined and accessible via ClassName::CONST.
     let out = compile_and_run(
         r#"<?php
 class Greet {
@@ -38,6 +40,7 @@ echo Greet::HELLO;
 
 #[test]
 fn test_class_constant_inherited_from_parent() {
+    //! Verifies child class inherits parent constants via ClassName::CONST lookup.
     let out = compile_and_run(
         r#"<?php
 class Base {
@@ -52,6 +55,7 @@ echo Child::VERSION;
 
 #[test]
 fn test_class_constant_expression_can_reference_self_constant() {
+    //! Verifies constant expressions can use self:: to reference other constants in the same class.
     let out = compile_and_run(
         r#"<?php
 class Box {
@@ -66,6 +70,8 @@ echo Box::B;
 
 #[test]
 fn test_inherited_class_constant_expression_keeps_lexical_self() {
+    //! Verifies self:: in a parent constant expression refers to the defining class, not the runtime subclass.
+    //! Regression: lexical self must not be replaced with runtime dynamic dispatch.
     let out = compile_and_run(
         r#"<?php
 class Base {
@@ -83,6 +89,7 @@ echo Child::B;
 
 #[test]
 fn test_class_constant_expression_can_reference_parent_constant() {
+    //! Verifies constant expressions can use parent:: to access inherited constants.
     let out = compile_and_run(
         r#"<?php
 class Base {
@@ -99,6 +106,7 @@ echo Child::B;
 
 #[test]
 fn test_class_constant_expression_can_use_self_class() {
+    //! Verifies self::class magic constant works inside a constant expression.
     let out = compile_and_run(
         r#"<?php
 class Box {
@@ -112,6 +120,7 @@ echo Box::NAME;
 
 #[test]
 fn test_class_constant_self_access_inside_method() {
+    //! Verifies self::CONST inside an instance method resolves to the defining class constant.
     let out = compile_and_run(
         r#"<?php
 class Box {
@@ -127,6 +136,7 @@ echo $b->describe();
 
 #[test]
 fn test_interface_constant() {
+    //! Verifies interface constants are accessible through implementing class and via ClassName::CONST.
     let out = compile_and_run(
         r#"<?php
 interface Limits {
@@ -144,6 +154,7 @@ echo $b->get();
 
 #[test]
 fn test_class_constant_with_attribute_compiles() {
+    //! Verifies constants with PHP attributes compile without error; attribute is discarded.
     let out = compile_and_run(
         r#"<?php
 class Cfg {

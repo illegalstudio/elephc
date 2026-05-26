@@ -11,9 +11,22 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_slice_refcounted: extract a slice of a refcounted array into a new array.
-/// Input: x0 = array pointer, x1 = offset, x2 = length (-1 means to end)
-/// Output: x0 = pointer to new sliced array
+/// Emits the `__rt_array_slice_refcounted` runtime helper.
+///
+/// Extracts a slice of a refcounted PHP array into a new array. The source array
+/// is never modified; the returned array owns its elements independently.
+///
+/// ## ABI
+/// - **ARM64**: `x0` = source array pointer, `x1` = start offset, `x2` = length (`-1` = till end).
+///   Result returned in `x0`.
+/// - **x86_64 Linux**: `rdi` = source array pointer, `rsi` = start offset, `rdx` = length.
+///   Result returned in `rax`.
+///
+/// ## Slice semantics
+/// - Negative offset: counted backward from end of source, clamped to 0.
+/// - Length `-1` (ARM64) / `-1` sentinel: slice from offset to end of source.
+/// - Length exceeding remaining elements: clamped to available elements.
+/// - Offset out of range: returns an empty array.
 pub fn emit_array_slice_refcounted(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_slice_refcounted_linux_x86_64(emitter);
@@ -88,6 +101,10 @@ pub fn emit_array_slice_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return empty sliced array
 }
 
+/// Emits the x86_64 Linux variant of `__rt_array_slice_refcounted`.
+/// Identical slice semantics to the ARM64 variant; only the ABI and register
+/// encoding differ. Uses the System V AMD64 ABI: `rdi`, `rsi`, `rdx` for arguments,
+/// `rax` for return value.
 fn emit_array_slice_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_slice_refcounted ---");

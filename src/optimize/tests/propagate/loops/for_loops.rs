@@ -11,6 +11,10 @@
 use super::*;
 
 #[test]
+// Verifies the propagate constants pass can track a variable assigned before a switch,
+// resolve the switch subject to its known value, follow the matching case branch
+// assignments, and constant-fold a subsequent expression using the propagated result.
+// The echo `base ^ 3` where `base = 2` from the matched case should fold to `8.0`.
 fn test_propagate_constants_uses_known_switch_subject_for_merge() {
     let program = vec![
         Stmt::assign("mode", Expr::int_lit(1)),
@@ -40,6 +44,9 @@ fn test_propagate_constants_uses_known_switch_subject_for_merge() {
 }
 
 #[test]
+// Verifies the pass preserves a scalar variable (`base`) assigned before a for loop
+// when the variable is not modified inside the loop body. After the loop,
+// `base ^ 3` should constant-fold to `8.0` even though the loop itself runs.
 fn test_propagate_constants_preserves_unmodified_scalar_across_for_loop() {
     let program = vec![
         Stmt::assign("base", Expr::int_lit(2)),
@@ -70,6 +77,9 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_for_loop() {
 }
 
 #[test]
+// Verifies the pass tracks an assignment (`base = 2`) that occurs inside an infinite
+// for loop (no condition) when that assignment is followed by a unconditional break.
+// The variable should be available after the loop for constant folding (`base ^ 3` → `8.0`).
 fn test_propagate_constants_tracks_assignment_through_for_infinite_break() {
     let program = vec![
         Stmt::new(
@@ -96,6 +106,9 @@ fn test_propagate_constants_tracks_assignment_through_for_infinite_break() {
 }
 
 #[test]
+// Verifies the pass tracks assignments from the for loop's init clause even when the
+// condition is a constant `false` (so the loop body never executes). The init
+// assignment `base = 2` should still be available for `base ^ 3` → `8.0` outside the loop.
 fn test_propagate_constants_preserves_for_init_when_condition_is_false() {
     let program = vec![
         Stmt::new(
@@ -119,6 +132,10 @@ fn test_propagate_constants_preserves_for_init_when_condition_is_false() {
 }
 
 #[test]
+// Verifies the pass correctly handles stable init-clause assignments: `exp = 3` in the
+// for init is not modified within the loop body, so it remains a known constant.
+// Both the echo inside the loop (`base ^ exp` → `8.0`) and the final echo (`exp` → `3`)
+// should constant-fold correctly.
 fn test_propagate_constants_tracks_stable_for_init_assignments() {
     let program = vec![
         Stmt::assign("base", Expr::int_lit(2)),

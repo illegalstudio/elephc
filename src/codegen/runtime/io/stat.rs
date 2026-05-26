@@ -10,9 +10,11 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// Stat-related helpers: file_exists, is_file, is_dir, is_readable, is_writable,
-/// filesize, filemtime.
-/// All take x1/x2=path string, return result in x0.
+/// Emits all stat-related runtime helpers for the current target.
+///
+/// Dispatches to `emit_stat_linux_x86_64` on x86_64 Linux; on all other targets
+/// (macOS ARM64, Linux ARM64), emits ARM64 stat helpers directly.
+/// Input: x1/x2=path string (pointer/length). Output: x0=result (integer or timestamp).
 pub fn emit_stat(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_stat_linux_x86_64(emitter);
@@ -248,6 +250,10 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits x86_64 Linux stat helpers: __rt_file_exists, __rt_is_file, __rt_is_dir,
+/// __rt_filesize, __rt_filemtime, plus permission checks via `emit_linux_access_check`.
+/// Uses the Linux `stat()` syscall via libc and the System V AMD64 ABI.
+/// Input: rdi=path pointer, rsi=path length (elephc string convention). Output: rax=result.
 fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     let mode_off = 24usize;
     let size_off = emitter.platform.stat_size_offset();
@@ -344,6 +350,12 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the Unix modification timestamp to the caller
 }
 
+/// Common x86_64 Linux helper: calls `__rt_cstr`, then invokes libc `stat()` to fill a
+/// stack-allocated stat buffer.
+///
+/// Frame: pushes old `rbp`, sets `rbp=rsp`, subtracts `frame_size` (16-byte aligned).
+/// Input: rax/rdx=elephc string (path). Clobbers: rax, rdi, rsi, rcx, r11, temporaries.
+/// Preserves: rbp is restored by the caller after the stat buffer is read.
 fn emit_linux_stat_call(emitter: &mut Emitter, frame_size: usize) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while the stat helper uses a local frame
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the temporary stat buffer
@@ -354,6 +366,11 @@ fn emit_linux_stat_call(emitter: &mut Emitter, frame_size: usize) {
     emitter.instruction("call stat");                                           // fill the temporary stat buffer through libc stat()
 }
 
+/// Common x86_64 Linux helper: calls `__rt_cstr`, then invokes libc `access()` to check
+/// path permissions.
+///
+/// Mode values: 4=R_OK (readable), 2=W_OK (writable). Uses System V AMD64 ABI.
+/// Input: rax/rdx=elephc string (path), `mode`=access mode constant. Output: rax=0/1.
 fn emit_linux_access_check(emitter: &mut Emitter, mode: u32) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while the access helper makes libc calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the call-aligned access helper

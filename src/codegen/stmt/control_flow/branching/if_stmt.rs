@@ -16,6 +16,11 @@ use crate::codegen::abi;
 use crate::codegen::stmt::emit_stmt;
 use crate::parser::ast::{Expr, Stmt};
 
+/// Lowers an if/elseif/else structure into target assembly.
+/// Allocates an end label shared by all branches; emits condition evaluation,
+/// truthiness coercion, and conditional jumps. Each branch body falls through
+/// or jumps to the shared end label. Bodies inherit the surrounding loop/switch/finally
+/// cleanup context through the context stack.
 pub(super) fn emit_if_stmt(
     condition: &Expr,
     then_body: &[Stmt],

@@ -13,7 +13,8 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// Emit `__rt_mixed_count(mixed_ptr) → int`.
+/// Emits the `__rt_mixed_count` runtime helper for `count()` on a boxed Mixed receiver.
+/// Dispatches to the target-specific implementation.
 pub fn emit_mixed_count(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_count_x86_64(emitter);
@@ -22,6 +23,16 @@ pub fn emit_mixed_count(emitter: &mut Emitter) {
     emit_mixed_count_aarch64(emitter);
 }
 
+/// Emits `__rt_mixed_count` for ARM64.
+///
+/// Input: `x0` = pointer to boxed Mixed.
+/// Output: `x0` = count (int), or 0 if the Mixed is not a countable container.
+///
+/// Behavior:
+/// - Tag 4 (indexed array) or tag 5 (associative array): reads the count from the
+///   payload header at offset 0 and returns it in `x0`.
+/// - Any other tag (including null): returns 0 silently, matching PHP's quiet
+///   "not countable" semantics.
 fn emit_mixed_count_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_count ---");
@@ -46,6 +57,16 @@ fn emit_mixed_count_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return 0 in x0
 }
 
+/// Emits `__rt_mixed_count` for x86_64.
+///
+/// Input: `rax` = pointer to boxed Mixed (single-arg int-result ABI).
+/// Output: `rax` = count (int), or 0 if the Mixed is not a countable container.
+///
+/// Behavior:
+/// - Tag 4 (indexed array) or tag 5 (associative array): reads the count from the
+///   payload header at offset 0 and returns it in `rax`.
+/// - Any other tag (including null): returns 0 silently, matching PHP's quiet
+///   "not countable" semantics.
 fn emit_mixed_count_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_count ---");
@@ -72,9 +93,9 @@ fn emit_mixed_count_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return 0 in rax
 }
 
-// Suppress an unused-import warning for the abi module on architectures
-// that don't yet need its helpers in this small file. The import keeps the
-// module structurally consistent with sibling runtime emitters.
+/// Suppresses the unused-import warning for the `abi` module on architectures that
+/// don't yet need its helpers in this file. The import keeps the module structurally
+/// consistent with sibling runtime emitters.
 const _: fn(&Emitter) = |_| {
     let _ = abi::int_result_reg;
 };

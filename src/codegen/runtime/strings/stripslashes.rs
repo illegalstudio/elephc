@@ -11,8 +11,16 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// stripslashes: remove escape backslashes.
-/// Input: x1/x2=string. Output: x1/x2=result.
+/// Emits the `__rt_stripslashes` runtime helper for the current target.
+///
+/// Removes escape backslashes from a PHP byte-string by copying bytes from source
+/// to the concat buffer, skipping backslashes and their following escaped characters.
+/// Trailing backslashes (no character to escape) are preserved as literal backslashes.
+///
+/// # ABI
+/// - ARM64: input string in x1/x2 (pointer/length), result returned in x1/x2
+/// - x86_64 Linux: input string in rax/rdx (pointer/length), result returned in rax/rdx
+/// - Updates `_concat_off` and `_concat_buf` with the written output slice
 pub fn emit_stripslashes(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_stripslashes_linux_x86_64(emitter);
@@ -53,6 +61,8 @@ pub fn emit_stripslashes(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits `__rt_stripslashes` for the x86_64 Linux ABI.
+/// x86_64 calling convention: input string in rax/rdx, result in rax/rdx.
 fn emit_stripslashes_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stripslashes ---");

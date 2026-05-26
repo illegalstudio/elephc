@@ -64,6 +64,7 @@ fn test_mixed_chained_access() {
     assert_eq!(out, "Alice,Bob");
 }
 
+// Chained index access through nested assoc arrays with in-place mutation via json_decode.
 #[test]
 fn test_mixed_chained_assoc_array_assignment() {
     let out = compile_and_run(
@@ -78,7 +79,7 @@ fn test_mixed_chained_assoc_array_assignment() {
 
 // stdClass receiver via array bracket access — PHP allows it for objects
 // with public properties accessed by string key (e.g. ArrayAccess interface
-// is the strict path; for stdClass elephc emulates the friendly idiom).
+// is the strict path; for stdClass elefant emulates the friendly idiom).
 #[test]
 fn test_mixed_string_index_on_stdclass() {
     let out = compile_and_run(
@@ -91,8 +92,7 @@ fn test_mixed_string_index_on_stdclass() {
 }
 
 // Missing keys decode to Mixed(null) instead of erroring out — matches
-// PHP's quiet "undefined index" warning behavior collapsed to a typed
-// null.
+// PHP's quiet "undefined index" warning behavior collapsed to a typed null.
 #[test]
 fn test_mixed_index_missing_key_is_null() {
     let out = compile_and_run(
@@ -147,7 +147,7 @@ fn test_mixed_count_assoc() {
 }
 
 // `count()` on a non-container Mixed payload returns 0 (PHP would emit a
-// warning and return 1 in older versions / 0 in PHP 8+; elephc collapses
+// warning and return 1 in older versions / 0 in PHP 8+; elefant collapses
 // to 0).
 #[test]
 fn test_mixed_count_scalar_is_zero() {
@@ -155,7 +155,8 @@ fn test_mixed_count_scalar_is_zero() {
     assert_eq!(out, "0");
 }
 
-// Nested access with mixed key types.
+// Nested access with int key first, then string key: `arr[0]["x"]` on an
+// array of assoc objects returned by json_decode.
 #[test]
 fn test_mixed_index_nested_int_then_string() {
     let out = compile_and_run(

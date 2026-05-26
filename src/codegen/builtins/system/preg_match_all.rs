@@ -16,6 +16,8 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a `preg_match_all` call, passing pattern (args[0]) and subject (args[1])
+/// to `__rt_preg_match_all` via platform ABI. Returns Int (match count).
 pub fn emit(
     _name: &str,
     args: &[Expr],

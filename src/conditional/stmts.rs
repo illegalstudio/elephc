@@ -14,6 +14,11 @@ use crate::parser::ast::{CatchClause, Stmt, StmtKind};
 
 use super::exprs::rewrite_expr;
 
+/// Recursively rewrites a statement list, selecting `ifdef` branches and recursing into child bodies.
+///
+/// Each `StmtKind::IfDef` is resolved by selecting `then_body` or `else_body` based on whether
+/// the symbol is present in `defines`. All other statements have their expressions rewritten
+/// and child bodies recursively processed. Returns a new `Vec<Stmt>` with inactive branches removed.
 pub(super) fn apply_stmts(stmts: Vec<Stmt>, defines: &HashSet<String>) -> Vec<Stmt> {
     let mut result = Vec::new();
     for stmt in stmts {
@@ -42,6 +47,12 @@ pub(super) fn apply_stmts(stmts: Vec<Stmt>, defines: &HashSet<String>) -> Vec<St
     result
 }
 
+/// Rewrites a single `StmtKind` by applying `ifdef` conditions and recursively processing child bodies.
+///
+/// For each variant, expressions are rewritten via `rewrite_expr` and nested statement lists are
+/// rewritten via `apply_stmts`. Branchless variants (declarations, breaks, etc.) are returned unchanged.
+/// `IfDef` variants should not reach this function — they are handled in `apply_stmts` before this
+/// is called; the `unreachable!` on line 385 enforces this invariant.
 fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
     match kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(apply_stmts(stmts, defines)),

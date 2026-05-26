@@ -20,8 +20,10 @@ use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{FunctionSig, PhpType};
 
-/// Emit an extern (FFI) function call using the C ABI.
-/// The C symbol is `_{name}` (macOS convention).
+/// Lowers an extern (FFI) call into target C ABI.
+/// Handles argument preevaluation, cleanup slot reservation, string conversion,
+/// register allocation, the foreign call, and borrowed-string cleanup after the call.
+/// Returns the PHP return type derived from the extern function's signature.
 pub fn emit_extern_call(
     name: &str,
     args: &[Expr],
@@ -200,6 +202,10 @@ pub fn emit_extern_call(
     sig.return_type
 }
 
+/// Evaluates all extern call arguments in source order before the C ABI stack is set up.
+/// Emits each argument expression, coerces it to the target parameter type, and pushes the result
+/// onto a temporary stack. Returns a vector of the emitted PHP types for each argument (after coercion).
+/// Callable arguments are resolved to symbol addresses at emit time.
 fn preevaluate_extern_args(
     args: &[Expr],
     sig: &crate::types::ExternFunctionSig,
@@ -249,6 +255,9 @@ fn preevaluate_extern_args(
     source_temp_types
 }
 
+/// Determines whether an owned `Mixed` or `Union` source value must be preserved on the stack
+/// while coercing it to a non-Mixed extern parameter type, to avoid leaking the heap value.
+/// Returns true when the argument is owned and not itself being coerced to a reference type.
 fn should_release_owned_mixed_after_extern_arg_coerce(
     arg: &Expr,
     source_ty: &PhpType,
@@ -268,6 +277,8 @@ fn should_release_owned_mixed_after_extern_arg_coerce(
             ))
 }
 
+/// Returns the stack slot size for a PHP type used as an extern argument or return value.
+/// `Void` and `Never` types occupy 0 bytes; all other types occupy 16 bytes (one slot).
 fn temp_slot_size(ty: &PhpType) -> usize {
     if matches!(ty, PhpType::Void | PhpType::Never) {
         0
@@ -276,10 +287,14 @@ fn temp_slot_size(ty: &PhpType) -> usize {
     }
 }
 
+/// Computes the total bytes occupied by all extern argument temporaries on the stack,
+/// using `temp_slot_size` for each type.
 fn pushed_temp_bytes(types: &[PhpType]) -> usize {
     types.iter().map(temp_slot_size).sum()
 }
 
+/// Computes the byte offset of each extern argument temporary from the top of the stack,
+/// iterating in reverse order so later arguments have higher offsets (matching the C call convention).
 fn temp_offsets(types: &[PhpType]) -> Vec<usize> {
     let mut offsets = vec![0usize; types.len()];
     let mut running = 0usize;
@@ -290,10 +305,16 @@ fn temp_offsets(types: &[PhpType]) -> Vec<usize> {
     offsets
 }
 
+/// Computes the absolute stack byte offset for a given extern argument temporary index,
+/// adding `extra_bytes` to account for cleanup slots reserved below the argument area.
 fn source_temp_offset(source_temp_types: &[PhpType], temp_idx: usize, extra_bytes: usize) -> usize {
     extra_bytes + temp_offsets(source_temp_types)[temp_idx]
 }
 
+/// Loads an extern argument temporary from the stack into the appropriate result register(s)
+/// based on its type: float to `d0`, string to `(x1, x2)`, scalar/pointer to `x0`.
+/// `extra_bytes` accounts for any cleanup slots positioned below the argument area on the stack.
+/// Returns the PHP type of the loaded value.
 fn load_extern_source_temp_to_result(
     temp_idx: usize,
     source_temp_types: &[PhpType],
@@ -319,6 +340,8 @@ fn load_extern_source_temp_to_result(
     ty
 }
 
+/// Returns the name of the Nth integer/pointer argument register for the current target's C ABI.
+/// ARM64: x0–x7; x86_64: rdi, rsi, rdx, rcx, r8, r9.
 fn int_abi_arg_reg(emitter: &Emitter, idx: usize) -> &'static str {
     match emitter.target.arch {
         Arch::AArch64 => ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"][idx],
@@ -326,6 +349,8 @@ fn int_abi_arg_reg(emitter: &Emitter, idx: usize) -> &'static str {
     }
 }
 
+/// Returns the name of the Nth floating-point argument register for the current target's C ABI.
+/// ARM64: d0–d7; x86_64: xmm0–xmm7.
 fn float_abi_arg_reg(emitter: &Emitter, idx: usize) -> &'static str {
     match emitter.target.arch {
         Arch::AArch64 => ["d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7"][idx],
@@ -333,6 +358,8 @@ fn float_abi_arg_reg(emitter: &Emitter, idx: usize) -> &'static str {
     }
 }
 
+/// Widens an integer-like result (in the integer result register) to a C double in the
+/// floating-point result register. Used when a PHP integer is passed to a C float parameter.
 fn emit_widen_int_like_to_float(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -344,6 +371,8 @@ fn emit_widen_int_like_to_float(emitter: &mut Emitter) {
     }
 }
 
+/// Emits a zero literal into the integer result register to represent a null pointer
+/// when a PHP `Void` value (null) is passed to a C `Pointer` parameter.
 fn emit_zero_int_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -355,6 +384,8 @@ fn emit_zero_int_result(emitter: &mut Emitter) {
     }
 }
 
+/// Sign-extends a 32-bit C integer return value into the native integer register.
+/// Required so PHP comparisons use the full 64-bit result after a C `int` return.
 fn emit_sign_extend_i32_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -366,6 +397,8 @@ fn emit_sign_extend_i32_result(emitter: &mut Emitter) {
     }
 }
 
+/// Pushes the current FFI return value (in result registers) onto the temporary stack to
+/// preserve it while borrowed C-string temporaries are cleaned up. Returns the number of bytes pushed (0 for void).
 fn push_ffi_return_value(emitter: &mut Emitter, ty: &PhpType) -> usize {
     match ty {
         PhpType::Void => 0,
@@ -385,6 +418,8 @@ fn push_ffi_return_value(emitter: &mut Emitter, ty: &PhpType) -> usize {
     }
 }
 
+/// Pops a previously preserved FFI return value off the temporary stack back into the
+/// result registers. No-op for void return type.
 fn pop_ffi_return_value(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Void => {}

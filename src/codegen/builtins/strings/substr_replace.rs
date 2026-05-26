@@ -15,6 +15,21 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `substr_replace(string, replacement, start, length)` builtin call.
+///
+/// Handles four-argument form where `length` is optional (defaults to replacement through
+/// end of subject). Pushes arguments onto the stack in evaluation order so that the callee
+/// can restore them in ABI order for the runtime helper.
+///
+/// # Arguments
+/// - `args[0]`: subject string to modify
+/// - `args[1]`: replacement string
+/// - `args[2]`: start offset (int)
+/// - `args[3]` (optional): replacement length; when absent, sentinel `-1` is passed to
+///   replace through end of subject string
+///
+/// # Return
+/// Always returns `Some(PhpType::Str)` — the runtime helper allocates a new PHP string.
 pub fn emit(
     _name: &str,
     args: &[Expr],

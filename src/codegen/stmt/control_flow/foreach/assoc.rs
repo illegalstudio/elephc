@@ -16,6 +16,21 @@ use crate::codegen::stmt::emit_stmt;
 use crate::parser::ast::Stmt;
 use crate::types::PhpType;
 
+/// Lowers `foreach` over associative arrays (hash tables) with key/value variable binding.
+/// Dispatches to the target-specific implementation (ARM64 or x86_64) and handles the
+/// full loop lifecycle: iterator initialization, value/key loading with ownership management,
+/// body emission, and cleanup on break/continue/loop completion.
+///
+/// # Arguments
+/// - `key_var` — optional `$key` variable name; if present, the current iteration key is stored.
+/// - `value_var` — the `$value` variable name to bind on each iteration.
+/// - `value_by_ref` — whether the value variable is by-reference (`foreach ($arr as &$v)`).
+/// - `value_was_ref` — whether the value variable was already a reference before this loop.
+/// - `local_ref_cell_flag_key` — optional key for the local ref cell flag slot when rebinding refs.
+/// - `body` — the loop body statements to emit.
+/// - `loop_start`, `loop_end`, `loop_cont` — labels for loop control flow.
+/// - `key_ty`, `val_ty` — PHP types of the key and value for correct storage and ownership.
+/// - `emitter`, `ctx`, `data` — codegen machinery.
 pub(crate) fn emit_assoc_foreach(
     key_var: &Option<String>,
     value_var: &str,
@@ -226,6 +241,12 @@ pub(crate) fn emit_assoc_foreach(
     }
 }
 
+/// Lowers `foreach` over associative arrays on the x86_64 Linux target.
+/// Uses the System V AMD64 ABI: hash-table pointer in `rdi`, iterator cursor in `rsi`,
+/// and returns key/payload via `rax` (cursor), `rcx`/`r8` (payload), `r9` (tag).
+///
+/// Handles by-reference value binding with a ref flag at `stack_size`, preserves
+/// iterator state across loop body emission, and manages Mixed-type boxing/reuse.
 fn emit_assoc_foreach_linux_x86_64(
     key_var: &Option<String>,
     value_var: &str,
@@ -418,6 +439,20 @@ fn emit_assoc_foreach_linux_x86_64(
     }
 }
 
+/// Stores the current associative-array iteration key into the `$key` variable slot on ARM64.
+///
+/// # Arguments
+/// - `name` — variable name (for warnings only).
+/// - `offset` — stack offset of the key variable.
+/// - `key_ty` — PHP type of the key determining register layout and boxing logic.
+/// - `emitter`, `ctx` — codegen machinery.
+///
+/// # Behavior
+/// - `Int`/`Bool`: stores via `x1` (low word only).
+/// - `Str`: stores via `x1` (ptr) and `x2` (len).
+/// - `Mixed`: boxes the key (int tag 0 or string tag 1) and stores the owned mixed cell pointer,
+///   releasing any prior owned mixed key via `__rt_decref_mixed`.
+/// - Other types: stores `x1` with a warning (unsupported type).
 fn store_assoc_key_var_aarch64(
     name: &str,
     offset: usize,
@@ -463,6 +498,20 @@ fn store_assoc_key_var_aarch64(
     }
 }
 
+/// Stores the current associative-array iteration key into the `$key` variable slot on x86_64.
+///
+/// # Arguments
+/// - `name` — variable name (for warnings only).
+/// - `offset` — stack offset of the key variable.
+/// - `key_ty` — PHP type of the key determining register layout and boxing logic.
+/// - `emitter`, `ctx` — codegen machinery.
+///
+/// # Behavior
+/// - `Int`/`Bool`: stores via `rdi` (low word only).
+/// - `Str`: stores via `rdi` (ptr) and `rdx` (len).
+/// - `Mixed`: boxes the key (int tag 0 or string tag 1) and stores the owned mixed cell pointer,
+///   releasing any prior owned mixed key via `__rt_decref_mixed`.
+/// - Other types: stores `rdi` with a warning (unsupported type).
 fn store_assoc_key_var_x86_64(
     name: &str,
     offset: usize,

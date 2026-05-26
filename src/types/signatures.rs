@@ -15,6 +15,11 @@ use crate::span::Span;
 use super::PhpType;
 
 #[derive(Debug, Clone, PartialEq)]
+/// Metadata for a callable's parameter and return type contract.
+///
+/// Used by call planning, named-argument resolution, first-class callables,
+/// and type inference. Builtin signatures must match PHP for coherence with
+/// named arguments, callable aliases, and mutation semantics.
 pub struct FunctionSig {
     pub params: Vec<(String, PhpType)>,
     pub defaults: Vec<Option<Expr>>,
@@ -29,6 +34,13 @@ pub struct FunctionSig {
     pub deprecation: Option<String>,
 }
 
+/// Upgrades a variadic signature for use as a first-class callable.
+///
+/// If the variadic parameter is not already typed as `Array`, upgrades it to
+/// `Array<Mixed>`. Non-variadic signatures are returned unchanged.
+///
+/// Called from:
+/// - first-class callable lowering in codegen
 pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
     let Some(variadic_name) = sig.variadic.as_ref() else {
         return sig.clone();
@@ -54,6 +66,16 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
     wrapper_sig
 }
 
+/// Looks up a builtin function's canonical call signature.
+///
+/// Returns `Some(FunctionSig)` for known PHP builtins (e.g., `strlen`, `array_push`);
+/// returns `None` for untracked or user-defined functions. The returned signature
+/// reflects PHP's actual parameter ordering, defaults, variadics, and by-ref params.
+///
+/// Called from:
+/// - type checker builtin validation
+/// - first-class callable builtin sig construction
+/// - optimizer effect modeling for builtins
 pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
     match name {
         "time" | "phpversion" | "json_last_error" | "json_last_error_msg" | "pi"
@@ -385,6 +407,14 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
     }
 }
 
+/// Returns the signature used when a builtin is accessed as a first-class callable.
+///
+/// Some builtins (e.g., `strlen`, `count`, `buffer_len`) have explicit first-class
+/// signatures with precise parameter and return types. Unknown builtins fall through
+/// to `general_first_class_callable_builtin_sig`.
+///
+/// Called from:
+/// - first-class callable lowering for builtin references
 pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
     match name {
         "strlen" => Some(FunctionSig {
@@ -427,6 +457,9 @@ pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig
     }
 }
 
+/// Fallback first-class callable signature builder for builtins without an explicit override.
+/// Constructs typed signatures for builtins where the canonical call signature
+/// (from `builtin_call_sig`) is not appropriate for first-class use.
 fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
     match name {
         "time" | "json_last_error" => Some(typed_first_class_builtin_sig(
@@ -633,6 +666,11 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
     }
 }
 
+/// Builds a first-class callable signature by overriding parameter and return types
+/// on top of an existing builtin catalog entry.
+///
+/// Panics if `name` is not in the builtin catalog — all first-class callable builtins
+/// must have a prior `builtin_call_sig` entry.
 fn typed_first_class_builtin_sig(
     name: &str,
     param_types: &[PhpType],
@@ -649,6 +687,9 @@ fn typed_first_class_builtin_sig(
     sig
 }
 
+/// Builds a first-class callable signature by overriding only the return type
+/// on top of an existing builtin catalog entry. Returns `None` if the builtin
+/// has no catalog entry.
 fn return_typed_first_class_builtin_sig(name: &str, return_type: PhpType) -> Option<FunctionSig> {
     let mut sig = builtin_call_sig(name)?;
     sig.return_type = return_type;
@@ -656,10 +697,16 @@ fn return_typed_first_class_builtin_sig(name: &str, return_type: PhpType) -> Opt
     Some(sig)
 }
 
+/// Constructs a signature with all parameters required (no defaults).
 fn fixed(params: &[&str]) -> FunctionSig {
     make_sig(params, vec![None; params.len()], None)
 }
 
+/// Constructs a signature with some trailing parameters optional.
+///
+/// `required` indicates how many leading params are mandatory; the rest receive
+/// defaults from `optional_defaults` (mapped positionally). Defaults are padded
+/// with `None` if fewer are provided than total params.
 fn optional(params: &[&str], required: usize, optional_defaults: Vec<Expr>) -> FunctionSig {
     let mut defaults = vec![None; required];
     defaults.extend(optional_defaults.into_iter().map(Some));
@@ -669,6 +716,10 @@ fn optional(params: &[&str], required: usize, optional_defaults: Vec<Expr>) -> F
     make_sig(params, defaults, None)
 }
 
+/// Constructs a variadic signature — trailing param collects excess arguments as an array.
+///
+/// `regular_params` lists the fixed parameters; `variadic_name` names the trailing
+/// variadic parameter. The variadic param starts as an empty `array` default.
 fn variadic(regular_params: &[&str], variadic_name: &str) -> FunctionSig {
     let mut params = regular_params.to_vec();
     params.push(variadic_name);
@@ -677,6 +728,7 @@ fn variadic(regular_params: &[&str], variadic_name: &str) -> FunctionSig {
     make_sig(&params, defaults, Some(variadic_name))
 }
 
+/// Marks the first parameter of a signature as by-reference.
 fn first_param_ref(mut sig: FunctionSig) -> FunctionSig {
     if let Some(first_ref) = sig.ref_params.first_mut() {
         *first_ref = true;
@@ -684,6 +736,10 @@ fn first_param_ref(mut sig: FunctionSig) -> FunctionSig {
     sig
 }
 
+/// Low-level `FunctionSig` constructor from raw parts.
+///
+/// Assembles params as `Mixed` types, sets all other fields from arguments,
+/// and defaults `deprecation` to `None`.
 fn make_sig(params: &[&str], defaults: Vec<Option<Expr>>, variadic: Option<&str>) -> FunctionSig {
     FunctionSig {
         params: params
@@ -700,18 +756,22 @@ fn make_sig(params: &[&str], defaults: Vec<Option<Expr>>, variadic: Option<&str>
     }
 }
 
+/// Constructs an `i64` literal expression for use in default parameter values.
 fn int_lit(value: i64) -> Expr {
     Expr::new(ExprKind::IntLiteral(value), Span::dummy())
 }
 
+/// Constructs a string literal expression for use in default parameter values.
 fn string_lit(value: &str) -> Expr {
     Expr::new(ExprKind::StringLiteral(value.to_string()), Span::dummy())
 }
 
+/// Constructs a boolean literal expression for use in default parameter values.
 fn bool_lit(value: bool) -> Expr {
     Expr::new(ExprKind::BoolLiteral(value), Span::dummy())
 }
 
+/// Constructs a null literal expression for use in default parameter values.
 fn null_lit() -> Expr {
     Expr::new(ExprKind::Null, Span::dummy())
 }

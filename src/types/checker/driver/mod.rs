@@ -42,6 +42,22 @@ mod functions;
 mod init;
 mod top_level;
 
+/// Orchestrates the full type-checker pipeline after parsing and name resolution.
+///
+/// Initializes the `Checker` and `TypeEnv`, then runs in order:
+/// 1. Yield-context validation
+/// 2. Function-declaration collection
+/// 3. Class/interface map construction (including builtins via injection)
+/// 4. Recursive class/interface info building
+/// 5. Enum declaration processing
+/// 6. Builtin signature patching
+/// 7. Extern declaration prescanning
+/// 8. Top-level program checking (twice: initial pass for errors that stabilize, then final)
+/// 9. Method body type-checking to stability
+/// 10. Implicit Stringable interface application
+///
+/// Returns `Ok((Checker, TypeEnv))` on success or `Err(CompileError)` if any phase reports errors.
+/// The `Checker` carries resolved class/interface/enum/function metadata; `TypeEnv` holds the global type environment.
 pub(super) fn check_types_impl(
     program: &Program,
     target_platform: Platform,

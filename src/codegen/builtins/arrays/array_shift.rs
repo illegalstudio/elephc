@@ -19,6 +19,26 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `array_shift()` builtin, which removes and returns the first element.
+///
+/// ## Inputs
+/// - `args[0]`: the array to shift from (passed by reference, mutated in place)
+/// - `emitter`: target-aware assembly emitter
+/// - `ctx`: codegen context (carries variable layout, caller storage for ref-like args)
+/// - `data`: data section for literals and runtime metadata
+///
+/// ## Outputs
+/// - Returns `Option<PhpType>`: the element type that was removed (`Int` if the array
+///   type is non-array or unknown, `inner` element type if wrapped in `PhpType::Array`)
+///
+/// ## Side effects & invariants
+/// - Uses COW (copy-on-write): calls `ensure_unique_arg` to ensure the array is uniquely
+///   owned before mutation to avoid modifying shared storage.
+/// - Calls `store_mutating_arg` to write the replacement array pointer back to the
+///   caller's variable slot after the runtime helper mutates the array in place.
+/// - On ARM64: uses `bl __rt_array_shift`; on x86_64: uses `mov rdi, rax` then
+///   `bl __rt_array_shift` to pass the array pointer via the first integer argument register.
+/// - Preserves source evaluation order; argument side effects occur before the runtime call.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -13,7 +13,11 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// Emit the ISO date sub-routine on both targets.
+/// Dispatches to the architecture-specific ISO date parser.
+/// Routes to `emit_iso_date_arm64` or `emit_iso_date_linux_x86_64` based on `emitter.target`.
+/// Inputs: trimmed ptr from `[sp+48]`, trimmed len from `[sp+56]`.
+/// Output: `struct tm` built at `[sp+0..47]` on the caller's frame.
+/// Exits: branches to `__rt_strtotime_fail` or `__rt_strtotime_ret` owned by the dispatcher.
 pub(crate) fn emit_iso_date(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_iso_date_linux_x86_64(emitter);
@@ -23,18 +27,32 @@ pub(crate) fn emit_iso_date(emitter: &mut Emitter) {
     emit_iso_date_arm64(emitter);
 }
 
+/// Emits a compare-and-branch sequence that rejects `reg` unless it holds a decimal digit (0–9).
+/// Used to validate each parsed ASCII digit before it is used in numeric assembly.
+/// Injects `b.hi __rt_strtotime_fail` on failure.
 fn emit_arm64_reject_unless_decimal_digit(emitter: &mut Emitter, reg: &str) {
     let cmp = format!("cmp {reg}, #9");
     emitter.instruction(&cmp);                                                  // ensure parsed byte is a decimal digit
     emitter.instruction("b.hi __rt_strtotime_fail");                            // reject malformed ISO numeric fields
 }
 
+/// Emits a compare-and-branch sequence that rejects `reg` unless it holds a decimal digit (0–9).
+/// Used to validate each parsed ASCII digit before it is used in numeric assembly.
+/// Injects `ja __rt_strtotime_fail_linux_x86_64` on failure.
 fn emit_x86_64_reject_unless_decimal_digit(emitter: &mut Emitter, reg: &str) {
     let cmp = format!("cmp {reg}, 9");
     emitter.instruction(&cmp);                                                  // ensure parsed byte is a decimal digit
     emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // reject malformed ISO numeric fields
 }
 
+/// Emits ARM64 assembly for the ISO date/datetime parser sub-routine.
+/// Entry label: `__rt_strtotime_iso_entry`.
+/// Inputs: trimmed ptr at `[sp+48]`, trimmed len at `[sp+56]`.
+/// Parses `YYYY-MM-DD` (10 bytes), `YYYY-MM-DD HH:MM` (16 bytes), and `YYYY-MM-DD HH:MM:SS` (19 bytes).
+/// Accepts date/time separator as space, `T`, or `t`.
+/// Builds `struct tm` at `[sp+0..47]`; fills tm_wday, tm_yday, tm_isdst before calling `mktime`.
+/// Exits via `__rt_strtotime_fail` on parse error, or `__rt_strtotime_ret` after `mktime`.
+/// Clobbers: x0–x12, w9–w11, lr (via `bl mktime`).
 fn emit_iso_date_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: ISO date sub-routine ---");
@@ -199,6 +217,14 @@ fn emit_iso_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_strtotime_ret");                                // return through shared epilogue
 }
 
+/// Emits x86_64 (Linux) assembly for the ISO date/datetime parser sub-routine.
+/// Entry label: `__rt_strtotime_iso_entry_linux_x86_64`.
+/// Inputs: trimmed ptr at `[rsp+48]`, trimmed len at `[rsp+56]` (SysV ABI convention).
+/// Parses `YYYY-MM-DD` (10 bytes), `YYYY-MM-DD HH:MM` (16 bytes), and `YYYY-MM-DD HH:MM:SS` (19 bytes).
+/// Accepts date/time separator as space, `T`, or `t`.
+/// Builds `struct tm` at `[rsp+0..47]`; fills tm_wday, tm_yday, tm_isdst before calling `mktime`.
+/// Exits via `__rt_strtotime_fail_linux_x86_64` on parse error, or `__rt_strtotime_ret_linux_x86_64` after `mktime`.
+/// Clobbers: rax, rcx, rdx, r8, rdi, rsi (via `call mktime`).
 fn emit_iso_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: ISO date sub-routine ---");

@@ -9,6 +9,8 @@
 
 use super::*;
 
+// Parses `<?php echo $obj?->prop;` and verifies that the AST produces a
+// `NullsafePropertyAccess` node with a variable object and "prop" property.
 #[test]
 fn test_parse_nullsafe_property_access() {
     let stmts = parse_source("<?php echo $obj?->prop;");
@@ -24,6 +26,8 @@ fn test_parse_nullsafe_property_access() {
     }
 }
 
+// Parses `<?php echo $obj?->{$name};` and verifies that the AST produces a
+// `NullsafeDynamicPropertyAccess` with variable object and variable property.
 #[test]
 fn test_parse_nullsafe_dynamic_property_access() {
     let stmts = parse_source("<?php echo $obj?->{$name};");
@@ -39,6 +43,8 @@ fn test_parse_nullsafe_dynamic_property_access() {
     }
 }
 
+// Parses `<?php $obj?->run(1, 2);` and verifies that the AST produces a
+// `NullsafeMethodCall` node with method "run" and two arguments.
 #[test]
 fn test_parse_nullsafe_method_call() {
     let stmts = parse_source("<?php $obj?->run(1, 2);");
@@ -59,6 +65,9 @@ fn test_parse_nullsafe_method_call() {
     }
 }
 
+// Parses `<?php echo $user?->profile?->name;` and verifies that chained nullsafe
+// access produces a nested `NullsafePropertyAccess` AST structure: outer accesses
+// "name", inner accesses "profile" on variable "$user".
 #[test]
 fn test_parse_chained_nullsafe_access() {
     let stmts = parse_source("<?php echo $user?->profile?->name;");
@@ -80,6 +89,9 @@ fn test_parse_chained_nullsafe_access() {
     }
 }
 
+// Parses `<?php echo $a?->b->c;` and verifies that a nullsafe access followed by
+// regular property access produces `PropertyAccess` (for "c") wrapping
+// `NullsafePropertyAccess` (for "b") wrapping variable "$a".
 #[test]
 fn test_parse_mixed_nullsafe_then_member_chain() {
     let stmts = parse_source("<?php echo $a?->b->c;");
@@ -101,6 +113,10 @@ fn test_parse_mixed_nullsafe_then_member_chain() {
     }
 }
 
+// Parses `<?php echo $a->b?->c->d;` and verifies that regular property access
+// followed by nullsafe access and then regular access produces the correct
+// nesting: `PropertyAccess` ("d") over `NullsafePropertyAccess` ("c") over
+// `PropertyAccess` ("b") over variable "$a".
 #[test]
 fn test_parse_nullsafe_middle_member_chain() {
     let stmts = parse_source("<?php echo $a->b?->c->d;");
@@ -130,6 +146,9 @@ fn test_parse_nullsafe_middle_member_chain() {
     }
 }
 
+// Parses `<?php echo $a?->b[0]->c;` and verifies that nullsafe property access
+// with an array subscript in the middle produces `PropertyAccess` ("c") over
+// `ArrayAccess` over `NullsafePropertyAccess` ("b") over variable "$a".
 #[test]
 fn test_parse_nullsafe_chain_with_array_suffix() {
     let stmts = parse_source("<?php echo $a?->b[0]->c;");

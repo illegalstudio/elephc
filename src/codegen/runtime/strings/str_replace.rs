@@ -11,9 +11,25 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// str_replace: replace all occurrences of search with replace in subject.
-/// Input: x1/x2=search, x3/x4=replace, x5/x6=subject
-/// Output: x1=result_ptr, x2=result_len (in concat_buf)
+/// Emits the `__rt_str_replace` runtime helper.
+///
+/// Replaces all occurrences of `search` with `replace` in `subject`, returning
+/// the result as a pointer/length pair in the concat buffer.
+///
+/// # Input (ARM64 calling convention)
+/// - `x1/x2`: search string pointer and length
+/// - `x3/x4`: replacement string pointer and length
+/// - `x5/x6`: subject string pointer and length
+///
+/// # Output (ARM64 calling convention)
+/// - `x1`: result string pointer in `_concat_buf`
+/// - `x2`: result string length
+///
+/// # Side effects
+/// - Advances the `_concat_off` global write offset by the result length.
+///
+/// # Dispatch
+/// On x86_64 Linux, delegates to `emit_str_replace_linux_x86_64`.
 pub fn emit_str_replace(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_str_replace_linux_x86_64(emitter);
@@ -110,6 +126,23 @@ pub fn emit_str_replace(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_str_replace` runtime helper.
+///
+/// Implements the same semantic as `emit_str_replace` for the System V AMD64 ABI.
+/// Uses a frame pointer in `rbp` with 80 bytes of spill slots to preserve the three
+/// input strings, concat-buffer bookkeeping, and the scanning cursor across the loop.
+///
+/// # Input (System V AMD64 calling convention)
+/// - `rdi/rsi`: search string pointer and length
+/// - `rdx/rcx`: replacement string pointer and length
+/// - `r8/r9`: subject string pointer and length (extra arguments passed in r8, r9)
+///
+/// # Output (System V AMD64 calling convention)
+/// - `rax`: result string pointer in `_concat_buf`
+/// - `rdx`: result string length
+///
+/// # Side effects
+/// - Advances the `_concat_off` global write offset by the result length.
 fn emit_str_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_replace ---");

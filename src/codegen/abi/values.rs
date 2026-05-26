@@ -16,6 +16,12 @@ use super::calls::{emit_call_label, emit_pop_reg, emit_push_reg};
 use super::frame::{emit_load_from_address, load_at_offset, store_at_offset};
 use super::registers::{float_result_reg, int_result_reg, string_result_regs};
 
+/// Stores the current result value (in result registers) of the given type at a stack frame offset.
+///
+/// For `PhpType::Str`, calls `__rt_str_persist` to copy the string into owned heap storage,
+/// then stores the pointer and length as separate values. For `PhpType::Void`/`Never`, stores
+/// a null sentinel. Refcounted types (array, object, etc.) are stored directly without
+/// incrementing the refcount—the caller owns the result register value.
 pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
         PhpType::Bool | PhpType::Int | PhpType::Resource(_) => {
@@ -48,6 +54,12 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     }
 }
 
+/// Retains a refcounted result value before it is reused or overwritten.
+///
+/// If `ty.is_refcounted()` is true, emits a call to `__rt_incref` after preserving the heap
+/// pointer in a temporary slot. The target architecture dictates register preservation
+/// conventions: AArch64 uses a pre-decrement stack store, while x86_64 uses a 16-byte
+/// aligned push/pop pair to maintain SysV ABI alignment.
 pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     if ty.is_refcounted() {
         match emitter.target.arch {
@@ -65,6 +77,15 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
+/// Releases a refcounted result value held in `x0`.
+///
+/// Dispatches to the appropriate runtime helper based on the PHP type:
+/// - `Mixed`/`Union` → `__rt_decref_mixed`
+/// - `Array` → `__rt_decref_array`
+/// - `AssocArray` → `__rt_decref_hash`
+/// - `Object` → `__rt_decref_object`
+/// - `Iterable` → `__rt_decref_any` (inspects heap kind)
+/// - Non-refcounted types → no-op
 pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Mixed | PhpType::Union(_) => {
@@ -86,6 +107,13 @@ pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
+/// Releases the payload of a local reference-counted cell and the cell itself.
+///
+/// Pushes `cell_reg` as a temporary, then:
+/// - For `PhpType::Str`: loads the string payload and calls `__rt_heap_free_safe`.
+/// - For other refcounted types: loads the heap pointer and calls `emit_decref_if_refcounted`.
+/// Pops the preserved cell pointer and calls `__rt_heap_free` to release the cell.
+/// Used during function epilogue for local variables that held borrowed or owned refs.
 pub fn emit_release_local_ref_cell(emitter: &mut Emitter, cell_reg: &str, value_ty: &PhpType) {
     emit_push_reg(emitter, cell_reg);                                           // preserve the owned reference cell pointer while releasing its payload
     match value_ty.codegen_repr() {
@@ -103,6 +131,11 @@ pub fn emit_release_local_ref_cell(emitter: &mut Emitter, cell_reg: &str, value_
     emit_call_label(emitter, "__rt_heap_free");                                // release the local reference cell itself
 }
 
+/// Loads a value of the given type from a stack frame offset into result registers.
+///
+/// For `PhpType::Str`, loads both the string pointer and length. For scalar types (bool, int,
+/// float, resource), loads into the appropriate result register. For void/never, loads a null
+/// sentinel. For compound types (array, object, callable, pointer, etc.), loads the heap pointer.
 pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
         PhpType::Bool | PhpType::Int | PhpType::Resource(_) => {
@@ -134,6 +167,10 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     }
 }
 
+/// Branches to `label` when the integer result register is zero (coerced truthiness).
+///
+/// AArch64: `cbz` (compare and branch if zero). x86_64: `test` + `je` (set cc + conditional jump).
+/// The integer result represents a coerced PHP truthiness value used in conditional contexts.
 pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => {
@@ -146,6 +183,10 @@ pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
     }
 }
 
+/// Branches to `label` when the integer result register is non-zero (coerced truthiness).
+///
+/// AArch64: `cbnz` (compare and branch if non-zero). x86_64: `test` + `jne` (set cc + conditional jump).
+/// The integer result represents a coerced PHP truthiness value used in conditional contexts.
 pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => {
@@ -158,6 +199,9 @@ pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
     }
 }
 
+/// Unconditionally jumps to `label` for control flow transfer.
+///
+/// AArch64 uses `b label`. x86_64 uses `jmp label`.
 pub fn emit_jump(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => {
@@ -169,6 +213,10 @@ pub fn emit_jump(emitter: &mut Emitter, label: &str) {
     }
 }
 
+/// Promotes the integer result register value to the floating-point result register.
+///
+/// AArch64: `scvtf` (signed convert to floating). x86_64: `cvtsi2sd` (signed integer to scalar double).
+/// Used when a PHP int must be coerced to a float in mixed arithmetic contexts.
 pub fn emit_int_result_to_float_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => {
@@ -182,6 +230,10 @@ pub fn emit_int_result_to_float_result(emitter: &mut Emitter) {
     }
 }
 
+/// Truncates the floating-point result register value to the integer result register.
+///
+/// AArch64: `fcvtzs` (floating-point convert to signed fixed-point). x86_64: `cvttsd2si` (convert with truncation).
+/// Used when a PHP float must be coerced to int in mixed arithmetic contexts.
 pub fn emit_float_result_to_int_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => {
@@ -195,6 +247,12 @@ pub fn emit_float_result_to_int_result(emitter: &mut Emitter) {
     }
 }
 
+/// Loads a 64-bit immediate integer `value` into `reg`.
+///
+/// AArch64: uses `mov` for values in [−65536, 65535]; otherwise constructs the value using
+/// `movz`/`movk` pairs for each 16-bit chunk (low, bits 16–31, 32–47, 48–63).
+/// x86_64: a single `mov` instruction handles any immediate since x86_64 immediates are 32-bit
+/// sign-extended to 64-bit.
 pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -234,6 +292,17 @@ pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
     }
 }
 
+/// Writes a result value of the given PHP type to stdout.
+///
+/// Dispatches to the appropriate runtime helper:
+/// - `Str` → `emit_write_current_string_stdout` directly
+/// - `Bool`/`Int` → `__rt_itoa` then `emit_write_current_string_stdout`
+/// - `Float` → `__rt_ftoa` then `emit_write_current_string_stdout`
+/// - `Pointer`/`Buffer`/`Packed` → `__rt_ptoa` then `emit_write_current_string_stdout`
+/// - `Resource` → `__rt_resource_write_stdout`
+/// - `Mixed` → `__rt_mixed_write_stdout`
+/// - `Iterable` → `__rt_iterable_write_stdout`
+/// - Other types (void, array, callable, object) → no-op
 pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Str => {
@@ -269,6 +338,11 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
+/// Writes the current string result registers to stdout via the `write` syscall.
+///
+/// AArch64: sets `x0=1` (stdout fd) and invokes syscall 4.
+/// x86_64: loads `string_result_regs` into `rsi`/`rdx`, sets `edi=1`, `eax=1`, and invokes `syscall`.
+/// The string pointer and length are expected to already reside in the platform's string result registers.
 fn emit_write_current_string_stdout(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {

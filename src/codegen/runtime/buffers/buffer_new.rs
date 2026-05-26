@@ -11,6 +11,24 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Emits the `__rt_buffer_new` runtime helper for the current target.
+///
+/// Allocates a zero-initialized buffer with a 16-byte header followed by a contiguous
+/// payload, then returns a pointer to the header. Calls `__rt_heap_alloc` which fatal-aborts
+/// on allocation failure — callers do not need a separate null check.
+///
+/// Inputs (platform ABI):
+///   - ARM64: x0 = logical element count, x1 = element stride in bytes
+///   - x86_64 Linux: rdi = logical element count, rsi = element stride in bytes
+///
+/// Output (platform ABI):
+///   - ARM64: x0 = pointer to buffer header
+///   - x86_64: rax = pointer to buffer header
+///
+/// Buffer header layout (both targets):
+///   - header[0..8]   = logical element count (set from input x0/rdi)
+///   - header[8..16]  = element stride in bytes (set from input x1/rsi)
+///   - header[16..]   = zero-initialized payload region (len * stride bytes)
 pub fn emit_buffer_new(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_buffer_new_linux_x86_64(emitter);
@@ -58,6 +76,8 @@ pub fn emit_buffer_new(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return x0 = buffer header pointer
 }
 
+/// Emits the `__rt_buffer_new` runtime helper for the x86_64 Linux target.
+/// Private; dispatcher lives in `emit_buffer_new`.
 fn emit_buffer_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_new ---");

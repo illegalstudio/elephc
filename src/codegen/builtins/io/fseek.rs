@@ -18,6 +18,32 @@ use crate::types::PhpType;
 
 use super::stream_arg::emit_stream_fd_arg;
 
+/// Emits the `fseek(stream, offset, whence)` builtin call.
+///
+/// Validates the stream resource and unboxes it to a raw file descriptor,
+/// evaluates `offset` and optional `whence` arguments (defaulting to SEEK_SET=0),
+/// then calls the platform lseek syscall. On success the stream's EOF flag is
+/// cleared before returning 0. On failure returns -1.
+///
+/// # Arguments
+/// - `_name`: builtin name (unused, always "fseek")
+/// - `args`: [stream, offset, whence?] — whence is optional, defaults to 0 (SEEK_SET)
+/// - `emitter`: target for emitted assembly
+/// - `ctx`: codegen context (labels, target, platform)
+/// - `data`: data section for symbols (eof_flags table)
+///
+/// # Returns
+/// Always `Some(PhpType::Int)` — PHP semantics: 0 on success, -1 on failure.
+///
+/// # Side effects
+/// - Clobbers caller-saved registers used for syscall argument passing.
+/// - Stack: pushes two registers before evaluating offset/whence, pops on completion.
+/// - On success: clears the per-fd EOF flag via the `_eof_flags` runtime symbol.
+///
+/// # ABI constraints
+/// - AArch64: lseek via syscall 199, args in x0 (fd), x1 (offset), x2 (whence).
+/// - x86_64: lseek via libc call, args in rdi (fd), rsi (offset), rdx (whence).
+/// - Preserves fd on the stack across expression evaluation to handle errors safely.
 pub fn emit(
     _name: &str,
     args: &[Expr],

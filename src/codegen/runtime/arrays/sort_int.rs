@@ -11,8 +11,21 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// sort_int / rsort_int: insertion sort on integer array (in-place).
-/// Input: x0 = array pointer
+/// Emits the `__rt_sort_int` (ascending) or `__rt_rsort_int` (descending) runtime helper.
+/// Uses ARM64 instructions on non-x86_64 targets; delegates to `emit_sort_int_linux_x86_64` for x86_64.
+///
+/// # Arguments
+/// * `emitter` — the assembly emitter with target and context
+/// * `reverse` — `false` for ascending sort, `true` for descending sort
+///
+/// # ABI
+/// * Input: array pointer in `x0`
+/// * Output: sorted array in-place (no return value register)
+/// * Temporaries: `x1`–`x7`
+///
+/// # Algorithm
+/// Insertion sort: for each element, shift larger/smaller elements right until the correct
+/// insertion position is found. Preserves PHP comparison semantics for integer values.
 pub fn emit_sort_int(emitter: &mut Emitter, reverse: bool) {
     if emitter.target.arch == Arch::X86_64 {
         emit_sort_int_linux_x86_64(emitter, reverse);
@@ -67,6 +80,10 @@ pub fn emit_sort_int(emitter: &mut Emitter, reverse: bool) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// x86_64 Linux implementation of the sort-int runtime helpers.
+/// Uses System V AMD64 ABI: array pointer in `rdi`, indexed-array length in `[rdi]`.
+/// Delegates to the shared insertion logic in `emit_sort_int` for the actual sort algorithm.
+/// Mirrors the ARM64 behavior but emits x86_64 instructions with the break-jump optimization.
 fn emit_sort_int_linux_x86_64(emitter: &mut Emitter, reverse: bool) {
     let label = if reverse { "__rt_rsort_int" } else { "__rt_sort_int" };
     let break_jump = if reverse {

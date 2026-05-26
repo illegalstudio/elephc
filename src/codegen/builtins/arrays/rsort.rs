@@ -18,6 +18,22 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a call to the PHP `rsort` builtin, mutating the first argument array in place
+/// in descending order. COW is handled via `emit_ensure_unique_arg` before the call, and
+/// any replacement array pointer is written back to caller storage via
+/// `emit_store_mutating_arg` after the call.
+///
+/// # Arguments
+/// - `_name`: unused, matches the `BuiltinDef` dispatcher signature
+/// - `args`: first arg is the array to sort; additional args (flags) are currently unused
+/// - `emitter`, `ctx`, `data`: standard codegen context
+///
+/// # Returns
+/// `Some(PhpType::Void)` since rsort has no meaningful return value for assignment
+///
+/// # Runtime behavior
+/// Calls `__rt_rsort_int` to sort indexed integer arrays descending in place; caller
+/// must ensure no value-temp preevaluation occurs for mutating/ref-like arguments.
 pub fn emit(
     _name: &str,
     args: &[Expr],

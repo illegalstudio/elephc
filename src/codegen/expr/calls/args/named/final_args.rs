@@ -18,6 +18,25 @@ use super::variadic::emit_variadic_array_arg_from_sources;
 use super::{FinalArgSource, PrefixVariadicTail, VariadicArgSource};
 use super::super::{declared_target_ty, emit_empty_variadic_array_arg, push_expr_arg, EmittedCallArgs};
 
+/// Materializes final ABI arguments from named-source descriptors in parameter order.
+ ///
+ /// Side effects from prefix-element evaluation and source-temp reads occur in source order
+ /// (as planned by the shared call-argument planner), while the final ABI push order follows
+ /// parameter/ABI order. This function consumes `slot_sources` and `variadic_sources`, emitting
+ /// each argument via the helper chain: `push_saved_source_temp_arg`, `push_prefix_array_element_arg`,
+ /// `push_expr_arg`, or `emit_variadic_array_arg_from_sources` depending on the source variant.
+ ///
+ /// # Parameters
+ /// - `slot_sources`: per-slot sources for regular parameters (indexed by parameter position).
+ /// - `variadic_sources`: sources for individual variadic arguments.
+ /// - `prefix_variadic_tail`: optional prefix-array tail for variadic expansion.
+ /// - `sig`: callee function signature used to resolve parameter names for named-key preference.
+ /// - `regular_param_count`: number of caller-visible regular (non-variadic) parameters.
+ /// - `source_temp_types`: PHP types of saved source temporaries for slot-size calculation.
+ ///
+ /// # Returns
+ /// `EmittedCallArgs` containing the types of all arguments pushed and the total byte size of
+ /// source temporaries (used by the caller for temp cleanup/frame accounting).
 pub(super) fn push_final_call_args_from_sources(
     slot_sources: Vec<Option<FinalArgSource>>,
     variadic_sources: Vec<VariadicArgSource>,

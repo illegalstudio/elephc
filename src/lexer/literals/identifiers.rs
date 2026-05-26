@@ -12,6 +12,9 @@ use super::super::cursor::Cursor;
 use super::super::token::Token;
 use crate::errors::CompileError;
 
+/// Scans a PHP variable (`$name`), consuming the leading `$` and collecting the
+/// identifier name. Returns `Token::This` for `$this`, or `Token::Variable(name)`
+/// otherwise. Leaves the cursor positioned after the last valid identifier character.
 pub(in crate::lexer) fn scan_variable(cursor: &mut Cursor) -> Result<Token, CompileError> {
     cursor.advance();
     let mut name = String::new();
@@ -36,6 +39,12 @@ pub(in crate::lexer) fn scan_variable(cursor: &mut Cursor) -> Result<Token, Comp
     Ok(Token::Variable(name))
 }
 
+/// Scans a PHP keyword, built-in constant, magic constant, or identifier.
+/// Collects alphanumeric+underscore characters, then classifies the word against
+/// case-insensitive magic constants (`__DIR__`, `__FILE__`, etc.), case-sensitive
+/// built-in constants (`INF`, `NAN`, `PHP_INT_MAX`, `M_PI`, etc.), keywords
+/// (`if`, `while`, `function`, etc.), and falls back to `Token::Identifier`.
+/// Leaves the cursor positioned after the word.
 pub(in crate::lexer) fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
     let mut word = String::new();
 

@@ -16,6 +16,17 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for a `htmlspecialchars` builtin call.
+///
+/// Marshals the string/scalar argument in `args[0]` and calls `__rt_htmlspecialchars`,
+/// the target-aware runtime helper that converts special characters to HTML entities.
+/// Returns `PhpType::Str` as the result type.
+///
+/// Arguments:
+/// - `args[0]` – the expression to encode
+///
+/// Output:
+/// - `PhpType::Str` indicating the returned PHP string
 pub fn emit(
     _name: &str,
     args: &[Expr],

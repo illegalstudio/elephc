@@ -16,6 +16,17 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a call to the libc `atan` function for the first argument expression.
+///
+/// # Arguments
+/// - `args[0]` is evaluated and its value is passed to `atan()`.
+/// - Integer arguments are normalized to float before the call via `emit_int_result_to_float_result`.
+/// - The return type is always `PhpType::Float`.
+///
+/// # Behavior
+/// Calls the target-native `atan` routine (AArch64: `bl_c("atan")`, X86_64: `call atan`)
+/// with the scalar in the native floating-point argument register. NaN and infinity
+/// propagate according to libm semantics, which matches PHP's `atan` behavior.
 pub fn emit(
     _name: &str,
     args: &[Expr],

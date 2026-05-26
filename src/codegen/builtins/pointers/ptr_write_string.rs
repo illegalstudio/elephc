@@ -16,6 +16,9 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `ptr_write_string` builtin: copies PHP string bytes into raw memory.
+/// Does not append a NUL terminator. Source string remains borrowed. Returns the
+/// number of bytes copied as `PhpType::Int`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

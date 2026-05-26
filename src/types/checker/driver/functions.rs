@@ -18,6 +18,10 @@ use crate::types::FunctionSig;
 use super::super::{Checker, FnDecl};
 
 impl Checker {
+    /// Collects top-level function declarations from the program, deduplicating by PHP case-insensitive
+    /// symbol key. Emits `DuplicateFunction` for repeats and `CannotRedeclareBuiltin` when a user
+    /// function shadows a built-in. Stores `FnDecl` records in `fn_decls` and variant groups in
+    /// `function_variant_groups`.
     pub(super) fn collect_function_decls(
         &mut self,
         program: &Program,
@@ -96,6 +100,8 @@ impl Checker {
         }
     }
 
+    /// Returns true if `name` resolves to any declared function: user declaration, variant group, or
+    /// extern. Resolution is case-insensitive via PHP symbol key matching.
     pub(super) fn has_function_decl_folded(&self, name: &str) -> bool {
         let key = php_symbol_key(name);
         self.fn_decls
@@ -111,16 +117,25 @@ impl Checker {
                 .any(|existing| php_symbol_key(existing) == key)
     }
 
+    /// Returns the canonical (case-matching) name of a user function identified by `name` by
+    /// case-insensitive lookup in `functions`, `function_variant_groups`, and `fn_decls`. Returns
+    /// `None` if no matching function exists.
     pub(crate) fn canonical_function_name_folded(&self, name: &str) -> Option<String> {
         folded_map_key(&self.functions, name)
             .or_else(|| folded_map_key(&self.function_variant_groups, name))
             .or_else(|| folded_map_key(&self.fn_decls, name))
     }
 
+    /// Returns the canonical (case-matching) name of an extern function identified by `name` by
+    /// case-insensitive lookup in `extern_functions`. Returns `None` if no matching extern exists.
     pub(crate) fn canonical_extern_function_name_folded(&self, name: &str) -> Option<String> {
         folded_map_key(&self.extern_functions, name)
     }
 
+    /// Resolves type signatures for all user functions that were not already resolved during the
+    /// initial pass. Iterates `fn_decls`, calls `initial_function_param_types` then
+    /// `resolve_function_signature` for each unchecked function, and finally resolves all variant
+    /// groups via `resolve_function_variant_groups`. Appends errors to `errors`.
     pub(super) fn resolve_unchecked_functions(&mut self, errors: &mut Vec<CompileError>) {
         let unchecked: Vec<String> = self
             .fn_decls
@@ -145,6 +160,9 @@ impl Checker {
         self.resolve_function_variant_groups(errors);
     }
 
+    /// Iterates all variant groups that are not yet in `functions` and calls
+    /// `ensure_function_variant_group_signature` to compute and insert their unified signatures.
+    /// Appends errors to `errors`.
     fn resolve_function_variant_groups(&mut self, errors: &mut Vec<CompileError>) {
         let names: Vec<String> = self.function_variant_groups.keys().cloned().collect();
         for name in names {
@@ -159,6 +177,11 @@ impl Checker {
         }
     }
 
+    /// Ensures a unified signature exists for a variant group named `name`. If no unified signature
+    /// is cached yet, computes a provisional signature from the first variant and inserts it into
+    /// `functions`. Then resolves each individual variant's signature and verifies all variants
+    /// share an identical signature. On mismatch, returns an error; on success, inserts the unified
+    /// signature and returns `Ok`.
     pub(crate) fn ensure_function_variant_group_signature(
         &mut self,
         name: &str,
@@ -229,6 +252,10 @@ impl Checker {
         Ok(())
     }
 
+    /// Builds a provisional `FunctionSig` for the first variant in a group using its declaration and
+    /// initial param types. Used as a placeholder when a unified variant-group signature is needed
+    /// before individual variants are fully resolved. Returns `Ok(None)` if no declaration exists
+    /// for the variant.
     fn provisional_variant_group_sig(
         &mut self,
         first_variant: &str,
@@ -255,6 +282,9 @@ impl Checker {
     }
 }
 
+/// Performs a case-insensitive PHP symbol key lookup on `map` and returns the canonical (case-
+/// matching) key if one exists. Used to translate case-insensitive names to their actual declared
+/// spelling.
 fn folded_map_key<T>(map: &HashMap<String, T>, name: &str) -> Option<String> {
     let key = php_symbol_key(name);
     map.keys()

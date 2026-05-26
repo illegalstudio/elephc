@@ -18,8 +18,10 @@ use super::target::{
 };
 use super::super::{coerce_null_to_zero, coerce_to_truthiness, emit_expr, BinOp, Expr, PhpType};
 
-/// PHP loose comparison coerces both sides to a common type.
-/// Simplified: coerce everything to int, then compare.
+/// Converts `ty` to integer for loose comparison.
+/// Handles null, bool, int, float, str, and Mixed/Union types.
+/// Emits the integer result into `abi::int_result_reg(emitter)`.
+/// Float values are truncated via `fcvtzs`. Strings call `__rt_atoi`.
 fn coerce_to_int_for_loose_cmp(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Void => {
@@ -44,6 +46,9 @@ fn coerce_to_int_for_loose_cmp(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
+/// Emits loose equality when the left operand is bool.
+/// Coerces both sides to truthiness, then compares saved left truthiness against current right truthiness.
+/// Uses a 16-byte temporary stack slot to preserve the left bool during right evaluation.
 fn emit_bool_left_loose_equality(
     _left: &Expr,
     op: &BinOp,
@@ -61,6 +66,10 @@ fn emit_bool_left_loose_equality(
     PhpType::Bool
 }
 
+/// Emits loose equality when the left operand is string.
+/// Pushes the left string onto the temporary stack, emits the right expression,
+/// then dispatches on the right type to handle bool, void, string, numeric, and other cases.
+/// Returns PhpType::Bool.
 fn emit_string_left_loose_equality(
     op: &BinOp,
     right: &Expr,
@@ -102,6 +111,9 @@ fn emit_string_left_loose_equality(
     PhpType::Bool
 }
 
+/// Emits loose equality when the right operand is bool but left is not.
+/// Left value is already on the temporary stack (numeric). Coerces right to truthiness,
+/// pops left and coerces it to truthiness, then compares saved right truthiness against current left truthiness.
 fn emit_bool_right_loose_equality(
     op: &BinOp,
     left_ty: &PhpType,
@@ -116,6 +128,11 @@ fn emit_bool_right_loose_equality(
     PhpType::Bool
 }
 
+/// Emits loose equality when the right operand is string.
+/// The left value (numeric) is on the temporary stack. Dispatches based on left type:
+/// - void: compares current string length to zero
+/// - int/float: converts string to number and compares
+/// - other: discards left and returns false
 fn emit_right_string_loose_equality(
     op: &BinOp,
     left_ty: &PhpType,
@@ -135,6 +152,9 @@ fn emit_right_string_loose_equality(
     PhpType::Bool
 }
 
+/// Pops the saved left truthiness value into a scratch register and compares it
+/// against the current right truthiness in `abi::int_result_reg(emitter)`.
+/// Sets the boolean result from flags using `loose_equality_condition(op)`.
 fn compare_saved_truthiness_with_current(op: &BinOp, emitter: &mut Emitter) {
     let left_reg = match emitter.target.arch {
         Arch::AArch64 => "x1",
@@ -145,6 +165,10 @@ fn compare_saved_truthiness_with_current(op: &BinOp, emitter: &mut Emitter) {
     emit_set_bool_from_flags(emitter, loose_equality_condition(op));
 }
 
+/// Pops the saved right truthiness value into a scratch register and compares it
+/// against the current left truthiness in `abi::int_result_reg(emitter)`.
+/// Sets the boolean result from flags using `loose_equality_condition(op)`.
+/// The comparison order is reversed relative to `compare_saved_truthiness_with_current`.
 fn compare_saved_right_truthiness_with_current_left(op: &BinOp, emitter: &mut Emitter) {
     let right_reg = match emitter.target.arch {
         Arch::AArch64 => "x1",
@@ -155,6 +179,9 @@ fn compare_saved_right_truthiness_with_current_left(op: &BinOp, emitter: &mut Em
     emit_set_bool_from_flags(emitter, loose_equality_condition(op));
 }
 
+/// Arranges arguments on ARM64 or x86_64 ABI registers and calls `__rt_str_loose_eq`
+/// with the saved left string (popped from temp stack) and current right string.
+/// Inverts the result for `!=` via `invert_loose_bool_if_needed`.
 fn call_str_loose_eq_with_saved_left(op: &BinOp, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -173,17 +200,22 @@ fn call_str_loose_eq_with_saved_left(op: &BinOp, emitter: &mut Emitter) {
     invert_loose_bool_if_needed(op, emitter);
 }
 
+/// Loads the saved left string from the temporary stack slot at `offset`.
+/// Pointer lands in `abi::string_result_regs(emitter).0`, length in `.1`.
 fn load_saved_left_string(emitter: &mut Emitter, offset: usize) {
     let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
     abi::emit_load_temporary_stack_slot(emitter, ptr_reg, offset);
     abi::emit_load_temporary_stack_slot(emitter, len_reg, offset + 8);
 }
 
+/// Pops the saved left string from the temporary stack into `abi::string_result_regs(emitter)`.
 fn pop_saved_left_string(emitter: &mut Emitter) {
     let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
     abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
 }
 
+/// Compares the current string's length register against zero.
+/// Sets the boolean result via `loose_equality_condition(op)`.
 fn emit_compare_current_string_length_to_zero(op: &BinOp, emitter: &mut Emitter) {
     let (_, len_reg) = abi::string_result_regs(emitter);
     match emitter.target.arch {
@@ -197,6 +229,8 @@ fn emit_compare_current_string_length_to_zero(op: &BinOp, emitter: &mut Emitter)
     emit_set_bool_from_flags(emitter, loose_equality_condition(op));
 }
 
+/// Promotes the current integer result to float if needed, then pushes the float
+/// onto the temporary stack for numeric string comparison.
 fn push_current_number_as_float(emitter: &mut Emitter, ty: &PhpType) {
     if *ty != PhpType::Float {
         emit_promote_int_to_float(
@@ -208,6 +242,10 @@ fn push_current_number_as_float(emitter: &mut Emitter, ty: &PhpType) {
     abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));
 }
 
+/// Compares a numeric string (parsed into x0/d0 by `__rt_str_to_number`) against a float
+/// that was saved on the temporary stack. On success (x0 != 0), pops the saved float and
+/// compares it with the parsed value. On parsing failure, jumps to `false_label` and
+/// sets the result to false. Uses `done_label` to skip the false branch on success.
 fn compare_parsed_string_with_saved_float(
     op: &BinOp,
     emitter: &mut Emitter,
@@ -229,6 +267,10 @@ fn compare_parsed_string_with_saved_float(
     emitter.label(&done_label);
 }
 
+/// Compares a numeric string (parsed into x0/d0) against a number that was saved on
+/// the temporary stack. If left was int, it is first promoted to float. On success
+/// (x0 != 0), pops the saved number and compares it with the parsed value.
+/// On parsing failure, jumps to `false_label` and sets result to false.
 fn compare_parsed_string_with_saved_left_number(
     op: &BinOp,
     left_ty: &PhpType,
@@ -260,6 +302,8 @@ fn compare_parsed_string_with_saved_left_number(
     emitter.label(&done_label);
 }
 
+/// Tests whether the string-to-number parsing result in x0/rax is zero (failure).
+/// Branches to `label` when parsing failed (non-numeric string).
 fn emit_branch_if_current_flag_false(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -273,6 +317,8 @@ fn emit_branch_if_current_flag_false(emitter: &mut Emitter, label: &str) {
     }
 }
 
+/// Issues the target-specific float comparison instruction between the saved float
+/// (d1/xmm1) and the parsed numeric string result (d0/xmm0).
 fn emit_compare_saved_float_with_parsed_string(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -284,6 +330,9 @@ fn emit_compare_saved_float_with_parsed_string(emitter: &mut Emitter) {
     }
 }
 
+/// Pops the saved left operand into the appropriate register for truthiness coercion.
+/// Float values go to `float_result_reg`, strings are popped as a pair, other types
+/// go to `int_result_reg`.
 fn pop_saved_left_for_truthiness(emitter: &mut Emitter, left_ty: &PhpType) {
     match left_ty {
         PhpType::Float => {
@@ -298,6 +347,8 @@ fn pop_saved_left_for_truthiness(emitter: &mut Emitter, left_ty: &PhpType) {
     }
 }
 
+/// Discards the saved left numeric operand from the temporary stack without using it.
+/// Float values pop to `float_result_reg`, integers to `int_result_reg`.
 fn discard_saved_left_numeric(emitter: &mut Emitter, left_ty: &PhpType) {
     if *left_ty == PhpType::Float {
         abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter));
@@ -306,6 +357,7 @@ fn discard_saved_left_numeric(emitter: &mut Emitter, left_ty: &PhpType) {
     }
 }
 
+/// Inverts the normalized equality result (0 or 1) in x0/rax when the operator is `!=`.
 fn invert_loose_bool_if_needed(op: &BinOp, emitter: &mut Emitter) {
     if *op == BinOp::NotEq {
         match emitter.target.arch {
@@ -319,6 +371,9 @@ fn invert_loose_bool_if_needed(op: &BinOp, emitter: &mut Emitter) {
     }
 }
 
+/// Emits a boolean literal result for loose equality operators.
+/// For `==`: emits `equality_value` directly; for `!=`: emits `!equality_value`.
+/// Result lands in `abi::int_result_reg(emitter)`.
 fn emit_set_loose_bool_literal(op: &BinOp, equality_value: bool, emitter: &mut Emitter) {
     let result = match op {
         BinOp::Eq => equality_value,
@@ -332,6 +387,8 @@ fn emit_set_loose_bool_literal(op: &BinOp, equality_value: bool, emitter: &mut E
     );
 }
 
+/// Returns the target condition name for loose equality operators.
+/// `"eq"` for `==`, `"ne"` for `!=`. Panics for other operators.
 fn loose_equality_condition(op: &BinOp) -> &'static str {
     match op {
         BinOp::Eq => "eq",
@@ -340,6 +397,10 @@ fn loose_equality_condition(op: &BinOp) -> &'static str {
     }
 }
 
+/// Emits `==` and `!=` loose equality with full PHP type coercion rules.
+/// Dispatches on the left type: bool-left and string-left have specialized paths.
+/// For other types, emits left, pushes it, emits right, then compares as int or float.
+/// Returns PhpType::Bool with result in `abi::int_result_reg(emitter)`.
 pub(super) fn emit_loose_equality_binop(
     left: &Expr,
     op: &BinOp,
@@ -417,6 +478,7 @@ pub(super) fn emit_loose_equality_binop(
     PhpType::Bool
 }
 
+/// Lowers <, >, <=, >= ordering comparisons with float/int dispatch.
 pub(super) fn emit_order_compare_binop(
     left: &Expr,
     op: &BinOp,
@@ -469,6 +531,7 @@ pub(super) fn emit_order_compare_binop(
     PhpType::Bool
 }
 
+/// Lowers the <=> spaceship operator returning -1, 0, or 1.
 pub(super) fn emit_spaceship_binop(
     left: &Expr,
     right: &Expr,
@@ -542,6 +605,9 @@ pub(super) fn emit_spaceship_binop(
     PhpType::Int
 }
 
+/// Coerces null to zero, then for Mixed/Union types calls `__rt_mixed_cast_int`
+/// to normalize boxed int|bool|string before ordering comparisons.
+/// Other numeric types are left as-is.
 fn coerce_numeric_mixed_to_int(emitter: &mut Emitter, ty: &PhpType) {
     coerce_null_to_zero(emitter, ty);
     if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {

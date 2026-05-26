@@ -15,6 +15,11 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::super::Checker;
 
 impl Checker {
+    /// Infers the type of a property access expression (`$obj->prop`).
+    ///
+    /// Returns the declared property type on class/object, handles `Mixed`
+    /// receivers (returning `Mixed`), and emits an error for non-object types.
+    /// For nullable unions resolved to a single class, returns a nullable type.
     pub(crate) fn infer_property_access_type(
         &mut self,
         object: &Expr,
@@ -80,6 +85,11 @@ impl Checker {
         ))
     }
 
+    /// Infers the type of a nullsafe property access expression (`$obj?->prop`).
+    ///
+    /// For `Mixed` receivers returns `Mixed`. For valid nullable object unions,
+    /// returns a union of the property type with `void`. Returns `void` for
+    /// invalid receivers.
     pub(crate) fn infer_nullsafe_property_access_type(
         &mut self,
         object: &Expr,
@@ -104,6 +114,12 @@ impl Checker {
         }
     }
 
+    /// Infers the type of a dynamic property access expression (`$obj->$prop`).
+    ///
+    /// The property name expression must be `string`, `int`, or `Mixed`.
+    /// Resolves string literals via `infer_property_access_type` or
+    /// `infer_nullsafe_property_access_type`; returns `Mixed` for runtime
+    /// dispatch on `Object`, `Union`, or `Mixed` receivers.
     pub(crate) fn infer_dynamic_property_access_type(
         &mut self,
         object: &Expr,
@@ -146,6 +162,12 @@ impl Checker {
         }
     }
 
+    /// Resolves a property name against a known class's schema.
+    ///
+    /// Returns the property type after checking visibility, or errors on
+    /// undefined properties. Returns `Mixed` for `stdClass` and classes
+    /// marked `#[AllowDynamicProperties]`. Uses `__get` signature when
+    /// no declared property matches.
     pub(crate) fn infer_property_on_class_type(
         &self,
         class_name: &str,
@@ -197,6 +219,12 @@ impl Checker {
         ))
     }
 
+    /// Extracts the single class name from a nullable object type for nullsafe ops.
+    ///
+    /// Returns `None` for `void`. On `Union` types, validates that exactly one
+    /// class is present alongside optional `void`s; errors on mixed non-object
+    /// union members. The `bool` in the result indicates whether `void` was
+    /// present (i.e. whether the original type was nullable).
     pub(crate) fn nullsafe_object_receiver(
         &self,
         obj_ty: &PhpType,
@@ -244,6 +272,11 @@ impl Checker {
         }
     }
 
+    /// Infers the type of a static property access (`Foo::$prop`).
+    ///
+    /// Resolves the static receiver (named, `self::`, `static::`, `parent::`)
+    /// to a class name, then looks up the declared static property type after
+    /// validating visibility rules.
     pub(crate) fn infer_static_property_access_type(
         &mut self,
         receiver: &StaticReceiver,
@@ -285,6 +318,10 @@ impl Checker {
             })
     }
 
+    /// Resolves a static property receiver to its class name.
+    ///
+    /// `Named` returns the class directly. `Self_`/`Static` require a class
+    /// context. `Parent` returns the parent of the current class.
     pub(crate) fn resolve_static_property_receiver(
         &self,
         receiver: &StaticReceiver,
@@ -315,6 +352,10 @@ impl Checker {
         }
     }
 
+    /// Infers the type of `$this` inside a class method.
+    ///
+    /// Errors if called from a static method or outside a class context.
+    /// Returns `PhpType::Object(current_class)` for valid contexts.
     pub(crate) fn infer_this_type(&mut self, expr: &Expr) -> Result<PhpType, CompileError> {
         if self.current_method_is_static {
             return Err(CompileError::new(
@@ -332,6 +373,10 @@ impl Checker {
         }
     }
 
+    /// Infers the type of a `ptr_cast<T>()` expression.
+    ///
+    /// Validates the inner expression is a pointer type, normalizes the target
+    /// type string, and returns `PhpType::Pointer(Some(normalized))`.
     pub(crate) fn infer_ptr_cast_type(
         &mut self,
         target_type: &str,

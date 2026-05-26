@@ -10,9 +10,14 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// glob: find pathnames matching a pattern.
-/// Input:  x1/x2=pattern string
-/// Output: x0=array pointer (array of matching path strings)
+/// Emits the `__rt_glob` runtime helper for ARM64 targets.
+/// Receives a pattern string pointer/length in x1/x2, calls libc `glob()` to find matching
+/// filesystem paths, and returns a runtime array of PHP strings (each with ptr/length).
+/// On success the array contains one entry per match; on failure (no matches, error) returns
+/// an empty array. Calls `globfree()` before returning to release libc resources.
+/// Preserves all callee-saved registers and restores the stack frame before returning.
+/// Input:  x1=pattern string pointer, x2=pattern string length
+/// Output: x0=array pointer (PhpArray of matching path strings as PhpString entries)
 pub fn emit_glob(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_glob_linux_x86_64(emitter);
@@ -103,6 +108,14 @@ pub fn emit_glob(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the `__rt_glob` runtime helper for the x86_64 Linux ABI.
+/// Receives a pattern string pointer/length in rax/rdx (converted to null-terminated by `__rt_cstr`),
+/// calls libc `glob()` to expand the pattern, and returns a runtime array of PHP strings (ptr/length).
+/// On success the array holds one entry per matched path; on failure returns an empty array.
+/// The stack frame holds the Linux glob_t at [rsp] and bookkeeping slots at rbp-8/16/24/32.
+/// Cleans up with `globfree()` before returning the result array.
+/// Input:  rax/rdx=pattern string pointer/length (cstr converted by `__rt_cstr`)
+/// Output: rax=array pointer (PhpArray of matching path strings as PhpString entries)
 fn emit_glob_linux_x86_64(emitter: &mut Emitter) {
     let pathv_off = emitter.platform.glob_pathv_offset();
     let frame_size = 160usize;

@@ -16,6 +16,27 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `sprintf` builtin call.
+///
+/// Evaluates all arguments in reverse order, pushing each as a 16-byte tagged
+/// argument record onto the stack. Format string is evaluated last, followed by
+/// the argument count. Calls `__rt_sprintf` to perform formatting.
+///
+/// # Arguments
+/// * `_name` - Unused; matches the builtin dispatch signature.
+/// * `args[0]` - Format string expression.
+/// * `args[1..]` - Values to substitute into the format string.
+///
+/// # Stack Layout (AArch64)
+///   Each argument occupies 16 bytes: `[sp + 0]` = value, `[sp + 8]` = type tag.
+///   Type tags: 0=int, 1=str (with length in upper bits), 2=float, 3=bool.
+///
+/// # Stack Layout (x86_64)
+///   Each argument occupies 16 bytes on the stack: low qword = value,
+///   high qword = type tag (0=int, 1=str with length in bits 8+, 2=float, 3=bool).
+///
+/// # Returns
+///   `Some(PhpType::Str)` — caller owns the returned string pointer/length.
 pub fn emit(
     _name: &str,
     args: &[Expr],

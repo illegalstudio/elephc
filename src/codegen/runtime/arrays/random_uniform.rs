@@ -11,7 +11,22 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// __rt_random_uniform: return a uniform random value in [0, x0).
+/// Emits the `__rt_random_uniform` runtime helper.
+///
+/// Dispatches to the x86_64 Linux implementation or generates a portable ARM64
+/// rejection-sampling implementation. Returns a bias-free uniform integer in the
+/// range [0, bound) where bound is passed in `w0` (ARM64) or `edi` (x86_64).
+/// The result is returned in `x0` (ARM64) or `eax` (x86_64).
+///
+/// # Algorithm
+/// Uses rejection sampling to avoid the modulo bias that would arise from naively
+/// scaling a uint32 to a smaller range. The rejection threshold is `2^32 % bound`,
+/// which discards the top portion of the 32-bit space that would otherwise cause
+/// uneven distribution.
+///
+/// # ABI
+/// - ARM64: bound in `w0`, result in `w0`
+/// - x86_64: bound in `edi`, result in `eax`
 pub fn emit_random_uniform(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_random_uniform_linux_x86_64(emitter);
@@ -51,6 +66,16 @@ pub fn emit_random_uniform(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the unbiased random value
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_random_uniform`.
+///
+/// Uses x86_64 System V ABI: bound passed in `edi`, result returned in `eax`.
+/// Stack-allocates two uint32 scratch slots (bound and rejection threshold) at
+/// `[rbp - 4]` and `[rbp - 8]` relative to the frame pointer.
+///
+/// # Algorithm
+/// Rejection sampling identical to the ARM64 path. Computes `threshold = 2^32 % bound`
+/// then loops generating `__rt_random_u32` candidates and discarding those below
+/// the threshold before computing `candidate % bound`.
 fn emit_random_uniform_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: random_uniform ---");

@@ -12,6 +12,7 @@ use crate::codegen::{abi, emit::Emitter, platform::Arch};
 use crate::parser::ast::BinOp;
 use crate::types::PhpType;
 
+/// Sets integer result (x0/rax) to 1 or 0 based on a condition code from flags.
 pub(super) fn emit_set_bool_from_flags(emitter: &mut Emitter, cond: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -33,6 +34,7 @@ pub(super) fn emit_set_bool_from_flags(emitter: &mut Emitter, cond: &str) {
     }
 }
 
+/// Sets integer result (x0/rax) from float comparison flags.
 pub(super) fn emit_set_float_bool_from_flags(emitter: &mut Emitter, cond: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -54,6 +56,7 @@ pub(super) fn emit_set_float_bool_from_flags(emitter: &mut Emitter, cond: &str) 
     }
 }
 
+/// Promotes an integer operand to a float register (scvtf/cvtsi2sd).
 pub(super) fn emit_promote_int_to_float(emitter: &mut Emitter, float_reg: &str, int_reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -65,6 +68,7 @@ pub(super) fn emit_promote_int_to_float(emitter: &mut Emitter, float_reg: &str, 
     }
 }
 
+/// Pops the left float (or promoted int) into the comparison scratch register.
 pub(super) fn emit_pop_left_float_for_comparison(emitter: &mut Emitter, left_ty: &PhpType) {
     let left_float_reg = match emitter.target.arch {
         Arch::AArch64 => "d1",
@@ -79,6 +83,7 @@ pub(super) fn emit_pop_left_float_for_comparison(emitter: &mut Emitter, left_ty:
     }
 }
 
+/// Emits a double-precision comparison (fcmp/ucomisd) setting NZCV/flags.
 pub(super) fn emit_float_compare(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -90,6 +95,7 @@ pub(super) fn emit_float_compare(emitter: &mut Emitter) {
     }
 }
 
+/// Emits a float binop (+, -, *, /, %) using target instructions.
 pub(super) fn emit_float_binop(emitter: &mut Emitter, op: &BinOp) {
     match emitter.target.arch {
         Arch::AArch64 => {

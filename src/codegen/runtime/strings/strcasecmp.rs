@@ -11,7 +11,17 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// strcasecmp: case-insensitive string comparison.
+/// Emits the `__rt_strcasecmp` runtime helper for case-insensitive string comparison.
+///
+/// dispatches to the x86_64 Linux variant or emits the ARM64 fallback depending on
+/// `emitter.target.arch`. The helper is called with pointer/length pairs:
+///
+/// - ARM64: x1=ptr_a, x2=len_a, x3=ptr_b, x4=len_b → x0 = signed result
+/// - x86_64 Linux: rdi=ptr_a, rsi=len_a, rdx=ptr_b, rcx=len_b → rax = signed result
+///
+/// Returns a signed integer: < 0 if a < b, 0 if a == b, > 0 if a > b.
+/// Comparison is lexicographic over the shared prefix, then by length when equal.
+/// ASCII bytes 'A'-'Z' are lowercased before comparison; all other bytes are compared as-is.
 pub fn emit_strcasecmp(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_strcasecmp_linux_x86_64(emitter);
@@ -67,6 +77,13 @@ pub fn emit_strcasecmp(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_strcasecmp`.
+///
+/// Registers (System V AMD64 ABI):
+/// - rdi = ptr_a, rsi = len_a, rdx = ptr_b, rcx = len_b → rax = signed result
+///
+/// Behavior is identical to the ARM64 fallback: case-insensitive lexicographic
+/// comparison over the shared prefix, then by length. ASCII 'A'-'Z' are lowercased.
 fn emit_strcasecmp_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strcasecmp ---");

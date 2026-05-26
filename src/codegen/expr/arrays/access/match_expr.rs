@@ -17,6 +17,26 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Lowers a `match` expression with PHP equality semantics.
+///
+/// The subject expression is evaluated and saved to a single 16-byte stack slot.
+/// Each arm's patterns are then evaluated and compared against the saved subject
+/// using PHP equality (`==`): strings via `__rt_str_eq`, floats via `fcmp`/`ucomisd`,
+/// scalars via integer comparison. Matching jumps to the arm body; misses fall through
+/// to the next arm or the default. If no arm matches and no default is present,
+/// `__rt_match_unhandled` is called.
+///
+/// Returns the `PhpType` of the selected arm expression (or `Void` if only the
+/// unhandled abort path is taken). The stack slot is released before returning
+/// without clobbering result registers.
+///
+/// # Arguments
+/// * `subject`  – the match subject expression
+/// * `arms`     – pairs of pattern lists and their result expressions
+/// * `default` – optional default expression when no arm matches
+/// * `emitter` – target assembly emitter
+/// * `ctx`     – codegen context (labels, types, ownership)
+/// * `data`    – data section for literals/strings
 pub(crate) fn emit_match_expr(
     subject: &Expr,
     arms: &[(Vec<Expr>, Expr)],

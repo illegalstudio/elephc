@@ -11,9 +11,13 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_key_exists: check if an integer key exists in an indexed array.
-/// Input: x0 = array pointer, x1 = key (integer index)
-/// Output: x0 = 1 if key exists, 0 if not
+/// Checks whether an integer key exists in an indexed array by comparing against the array length in the header.
+///
+/// ABI: x0 = array pointer, x1 = integer key
+/// Returns: x0 = 1 if key exists and is in bounds [0, length); x0 = 0 otherwise
+///
+/// Negative keys are rejected before the upper-bound comparison and fall through to the "no" path.
+/// The caller receives the result directly in x0; no other registers are modified.
 pub fn emit_array_key_exists(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_key_exists_linux_x86_64(emitter);
@@ -41,6 +45,9 @@ pub fn emit_array_key_exists(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// x86_64 Linux variant of `emit_array_key_exists`.
+/// Uses the System V AMD64 ABI: rdi = array pointer, rsi = integer key, rax = return value.
+/// Negative keys are rejected before the upper-bound comparison; out-of-bounds keys return 0 in rax.
 fn emit_array_key_exists_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_key_exists ---");

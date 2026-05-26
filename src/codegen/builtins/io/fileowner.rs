@@ -17,6 +17,16 @@ use crate::parser::ast::Expr;
 use crate::types::PhpType;
 use super::stat_result::box_stat_int_or_false_result;
 
+/// Emits the `fileowner` builtin call.
+///
+/// Evaluates the path argument, calls the runtime helper that retrieves `st_uid`
+/// via the target-aware stat path, boxes the integer UID or `false` into a PHP
+/// `Mixed` value, and returns `PhpType::Mixed`.
+///
+/// Arguments:
+/// - `args[0]` must be a path expression (string).
+///
+/// Side effects: filesystem state is observable; call order and failure sentinels are preserved.
 pub fn emit(
     _name: &str,
     args: &[Expr],

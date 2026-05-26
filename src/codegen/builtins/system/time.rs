@@ -15,6 +15,12 @@ use crate::codegen::emit::Emitter;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `time()` builtin, which returns the current Unix timestamp.
+///
+/// `name` and `args` are ignored—`time()` takes no arguments. Calls the `__rt_time`
+/// runtime helper, which returns the current wall-clock Unix timestamp in the native
+/// integer result register (`x0` on ARM64). Returns `PhpType::Int` to indicate the
+/// result type is a signed integer.
 pub fn emit(
     _name: &str,
     _args: &[Expr],

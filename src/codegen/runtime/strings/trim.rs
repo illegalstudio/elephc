@@ -10,7 +10,10 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// trim: strip whitespace from both ends. Returns adjusted ptr+len (no copy needed).
+/// Emits the `__rt_trim` runtime helper.
+/// Delegates to `__rt_ltrim` then `__rt_rtrim` to strip leading and trailing ASCII
+/// whitespace. Returns adjusted pointer/length in registers per target ABI:
+/// ARM64: x1=ptr, x2=len; x86_64: rax=ptr, rdx=len. No heap allocation.
 pub fn emit_trim(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_trim_linux_x86_64(emitter);
@@ -37,6 +40,9 @@ pub fn emit_trim(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_trim`. Preserves frame pointer across the
+/// call chain and forwards to `__rt_ltrim` then `__rt_rtrim`. Returns adjusted
+/// pointer/length in rax/rdx per the x86_64 ELF ABI. No heap allocation.
 fn emit_trim_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: trim ---");

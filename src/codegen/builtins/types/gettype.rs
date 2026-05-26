@@ -16,6 +16,12 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a PHP type-name string into the string-result registers and records it in
+/// the data section.
+///
+/// Adds `type_name` as a null-terminated string to the data section, then loads its
+/// address into `ptr_reg` and its byte length into `len_reg` per the target ABI.
+/// Always returns `Some(PhpType::Str)`.
 fn emit_type_name_result(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -35,6 +41,20 @@ fn emit_type_name_result(
     Some(PhpType::Str)
 }
 
+/// Emits code for the `gettype()` builtin, which returns the PHP type name of a
+/// value as a string.
+///
+/// Handles three cases:
+/// - `PhpType::Iterable`: probes the runtime heap kind tag to distinguish array,
+///   object, and unknown heap representations and emits the corresponding PHP type name.
+/// - `PhpType::Mixed` or `PhpType::Union`: unboxes the mixed payload and dispatches on
+///   its runtime tag to emit one of: integer, double, string, boolean, NULL, array,
+///   object, or resource.
+/// - All other types: directly emits the known PHP type name string.
+///
+/// Returns `Some(PhpType::Str)` with the type-name bytes materialized in the ABI
+/// string-result registers. The caller is responsible for releasing any temporary
+/// Mixed box owned by the expression before entry.
 pub fn emit(
     _name: &str,
     args: &[Expr],

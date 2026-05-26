@@ -9,6 +9,7 @@
 //! - Token names must track PHP-compatible spelling and precedence-sensitive operators exactly.
 
 #[derive(Debug, Clone, PartialEq)]
+/// Lexer token.
 pub enum Token {
     // Structural
     OpenTag,        // <?php

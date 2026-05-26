@@ -11,9 +11,10 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// str_eq: compare two strings for equality.
-/// Input:  x1=ptr_a, x2=len_a, x3=ptr_b, x4=len_b
-/// Output: x0 = 1 if equal, 0 if not
+/// Emits the `__rt_str_eq` runtime helper for byte-string equality.
+/// Dispatches to the x86_64 Linux variant when targeting that architecture; otherwise
+/// emits a portable ARM64 implementation.
+/// ABI: ARM64 calling convention — x1=ptr_a, x2=len_a, x3=ptr_b, x4=len_b → x0=result (1=equal, 0=different).
 pub fn emit_str_eq(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_str_eq_linux_x86_64(emitter);
@@ -49,6 +50,9 @@ pub fn emit_str_eq(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_str_eq`.
+/// ABI: System V AMD64 — rdi=ptr_a, rsi=len_a, rdx=ptr_b, rcx=len_b → rax=result (1=equal, 0=different).
+/// Uses byte loop with early exit on length mismatch or first byte difference.
 fn emit_str_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_eq ---");

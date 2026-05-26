@@ -19,6 +19,21 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a PHP `uasort(array &$array, callable $callback): bool` builtin call.
+///
+/// Evaluates the array argument first, then resolves the callback address.
+/// For captured callbacks, emits a comparator wrapper and calls `__rt_usort`.
+/// For simple callbacks, directly calls `__rt_usort` with the comparator address.
+///
+/// # Arguments
+/// * `name` — builtin name (unused, matched by dispatcher)
+/// * `args` — [array, callback] expressions
+/// * `emitter` — assembly emitter
+/// * `ctx` — codegen context (may be mutated for temporaries)
+/// * `data` — data section for literals and symbols
+///
+/// # Returns
+/// `Some(PhpType::Void)` on success; the mutating `&$array` is handled in-place.
 pub fn emit(
     _name: &str,
     args: &[Expr],

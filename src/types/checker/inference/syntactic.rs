@@ -34,6 +34,11 @@ pub fn infer_return_type_syntactic(body: &[Stmt]) -> PhpType {
     result
 }
 
+/// Recursively collects `PhpType` values from all Return statements in a statement tree.
+///
+/// Used by `infer_return_type_syntactic` to gather return types from a function body.
+/// Handles control-flow structures (if/else, while, try/catch, switch, match) by recursing
+/// into their nested bodies. Skips declarations and other non-executable statements.
 fn collect_return_types_syntactic(stmt: &Stmt, types: &mut Vec<PhpType>) {
     match &stmt.kind {
         StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => {}
@@ -111,6 +116,12 @@ fn collect_return_types_syntactic(stmt: &Stmt, types: &mut Vec<PhpType>) {
     }
 }
 
+/// Computes the wider of two `PhpType` values for union-type heuristics.
+///
+/// Takes two types and returns the more general type according to PHP coercion rules:
+/// `Str` dominates numeric and void types; `Float` dominates `Int`; `Never` is identity;
+/// `Void` passes through. Used when merging types from different branches (e.g., ternary,
+/// match arms, coalesce defaults).
 pub(crate) fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
     if a == b {
         return a.clone();
@@ -136,6 +147,12 @@ pub(crate) fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
     a.clone()
 }
 
+/// Computes the union of two array types when one operand is an empty indexed array literal.
+///
+/// Returns `Some(PhpType)` when a + b can be expressed as a single type (identical arrays,
+/// identical assoc arrays, or indexed+assoc with merged key/value types). Returns `None`
+/// when the union cannot be expressed syntactically (e.g., two different assoc arrays).
+/// Called from binary-op type inference to handle `[] + $arr` PHP semantics.
 fn array_union_type_syntactic(a: &PhpType, b: &PhpType) -> Option<PhpType> {
     match (a, b) {
         (PhpType::Array(left), PhpType::Array(right)) if left == right => {
@@ -179,6 +196,11 @@ fn array_union_type_syntactic(a: &PhpType, b: &PhpType) -> Option<PhpType> {
     }
 }
 
+/// Computes the union value type for array + assoc-array unions.
+///
+/// Takes the element type of an indexed array and the value type of an assoc array
+/// and returns the merged value type: `Mixed` if they differ, otherwise the common type.
+/// `Never` is treated as identity. Used only in `array_union_type_syntactic`.
 fn array_union_value_type_syntactic(left: &PhpType, right: &PhpType) -> PhpType {
     if left == right {
         left.clone()
@@ -191,10 +213,19 @@ fn array_union_value_type_syntactic(left: &PhpType, right: &PhpType) -> PhpType 
     }
 }
 
+/// Returns true if the expression is an empty `array(...)` literal.
+///
+/// Used to detect the PHP `[] + $arr` pattern in binary-op type inference, where an
+/// empty indexed array on either side should return the other operand's type.
 fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
     matches!(&expr.kind, ExprKind::ArrayLiteral(elems) if elems.is_empty())
 }
 
+/// Infers the `PhpType` of an expression from its syntactic form.
+///
+/// A best-effort syntactic heuristic — not full type inference. Handles literals,
+/// casts, null-coalesce, ternary, match, array literals, binary operators, function calls,
+/// and `new` expressions. Returns a conservative type for unrecognized constructs.
 pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
     match &expr.kind {
         ExprKind::StringLiteral(_) => PhpType::Str,

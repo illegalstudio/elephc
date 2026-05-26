@@ -22,6 +22,9 @@ mod merge;
 mod validation;
 
 #[derive(Debug, Clone)]
+/// A class with all traits fully expanded, property/method conflicts resolved,
+/// and direct members merged. Produced by `flatten_classes` and consumed by
+/// schema building, type checking, and codegen.
 pub struct FlattenedClass {
     pub name: String,
     pub extends: Option<String>,
@@ -37,6 +40,8 @@ pub struct FlattenedClass {
 }
 
 #[derive(Clone)]
+/// Raw declaration data for a trait encountered during program traversal.
+/// Stored in `trait_map` until `expand_trait` resolves its trait_uses and merges members.
 struct TraitDeclInfo {
     trait_uses: Vec<TraitUse>,
     properties: Vec<ClassProperty>,
@@ -45,17 +50,31 @@ struct TraitDeclInfo {
 }
 
 #[derive(Clone)]
+/// Cached result of fully expanding a trait: all properties and methods
+/// after applying trait_uses, conflict resolution, and adaptations.
+/// Stored in the expansion cache to avoid repeated work.
 struct ExpandedTrait {
     properties: Vec<ClassProperty>,
     methods: Vec<ClassMethod>,
 }
 
 #[derive(Clone)]
+/// A trait method imported during trait composition, with its source trait
+/// tracked for insteadof conflict resolution and visibility override resolution.
 struct ImportedMethod {
     source_trait: String,
     decl: ClassMethod,
 }
 
+/// Scans `program` for all traits and classes, validates direct member uniqueness,
+/// expands trait uses for each class, merges imported vs. local members, and returns
+/// a vector of `FlattenedClass` with any composition errors collected.
+///
+/// Trait declarations are stored in `trait_map` for later expansion.
+/// Classes with traits are processed in program order; each class's trait uses are
+/// resolved recursively, then merged with the class's own members.
+/// Circular trait composition and duplicate declarations are reported as errors.
+/// Returns `([FlattenedClass], Vec<CompileError>)`.
 pub fn flatten_classes(program: &Program) -> (Vec<FlattenedClass>, Vec<CompileError>) {
     let mut trait_map = HashMap::new();
     let mut trait_keys = HashSet::new();

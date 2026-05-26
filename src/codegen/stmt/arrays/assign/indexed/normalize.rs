@@ -16,6 +16,15 @@ use crate::types::PhpType;
 
 use super::prepare::IndexedAssignState;
 
+/// Normalizes the array's runtime storage layout on the first indexed write (when length
+/// is zero). Sets the slot width and packed kind word according to `effective_store_ty`
+/// so subsequent operations use the correct data region offsets.
+///
+/// # Arguments
+/// * `state` - prepared indexed assignment state from the prepare phase; carries
+///   `effective_store_ty` and `val_ty` used to configure the runtime header
+/// * `emitter` - target-specific instruction emitter
+/// * `ctx` - codegen context (labels, locals, types)
 pub(super) fn normalize_indexed_array_layout(
     state: &IndexedAssignState,
     emitter: &mut Emitter,
@@ -51,6 +60,25 @@ pub(super) fn normalize_indexed_array_layout(
     emitter.label(&skip_normalize);
 }
 
+/// Emits runtime storage layout normalization for x86_64/Linux targets.
+///
+/// On the first indexed write (when the array length is zero), this function sets the
+/// slot width and packed kind word in the array header so subsequent operations use the
+/// correct data region offsets. The logic branches on `effective_store_ty`:
+/// - `PhpType::Str`: 16-byte slots (pointer + length), string type stamped in header
+/// - Heap pointer types (`Mixed`, `Array`, `AssocArray`, `Object`): 8-byte slots
+/// - Scalar types: 8-byte slots, preserving the x86_64 heap marker and container kind bits
+///
+/// # Arguments
+/// * `state` - prepared indexed assignment state from the prepare phase
+/// * `emitter` - target-specific instruction emitter
+/// * `ctx` - codegen context (labels, locals, types)
+///
+/// # Register usage
+/// - `r10`: heap pointer to indexed-array header
+/// - `r11`: array length (checked against zero)
+/// - `r12`: slot width temporaries
+/// - `r14`: packed kind word copy for bit manipulation
 fn normalize_indexed_array_layout_linux_x86_64(
     state: &IndexedAssignState,
     emitter: &mut Emitter,

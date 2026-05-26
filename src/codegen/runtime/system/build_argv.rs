@@ -10,9 +10,16 @@
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
-/// build_argv: create a PHP $argv array from OS argc/argv.
-/// Reads _global_argc and _global_argv, builds a string array.
-/// Output: x0 = pointer to array
+/// Emits the `__rt_build_argv` runtime helper for the current target.
+/// Reads `_global_argc` and `_global_argv` populated by the entry point, iterates over
+/// each OS argument string, computes its length via null-terminator scan, and stores a
+/// `ptr+len` slot in a runtime array. Returns the array pointer in the function result
+/// register (`x0` on ARM64, `rax` on x86_64).
+///
+/// On ARM64 this function uses `__rt_array_new` and `__rt_array_push_str` for allocation.
+/// On x86_64 Linux it calls `malloc` directly with a precomputed layout of `(argc * 16) + 24`
+/// bytes to hold the 24-byte array header plus `argc` entries of 16 bytes each (ptr + len).
+/// Callee-saved registers are preserved across the helper call sequence.
 pub fn emit_build_argv(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_build_argv_linux_x86_64(emitter);
@@ -89,6 +96,12 @@ pub fn emit_build_argv(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_build_argv` using the System V AMD64 ABI.
+/// Uses callee-saved registers `r8` (argc), `r9` (argv), `r10` (array pointer), `r11`
+/// (current string pointer), and `rcx` (loop index). The loop counter lives at `[rbp - 32]`
+/// and the array pointer at `[rbp - 24]`. String length is accumulated in `rdx` via null-terminator
+/// scan. Allocates with `malloc` using a precomputed size of `(argc * 16) + 24` and stores the
+/// resulting array pointer in `rax` before returning.
 fn emit_build_argv_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: build_argv ---");
@@ -157,6 +170,9 @@ mod tests {
 
     use super::*;
 
+    /// Verifies that the x86_64 Linux path calls `malloc` for array backing storage and
+    /// emits the expected header slots (`[rax] = argc`, `[rax + 8] = argc`, `[rax + 16] = 16`)
+    /// plus string length storage at `[r10 + 8] = rdx`.
     #[test]
     fn test_emit_build_argv_linux_x86_64_uses_malloc_backing() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));

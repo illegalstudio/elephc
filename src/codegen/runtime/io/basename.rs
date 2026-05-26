@@ -10,15 +10,19 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// basename: extract trailing name component of a path.
-/// Input:  x1/x2 = path string, x3/x4 = optional suffix string (empty = no suffix)
-/// Output: x1/x2 = trailing name component (a slice of the input path)
+/// Emits the `__rt_basename` runtime helper for ARM64 targets, with an x86_64 Linux variant.
 ///
-/// Behaviour mirrors PHP's `basename()`:
+/// **ARM64 ABI** (caller-saved: x0-x7 for args, x1=path_ptr, x2=path_len, x3=suffix_ptr, x4=suffix_len):
+/// Returns the basename slice in **x1=result_ptr, x2=result_len**. The returned slice is a direct
+/// pointer/length into the input path; no allocation or copy is performed.
+///
+/// **x86_64 Linux dispatch**: Delegates to `emit_basename_linux_x86_64()` which uses the System V AMD64
+/// ABI (rax=path_ptr, rdx=path_len, rdi=suffix_ptr, rsi=suffix_len; returns rax=result_ptr, rdx=result_len).
+///
+/// **Behaviour** mirrors PHP's `basename()`:
 /// - trailing `/` characters are stripped before scanning
 /// - the substring after the last remaining `/` is returned
-/// - if the suffix matches the tail of the result and is shorter than the result,
-///   it is trimmed off
+/// - if the suffix matches the tail of the result and is strictly shorter than the result, it is trimmed off
 pub fn emit_basename(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_basename_linux_x86_64(emitter);
@@ -85,6 +89,16 @@ pub fn emit_basename(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return basename slice in x1/x2
 }
 
+/// Emits the `__rt_basename` runtime helper for the x86_64 Linux target (System V AMD64 ABI).
+///
+/// **ABI**: rax=path_ptr, rdx=path_len, rdi=suffix_ptr, rsi=suffix_len; returns rax=result_ptr, rdx=result_len.
+///
+/// The returned slice is a direct pointer/length into the input path; no allocation or copy is performed.
+///
+/// **Behaviour** mirrors PHP's `basename()`:
+/// - trailing `/` characters are stripped before scanning
+/// - the substring after the last remaining `/` is returned
+/// - if the suffix matches the tail of the result and is strictly shorter than the result, it is trimmed off
 fn emit_basename_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: basename ---");

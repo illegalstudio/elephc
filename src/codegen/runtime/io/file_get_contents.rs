@@ -14,9 +14,13 @@ const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 const FILE_GET_CONTENTS_FAILED_WARNING: &str =
     "Warning: file_get_contents(): Failed to open stream\n";
 
-/// file_get_contents: read an entire file into a string.
-/// Input:  x1/x2=filename string
-/// Output: x1=buffer pointer, x2=bytes read
+/// Emits `__rt_file_get_contents`, the runtime helper that reads an entire file into an owned heap buffer.
+/// Dispatches to the x86_64 or ARM64 implementation based on `emitter.target`.
+/// Input: x1=filename pointer, x2=filename length (PHP string encoding)
+/// Output: x1=heap buffer pointer, x2=bytes read (caller owns the buffer)
+/// Failure: returns x1=0, x2=0 and emits a "Failed to open stream" warning via `__rt_diag_warning`.
+/// Uses stat64 to determine file size, then open+read+close for the actual I/O.
+/// Calls `__rt_cstr` to null-terminate the filename before passing to stat/open.
 pub fn emit_file_get_contents(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_file_get_contents_linux_x86_64(emitter);
@@ -116,6 +120,12 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the empty string result for the failed read path
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_file_get_contents`.
+/// Uses the System V AMD64 ABI: rdi=path, rsi=stat buffer for stat(); rdi=fd, rsi=buf, rdx=count for read(); returns rax=ptr, rdx=length.
+/// Calls `__rt_cstr` to null-terminate the filename.
+/// Calls `__rt_heap_alloc` to allocate the owned destination buffer.
+/// Calls `__rt_diag_warning` on failure before returning (rax=0, rdx=0).
+/// Frame: pushes rbp, allocates `frame_size` bytes on rsp, preserves r10 as a temporary.
 fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     let stat_buf = emitter.platform.stat_buf_size();
     let size_off = emitter.platform.stat_size_offset();

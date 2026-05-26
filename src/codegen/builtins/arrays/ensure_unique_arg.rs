@@ -13,6 +13,13 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::types::PhpType;
 
+/// Emits a copy-on-write uniqueness check for array arguments before in-place mutation.
+///
+/// On ARM64: uses `bl` to call `__rt_array_ensure_unique` or `__rt_hash_ensure_unique`.
+/// On x86_64: moves the array pointer from `rax` into `rdi` (first argument register), then calls the runtime function.
+///
+/// After the call, the array pointer in `rax` may have changed due to COW repair. Callers
+/// must store the returned pointer back when mutating by reference.
 pub(crate) fn emit_ensure_unique_arg(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Array(_) => {

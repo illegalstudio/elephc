@@ -15,6 +15,13 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `pi()` builtin as a compile-time float constant loaded into the ABI return register.
+///
+/// `_name` is unused—signature checking has already validated the call.
+/// `_args` is empty and not accessed—signature checking enforces arity.
+/// Returns `Some(PhpType::Float)` since `pi()` always yields a float.
+/// Loads the `std::f64::consts::PI` constant into `d0` (ARM64) or `xmm0` (x86_64) via
+/// `DataSection` to avoid hardcoding relocatable assembly constants in the emitter.
 pub fn emit(
     _name: &str,
     _args: &[Expr],

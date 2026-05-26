@@ -25,6 +25,14 @@ use super::x86_minimal::emit_runtime_linux_x86_64_minimal;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::{Arch, Platform};
 
+/// Emits all runtime helper labels in dependency order for non-minimal targets.
+///
+/// For x86_64 Linux, delegates to the minimal runtime emitter and returns early.
+/// For all other targets, emits in order: diagnostics, strings, callables, system,
+/// exceptions, generators, arrays, SPL, objects, buffers, I/O, pointers, fibers.
+///
+/// Each category is emitted before any code that depends on it, ensuring labels
+/// are available when branches are assembled.
 pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_runtime_linux_x86_64_minimal(emitter);
@@ -336,6 +344,10 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     fibers::emit_fiber_state_getter(emitter);
 }
 
+/// Emits weak symbol declarations for MD5, SHA1, and SHA256 on Linux targets.
+///
+/// These weak declarations allow the linker to omit the symbols if no other object
+/// file provides them, preventing link errors when crypto features are unused.
 fn emit_optional_linux_crypto_decls(emitter: &mut Emitter) {
     if emitter.target.platform == Platform::Linux {
         emitter.raw(".weak MD5");

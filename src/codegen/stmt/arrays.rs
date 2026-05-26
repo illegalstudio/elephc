@@ -17,6 +17,7 @@ use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use crate::parser::ast::Expr;
 
+/// Emits an array element assignment: $array[index] = value.
 pub(crate) fn emit_array_assign_stmt(
     array: &str,
     index: &Expr,
@@ -28,6 +29,7 @@ pub(crate) fn emit_array_assign_stmt(
     assign::emit_array_assign_stmt(array, index, value, emitter, ctx, data)
 }
 
+/// Emits a nested array assignment targeting a sub-expression.
 pub(crate) fn emit_nested_array_assign_stmt(
     target: &Expr,
     value: &Expr,
@@ -38,6 +40,7 @@ pub(crate) fn emit_nested_array_assign_stmt(
     assign::emit_nested_array_assign_stmt(target, value, emitter, ctx, data)
 }
 
+/// Emits an array_push operation: $array[] = value or $array .= value.
 pub(super) fn emit_array_push_stmt(
     array: &str,
     value: &Expr,
@@ -48,6 +51,7 @@ pub(super) fn emit_array_push_stmt(
     push::emit_array_push_stmt(array, value, emitter, ctx, data)
 }
 
+/// Emits a list() unpack from an array value.
 pub(super) fn emit_list_unpack_stmt(
     vars: &[String],
     value: &Expr,

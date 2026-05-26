@@ -10,9 +10,13 @@
 
 use crate::codegen::emit::Emitter;
 
-/// ksort / krsort: sort array by keys.
-/// For indexed int arrays, elements are already ordered by numeric index,
-/// so these are no-ops that return immediately.
+/// Emits `__rt_ksort` and `__rt_krsort` runtime helpers into the assembly buffer.
+///
+/// `__rt_ksort` sorts a PHP array by keys in ascending order.
+/// `__rt_krsort` sorts a PHP array by keys in descending order.
+/// For indexed (integer-keyed) arrays, elements are already ordered by numeric
+/// index, so both functions are no-ops that return immediately without modifying
+/// the array payload.
 pub fn emit_ksort(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ksort (sort by keys ascending, no-op for indexed) ---");

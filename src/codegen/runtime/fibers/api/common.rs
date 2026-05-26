@@ -11,6 +11,11 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Emits the `__rt_mixed_from_value` call sequence to allocate a boxed `Mixed` null cell.
+///
+/// For both targets the sequence sets x0/rax to tag 8 (PHP null) and clears the low/high
+/// payload words before branching to the runtime allocator. The result is returned in the
+/// ABI's normal scalar return location (x0 for ARM64, rax for x86_64).
 pub(super) fn emit_box_null_mixed(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {

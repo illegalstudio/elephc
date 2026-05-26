@@ -15,9 +15,14 @@ use super::{
 use super::super::system;
 use crate::types::checker::builtins::supported_builtin_function_names;
 
-/// Emit the fixed runtime data section — cacheable across compilations.
-/// Contains heap buffers, error messages, lookup tables, and other
-/// data that does not depend on the user's program.
+/// Emit the fixed runtime `.data` section as assembly text.
+/// Cached across compilations because it contains only target-independent
+/// runtime data: heap globals, concat buffers, exception/fiber state,
+/// JSON/SPL error messages, base64 tables, PCRE regex patterns, and
+/// lookup tables for builtins, file types, and `pathinfo` keys.
+///
+/// `heap_size` is the maximum heap bytes requested by the user program;
+/// it is baked into `_heap_max` to enforce the heap limit at runtime.
 pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
@@ -237,6 +242,13 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out
 }
 
+/// Emit symbol data for all first-class-callable builtin functions.
+///
+/// Produces per-name labels (`_callable_builtin_name_N`), a null-terminated
+/// `"__invoke"` string for `__invoke` lookups, `_callable_builtin_count`
+/// holding the total count, and `_callable_builtin_table` containing
+/// pointer/length pairs for each builtin. Used by the `is_callable()` runtime
+/// routine and callable-invoke paths.
 fn emit_builtin_callable_data() -> String {
     let mut out = String::new();
     let builtins = supported_builtin_function_names();
@@ -260,6 +272,8 @@ fn emit_builtin_callable_data() -> String {
     out
 }
 
+/// Emit the `php_uname_mode_len_msg` and `php_uname_mode_value_msg`
+/// error message strings used when `php_uname()` mode argument validation fails.
 fn emit_php_uname_data() -> String {
     format!(
         ".globl _php_uname_mode_len_msg\n_php_uname_mode_len_msg:\n    .ascii {:?}\n\

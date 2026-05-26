@@ -10,6 +10,8 @@
 use super::*;
 
 #[test]
+// Verifies that a single integer captured by a fiber closure is correctly passed
+// through `use ($ctx)` and echoed inside the fiber body.
 fn test_fiber_closure_capture_int() {
     let out = compile_and_run(
         r#"<?php
@@ -22,6 +24,8 @@ $f->start();
 }
 
 #[test]
+// Verifies that two integers captured by a fiber closure are correctly passed
+// through `use ($a, $b)` and summed inside the fiber body.
 fn test_fiber_closure_capture_two_ints() {
     let out = compile_and_run(
         r#"<?php
@@ -35,6 +39,8 @@ $f->start();
 }
 
 #[test]
+// Verifies that three integers captured by a fiber closure are correctly passed
+// through `use ($x, $y, $z)` and summed inside the fiber body.
 fn test_fiber_closure_capture_three_ints() {
     let out = compile_and_run(
         r#"<?php
@@ -49,6 +55,10 @@ $f->start();
 }
 
 #[test]
+// Verifies that a captured integer and a user-supplied `mixed` argument are both
+// accessible inside the fiber. The capture rides in `start_args[1]` while the
+// user arg is in `start_args[0]`; `user_arg_max` is lowered to 1 so the capture
+// slot is not clobbered.
 fn test_fiber_closure_capture_with_user_arg() {
     // The user arg must be typed `mixed` to round-trip cleanly through
     // start_args; the capture rides in start_args[1] and stays untouched
@@ -64,6 +74,8 @@ $f->start(7);
 }
 
 #[test]
+// Verifies that a single string captured by a fiber closure is correctly passed
+// through `use ($s)` and echoed inside the fiber body.
 fn test_fiber_closure_capture_string() {
     let out = compile_and_run(
         r#"<?php
@@ -76,6 +88,8 @@ $f->start();
 }
 
 #[test]
+// Verifies that two strings captured by a fiber closure are correctly passed
+// through `use ($a, $b)` and concatenated with a "/" separator inside the fiber.
 fn test_fiber_closure_capture_two_strings() {
     let out = compile_and_run(
         r#"<?php
@@ -89,6 +103,8 @@ $f->start();
 }
 
 #[test]
+// Verifies that an integer and a string captured together (`use ($n, $s)`) are
+// correctly passed to the fiber body and concatenated in the expected order.
 fn test_fiber_closure_capture_int_then_string() {
     let out = compile_and_run(
         r#"<?php
@@ -102,6 +118,8 @@ $f->start();
 }
 
 #[test]
+// Verifies that a string and an integer captured together (`use ($s, $n)`) are
+// correctly passed to the fiber body in the declared order.
 fn test_fiber_closure_capture_string_then_int() {
     let out = compile_and_run(
         r#"<?php
@@ -115,6 +133,9 @@ $f->start();
 }
 
 #[test]
+// Regression: the capture snapshot must not be disturbed when the caller's
+// variable is later reassigned. The captured int value is stored by value at
+// capture time; the fiber must see 42 even after `$n` is set to 99.
 fn test_fiber_closure_capture_int_survives_caller_reassignment() {
     // The capture is incref'd at construction so the original value stays
     // reachable through the Fiber even when the caller's variable is later
@@ -133,6 +154,8 @@ $f->start();
 }
 
 #[test]
+// Verifies that a single float captured by a fiber closure is correctly passed
+// through `use ($pi)` and echoed inside the fiber body.
 fn test_fiber_closure_capture_float() {
     let out = compile_and_run(
         r#"<?php
@@ -145,6 +168,8 @@ $f->start();
 }
 
 #[test]
+// Verifies that a float and an integer captured together (`use ($rate, $count)`)
+// are both accessible inside the fiber and can be used in arithmetic.
 fn test_fiber_closure_capture_float_and_int() {
     let out = compile_and_run(
         r#"<?php
@@ -160,6 +185,8 @@ $f->start();
 }
 
 #[test]
+// Verifies that a float and a string captured together (`use ($factor, $tag)`)
+// are both accessible inside the fiber in the declared order.
 fn test_fiber_closure_capture_float_and_string() {
     let out = compile_and_run(
         r#"<?php
@@ -173,6 +200,8 @@ $f->start();
 }
 
 #[test]
+// Verifies that two floats captured by a fiber closure are correctly passed
+// through `use ($a, $b)` and summed inside the fiber body.
 fn test_fiber_closure_capture_two_floats() {
     let out = compile_and_run(
         r#"<?php
@@ -186,6 +215,8 @@ $f->start();
 }
 
 #[test]
+// Verifies that a captured object is correctly passed through `use ($c)` and
+// its public property is readable inside the fiber body.
 fn test_fiber_closure_capture_object() {
     let out = compile_and_run(
         r#"<?php
@@ -200,6 +231,9 @@ $f->start();
 }
 
 #[test]
+// Verifies that mutations to a captured object are visible to the caller after
+// `Fiber::suspend` / `resume`. Objects are reference types in PHP — the capture
+// stores the heap pointer, so fiber mutations mutate the shared object in place.
 fn test_fiber_closure_capture_object_mutation_visible_to_caller() {
     // Objects are reference types in PHP — when the fiber mutates a captured
     // object, the change is visible to the original caller because both share
@@ -219,6 +253,10 @@ echo "after=" . $d->value;
 }
 
 #[test]
+// Verifies that a fiber captured in a slot survives when the slot is re-used
+// across multiple init/reset cycles. The `$self` capture is held by the inner
+// fiber closure and must remain valid after `$this->fiber = null` clears the
+// slot, then `init()` is called again.
 fn test_fiber_capture_object_survives_terminated_slot_reset() {
     let out = compile_and_run(
         r#"<?php
@@ -247,6 +285,8 @@ echo "|done";
 }
 
 #[test]
+// Verifies that a single array captured by a fiber closure is correctly passed
+// through `use ($arr)` and its elements are indexed inside the fiber body.
 fn test_fiber_closure_capture_array() {
     let out = compile_and_run(
         r#"<?php
@@ -259,6 +299,10 @@ $f->start();
 }
 
 #[test]
+// Regression: the captured array must survive the caller's `$arr` reassignment.
+// `emit_fiber_capture_preload` increfs the heap pointer at capture time; without
+// the incref the array's refcount would drop to zero and free it before the
+// fiber consumed it.
 fn test_fiber_closure_capture_array_survives_caller_reassignment() {
     // The captured array stays alive across reassignment of the caller's $arr
     // because emit_fiber_capture_preload incref's the heap pointer at capture
@@ -278,6 +322,9 @@ $f->start();
 }
 
 #[test]
+// Verifies that two fibers sharing the same captured object see the same heap
+// pointer. Mutations from each fiber are accumulated via `Fiber::suspend` /
+// `resume` and the final `$shared->value` reflects both increments (1 + 10 = 11).
 fn test_fiber_multiple_fibers_share_captured_object() {
     // Two fibers each capture the same Counter object. Mutations from one
     // fiber are visible to the other and to main, because the capture stores
@@ -306,6 +353,9 @@ echo $shared->value;
 }
 
 #[test]
+// Verifies that a captured value passed from an outer fiber to an inner fiber
+// re-triggers the capture preload path and the inner closure sees the same
+// value without isolation or aliasing issues.
 fn test_fiber_nested_with_outer_capture_passed_to_inner() {
     // Inside the outer fiber's body, $shared is a local visible from a
     // capture; passing it as a capture to the inner fiber re-triggers the

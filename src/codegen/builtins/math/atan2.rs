@@ -16,6 +16,23 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the PHP `atan2(y, x)` builtin call.
+///
+/// Evaluates `y` (first arg) and preserves it while `x` (second arg) is evaluated,
+/// then calls the target libc `atan2` function. Both operands are normalized to
+/// floating-point before the call. The return type is always `PhpType::Float`.
+/// Target ABI: AArch64 passes `y` in `d0` and `x` in `d1`; x86_64 SysV passes
+/// `y` in `xmm0` and `x` in `xmm1`.
+///
+/// # Arguments
+/// * `_name` – unused (builtin dispatch is by signature)
+/// * `args` – exactly two expressions: `y` then `x`
+/// * `emitter` – target assembly emitter
+/// * `ctx` – compilation context (variables, types)
+/// * `data` – data section for constants/literals
+///
+/// # Returns
+/// `Some(PhpType::Float)` – always a float result per PHP spec
 pub fn emit(
     _name: &str,
     args: &[Expr],

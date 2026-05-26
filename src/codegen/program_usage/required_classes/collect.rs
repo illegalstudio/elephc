@@ -12,6 +12,21 @@ use std::collections::HashSet;
 
 use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Program, Stmt, StmtKind};
 
+/// Entry point: walks a complete `Program` and returns all class names that require
+/// emitted metadata (class tables, vtables, dispatch helpers, etc.).
+///
+/// The returned `HashSet` contains fully-qualified or local class names gathered from:
+/// - Class declarations (the class itself, its `extends` parent, and `implements` interfaces)
+/// - `new` expressions and `instanceof` checks
+/// - Catch clause exception types
+/// - Static property/method access on named receivers
+/// - `Generator` for `yield`/`yield from` expressions
+///
+/// # Arguments
+/// - `program` — the parsed program to analyze
+///
+/// # Returns
+/// - `HashSet<String>` of class names referenced anywhere in the program
 pub(in crate::codegen) fn collect_required_class_names(program: &Program) -> HashSet<String> {
     let mut names = HashSet::new();
     collect_required_class_names_in_body(program, &mut names);
@@ -25,6 +40,22 @@ pub(in crate::codegen) fn collect_required_class_names_in_stmts(
     collect_required_class_names_in_body(stmts, names);
 }
 
+/// Recursively walks a list of statements, collecting class names into `names`.
+///
+/// Dispatches on `StmtKind` variants that can introduce or reference class names:
+/// - `ClassDecl`: inserts the class name, its `extends` parent, and all `implements` interfaces,
+///   then recurses into method bodies.
+/// - `Try`: recurses into `try_body`, each `catches` clause body, and optionally `finally_body`.
+///   Each catch's `exception_types` are inserted.
+/// - Control-flow statements (`If`, `While`, `Foreach`, `Switch`, etc.) recurse into their bodies
+///   and also process any embedded expressions that may contain class references.
+/// - Property/static assignments with named `StaticReceiver`: inserts the receiver class name.
+/// - Statement variants that are purely expression-based delegate to
+///   `collect_required_class_names_in_expr` for their expression(s).
+///
+/// # Arguments
+/// - `stmts` — statement list to walk
+/// - `names` — mutable accumulator into which class names are inserted
 fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<String>) {
     for stmt in stmts {
         match &stmt.kind {
@@ -198,6 +229,29 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
     }
 }
 
+/// Recursively walks an expression, collecting class names into `names`.
+///
+/// Dispatches on `ExprKind` variants that can reference classes:
+/// - `NewObject`: inserts the constructed class name, then recurses into constructor arguments.
+/// - `InstanceOf`: recurses into the value; for `InstanceOfTarget::Name` (excluding `self`,
+///   `parent`, `static`) inserts the class name.
+/// - `StaticPropertyAccess`, `StaticMethodCall`, `ClassConstant`, `ScopedConstantAccess`,
+///   `NewScopedObject`: for named `StaticReceiver`, inserts the class name; recurses into
+///   arguments/expressions as needed.
+/// - `FirstClassCallable` when targeting a static method: inserts the receiver class name;
+///   when targeting an instance method: recurses into the object expression.
+/// - `Yield` / `YieldFrom`: unconditionally inserts `"Generator"` (the builtin iterator class),
+///   then recurses into optional key/value expressions.
+/// - Complex expressions that nest other expressions (`BinaryOp`, `Assignment`, `Ternary`,
+///   `Match`, `ArrayAccess`, etc.) recurse into their sub-expressions.
+/// - Literal and variable expressions (`IntLiteral`, `Variable`, `This`, etc.) are no-ops.
+///
+/// # Arguments
+/// - `expr` — the expression to walk
+/// - `names` — mutable accumulator into which class names are inserted
+///
+/// # Panics
+/// - `unreachable!` if a `MagicConstant` is encountered (must be lowered before this pass).
 fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>) {
     match &expr.kind {
         ExprKind::BinaryOp { left, right, .. } => {

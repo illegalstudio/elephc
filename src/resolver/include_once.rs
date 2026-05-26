@@ -10,6 +10,17 @@
 
 use std::path::Path;
 
+/// Computes a deterministic assembly-safe label for `include_once`/`require_once` guards.
+///
+/// Uses FNV-1a hashing to convert a file path into a unique 64-bit identifier,
+/// formatted as `_include_once_{hash:016x}`. The same canonical path always
+/// produces the same label, enabling deduplication of repeated includes.
+///
+/// # Arguments
+/// * `path` - The file path to hash.
+///
+/// # Returns
+/// A `String` label safe for use as an assembly symbol name.
 pub(super) fn include_once_label(path: &Path) -> String {
     let mut hash = 0xcbf29ce484222325u64;
     for byte in path.to_string_lossy().as_bytes() {

@@ -11,10 +11,18 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Magic high-32 bits marker injected into x86_64 heap wrapper headers to distinguish
+/// managed heap payloads from foreign/static pointers during release validation.
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
-/// decref_any: release a mixed heap-backed value using the uniform heap kind tag.
-/// Input: x0 = heap-backed value pointer
+/// Uniform release dispatcher for mixed heap-backed values.
+///
+/// Reads the heap kind tag from the value's header, validates the pointer against the
+/// managed heap window, and dispatches to the appropriate concrete release helper
+/// (string, array, hash, object, mixed). Skips GC-tracked children during active cycle
+/// collection to avoid double-frees when the collector reclaims them directly.
+///
+/// Input: x0 (ARM64) or rax (x86_64) = heap-backed value pointer
 /// Output: none
 pub fn emit_decref_any(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -88,6 +96,12 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // nothing to release
 }
 
+/// x86_64 Linux implementation of the uniform release dispatcher.
+/// Uses the x86_64 heap wrapper header format with a high-word magic marker to distinguish
+/// managed heap payloads from foreign or static pointers before dispatching to concrete
+/// release helpers (string, array, hash, object, mixed).
+/// Input: rax = heap-backed value pointer
+/// Output: none (tail-calls to specialized release helpers)
 fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: decref_any ---");

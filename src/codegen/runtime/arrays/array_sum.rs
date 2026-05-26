@@ -11,9 +11,15 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_sum: compute the sum of all integer elements in an array.
-/// Input: x0 = array pointer
-/// Output: x0 = sum of all elements
+/// Emits the `__rt_array_sum` runtime helper for computing the sum of all integer elements in an indexed PHP array.
+///
+/// Dispatches to the x86_64 Linux variant if the target is `Arch::X86_64`; otherwise emits an ARM64
+/// implementation directly. Both variants assume the array pointer is in `x0`/`rdi` and return the
+/// sum in `x0`/`rax`. The helper skips the 24-byte array header and iterates over scalar payload
+/// slots, accumulating a 64-bit integer sum.
+///
+/// # Arguments
+/// * `emitter` - the assembly emitter to write instructions into
 pub fn emit_array_sum(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_sum_linux_x86_64(emitter);
@@ -45,6 +51,14 @@ pub fn emit_array_sum(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_array_sum` using the System V AMD64 ABI.
+///
+/// Uses `rdi` for the array pointer, `rax` for the accumulator/return value, `rcx` as the loop
+/// cursor, `r10` for the array length, and `r11` for the data region base. Skips the 24-byte
+/// array header and sums 64-bit scalar payloads at `rdi + 24 + rcx * 8`.
+///
+/// # Arguments
+/// * `emitter` - the assembly emitter to write x86_64 instructions into
 fn emit_array_sum_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_sum ---");

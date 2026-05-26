@@ -10,11 +10,17 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
+/// High 32 bits of the x86_64 owned-string heap marker, combined with a low byte to form
+/// the full `kind` word stamped into heap-allocated template buffers.
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
-/// tempnam: create a temporary filename.
-/// Input:  x1/x2=dir string, x3/x4=prefix string
-/// Output: x1=temp filename pointer, x2=temp filename length
+/// Emits the `__rt_tempnam` runtime helper for creating a unique temporary filename.
+///
+/// Uses libc `mkstemp` to create and immediately close a temp file — only the path is
+/// returned, not an open descriptor. The returned string is heap-allocated and persisted.
+///
+/// Input (ARM64): x1/x2=dir string ptr/len, x3/x4=prefix string ptr/len
+/// Output (ARM64): x1=temp filename ptr, x2=temp filename len
 pub fn emit_tempnam(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_tempnam_linux_x86_64(emitter);
@@ -100,6 +106,13 @@ pub fn emit_tempnam(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// x86_64-specific implementation of `__rt_tempnam`.
+///
+/// Builds a mkstemp template from dir + "/" + prefix + "XXXXXX", allocates a mutable owned
+/// buffer, calls mkstemp to rewrite the Xs in-place, closes the file descriptor, and returns
+/// the path as a heap-allocated persisted string via rax/rdx.
+///
+/// On mkstemp failure, frees the allocated buffer and returns an empty string (rax=0, rdx=0).
 fn emit_tempnam_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: tempnam ---");

@@ -11,9 +11,15 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// hash_key_eq: compare two normalized associative-array keys.
-/// Input:  x1=left_lo, x2=left_hi, x3=right_lo, x4=right_hi
-/// Output: x0=1 when equal, 0 otherwise
+/// Emits `__rt_hash_key_eq` for ARM64.
+///
+/// Compares two PHP associative-array keys that have already been normalized by the
+/// hash probe path. Integer keys are encoded with the sentinel value -1 in the upper
+/// word (hi); string keys carry a pointer and length.
+///
+/// x1=left_lo, x2=left_hi, x3=right_lo, x4=right_hi.
+/// Returns x0=1 when equal, x0=0 when different or when the key kinds mismatch
+/// (e.g. int vs string). Never panics; all control paths return through x0.
 pub fn emit_hash_key_eq(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_key_eq_linux_x86_64(emitter);
@@ -46,6 +52,14 @@ pub fn emit_hash_key_eq(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return false to the hash probe caller
 }
 
+/// Emits `__rt_hash_key_eq` for x86_64 Linux.
+///
+/// Mirrors the ARM64 logic but uses the System V AMD64 ABI register convention:
+/// rdi=left_lo, rsi=left_hi, rdx=right_lo, rcx=right_hi.
+/// Returns in rax (1=equal, 0=different or kind mismatch).
+///
+/// The sentinel for an integer key is -1 in the hi register (rsi/rcx); a string key
+/// carries a pointer in the lo register and the length in the hi register.
 fn emit_hash_key_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_key_eq ---");

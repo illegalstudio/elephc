@@ -10,6 +10,8 @@
 
 use super::*;
 
+// Verifies that `strlen` is classified as a pure call with no side effects,
+// no exception potential, and no observable behavior.
 #[test]
 fn test_effect_analysis_recognizes_pure_builtin_calls() {
     let expr = Expr::new(
@@ -25,6 +27,8 @@ fn test_effect_analysis_recognizes_pure_builtin_calls() {
     assert!(!expr_is_observable(&expr));
 }
 
+// Verifies that property accesses (`.`) are pure while array accesses (`[]`)
+// are observable and may throw (e.g., undefined index).
 #[test]
 fn test_effect_analysis_treats_property_reads_as_pure_and_array_reads_as_observable() {
     let property = Expr::new(
@@ -49,6 +53,8 @@ fn test_effect_analysis_treats_property_reads_as_pure_and_array_reads_as_observa
     assert!(expr_is_observable(&array));
 }
 
+// Verifies that a user-defined function whose body consists solely of a pure
+// builtin call (`strlen`) is classified as `Effect::PURE`.
 #[test]
 fn test_program_function_effects_recognize_pure_user_functions() {
     let program = vec![Stmt::new(
@@ -76,6 +82,9 @@ fn test_program_function_effects_recognize_pure_user_functions() {
     assert_eq!(function_effects.get("len3"), Some(&Effect::PURE));
 }
 
+// Verifies that a wrapper function calling a function that throws is classified
+// as `PURE` with `side_effects` and `may_throw` — the throw does not make the
+// wrapper non-pure, but it does propagate the exception potential.
 #[test]
 fn test_program_function_effects_propagate_throwing_calls() {
     let program = vec![

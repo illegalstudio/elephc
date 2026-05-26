@@ -142,19 +142,24 @@ pub fn emit_pathinfo_array(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return hash pointer in x0
 }
 
+/// x86_64 Linux variant of `emit_pathinfo_array`.
+///
+/// ABI: `rax` = path pointer, `rdx` = path length → `rax` = hash pointer.
+///
+/// Frame layout (rbp-relative, 64 bytes):
+///   `[rbp - 8]`  : path_ptr
+///   `[rbp - 16]` : path_len
+///   `[rbp - 24]` : hash_ptr
+///   `[rbp - 32]` : value_ptr (persisted component pointer)
+///   `[rbp - 40]` : value_len (persisted component length)
+///
+/// Mirrors the ARM64 pathinfo_array logic but uses System V AMD64 ABI registers:
+/// dirname (flag=1) → basename (flag=2) → extension (flag=4, only when non-empty) → filename (flag=8).
+/// String values are persisted via `__rt_str_persist` before hash insertion.
 fn emit_pathinfo_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: pathinfo (no-flag, array form) ---");
     emitter.label_global("__rt_pathinfo_array");
-
-    // ABI: rax=path_ptr, rdx=path_len → rax=hash_ptr
-    //
-    // Frame layout (rbp-relative):
-    //   [rbp - 8]  : path_ptr
-    //   [rbp - 16] : path_len
-    //   [rbp - 24] : hash_ptr
-    //   [rbp - 32] : value_ptr (persisted component pointer)
-    //   [rbp - 40] : value_len (persisted component length)
 
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base

@@ -15,6 +15,9 @@ use crate::span::Span;
 
 use super::{expect_semicolon, expect_token, recover_to_statement_boundary};
 
+/// Parses a C type token and returns the corresponding CType variant.
+/// Handles primitive types (int, float, string, bool, void, callable) and pointer types
+/// including ptr and ptr<TypeName>. Advances `pos` on success.
 fn parse_c_type(tokens: &[(Token, Span)], pos: &mut usize) -> Result<CType, CompileError> {
     let span = if *pos < tokens.len() {
         tokens[*pos].1
@@ -68,6 +71,9 @@ fn parse_c_type(tokens: &[(Token, Span)], pos: &mut usize) -> Result<CType, Comp
     }
 }
 
+/// Parses extern function parameters inside parentheses: `($param1: CType, $param2: CType)`.
+/// Each parameter is a C type followed by a PHP-style variable name. Advances `pos` to the closing `)`.
+/// Returns the list of ExternParam nodes, each with a name and CType.
 fn parse_extern_params(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -106,6 +112,9 @@ fn parse_extern_params(
     Ok(params)
 }
 
+/// Parses an `extern function` declaration: `extern function name(params) -> ReturnType;`.
+/// Consumes the `function` keyword, then reads the identifier, parameter list, optional return type,
+/// and trailing semicolon. Advances `pos` to the token after the semicolon.
 fn parse_extern_function(
     tokens: &[(Token, Span)],
     pos: &mut usize,

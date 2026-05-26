@@ -17,6 +17,19 @@ use crate::types::PhpType;
 use super::super::Checker;
 
 impl Checker {
+    /// Constructs a new `Checker` with pre-populated builtin constants and empty declaration tables.
+    ///
+    /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, pathinfo
+    /// constants, `FNM_*` flags, `STDIN`/`STDOUT`/`STDERR` stream resources, `LOCK_*` constants)
+    /// and JSON integer constants. All other tables (function declarations, classes, interfaces,
+    /// enums, etc.) are initialized empty.
+    ///
+    /// # Arguments
+    /// * `target_platform` - The compilation target platform, stored for use in platform-specific
+    ///   type checks and library requirements.
+    ///
+    /// # Returns
+    /// A `Checker` instance ready for the program to be loaded into.
     pub(super) fn new(target_platform: Platform) -> Self {
         let mut constants = HashMap::new();
         constants.insert("PHP_OS".to_string(), PhpType::Str);

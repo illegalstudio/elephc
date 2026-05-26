@@ -49,6 +49,9 @@ pub fn emit_hash_ensure_unique(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = a unique hash pointer
 }
 
+/// x86_64 Linux variant of `emit_hash_ensure_unique`.
+/// Input:  rdi = candidate hash pointer
+/// Output: rax = unique hash pointer (original or cloned)
 fn emit_hash_ensure_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_ensure_unique ---");

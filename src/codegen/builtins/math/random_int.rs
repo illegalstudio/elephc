@@ -17,6 +17,34 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `random_int($min, $max)` builtin.
+///
+/// Produces a cryptographically secure random integer in the inclusive range
+/// [$min, $max]. The implementation evaluates `$min` first, then `$max`, pushes
+/// the minimum to preserve it while evaluating the maximum, then calls the runtime
+/// helper `__rt_random_uniform` to obtain a uniform offset in the half-open range
+/// [0, max-min+1). The offset is shifted by `$min` to restore the inclusive interval.
+///
+/// # Arguments
+/// - `_name`: the builtin name (unused, already resolved to `random_int`).
+/// - `args`: exactly two expressions: the minimum and maximum bounds.
+/// - `emitter`: target-specific instruction emitter.
+/// - `ctx`: codegen context with variable layout and target info.
+/// - `data`: mutable data section for constants/labels.
+///
+/// # Returns
+/// `Some(PhpType::Int)` indicating the result is a PHP integer.
+/// The value is placed in the primary integer register (`x0` on ARM64, `rax` on x86_64)
+/// per the target ABI.
+///
+/// # ABI constraints
+/// - `emit_expr` for each argument may clobber the primary integer register.
+/// - A scratch register (`x9`/`r9`) holds the preserved minimum across calls.
+/// - `__rt_random_uniform` is called with the exclusive upper bound in `rdi`/`x0`
+///   and returns a uniform value in the primary integer register.
+///
+/// # Panics
+/// Panics if `args.len() != 2`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

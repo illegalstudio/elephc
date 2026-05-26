@@ -57,6 +57,9 @@ pub fn emit_array_fill_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return filled array
 }
 
+/// x86_64 Linux variant of `emit_array_fill_refcounted`.
+/// Input: rsi = count, rdx = borrowed payload pointer
+/// Output: rax = pointer to new array with count retained copies of the payload
 fn emit_array_fill_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_fill_refcounted ---");

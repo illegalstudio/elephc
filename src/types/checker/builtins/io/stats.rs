@@ -15,6 +15,25 @@ use crate::types::{PhpType, TypeEnv};
 use super::common::{ensure_stream_resource, BuiltinResult};
 use super::super::super::Checker;
 
+/// Type-checks stat/fstat filesystem builtins: `file_exists`, `is_file`, `is_dir`,
+/// `is_readable`, `is_writable`, `is_writeable`, `is_executable`, `is_link`, `filesize`,
+/// `filemtime`, `fileatime`, `filectime`, `fileperms`, `fileowner`, `filegroup`, `fileinode`,
+/// `filetype`, `clearstatcache`, `stat`, `lstat`, `fstat`, and `linkinfo`.
+///
+/// Validates argument count for each builtin, infers argument types via `checker.infer_type()`,
+/// and returns the PHP return type. For `fstat`, validates the stream resource via
+/// `ensure_stream_resource`. Returns `Ok(None)` for unhandled names so the caller can fall through.
+///
+/// # Arguments
+/// - `checker`: mutable checker state for type inference and normalization
+/// - `name`: lowercase builtin name (case-insensitive lookup already resolved by caller)
+/// - `args`: parsed argument expressions
+/// - `span`: source location for error reporting
+/// - `env`: current type environment
+///
+/// # Returns
+/// `BuiltinResult` — `Ok(Some(PhpType))` with the PHP return type, or `Ok(None)` if `name`
+/// is not a stat/filesystem builtin handled by this module.
 pub(super) fn check_builtin(
     checker: &mut Checker,
     name: &str,
@@ -105,6 +124,15 @@ pub(super) fn check_builtin(
     }
 }
 
+/// Returns the normalized return type for `stat()` / `lstat()` / `fstat()`.
+///
+/// Produces `assoc-array<mixed, int>|bool` as a normalized union type. PHP's stat functions
+/// return `array|false` — the AssocArray represents the stat buffer keys (mode, ino, uid, etc.
+/// as int values), and `Bool` represents the false return on failure. The `Mixed` key type
+/// reflects PHP's heterogeneous array indexing.
+///
+/// # Arguments
+/// - `checker`: checker instance used for `normalize_union_type()` to produce the canonical union
 fn stat_result_type(checker: &Checker) -> PhpType {
     checker.normalize_union_type(vec![
         PhpType::AssocArray {

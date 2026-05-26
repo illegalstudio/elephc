@@ -10,15 +10,25 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// dirname: return the parent directory portion of a path.
-/// Input:  x1/x2 = path string
-/// Output: x1/x2 = parent directory (a slice of the input path)
+/// Emits the `__rt_dirname` runtime helper for the current target.
 ///
-/// Behaviour mirrors PHP's `dirname()`:
-/// - if the path has no separator: returns "."
-/// - if the path is "/" (or only slashes): returns "/"
-/// - trailing slashes are ignored before locating the final separator
-/// - the result drops the trailing slash unless the parent is the filesystem root
+/// Dispatches to `emit_dirname_linux_x86_64` on x86_64; emits a shared ARM64
+/// implementation on all other targets (including ARM64 macOS and Linux).
+///
+/// # ABI (ARM64)
+/// - Input: `x1` = path string pointer, `x2` = path string length
+/// - Output: `x1` = parent directory pointer (slice of the input, no allocation), `x2` = parent length
+///
+/// # ABI (x86_64)
+/// - Input: `rax` = path string pointer, `rdx` = path string length
+/// - Output: `rax` = parent directory pointer (slice of the input, no allocation), `rdx` = parent length
+///
+/// # Behaviour mirrors PHP's `dirname()`:
+/// - empty path → "."
+/// - path with no separator → "."
+/// - path is "/" or only slashes → "/"
+/// - trailing slashes are stripped before locating the final separator
+/// - result drops the trailing slash unless the parent is the filesystem root
 pub fn emit_dirname(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_dirname_linux_x86_64(emitter);
@@ -89,6 +99,18 @@ pub fn emit_dirname(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return parent-dir slice in x1/x2
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_dirname`.
+///
+/// # ABI
+/// - Input: `rax` = path string pointer, `rdx` = path string length
+/// - Output: `rax` = parent directory pointer (slice of the input, no allocation), `rdx` = parent length
+///
+/// # Behaviour (mirrors PHP's `dirname()`):
+/// - empty path → "."
+/// - no separator → "."
+/// - "/" or only slashes → "/"
+/// - trailing slashes stripped before scanning for the final separator
+/// - parent drops trailing slash unless it is the filesystem root
 fn emit_dirname_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: dirname ---");

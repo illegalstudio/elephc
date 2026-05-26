@@ -18,6 +18,26 @@ use crate::types::PhpType;
 
 use super::stream_arg::emit_stream_fd_arg;
 
+/// Emits code for PHP `ftruncate($stream, $size)`.
+///
+/// Validates `$stream` via `emit_stream_fd_arg`, then evaluates `$size` and
+/// loads both arguments into ABI registers before calling `__rt_ftruncate`.
+/// Returns `PhpType::Bool` because `ftruncate` returns `true` on success or `false` on failure.
+///
+/// # Arguments
+/// - `_name`: builtin name (unused, always `ftruncate`)
+/// - `args[0]`: stream resource expression (validated and unboxed to file descriptor)
+/// - `args[1]`: size expression (evaluated after fd is preserved)
+/// - `emitter`: target for code emission and target metadata
+/// - `ctx`: codegen context (variable layout, ownership state)
+/// - `data`: data section for relocations and runtime symbols
+///
+/// # Register usage
+/// - AArch64: fd in `x0`, size in `x1`
+/// - X86_64: fd in `rax`, size in `rdx`
+///
+/// # Return
+/// `Some(PhpType::Bool)` — `ftruncate` always returns a boolean in PHP
 pub fn emit(
     _name: &str,
     args: &[Expr],

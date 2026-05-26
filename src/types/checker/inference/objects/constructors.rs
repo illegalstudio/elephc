@@ -16,6 +16,14 @@ use crate::types::{fibers, PhpType, TypeEnv};
 use super::super::super::Checker;
 
 impl Checker {
+    /// Infers the type of a `new Class(...)` expression.
+    ///
+    /// Errors on enums, interfaces, abstract classes, or undefined classes.
+    /// Validates constructor visibility, normalizes named arguments, checks
+    /// the callable signature, and propagates argument types to constructor
+    /// properties via `propagate_constructor_arg_type`. Special-cases `Fiber`
+    /// (calls `validate_fiber_constructor_args`) and reflection owners
+    /// (`ReflectionClass`, `ReflectionMethod`, `ReflectionProperty`).
     pub(crate) fn infer_new_object_type(
         &mut self,
         class_name: &str,
@@ -146,6 +154,12 @@ impl Checker {
             && self.current_method.as_deref() == Some(get_iterator_key.as_str())
     }
 
+    /// Validates constructor arguments for reflection owner classes
+    /// (`ReflectionClass`, `ReflectionMethod`, `ReflectionProperty`).
+    ///
+    /// Extracts the reflected class/method/property from string literal args,
+    /// then delegates to `validate_reflection_class_attrs`,
+    /// `validate_reflection_method_attrs`, or `validate_reflection_property_attrs`.
     fn validate_reflection_owner_constructor(
         &mut self,
         class_name: &str,
@@ -200,6 +214,11 @@ impl Checker {
         }
     }
 
+    /// Extracts the class name argument from a reflection constructor call.
+    ///
+    /// Accepts a string literal or `ClassName::class` constant; returns the
+    /// resolved class name. Errors if the argument is not a string or if the
+    /// class is undefined.
     fn reflection_class_literal_arg(
         &mut self,
         reflection_type: &str,
@@ -244,6 +263,11 @@ impl Checker {
             })
     }
 
+    /// Extracts a string literal argument from a reflection constructor call.
+    ///
+    /// The argument must be a `string` literal (dynamic lookup is not yet
+    /// supported). Used for method names and property names in reflection
+    /// constructors.
     fn reflection_string_literal_arg(
         &mut self,
         reflection_type: &str,
@@ -274,6 +298,10 @@ impl Checker {
         }
     }
 
+    /// Validates that a class's attributes do not have unsupported argument metadata.
+    ///
+    /// Returns `Ok` if the class has no attribute args or if all args are
+    /// supported. Used by `ReflectionClass` constructor validation.
     fn validate_reflection_class_attrs(
         &self,
         class_name: &str,
@@ -295,6 +323,10 @@ impl Checker {
         Ok(())
     }
 
+    /// Validates that a method's attributes do not have unsupported argument metadata.
+    ///
+    /// Also checks that the method exists on the class. Used by
+    /// `ReflectionMethod` constructor validation.
     fn validate_reflection_method_attrs(
         &self,
         class_name: &str,
@@ -338,6 +370,10 @@ impl Checker {
         Ok(())
     }
 
+    /// Validates that a property's attributes do not have unsupported argument metadata.
+    ///
+    /// Also checks that the property exists on the class (instance or static).
+    /// Used by `ReflectionProperty` constructor validation.
     fn validate_reflection_property_attrs(
         &self,
         class_name: &str,
@@ -383,6 +419,10 @@ impl Checker {
         Ok(())
     }
 
+    /// Resolves a static receiver to a class name for reflection class constant.
+    ///
+    /// `Named` returns the canonical name. `Self_`/`Static` require a class
+    /// context. `Parent` returns the parent of the current class.
     fn resolve_reflection_class_constant(
         &self,
         receiver: &StaticReceiver,
@@ -411,6 +451,10 @@ impl Checker {
         }
     }
 
+    /// Looks up a class name by PHP case-insensitive symbol key.
+    ///
+    /// Strips leading backslashes and uses `php_symbol_key` for comparison.
+    /// Returns the canonical class name string if found.
     fn resolve_reflection_class_name<'a>(&'a self, class_name: &str) -> Option<&'a str> {
         let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
         self.classes
@@ -419,6 +463,12 @@ impl Checker {
             .map(String::as_str)
     }
 
+    /// Validates arguments passed to the `Fiber` constructor.
+    ///
+    /// The first argument must be a closure or known first-class callable.
+    /// Validates capture slots for closures (by-ref captures, variadic params)
+    /// and checks the callback signature compatibility. Emits an error if
+    /// the callback is invalid.
     fn validate_fiber_constructor_args(
         &mut self,
         args: &[Expr],
@@ -559,6 +609,9 @@ impl Checker {
         Ok(())
     }
 
+    /// Infers the type of an enum case access (`EnumName::Case`).
+    ///
+    /// Errors if the enum or case is undefined. Returns `PhpType::Object(enum_name)`.
     pub(crate) fn infer_enum_case_type(
         &mut self,
         enum_name: &str,
@@ -579,6 +632,8 @@ impl Checker {
     }
 }
 
+/// Returns `true` if `class_name` is a reflection owner class
+/// (`ReflectionClass`, `ReflectionMethod`, `ReflectionProperty`).
 fn is_reflection_owner_class(class_name: &str) -> bool {
     matches!(
         class_name,
@@ -586,6 +641,8 @@ fn is_reflection_owner_class(class_name: &str) -> bool {
     )
 }
 
+/// Returns `true` if the attribute name/arg slices are mismatched or any
+/// arg is `None` (indicating unsupported metadata).
 fn attributes_have_unsupported_args(
     names: &[String],
     args: &[Option<Vec<crate::types::AttrArgValue>>],

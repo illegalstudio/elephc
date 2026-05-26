@@ -16,6 +16,7 @@ use crate::parser::ast::{
     StaticReceiver, Stmt, StmtKind, TraitUse, TypeExpr,
 };
 
+/// Collect all declared fully-qualified class-like names from the program.
 pub(super) fn collect_declared_fqns(program: &Program) -> HashSet<String> {
     let mut out = HashSet::new();
     for stmt in program {
@@ -24,6 +25,7 @@ pub(super) fn collect_declared_fqns(program: &Program) -> HashSet<String> {
     out
 }
 
+/// Recurse into a statement to collect declared class names.
 fn collect_declared_in_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
     match &stmt.kind {
         StmtKind::ClassDecl { name, .. }
@@ -42,6 +44,7 @@ fn collect_declared_in_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
     }
 }
 
+/// Collect all class reference points in the program, returning (statement index, FQN) pairs.
 pub(super) fn collect_reference_points(program: &Program) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     for (stmt_idx, stmt) in program.iter().enumerate() {
@@ -54,6 +57,7 @@ pub(super) fn collect_reference_points(program: &Program) -> Vec<(usize, String)
     out
 }
 
+/// Recurse into a statement to collect class references.
 fn collect_refs_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
     match &stmt.kind {
         StmtKind::ClassDecl {
@@ -338,6 +342,7 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
     }
 }
 
+/// Collect class references from a catch clause.
 fn collect_refs_catch(catch: &CatchClause, out: &mut HashSet<String>) {
     for ty in &catch.exception_types {
         push_name(ty, out);
@@ -347,6 +352,7 @@ fn collect_refs_catch(catch: &CatchClause, out: &mut HashSet<String>) {
     }
 }
 
+/// Collect class references from a class method declaration.
 fn collect_method(method: &ClassMethod, out: &mut HashSet<String>) {
     for (_, type_expr, default, _) in &method.params {
         if let Some(t) = type_expr {
@@ -364,6 +370,7 @@ fn collect_method(method: &ClassMethod, out: &mut HashSet<String>) {
     }
 }
 
+/// Collect class references from a class property declaration.
 fn collect_property(prop: &ClassProperty, out: &mut HashSet<String>) {
     if let Some(t) = &prop.type_expr {
         collect_type_expr(t, out);
@@ -373,16 +380,19 @@ fn collect_property(prop: &ClassProperty, out: &mut HashSet<String>) {
     }
 }
 
+/// Collect class references from a class constant declaration.
 fn collect_class_const(constant: &ClassConst, out: &mut HashSet<String>) {
     collect_refs_expr(&constant.value, out);
 }
 
+/// Collect class references from a trait use declaration.
 fn collect_trait_use(trait_use: &TraitUse, out: &mut HashSet<String>) {
     for name in &trait_use.trait_names {
         push_name(name, out);
     }
 }
 
+/// Collect class references from a type expression.
 fn collect_type_expr(ty: &TypeExpr, out: &mut HashSet<String>) {
     match ty {
         TypeExpr::Named(name) => push_name(name, out),
@@ -398,6 +408,8 @@ fn collect_type_expr(ty: &TypeExpr, out: &mut HashSet<String>) {
     }
 }
 
+/// Recurse into an expression to collect class references, including compile-time
+/// autoload demands from `class_exists`/`interface_exists`/etc. with literal arguments.
 fn collect_refs_expr(expr: &Expr, out: &mut HashSet<String>) {
     match &expr.kind {
         ExprKind::NewObject { class_name, args } => {
@@ -590,12 +602,14 @@ fn collect_refs_expr(expr: &Expr, out: &mut HashSet<String>) {
     }
 }
 
+/// Collect a class reference from a static receiver (::scope).
 fn collect_static_receiver(receiver: &StaticReceiver, out: &mut HashSet<String>) {
     if let StaticReceiver::Named(name) = receiver {
         push_name(name, out);
     }
 }
 
+/// Collect a class reference from a first-class callable target.
 fn collect_callable_target(target: &CallableTarget, out: &mut HashSet<String>) {
     match target {
         CallableTarget::StaticMethod { receiver, .. } => collect_static_receiver(receiver, out),
@@ -604,6 +618,7 @@ fn collect_callable_target(target: &CallableTarget, out: &mut HashSet<String>) {
     }
 }
 
+/// Normalize a name to its canonical FQN (strip leading `\`), then insert it into `out` if non-empty.
 fn push_name(name: &crate::names::Name, out: &mut HashSet<String>) {
     let canonical = name.as_canonical();
     let trimmed = canonical.trim_start_matches('\\');
@@ -612,6 +627,8 @@ fn push_name(name: &crate::names::Name, out: &mut HashSet<String>) {
     }
 }
 
+/// Extract a literal string FQN from an expression argument (used for `class_exists` etc.).
+/// Inserts the cleaned FQN into `out` if the argument is a string literal.
 fn push_literal_fqn(arg: Option<&crate::parser::ast::Expr>, out: &mut HashSet<String>) {
     let Some(arg) = arg else { return };
     let ExprKind::StringLiteral(name) = &arg.kind else {

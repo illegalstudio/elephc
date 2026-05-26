@@ -10,6 +10,8 @@
 use super::*;
 
 #[test]
+// Verifies that `<?php echo 2 + 3 * 4;` parses as `2 + (3 * 4)` — multiplication has higher
+// precedence than addition, matching PHP's arithmetic precedence.
 fn test_arithmetic_precedence() {
     let stmts = parse_source("<?php echo 2 + 3 * 4;");
     let expected = Stmt::echo(Expr::binop(
@@ -21,6 +23,8 @@ fn test_arithmetic_precedence() {
 }
 
 #[test]
+// Verifies that `<?php echo "a" . "b";` parses as a binary concat operation.
+// The `.` operator concatenates two string literals.
 fn test_concat_operator() {
     let stmts = parse_source("<?php echo \"a\" . \"b\";");
     let expected = Stmt::echo(Expr::binop(
@@ -32,6 +36,8 @@ fn test_concat_operator() {
 }
 
 #[test]
+// Verifies that `<?php echo 1 + 2 == 3;` parses as `(1 + 2) == 3` — addition has higher
+// precedence than equality, matching PHP's precedence rules.
 fn test_comparison_lower_than_arithmetic() {
     // 1 + 2 == 3 should parse as (1 + 2) == 3
     let stmts = parse_source("<?php echo 1 + 2 == 3;");
@@ -44,6 +50,8 @@ fn test_comparison_lower_than_arithmetic() {
 }
 
 #[test]
+// Verifies that `<?php echo "x" . 1 < 2;` parses as `("x" . 1) < 2` — concatenation has higher
+// precedence than comparison, matching PHP precedence.
 fn test_concat_higher_than_comparison() {
     // "x" . 1 < 2 should parse as ("x" . 1) < 2 — PHP precedence
     let stmts = parse_source("<?php echo \"x\" . 1 < 2;");
@@ -56,6 +64,8 @@ fn test_concat_higher_than_comparison() {
 }
 
 #[test]
+// Verifies that `<?php echo 10 % 3 * 2;` parses as `(10 % 3) * 2` — modulo and multiplication
+// have the same precedence and are left-associative.
 fn test_modulo_same_as_multiply() {
     // 10 % 3 * 2 should parse as (10 % 3) * 2
     let stmts = parse_source("<?php echo 10 % 3 * 2;");
@@ -70,6 +80,8 @@ fn test_modulo_same_as_multiply() {
 // --- Control flow ---
 
 #[test]
+// Verifies that `<?php echo 1 === 1;` parses as a strict equality binary operation.
+// The `===` operator checks type-strict equality in PHP.
 fn test_strict_equal_parses() {
     let stmts = parse_source("<?php echo 1 === 1;");
     let expected = Stmt::echo(Expr::binop(
@@ -81,6 +93,8 @@ fn test_strict_equal_parses() {
 }
 
 #[test]
+// Verifies that `<?php echo 1 !== 2;` parses as a strict inequality binary operation.
+// The `!==` operator checks type-strict inequality in PHP.
 fn test_strict_not_equal_parses() {
     let stmts = parse_source("<?php echo 1 !== 2;");
     let expected = Stmt::echo(Expr::binop(
@@ -92,6 +106,8 @@ fn test_strict_not_equal_parses() {
 }
 
 #[test]
+// Verifies that `<?php echo 1 + 2 === 3;` parses as `(1 + 2) === 3` — arithmetic has higher
+// precedence than strict equality, consistent with PHP's precedence table.
 fn test_strict_equal_same_precedence_as_loose() {
     // 1 + 2 === 3 should parse as (1 + 2) === 3
     let stmts = parse_source("<?php echo 1 + 2 === 3;");
@@ -106,6 +122,8 @@ fn test_strict_equal_same_precedence_as_loose() {
 // --- Include/Require ---
 
 #[test]
+// Verifies that `<?php echo 2 ** 3;` parses as an exponentiation binary operation.
+// The `**` operator computes the power of left operand raised to the right operand.
 fn test_pow_operator_parses() {
     let stmts = parse_source("<?php echo 2 ** 3;");
     let expected = Stmt::echo(Expr::binop(Expr::int_lit(2), BinOp::Pow, Expr::int_lit(3)));
@@ -113,6 +131,8 @@ fn test_pow_operator_parses() {
 }
 
 #[test]
+// Verifies that `<?php echo 2 ** 3 ** 2;` parses as `2 ** (3 ** 2)` — exponentiation is
+// right-associative in PHP, so the rightmost `**` groups first.
 fn test_pow_right_associative_parse() {
     // 2 ** 3 ** 2 should parse as 2 ** (3 ** 2)
     let stmts = parse_source("<?php echo 2 ** 3 ** 2;");
@@ -125,6 +145,8 @@ fn test_pow_right_associative_parse() {
 }
 
 #[test]
+// Verifies that `<?php echo 3 * 2 ** 3;` parses as `3 * (2 ** 3)` — exponentiation has
+// higher precedence than multiplication, matching PHP precedence rules.
 fn test_pow_higher_than_mul_parse() {
     // 3 * 2 ** 3 should parse as 3 * (2 ** 3)
     let stmts = parse_source("<?php echo 3 * 2 ** 3;");
@@ -139,6 +161,8 @@ fn test_pow_higher_than_mul_parse() {
 // --- Type casting ---
 
 #[test]
+// Verifies that `<?php echo 1 == 1 & 0;` parses as `(1 == 1) & 0` — bitwise AND has lower
+// precedence than loose equality, matching PHP precedence table.
 fn test_bitwise_and_lower_than_equality() {
     // 1 == 1 & 0 should parse as (1 == 1) & 0 — PHP precedence
     let stmts = parse_source("<?php echo 1 == 1 & 0;");
@@ -151,6 +175,8 @@ fn test_bitwise_and_lower_than_equality() {
 }
 
 #[test]
+// Verifies that `<?php echo 1 << 2 < 10;` parses as `(1 << 2) < 10` — shift operators have
+// higher precedence than comparison, matching PHP precedence.
 fn test_shift_higher_than_comparison() {
     // 1 << 2 < 10 should parse as (1 << 2) < 10 — PHP precedence
     let stmts = parse_source("<?php echo 1 << 2 < 10;");
@@ -165,6 +191,9 @@ fn test_shift_higher_than_comparison() {
 // --- Unary operators ---
 
 #[test]
+// Verifies that `<?php echo ++$i;`, `<?php echo $i++;`, `<?php echo --$i;`, and
+// `<?php echo $i--;` parse correctly as pre/post increment/decrement expressions.
+// Tests all four variants to ensure the parser distinguishes prefix vs postfix forms.
 fn test_increment_decrement_parses() {
     let pre_inc = parse_source("<?php echo ++$i;");
     assert_eq!(echoed_expr(&pre_inc), &ExprKind::PreIncrement("i".into()));
@@ -177,6 +206,8 @@ fn test_increment_decrement_parses() {
 }
 
 #[test]
+// Verifies that `<?php echo ~$x;` parses as a bitwise NOT unary operation.
+// The `~` operator inverts bits of its operand.
 fn test_bitwise_not_parses() {
     let stmts = parse_source("<?php echo ~$x;");
     assert_eq!(
@@ -186,6 +217,8 @@ fn test_bitwise_not_parses() {
 }
 
 #[test]
+// Verifies that `<?php echo $arr[0]();` parses as an ExprCall node whose callee is an
+// ArrayAccess. This exercises callable expressions where the callee is a subscript result.
 fn test_expr_call_parses() {
     // `$arr[0]()` calls the result of an array access — an ExprCall node.
     let stmts = parse_source("<?php echo $arr[0]();");

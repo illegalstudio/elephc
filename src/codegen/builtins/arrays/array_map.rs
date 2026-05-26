@@ -18,6 +18,30 @@ use crate::types::PhpType;
 use super::array_map_callback_returns_str::callback_returns_str;
 use super::callback_env;
 
+/// Emits the `array_map` builtin call.
+///
+/// Lowers `array_map(callback, array)` to a runtime helper call, selecting
+/// between `__rt_array_map` (scalar results) and `__rt_array_map_str` (string
+/// results) based on the inferred callback return type.
+///
+/// ## Evaluation order
+/// The callback expression is evaluated first into `call_reg`, then the array
+/// argument is evaluated. Both are pushed to the temporary stack before the
+/// runtime call so they occupy the first two integer argument registers.
+///
+/// ## Capture handling
+/// When `callback_env::materialize_callback_address` reports captures, a wrapper
+/// environment is built on the temporary stack with the callback entry point in
+/// slot 0, the array pointer in the last slot, and capture values in between.
+/// The wrapper label address is passed as the first argument, the array pointer
+/// as the second, and the environment pointer as the third.
+///
+/// ## Runtime helpers
+/// - `__rt_array_map`: result array element type is `PhpType::Int`
+/// - `__rt_array_map_str`: result array element type is `PhpType::Str`
+///
+/// Returns `Some(PhpType::Array(Box::new(element_type)))` where element type is
+/// `Str` if `callback_returns_str` is true, otherwise `Int`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -18,6 +18,29 @@ use crate::parser::ast::Expr;
 use crate::types::PhpType;
 use super::callback_env;
 
+/// Emits the `array_filter($array, $callback, $flag)` builtin call.
+///
+/// Evaluates arguments in PHP source order: array first, then callback. The array pointer
+/// is saved to the temporary stack before callback materialization to preserve evaluation
+/// order. The appropriate runtime helper is selected based on whether the array element
+/// type requires refcounted payload handling.
+///
+/// # Arguments
+/// - `_name`: Unused; dispatch is handled at the caller level.
+/// - `args`: Exactly three expressions — the input array, the callback, and the optional flag.
+/// - `emitter`: Target-aware instruction emitter.
+/// - `ctx`: Codegen context carrying variable layout and ownership state.
+/// - `data`: Mutable data section for relocations and constants.
+///
+/// # Returns
+/// `Some(PhpType::Array(...))` with the element type preserved from the input array
+/// if known, otherwise `PhpType::Array(Int)` as a safe default.
+///
+/// # ABI constraints
+/// - Uses `nested_call_reg` for the callback address.
+/// - Uses `int_result_reg` as a temporary to hold the array pointer during callback lowering.
+/// - Pushes the array pointer before callback materialization and pops it after.
+/// - On x86_64: uses `emit_call_label`; on ARM64: uses `bl` directly.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -90,6 +113,10 @@ pub fn emit(
     }
 }
 
+/// Returns the element type to store in the capture environment for the filtered array.
+///
+/// Uses `codegen_repr()` so the environment slot reflects the actual lowered type rather
+/// than the PHP-level type (e.g., `Str` becomes `Array(Int)` after array-of-strings encoding).
 fn filter_elem_type(arr_ty: &PhpType) -> PhpType {
     match arr_ty {
         PhpType::Array(elem_ty) => elem_ty.codegen_repr(),
@@ -97,6 +124,12 @@ fn filter_elem_type(arr_ty: &PhpType) -> PhpType {
     }
 }
 
+/// Returns `true` if the array element type requires the refcounted runtime helper.
+///
+/// An element type requires refcounted handling when its `codegen_repr()` is a string
+/// (strings are refcounted in the runtime) or when `is_refcounted()` is true for the
+/// inner type. This determines whether `__rt_array_filter_refcounted` or `__rt_array_filter`
+/// is called.
 fn filter_uses_payload_runtime(arr_ty: &PhpType) -> bool {
     matches!(
         &arr_ty,

@@ -16,6 +16,20 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `strstr` builtin call.
+///
+/// Searches for `needle` in `haystack` (the first two call arguments) and returns
+/// the haystack suffix starting at the match position. When the needle is not found,
+/// returns an empty string (zero-length). Delegates to `__rt_strpos` to perform the
+/// underlying search, then post-processes the result: advances the haystack pointer
+/// to the match offset and shrinks the length to the remaining suffix.
+///
+/// # Arguments
+/// - `args[0]` — haystack string expression
+/// - `args[1]` — needle string expression
+///
+/// # Output
+/// - `PhpType::Str` — a string pointer in `x1`/`rax` and length in `x2`/`rdx`
 pub fn emit(
     _name: &str,
     args: &[Expr],

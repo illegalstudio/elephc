@@ -17,6 +17,26 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `implode` builtin call.
+///
+/// Compiles PHP `implode($glue, $array)` by evaluating the glue string,
+/// then the array, preserving both across architecture-specific ABI registers,
+/// and calling the appropriate runtime helper.
+///
+/// # Arguments
+/// - `args[0]`: glue string expression
+/// - `args[1]`: array expression
+///
+/// # Return value
+/// Returns `Some(PhpType::Str)` on success.
+///
+/// # ABI constraints
+/// - AArch64: pushes glue (x1/x2) and array pointer (x0) to stack; restores array → x3, glue → x1/x2 before calling `__rt_implode` or `__rt_implode_int`
+/// - X86_64: pushes glue (rdi/rsi) and array pointer (rax) to stack; restores array → rdx, glue → rdi/rsi before calling `__rt_implode` or `__rt_implode_int`
+///
+/// # Runtime helpers
+/// - `__rt_implode`: standard runtime for string/value arrays
+/// - `__rt_implode_int`: specialized runtime for int/bool element arrays
 pub fn emit(
     _name: &str,
     args: &[Expr],

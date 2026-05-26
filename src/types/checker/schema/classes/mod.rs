@@ -25,6 +25,11 @@ use super::super::Checker;
 use super::validation::build_constructor_param_map;
 use state::ClassBuildState;
 
+/// Recursively builds and registers `ClassInfo` for `class_name` and its inheritance chain.
+///
+/// Uses `building` set to detect circular inheritance. Validates modifiers, resolves the parent
+/// class recursively, collects properties and methods, validates interface contracts, and finally
+/// inserts the completed `ClassInfo` into `checker.classes`. Each class gets a unique `next_class_id`.
 pub(crate) fn build_class_info_recursive(
     class_name: &str,
     class_map: &HashMap<String, FlattenedClass>,
@@ -81,6 +86,8 @@ pub(crate) fn build_class_info_recursive(
     Ok(())
 }
 
+/// Looks up `class_name` in `class_map` and returns a cloned `FlattenedClass`.
+/// Returns an error if the class is not found.
 fn load_class(
     class_name: &str,
     class_map: &HashMap<String, FlattenedClass>,
@@ -96,6 +103,7 @@ fn load_class(
     })
 }
 
+/// Validates that `class` is not both `abstract` and `final` — a class cannot be simultaneously abstract and final.
 fn validate_class_modifiers(class: &FlattenedClass) -> Result<(), CompileError> {
     if class.is_abstract && class.is_final {
         return Err(CompileError::new(
@@ -106,6 +114,11 @@ fn validate_class_modifiers(class: &FlattenedClass) -> Result<(), CompileError> 
     Ok(())
 }
 
+/// Resolves the parent class for `class` by recursively building its `ClassInfo`.
+///
+/// Returns `Ok(None)` if `class` has no `extends` clause. If the parent name refers to an interface,
+/// returns an error. Recursively invokes `build_class_info_recursive` to ensure the parent is registered
+/// in `checker.classes` before returning its `ClassInfo`.
 fn resolve_parent_info(
     class_name: &str,
     class: &FlattenedClass,
@@ -140,6 +153,9 @@ fn resolve_parent_info(
         })
 }
 
+/// Validates that `class` does not extend a `final` parent and that both have matching `readonly` class status.
+///
+/// Returns an error if the parent is final or if the readonly modifier differs between the child and parent.
 fn validate_parent_constraints(
     class: &FlattenedClass,
     parent_info: Option<&ClassInfo>,
@@ -167,6 +183,12 @@ fn validate_parent_constraints(
     Ok(())
 }
 
+/// Builds a mapping from constructor parameter position to promoted property name for `class`.
+///
+/// If `class` defines `__construct`, maps each parameter (by order) to the property it promotes,
+/// returning `Some` for promoted params and `None` for non-promoted params. If there is no
+/// constructor, falls back to the parent's `constructor_param_to_prop`. Returns an empty vector
+/// if there is no constructor and no parent. The result is stored in `ClassInfo` for codegen wiring.
 fn constructor_param_to_prop_for(
     class: &FlattenedClass,
     parent_info: Option<&ClassInfo>,

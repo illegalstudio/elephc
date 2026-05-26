@@ -32,6 +32,9 @@ pub(crate) fn emit_helpers(emitter: &mut Emitter) {
     emit_lc_cursor_arm64(emitter);
 }
 
+/// Emits ARM64 assembly to strip leading and trailing ASCII whitespace (space, tab, newline,
+/// vtab, form-feed, carriage-return) from the input buffer at [sp+48]/[sp+56] in-place.
+/// Saves the trimmed pointer and length back to the same dispatcher slots on return.
 fn emit_trim_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: trim leading/trailing ASCII whitespace ---");
@@ -76,6 +79,10 @@ fn emit_trim_arm64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits ARM64 assembly to copy up to 16 bytes from the trimmed input (at [sp+48]/[sp+56])
+/// into the lc16 buffer at [sp+64..79], lowercasing ASCII uppercase letters A-Z in-place.
+/// The buffer is zero-padded to 16 bytes before copying. Only ASCII bytes are case-folded;
+/// non-ASCII bytes are stored unchanged.
 fn emit_lc16_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: lowercase first 16 input bytes into [sp+64..79] ---");
@@ -108,6 +115,18 @@ fn emit_lc16_arm64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits ARM64 assembly to match the input prefix against a fixed-stride table of
+/// length-prefixed entries (10 bytes payload + 1 length byte + 1 kind byte = 12-byte stride).
+///
+/// Input registers: x6 = candidate prefix pointer (already lowercased), x7 = table base,
+/// x8 = available input bytes.
+///
+/// Output registers: x9 = kind byte (0–127; -1 if no match), x10 = consumed bytes
+/// (0 if no match, entry length on hit).
+///
+/// Matching is exact (full entry must match) and requires a word boundary after the match
+/// (next byte must be non-alphabetic or input must end). Table entries are scanned
+/// sequentially until a sentinel length of 0 is encountered.
 fn emit_match_word_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: match input prefix vs fixed-stride table ---");
@@ -155,6 +174,10 @@ fn emit_match_word_arm64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits x86_64 Linux assembly to strip leading and trailing ASCII whitespace from the
+/// input buffer. On entry, rdi = pointer, rsi = length. On exit, rdi = trimmed pointer,
+/// rsi = trimmed length. Accessible from the dispatcher as [rbp-80]/[rbp-72],
+/// which maps to the caller's [rsp+48]/[rsp+56] slots.
 fn emit_trim_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: trim leading/trailing ASCII whitespace ---");
@@ -201,6 +224,11 @@ fn emit_trim_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits x86_64 Linux assembly to copy up to 16 bytes from the trimmed input into the
+/// lc16 buffer (accessible from dispatcher as [rbp-64..rbp-49]), lowercasing ASCII A-Z.
+/// The buffer is zero-padded to 16 bytes before copying. On entry, rdi = input pointer,
+/// rsi = input length (from [rbp-80]/[rbp-72]). Only ASCII uppercase bytes are folded;
+/// non-ASCII bytes pass through unchanged.
 fn emit_lc16_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: lowercase first 16 input bytes into dispatcher [rsp+64..79] ---");
@@ -237,6 +265,17 @@ fn emit_lc16_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits x86_64 Linux assembly to match the input prefix against a fixed-stride table.
+/// Entry layout matches ARM64: 10 bytes payload + 1 length byte + 1 kind byte (12-byte stride).
+///
+/// Input registers (caller-saved convention): rdi = candidate prefix pointer (lowercased),
+/// rsi = table base, rcx = available input bytes.
+///
+/// Output registers: rax = consumed bytes (0 if no match, entry length on hit),
+/// rdx = kind byte (-1 if no match).
+///
+/// Matching rules identical to `emit_match_word_arm64`: exact match required, word boundary
+/// enforced after the match, sentinel at table entry with length 0.
 fn emit_match_word_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: match input prefix vs fixed-stride table ---");
@@ -287,6 +326,10 @@ fn emit_match_word_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits ARM64 assembly to advance the cursor (x3) past any ASCII whitespace characters
+/// while x3 < x4 (end). Whitespace includes space (32) and ASCII control codes tab/newline/
+/// vtab/form-feed/carriage-return (9–13). On return, x3 points to the first non-whitespace
+/// byte or to x4. Uses x9 and x10 as scratch registers.
 fn emit_skip_ws_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: skip ASCII whitespace at cursor (x3) up to end (x4) ---");
@@ -308,6 +351,10 @@ fn emit_skip_ws_arm64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits ARM64 assembly to parse decimal digits at [x3..x4), returning the parsed integer
+/// in x5 and updating x3 to point past the last consumed digit. Accumulator starts at 0.
+/// If no digits are found, x3 is unchanged and x5 is 0. Digits outside 0–9 stop parsing.
+/// On overflow, the result is clamped to the maximum representable value.
 fn emit_parse_dec_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: parse decimal digits at cursor (x3..x4) into x5 ---");
@@ -331,6 +378,10 @@ fn emit_parse_dec_arm64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits ARM64 assembly to lowercase up to 16 bytes starting at cursor x3 (up to x4)
+/// and write them into the lc16 buffer at [sp+64..79]. The buffer is zero-padded.
+/// Input: x3 = cursor start, x4 = end. x10 = min(remaining, 16) is computed inline.
+/// Scratch registers: x9 (index), x11 (remaining bytes), x14 (buffer base).
 fn emit_lc_cursor_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: lowercase 16 bytes from cursor (x3..x4) into [sp+64..79] ---");
@@ -359,6 +410,10 @@ fn emit_lc_cursor_arm64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits x86_64 Linux assembly to advance the cursor (rdi) past ASCII whitespace while
+/// rdi < r10 (end). Whitespace includes space (32) and ASCII control codes tab/newline/
+/// vtab/form-feed/carriage-return (9–13). On return, rdi points to the first non-whitespace
+/// byte or to r10. Uses rax, rcx, rdx as scratch registers.
 fn emit_skip_ws_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: skip ASCII whitespace at cursor (rdi) up to end (r10) ---");
@@ -381,6 +436,10 @@ fn emit_skip_ws_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits x86_64 Linux assembly to parse decimal digits at [rdi..r10), returning the parsed
+/// integer in rax and updating rdi to point past the last consumed digit. Accumulator
+/// starts at 0. If no digits are found, rdi is unchanged and rax is 0. Non-digit bytes
+/// stop parsing. The caller detects "no digits" via cursor delta.
 fn emit_parse_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: parse decimal digits at cursor (rdi..r10) into rax ---");
@@ -405,6 +464,10 @@ fn emit_parse_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits x86_64 Linux assembly to lowercase up to 16 bytes starting at cursor rdi (up to
+/// r10) and write them into the lc16 buffer (accessible from dispatcher as [rbp-64..rbp-49]).
+/// The buffer is zero-padded before copying. Input: rdi = cursor start, r10 = end.
+/// Uses r8, r11, rax, rcx, rdx as scratch registers.
 fn emit_lc_cursor_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime helper: lowercase 16 bytes from cursor (rdi..r10) into [rbp-64..rbp-49] ---");

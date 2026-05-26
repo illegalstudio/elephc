@@ -12,6 +12,11 @@ use crate::names::Name;
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::span::Span;
 
+/// Normalized call-argument plan used by both the type checker and codegen.
+///
+/// Retains source-order args, resolved regular/variadic slots, spread bounds checks,
+/// and any planner errors. Enough span and source-index data is kept to produce
+/// PHP-compatible diagnostics while preserving evaluation order.
 pub(crate) struct CallArgPlan {
     pub(crate) source_args: Vec<Expr>,
     pub(crate) regular_args: Vec<PlannedRegularArg>,
@@ -23,6 +28,7 @@ pub(crate) struct CallArgPlan {
     pub(super) passthrough_args: Option<Vec<Expr>>,
 }
 
+/// A resolved regular (non-variadic) parameter slot in the plan.
 #[derive(Clone)]
 pub(crate) enum PlannedRegularArg {
     Source {
@@ -42,12 +48,15 @@ pub(crate) enum PlannedRegularArg {
     Default(Expr),
 }
 
+/// A resolved variadic argument entry collected from positional or named call-site values.
 #[derive(Clone)]
 pub(crate) struct PlannedVariadicArg {
     pub(crate) key: Option<String>,
     pub(crate) expr: Expr,
 }
 
+/// A call-site argument projected into the parameter space, tracking which
+/// source argument it came from and which parameter slot it fills.
 #[derive(Clone)]
 pub(crate) enum PlannedSourceValue {
     Regular {
@@ -62,6 +71,8 @@ pub(crate) enum PlannedSourceValue {
     },
 }
 
+/// Records the minimum and optional maximum number of elements a spread argument
+/// must contain to satisfy the parameter slots it feeds.
 #[derive(Clone)]
 pub(crate) struct SpreadBoundsCheck {
     pub(crate) spread_expr: Expr,
@@ -69,6 +80,7 @@ pub(crate) struct SpreadBoundsCheck {
     pub(crate) max_len: Option<usize>,
 }
 
+/// Errors from `plan_call_args` when call-site arguments cannot be mapped to the signature.
 #[derive(Debug)]
 pub(crate) enum CallArgPlanError {
     UnknownNamed {
@@ -96,16 +108,22 @@ pub(crate) enum CallArgPlanError {
 }
 
 impl CallArgPlan {
+    /// Returns `true` if any source argument used named-parameter syntax.
     pub(crate) fn has_named_args(&self) -> bool {
         self.first_named_pos.is_some()
     }
 
+    /// Returns `true` if any source argument used the spread (`...`) operator.
     pub(crate) fn has_spread_args(&self) -> bool {
         self.source_args
             .iter()
             .any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
     }
 
+    /// Returns a flat list of expressions in parameter order suitable for codegen
+    /// materialization. Preserves spread expressions for static-array spreads that
+    /// were resolved in place; applies default guards for optional slots when the
+    /// spread may not have provided those elements.
     pub(crate) fn normalized_args(&self) -> Vec<Expr> {
         if let Some(args) = &self.passthrough_args {
             return args.clone();
@@ -174,6 +192,10 @@ impl CallArgPlan {
         args
     }
 
+    /// Returns the leading positional-only prefix as either a bare spread expression
+    /// (when there is exactly one prefix element that is a spread) or an array literal
+    /// of all prefix elements. Used to reconstruct the leading positional arguments
+    /// when forwarding calls with named parameters.
     pub(crate) fn positional_prefix_expr(&self, call_span: Span) -> Option<Expr> {
         let first_named_pos = self.first_named_pos?;
         let prefix_args = self.source_args[..first_named_pos].to_vec();
@@ -191,6 +213,7 @@ impl CallArgPlan {
 }
 
 impl PlannedSourceValue {
+    /// The position of this value's source argument in the original call-site argument list.
     pub(crate) fn source_index(&self) -> usize {
         match self {
             PlannedSourceValue::Regular { source_index, .. }
@@ -198,6 +221,7 @@ impl PlannedSourceValue {
         }
     }
 
+    /// The parameter index this value fills, or `None` for variadic entries.
     pub(crate) fn param_idx(&self) -> Option<usize> {
         match self {
             PlannedSourceValue::Regular { param_idx, .. } => Some(*param_idx),
@@ -205,6 +229,7 @@ impl PlannedSourceValue {
         }
     }
 
+    /// The string key for variadic named entries, or `None` for positional variadic entries.
     pub(crate) fn key(&self) -> Option<&str> {
         match self {
             PlannedSourceValue::Regular { .. } => None,
@@ -212,6 +237,7 @@ impl PlannedSourceValue {
         }
     }
 
+    /// The expression from the source argument for this planned value.
     pub(crate) fn expr(&self) -> &Expr {
         match self {
             PlannedSourceValue::Regular { expr, .. }
@@ -220,6 +246,10 @@ impl PlannedSourceValue {
     }
 }
 
+/// Emits an `ArrayAccess` expression to extract `spread_expr[element_idx]` using
+/// a numeric index. When `prefer_named_key` is `true` and `param_name` is present,
+/// uses the parameter name as the string key instead of the numeric index.
+/// Used to materialize a single element from a spread array.
 fn spread_element_expr(
     spread_expr: &Expr,
     element_idx: usize,
@@ -245,6 +275,11 @@ fn spread_element_expr(
     )
 }
 
+/// Emits a ternary that selects `spread_expr[element_idx]` if the spread is
+/// long enough, otherwise falls back to `default_expr`. The bounds check
+/// uses `array_key_exists` when a named key is available, or `count() > element_idx`
+/// for numeric keys. This handles optional spread elements that may or may not
+/// be present at a given position.
 fn spread_element_or_default_expr(
     spread_expr: &Expr,
     element_idx: usize,
@@ -287,6 +322,7 @@ fn spread_element_or_default_expr(
     )
 }
 
+/// Emits `count($spread_expr) > element_idx` as a `BinaryOp` expression.
 fn spread_len_gt_expr(spread_expr: &Expr, element_idx: usize, span: Span) -> Expr {
     Expr::new(
         ExprKind::BinaryOp {
@@ -298,6 +334,7 @@ fn spread_len_gt_expr(spread_expr: &Expr, element_idx: usize, span: Span) -> Exp
     )
 }
 
+/// Emits `count($spread_expr)` as a function call expression.
 fn spread_len_expr(spread_expr: &Expr, span: Span) -> Expr {
     Expr::new(
         ExprKind::FunctionCall {

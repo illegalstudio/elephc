@@ -12,6 +12,10 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, context::Context, data_section::DataSection};
 use crate::types::call_args::SpreadBoundsCheck;
 
+/// Iterates over `SpreadBoundsCheck` descriptors, emits the spread expression evaluation,
+/// then emits a bounds check that branches to `fail_label` if the array length does not
+/// cover all required positional slots, or to `ok_label` if it does. On failure, calls
+/// `emit_named_spread_length_abort`.
 pub(crate) fn emit_spread_length_checks(
     checks: &[SpreadBoundsCheck],
     emitter: &mut Emitter,
@@ -39,6 +43,10 @@ pub(crate) fn emit_spread_length_checks(
     }
 }
 
+/// Loads the integer constant `min_len` into a scratch register and compares it again `length_reg`.
+/// Branches to `fail_label` if `length_reg < min_len`. If `max_len` is `Some`, also compares
+/// `length_reg` against it and branches to `ok_label` if `length_reg <= max_len`; otherwise
+/// falls through to `ok_label`. The two compares are independent checks, not a single range.
 pub(super) fn emit_array_length_bounds_check(
     length_reg: &str,
     min_len: usize,
@@ -75,6 +83,7 @@ pub(super) fn emit_array_length_bounds_check(
     }
 }
 
+/// Writes a fixed diagnostic message to stderr and then exits the process with code 1.
 pub(super) fn emit_named_spread_length_abort(emitter: &mut Emitter, data: &mut DataSection) {
     let (message_label, message_len) =
         data.add_string(b"Fatal error: named argument spread length mismatch\n");

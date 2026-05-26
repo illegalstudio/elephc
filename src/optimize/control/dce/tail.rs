@@ -14,6 +14,9 @@ use super::state::{GuardState, TailSinkTarget};
 use super::switches::dce_switch_stmt_with_tail;
 use super::tries::dce_try_stmt_with_tail;
 
+/// Appends `tail` statements to `body` only when `body` can reach the following statement
+/// (i.e., when it falls through). If `body` terminates (break/return/throw/exit), the tail is
+/// discarded to avoid creating unreachable code.
 pub(super) fn append_tail_to_fallthrough_path(mut body: Vec<Stmt>, tail: Vec<Stmt>) -> Vec<Stmt> {
     if block_reaches_following_stmt(&body) {
         body.extend(tail);
@@ -21,6 +24,10 @@ pub(super) fn append_tail_to_fallthrough_path(mut body: Vec<Stmt>, tail: Vec<Stm
     body
 }
 
+/// Dispatches a statement to the appropriate DCE handler, threading `tail` statements through
+/// control-flow paths that sink to the tail position. Handles If, IfDef, Switch, and Try by
+/// recursively passing tail into branches that reach the tail sink; all other statements are
+/// processed with `dce_stmt_with_guards` and extended with the tail only when they fall through.
 pub(super) fn dce_stmt_with_tail(stmt: Stmt, tail: Vec<Stmt>, guards: &GuardState) -> Vec<Stmt> {
     let span = stmt.span;
     match stmt.kind {
@@ -105,6 +112,8 @@ pub(super) fn dce_stmt_with_tail(stmt: Stmt, tail: Vec<Stmt>, guards: &GuardStat
     }
 }
 
+/// Returns true when `body`'s terminal effect matches `target`: FallsThrough to FallsThrough,
+/// or Breaks to Breaks. Used to decide whether a branch can absorb tail statements.
 fn block_matches_tail_target(body: &[Stmt], target: TailSinkTarget) -> bool {
     matches!(
         (block_terminal_effect(body), target),
@@ -113,6 +122,9 @@ fn block_matches_tail_target(body: &[Stmt], target: TailSinkTarget) -> bool {
     )
 }
 
+/// Sinks `tail` statements into the terminal path of `body`, rewriting the last statement
+/// in place when its terminal effect matches `target`. If `body` is empty, returns `tail`
+/// unchanged. The target is typically FallsThrough (for normal flow) or Breaks (for loops).
 pub(super) fn sink_tail_into_terminal_path(
     mut body: Vec<Stmt>,
     tail: Vec<Stmt>,
@@ -127,6 +139,10 @@ pub(super) fn sink_tail_into_terminal_path(
     body
 }
 
+/// Rewrites the terminal statement `stmt` by splicing `tail` into its branching paths
+/// when those paths can reach the tail sink (matched via `block_matches_tail_target`).
+/// For If/IfDef/Try, recurses into each branch; for statements that fall through or break
+/// at the target level, appends the tail directly.
 fn sink_tail_into_terminal_stmt(stmt: Stmt, tail: Vec<Stmt>, target: TailSinkTarget) -> Vec<Stmt> {
     let span = stmt.span;
     match stmt.kind {

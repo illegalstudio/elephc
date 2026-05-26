@@ -10,6 +10,9 @@
 
 use super::*;
 
+// Verifies that an immediately-invoked closure expression (IIFE) that calls `strlen` is
+// classified as pure, non-throwing, and non-observable when used as a callee in an ExprCall.
+// The closure body calls a builtin function but produces no observable side effects.
 #[test]
 fn test_effect_analysis_tracks_pure_iife_expr_calls() {
     let expr = Expr::new(
@@ -46,6 +49,9 @@ fn test_effect_analysis_tracks_pure_iife_expr_calls() {
     assert!(!expr_is_observable(&expr));
 }
 
+// Verifies that a direct ExprCall on a FirstClassCallable targeting `strlen` is classified
+// as pure, non-throwing, and non-observable. The callable wraps a named function reference
+// and is invoked immediately with a string argument.
 #[test]
 fn test_effect_analysis_tracks_named_first_class_callable_expr_calls() {
     let expr = Expr::new(
@@ -64,6 +70,9 @@ fn test_effect_analysis_tracks_named_first_class_callable_expr_calls() {
     assert!(!expr_is_observable(&expr));
 }
 
+// Verifies that callable aliases assigned in both branches of an if/else are merged.
+// `$flag ? $g = strlen : $g = strlen` assigns the same callable target in both paths;
+// the merged effect after the if statement must reflect `strlen` reachability through `$g`.
 #[test]
 fn test_program_function_effects_merge_callable_aliases_across_if_paths() {
     let program = vec![Stmt::new(
@@ -127,6 +136,9 @@ fn test_program_function_effects_merge_callable_aliases_across_if_paths() {
     );
 }
 
+// Verifies that callable aliases assigned in try and catch blocks are merged.
+// `$g = strlen` appears in both the try body and the catch clause;
+// the merged effect after the try/catch must reflect `strlen` reachability through `$g`.
 #[test]
 fn test_program_function_effects_merge_callable_aliases_across_try_paths() {
     let program = vec![Stmt::new(
@@ -196,6 +208,9 @@ fn test_program_function_effects_merge_callable_aliases_across_try_paths() {
     );
 }
 
+// Verifies that callable aliases assigned in switch cases and the default arm are merged.
+// `switch ($flag) { case 1: $g = strlen; case 2: ...; default: $g = strlen }` assigns
+// the same callable target in multiple arms; the merged effect must reflect `strlen` reachability.
 #[test]
 fn test_program_function_effects_merge_callable_aliases_across_switch_paths() {
     let program = vec![Stmt::new(

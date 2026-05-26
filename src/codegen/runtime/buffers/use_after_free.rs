@@ -12,6 +12,9 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Emits the `__rt_buffer_use_after_free` runtime helper for buffer use-after-free diagnostics.
+/// Dispatches to the platform-specific variant based on `emitter.target.arch`.
+/// Terminates the process with exit code 70 after emitting the error message.
 pub fn emit_buffer_use_after_free(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_buffer_use_after_free_linux_x86_64(emitter);
@@ -30,6 +33,9 @@ pub fn emit_buffer_use_after_free(emitter: &mut Emitter) {
     emitter.syscall(1);
 }
 
+/// Emits the Linux x86_64 variant of `__rt_buffer_use_after_free`.
+/// Uses Linux syscall 1 (`write`) to emit the error message to stderr (fd=2), then
+/// syscall 60 (`exit`) to terminate with exit code 70 (EX_SOFTWARE), matching the ARM64 runtime.
 fn emit_buffer_use_after_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_use_after_free ---");

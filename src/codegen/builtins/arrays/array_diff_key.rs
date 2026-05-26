@@ -17,6 +17,25 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits PHP `array_diff_key($arr1, $arr2)` by computing the key-wise difference of two associative arrays.
+///
+/// # Arguments
+/// - `args[0]`: the base associative array whose keys are retained
+/// - `args[1]`: the mask associative array whose keys are excluded
+///
+/// # Behavior
+/// Pushes the first array pointer onto the stack, evaluates the second array,
+/// then loads both pointers into the runtime helper argument registers and
+/// calls `__rt_array_diff_key` to produce a new hash table containing only
+/// keys present in `$arr1` but not in `$arr2`.
+///
+/// # Returns
+/// `Some(PhpType)` with the type of the first argument (an associative array type);
+/// `None` if no type information is available.
+///
+/// # ABI constraints
+/// - AArch64: first array pointer in `x0`, second array pointer in `x1`; result pointer in `x0`.
+/// - X86_64: first array pointer in `rdi`, second array pointer in `rsi`; result pointer in `rax`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

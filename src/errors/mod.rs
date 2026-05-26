@@ -13,6 +13,7 @@ mod report;
 use crate::span::Span;
 
 #[derive(Debug, Clone)]
+/// Compile error.
 pub struct CompileError {
     pub span: Span,
     pub file: Option<String>,
@@ -21,12 +22,14 @@ pub struct CompileError {
 }
 
 #[derive(Debug, Clone)]
+/// Compile warning.
 pub struct CompileWarning {
     pub span: Span,
     pub message: String,
 }
 
 impl CompileError {
+    /// Creates a new error with the given span and message, with no file and no related errors.
     pub fn new(span: Span, message: &str) -> Self {
         Self {
             span,
@@ -36,17 +39,20 @@ impl CompileError {
         }
     }
 
+    /// Sets the file name and returns self for chaining.
     pub fn with_file(mut self, file: impl Into<String>) -> Self {
         self.file = Some(file.into());
         self
     }
 
+    /// Combines a vector of errors into a single error, treating the first as primary and the rest as related.
     pub fn from_many(mut errors: Vec<CompileError>) -> Self {
         let mut first = errors.remove(0);
         first.related = errors;
         first
     }
 
+    /// Returns all errors including related ones as a flat vector, with the primary error first.
     pub fn flatten(&self) -> Vec<CompileError> {
         let mut first = self.clone();
         first.related.clear();
@@ -59,6 +65,7 @@ impl CompileError {
 }
 
 impl CompileWarning {
+    /// Creates a new warning with the given span and message.
     pub fn new(span: Span, message: &str) -> Self {
         Self {
             span,
@@ -82,10 +89,12 @@ impl std::fmt::Display for CompileError {
     }
 }
 
+/// Prints the error message to stderr with file:line:col formatting when available.
 pub fn report(error: &CompileError) {
     report::print_error(error);
 }
 
+/// Prints the warning message to stderr with file:line:col formatting when available.
 pub fn report_warning(warning: &CompileWarning) {
     report::print_warning(warning);
 }

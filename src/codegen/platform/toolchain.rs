@@ -11,6 +11,14 @@
 use std::process::Command;
 use std::sync::OnceLock;
 
+/// Checks whether the host machine has a native ARM64/AArch64 GCC toolchain.
+///
+/// Uses `gcc -dumpmachine` to query the host triple and caches the result
+/// in a `OnceLock` to avoid repeated subprocess spawning. Returns `true`
+/// if the triple contains "aarch64", `false` otherwise.
+///
+/// Side effects:
+/// - Spawns a single subprocess on first call only.
 pub(super) fn host_has_native_aarch64_toolchain() -> bool {
     static NATIVE_AARCH64: OnceLock<bool> = OnceLock::new();
     *NATIVE_AARCH64.get_or_init(|| {

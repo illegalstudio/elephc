@@ -11,9 +11,16 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_fill_keys: create associative array from keys with the same value.
-/// Input:  x0=keys_array (string array), x1=value, x2=value_type_tag
-/// Output: x0=new hash table
+/// Emits the `__rt_array_fill_keys` runtime helper for the `array_fill_keys` PHP built-in.
+///
+/// Translates the PHP `array_fill_keys($keys, $value)` call into a loop that inserts
+/// each key from `$keys` with `$value` as the fill value into a newly allocated hash table.
+/// On x86_64, dispatches to the x86_64-specific implementation; otherwise emits ARM64 code.
+///
+/// Inputs (ARM64): x0=keys_array (string array), x1=fill value lo, x2=value_type_tag
+/// Inputs (x86_64): rdi=keys_array, rsi=fill value lo, rdx=value_type_tag
+/// Output (ARM64): x0=new hash table pointer
+/// Output (x86_64): rax=new hash table pointer
 pub fn emit_array_fill_keys(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_fill_keys_linux_x86_64(emitter);
@@ -89,6 +96,15 @@ pub fn emit_array_fill_keys(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = hash table
 }
 
+/// Emits the x86_64 Linux variant of `__rt_array_fill_keys`.
+///
+/// Identical behavior to the ARM64 variant but using x86_64 System V ABI conventions:
+/// - rdi: keys_array (input, preserved across calls)
+/// - rsi: fill value lo (preserved across calls)
+/// - rdx: value_type_tag (preserved across calls)
+/// - rax: returns the new hash table pointer
+///
+/// Stack frame reserves 48 bytes for spill slots: keys ptr, fill payload, hash ptr, loop index, value tag.
 fn emit_array_fill_keys_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_fill_keys ---");

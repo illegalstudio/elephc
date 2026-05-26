@@ -18,6 +18,10 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{ClassInfo, PhpType};
 
+/// Emits AOT `is_a()` and `is_subclass_of()` checks when the target class is a string literal.
+/// The first argument is evaluated for its static type (used for the relation check); all
+/// remaining arguments are evaluated purely for side effects. Returns a `PhpType::Bool` result
+/// in the ABI integer register. `is_subclass_of()` differs by excluding an exact self match.
 pub fn emit(
     name: &str,
     args: &[Expr],
@@ -44,6 +48,12 @@ pub fn emit(
     Some(PhpType::Bool)
 }
 
+/// Statically evaluates whether `arg_ty` (an `PhpType::Object`) satisfies the class relation
+/// described by `target_arg` (a string literal class name).
+///
+/// Returns `true` if `arg_ty`'s class is the same as (or is a subclass/implements) `target_arg,
+/// depending on the `exclude_self` flag. Walks the parent chain first, then the implemented
+/// interface list. All comparisons are case-insensitive via `php_symbol_key`.
 fn static_relation_holds(
     arg_ty: &PhpType,
     target_arg: &Expr,
@@ -90,6 +100,9 @@ fn static_relation_holds(
     false
 }
 
+/// Looks up a class by name in `ctx.classes` using PHP-style case-insensitive lookup.
+/// Tries an exact match first (with leading backslash stripped), then falls back to a
+/// linear search via `php_symbol_key`. Returns the `ClassInfo` if found.
 fn lookup_class<'a>(ctx: &'a Context, name: &str) -> Option<&'a ClassInfo> {
     let clean = name.trim_start_matches('\\');
     if let Some(info) = ctx.classes.get(clean) {

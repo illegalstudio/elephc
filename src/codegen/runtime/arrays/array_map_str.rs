@@ -11,10 +11,26 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_map_str: apply a callback to each element of an array, returning a new string array.
-/// Handles both int and string source arrays (detects elem_size from header).
-/// Input: x0 = callback function address, x1 = source array pointer, x2 = optional callback environment pointer
-/// Output: x0 = pointer to new array with string elements (elem_size=16)
+/// Applies a user callback to each element of a source array, producing a new string array.
+///
+/// # Input registers (ARM64 calling convention)
+/// - `x0`: callback function pointer
+/// - `x1`: source array pointer
+/// - `x2`: optional callback environment/capture pointer (0 if not used)
+///
+/// # Element dispatch
+/// - Int source arrays (`elem_size=8`): callback receives element in `x0` as integer.
+///   When `x2 != 0`, the environment pointer is passed in `x1` as well.
+/// - String source arrays (`elem_size=16`): callback receives string pointer in `x0`
+///   and length in `x1`. When `x2 != 0`, the environment pointer is passed in `x2`.
+///
+/// # Callback output
+/// - Returns string result in `x1` (pointer) and `x2` (length), which is persisted
+///   to the heap via `__rt_str_persist` before being written to the destination array.
+///
+/// # Output
+/// - `x0`: pointer to a newly allocated string array (`elem_size=16`), one entry per
+///   source element, in the same order. The caller owns the returned array.
 pub fn emit_array_map_str(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_map_str_linux_x86_64(emitter);
@@ -117,6 +133,10 @@ pub fn emit_array_map_str(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = new mapped string array
 }
 
+/// x86_64 Linux implementation of `emit_array_map_str`.
+/// Uses the System V AMD64 ABI: callback in `rdi`, source array in `rsi`, env in `rdx`.
+/// Result string returned via `rax` (pointer) and `rdx` (length).
+/// Destination array is built with `__rt_array_push_str` for dynamic reallocation safety.
 fn emit_array_map_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_map_str ---");

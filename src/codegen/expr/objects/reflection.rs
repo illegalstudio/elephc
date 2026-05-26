@@ -19,6 +19,9 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::types::{AttrArgValue, PhpType};
 
+/// Returns true if `class_name` is one of the builtin reflection types
+/// (ReflectionClass, ReflectionMethod, ReflectionProperty) that require
+/// special metadata population instead of normal object construction.
 pub(super) fn is_reflection_owner_class(class_name: &str) -> bool {
     matches!(
         class_name,
@@ -26,6 +29,11 @@ pub(super) fn is_reflection_owner_class(class_name: &str) -> bool {
     )
 }
 
+/// Emits the allocation sequence for a builtin reflection object.
+///
+/// Builds a normal object (ignoring constructor args), saves it on the stack,
+/// populates its private `__attrs` slot from compile-time metadata, then restores
+/// it as the expression result. Returns `PhpType::Object` for the given class name.
 pub(super) fn emit_new_reflection_owner(
     class_name: &str,
     args: &[Expr],
@@ -43,6 +51,9 @@ pub(super) fn emit_new_reflection_owner(
     PhpType::Object(class_name.to_string())
 }
 
+/// Normalizes constructor call arguments using the signature for `class_name`'s
+/// `__construct` method, falling back to the original args if no signature is
+/// available or planning fails.
 fn normalized_constructor_args(
     class_name: &str,
     args: &[Expr],
@@ -70,6 +81,15 @@ fn normalized_constructor_args(
     .unwrap_or_else(|_| args.to_vec())
 }
 
+/// Performs compile-time reflection lookup for the given class and constructor
+/// arguments, returning a tuple of `(attribute_names, attribute_args)` from the
+/// class/method/property metadata captured by the type checker.
+///
+/// - `ReflectionClass(arg)` → class attribute metadata
+/// - `ReflectionMethod(class, method)` → method attribute metadata
+/// - `ReflectionProperty(class, prop)` → property attribute metadata
+///
+/// Returns empty vectors if any argument is non-static or the target doesn't exist.
 fn reflection_lookup(
     class_name: &str,
     args: &[Expr],
@@ -124,6 +144,11 @@ fn reflection_lookup(
     }
 }
 
+/// Overwrites the `__attrs` property of the Reflection object saved on the stack.
+///
+/// First decrements the default empty `__attrs` array, then emits a new array
+/// populated from `attr_names` and `attr_args`, then stores the new array pointer
+/// and its kind tag (4 = indexed array) into the object's slots at offset 8 and 16.
 fn overwrite_attrs_property(
     attr_names: &[String],
     attr_args: &[Option<Vec<AttrArgValue>>],
@@ -167,6 +192,10 @@ fn overwrite_attrs_property(
     }
 }
 
+/// Extracts a class name from `expr` for reflection lookup.
+///
+/// Handles `StringLiteral` (direct class name) and `ClassConstant` (e.g. `Foo::class`).
+/// Returns `None` for other expression kinds.
 fn class_name_arg(expr: &Expr, ctx: &Context) -> Option<String> {
     match &expr.kind {
         ExprKind::StringLiteral(name) => crate::codegen::reflection::resolve_class_name(
@@ -181,6 +210,8 @@ fn class_name_arg(expr: &Expr, ctx: &Context) -> Option<String> {
     }
 }
 
+/// Extracts a string value from `expr` if it is a `StringLiteral`.
+/// Returns `None` for any other expression kind.
 fn string_literal_arg(expr: &Expr) -> Option<String> {
     match &expr.kind {
         ExprKind::StringLiteral(value) => Some(value.clone()),
@@ -188,6 +219,11 @@ fn string_literal_arg(expr: &Expr) -> Option<String> {
     }
 }
 
+/// Resolves the class name for a static receiver used in reflection lookups.
+///
+/// - `Named(name)` → resolves via `resolve_class_name`
+/// - `Self_` / `Static` → current class from context
+/// - `Parent` → parent class of current class
 fn resolve_static_receiver_class(receiver: &StaticReceiver, ctx: &Context) -> Option<String> {
     match receiver {
         StaticReceiver::Named(name) => crate::codegen::reflection::resolve_class_name(
@@ -204,6 +240,7 @@ fn resolve_static_receiver_class(receiver: &StaticReceiver, ctx: &Context) -> Op
     }
 }
 
+/// Returns a pair of empty vectors, used as the fallback when reflection lookup fails.
 fn empty_attrs() -> (Vec<String>, Vec<Option<Vec<AttrArgValue>>>) {
     (Vec::new(), Vec::new())
 }

@@ -10,8 +10,14 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// heap_debug_fail: print a heap-debug fatal error to stderr and terminate.
-/// Input: x1 = message pointer, x2 = message length
+/// Emits the `__rt_heap_debug_fail` runtime helper that prints a heap-debug fatal
+/// error to stderr and terminates the process.
+///
+/// # ABI contract
+///
+/// - **ARM64**: expects fd=2 (stderr) in `x0`; exit code=1 in `x0` after write.
+/// - **x86_64**: expects fd=2 (stderr) in `edi`; exit code=1 in `edi` after write.
+/// - Syscall 4 (write) outputs the message; syscall 1 (exit) terminates.
 pub fn emit_heap_debug_fail(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emitter.blank();

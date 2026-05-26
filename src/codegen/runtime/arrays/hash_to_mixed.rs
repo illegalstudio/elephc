@@ -14,9 +14,11 @@ use crate::codegen::platform::Arch;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
-/// hash_to_mixed: convert associative array entries to boxed Mixed values.
-/// Input:  x0/rdi = hash pointer
-/// Output: x0/rax = unique hash pointer with value_type tag 7 entries
+/// Emits the `__rt_hash_to_mixed` runtime helper.
+/// Converts all entry payloads of an associative array to boxed Mixed cells.
+/// COW is enforced first via `__rt_hash_ensure_unique` so entries can be safely rewritten.
+/// Each entry is stamped with value_type tag 7. The hash header is also stamped with 7.
+/// Dispatches to `emit_hash_to_mixed_linux_x86_64` on x86_64; uses ARM64 otherwise.
 pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_to_mixed_linux_x86_64(emitter);
@@ -88,6 +90,10 @@ pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the Mixed cell pointer
 }
 
+/// Generates the x86_64 Linux version of the `__rt_hash_to_mixed` runtime helper.
+/// Converts each hash entry payload to a boxed Mixed cell via `__rt_hash_to_mixed_x86_box_owned`,
+/// stamps the hash header with value_type 7, and returns the unique hash pointer.
+/// Calling convention: rdi = hash pointer, rax = converted hash pointer.
 fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_to_mixed ---");

@@ -16,6 +16,24 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a `floor()` call, which rounds a value down to the nearest integer (toward minus infinity).
+///
+/// # Arguments
+/// - `_name`: Ignored; present for dispatcher consistency.
+/// - `args`: Single operand to floor. May be a float or integer type.
+/// - `emitter`: Target-aware instruction emitter.
+/// - `ctx`: Codegen context carrying type and variable information.
+/// - `data`: Data section for constants/literals.
+///
+/// # Returns
+/// Always returns `Some(PhpType::Float)` since floor always produces a floating-point result.
+///
+/// # ABI & Instruction Details
+/// - **AArch64**: Converts integer to double via `scvtf` if needed, then `frintm` (round toward -∞).
+/// - **x86_64**: Converts integer to SSE2 double via `cvtsi2sd` if needed, then `roundsd` with mode 1 (round toward -∞).
+///
+/// # Notes
+/// PHP's `floor()` always returns a float, even for integer inputs.
 pub fn emit(
     _name: &str,
     args: &[Expr],

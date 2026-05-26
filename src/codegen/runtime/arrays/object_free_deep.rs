@@ -14,9 +14,15 @@ use crate::codegen::runtime::generators::frame as gen_frame;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
-/// object_free_deep: free an object instance and release all heap-backed properties.
-/// Input:  x0 = object pointer
-/// Output: none
+/// Emits the `__rt_object_free_deep` runtime helper for ARM64.
+/// Frees an object instance and recursively releases all heap-backed property payloads
+/// (strings, arrays, objects, Mixed cells) via class-level gc descriptors, then returns
+/// storage to the heap.
+///
+/// Input:  x0 = object pointer (heap-backed, non-null, within heap range)
+/// Output: none (x0 = 0 on return via `__rt_object_free_deep_done`)
+/// Clobbers: x0–x15, lr as needed for helper calls
+/// Special cases: Fiber (munmap stack), Generator (boxed Mixed fields), SPL types.
 pub fn emit_object_free_deep(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_object_free_deep_linux_x86_64(emitter);
@@ -248,6 +254,15 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller
 }
 
+/// Emits the `__rt_object_free_deep` runtime helper for x86_64 Linux.
+/// Mirrors the ARM64 deep-free logic but uses the x86_64 ABI and heap marker layout.
+/// Validates the x86_64 heap magic word and heap-kind tag before descending into
+/// per-class property cleanup.
+///
+/// Input:  rax = object pointer (heap-backed, non-null, with x86_64 heap magic marker)
+/// Output: none (rax = 0 on return via `__rt_object_free_deep_done`)
+/// Clobbers: rax, r10, r11, rcx, r8, r9, and the x86_64 C call-clobbered set
+/// Special cases: Fiber, Generator, SPL doubly-linked-list, SplFixedArray.
 fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: object_free_deep ---");
@@ -434,6 +449,13 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller after releasing the object and any owned heap-backed properties
 }
 
+/// Emits a single `__rt_decref_mixed` call to release one boxed Mixed field from a Generator frame on ARM64.
+/// Used for last_key, last_value, return_value, and sent_value fields.
+///
+/// Input:  x0 = Generator frame pointer (reloaded from [sp, #0])
+///         offset = byte offset of the boxed Mixed field within the frame
+///         name = field name for the emitted comment
+/// Output: none
 fn emit_generator_mixed_field_release_aarch64(emitter: &mut Emitter, offset: usize, name: &str) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Generator frame pointer before field cleanup
     emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));                 // load the Generator frame's boxed Mixed field for release
@@ -441,6 +463,13 @@ fn emit_generator_mixed_field_release_aarch64(emitter: &mut Emitter, offset: usi
     emitter.comment(&format!("released Generator::{}", name));
 }
 
+/// Emits a single `__rt_decref_mixed` call to release one boxed Mixed field from a Generator frame on x86_64.
+/// Used for last_key, last_value, return_value, and sent_value fields.
+///
+/// Input:  rax = Generator frame pointer (reloaded from [rbp - 8])
+///         offset = byte offset of the boxed Mixed field within the frame
+///         name = field name for the emitted comment
+/// Output: none
 fn emit_generator_mixed_field_release_x86_64(emitter: &mut Emitter, offset: usize, name: &str) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Generator frame pointer before field cleanup
     emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", offset));     // load the Generator frame's boxed Mixed field for release

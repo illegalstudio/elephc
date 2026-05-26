@@ -11,9 +11,20 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// hash_key_hash: hash a normalized associative-array key.
-/// Input:  x1=key_lo, x2=key_hi (-1 means integer key)
-/// Output: x0=hash
+/// Emits the `__rt_hash_key_hash` runtime helper.
+/// Normalizes a PHP associative-array key (string or integer sentinel) into a hash value for bucketing.
+///
+/// # Input (ARM64)
+/// - `x1`: integer key payload (when `x2 == -1`) or string length (when `x2 != -1`)
+/// - `x2`: integer-key sentinel (`-1`) or string pointer (high 32 bits)
+///
+/// # Output
+/// - `x0`: hash value
+///
+/// # Behavior
+/// - If `key_hi == -1`: treats the key as a signed integer, seeds hash from `key_lo`, mixes high bits,
+///   and multiplies by an odd 64-bit constant (Knuth-style multiplicative hash).
+/// - Otherwise: delegates to `__rt_hash_fnv1a` to hash the string key byte-by-byte.
 pub fn emit_hash_key_hash(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_key_hash_linux_x86_64(emitter);
@@ -43,6 +54,18 @@ pub fn emit_hash_key_hash(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the integer-key hash to the caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_hash_key_hash`.
+///
+/// # Input (x86_64 System V)
+/// - `rdi`: integer key payload (when `rsi == -1`) or string pointer (when `rsi != -1`)
+/// - `rsi`: integer-key sentinel (`-1`) or string length
+///
+/// # Output
+/// - `rax`: hash value
+///
+/// # Behavior
+/// - Mirrors the ARM64 path: sentinel check on `rsi`, integer-key multiplicative hash path,
+///   or string-hash delegation to `__rt_hash_fnv1a`.
 fn emit_hash_key_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_key_hash ---");

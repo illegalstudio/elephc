@@ -17,6 +17,11 @@ use crate::span::Span;
 
 use super::validation::validate_direct_method_duplicates;
 
+/// Merges `imported` trait properties with `local` class/trait properties.
+/// Conflicts (same name, incompatible modifiers) are reported as errors.
+/// If `replace_compatible_existing` is true, a compatible imported property
+/// replaces an existing one (trait-precedence rule); otherwise the local property wins.
+/// Returns the merged list in declaration order.
 pub(super) fn merge_properties(
     imported: &[ClassProperty],
     local: &[ClassProperty],
@@ -37,6 +42,11 @@ pub(super) fn merge_properties(
     Ok(merged)
 }
 
+/// Appends `property` into `merged`, checking for duplicate name conflicts.
+/// If a duplicate exists and is compatible with `replace_compatible_existing`,
+/// the existing entry is replaced; otherwise a fatal error is emitted.
+/// Visibility, type, hooks, readonly, static, abstract, by_ref, and default
+/// must all match for two properties to be considered compatible.
 pub(super) fn merge_property_into(
     merged: &mut Vec<ClassProperty>,
     property: ClassProperty,
@@ -76,6 +86,11 @@ pub(super) fn merge_property_into(
     Ok(())
 }
 
+/// Merges `imported` trait methods with `local` class/trait methods.
+/// Validates that `local` has no duplicate method keys (name + is_static).
+/// Imported methods with the same key as local are skipped (local wins).
+/// Duplicate imported methods (same key from multiple traits) are reported as errors.
+/// Returns the merged list: imported-first, then local.
 pub(super) fn merge_methods(
     imported: Vec<ClassMethod>,
     local: &[ClassMethod],
@@ -112,6 +127,10 @@ pub(super) fn merge_methods(
     Ok(merged)
 }
 
+/// Appends each method in `incoming` to `existing`, tracking seen (name, is_static)
+/// keys to prevent duplicate imports across different trait sources.
+/// Errors if the same method key already exists in `existing` (trait conflict).
+/// Used when accumulating methods from multiple traits within one class.
 pub(super) fn merge_imported_method_set(
     existing: &mut Vec<ClassMethod>,
     incoming: Vec<ClassMethod>,
@@ -135,6 +154,10 @@ pub(super) fn merge_imported_method_set(
     Ok(())
 }
 
+/// Returns true if `left` and `right` have matching visibility, type_expr,
+/// hooks, readonly, static, abstract, by_ref, and default value.
+/// Used by `merge_property_into` to determine whether two same-named properties
+/// are compatible for trait composition (no conflict error).
 fn properties_compatible(left: &ClassProperty, right: &ClassProperty) -> bool {
     left.visibility == right.visibility
         && left.type_expr == right.type_expr

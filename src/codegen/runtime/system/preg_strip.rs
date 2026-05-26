@@ -10,7 +10,15 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// __rt_preg_strip: strip regex delimiters (e.g., "/pattern/i" → "pattern").
+/// Emits the `__rt_preg_strip` runtime helper for stripping PHP regex delimiters.
+///
+/// Transforms PHP PCRE patterns by removing leading/trailing '/' delimiters and extracting
+/// the 'i' case-insensitive flag. For example, `"/pattern/i"` becomes `("pattern", flags=1)`.
+///
+/// Dispatches to `emit_preg_strip_linux_x86_64` on x86_64; ARM64 uses inline scalar
+/// loads/stores in the main emitter. Undelimited patterns (no leading '/') are returned
+/// unchanged with flags=0.
+///
 /// Input:  x1=pattern ptr, x2=pattern len
 /// Output: x1=stripped pattern ptr, x2=stripped len, x3=flags (bit 0=icase)
 pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
@@ -71,6 +79,12 @@ pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// x86_64-specific emitter for `__rt_preg_strip`.
+///
+/// Uses System V AMD64 ABI: pattern pointer in `rax`, length in `rdx`; returns stripped
+/// pattern pointer in `rax`, stripped length in `rdx`, and `REG_ICASE` flag bit in `rcx`.
+/// Clobbers `r8`, `r9` as temporaries during the reverse scan. Returns patterns unchanged
+/// when they do not begin with '/' (undelimited raw regex payloads).
 fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: preg_strip_delimiters ---");

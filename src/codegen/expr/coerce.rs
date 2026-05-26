@@ -14,8 +14,20 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, platform::Arch};
 use crate::types::PhpType;
 
-/// Coerce a value to string (x1=ptr, x2=len) for concatenation.
-/// PHP behavior: false -> "", true -> "1", null -> "", int -> itoa
+/// Coerce a value to a PHP string for concatenation (`x1`/`x2` on ARM64, `rsi`/`rdx` on x86_64).
+///
+/// Dispatches to runtime helpers based on type:
+/// - `Int` → `__rt_itoa` (integer-to-ASCII)
+/// - `Float` → `__rt_ftoa` (float-to-ASCII)
+/// - `Bool` → true `"1"` / false `""` (zero-length)
+/// - `Void`/`Never` → `""` (zero-length)
+/// - `Resource` → `__rt_resource_to_string`
+/// - `Mixed`/`Union` → `__rt_mixed_cast_string` (runtime dispatch on boxed payload)
+/// - `Iterable` → literal `"Array"` string
+/// - `Object` → invokes `__toString()` if present, otherwise emits a fatal error and terminates
+///
+/// ABI: places string pointer in first string-result register and length in second.
+/// Ownership: callers must treat the returned string as owned (runtime may allocate).
 pub fn coerce_to_string(
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -117,6 +129,10 @@ pub fn coerce_to_string(
     }
 }
 
+/// Emit a fatal error and terminate when an object without `__toString()` is coerced to string.
+///
+/// Writes the error message to stderr using platform syscalls, then exits with code 1.
+/// This function does not return.
 fn emit_missing_tostring_fatal(emitter: &mut Emitter, data: &mut DataSection, class_name: &str) {
     let message = format!(
         "Fatal error: Object of class {} could not be converted to string\n",
@@ -146,9 +162,15 @@ fn emit_missing_tostring_fatal(emitter: &mut Emitter, data: &mut DataSection, cl
     }
 }
 
-/// Replace null sentinel with 0 in x0 (for arithmetic/comparison with null).
-/// Handles both compile-time null (Void type) and runtime null (variable
-/// that was assigned null - sentinel value in x0).
+/// Replace null sentinel with 0 in the integer result register after `coerce_null_to_zero`.
+///
+/// Two cases are handled:
+/// - **Compile-time null** (`Void`/`Never` type): directly emit `mov x0/rax, #0/0`.
+/// - **Runtime null** (Int payload that may hold the sentinel `0x7FFFFFFFFFFFFFFF_FFFE`): compare
+///   against the sentinel and select zero when equal; ordinary integers are unchanged.
+///
+/// `Bool` and `Float` are no-ops because their representations already match integer zero
+/// (bool is 0/1 in x0, float is in d0).
 pub fn coerce_null_to_zero(emitter: &mut Emitter, ty: &PhpType) {
     if *ty == PhpType::Void {
         match emitter.target.arch {
@@ -185,9 +207,18 @@ pub fn coerce_null_to_zero(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
-/// Coerce any type to a truthiness value in x0 for use in conditions
-/// (if, while, for, ternary, &&, ||). For strings, PHP treats both ""
-/// and "0" as falsy. For other types, x0 already holds the truthiness.
+/// Coerce any type to a PHP truthiness value in the integer result register.
+///
+/// Handles all PHP truthiness rules:
+/// - Calls `coerce_null_to_zero` first to normalize null for all types.
+/// - `Str`: `""` and `"0"` are falsy; all other strings (including `"1"`, `"-1"`) are truthy.
+/// - `Float`: 0.0 is falsy; non-zero (including negative zero) is truthy.
+/// - `Int`/`Bool`/`Void`/`Callable`/`Object`/`Buffer`/`Packed`/`Pointer`: non-zero is truthy.
+/// - `Resource`: always truthy (regardless of native handle value).
+/// - `Array`/`AssocArray`/`Iterable`: non-empty (runtime length > 0) is truthy.
+/// - `Mixed`/`Union`: delegates to `__rt_mixed_cast_bool` for runtime dispatch.
+///
+/// Result is placed in the canonical integer result register (`x0`/`rax`).
 pub fn coerce_to_truthiness(emitter: &mut Emitter, ctx: &mut Context, ty: &PhpType) {
     coerce_null_to_zero(emitter, ty);
     if *ty == PhpType::Str {

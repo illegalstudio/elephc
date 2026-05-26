@@ -16,6 +16,25 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits PHP `pow(base, exponent)` as a call to the platform's libc `pow()`.
+///
+/// Both operands are evaluated, converted to floating-point if needed, and
+/// passed to `pow()` following the target ABI (AArch64: d0/d1, X86_64: xmm0/xmm1).
+/// The base is saved to a scratch float register before the exponent is evaluated,
+/// then restored to the first argument register after exponent evaluation. The
+/// result is always `PhpType::Float`. The `_name` parameter is unused for this
+/// builtin and is accepted only to match the emitter dispatch signature.
+///
+/// # Arguments
+/// * `_name` - Unused; present only to match the builtin emitter dispatch.
+/// * `args` - Must contain exactly 2 expressions: base and exponent.
+/// * `emitter` - Target-specific instruction emission.
+/// * `ctx` - Codegen context carrying variable layout and class metadata.
+/// * `data` - Data section for relocations and constant materialization.
+///
+/// # Returns
+/// `Some(PhpType::Float)` on success; `None` is not produced by this emitter
+/// but is returned to satisfy the emitter trait signature.
 pub fn emit(
     _name: &str,
     args: &[Expr],

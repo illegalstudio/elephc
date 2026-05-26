@@ -19,6 +19,12 @@ use super::super::validation::visibility_rank;
 use super::super::interfaces::{build_property_contract, merge_property_contract};
 use super::state::{collect_attribute_args, collect_attribute_names, ClassBuildState};
 
+/// Applies property schema validation and metadata for all static and instance
+/// properties declared in `class`. Static properties are validated for PHP
+/// inheritance rules (final, visibility, override) and inserted into
+/// `state.static_prop_types`. Instance properties are validated and inserted
+/// into `state.prop_types`. Each property runs either `apply_static_property`
+/// or `apply_instance_property` based on `prop.is_static`.
 pub(super) fn apply_properties(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
@@ -34,6 +40,12 @@ pub(super) fn apply_properties(
     Ok(())
 }
 
+/// Validates a static property declaration against PHP inheritance rules and
+/// records it in `state`. Rejects by-reference static properties, final private
+/// combinations, and property type/redeclare conflicts. Computes the property
+/// type from the declared hint, the default value, or defaults to `PhpType::Int`.
+/// Updates `state.static_prop_types`, `state.static_property_declaring_classes`,
+/// `state.final_static_properties`, and attribute maps.
 fn apply_static_property(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
@@ -120,6 +132,10 @@ fn apply_static_property(
     Ok(())
 }
 
+/// Validates that a static property override maintains PHP inheritance constraints:
+/// final properties cannot be overridden, visibility cannot be reduced, and the
+/// type must be invariant with the parent declaration. Retrieves inherited
+/// visibility and finality from `state` to produce precise error messages.
 fn validate_static_property_override(
     state: &ClassBuildState,
     class: &FlattenedClass,
@@ -172,6 +188,13 @@ fn validate_static_property_override(
     )
 }
 
+/// Validates and records an instance property declaration. Rejects final+private
+/// combinations and static/redeclare conflicts. Handles readonly classes, promoted
+/// parameters, by-reference semantics, abstract properties, and property contracts.
+/// Computes the property type and assigns a slot index (offset). Updates
+/// `state.prop_types`, `state.property_offsets`, `state.property_declaring_classes`,
+/// `state.readonly_properties`, `state.reference_properties`, `state.abstract_properties`,
+/// and attribute maps. On redeclaration, delegates to `apply_instance_property_redeclaration`.
 fn apply_instance_property(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
@@ -273,6 +296,13 @@ fn apply_instance_property(
     Ok(())
 }
 
+/// Handles a child-class redeclaration of an instance property inherited from a
+/// parent. Validates final, readonly, by-reference, and visibility constraints via
+/// `validate_instance_property_override`. Updates the slot with the child's type
+/// or default, merges abstract property contracts if applicable, and syncs
+/// `state.prop_types`, `state.property_declaring_classes`, `state.final_properties`,
+/// `state.readonly_properties`, `state.abstract_properties`, and
+/// `state.reference_properties`.
 fn apply_instance_property_redeclaration(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
@@ -356,6 +386,12 @@ fn apply_instance_property_redeclaration(
     Ok(())
 }
 
+/// Validates an instance property override against PHP inheritance rules:
+/// visibility reduction, final override attempts, readonly removal, by-reference
+/// toggling, and making a concrete property abstract. For abstract parent
+/// properties, delegates to `validate_abstract_property_contract`; otherwise
+/// validates type invariance. Private parent properties are rejected as
+/// shadowing is not yet supported.
 fn validate_instance_property_override(
     state: &ClassBuildState,
     class: &FlattenedClass,
@@ -449,6 +485,12 @@ fn validate_instance_property_override(
     Ok(())
 }
 
+/// Validates that a concrete property satisfies the `get`/`set` type contract
+/// inherited from an abstract property declaration in the parent. For abstract
+/// child declarations, merges the child's contract with the parent's contract.
+/// For concrete overrides, checks that the declared or inferred type is
+/// compatible with the required getter and, unless readonly, the required setter.
+/// Returns `Ok` if no contract exists or validation passes.
 fn validate_abstract_property_contract(
     state: &ClassBuildState,
     checker: &Checker,
@@ -509,6 +551,9 @@ fn validate_abstract_property_contract(
     Ok(())
 }
 
+/// Looks up the declared type of a static property named `property` from the
+/// parent's resolved types in `state.static_prop_types`. Returns `PhpType::Int`
+/// if the property is not found, matching the undeclared-property default.
 fn inherited_static_property_type(state: &ClassBuildState, property: &str) -> PhpType {
     state
         .static_prop_types
@@ -518,6 +563,9 @@ fn inherited_static_property_type(state: &ClassBuildState, property: &str) -> Ph
         .unwrap_or(PhpType::Int)
 }
 
+/// Looks up the declared type of an instance property named `property` from the
+/// parent's resolved types in `state.prop_types`. Returns `PhpType::Int`
+/// if the property is not found, matching the undeclared-property default.
 fn inherited_instance_property_type(state: &ClassBuildState, property: &str) -> PhpType {
     state
         .prop_types
@@ -527,6 +575,9 @@ fn inherited_instance_property_type(state: &ClassBuildState, property: &str) -> 
         .unwrap_or(PhpType::Int)
 }
 
+/// Finds the slot index of an instance property by name in `state.prop_types`.
+/// Panics if the property is not found; the caller is responsible for ensuring
+/// the property exists via prior checks on `state.property_declaring_classes`.
 fn find_instance_property_slot(state: &ClassBuildState, name: &str) -> usize {
     state
         .prop_types
@@ -587,6 +638,10 @@ where
     }
 }
 
+/// Resolves the declared type for a property from its `type_expr` using
+/// `checker.resolve_declared_property_hint`. Returns `Ok(None)` if the
+/// property has no type declaration. Errors are mapped to the property's
+/// span and name for clear diagnostics.
 fn resolve_property_declared_type(
     checker: &Checker,
     class_name: &str,

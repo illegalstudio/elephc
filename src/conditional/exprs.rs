@@ -14,6 +14,18 @@ use crate::parser::ast::{CallableTarget, Expr, ExprKind};
 
 use super::stmts::apply_stmts;
 
+/// Recursively rewrites an expression, applying compiler conditional branches for any
+/// embedded statement bodies (e.g., closure bodies, assignment preludes).
+///
+/// For each `ExprKind` variant, recurses into child expressions. Closure bodies are
+/// rewritten via `apply_stmts()` rather than `rewrite_expr()` so that nested `ifdef`
+/// blocks inside the closure are handled correctly.
+///
+/// Constants (`ConstRef`), static property accesses, and simple name variants are
+/// returned unchanged — ifdef symbols affect runtime code, not compile-time constants.
+///
+/// - Input: `expr` to rewrite, `defines` set of active `ifdef` symbols.
+/// - Output: New `Expr` with conditionals applied, span preserved.
 pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
     let span = expr.span;
     let kind = match expr.kind {

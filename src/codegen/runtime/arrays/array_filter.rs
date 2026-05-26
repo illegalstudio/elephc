@@ -11,9 +11,13 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_filter: filter scalar elements using a callback, returning a new array.
-/// Input: x0 = callback function address, x1 = source array pointer, x2 = optional callback environment pointer
-/// Output: x0 = pointer to new array with only elements where callback returned truthy
+/// Emits the `__rt_array_filter` runtime helper.
+/// Dispatches to the x86_64 Linux SysV ABI variant; ARM64 uses the default implementation below.
+/// Iterates over `source_array`, calling `callback(element)` for each. Elements where the callback
+/// returns non-zero are copied into a newly allocated array. The new array length is set to the
+/// count of kept elements. Caller-saved registers are preserved across the callback loop.
+/// Input: x0 = callback address, x1 = source array ptr, x2 = optional callback environment
+/// Output: x0 = new array containing only elements where callback returned truthy
 pub fn emit_array_filter(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_filter_linux_x86_64(emitter);
@@ -95,6 +99,13 @@ pub fn emit_array_filter(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = new filtered array
 }
 
+/// Emits the `__rt_array_filter` runtime helper for x86_64 Linux (SysV ABI).
+/// Saves frame pointer and callee-saved registers (r12–r14), allocates a destination array sized
+/// to the source length, then iterates source indices in r13 while accumulating kept elements in r14.
+/// Calls the user callback through r12 with the current element in rdi; optionally passes the
+/// capture environment from [rbp-64] as rsi when present. Copies kept elements to
+/// `destination_array[kept_count * 8 + 24]`. Stores the final kept count as the destination array length.
+/// Clobbers: rax, r10, r11 (caller-saved); preserves: r12, r13, r14, rbp across the loop.
 fn emit_array_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_filter ---");

@@ -18,6 +18,12 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits PHP `tmpfile` builtin calls.
+///
+/// Calls `__rt_tmpfile` runtime helper, then boxes the raw fd result (or -1
+/// on failure) into a `PhpType::Mixed` value using `__rt_mixed_from_value`.
+/// The boxed result is `resource|false` matching PHP's `tmpfile()` signature.
+/// Returns `Some(PhpType::Mixed)`.
 pub fn emit(
     _name: &str,
     _args: &[Expr],
@@ -31,6 +37,12 @@ pub fn emit(
     Some(PhpType::Mixed)
 }
 
+/// Boxes the raw fd result from `__rt_tmpfile` into a PHP-compatible `Mixed`.
+///
+/// On entry the result register holds the file descriptor (>= 0 on success,
+/// -1 on failure). This function branches on the result, then calls
+/// `__rt_mixed_from_value` to box either a resource (tag 9) or bool false
+/// (tag 3) into the Mixed value returned to PHP.
 fn box_tmpfile_result(emitter: &mut Emitter, ctx: &mut Context) {
     let false_label = ctx.next_label("tmpfile_false");
     let done_label = ctx.next_label("tmpfile_done");

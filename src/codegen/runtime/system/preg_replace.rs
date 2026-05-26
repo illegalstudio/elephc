@@ -239,6 +239,15 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// x86_64 Linux-specific implementation of `__rt_preg_replace`.
+///
+/// Inputs (System V AMD64 ABI): rdi=pattern ptr, rsi=pattern len,
+///   rdx=replacement ptr, rcx=replacement len, r8=subject ptr, r9=subject len
+/// Outputs: rax=result ptr, rdx=result len
+///
+/// On regex compilation failure, returns the original subject unchanged.
+/// Handles backreference expansion (`$1`..`$9`, `\1`..`\9`) in replacement strings.
+/// Uses the concat scratch buffer for output and updates `_concat_off` accordingly.
 fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     let regex_t_size = emitter.platform.regex_t_size();
     let regmatch_rm_eo_off = emitter.platform.regmatch_rm_eo_offset();

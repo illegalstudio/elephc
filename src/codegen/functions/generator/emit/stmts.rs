@@ -30,6 +30,10 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::runtime::generators::frame as gen_frame;
 
+/// Emits a single generator body statement: `AssignInt`, `AssignMixed`,
+/// `PostIncrement`, or `PostDecrement`. Each mutation uses the standard
+/// refcount-replace pattern for Mixed slots to maintain ownership safety.
+/// The slot index is converted to a stack offset via `slot_offset`.
 pub(super) fn emit_body_stmt(emitter: &mut Emitter, stmt: &BodyStmt) {
     match stmt {
         BodyStmt::AssignInt(idx, src) => {
@@ -82,6 +86,8 @@ pub(super) fn emit_body_stmt(emitter: &mut Emitter, stmt: &BodyStmt) {
     }
 }
 
+/// Emits a jump instruction to the given label name, using `b` on ARM64
+/// and `jmp` on x86_64.
 fn emit_jump(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -93,6 +99,8 @@ fn emit_jump(emitter: &mut Emitter, label: &str) {
     }
 }
 
+/// Emits a conditional jump (`b.eq` / `je`) that transfers control when the
+/// preceding comparison result was equal. Used by `emit_switch` after `cmp`.
 fn emit_jump_eq(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -104,12 +112,18 @@ fn emit_jump_eq(emitter: &mut Emitter, label: &str) {
     }
 }
 
+/// Walks a slice of `ResumeNode` items in source order, delegating each to
+/// `emit_node`. Used for top-level body walks and nested control-flow bodies.
 pub(super) fn emit_nodes(emitter: &mut Emitter, nodes: &[ResumeNode], ctx: &mut ResumeCtx) {
     for node in nodes {
         emit_node(emitter, node, ctx);
     }
 }
 
+/// Dispatches a single `ResumeNode` variant to the appropriate emitter.
+/// Handles all statement types, control-flow constructs, and the special
+/// `Yield`/`YieldFromGenerator` nodes that suspend the generator.
+/// `break`/`continue` use `emit_loop_jump` to respect `loop_stack`.
 fn emit_node(emitter: &mut Emitter, node: &ResumeNode, ctx: &mut ResumeCtx) {
     match node {
         ResumeNode::Stmt(s) => emit_body_stmt(emitter, s),
@@ -212,6 +226,12 @@ fn emit_loop_jump(emitter: &mut Emitter, ctx: &mut ResumeCtx, break_jump: bool) 
     emit_jump(emitter, &lbl);
 }
 
+/// Emits a switch/case dispatch for integer subjects. Evaluates `subject`
+/// once into a scratch register (x1 on ARM64, r10 on x86_64), then emits
+/// a sequence of `cmp`/`b.eq` tests for each case value. Unmatched subjects
+/// jump to `default`. Cases push a synthetic `LoopLabels { end, cont }` entry
+/// onto `loop_stack` so that `break` inside a case exits the switch end,
+/// matching PHP fall-through semantics.
 fn emit_switch(
     emitter: &mut Emitter,
     subject: &IntSource,

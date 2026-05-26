@@ -72,6 +72,11 @@ use crate::codegen::emit::Emitter;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Dispatches a PHP string/byte builtin call to its focused codegen emitter.
+///
+/// `name` must be a canonical builtin name from the catalog (case-insensitive lookup
+/// is handled by the caller). Returns `Some(PhpType)` with the result type when the
+/// builtin is recognized, or `None` if `name` is not a string-category builtin.
 pub fn emit(
     name: &str,
     args: &[Expr],

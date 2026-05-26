@@ -10,7 +10,15 @@
 
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 
-/// Check if an expression produces a string result.
+/// Returns true if the expression syntactically produces a string result.
+///
+/// Recognizes: string literals, `.` (concat) binary ops, explicit `(string)` casts,
+/// and calls to known string-returning builtins (`substr`, `strtolower`, `strtoupper`,
+/// `trim`, `ltrim`, `rtrim`, `str_repeat`, `strrev`, `chr`, `str_replace`, `ucfirst`,
+/// `lcfirst`, `ucwords`, `str_pad`, `implode`, `join`, `sprintf`, `str_word_count`,
+/// `nl2br`, `wordwrap`, `number_format`, `chunk_split`, `md5`, `sha1`, `hash`).
+///
+/// This is a purely syntactic check; no semantic callable validation is performed.
 pub(super) fn expr_is_str(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::StringLiteral(_) => true,

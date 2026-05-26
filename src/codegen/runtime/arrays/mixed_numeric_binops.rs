@@ -11,10 +11,17 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, platform::Arch};
 
-/// mixed_numeric_binops: add/sub/mul boxed numeric payloads and return Mixed.
+/// Dispatches to architecture-specific helpers for add/sub/mul on boxed Mixed numeric values.
+///
+/// For ARM64 emits `__rt_mixed_numeric_add/sub/mul` that unbox operands, classify each
+/// payload as integer or double, and compute in integer or floating-point arithmetic with
+/// PHP integer-overflow promotion (overflowing integers are promoted to double).
+///
+/// For x86_64 emits the equivalent Linux x86_64 ABI helpers under the same symbol names.
+///
 /// Input:  AArch64 x0=left Mixed*, x1=right Mixed*
 ///         x86_64 rax=left Mixed*, rdi=right Mixed*
-/// Output: boxed Mixed pointer in the integer result register
+/// Output: boxed Mixed pointer in the integer result register (x0 / rax)
 pub fn emit_mixed_numeric_binops(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_numeric_binops_linux_x86_64(emitter);
@@ -131,6 +138,13 @@ pub fn emit_mixed_numeric_binops(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to generated code with boxed Mixed result in x0
 }
 
+/// Emits the ARM64 entry point for one mixed numeric binary operation.
+///
+/// Allocates a 80-byte helper frame on the stack, saves the frame pointer and link register,
+/// then loads `opcode` into x9 and branches to the shared `__rt_mixed_numeric_common` implementation.
+///
+/// - `label`: global symbol name for the entry point (e.g. `__rt_mixed_numeric_add`)
+/// - `opcode`: 0 = add, 1 = sub, 2 = mul — passed via x9 to the common handler
 fn emit_aarch64_entry(emitter: &mut Emitter, label: &str, opcode: i64) {
     emitter.label_global(label);
     emitter.instruction("sub sp, sp, #80");                                     // allocate a helper frame for operands, tags, and saved FP state
@@ -140,6 +154,15 @@ fn emit_aarch64_entry(emitter: &mut Emitter, label: &str, opcode: i64) {
     emitter.instruction("b __rt_mixed_numeric_common");                         // enter the shared mixed numeric implementation
 }
 
+/// Emits the Linux x86_64 ABI helpers for mixed numeric add/sub/mul.
+///
+/// Each entry point (`__rt_mixed_numeric_add/sub/mul`) establishes a frame via `push rbp`,
+/// allocates 80 bytes of stack space, loads the opcode into r10, and jumps to the shared
+/// `__rt_mixed_numeric_common_linux_x86_64` implementation.
+///
+/// The common handler unboxes both operands, classifies each as integer or double, and
+/// dispatches to the appropriate arithmetic path with PHP integer-overflow promotion
+/// (overflowing integers are converted to double before the operation).
 fn emit_mixed_numeric_binops_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_numeric_binops ---");
@@ -248,6 +271,14 @@ fn emit_mixed_numeric_binops_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to generated code with boxed Mixed result in rax
 }
 
+/// Emits the Linux x86_64 entry point for one mixed numeric binary operation.
+///
+/// Saves and establishes rbp as the frame pointer, allocates an aligned 80-byte stack region
+/// for operand slots and saved FP state, loads `opcode` into r10, then jumps to the shared
+/// `__rt_mixed_numeric_common_linux_x86_64` implementation.
+///
+/// - `label`: global symbol name for the entry point (e.g. `__rt_mixed_numeric_add`)
+/// - `opcode`: 0 = add, 1 = sub, 2 = mul — saved to the stack and read by the common handler
 fn emit_x86_64_entry(emitter: &mut Emitter, label: &str, opcode: i64) {
     emitter.label_global(label);
     emitter.instruction("push rbp");                                            // save the caller frame pointer before nested runtime calls

@@ -24,6 +24,12 @@ use crate::codegen::{
     platform::{Arch, Platform},
 };
 
+/// Emits stream-extension runtime helpers for the current target.
+///
+/// Dispatches to `emit_streams_ext_linux_x86_64` when targeting x86_64 Linux;
+/// otherwise emits ARM64 helpers for all other targets (Darwin, Linux ARM64).
+///
+/// ARM64 helpers emitted: `__rt_fgetc`, `__rt_readfile`, `__rt_fpassthru`, `__rt_flock`, `__rt_tmpfile`.
 pub fn emit_streams_ext(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_streams_ext_linux_x86_64(emitter);
@@ -284,6 +290,10 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return -1
 }
 
+/// Emits x86_64 Linux stream-extension runtime helpers (`__rt_fgetc`, `__rt_readfile`,
+/// `__rt_fpassthru`, `__rt_flock`, `__rt_tmpfile`).
+///
+/// Called from `emit_streams_ext` when `emitter.target.arch == Arch::X86_64`.
 fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     // -- fgetc --
     emitter.blank();

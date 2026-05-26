@@ -73,6 +73,13 @@ pub fn emit_cstr(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits `__rt_cstr` and `__rt_cstr2` runtime helpers for the x86_64 Linux target.
+/// Uses `_cstr_buf` (4096 bytes) as scratch space for the primary helper and
+/// `_cstr_buf2` (4096 bytes) for the secondary helper.
+/// Input:  rdi=ignored, rsi=ignored, rdx=source length (caller passes in rdx),
+///         rax=source pointer (caller passes in rax)
+/// Output: rax=pointer to null-terminated string in _cstr_buf (or _cstr_buf2 for cstr2)
+/// ABI:    System V AMD64 (caller-saved registers r8-r11 used as scratch).
 fn emit_cstr_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: cstr ---");

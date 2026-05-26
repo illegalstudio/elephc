@@ -9,6 +9,8 @@
 
 use super::*;
 
+// Tests tokenization of `packed`, `class`, `buffer<T>`, and `buffer_new<T>` from a class
+// definition with typed properties. Verifies OOP extension keywords and generic buffer syntax.
 #[test]
 fn test_packed_class_and_buffer_type_tokens() {
     let t = tokens("<?php packed class Vec2 { public float $x; public float $y; } buffer<int> $points = buffer_new<int>(2);");
@@ -48,6 +50,8 @@ fn test_packed_class_and_buffer_type_tokens() {
     );
 }
 
+// Tests tokenization of `interface`, `implements`, `abstract`, and `final` keywords
+// in a bare PHP script. Checks that all four interface-related tokens are recognized.
 #[test]
 fn test_interface_related_keywords() {
     let t = tokens("<?php interface implements abstract final");
@@ -57,36 +61,45 @@ fn test_interface_related_keywords() {
     assert_eq!(t[4], Token::Final);
 }
 
+// Tests tokenization of the `trait` keyword at position [1] from a bare PHP script.
 #[test]
 fn test_keyword_trait() {
     assert_eq!(tokens("<?php trait")[1], Token::Trait);
 }
 
+// Tests tokenization of the `protected` keyword at position [1] from a bare PHP script.
 #[test]
 fn test_keyword_protected() {
     assert_eq!(tokens("<?php protected")[1], Token::Protected);
 }
 
+// Tests tokenization of the `self` keyword (lowercase) at position [1] from a bare PHP script.
 #[test]
 fn test_keyword_self() {
     assert_eq!(tokens("<?php self")[1], Token::Self_);
 }
 
+// Tests tokenization of the `insteadof` keyword (trait resolution operator) at position [1]
+// from a bare PHP script.
 #[test]
 fn test_keyword_insteadof() {
     assert_eq!(tokens("<?php insteadof")[1], Token::InsteadOf);
 }
 
+// Tests tokenization of the `extends` keyword at position [1] from a bare PHP script.
 #[test]
 fn test_keyword_extends() {
     assert_eq!(tokens("<?php extends")[1], Token::Extends);
 }
 
+// Tests tokenization of the `parent` keyword at position [1] from a bare PHP script.
 #[test]
 fn test_keyword_parent() {
     assert_eq!(tokens("<?php parent")[1], Token::Parent);
 }
 
+// Tests tokenization of a full class definition including `class`, `new`, `public`,
+// `private`, and `readonly` keywords. Verifies all OOP keywords are recognized in context.
 #[test]
 fn test_lex_class_keyword() {
     let t = tokens("<?php class Point { public $x; private $y; public readonly $id; } $p = new Point();");
@@ -97,6 +110,8 @@ fn test_lex_class_keyword() {
     assert!(t.contains(&Token::ReadOnly));
 }
 
+// Tests tokenization of a class with typed properties including nullable type (`?string`),
+// `final` modifier, and property variables. Verifies all tokens for typed property syntax.
 #[test]
 fn test_lex_typed_property_tokens() {
     let t = tokens("<?php class User { public ?string $email = null; final public int $id; }");

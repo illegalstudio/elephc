@@ -16,6 +16,14 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits codegen for the PHP `str_replace(search, replacement, subject)` builtin call.
+///
+/// `args[0]` = search string, `args[1]` = replacement string, `args[2]` = subject string.
+/// Each string argument is emitted as a pointer/length pair in ABI registers.
+/// Stack-based preservation pattern: search is saved first, then replacement, then subject
+/// is evaluated; registers are restored so the runtime helper receives search in the primary
+/// pair, replacement in the secondary pair, and subject in the third pair.
+/// Calls `__rt_str_replace` and returns `PhpType::Str`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

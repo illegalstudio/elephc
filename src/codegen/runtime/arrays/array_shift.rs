@@ -11,10 +11,24 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_shift: remove and return the first element of an integer array.
-/// Input: x0 = array pointer
-/// Output: x0 = removed first element value
-/// Mutates the array in place: shifts all elements left, decrements length.
+/// Emits the `__rt_array_shift` runtime helper that removes and returns the first
+/// element of a PHP integer-indexed array.
+///
+/// ABI on entry (ARM64):
+/// - `x0`: pointer to the array header (first field = length, followed by data region)
+///
+/// ABI on exit:
+/// - `x0`: the removed first element value, or 0x7FFFFFFFFFFFFFFE as the null sentinel
+///   if the array was empty
+///
+/// Behavior:
+/// - Reads the array length from the header at `[x0]`.
+/// - If length is zero, returns the null sentinel immediately.
+/// - Otherwise, saves `data[0]`, shifts all remaining elements left by one position,
+///   decrements the length in the header, and returns the saved first element.
+/// - The array storage capacity is unchanged; only the logical length is decremented.
+///
+/// Panics: none. All control flow converges at `ret`.
 pub fn emit_array_shift(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_shift_linux_x86_64(emitter);
@@ -63,6 +77,22 @@ pub fn emit_array_shift(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_array_shift` runtime helper.
+///
+/// This is the x86_64 counterpart to `emit_array_shift` for the System V AMD64 ABI.
+/// The function follows the same semantics: remove and return the first element,
+/// shift remaining elements left, decrement length, or return the null sentinel (0x7FFFFFFFFFFFFFFE)
+/// when the array is empty.
+///
+/// ABI on entry (System V AMD64):
+/// - `rdi`: pointer to the array header (first field = length, followed by data region)
+///
+/// ABI on exit:
+/// - `rax`: the removed first element value, or 0x7FFFFFFFFFFFFFFE as the null sentinel
+///   if the array was empty
+///
+/// Uses `r10` for length, `r11` for data region base, `rcx` as the shift loop cursor,
+/// and `r8` for the element being shifted.
 fn emit_array_shift_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_shift ---");

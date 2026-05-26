@@ -19,6 +19,10 @@ use crate::types::{
 use super::super::super::Checker;
 use super::properties_null_coalesce::null_coalesce_property_keeps_non_null;
 
+/// Type-checks a direct property assignment (`$obj->prop = value`).
+///
+/// Infers the object and value types, then validates write access for `Object` and `Pointer` types.
+/// For objects, also refines the property's inferred type based on the assigned value.
 pub(super) fn check_property_assign(
     checker: &mut Checker,
     object: &Expr,
@@ -39,6 +43,11 @@ pub(super) fn check_property_assign(
     Ok(())
 }
 
+/// Type-checks an array-push property operation (`$obj->prop[] = value`).
+///
+/// Infers object and value types, then validates that the property is an array (not a buffer).
+/// For `PhpType::Object`, resolves the property type and computes the updated array element type,
+/// merging element types if the property has no declared type.
 pub(super) fn check_property_array_push(
     checker: &mut Checker,
     object: &Expr,
@@ -92,6 +101,12 @@ pub(super) fn check_property_array_push(
     }
 }
 
+/// Type-checks an indexed property array assignment (`$obj->prop[$index] = value`).
+///
+/// Infers object, index, and value types. Validates array key types and property mutability.
+/// For `PhpType::Object`, handles both `Array` and `AssocArray` storage, merging element types
+/// when the property lacks a declared type. For `PhpType::Pointer`, requires integer indexing
+/// and that the field is an array type.
 pub(super) fn check_property_array_assign(
     checker: &mut Checker,
     object: &Expr,
@@ -175,6 +190,12 @@ pub(super) fn check_property_array_assign(
     }
 }
 
+/// Validates a write to a named property of a class instance.
+///
+/// Checks: property existence, `__set` magic method fallback, dynamic properties (`#[\AllowDynamicProperties]`),
+/// readonly modifier restrictions (disallows writes outside `__construct` except via null-coalesce),
+/// visibility via `can_access_member`, and declared-type compatibility via `require_compatible_arg_type`.
+/// StdClass properties are allowed unconditionally.
 fn check_object_property_write(
     checker: &Checker,
     object: &Expr,
@@ -241,6 +262,10 @@ fn check_object_property_write(
     Ok(())
 }
 
+/// Validates that the current context can access a named property, checking visibility and class scope.
+///
+/// Looks up the property's declared class and visibility modifier, then delegates to
+/// `Checker::can_access_member` to enforce access control rules.
 fn validate_object_property_access(
     checker: &Checker,
     class_name: &str,
@@ -271,6 +296,11 @@ fn validate_object_property_access(
     Ok(())
 }
 
+/// Refines the inferred type of an object property after a write, for properties without declared types.
+///
+/// For untyped `Int` or `Void` properties, replaces the type with the assigned value's type.
+/// For generic arrays, calls `Checker::specialize_generic_array_hint` to narrow the element type
+/// based on the assigned value. Only updates when the refined type differs from the current type.
 fn refine_object_property_type(
     checker: &mut Checker,
     class_name: &str,
@@ -298,6 +328,10 @@ fn refine_object_property_type(
     }
 }
 
+/// Validates a write to a property of a typed pointer (extern or packed class).
+///
+/// Checks that the field exists in `extern_field_type` or `packed_field_type` and that the
+/// assigned value's type is compatible with the field's declared type.
 fn check_pointer_property_write(
     checker: &Checker,
     class_name: &str,
@@ -339,6 +373,11 @@ fn check_pointer_property_write(
     Ok(())
 }
 
+/// Resolves the type of a named property on a class object, for array property operations.
+///
+/// Looks up the property in `checker.classes`, validates existence and access, and returns
+/// the property type along with a flag indicating whether the property has a declared type.
+/// Returns an error if the class or property is undefined.
 fn resolve_object_array_property(
     checker: &Checker,
     class_name: &str,
@@ -366,6 +405,12 @@ fn resolve_object_array_property(
     Ok((prop_ty, property_has_declared_type))
 }
 
+/// Computes the updated type of an array property after a push operation (`$prop[] = value`).
+///
+/// For typed arrays: validates the pushed value against the element type via `require_compatible_arg_type`.
+/// For untyped arrays: merges the pushed value's type into the element type via `merge_array_element_type`.
+/// For untyped `Int` or `Void` base types: converts the property to `array<value_type>`.
+/// Returns an error for buffer types or non-array property types.
 fn updated_array_property_push_type(
     checker: &Checker,
     prop_ty: &PhpType,
@@ -408,6 +453,14 @@ fn updated_array_property_push_type(
     }
 }
 
+/// Computes the updated type of an array property after an indexed write (`$prop[$index] = value`).
+///
+/// Handles `PhpType::Array` and `PhpType::AssocArray` storage:
+/// - For `Array`: validates element type compatibility, handles `Never`-element arrays specially
+///   (converts to `AssocArray` when a static key forces hash storage), and merges element types
+///   for untyped properties.
+/// - For `AssocArray`: merges the key type with the index type and merges the value type with
+///   the assigned value, preserving declared-type constraints.
 fn updated_array_property_assign_type(
     checker: &Checker,
     prop_ty: &PhpType,
@@ -493,10 +546,18 @@ fn updated_array_property_assign_type(
     }
 }
 
+/// Returns true if `ty` is a valid PHP array key type (Int, Str, or Mixed).
 fn is_php_array_key_type(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Int | PhpType::Str | PhpType::Mixed)
 }
 
+/// Computes the resulting `PhpType::AssocArray` type after writing to an array property with a
+/// non-integer or static-computed key.
+///
+/// Special-cases `PhpType::Never` element types (treats the key and value as derived from the
+/// write operands). Otherwise merges the element type with the assigned value type via
+/// `merge_array_element_type`. If the property has a declared `Mixed` element type, returns
+/// a fully `Mixed` `AssocArray` to preserve type soundness.
 fn assoc_property_type_after_keyed_write(
     checker: &Checker,
     elem_ty: &PhpType,
@@ -531,6 +592,11 @@ fn assoc_property_type_after_keyed_write(
     }
 }
 
+/// Updates the in-memory type of an object property after an array operation.
+///
+/// Writes the updated type back to `checker.classes` only if the property has no declared type,
+/// or if the update satisfies `declared_generic_array_can_use_assoc_storage` (permits converting
+/// a `Mixed` element array to `AssocArray` storage when appropriate).
 fn update_object_property_type(
     checker: &mut Checker,
     class_name: &str,
@@ -553,6 +619,11 @@ fn update_object_property_type(
     }
 }
 
+/// Returns true if a declared generic array property may be updated to `AssocArray` storage.
+///
+/// Currently returns true only when the property is declared as `array<PhpType::Mixed>` and the
+/// updated type is an `AssocArray` with `PhpType::Mixed` values. This guards against widening
+/// a typed array to an associative storage with a narrower element type.
 fn declared_generic_array_can_use_assoc_storage(current: &PhpType, updated: &PhpType) -> bool {
     matches!(
         (current, updated),
@@ -564,6 +635,11 @@ fn declared_generic_array_can_use_assoc_storage(current: &PhpType, updated: &Php
     )
 }
 
+/// Resolves the type of a field on a typed pointer (extern class or packed struct) for array operations.
+///
+/// Checks `extern_field_type` then `packed_field_type`. Returns the field type if found.
+/// If the class is known as extern/packed but the field is not defined, returns an error
+/// describing the undefined field. The `operation` string is used only in error messages.
 fn resolve_pointer_field_type(
     checker: &Checker,
     class_name: &str,

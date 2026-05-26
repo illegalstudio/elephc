@@ -16,6 +16,8 @@ use crate::span::Span;
 
 use super::expr_reads::{collect_closure_warnings_in_stmt, collect_expr_reads};
 
+/// Tracks variable declarations and reads within a single function-like scope.
+/// Used to detect unused variables by comparing declared names against read names.
 #[derive(Default)]
 pub(super) struct ScopeUsage {
     declared: HashMap<String, Span>,
@@ -23,15 +25,20 @@ pub(super) struct ScopeUsage {
 }
 
 impl ScopeUsage {
+    /// Records a variable declaration, keeping the first span encountered for each name.
     fn declare(&mut self, name: &str, span: Span) {
         self.declared.entry(name.to_string()).or_insert(span);
     }
 
+    /// Records a variable read (access) within the current scope.
     pub(super) fn read(&mut self, name: &str) {
         self.reads.insert(name.to_string());
     }
 }
 
+/// Recursively scans top-level statements for functions, methods, and classes,
+/// dispatching each to `analyze_function_like_scope` or `analyze_method_scope`.
+/// Also handles namespace blocks and falls back to closure-level analysis for other statements.
 pub(super) fn collect_function_like_warnings(stmts: &[Stmt], warnings: &mut Vec<CompileWarning>) {
     for stmt in stmts {
         match &stmt.kind {
@@ -54,6 +61,8 @@ pub(super) fn collect_function_like_warnings(stmts: &[Stmt], warnings: &mut Vec<
     }
 }
 
+/// Collects variable reads within a single class method and emits unused variable warnings.
+/// Skips methods without a body (e.g., abstract methods).
 pub(super) fn analyze_method_scope(method: &ClassMethod, warnings: &mut Vec<CompileWarning>) {
     if !method.has_body {
         return;
@@ -67,6 +76,10 @@ pub(super) fn analyze_method_scope(method: &ClassMethod, warnings: &mut Vec<Comp
     );
 }
 
+/// Analyzes a function's parameter list and body to detect unused variables.
+/// Declares parameters as scoped variables, collects all reads from the body,
+/// then emits an "Unused variable" warning for any declared variable that was never read.
+/// Variables whose names start with underscore are ignored.
 pub(super) fn analyze_function_like_scope(
     params: &[(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)],
     variadic: Option<&String>,
@@ -95,6 +108,9 @@ pub(super) fn analyze_function_like_scope(
     }
 }
 
+/// Recursively walks statements and expressions within a function-like scope,
+/// recording variable declarations and reads into the provided `ScopeUsage` tracker.
+/// Emits warnings for suspicious patterns via `collect_expr_reads` and `collect_closure_warnings_in_stmt`.
 pub(super) fn collect_scope_reads(
     stmts: &[Stmt],
     scope: &mut ScopeUsage,
@@ -312,6 +328,8 @@ pub(super) fn collect_scope_reads(
     }
 }
 
+/// Returns a list of free variable names (reads of variables not declared in the parameter list).
+/// Used by closure capture analysis to determine which outer scope variables a closure references.
 pub(super) fn collect_free_reads_in_function_like(
     body: &[Stmt],
     params: &[(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)],

@@ -11,9 +11,11 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// mixed_cast_string: cast a boxed mixed payload to string using the current scalar rules.
-/// Input:  x0 = boxed mixed pointer
-/// Output: x1 = string pointer, x2 = string length
+/// Converts a boxed Mixed value to a string by dispatching on the unboxed tag.
+/// Input: x0 = boxed mixed pointer. Output: x1 = string pointer, x2 = string length (ARM64).
+/// Handles int (tag 0 → itoa), string (tag 1 → pass-through), float (tag 2 → ftoa),
+/// bool (tag 3 → "1" or ""), and null/unsupported (→ empty string).
+/// Dispatches to `emit_mixed_cast_string_linux_x86_64` on x86_64; ARM64 emits inline.
 pub fn emit_mixed_cast_string(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_cast_string_linux_x86_64(emitter);
@@ -66,6 +68,10 @@ pub fn emit_mixed_cast_string(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the string cast result in x1/x2
 }
 
+/// x86_64 variant of `emit_mixed_cast_string`: converts a boxed Mixed value to a string.
+/// Input: RDI = boxed mixed pointer. Output: RAX = string pointer, RDX = string length (System V ABI).
+/// Handles int (tag 0 → itoa), string (tag 1 → pass-through), float (tag 2 → ftoa),
+/// bool (tag 3 → "1" or ""), and null/unsupported (→ empty string).
 fn emit_mixed_cast_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_cast_string ---");

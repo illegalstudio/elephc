@@ -10,9 +10,14 @@
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
-/// mixed_strict_eq: compare two boxed mixed values by runtime tag and payload.
-/// Input:  x0 = left mixed pointer, x1 = right mixed pointer
-/// Output: x0 = 1 if strictly equal, else 0
+/// Compares two boxed mixed values for strict equality using runtime tag and payload dispatch.
+///
+/// dispatches to `emit_mixed_strict_eq_linux_x86_64` on x86_64, otherwise uses ARM64 SysV ABI.
+/// Saves both operand pointers and calls `__rt_mixed_unbox` on each to extract runtime tags.
+/// If tags match, dispatches on the shared tag: scalar/pointer payloads compare word-for-word;
+/// string payloads delegate to `__rt_str_eq` for byte-by-byte comparison.
+/// Returns 1 in `x0` (ARM64) or `rax` (x86_64) if strictly equal, 0 otherwise.
+/// Clobbers: x0–x12, lr. Preserves: x29 (frame pointer).
 pub fn emit_mixed_strict_eq(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_strict_eq_linux_x86_64(emitter);
@@ -70,6 +75,12 @@ pub fn emit_mixed_strict_eq(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the strict-equality boolean in x0
 }
 
+/// x86_64 Linux implementation of mixed strict equality comparison.
+///
+/// Uses System V AMD64 ABI: left mixed pointer in `rdi`, right in `rsi`.
+/// Saves both operands on the stack, calls `__rt_mixed_unbox` on each, then compares
+/// tags and payloads. String payloads delegate to `__rt_str_eq`. Returns boolean in `rax`.
+/// Clobbers: rax, rcx, rdx, rdi, rsi, r10, r11. Preserves: rbx, rbp, r12–r15.
 fn emit_mixed_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_strict_eq ---");

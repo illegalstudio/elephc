@@ -11,6 +11,7 @@ use crate::support::*;
 
 // --- ::class magic constant ---
 
+// Verifies `ClassName::class` resolves to the unqualified class name `C`.
 #[test]
 fn test_class_class_named() {
     let out = compile_and_run(
@@ -19,6 +20,7 @@ fn test_class_class_named() {
     assert_eq!(out, "C");
 }
 
+// Verifies `ClassName::class` inside a namespace resolves to the fully-qualified name `App\C`.
 #[test]
 fn test_class_class_namespaced() {
     let out = compile_and_run(
@@ -27,6 +29,7 @@ fn test_class_class_namespaced() {
     assert_eq!(out, "App\\C");
 }
 
+// Verifies `self::class` inside a method resolves to the lexical (defining) class `C`, not the runtime-called subclass.
 #[test]
 fn test_class_class_self_inside_method() {
     let out = compile_and_run(
@@ -35,6 +38,7 @@ fn test_class_class_self_inside_method() {
     assert_eq!(out, "C");
 }
 
+// Verifies `parent::class` inside a child class resolves to the parent class `Base`.
 #[test]
 fn test_class_class_parent_inside_child() {
     let out = compile_and_run(
@@ -43,6 +47,7 @@ fn test_class_class_parent_inside_child() {
     assert_eq!(out, "Base");
 }
 
+// Verifies `static::class` uses late static binding — resolves to the runtime class `Child` even when called from base method.
 #[test]
 fn test_class_class_static_uses_late_static_binding() {
     let out = compile_and_run(
@@ -51,6 +56,7 @@ fn test_class_class_static_uses_late_static_binding() {
     assert_eq!(out, "Child");
 }
 
+// Verifies `::class` can be used in string concatenation expressions.
 #[test]
 fn test_class_class_concat_in_message() {
     let out = compile_and_run(
@@ -61,6 +67,7 @@ fn test_class_class_concat_in_message() {
 
 // --- new self() / new static() / new parent() ---
 
+// Verifies `new self()` inside a static method returns an instance of the lexical (defining) class `Box` and that fields are accessible.
 #[test]
 fn test_new_self_returns_instance_of_lexical_class() {
     let out = compile_and_run(
@@ -69,6 +76,7 @@ fn test_new_self_returns_instance_of_lexical_class() {
     assert_eq!(out, "hello");
 }
 
+// Verifies `new static()` uses late static binding — returns an instance of the runtime-called class `Child` when called via `Child::make()`.
 #[test]
 fn test_new_static_returns_instance_of_called_class() {
     let out = compile_and_run(
@@ -77,6 +85,7 @@ fn test_new_static_returns_instance_of_called_class() {
     assert_eq!(out, "Child");
 }
 
+// Verifies `new parent()` inside a child class returns an instance of the parent class `Base`.
 #[test]
 fn test_new_parent_returns_instance_of_parent_class() {
     let out = compile_and_run(
@@ -85,6 +94,7 @@ fn test_new_parent_returns_instance_of_parent_class() {
     assert_eq!(out, "base");
 }
 
+// Verifies `new self()` passes constructor arguments correctly.
 #[test]
 fn test_new_self_with_constructor_args() {
     let out = compile_and_run(
@@ -95,6 +105,7 @@ fn test_new_self_with_constructor_args() {
 
 // --- Static closures ---
 
+// Verifies static anonymous functions (closures) can be created and invoked with positional arguments.
 #[test]
 fn test_static_closure_runs() {
     let out = compile_and_run(
@@ -103,6 +114,7 @@ fn test_static_closure_runs() {
     assert_eq!(out, "7");
 }
 
+// Verifies static arrow functions (fn) can be created and invoked.
 #[test]
 fn test_static_arrow_function_runs() {
     let out = compile_and_run("<?php $g = static fn($x) => $x * 2; echo $g(5);");

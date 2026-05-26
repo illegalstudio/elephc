@@ -11,6 +11,9 @@
 use super::*;
 
 #[test]
+// Verifies DCE prunes the inner if region when the outer guard is a negated conjunction
+// and the inner guard is the De Morgan equivalent (a OR b becomes !a AND !b).
+// The nested if with `echo 8` should be eliminated; `echo 7` in then-body and `echo 9` in else-body must remain.
 fn test_eliminate_dead_code_prunes_nested_if_region_from_demorgan_equivalent_guard() {
     let conjunction = Expr::binop(Expr::var("a"), BinOp::And, Expr::var("b"));
     let negated_conjunction = Expr::new(ExprKind::Not(Box::new(conjunction)), Span::dummy());
@@ -59,6 +62,9 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_demorgan_equivalent_gua
 }
 
 #[test]
+// Verifies DCE prunes the inner if region when the outer guard is a loose equality (value == 0)
+// and the inner guard is the loose negation (value != 0), which is always false inside the outer true-branch.
+// The nested if with `echo 8` and `echo 7` should collapse to `echo 7` in the outer then-body.
 fn test_eliminate_dead_code_prunes_nested_if_region_from_loose_comparison_guard() {
     let loose_eq = Expr::binop(Expr::var("value"), BinOp::Eq, Expr::int_lit(0));
     let loose_neq = Expr::binop(Expr::var("value"), BinOp::NotEq, Expr::int_lit(0));
@@ -101,6 +107,9 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_loose_comparison_guard(
 }
 
 #[test]
+// Verifies DCE prunes the inner if region when the outer guard is a strict greater-than (value > 10)
+// and the inner guard is a less-than-or-equal (value <= 10), which is always false inside the outer true-branch.
+// The nested if with `echo 8` and `echo 7` should collapse to `echo 7` in the outer then-body.
 fn test_eliminate_dead_code_prunes_nested_if_region_from_relational_guard() {
     let greater_than = Expr::binop(Expr::var("value"), BinOp::Gt, Expr::int_lit(10));
     let less_equal = Expr::binop(Expr::var("value"), BinOp::LtEq, Expr::int_lit(10));
@@ -143,6 +152,9 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_relational_guard() {
 }
 
 #[test]
+// Verifies DCE refines composite guards across a chain of nested ifs, eliminating unreachable elseif branches
+// and dead code paths when the guard can be strengthened through the control-flow context.
+// Here the innermost if has an always-true elseif that gets pruned, leaving only `echo 7` and `echo 9`.
 fn test_eliminate_dead_code_prunes_nested_elseif_from_composite_guard_refinement() {
     let left = Expr::binop(Expr::var("a"), BinOp::And, Expr::var("b"));
     let outer = Expr::binop(left.clone(), BinOp::Or, Expr::var("c"));
@@ -200,6 +212,9 @@ fn test_eliminate_dead_code_prunes_nested_elseif_from_composite_guard_refinement
 }
 
 #[test]
+// Verifies DCE propagates composite guard refinement through multiple nesting levels,
+// pruning inner subexpressions and dead branches as the guard context is accumulated
+// through the control-flow hierarchy (outer → !c → inner ab → final echo 7).
 fn test_eliminate_dead_code_prunes_nested_subexpr_from_composite_guard_refinement() {
     let ab = Expr::binop(Expr::var("a"), BinOp::And, Expr::var("b"));
     let left = Expr::binop(ab.clone(), BinOp::Or, Expr::var("c"));

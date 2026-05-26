@@ -13,6 +13,8 @@ use crate::types::PhpType;
 use super::super::Checker;
 
 impl Checker {
+    /// Flattens nested unions, removes duplicates and `PhpType::Mixed` (which absorbs all),
+    /// and returns a single `PhpType` or a `PhpType::Union` with deduped members.
     pub(crate) fn normalize_union_type(&self, members: Vec<PhpType>) -> PhpType {
         let mut flat = Vec::new();
         for member in members {
@@ -37,6 +39,10 @@ impl Checker {
         }
     }
 
+    /// Returns true if `expected` type can accept a value of `actual` type (i.e., the
+    /// assignment `expected = actual` is valid). Checks identity, Mixed, unions, arrays,
+    /// associative arrays, object class/interface compatibility, `iterable`, pointers,
+    /// and resources.
     pub(crate) fn type_accepts(&self, expected: &PhpType, actual: &PhpType) -> bool {
         if expected == actual {
             return true;
@@ -96,10 +102,14 @@ impl Checker {
         }
     }
 
+    /// Returns true if `ty` is a `PhpType::Union` that contains `PhpType::Void`.
     pub(crate) fn union_contains_void(ty: &PhpType) -> bool {
         matches!(ty, PhpType::Union(members) if members.iter().any(|member| *member == PhpType::Void))
     }
 
+    /// Removes `PhpType::Void` from a union type, re-normalizing the result.
+    /// If all members are removed, returns `PhpType::Never`. If only one member remains,
+    /// returns it directly without wrapping in a union.
     pub(crate) fn strip_void_from_union(&self, ty: &PhpType) -> PhpType {
         match ty {
             PhpType::Union(members) => {
@@ -114,6 +124,8 @@ impl Checker {
         }
     }
 
+    /// Returns true if `ty` is `Int`, `Bool`, `Void`, `Str`, or a union of only those types.
+    /// These types support fast integer-dispatch in `Mixed` value handling.
     pub(crate) fn type_supports_mixed_int_dispatch(&self, ty: &PhpType) -> bool {
         let _ = self;
         match ty {
@@ -125,10 +137,14 @@ impl Checker {
         }
     }
 
+    /// Returns true if `ty` is a union type where every member supports mixed-int dispatch.
     pub(crate) fn is_union_with_mixed_int_dispatch(&self, ty: &PhpType) -> bool {
         matches!(ty, PhpType::Union(_)) && self.type_supports_mixed_int_dispatch(ty)
     }
 
+    /// Computes the merged type when assigning `new_ty` to a variable that already has
+    /// `existing` type. Returns `Some(merged)` when types are compatible for compound assignment
+    /// (e.g., `+=`), or `None` when the types cannot be merged (e.g., two incompatible scalars).
     pub(crate) fn merged_assignment_type(
         &self,
         existing: &PhpType,
@@ -196,6 +212,9 @@ impl Checker {
         None
     }
 
+    /// Computes the merged array element type when writing a value of `new_ty` into an
+    /// array that already has `existing` element type. Returns `Some(merged)` for compatible
+    /// types (same, `Never`, `Mixed`, or compatible objects), or `None` otherwise.
     pub(crate) fn merge_array_element_type(
         &self,
         existing: &PhpType,
@@ -220,10 +239,15 @@ impl Checker {
         }
     }
 
+    /// Returns true if `ty` is `PhpType::Array(Box::new(PhpType::Mixed))`, i.e., an
+    /// untyped `array` hint without element type specialization.
     pub(crate) fn is_generic_array_hint(ty: &PhpType) -> bool {
         matches!(ty, PhpType::Array(inner) if matches!(inner.as_ref(), PhpType::Mixed))
     }
 
+    /// If `declared_ty` is a generic array hint and `actual_ty` is a concrete array or
+    /// assoc-array, returns `actual_ty` (specialization). Otherwise returns `declared_ty`.
+    /// Used to sharpen untyped `array` parameters when the actual argument type is known.
     pub(crate) fn specialize_generic_array_hint(
         declared_ty: &PhpType,
         actual_ty: &PhpType,

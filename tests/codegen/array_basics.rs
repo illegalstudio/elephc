@@ -11,12 +11,14 @@ use crate::support::*;
 
 // --- Arrays ---
 
+// Compiles `[1, 2, 3]` and verifies `count()` returns the array length.
 #[test]
 fn test_array_literal_and_count() {
     let out = compile_and_run("<?php $a = [1, 2, 3]; echo count($a);");
     assert_eq!(out, "3");
 }
 
+// Compiles `[10, 20, 30]` and accesses elements at literal indices 0, 1, 2.
 #[test]
 fn test_array_access() {
     let out =

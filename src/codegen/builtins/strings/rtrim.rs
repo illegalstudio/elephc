@@ -15,6 +15,27 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `rtrim(chars?)` builtin.
+///
+/// Dispatches to `__rt_rtrim` (1-arg: strip ASCII whitespace from the right)
+/// or `__rt_rtrim_mask` (2-arg: strip each character in `chars` from the right).
+///
+/// # Arguments
+/// - `_name`: Unused; present to match the builtin emitter signature.
+/// - `args`: Either one argument (string to trim) or two (string + character mask).
+/// - `emitter`: Target-aware assembly emitter.
+/// - `ctx`: Codegen context carrying variable layout and class metadata.
+/// - `data`: Writable data section for string literals.
+///
+/// # Returns
+/// Always returns `Some(PhpType::Str)`; the caller does not need to handle null.
+///
+/// # ABI / Register Usage
+/// Two-argument calls preserve the first string's ptr/len pair while evaluating
+/// the second argument expression, then load both into the callee parameter
+/// registers. AArch64 uses `x1`/`x2` for the first string and `x3`/`x4` for
+/// the mask; x86_64 uses `rdi`/`rdx` and `rdi`/`rsi` respectively via a
+/// push/pop register-pair protocol.
 pub fn emit(
     _name: &str,
     args: &[Expr],

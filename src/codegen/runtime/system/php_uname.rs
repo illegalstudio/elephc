@@ -16,6 +16,11 @@ use crate::codegen::{
 
 use super::super::data::{PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG};
 
+/// Emits the `__rt_php_uname` runtime helper.
+///
+/// ABI: expects x0 = mode string ptr, x1 = mode string start, x2 = mode string length.
+/// Returns: x1 = concat-buffer result ptr, x2 = result length.
+/// Exits process on invalid mode string length or unknown mode byte.
 pub(crate) fn emit_php_uname(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => emit_php_uname_aarch64(emitter),
@@ -23,6 +28,8 @@ pub(crate) fn emit_php_uname(emitter: &mut Emitter) {
     }
 }
 
+/// Returns the byte length of a utsname field for the given platform.
+/// Linux uses 65-byte fields; macOS uses 256-byte fields.
 fn uts_field_len(platform: Platform) -> usize {
     match platform {
         Platform::MacOS => 256,
@@ -30,10 +37,16 @@ fn uts_field_len(platform: Platform) -> usize {
     }
 }
 
+/// Computes the byte offset of field `field_index` within a utsname buffer.
+/// Multiplies the platform's field length by `field_index`.
 fn uts_offset(platform: Platform, field_index: usize) -> usize {
     uts_field_len(platform) * field_index
 }
 
+/// Emits the `__rt_php_uname` runtime helper for ARM64 targets.
+/// Validates the mode byte, calls libc uname, dispatches on mode, and writes
+/// the result into the concat-buffer. Returns via x1 (ptr) and x2 (length).
+/// Exits via `__rt_php_uname_mode_len_fail` or `__rt_php_uname_mode_value_fail` on error.
 fn emit_php_uname_aarch64(emitter: &mut Emitter) {
     let uts_base = 32usize;
     let sysname = uts_base + uts_offset(emitter.target.platform, 0);
@@ -121,6 +134,9 @@ fn emit_php_uname_aarch64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits validation logic that checks w8 contains a valid PHP php_uname mode byte.
+/// Falls through to `__rt_php_uname_mode_ok` if the byte is one of a/m/n/r/s/v;
+/// branches to `__rt_php_uname_mode_value_fail` otherwise.
 fn emit_aarch64_validate_mode(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp w8, #{}", b'a'));                         // accept PHP mode "a" for the complete uname string
     emitter.instruction("b.eq __rt_php_uname_mode_ok");                         // finish validation when mode "a" was requested
@@ -138,6 +154,9 @@ fn emit_aarch64_validate_mode(emitter: &mut Emitter) {
     emitter.label("__rt_php_uname_mode_ok");
 }
 
+/// Emits the copy loop for a single-field mode (s/n/r/v/m).
+/// Reads bytes from x10 (source utsname field) and appends them to x9 (concat-buffer),
+/// counting bytes in x2. Stops at the C null terminator and jumps to `__rt_php_uname_done`.
 fn emit_aarch64_copy_selected(emitter: &mut Emitter) {
     emitter.label("__rt_php_uname_copy_selected");
     emitter.instruction("ldrb w11, [x10], #1");                                 // read the next byte from the selected utsname C string
@@ -147,6 +166,9 @@ fn emit_aarch64_copy_selected(emitter: &mut Emitter) {
     emitter.instruction("b __rt_php_uname_copy_selected");                      // continue copying the selected utsname field
 }
 
+/// Emits a copy loop that appends a utsname field (identified by `offset`) into the concat-buffer,
+/// then appends a space separator if `append_space` is true.
+/// Used to build the complete "a" mode string from all five fields.
 fn emit_aarch64_copy_field(
     emitter: &mut Emitter,
     label: &str,
@@ -170,6 +192,9 @@ fn emit_aarch64_copy_field(
     }
 }
 
+/// Emits the epilogue for the ARM64 `__rt_php_uname` helper.
+/// Publishes the updated concat-buffer write offset, restores callee-saved registers,
+/// releases the stack frame, and returns with x1 = result ptr, x2 = result length.
 fn emit_aarch64_done(emitter: &mut Emitter) {
     emitter.label("__rt_php_uname_done");
     emitter.instruction("ldr x7, [x6]");                                        // reload the concat-buffer write offset from before this result
@@ -180,6 +205,9 @@ fn emit_aarch64_done(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the selected uname string in x1/x2
 }
 
+/// Emits a failure label that writes a diagnostic message to stderr then exits the process.
+/// `msg_label` names the data symbol containing the diagnostic bytes; `msg_len` is its byte length.
+/// Used for invalid mode string length and invalid mode byte values.
 fn emit_aarch64_fail(emitter: &mut Emitter, label: &str, msg_label: &str, msg_len: usize) {
     emitter.label(label);
     abi::emit_symbol_address(emitter, "x1", msg_label);
@@ -190,6 +218,10 @@ fn emit_aarch64_fail(emitter: &mut Emitter, label: &str, msg_label: &str, msg_le
     emitter.syscall(1);
 }
 
+/// Emits the `__rt_php_uname` runtime helper for Linux x86_64 targets.
+/// Validates the mode byte, calls libc uname, dispatches on mode, and writes
+/// the result into the concat-buffer. Returns via rax (ptr) and rdx (length).
+/// Exits via `__rt_php_uname_mode_len_fail` or `__rt_php_uname_mode_value_fail` on error.
 fn emit_php_uname_linux_x86_64(emitter: &mut Emitter) {
     let uts_base = -512isize;
     let sysname = x86_field_addr(uts_base, uts_offset(Platform::Linux, 0));
@@ -276,6 +308,9 @@ fn emit_php_uname_linux_x86_64(emitter: &mut Emitter) {
     );
 }
 
+/// Formats a Linux x86_64 memory operand for a utsname field at `offset` from `base`.
+/// Returns a `[rbp ± N]` string suitable for x86_64 load instructions.
+/// `base` is typically -512, the negative offset where the utsname struct begins.
 fn x86_field_addr(base: isize, offset: usize) -> String {
     let displacement = base + offset as isize;
     if displacement < 0 {
@@ -287,6 +322,9 @@ fn x86_field_addr(base: isize, offset: usize) -> String {
     }
 }
 
+/// Emits validation logic that checks r8b contains a valid PHP php_uname mode byte.
+/// Falls through to `__rt_php_uname_mode_ok` if the byte is one of a/m/n/r/s/v;
+/// jumps to `__rt_php_uname_mode_value_fail` otherwise.
 fn emit_x86_64_validate_mode(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp r8b, {}", b'a'));                         // accept PHP mode "a" for the complete uname string
     emitter.instruction("je __rt_php_uname_mode_ok");                           // finish validation when mode "a" was requested
@@ -304,6 +342,9 @@ fn emit_x86_64_validate_mode(emitter: &mut Emitter) {
     emitter.label("__rt_php_uname_mode_ok");
 }
 
+/// Emits the copy loop for a single-field mode (s/n/r/v/m) on x86_64.
+/// Reads bytes from rsi (source utsname field) and appends them to r9 (concat-buffer),
+/// counting bytes in rdx. Stops at the C null terminator and jumps to `__rt_php_uname_done`.
 fn emit_x86_64_copy_selected(emitter: &mut Emitter) {
     emitter.label("__rt_php_uname_copy_selected");
     emitter.instruction("mov r11b, BYTE PTR [rsi]");                            // read the next byte from the selected utsname C string
@@ -316,6 +357,9 @@ fn emit_x86_64_copy_selected(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_php_uname_copy_selected");                    // continue copying the selected utsname field
 }
 
+/// Emits a copy loop that appends a utsname field at `addr` into the concat-buffer,
+/// then appends a space separator if `append_space` is true.
+/// Used to build the complete "a" mode string from all five fields on x86_64.
 fn emit_x86_64_copy_field(
     emitter: &mut Emitter,
     label: &str,
@@ -342,6 +386,9 @@ fn emit_x86_64_copy_field(
     }
 }
 
+/// Emits the epilogue for the x86_64 `__rt_php_uname` helper.
+/// Publishes the updated concat-buffer write offset, releases the stack frame,
+/// restores rbp, and returns with rax = result ptr, rdx = result length.
 fn emit_x86_64_done(emitter: &mut Emitter) {
     emitter.label("__rt_php_uname_done");
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // reload the concat-buffer write offset from before this result
@@ -352,6 +399,10 @@ fn emit_x86_64_done(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the selected uname string in rax/rdx
 }
 
+/// Emits a failure label that writes a diagnostic message to stderr using the Linux syscall
+/// interface then exits the process with status 1.
+/// `msg_label` names the data symbol containing the diagnostic bytes; `msg_len` is its byte length.
+/// Used for invalid mode string length and invalid mode byte values on x86_64.
 fn emit_x86_64_fail(emitter: &mut Emitter, label: &str, msg_label: &str, msg_len: usize) {
     emitter.label(label);
     abi::emit_symbol_address(emitter, "rsi", msg_label);

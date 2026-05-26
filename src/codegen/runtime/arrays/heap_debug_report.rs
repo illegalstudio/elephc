@@ -10,7 +10,22 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// heap_debug_report: print allocator/debug summary and leak info to stderr.
+/// Emits the `__rt_heap_debug_report` runtime helper for the current target.
+///
+/// Generates target-specific assembly that prints a heap debug summary to stderr on
+/// process exit, including: total allocs, frees, live_blocks, live_bytes, and peak_live_bytes.
+/// If any heap blocks are still live, prints leak details (live_blocks and live_bytes values).
+///
+/// # Arguments
+/// * `emitter` - The assembly emitter to write the helper into.
+///
+/// # Target details
+/// - **x86_64 (Linux)**: Uses `syscall` with register-based ABI; saves counters on the stack
+///   across nested `__rt_itoa` calls using a 40-byte frame.
+/// - **ARM64 (macOS/Linux)**: Uses `syscall` with x0-x8 argument registers; saves counters
+///   on the stack using a 64-byte frame with frame-pointer chaining.
+///
+/// Both targets emit a global `__rt_heap_debug_report` label that the runtime calls at exit.
 pub fn emit_heap_debug_report(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emitter.blank();

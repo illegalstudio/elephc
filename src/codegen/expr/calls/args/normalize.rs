@@ -17,15 +17,18 @@ use crate::types::{call_args, FunctionSig, PhpType};
 
 use super::{NormalizedCallArgs, PreparedCallArgs};
 
+/// Returns true if any argument is a named argument.
 pub(crate) fn has_named_args(args: &[Expr]) -> bool {
     call_args::has_named_args(args)
 }
 
+/// Returns the regular (non-variadic) parameter count from a signature, or fallback.
 pub(crate) fn regular_param_count(sig: Option<&FunctionSig>, fallback_arg_count: usize) -> usize {
     sig.map(call_args::regular_param_count)
     .unwrap_or(fallback_arg_count)
 }
 
+/// Generates a unique temp name for a named call argument at a given position.
 pub(crate) fn named_call_arg_temp_name(call_span: Span, idx: usize) -> String {
     format!(
         "__elephc_named_arg_{}_{}_{}",
@@ -33,10 +36,12 @@ pub(crate) fn named_call_arg_temp_name(call_span: Span, idx: usize) -> String {
     )
 }
 
+/// Generates a unique temp name for the positional prefix in a spread named call.
 pub(crate) fn named_call_prefix_temp_name(call_span: Span) -> String {
     format!("__elephc_named_prefix_{}_{}", call_span.line, call_span.col)
 }
 
+/// Normalizes named call args with runtime checks for spread bounds.
 pub(crate) fn normalize_named_call_args_with_checks(
     sig: &FunctionSig,
     args: &[Expr],
@@ -45,6 +50,7 @@ pub(crate) fn normalize_named_call_args_with_checks(
     normalize_call_args(sig, args, regular_param_count, false, true, &[])
 }
 
+/// Normalizes builtin call args with runtime checks for spread bounds.
 pub(crate) fn normalize_builtin_call_args_with_checks(
     sig: &FunctionSig,
     args: &[Expr],
@@ -59,6 +65,7 @@ pub(crate) fn normalize_builtin_call_args_with_checks(
     )
 }
 
+/// Preevaluates named call args to temps in source order before final materialization.
 pub(crate) fn preevaluate_named_call_args_to_temps(
     sig: &FunctionSig,
     args: &[Expr],
@@ -107,6 +114,10 @@ pub(crate) fn preevaluate_named_call_args_to_temps(
     )
 }
 
+/// Rewrites named call args that include a positional spread prefix.
+/// The spread prefix is extracted to a temp variable, wrapped in a Spread node,
+/// and placed before all named arguments in the result. Named values are preevaluated
+/// to temps if needed to preserve side effects ordering.
 fn preevaluate_named_spread_args_to_temps(
     sig: &FunctionSig,
     args: &[Expr],
@@ -155,6 +166,10 @@ fn preevaluate_named_spread_args_to_temps(
     rewritten
 }
 
+/// Rewrites named call args with no spread operators.
+/// Non-named positional args that are side-effect-free literals are kept as-is;
+/// others are assigned to temps. Named arguments are preevaluated to temps if needed
+/// to preserve source-order evaluation before materialization.
 fn preevaluate_named_non_spread_args_to_temps(
     sig: &FunctionSig,
     args: &[Expr],
@@ -201,6 +216,11 @@ fn preevaluate_named_non_spread_args_to_temps(
     rewritten
 }
 
+/// Possibly preevaluates a named argument value to a temp.
+/// Returns a clone if the parameter is by-reference or the value is a side-effect-free
+/// literal; otherwise emits an assignment to a unique temp and returns a Variable
+/// referencing that temp. This ensures named arg side effects are observable at the
+/// PHP-expected point and not skipped by early ABI checks.
 #[allow(clippy::too_many_arguments)]
 fn preevaluate_named_value_if_needed(
     sig: &FunctionSig,
@@ -226,6 +246,7 @@ fn preevaluate_named_value_if_needed(
     Expr::new(ExprKind::Variable(temp_name), value.span)
 }
 
+/// Returns the inner expression if the slice is a single Spread node.
 fn single_spread_inner(prefix_args: &[Expr]) -> Option<Expr> {
     if let [arg] = prefix_args {
         if let ExprKind::Spread(inner) = &arg.kind {
@@ -235,6 +256,8 @@ fn single_spread_inner(prefix_args: &[Expr]) -> Option<Expr> {
     None
 }
 
+/// Returns true if the expression is a literal with no side effects.
+/// Used to avoid unnecessary temp allocation for simple literals.
 fn is_side_effect_free_literal(expr: &Expr) -> bool {
     matches!(
         expr.kind,
@@ -246,6 +269,9 @@ fn is_side_effect_free_literal(expr: &Expr) -> bool {
     )
 }
 
+/// Core normalization using the shared CallArgs planner.
+/// Produces NormalizedCallArgs with normalized arg order and spread bounds checks
+/// based on the provided signature, param count, and association spread sources.
 fn normalize_call_args(
     sig: &FunctionSig,
     args: &[Expr],
@@ -270,6 +296,9 @@ fn normalize_call_args(
     }
 }
 
+/// Returns a vec of booleans indicating which spread args resolve to AssocArray.
+/// Used to skip runtime length checks for static array spreads where the length
+/// is known at compile time, avoiding unnecessary runtime overhead.
 fn assoc_spread_sources(args: &[Expr], ctx: &Context) -> Vec<bool> {
     call_args::expand_static_assoc_spread_args(args)
         .iter()
@@ -283,6 +312,7 @@ fn assoc_spread_sources(args: &[Expr], ctx: &Context) -> Vec<bool> {
         .collect()
 }
 
+/// Prepares positional call args for ABI materialization (no named arguments).
 pub(crate) fn prepare_call_args(
     sig: Option<&FunctionSig>,
     args_exprs: &[Expr],

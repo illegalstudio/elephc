@@ -10,9 +10,10 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// feof: check if EOF has been reached for a file descriptor.
-/// Input:  x0=fd
-/// Output: x0=1 if EOF, 0 if not
+/// Emits the `__rt_feof` runtime helper.
+/// Dispatches to the target-specific implementation based on `emitter.target`.
+/// Input: x0 = file descriptor number
+/// Output: x0 = 1 if EOF reached, 0 otherwise
 pub fn emit_feof(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_feof_linux_x86_64(emitter);
@@ -29,6 +30,10 @@ pub fn emit_feof(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// x86_64 Linux implementation of `__rt_feof`.
+/// Loads the EOF flag byte from the `_eof_flags` array for the given file descriptor.
+/// Input: rdi = file descriptor number
+/// Output: eax = 1 if EOF reached, 0 otherwise
 fn emit_feof_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: feof ---");

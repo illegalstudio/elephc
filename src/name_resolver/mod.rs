@@ -20,6 +20,8 @@ use crate::errors::CompileError;
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{Expr, ExprKind, Program};
 
+/// Tracks namespace use imports for classes, functions, and constants.
+/// Used during name resolution to map short names to their canonical fully-qualified names.
 #[derive(Default, Clone)]
 struct Imports {
     classes: HashMap<String, String>,
@@ -27,6 +29,8 @@ struct Imports {
     constants: HashMap<String, String>,
 }
 
+/// Internal symbol table for tracking declared functions, classes, interfaces, traits,
+/// constants, and extern symbols within a namespace scope.
 #[derive(Default)]
 struct Symbols {
     functions: HashMap<String, String>,
@@ -38,12 +42,16 @@ struct Symbols {
     extern_classes: HashMap<String, String>,
 }
 
+/// Resolves PHP namespace/use statements and rewrites names to canonical forms across the program.
 pub fn resolve(program: Program) -> Result<Program, CompileError> {
     let mut symbols = Symbols::default();
     symbols::collect_symbols(&program, None, &mut symbols);
     statements::resolve_stmt_list(&program, None, &Imports::default(), &symbols)
 }
 
+/// Rewrites string literal arguments in callbacks for functions that accept callable names.
+/// For functions like `array_map` or `usort`, resolves string callback names to their canonical
+/// fully-qualified form using the current namespace and imports.
 fn rewrite_callback_literal_args(
     function_name: &str,
     args: &[Expr],
@@ -77,6 +85,9 @@ fn rewrite_callback_literal_args(
         .collect()
 }
 
+/// Parses a string callback name (e.g., `"my_func"` or `"MyNamespace\MyClass::method"`)
+/// into a `Name` with the appropriate `NameKind`. Leading backslashes are stripped;
+/// names containing backslashes are treated as fully-qualified.
 fn parse_callback_name(raw_name: &str) -> Name {
     if let Some(stripped) = raw_name.strip_prefix('\\') {
         return Name::from_parts(
@@ -93,6 +104,8 @@ fn parse_callback_name(raw_name: &str) -> Name {
     Name::unqualified(raw_name)
 }
 
+/// Converts a string containing a fully-qualified name (e.g., `"Namespace\Class"`)
+/// into a `Name` with `NameKind::FullyQualified`.
 fn resolved_name(name: String) -> Name {
     Name::from_parts(
         NameKind::FullyQualified,
@@ -100,14 +113,20 @@ fn resolved_name(name: String) -> Name {
     )
 }
 
+/// Extracts the namespace name as a dot-separated string from an optional `Name`.
+/// Returns an empty string if the name is `None`.
 fn namespace_name(name: &Option<Name>) -> String {
     name.as_ref().map(Name::as_canonical).unwrap_or_default()
 }
 
+/// Returns `true` if `name` is a supported builtin function in PHP.
+/// Used by name resolution to apply PHP's builtin fallback rules.
 pub(crate) fn is_builtin_function(name: &str) -> bool {
     crate::types::checker::builtins::is_supported_builtin_function(name)
 }
 
+/// Returns the canonical name for a builtin function, case-normalized.
+/// Returns `None` if the name is not a known builtin.
 pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
     crate::types::checker::builtins::canonical_builtin_function_name(name)
 }

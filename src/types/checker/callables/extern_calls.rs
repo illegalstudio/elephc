@@ -16,6 +16,17 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 use super::super::Checker;
 
 impl Checker {
+    /// Type-checks an extern function call.
+    ///
+    /// Looks up both the extern signature (`extern_sig`) and the user-defined function signature
+    /// (`sig`) for the given name. Normalizes named/spread arguments using shared call-argument
+    /// planning, then validates argument count and each argument's type against the extern signature.
+    ///
+    /// Callable-typed extern parameters accept only string literals naming a user function;
+    /// registers the callback via `register_callback_function` when a match is found.
+    ///
+    /// Returns the extern's `return_type` on success, or a `CompileError` if the function is
+    /// undefined, argument count is wrong, or any argument type is incompatible.
     pub(crate) fn check_extern_function_call(
         &mut self,
         name: &str,
@@ -79,6 +90,17 @@ impl Checker {
         Ok(extern_sig.return_type)
     }
 
+    /// Validates that the number of provided arguments matches the callee's arity requirements.
+    ///
+    /// `kind` and `name` are used only in error messages. The check respects:
+    /// - Required parameters (those without defaults)
+    /// - Optional parameters (those with defaults)
+    /// - Variadic parameters (which absorb any number of additional arguments)
+    ///
+    /// Spread arguments bypass arity validation entirely. When `variadic` is set, only the
+    /// lower bound of required arguments is enforced.
+    ///
+    /// Returns `Ok(())` if argument count is valid, or a `CompileError` describing the mismatch.
     pub(crate) fn check_call_arity(
         &self,
         kind: &str,

@@ -10,14 +10,21 @@
 
 use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Program, Stmt, StmtKind};
 
+/// Returns true if the program contains any `instanceof` expression whose target is
+/// computed at runtime (not a statically-known class name).
+///
+/// A dynamic target means the concrete class cannot be determined at compile time,
+/// so codegen must retain broader class metadata for the check.
 pub(in crate::codegen) fn program_has_dynamic_instanceof(program: &Program) -> bool {
     body_has_dynamic_instanceof(program)
 }
 
+/// Scans a statement list and returns true if any statement contains a dynamic instanceof.
 fn body_has_dynamic_instanceof(stmts: &[Stmt]) -> bool {
     stmts.iter().any(stmt_has_dynamic_instanceof)
 }
 
+/// Scans a single statement for a dynamic instanceof, recursing into class/function/try bodies.
 fn stmt_has_dynamic_instanceof(stmt: &Stmt) -> bool {
     match &stmt.kind {
         StmtKind::ClassDecl { methods, .. }
@@ -126,6 +133,7 @@ fn stmt_has_dynamic_instanceof(stmt: &Stmt) -> bool {
     }
 }
 
+/// Scans an expression tree for an instanceof with a dynamic target or nested dynamic instanceof.
 fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::InstanceOf { value, target } => {

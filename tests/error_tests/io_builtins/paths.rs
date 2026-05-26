@@ -9,9 +9,38 @@
 
 use super::*;
 
+// Verifies rewind() rejects zero arguments — expects "takes exactly 1 argument".
 #[test]
 fn test_error_rewind_wrong_args() {
     expect_error("<?php rewind();", "rewind() takes exactly 1 argument");
+
+// Verifies ftell() rejects zero arguments — expects "takes exactly 1 argument".
+
+// Verifies fseek() rejects one argument (needs 2 or 3) — expects "takes 2 or 3 arguments".
+
+// Verifies file() rejects zero arguments — expects "takes exactly 1 argument".
+
+// Verifies readline() rejects two arguments (accepts 0 or 1) — expects "takes 0 or 1 arguments".
+
+// Verifies fgetcsv() rejects zero arguments (accepts 1 to 3) — expects "takes 1 to 3 arguments".
+
+// Verifies fputcsv() rejects one argument (accepts 2 to 4) — expects "takes 2 to 4 arguments".
+
+// Verifies dirname() rejects zero arguments (accepts 1 or 2) — expects "takes 1 or 2 arguments".
+
+// Verifies basename() rejects zero arguments (accepts 1 or 2) — expects "takes 1 or 2 arguments".
+
+// Verifies dirname() rejects a static levels value of 0 — expects "levels must be greater than or equal to 1".
+
+// Verifies fnmatch() rejects one argument (accepts 2 or 3) — expects "takes 2 or 3 arguments".
+
+// Verifies fnmatch() rejects a non-integer flags string — expects "flags must be int".
+
+// Verifies pathinfo() rejects a non-integer flag via variable — expects "flag must be int".
+
+// Verifies realpath() rejects zero arguments — expects "takes exactly 1 argument".
+
+// Verifies touch() rejects a non-integer mtime and a null mtime when atime is provided.
 }
 
 #[test]

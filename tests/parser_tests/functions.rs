@@ -10,6 +10,8 @@
 use super::*;
 
 #[test]
+// Verifies that `<?php function foo($a, $b) { return $a; }` parses to a `FunctionDecl` with
+// name "foo", two parameters ["a", "b"], and a body containing one return statement.
 fn test_function_declaration_parses() {
     let stmts = parse_source("<?php function foo($a, $b) { return $a; }");
     if let StmtKind::FunctionDecl {
@@ -26,6 +28,9 @@ fn test_function_declaration_parses() {
 }
 
 #[test]
+// Verifies that `<?php FUNCTION Foo() { RETURN TRUE; } IF (FALSE) { ECHO 1; }` parses with
+// case-insensitive keywords: function name "Foo", `RETURN` producing a `Return(Some(...))`,
+// and `IF` producing an `If` statement.
 fn test_parse_mixed_case_php_keywords() {
     let stmts = parse_source("<?php FUNCTION Foo() { RETURN TRUE; } IF (FALSE) { ECHO 1; }");
     match &stmts[0].kind {
@@ -39,6 +44,8 @@ fn test_parse_mixed_case_php_keywords() {
 }
 
 #[test]
+// Verifies that `<?php function noop() { return; }` parses to a `FunctionDecl` with no
+// parameters and an empty body containing a bare `return;`.
 fn test_function_no_params() {
     let stmts = parse_source("<?php function noop() { return; }");
     if let StmtKind::FunctionDecl { params, .. } = &stmts[0].kind {
@@ -47,6 +54,8 @@ fn test_function_no_params() {
 }
 
 #[test]
+// Verifies that `<?php $fn = function($x) { return $x; };` parses to an `Assign` statement
+// with an `ExprKind::Closure` that has one parameter "x" and `is_arrow` false.
 fn test_parse_closure() {
     let stmts = parse_source("<?php $fn = function($x) { return $x; };");
     assert_eq!(stmts.len(), 1);
@@ -67,6 +76,8 @@ fn test_parse_closure() {
 }
 
 #[test]
+// Verifies that `<?php $fn = function(int &$x) { return $x; };` parses a closure with a
+// typed by-reference parameter: type `Int`, name "x", and `by_ref` flag set.
 fn test_parse_typed_closure_param() {
     let stmts = parse_source("<?php $fn = function(int &$x) { return $x; };");
     assert_eq!(stmts.len(), 1);
@@ -89,6 +100,9 @@ fn test_parse_typed_closure_param() {
 }
 
 #[test]
+// Verifies that `<?php $x = 1; $fn = function(int $n) use ($x): string { return "ok"; };`
+// parses a closure with: typed param `int $n`, capture `$x`, return type `string`, and
+// `is_arrow` false.
 fn test_parse_closure_return_type_after_use() {
     let stmts =
         parse_source("<?php $x = 1; $fn = function(int $n) use ($x): string { return \"ok\"; };");
@@ -117,6 +131,8 @@ fn test_parse_closure_return_type_after_use() {
 }
 
 #[test]
+// Verifies that `<?php $g = function(int $n) use (&$g): int { return $g($n - 1); };`
+// parses a closure with by-reference capture `&$g`: name "g", `capture_refs` includes "g".
 fn test_parse_closure_use_by_reference_capture() {
     let stmts =
         parse_source("<?php $g = function(int $n) use (&$g): int { return $g($n - 1); };");
@@ -144,6 +160,8 @@ fn test_parse_closure_use_by_reference_capture() {
 }
 
 #[test]
+// Verifies that `<?php $fn = fn($x) => $x * 2;` parses to a closure with `is_arrow` true
+// and one parameter "x".
 fn test_parse_arrow_function() {
     let stmts = parse_source("<?php $fn = fn($x) => $x * 2;");
     assert_eq!(stmts.len(), 1);
@@ -164,6 +182,8 @@ fn test_parse_arrow_function() {
 }
 
 #[test]
+// Verifies that `<?php $fn = fn(int $x): int => $x + 1;` parses an arrow function with
+// typed param `int $x`, return type `int`, and `is_arrow` true.
 fn test_parse_arrow_function_return_type() {
     let stmts = parse_source("<?php $fn = fn(int $x): int => $x + 1;");
     assert_eq!(stmts.len(), 1);
@@ -189,6 +209,8 @@ fn test_parse_arrow_function_return_type() {
 }
 
 #[test]
+// Verifies that `<?php $fn = fn(string $label) => $label;` parses an arrow function with
+// typed param `string $label` and `is_arrow` true.
 fn test_parse_typed_arrow_function_param() {
     let stmts = parse_source("<?php $fn = fn(string $label) => $label;");
     assert_eq!(stmts.len(), 1);
@@ -210,6 +232,8 @@ fn test_parse_typed_arrow_function_param() {
 }
 
 #[test]
+// Verifies that `<?php $fn(1, 2);` parses a closure call expression with var "fn" and
+// two positional arguments.
 fn test_parse_closure_call() {
     let stmts = parse_source("<?php $fn(1, 2);");
     assert_eq!(stmts.len(), 1);
@@ -226,6 +250,8 @@ fn test_parse_closure_call() {
 }
 
 #[test]
+// Verifies that `<?php greet(name: "Alice", age: 30);` parses a named function call with
+// two `NamedArg` expressions for "name" and "age".
 fn test_parse_named_function_call() {
     let stmts = parse_source("<?php greet(name: \"Alice\", age: 30);");
     if let StmtKind::ExprStmt(expr) = &stmts[0].kind {
@@ -249,6 +275,8 @@ fn test_parse_named_function_call() {
 }
 
 #[test]
+// Verifies that `<?php $user = new User(id: 42);` parses a named constructor call with
+// class "User", one `NamedArg` for "id", and an integer literal value.
 fn test_parse_named_constructor_call() {
     let stmts = parse_source("<?php $user = new User(id: 42);");
     if let StmtKind::Assign { value: expr, .. } = &stmts[0].kind {
@@ -289,6 +317,9 @@ fn test_parse_keyword_named_constructor_call() {
 // --- Default parameter values ---
 
 #[test]
+// Verifies that `<?php function foo($a, $b = 10) { return $a + $b; }` parses a function
+// declaration where the second param "b" has a default value expression and the first
+// param "a" does not.
 fn test_parse_function_default_params() {
     let stmts = parse_source("<?php function foo($a, $b = 10) { return $a + $b; }");
     if let StmtKind::FunctionDecl { params, .. } = &stmts[0].kind {
@@ -305,6 +336,8 @@ fn test_parse_function_default_params() {
 // --- Bitwise operator precedence ---
 
 #[test]
+// Verifies that `<?php function foo(&$x) { }` parses a function declaration with a single
+// by-reference parameter "x" (pass-by-reference flag set).
 fn test_parse_ref_param() {
     let stmts = parse_source("<?php function foo(&$x) { }");
     assert_eq!(stmts.len(), 1);
@@ -320,6 +353,8 @@ fn test_parse_ref_param() {
 }
 
 #[test]
+// Verifies that `<?php function foo(&$a, $b, &$c) { }` parses a function declaration with
+// mixed ref/non-ref parameters: first and third are by-reference, second is not.
 fn test_parse_mixed_ref_params() {
     let stmts = parse_source("<?php function foo(&$a, $b, &$c) { }");
     assert_eq!(stmts.len(), 1);
@@ -335,6 +370,8 @@ fn test_parse_mixed_ref_params() {
 }
 
 #[test]
+// Verifies that `<?php function foo($x) { }` parses a normal (non-ref) parameter and that
+// the pass-by-reference flag is unset.
 fn test_parse_non_ref_param() {
     let stmts = parse_source("<?php function foo($x) { }");
     match &stmts[0].kind {
@@ -346,6 +383,8 @@ fn test_parse_non_ref_param() {
 }
 
 #[test]
+// Verifies that `<?php function foo(int $x): string { return "ok"; }` parses a function
+// declaration with a typed parameter `int $x` and return type `string`.
 fn test_parse_typed_function_param_and_return_type() {
     let stmts = parse_source("<?php function foo(int $x): string { return \"ok\"; }");
     match &stmts[0].kind {
@@ -366,6 +405,8 @@ fn test_parse_typed_function_param_and_return_type() {
 }
 
 #[test]
+// Verifies that `<?php function describe(int|string $value): ?int { return null; }` parses
+// a function with a union type param `int|string` and nullable return type `?int`.
 fn test_parse_union_and_nullable_function_types() {
     let stmts = parse_source("<?php function describe(int|string $value): ?int { return null; }");
     match &stmts[0].kind {
@@ -388,6 +429,8 @@ fn test_parse_union_and_nullable_function_types() {
 }
 
 #[test]
+// Verifies that `<?php function bump(int &$x) { }` parses a typed by-reference parameter:
+// type `Int`, name "x", and pass-by-reference flag set.
 fn test_parse_typed_ref_param() {
     let stmts = parse_source("<?php function bump(int &$x) { }");
     match &stmts[0].kind {
@@ -402,6 +445,8 @@ fn test_parse_typed_ref_param() {
 }
 
 #[test]
+// Verifies that `<?php function walk(iterable $items): iterable { return $items; }` parses
+// a function with `iterable` type on both the parameter and the return type.
 fn test_parse_iterable_type() {
     let stmts = parse_source("<?php function walk(iterable $items): iterable { return $items; }");
     match &stmts[0].kind {
@@ -422,6 +467,8 @@ fn test_parse_iterable_type() {
 // --- Variadic and Spread ---
 
 #[test]
+// Verifies that `<?php function foo(...$args) { }` parses a variadic-only function with
+// an empty param list and `variadic` set to `Some("args")`.
 fn test_parse_variadic_function() {
     let stmts = parse_source("<?php function foo(...$args) { }");
     match &stmts[0].kind {
@@ -440,6 +487,8 @@ fn test_parse_variadic_function() {
 }
 
 #[test]
+// Verifies that `<?php function foo($a, $b, ...$rest) { }` parses a variadic function with
+// two regular parameters "a" and "b", and `variadic` set to `Some("rest")`.
 fn test_parse_variadic_with_regular_params() {
     let stmts = parse_source("<?php function foo($a, $b, ...$rest) { }");
     match &stmts[0].kind {
@@ -456,6 +505,8 @@ fn test_parse_variadic_with_regular_params() {
 }
 
 #[test]
+// Verifies that `<?php function foo($a) { }` parses a non-variadic function and that
+// `variadic` is `None`.
 fn test_parse_no_variadic() {
     let stmts = parse_source("<?php function foo($a) { }");
     match &stmts[0].kind {
@@ -467,11 +518,15 @@ fn test_parse_no_variadic() {
 }
 
 #[test]
+// Verifies that `<?php function foo(int ...$xs) { }` fails to parse because typed
+// variadic parameters are not permitted.
 fn test_parse_typed_variadic_param_fails() {
     assert!(parse_fails("<?php function foo(int ...$xs) { }"));
 }
 
 #[test]
+// Verifies that `<?php foo(...$arr);` parses a function call with a spread argument
+// (single `Spread` expression inside args).
 fn test_parse_spread_in_function_call() {
     let stmts = parse_source("<?php foo(...$arr);");
     match &stmts[0].kind {
@@ -487,6 +542,8 @@ fn test_parse_spread_in_function_call() {
 }
 
 #[test]
+// Verifies that `<?php $x = [...$a, ...$b];` parses an array literal containing two
+// spread elements in source order.
 fn test_parse_spread_in_array_literal() {
     let stmts = parse_source("<?php $x = [...$a, ...$b];");
     match &stmts[0].kind {
@@ -503,6 +560,9 @@ fn test_parse_spread_in_array_literal() {
 }
 
 #[test]
+// Verifies that `<?php echo getColor()[0];` parses correctly with an `Echo` statement
+// containing an `ArrayAccess` whose array operand is a `FunctionCall` to `getColor`
+// with no arguments and integer index `0`.
 fn test_parse_array_access_on_function_call_result() {
     let stmts = parse_source("<?php echo getColor()[0];");
     match &stmts[0].kind {
@@ -524,6 +584,8 @@ fn test_parse_array_access_on_function_call_result() {
 }
 
 #[test]
+// Verifies that `<?php $f = strlen(...);` parses a first-class callable expression
+// wrapping the builtin function "strlen".
 fn test_parse_first_class_callable_function() {
     let stmts = parse_source("<?php $f = strlen(...);");
     match &stmts[0].kind {
@@ -538,6 +600,8 @@ fn test_parse_first_class_callable_function() {
 }
 
 #[test]
+// Verifies that `<?php echo __FUNCTION__;` parses an echo statement whose expression is
+// the magic constant `MagicConstant::Function`.
 fn test_parse_dunder_function_magic_constant() {
     let stmts = parse_source("<?php echo __FUNCTION__;");
     assert_eq!(

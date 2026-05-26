@@ -23,6 +23,11 @@ use super::super::validation::{
 };
 use super::state::ClassBuildState;
 
+/// Collects all interfaces (including transitive parents) that `class` implements.
+///
+/// Validates that each interface exists, that `Throwable` is only implementable by
+/// `Error`/`Exception`, and that non-interfaces are not being implemented as interfaces.
+/// Pushes collected interface names onto `state.interfaces` in breadth-first order.
 pub(super) fn collect_interfaces(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
@@ -78,11 +83,14 @@ pub(super) fn collect_interfaces(
     Ok(())
 }
 
+/// Returns `true` if `interface_name` is or extends `Throwable` (case-insensitive).
 fn interface_is_throwable_contract(checker: &Checker, interface_name: &str) -> bool {
     php_symbol_key(interface_name) == php_symbol_key("Throwable")
         || checker.interface_extends_interface(interface_name, "Throwable")
 }
 
+/// Returns `true` if `class` is allowed to implement `Throwable` (must be `Error`, `Exception`,
+/// or already implement `Throwable`).
 fn class_can_implement_throwable_contract(
     state: &ClassBuildState,
     class: &FlattenedClass,
@@ -95,6 +103,11 @@ fn class_can_implement_throwable_contract(
             .any(|interface_name| php_symbol_key(interface_name) == php_symbol_key("Throwable"))
 }
 
+/// Validates that `class` satisfies all method and property contracts for each interface it
+/// implements (including transitive parents).
+///
+/// For each interface method, calls `validate_interface_method`. For each interface property,
+/// calls `validate_interface_property`. Abstract classes are permitted to defer contracts.
 pub(super) fn validate_interface_contracts(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
@@ -143,6 +156,11 @@ pub(super) fn validate_interface_contracts(
     Ok(())
 }
 
+/// Validates that a concrete (non-abstract) `class` has implementations for all deferred abstract
+/// methods and properties accumulated in `state`.
+///
+/// Returns an error if any instance method sig lacks an implementation class, any static method sig
+/// lacks an implementation class, or any abstract property remains undeclared.
 pub(super) fn ensure_concrete_class_implements_abstracts(
     state: &ClassBuildState,
     class: &FlattenedClass,
@@ -198,6 +216,11 @@ pub(super) fn ensure_concrete_class_implements_abstracts(
     Ok(())
 }
 
+/// Validates that `class` implements the interface method `method_name` from `interface_name`.
+///
+/// Checks signature compatibility, return type declarations, visibility (must be public), and
+/// that non-public static methods cannot satisfy interface contracts. For abstract classes,
+/// missing methods are inserted into the class state as deferred contracts.
 #[allow(clippy::too_many_arguments)]
 fn validate_interface_method(
     state: &mut ClassBuildState,
@@ -324,6 +347,11 @@ fn validate_interface_method(
     Ok(())
 }
 
+/// Validates that `class` implements the interface property `property_name` from `interface_name`
+/// per the `PropertyHookContract`.
+///
+/// Checks that the property is not static, is publicly visible, and that its type is compatible
+/// with the get/set hook contracts. For abstract classes, defers the contract to the class state.
 fn validate_interface_property(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
@@ -434,6 +462,7 @@ fn validate_interface_property(
     Ok(())
 }
 
+/// Returns the source span of `property_name` in `class`, or `fallback` if not found.
 fn class_property_span(
     class: &FlattenedClass,
     property_name: &str,
@@ -447,6 +476,9 @@ fn class_property_span(
         .unwrap_or(fallback)
 }
 
+/// Recursively ensures all `PhpType::Object` types referenced in `ty` have been built in `checker`.
+///
+/// Handles `Object`, `Union`, `Array`, and `AssocArray` recursively; stops for other types.
 fn ensure_object_type_known(
     ty: &PhpType,
     current_class: &str,
@@ -507,6 +539,11 @@ fn ensure_object_type_known(
     Ok(())
 }
 
+/// Defers an interface property contract to an abstract class by populating `state` with the
+/// property name, type from the contract (or `Mixed`), visibility (public), and abstract marker.
+///
+/// This allows abstract classes to satisfy interface property requirements without providing an
+/// implementation.
 fn defer_interface_property_contract(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
@@ -552,6 +589,8 @@ fn defer_interface_property_contract(
         .or_insert_with(|| class.name.clone());
 }
 
+/// Returns the runtime `PhpType` for `property_name` from `state`, or `PhpType::Mixed` if the
+/// property is not declared.
 fn instance_property_type_for_contract(
     state: &ClassBuildState,
     property_name: &str,

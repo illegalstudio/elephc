@@ -11,9 +11,16 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// strtolower: copy string to concat_buf, lowercasing A-Z.
-/// Input:  x1=ptr, x2=len
-/// Output: x1=new_ptr, x2=len
+/// Emits the `__rt_strtolower` runtime helper for the active target.
+///
+/// Copies the input PHP byte-string (pointer in `x1`, length in `x2`) into the
+/// shared `concat_buf`, lowercases ASCII uppercase bytes A-Z to a-z in-place,
+/// and returns the new pointer (start of the lowered copy) in `x1` with length
+/// unchanged in `x2`. The concat_buf write offset is advanced by the string length.
+///
+/// # ABI
+/// - **ARM64 (macOS/Linux)**: `x1` = input pointer, `x2` = length → `x1` = new ptr, `x2` = len
+/// - **x86_64 Linux**: delegates to `__rt_strcopy` then lowercases in-place; result in `rax`
 pub fn emit_strtolower(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_strtolower_linux_x86_64(emitter);
@@ -63,6 +70,12 @@ pub fn emit_strtolower(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_strtolower`.
+///
+/// Calls `__rt_strcopy` to copy the input string into concat-backed owned storage,
+/// then iterates over each byte, lowercasing ASCII A-Z in-place within the mutable
+/// concat buffer. Result registers follow the standard x86_64 string ABI: `rax`
+/// holds the returned pointer, `rdx` holds the length.
 fn emit_strtolower_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strtolower ---");

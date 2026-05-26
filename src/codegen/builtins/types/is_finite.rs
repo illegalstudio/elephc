@@ -16,6 +16,14 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `is_finite` PHP builtin call.
+///
+/// Takes a single float argument (integers are normalized to float before the check).
+/// Returns a PHP boolean indicating whether the value is finite (not NaN, not ±Inf).
+///
+/// - ARM64: computes |value|, compares against +∞ constant, materializes result in `x0`.
+/// - x86_64: checks NaN via self-comparison, then compares against +∞ and −∞ constants,
+///   materializes result in `rax`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

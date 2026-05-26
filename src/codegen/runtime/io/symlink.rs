@@ -17,6 +17,10 @@ use crate::codegen::{emit::Emitter, platform::Arch};
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
+/// Emits the `__rt_symlink` runtime helper on ARM64, or dispatches to the
+/// x86_64-specific emitter. On ARM64: takes `target` (x1/x2) and `link` (x3/x4)
+/// as PHP string pointer/length pairs, calls `libc::symlink`, and returns
+/// x0 = 1 on success, x0 = 0 on failure.
 pub fn emit_symlink(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_symlink_linux_x86_64(emitter);
@@ -161,6 +165,12 @@ pub fn emit_symlink(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return failure sentinel
 }
 
+/// Emits `__rt_symlink`, `__rt_link`, `__rt_readlink`, and `__rt_linkinfo`
+/// for the Linux x86_64 target. Takes arguments via the System V AMD64 ABI:
+/// rdi = link ptr, rsi = link len, rdx = target ptr, rcx = target len.
+/// `__rt_readlink` returns an owned-heap string in rax/rdx; failure returns
+/// 0/0 (mapped by the codegen wrapper to `string|false`).
+/// `__rt_linkinfo` returns the `st_dev` field or -1 on failure.
 fn emit_symlink_linux_x86_64(emitter: &mut Emitter) {
     // -- symlink --
     emitter.blank();

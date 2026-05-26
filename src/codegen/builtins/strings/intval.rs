@@ -17,6 +17,14 @@ use crate::codegen::abi;
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::types::PhpType;
 
+/// Emits code for the PHP `intval()` builtin.
+///
+/// Dispatches on the argument type:
+/// - `Str`: calls `__rt_atoi` to parse the string as an integer
+/// - `Mixed`/`Union`: calls `__rt_mixed_cast_int` for runtime type coercion
+/// - Other types: no-op (PHP scalar-to-int coercion is a no-op at codegen level)
+///
+/// Returns `PhpType::Int` unconditionally, matching PHP's `intval()` return type.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -47,6 +55,11 @@ pub fn emit(
     Some(PhpType::Int)
 }
 
+/// Returns true if the expression result is heap-owned and must be preserved
+/// across the `__rt_mixed_cast_int` call.
+///
+/// Arithmetic binary operations are included because their result may alias
+/// argument temporaries that the runtime call could otherwise clobber.
 fn mixed_arg_result_is_owned(arg: &Expr) -> bool {
     expr_result_heap_ownership(arg) == HeapOwnership::Owned
         || matches!(
@@ -58,6 +71,11 @@ fn mixed_arg_result_is_owned(arg: &Expr) -> bool {
         )
 }
 
+/// Restores the preserved `Mixed` argument after a `__rt_mixed_cast_int` call.
+///
+/// The integer result was pushed onto the stack before the call to protect it
+/// from being clobbered. This function decrefs the original `Mixed` cell and
+/// pops the preserved integer back into the result register.
 fn release_preserved_mixed_arg_after_int_cast(emitter: &mut Emitter) {
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);

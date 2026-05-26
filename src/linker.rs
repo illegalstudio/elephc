@@ -13,6 +13,11 @@ use std::process::{self, Command};
 
 use crate::codegen::platform::{Platform, Target};
 
+/// Invokes the target assembler to produce an object file from assembly source.
+/// - `target`: Compiler target (controls assembler command and flags).
+/// - `asm_path`: Path to the generated `.s` assembly file.
+/// - `obj_path`: Output path for the resulting `.o` object file.
+/// Exits with status 1 if the assembler fails.
 pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
     let mut as_cmd = Command::new(target.assembler_cmd());
     if target.platform == Platform::MacOS {
@@ -22,6 +27,16 @@ pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
     run_tool("Assembler", &mut as_cmd);
 }
 
+/// Links object files and runtime objects into a final binary.
+/// - `target`: Compiler target (controls platform, linker command, and flags).
+/// - `bin_path`: Output path for the final executable.
+/// - `obj_path`: Path to the user code object file.
+/// - `runtime_object_path`: Path to the compiler runtime object file.
+/// - `extra_link_libs`: Additional libraries to link against (e.g., `["m", "pthread"]`).
+/// - `extra_link_paths`: Additional `-L` search paths for libraries.
+/// - `extra_frameworks`: Additional macOS frameworks to link against.
+/// On macOS, `-lSystem` is always added. On Linux, `-static` is used when no extra libs are provided.
+/// Exits with status 1 if linking fails.
 pub(crate) fn link(
     target: Target,
     bin_path: &Path,
@@ -77,6 +92,10 @@ pub(crate) fn link(
     run_tool("Linker", &mut ld_cmd);
 }
 
+/// Executes a tool command and exits the process if the command fails.
+/// - `name`: Human-readable name for error messages (e.g., "Assembler", "Linker").
+/// - `cmd`: Prepared `Command` to execute.
+/// Prints an error message and exits with status 1 on failure.
 fn run_tool(name: &str, cmd: &mut Command) {
     match cmd.status() {
         Ok(s) if s.success() => {}
@@ -91,6 +110,8 @@ fn run_tool(name: &str, cmd: &mut Command) {
     }
 }
 
+/// Returns the macOS SDK path by running `xcrun --show-sdk-path`.
+/// Returns an empty string if the command fails.
 fn macos_sdk_path() -> String {
     Command::new("xcrun")
         .args(["--show-sdk-path"])
@@ -99,6 +120,8 @@ fn macos_sdk_path() -> String {
         .unwrap_or_default()
 }
 
+/// Returns the macOS SDK version string by running `xcrun --sdk macosx --show-sdk-version`.
+/// Returns `"15.0"` as a fallback if the command fails or returns an empty version.
 fn macos_sdk_version() -> String {
     match Command::new("xcrun")
         .args(["--sdk", "macosx", "--show-sdk-version"])

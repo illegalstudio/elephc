@@ -9,12 +9,16 @@
 
 use super::*;
 
+// Tests that a backslash-escaped dollar (`\$`) inside a double-quoted string is
+// treated as a literal dollar sign, matching PHP's escape sequence behavior.
 #[test]
 fn test_string_escaped_dollar() {
     let out = compile_and_run(r#"<?php echo "price is \$5";"#);
     assert_eq!(out, "price is $5");
 }
 
+// Tests that a multibyte UTF-8 string literal preceding ASCII digits round-trips
+// correctly through the compiler with no byte-level corruption or digit mishandling.
 #[test]
 fn test_multibyte_string_literal_before_ascii_digits_round_trips() {
     let out = compile_and_run("<?php echo '日本語123';");

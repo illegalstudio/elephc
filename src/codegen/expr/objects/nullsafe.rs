@@ -21,8 +21,11 @@ use crate::types::PhpType;
 use super::{access, dispatch};
 use crate::codegen::expr::emit_expr;
 
+/// Sentinel value representing a plain (non-boxed) null in the runtime.
+/// Uses an unlikely bit pattern to distinguish from valid object pointers.
 const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 
+/// Lowers `$obj?->property` with a short-circuit null result when the receiver is null.
 pub(super) fn emit_nullsafe_property_access(
     object: &Expr,
     property: &str,
@@ -58,6 +61,7 @@ pub(super) fn emit_nullsafe_property_access(
     PhpType::Mixed
 }
 
+/// Lowers `$obj?->method(...)` with a short-circuit boxed null result when the receiver is null.
 pub(super) fn emit_nullsafe_method_call(
     object: &Expr,
     method: &str,
@@ -118,6 +122,9 @@ pub(super) fn emit_nullsafe_method_call(
     PhpType::Mixed
 }
 
+/// Infers the class name and nullability of the receiver in a nullsafe chain.
+/// Returns `None` when the receiver type cannot be resolved to an object type.
+/// Handles union types by extracting the object member and tracking whether `Void` is present.
 fn nullsafe_receiver_class(object: &Expr, ctx: &Context) -> Option<(String, bool)> {
     match functions::infer_contextual_type(object, ctx) {
         PhpType::Object(class_name) => Some((class_name, false)),
@@ -138,6 +145,11 @@ fn nullsafe_receiver_class(object: &Expr, ctx: &Context) -> Option<(String, bool
     }
 }
 
+/// Emits a null-check that converts a nullable receiver to a non-null object pointer.
+/// For `PhpType::Mixed`, emits a runtime unbox call and a conditional jump to `null_label`
+/// when the boxed value is null. For `PhpType::Void`, returns `false` to signal that the
+/// caller should fall through to the null result path. For other types, returns `true`
+/// since they are already non-nullable object types.
 fn emit_nullable_receiver_to_object(
     receiver_ty: &PhpType,
     null_label: &str,
@@ -166,6 +178,7 @@ fn emit_nullable_receiver_to_object(
     }
 }
 
+/// Writes the NULL_SENTINEL into the integer result register to represent a plain null.
 fn emit_plain_null(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), NULL_SENTINEL);
 }

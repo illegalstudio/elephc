@@ -15,6 +15,7 @@ use super::super::emit::Emitter;
 use crate::names::{function_symbol, function_variant_active_symbol};
 use crate::parser::ast::Stmt;
 
+/// Emits the data-section marker for an include-once guard label.
 pub(super) fn emit_include_once_mark(
     label: &str,
     emitter: &mut Emitter,
@@ -27,6 +28,7 @@ pub(super) fn emit_include_once_mark(
     mark_included(label, emitter);
 }
 
+/// Emits the include-once guard and body for a require/require_once.
 pub(super) fn emit_include_once_guard(
     label: &str,
     body: &[Stmt],
@@ -52,6 +54,7 @@ pub(super) fn emit_include_once_guard(
     emitter.label(&skip_label);
 }
 
+/// Emits the data-section marker for activating an include-loaded function variant.
 pub(super) fn emit_function_variant_mark(
     name: &str,
     variant: &str,
@@ -68,6 +71,7 @@ pub(super) fn emit_function_variant_mark(
     abi::emit_store_reg_to_symbol(emitter, variant_reg, &active_symbol, 0);
 }
 
+/// Writes 1 to the include-once guard symbol, marking the file as loaded.
 fn mark_included(label: &str, emitter: &mut Emitter) {
     let result_reg = abi::int_result_reg(emitter);
     abi::emit_load_int_immediate(emitter, result_reg, 1);

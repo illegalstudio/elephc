@@ -29,6 +29,19 @@ pub(in crate::resolver) use output::{
     DiscoveryEntry, FunctionVariantInfo, FunctionVariantKey, FunctionVariantRegistry,
 };
 
+/// Discovers declarations reachable through include/require statements in the given AST.
+///
+/// Traverses all top-level statements, following include/require chains while tracking
+/// loaded paths to avoid cycles. Populates `IncludeDiscovery` with the complete set of
+/// reachable declarations and their source locations.
+///
+/// # Arguments
+/// * `stmts` - Top-level statements to scan for include/require directives
+/// * `base_dir` - Directory from which relative paths are resolved
+///
+/// # Returns
+/// * `Ok(IncludeDiscovery)` with all reachable declarations grouped by source file
+/// * `Err(CompileError)` if an include path is invalid, cycles are detected, or resolution fails
 pub(super) fn discover_include_declarations(
     stmts: &[Stmt],
     base_dir: &Path,

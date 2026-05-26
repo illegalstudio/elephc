@@ -16,6 +16,10 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `fopen` builtin call, evaluating filename (arg[0]) and mode (arg[1]) in
+/// source order before materializing arguments in ABI order for `__rt_fopen`. On success,
+/// boxes the native file descriptor as a PHP resource (tag 9). On failure (negative
+/// descriptor), boxes PHP false (tag 3) to distinguish from empty string or empty array.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -47,6 +51,9 @@ pub fn emit(
     Some(PhpType::Mixed)
 }
 
+/// Boxes the fopen result: if `x0`/`rax` is negative, emits PHP false (tag 3, payload 0);
+/// otherwise emits a PHP resource (tag 9, descriptor in low word). Uses `__rt_mixed_from_value`
+/// via ABI calling convention.
 fn box_fopen_result(emitter: &mut Emitter, ctx: &mut Context) {
     let false_label = ctx.next_label("fopen_false");
     let done_label = ctx.next_label("fopen_done");

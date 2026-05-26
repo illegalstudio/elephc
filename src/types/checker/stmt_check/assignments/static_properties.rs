@@ -15,6 +15,8 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::Checker;
 
+/// Internal data for static property assignment resolution.
+/// Holds the resolved class, declaring class, declared-type status, and current property type.
 struct StaticPropertyAssignmentTarget {
     class_name: String,
     declaring_class: String,
@@ -22,6 +24,11 @@ struct StaticPropertyAssignmentTarget {
     prop_ty: PhpType,
 }
 
+/// Type-checks a direct static property assignment `Class::$prop = value`.
+///
+/// Infers the value type, resolves the property target via `resolve_static_property_assignment_target`,
+/// validates type compatibility against declared types, and refines the property type when no
+/// declared type is present.
 pub(super) fn check_static_property_assign(
     checker: &mut Checker,
     receiver: &StaticReceiver,
@@ -53,6 +60,11 @@ pub(super) fn check_static_property_assign(
     Ok(())
 }
 
+/// Type-checks an array-push assignment `Class::$prop[] = value`.
+///
+/// Infers the value type, resolves the property target, validates element-type compatibility
+/// against declared types, merges element types when the property is untyped, and updates the
+/// property type. Rejects buffer properties and non-array static properties.
 pub(super) fn check_static_property_array_push(
     checker: &mut Checker,
     receiver: &StaticReceiver,
@@ -110,6 +122,11 @@ pub(super) fn check_static_property_array_push(
     Ok(())
 }
 
+/// Type-checks an indexed array assignment `Class::$prop[index] = value`.
+///
+/// Infers the index and value types, resolves the property target, validates integer index,
+/// validates element-type compatibility against declared types, merges element types when the
+/// property is untyped, and updates the property type. Short-circuits for `ArrayAccess` objects.
 pub(super) fn check_static_property_array_assign(
     checker: &mut Checker,
     receiver: &StaticReceiver,
@@ -175,6 +192,11 @@ pub(super) fn check_static_property_array_assign(
     Ok(())
 }
 
+/// Resolves `receiver` to a class name and fetches static property metadata.
+///
+/// Returns `StaticPropertyAssignmentTarget` with class name, declaring class,
+/// declared-type flag, and current property type. Checks that the property exists
+/// and that the current context can access it per PHP visibility rules.
 fn resolve_static_property_assignment_target(
     checker: &Checker,
     receiver: &StaticReceiver,
@@ -262,6 +284,11 @@ fn resolve_static_property_assignment_target(
     })
 }
 
+/// Updates the type of a static property in all classes that declare it.
+///
+/// Iterates over all classes and mutates the type entry for `property` on the
+/// declaring class `declaring_class`. Used after array-push or index assignment
+/// to propagate the new element type.
 fn update_static_property_type(
     checker: &mut Checker,
     property: &str,
@@ -287,6 +314,11 @@ fn update_static_property_type(
     }
 }
 
+/// Refines the type of a static property based on an assigned value.
+///
+/// If the property currently holds `Int` or `Void` (uninitialized), it is set to `val_ty`.
+/// Otherwise `specialize_generic_array_hint` is used to merge the value type into the
+/// existing array element type. Only updates when the refined type differs from the current.
 fn refine_static_property_assignment_type(
     checker: &mut Checker,
     property: &str,

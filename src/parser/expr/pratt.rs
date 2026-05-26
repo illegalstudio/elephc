@@ -23,6 +23,28 @@ use super::parse_args;
 use super::prefix::parse_prefix;
 use super::parse_expr;
 
+/// Parses an expression using Pratt parsing, starting with a prefix expression and
+/// extending it via infix, postfix, access, call, and assignment operators.
+///
+/// `min_bp` is the minimum binding power required to continue parsing. Lower
+/// binding powers indicate looser binding (e.g., lower precedence). The function
+/// returns when it encounters a token whose binding power is below `min_bp` or
+/// when no more infix operators apply.
+///
+/// # Inputs
+/// - `tokens`: the token stream
+/// - `pos`: current position (updated to the token after the parsed expression)
+/// - `min_bp`: minimum binding power threshold
+///
+/// # Returns
+/// The parsed left-hand side expression with all applicable operators applied.
+///
+/// # Algorithm
+/// 1. Parse an initial prefix expression (`parse_prefix`)
+/// 2. In the first loop, consume postfix operators: array access (`[]`),
+///    object access (`->` / `?->`), and callable invocation (`()`)
+/// 3. In the second loop, consume ternary (`? :`), instanceof, assignments
+///    (`=`, `+=`, `??=`, etc.), pipe (`|>`), and remaining binary operators
 pub(super) fn parse_expr_bp(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -364,17 +386,40 @@ pub(super) fn parse_expr_bp(
     Ok(lhs)
 }
 
+/// Returns `true` if the token at `pos` is an arrow function (`fn`) or a static
+/// arrow function (`static fn`) that is not wrapped in parentheses.
+///
+/// Used by pipe operator (`|>`) parsing to reject unparenthesized arrow functions
+/// as pipe targets, since PHP requires them to be parenthesized.
 fn starts_unparenthesized_arrow_function(tokens: &[(Token, Span)], pos: usize) -> bool {
     matches!(tokens.get(pos).map(|(token, _)| token), Some(Token::Fn))
         || (matches!(tokens.get(pos).map(|(token, _)| token), Some(Token::Static))
             && matches!(tokens.get(pos + 1).map(|(token, _)| token), Some(Token::Fn)))
 }
 
+/// Represents the member accessed after an object operator (`->` or `?->`).
+///
+/// `Named` holds a static identifier string. `Dynamic` holds an expression
+/// inside braces (`{$expr}`) used for computed property/method names.
 enum ObjectMember {
     Named(String),
     Dynamic(Expr),
 }
 
+/// Parses the member or property name following an object operator (`->` or `?->`).
+///
+/// Handles three forms:
+/// - Static identifier: `->foo`
+/// - Dynamic expression in braces: `->{$expr}`
+/// - PHP 7+ reserved keywords allowed as member names: `throw`, `yield`, `match`,
+///   `print`, `echo`, `return`
+///
+/// Returns `ObjectMember::Named` for identifiers and keywords, or
+/// `ObjectMember::Dynamic` for brace-enclosed expressions.
+///
+/// # Inputs
+/// - `arrow_span`: span of the `->` or `?->` token, used for error reporting
+/// - `nullsafe`: whether the operator was `?->` (changes error messages)
 fn parse_object_member(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -433,6 +478,7 @@ fn parse_object_member(
     }
 }
 
+/// Represents the specific assignment operator encountered during parsing.
 #[derive(Debug, Clone, PartialEq)]
 enum AssignmentOperator {
     Assign,
@@ -440,6 +486,11 @@ enum AssignmentOperator {
     NullCoalesce,
 }
 
+/// Looks up assignment operator binding power.
+///
+/// Returns `None` for non-assignment tokens. For recognized tokens, returns
+/// `(AssignmentOperator, left_bp, right_bp)` with binding powers `(7, 6)`,
+/// enforcing right-associativity (rhs binds tighter than lhs).
 fn assignment_bp(token: &Token) -> Option<(AssignmentOperator, u8, u8)> {
     let op = match token {
         Token::Assign => AssignmentOperator::Assign,
@@ -461,6 +512,14 @@ fn assignment_bp(token: &Token) -> Option<(AssignmentOperator, u8, u8)> {
     Some((op, 7, 6))
 }
 
+/// Computes the value expression for an assignment operator applied to `target`
+/// and `rhs`.
+///
+/// - `Assign`: returns `rhs`
+/// - `Compound(op)`: returns `BinaryOp { left: target, op, right: rhs }`
+/// - `NullCoalesce`: returns `NullCoalesce { value: target, default: rhs }`
+///
+/// The `target` is consumed and placed on the left side of the derived expression.
 fn assignment_value(target: Expr, op: AssignmentOperator, rhs: Expr, span: Span) -> Expr {
     match op {
         AssignmentOperator::Assign => rhs,
@@ -482,6 +541,16 @@ fn assignment_value(target: Expr, op: AssignmentOperator, rhs: Expr, span: Span)
     }
 }
 
+/// Parses the target of an `instanceof` operator.
+///
+/// Handles the PHP 8.0 class-name forms and the dynamic expression form:
+/// - `self`, `parent`, `static` keyword → `InstanceOfTarget::Name`
+/// - Variable or parenthesized expression → parsed as `Expr`, wrapped in
+///   `InstanceOfTarget::Expr` with binding power 36 (above comparisons)
+/// - Class/interface name → resolved via `parse_name` into a qualified `Name`
+///
+/// The dynamic form is parsed with `min_bp = 36` to ensure it captures everything
+/// with tighter precedence than comparison operators.
 fn parse_instanceof_target(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -514,6 +583,21 @@ fn parse_instanceof_target(
     }
 }
 
+/// Looks up binary operator binding power for Pratt parsing.
+///
+/// Returns `None` for tokens that are not binary operators. For recognized tokens,
+/// returns `(BinOp, left_bp, right_bp)` where the left binding power is used
+/// when parsing the left operand and the right binding power when parsing the
+/// right operand. The asymmetric pair encodes associativity: left-associative
+/// operators have `l_bp < r_bp` so the right operand is parsed with a tighter
+/// bp threshold, while right-associative operators (e.g., `**`) have
+/// `l_bp > r_bp` so the left side binds tighter.
+///
+/// Precedence order (lowest to highest): `or` (1) < `xor` (3) < `and` (5)
+/// < `??` (9) < `||` (11) < `&&` (13) < `|` (15) < `^` (17) < `&` (19)
+/// < `==`/`!=`/`===`/`!==` (21) < `<`/`>`/`<=`/`>=`/`<=>` (23)
+/// < `<<`/`>>` (25) < `.` (27) < `+`/`-` (29) < `*`/`/`/`%` (31)
+/// < `**` (37 right-assoc)
 fn infix_bp(token: &Token) -> Option<(BinOp, u8, u8)> {
     match token {
         Token::Or => Some((BinOp::Or, 1, 2)),

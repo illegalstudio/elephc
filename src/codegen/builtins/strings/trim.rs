@@ -15,6 +15,30 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `trim` builtin, which strips whitespace (or a specified
+/// character mask) from the beginning and end of a string.
+///
+/// # Arguments
+/// - `_name`: Unused; caller dispatches by name so this param is ignored.
+/// - `args`: Either 1 argument (string to strip) or 2 arguments (string + mask).
+/// - `emitter`: Target-aware instruction emitter.
+/// - `ctx`: Codegen context carrying variable layout and metadata.
+/// - `data`: Writable data section for string literals and runtime symbols.
+///
+/// # Behavior
+/// - 1 arg: evaluates the string argument, then calls `__rt_trim` to strip
+///   ASCII whitespace from both ends.
+/// - 2 args: evaluates the string argument, then evaluates the mask argument
+///   (source string is preserved on the stack during mask evaluation), then
+///   calls `__rt_trim_mask` to strip the given character mask from both ends.
+///
+/// # Returns
+/// Always returns `Some(PhpType::Str)` — the result is an owned PHP string.
+///
+/// # ABI notes
+/// ARM64: source string ptr/len live in x1/x2; mask ptr/len are loaded into x3/x4
+///   before the call. x86_64: source string ptr/len are pushed on the stack during
+///   mask evaluation, then moved to rdi/rsi for the call.
 pub fn emit(
     _name: &str,
     args: &[Expr],

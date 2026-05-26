@@ -11,9 +11,18 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// strpos: find needle in haystack. Returns position in x0, or -1 if not found.
-/// Input: x1=haystack_ptr, x2=haystack_len, x3=needle_ptr, x4=needle_len
-/// Output: x0 = position (or -1)
+/// Emits the `__rt_strpos` runtime helper for ARM64.
+/// Implements PHP's strpos semantics: scans haystack for needle and returns
+/// the byte offset of the first match, or -1 if not found. An empty needle
+/// always matches at position 0.
+///
+/// ABI:
+///   Input:  x1=haystack_ptr, x2=haystack_len, x3=needle_ptr, x4=needle_len
+///   Output: x0 = match offset (0-based byte offset), or -1 if not found
+///
+/// Uses a two-level loop: outer loop advances through haystack positions,
+/// inner loop compares needle bytes at each candidate position. Exits early
+/// when needle exceeds haystack length.
 pub fn emit_strpos(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_strpos_linux_x86_64(emitter);
@@ -66,6 +75,18 @@ pub fn emit_strpos(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the `__rt_strpos` runtime helper for Linux x86_64.
+/// Implements PHP's strpos semantics: scans haystack for needle and returns
+/// the byte offset of the first match, or -1 if not found. An empty needle
+/// always matches at position 0.
+///
+/// ABI:
+///   Input:  rdi=haystack_ptr, rsi=haystack_len, rdx=needle_ptr, rcx=needle_len
+///   Output: rax = match offset (0-based byte offset), or -1 if not found
+///
+/// Uses a two-level loop: outer loop advances through haystack positions,
+/// inner loop compares needle bytes at each candidate position. Exits early
+/// when needle exceeds haystack length.
 fn emit_strpos_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strpos ---");

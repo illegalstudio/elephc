@@ -11,7 +11,11 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// strtoupper: copy string to concat_buf, uppercasing a-z.
+/// Emits the `__rt_strtoupper` runtime helper for ARM64.
+/// Copies the source string pointed to by `x1` with length `x2` into the concat buffer,
+/// uppercasing ASCII lowercase letters `a-z` to `A-Z` in-place during copy.
+/// On return: `x1` holds the new concat-buffer pointer, `x2` holds the unchanged length.
+/// The concat-buffer write offset (`_concat_off`) is advanced by the string length.
 pub fn emit_strtoupper(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_strtoupper_linux_x86_64(emitter);
@@ -61,6 +65,11 @@ pub fn emit_strtoupper(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the `__rt_strtoupper` runtime helper for Linux x86_64.
+/// Copies the source string pointed to by `rax` with length `rdx` into the concat buffer,
+/// uppercasing ASCII lowercase letters `a-z` to `A-Z` in-place during copy.
+/// On return: `rax` holds the new concat-buffer pointer, `rdx` holds the unchanged length.
+/// The concat-buffer write offset (`_concat_off`) is advanced by the string length.
 fn emit_strtoupper_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strtoupper ---");

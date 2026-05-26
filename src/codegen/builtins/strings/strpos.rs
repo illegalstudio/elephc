@@ -16,6 +16,22 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `strpos(haystack, needle)` builtin call.
+///
+/// Evaluate `haystack` first, then `needle`, arranging arguments in target-specific
+/// string-helper registers before calling `__rt_strpos`. The runtime returns either a
+/// non-negative byte offset (including 0 for a match at the start) or a sentinel to
+/// indicate no match. Calls `box_search_result` to box the raw result as a `Mixed`
+/// value so PHP can distinguish integer `0` from boolean `false`.
+///
+/// Returns `Some(PhpType::Mixed)` because `strpos` returns `int|false` in PHP.
+///
+/// # Arguments
+/// * `_name` - Unused; the caller dispatches by name
+/// * `args` - `[haystack, needle]`
+/// * `emitter` - Target assembly emitter
+/// * `ctx` - Codegen context for labels and target info
+/// * `data` - Data section for relocations
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -47,6 +63,14 @@ pub fn emit(
     Some(PhpType::Mixed)
 }
 
+/// Box a raw `strpos` result as a `Mixed` value.
+///
+/// Reads the raw integer result from `x0` (ARM64) or `rax` (x86_64). If the value
+/// is non-negative, it is boxed as an integer (`tag = 0`). Otherwise, the not-found
+/// sentinel is boxed as boolean `false` (`tag = 3`), preserving PHP's requirement that
+/// `strpos(...) === false` and `strpos(...) !== 0` are both meaningful.
+///
+/// Uses `ctx.next_label` to generate local branch labels unique to this invocation.
 fn box_search_result(emitter: &mut Emitter, ctx: &mut Context) {
     let found_label = ctx.next_label("strpos_found");
     let end_label = ctx.next_label("strpos_done");

@@ -10,9 +10,29 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// heap_kind: return the uniform heap kind tag for a heap-backed value.
-/// Input: x0 = heap user pointer
-/// Output: x0 = kind tag (0 for null/non-heap/raw allocations)
+/// Emits the `__rt_heap_kind` runtime helper.
+///
+/// Returns the uniform heap kind tag for a heap-backed value by probing the
+/// in-header kind word and validating the heap ownership marker.
+///
+/// ## Inputs
+/// - `x0` / `rax`: heap user pointer (pointer into the managed heap)
+///
+/// ## Outputs
+/// - `x0` / `eax`: kind tag (0 = not heap-backed, 1..255 = PHP array/hash kind)
+///
+/// ## Behavior
+/// - Null pointers → returns 0 immediately.
+/// - Pointers below the managed heap base → returns 0 (covers scalar integers and static data).
+/// - Pointers at or beyond the heap extent → returns 0.
+/// - On x86_64: validates the high-word ownership marker (`0x454c5048`) before returning the kind.
+///   Foreign or freed pointers report kind 0.
+/// - On ARM64: validates the heap range via `_heap_buf` / `_heap_off` symbols, loads kind word,
+///   and masks to low byte.
+///
+/// ## ABI constraints
+/// - Caller-saved registers used for transient heap address calculations.
+/// - Result returned in the standard integer register (`x0` / `eax`).
 pub fn emit_heap_kind(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emitter.blank();

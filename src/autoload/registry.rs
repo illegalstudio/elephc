@@ -51,6 +51,8 @@ impl Registry {
         (registry, program)
     }
 
+    /// Returns the PSR-4 namespace-to-directory index built from all
+    /// composer.json files in the project.
     pub fn psr4(&self) -> &AutoloadIndex {
         &self.psr4
     }
@@ -63,11 +65,16 @@ impl Registry {
         self.psr4.files()
     }
 
+    /// Registered SPL autoload closure rules, in PHP-equivalent chain order.
     pub fn rules(&self) -> &[AutoloadRule] {
         &self.rules
     }
 
     #[allow(dead_code)] // consumed by spl_autoload_extensions runtime helper
+    /// Returns the semicolon-separated list of file extensions that
+    /// `spl_autoload` will attempt to load when searching for a class file.
+    /// Defaults to `.inc,.php` when no explicit call to
+    /// `spl_autoload_extensions()` has been made.
     pub fn extensions(&self) -> &str {
         &self.extensions
     }

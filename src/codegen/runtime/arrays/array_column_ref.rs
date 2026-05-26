@@ -87,6 +87,10 @@ pub fn emit_array_column_ref(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// x86_64 Linux variant of `emit_array_column_ref` using the System V AMD64 ABI.
+/// Input: rdi=outer array (Array of AssocArray), rsi=column key ptr, rdx=column key len
+/// Output: rax=new array containing retained heap pointers (elem_size=8)
+/// Preserves rbp, frees scratch registers before return.
 fn emit_array_column_ref_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_column_ref ---");

@@ -15,6 +15,21 @@ use crate::codegen::emit::Emitter;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `phpversion()` builtin call.
+///
+/// Returns the compiler's Cargo package version string as a PHP string.
+/// The version string address is materialized in `ptr_reg` and its byte length
+/// in `len_reg` per the target ABI string return convention.
+///
+/// # Arguments
+/// * `_name` — the builtin name (unused, dispatch already occurred)
+/// * `_args` — the call arguments (phpversion takes none, ignored)
+/// * `emitter` — the assembly emitter
+/// * `_ctx` — codegen context (unused by this builtin)
+/// * `data` — the data section where the version string is stored
+///
+/// # Returns
+/// `Some(PhpType::Str)` since phpversion() always returns a string
 pub fn emit(
     _name: &str,
     _args: &[Expr],

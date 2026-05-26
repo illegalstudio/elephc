@@ -11,9 +11,17 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// __rt_json_encode_array_int: encode an int array as JSON "[1,2,3]".
+/// Emits `__rt_json_encode_array_int` to encode an int array as JSON "[1,2,3]" with optional pretty-printing.
+///
 /// Input:  x0 = array pointer (header: capacity[8], length[8], then elements[8 each])
 /// Output: x1 = result ptr (in concat_buf), x2 = result len
+///
+/// Behavior:
+/// - Redirects to `__rt_json_encode_array_dynamic` when `JSON_FORCE_OBJECT` (bit 16) is set in `_json_active_flags`.
+/// - Enters one pretty-print indentation level via `__rt_json_pretty_push` after the opening bracket.
+/// - Each element gets optional newline + indentation via `__rt_json_pretty_line`.
+/// - Recursion depth is tracked via `__rt_json_depth_enter`/`__rt_json_depth_exit`.
+/// - Result is written to `_concat_buf` at the current `_concat_off` offset; offset is updated on return.
 pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_json_encode_array_int_linux_x86_64(emitter);
@@ -142,6 +150,12 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits `__rt_json_encode_array_int` for the x86_64-linux target.
+///
+/// Mirrors the ARM64 emitter's semantics but uses x86_64 calling conventions and register layout:
+/// - Array pointer in `rax` on entry; result returned in `rax` (ptr) and `rdx` (len).
+/// - Local scratch slots at `[rbp - 8]`, `[rbp - 16]`, `[rbp - 24]`, `[rbp - 32]`, `[rbp - 40]`.
+/// - Pretty-print, depth tracking, and concat-buffer management are identical to the ARM64 path.
 fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_array_int ---");

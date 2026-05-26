@@ -16,6 +16,12 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits x86_64 / ARM64 codegen for PHP's `is_dir(path)` builtin.
+///
+/// Evaluates `path` (a string expression), calls the runtime helper
+/// `__rt_is_dir`, and returns a `bool`. The runtime helper performs
+/// a target-aware stat call and signals failure via a sentinel value
+/// rather than panicking, preserving PHP semantics.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -11,10 +11,17 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// md5: compute MD5 hash of a string, return as 32-char hex string.
-/// Input: x1=string ptr, x2=string len
-/// Output: x1=hex string ptr, x2=32
-/// Uses macOS CommonCrypto CC_MD5(data, len, md) which outputs 16 raw bytes.
+/// Computes the MD5 hash of a PHP byte-string and returns it as a 32-character lowercase hex string.
+///
+/// Dispatches to `emit_md5_linux_x86_64` on x86_64; falls through to ARM64 CommonCrypto path otherwise.
+///
+/// Input (ARM64): x1=string pointer, x2=string length
+/// Output (ARM64): x1=hex string pointer (concat buffer), x2=32
+/// Input (x86_64 SysV): rdi=string pointer, rdx=string length
+/// Output (x86_64 SysV): rax=hex string pointer (concat buffer), rdx=32
+///
+/// Uses platform `CC_MD5` to compute 16 raw bytes, then converts to lowercase hex.
+/// Updates `_concat_off` and writes into `_concat_buf` global concat buffer.
 pub fn emit_md5(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_md5_linux_x86_64(emitter);
@@ -85,6 +92,15 @@ pub fn emit_md5(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits the `__rt_md5` runtime helper for Linux x86_64 using SysV ABI.
+///
+/// Computes MD5 via `CC_MD5`, then converts 16 raw bytes to 32 lowercase hex characters.
+/// Writes into the global concat buffer (`_concat_buf`), updating `_concat_off`.
+///
+/// Input: rdi=string pointer, rdx=string length
+/// Output: rax=hex string pointer (concat buffer), rdx=32
+///
+/// Preserves frame pointer and uses aligned stack space for the 16-byte MD5 digest buffer.
 fn emit_md5_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: md5 ---");

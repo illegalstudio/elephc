@@ -9,6 +9,12 @@
 
 use super::*;
 
+// Tests that a Child class inheriting Base's constructor properly specializes the
+// base class's string property type, so `new Child("Ada")` works without explicit
+// constructor in the child.
+//
+// Fixture: Base with `$name` property and typed constructor; Child extends Base with
+// no constructor. Verifies greet() returns the passed name.
 #[test]
 fn test_inherited_constructor_specializes_base_string_property_type() {
     let out = compile_and_run(
@@ -34,6 +40,11 @@ echo $child->greet();
     assert_eq!(out, "Ada");
 }
 
+// Tests that array literals can contain sibling objects that share a common parent
+// class, using a foreach loop to iterate and call a parent method.
+//
+// Fixture: Animal base with `$name`; Dog and Cat subclasses; array literal with
+// `new Dog("Rex")` and `new Cat("Mia")`. Verifies both labels are printed.
 #[test]
 fn test_array_literal_allows_sibling_objects_with_common_parent() {
     let out = compile_and_run(
@@ -62,6 +73,11 @@ foreach ($animals as $animal) {
     assert_eq!(out, "Rex Mia ");
 }
 
+// Tests that a match expression without a default case produces a fatal error
+// ("unhandled match case") when the matched value has no corresponding arm.
+//
+// Fixture: `$value = 3` matched against arms 1 and 2 only. Verifies fatal error
+// message is produced.
 #[test]
 fn test_match_without_default_is_fatal() {
     let err = compile_and_run_expect_failure(
@@ -76,6 +92,11 @@ echo match($value) {
     assert!(err.contains("unhandled match case"), "{err}");
 }
 
+// Verifies the v017-trio example PHP fixture compiles and runs, asserting the
+// expected output "health:[ok]:missing".
+//
+// Fixture: `examples/v017-trio/main.php` via `include_str!`. Regression guard for
+// trio example staying working.
 #[test]
 fn test_example_v017_trio_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/v017-trio/main.php"));

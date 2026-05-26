@@ -11,8 +11,15 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// html_entity_decode: decode &amp;, &lt;, &gt;, &quot;, &#039; back to chars.
-/// Input: x1/x2=string. Output: x1/x2=result in concat_buf.
+/// Emits the `runtime helper for ARM64`.
+///
+/// Scans the input string byte-by-byte. When an & is found, attempts to match
+/// one of the five supported HTML entities (<, >, &, ", #039;).
+/// Matches are decoded into their single-byte character equivalents;
+/// non-matching bytes are copied as-is.
+///
+/// Input: x1 = string pointer, x2 = string length (ElephC string convention).
+/// Output: x1 = result pointer in concat_buf, x2 = result length.
 pub fn emit_html_entity_decode(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_html_entity_decode_linux_x86_64(emitter);
@@ -158,6 +165,16 @@ pub fn emit_html_entity_decode(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits the `__rt_html_entity_decode` runtime helper for x86_64 Linux.
+///
+/// Identical in behavior to the ARM64 variant but uses x86_64 register conventions
+/// and AT&T syntax. Scans the input string byte-by-byte, matching the same five
+/// HTML entities to their single-byte equivalents.
+///
+/// ABI contract:
+/// - Input: rax = string pointer, rdx = string length (ElephC convention)
+/// - Output: rax = result pointer (concat_buf), rdx = result length
+/// - Clobbers: r8-r11, rcx, rsi, rdx; advances `_concat_off` by the produced length
 fn emit_html_entity_decode_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: html_entity_decode ---");

@@ -13,9 +13,25 @@ use crate::codegen::platform::Arch;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
-/// hash_free_deep: free a hash table and all owned keys / heap-backed values.
-/// Input:  x0 = hash table pointer
-/// Output: none
+/// Frees a hash table and all owned key/value payloads recursively.
+///
+/// Recursively releases owned child storage (string keys, nested arrays, objects,
+/// boxed mixed cells) through `__rt_decref_any` before freeing the hash table struct itself.
+/// Suppresses nested GC runs during the entire deep-free walk via `_gc_release_suppressed`.
+/// Skips null pointers and any pointer whose heap kind word does not match the internal marker.
+///
+/// # Inputs
+/// - `x0`: hash table pointer (may be null or a foreign pointer — both are skipped safely)
+///
+/// # Outputs
+/// - `x0`-`x7`: clobbered; `x29`/`x30` restored; stack frame deallocated
+///
+/// # ABI / invariants
+/// - Hash entries are 64 bytes: 40-byte header + 24-byte payload (occupied flag at +0,
+///   key pointer at +8, key_hi at +16, value_tag at +40, value pointer at +24)
+/// - Integer keys are inline payloads (key_hi == -1) and carry no heap ownership
+/// - Heap-backed values (tags 1/4/5/6/7) are released through `__rt_decref_any`
+/// - `_gc_release_suppressed` is set to 1 before the scan and cleared before freeing the struct
 pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_free_deep_linux_x86_64(emitter);
@@ -130,6 +146,23 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// x86_64 Linux variant of `emit_hash_free_deep`.
+///
+/// Mirrors the ARM64 path but emits x86_64 System V ABI assembly.
+/// Heap kind is stamped in the high 32 bits of the uniform 64-bit header word at [ptr - 8].
+/// Foreign pointers (missing the `0x454C5048` marker) are skipped without mutation.
+///
+/// # Inputs
+/// - `rax`: hash table pointer
+///
+/// # Outputs
+/// - `rax`, `rcx`, `rdx`, `r8`-`r11`: clobbered; `rbp` restored; `rsp` adjusted
+///
+/// # ABI / invariants
+/// - Entry size is 64 bytes: 40-byte header + 24-byte payload (same layout as ARM64)
+/// - `_gc_release_suppressed` is set to 1 before the scan and cleared before freeing the struct
+/// - Recursive child cleanup routes through `__rt_decref_array`, `__rt_decref_hash`,
+///   `__rt_decref_object`, `__rt_decref_mixed`, and `__rt_heap_free` as appropriate
 fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_free_deep ---");

@@ -11,8 +11,23 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// addslashes: escape single quotes, double quotes, backslashes with backslash.
-/// Input: x1/x2=string. Output: x1/x2=result.
+/// Emits the `__rt_addslashes` runtime helper for PHP's `addslashes()`.
+///
+/// Escapes single quotes (`'`), double quotes (`"`), and backslashes (`\`)
+/// by prefixing each with a backslash. Operates on raw byte strings using
+/// PHP's pointer/length ABI convention.
+///
+/// ## ARM64 ABI (default)
+/// - Input: `x1` = source string pointer, `x2` = source string length
+/// - Output: `x1` = result string pointer, `x2` = result string length
+/// - Uses the concat buffer (`_concat_buf` / `_concat_off`) for output storage
+/// - Clobbers: `x8`-`x13`
+///
+/// ## x86_64 Linux ABI
+/// - Input: `rax` = source string pointer, `rdx` = source string length
+/// - Output: `rax` = result string pointer, `rdx` = result string length
+/// - Uses the concat buffer (`_concat_buf` / `_concat_off`) for output storage
+/// - Clobbers: `r8`-`r11`, `rcx`
 pub fn emit_addslashes(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_addslashes_linux_x86_64(emitter);
@@ -61,6 +76,10 @@ pub fn emit_addslashes(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits the x86_64 Linux variant of `__rt_addslashes`.
+///
+/// Identical behavior to the ARM64 variant but uses x86_64 System V ABI
+/// registers: `rax`/`rdx` for pointer/length, `r8`-`r11` and `rcx` as temporaries.
 fn emit_addslashes_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: addslashes ---");

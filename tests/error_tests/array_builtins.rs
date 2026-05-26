@@ -9,6 +9,7 @@
 
 use super::*;
 
+// Verifies that a heterogeneous associative array with string and integer values widens to `mixed` without error.
 #[test]
 fn test_assoc_array_mixed_type_checks() {
     assert!(
@@ -17,6 +18,7 @@ fn test_assoc_array_mixed_type_checks() {
     );
 }
 
+// Regression test: array union with a non-array right operand produces a type error.
 #[test]
 fn test_error_array_union_requires_array_operands() {
     expect_error(
@@ -25,6 +27,7 @@ fn test_error_array_union_requires_array_operands() {
     );
 }
 
+// Regression test: indexed array union with mismatched element types (int vs string) produces a type error.
 #[test]
 fn test_error_indexed_array_union_requires_compatible_element_types() {
     expect_error(

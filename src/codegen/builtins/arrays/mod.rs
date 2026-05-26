@@ -74,6 +74,7 @@ use crate::codegen::emit::Emitter;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Dispatches array, buffer, and callable-related PHP builtins to their leaf codegen emitters.
 pub fn emit(
     name: &str,
     args: &[Expr],

@@ -52,6 +52,9 @@ pub(crate) fn emit_microtime(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_microtime` using libc `gettimeofday`.
+/// Uses the SysV AMD64 ABI: arguments in rdi, rsi; floating-point result in xmm0.
+/// Output: xmm0 = tv_sec + tv_usec / 1000000.0 as double.
 fn emit_microtime_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: microtime ---");

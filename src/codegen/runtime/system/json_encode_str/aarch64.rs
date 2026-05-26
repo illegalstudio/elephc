@@ -10,7 +10,18 @@
 
 use crate::codegen::emit::Emitter;
 
-/// ARM64 implementation of `__rt_json_encode_str`.
+/// Emits the AArch64 runtime helper for PHP's JSON string escaping.
+///
+/// Writes the complete `__rt_json_encode_str` routine to `emitter`, including:
+/// - A 80-byte scratch stack frame that preserves callee-saved registers (x19, x29, x30)
+/// - The `_json_active_flags` bitmask cached in x19 for the hot loop
+/// - `__rt_json_str_is_numeric`: classifies input as a JSON number (RFC 8259) for the JSON_NUMERIC_CHECK fast-path
+/// - `__rt_json_str_emit_u16`: emits the 6-byte `\u00XX` escape sequence
+/// - Malformed UTF-8 recovery dispatch (`JSON_INVALID_UTF8_IGNORE`, `_SUBSTITUTE`, or error throw)
+/// - All escape sequences (`\"`, `\\`, `\n`, `\r`, `\t`, `\b`, `\f`, `\u00XX`, surrogate pairs)
+///
+/// ABI: x0 = source ptr, x1 = source len, returns x1 = output ptr, x2 = output length.
+/// Caller: `crate::codegen::runtime::system`.
 pub(super) fn emit(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_str ---");

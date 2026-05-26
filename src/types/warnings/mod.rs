@@ -20,6 +20,7 @@ use oop::collect_oop_warnings;
 use scope_usage::collect_function_like_warnings;
 use unreachable::collect_unreachable_recursive;
 
+/// Emits the `collect_warnings` routine.
 pub fn collect_warnings(program: &Program) -> Vec<CompileWarning> {
     let mut warnings = Vec::new();
     collect_oop_warnings(program, &mut warnings);

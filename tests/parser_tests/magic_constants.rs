@@ -11,24 +11,30 @@ use super::*;
 use std::path::Path;
 
 #[test]
+// Verifies that `<?php echo __DIR__;` parses to an `Echo` of `MagicConstant::Dir`.
 fn test_parse_dunder_dir_magic_constant() {
     let stmts = parse_source("<?php echo __DIR__;");
     assert_eq!(echoed_expr(&stmts), &ExprKind::MagicConstant(MagicConstant::Dir));
 }
 
 #[test]
+// Verifies that `<?php echo __dir__;` (lowercase) also parses to `MagicConstant::Dir`.
+// PHP magic constants are case-insensitive.
 fn test_parse_dunder_dir_magic_constant_case_insensitive() {
     let stmts = parse_source("<?php echo __dir__;");
     assert_eq!(echoed_expr(&stmts), &ExprKind::MagicConstant(MagicConstant::Dir));
 }
 
 #[test]
+// Verifies that `<?php echo __FILE__;` parses to an `Echo` of `MagicConstant::File`.
 fn test_parse_dunder_file_magic_constant() {
     let stmts = parse_source("<?php echo __FILE__;");
     assert_eq!(echoed_expr(&stmts), &ExprKind::MagicConstant(MagicConstant::File));
 }
 
 #[test]
+// Verifies that `__LINE__` is substituted at parse time to an integer literal using the span line.
+// `<?php echo __LINE__;` on line 1 must lower to `IntLiteral(1)`.
 fn test_parse_dunder_line_lowers_to_int_literal() {
     // __LINE__ is substituted at parse time using the span line.
     let stmts = parse_source("<?php echo __LINE__;");
@@ -39,6 +45,8 @@ fn test_parse_dunder_line_lowers_to_int_literal() {
 }
 
 #[test]
+// Verifies that `__LINE__` reports the correct line when the constant appears on a different
+// line than the opening tag. Parsing `<?php\n\necho __LINE__;\n` (line 3) must lower to `IntLiteral(3)`.
 fn test_parse_dunder_line_reports_correct_line_inside_multiline() {
     let stmts = parse_source("<?php\n\necho __LINE__;\n");
     match echoed_expr(&stmts) {
@@ -48,18 +56,23 @@ fn test_parse_dunder_line_reports_correct_line_inside_multiline() {
 }
 
 #[test]
+// Verifies that `<?php echo __CLASS__;` parses to an `Echo` of `MagicConstant::Class`.
 fn test_parse_dunder_class_magic_constant() {
     let stmts = parse_source("<?php echo __CLASS__;");
     assert_eq!(echoed_expr(&stmts), &ExprKind::MagicConstant(MagicConstant::Class));
 }
 
 #[test]
+// Verifies that `<?php echo __METHOD__;` parses to an `Echo` of `MagicConstant::Method`.
 fn test_parse_dunder_method_magic_constant() {
     let stmts = parse_source("<?php echo __METHOD__;");
     assert_eq!(echoed_expr(&stmts), &ExprKind::MagicConstant(MagicConstant::Method));
 }
 
 #[test]
+// Verifies that magic constants are correctly substituted inside first-class callable
+// receiver expressions (e.g., `make(__FILE__)->m(...)`). The `__FILE__` argument must lower
+// to a `StringLiteral` before the pipe operator processes the callable.
 fn test_magic_constants_lower_inside_first_class_callable_receiver() {
     let stmts = parse_source("<?php echo 1 |> make(__FILE__)->m(...);");
     let lowered = elephc::magic_constants::substitute_file_and_scope_constants(
@@ -92,6 +105,7 @@ fn test_magic_constants_lower_inside_first_class_callable_receiver() {
 }
 
 #[test]
+// Verifies that `<?php echo MyClass::class;` parses to a `ClassConstant` with a `StaticReceiver::Named("MyClass")`.
 fn test_parse_class_class_named() {
     let stmts = parse_source("<?php echo MyClass::class;");
     match echoed_expr(&stmts) {
@@ -103,6 +117,7 @@ fn test_parse_class_class_named() {
 }
 
 #[test]
+// Verifies that `<?php echo self::class;` parses to a `ClassConstant` with `StaticReceiver::Self_`.
 fn test_parse_class_class_self() {
     let stmts = parse_source("<?php echo self::class;");
     assert_eq!(
@@ -114,6 +129,7 @@ fn test_parse_class_class_self() {
 }
 
 #[test]
+// Verifies that `<?php echo static::class;` parses to a `ClassConstant` with `StaticReceiver::Static`.
 fn test_parse_class_class_static() {
     let stmts = parse_source("<?php echo static::class;");
     assert_eq!(
@@ -125,6 +141,7 @@ fn test_parse_class_class_static() {
 }
 
 #[test]
+// Verifies that `<?php echo parent::class;` parses to a `ClassConstant` with `StaticReceiver::Parent`.
 fn test_parse_class_class_parent() {
     let stmts = parse_source("<?php echo parent::class;");
     assert_eq!(

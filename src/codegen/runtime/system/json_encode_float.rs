@@ -101,6 +101,16 @@ pub(crate) fn emit_json_encode_float(emitter: &mut Emitter) {
 }
 
 fn emit_x86_64(emitter: &mut Emitter) {
+    //! Emits x86_64-specific runtime helper for JSON float encoding.
+    //!
+    //! Mirrors the ARM64 `__rt_json_encode_float` path: detects Inf/NaN,
+    //! records `JSON_ERROR_INF_OR_NAN` via `__rt_json_throw_error`, substitutes
+    //! zero for partial-output, formats via `__rt_ftoa`, and appends `.0` when
+    //! `JSON_PRESERVE_ZERO_FRACTION` is set on an integer-valued result.
+    //!
+    //! Input:  x86_64 xmm0 = float value
+    //! Output: rax, rdx = result ptr, len (in concat_buf)
+
     emitter.blank();
     emitter.comment("--- runtime: json_encode_float ---");
     emitter.label_global("__rt_json_encode_float");

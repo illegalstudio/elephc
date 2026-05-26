@@ -53,6 +53,7 @@ const BUILTIN_CLASS_LIKE_SYMBOLS: &[&str] = &[
 ];
 
 impl Symbols {
+    /// canonical_function
     pub(super) fn canonical_function(&self, name: &str) -> Option<String> {
         let key = php_symbol_key(name);
         self.functions
@@ -62,6 +63,7 @@ impl Symbols {
             .or_else(|| canonical_builtin_function_name(name))
     }
 
+    /// canonical_class_like
     pub(super) fn canonical_class_like(&self, name: &str) -> Option<String> {
         let key = php_symbol_key(name);
         self.classes
@@ -78,11 +80,13 @@ impl Symbols {
             })
     }
 
+    /// has_constant
     pub(super) fn has_constant(&self, name: &str) -> bool {
         self.constants.contains(name)
     }
 }
 
+/// collect_symbols
 pub(super) fn collect_symbols(
     stmts: &[Stmt],
     current_namespace: Option<&str>,

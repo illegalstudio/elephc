@@ -11,9 +11,25 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_map: apply a callback to each scalar/string source element, returning a scalar array.
-/// Input: x0 = callback function address, x1 = source array pointer, x2 = optional callback environment pointer
-/// Output: x0 = pointer to new array with transformed elements
+/// Emits the `__rt_array_map` runtime helper for ARM64 (macOS/Linux).
+///
+/// Iterates over every element in the source array, invokes the callback with the
+/// current element (and an optional capture environment pointer), and stores each
+/// transformed result into a newly allocated destination array. The callback ABI
+/// differs for scalar values (single register) versus string elements (ptr/len pair).
+///
+/// # Input registers
+/// - `x0`: callback function address
+/// - `x1`: source array pointer
+/// - `x2`: optional callback environment pointer (capture closure)
+///
+/// # Output registers
+/// - `x0`: pointer to the new mapped array (same length as source)
+///
+/// # Register usage
+/// - `x19`: callee-saved callback address
+/// - `x20`: loop index (callee-saved)
+/// - `x9`–`x11`: scratch temporaries
 pub fn emit_array_map(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_map_linux_x86_64(emitter);
@@ -98,6 +114,24 @@ pub fn emit_array_map(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = new mapped array
 }
 
+/// Emits the `__rt_array_map` runtime helper for x86_64 Linux (System V ABI).
+///
+/// Same behavior as the ARM64 variant but uses the x86_64 System V calling convention.
+/// The callback receives the element in `rdi` (or `rdi`/`rsi` for strings) and an
+/// optional capture environment in `rdx`. The transformed result is returned in `rax`.
+///
+/// # Input registers
+/// - `rdi`: callback function address
+/// - `rsi`: source array pointer
+/// - `rdx`: optional callback environment pointer
+///
+/// # Output registers
+/// - `rax`: pointer to the new mapped array
+///
+/// # Register usage
+/// - `r12`: callee-saved callback address
+/// - `r13`: loop index (callee-saved)
+/// - `r10`–`r11`: scratch temporaries
 fn emit_array_map_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_map ---");

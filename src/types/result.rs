@@ -21,6 +21,9 @@ use super::{
 };
 
 #[derive(Debug)]
+/// Aggregate result of type checking, carrying type environments, declarations,
+/// class metadata, warnings, FFI data, and required libraries forward to optimizer,
+/// codegen, and linker setup.
 pub struct CheckResult {
     pub global_env: TypeEnv,
     pub functions: HashMap<String, FunctionSig>,
@@ -37,11 +40,18 @@ pub struct CheckResult {
     pub warnings: Vec<CompileWarning>,
 }
 
+/// Runs type checking using the host platform (auto-detected from the build environment).
+/// Returns `Ok(CheckResult)` on success, or `Err(CompileError)` if type checking fails.
+/// The `CheckResult` carries the resolved type environment, function signatures, class
+/// metadata, warnings, and any required native libraries for linking.
 #[allow(dead_code)]
 pub fn check(program: &Program) -> Result<CheckResult, CompileError> {
     checker::check_types(program, Platform::detect_host())
 }
 
+/// Runs type checking targeting a specific platform (e.g., Linux instead of the host macOS).
+/// Returns `Ok(CheckResult)` on success, or `Err(CompileError)` if type checking fails.
+/// The target affects FFI metadata, required library resolution, and platform-specific type behavior.
 pub fn check_with_target(program: &Program, target: Target) -> Result<CheckResult, CompileError> {
     checker::check_types(program, target.platform)
 }
@@ -51,6 +61,7 @@ mod tests {
     use super::*;
     use crate::codegen::platform::{Arch, Target};
 
+    /// Parses PHP source text into an AST for use in tests.
     fn parse_program(source: &str) -> Program {
         let tokens = crate::lexer::tokenize(source).expect("tokenize failed");
         crate::parser::parse(&tokens).expect("parse failed")

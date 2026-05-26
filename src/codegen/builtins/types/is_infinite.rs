@@ -16,6 +16,23 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for PHP's `is_infinite()` builtin.
+///
+/// Writes the result as a boolean integer in `x0`/`rax`. Non-float inputs are
+/// normalized into the float register before the infinity check. The predicate
+/// is true when the absolute value equals positive infinity (covers both `+INF`
+/// and `-INF` on AArch64) or when the value equals either `+INF` or `-INF` on
+/// x86_64.
+///
+/// # Arguments
+/// * `_name` — unused, follows the builtin emitter convention
+/// * `args` — the expression to test for infinity; must have at least one element
+/// * `emitter` — target-specific instruction emission
+/// * `ctx` — variable layout, ownership state, class/FFI metadata
+/// * `data` — runtime data section for floating-point constants
+///
+/// # Returns
+/// `Some(PhpType::Bool)` on success; never returns `None` for this builtin.
 pub fn emit(
     _name: &str,
     args: &[Expr],

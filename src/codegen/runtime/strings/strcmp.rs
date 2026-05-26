@@ -11,9 +11,19 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// strcmp: compare two strings lexicographically.
-/// Input: x1/x2 = str_a, x3/x4 = str_b
-/// Output: x0 = <0, 0, or >0
+/// Emits the `__rt_strcmp` runtime helper for lexicographic string comparison.
+///
+/// Dispatches to the x86_64 variant when `target.arch == Arch::X86_64`; otherwise
+/// emits ARM64 assembly inline. The callee owns no heap allocations and the result
+/// is determined entirely from the byte sequences and their lengths.
+///
+/// Register contract (ARM64):
+/// - Input: x1 = ptr_a, x2 = len_a, x3 = ptr_b, x4 = len_b
+/// - Output: x0 = result (< 0 if a < b, 0 if equal, > 0 if a > b)
+///
+/// Register contract (x86_64 System V):
+/// - Input: rdi = ptr_a, rsi = len_a, rdx = ptr_b, rcx = len_b
+/// - Output: rax = result (< 0 if a < b, 0 if equal, > 0 if a > b)
 pub fn emit_strcmp(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_strcmp_linux_x86_64(emitter);
@@ -51,6 +61,14 @@ pub fn emit_strcmp(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_strcmp`.
+///
+/// Uses the System V AMD64 ABI register convention:
+/// - Input: rdi = ptr_a, rsi = len_a, rdx = ptr_b, rcx = len_b
+/// - Output: rax = result (< 0 if a < b, 0 if equal, > 0 if a > b)
+///
+/// Compares bytes in the shared prefix first; if all match, returns the length difference.
+/// Uses `cmovg` to clamp the comparison bound to the shorter string length.
 fn emit_strcmp_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strcmp ---");

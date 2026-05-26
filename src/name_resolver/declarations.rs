@@ -20,6 +20,14 @@ use super::names::{resolve_type_expr, resolved_class_name};
 use super::statements::{resolve_params, resolve_stmt_list};
 use super::{resolved_name, Imports, Symbols};
 
+/// Resolves names within top-level declaration statements.
+///
+/// Dispatches on `StmtKind` variants to resolve functions, classes, enums,
+/// traits, interfaces, packed classes, extern declarations, and constants.
+/// Applies `canonical_name_for_decl` to declaration names and resolves all
+/// nested expressions, types, parameters, and attribute groups using the
+/// provided namespace/import context. Returns `Ok(None)` for non-declaration
+/// statements to signal passthrough.
 pub(super) fn resolve_decl_stmt(
     stmt: &Stmt,
     namespace: Option<&str>,
@@ -233,6 +241,11 @@ pub(super) fn resolve_decl_stmt(
     }
 }
 
+/// Resolves attribute groups by rewriting each attribute's name through
+/// `resolved_class_name` and each attribute argument through `resolve_expr`.
+///
+/// - `groups`: slice of attribute groups to resolve.
+/// - `namespace`, `imports`, `symbols`: standard name resolution context.
 fn resolve_attribute_groups(
     groups: &[AttributeGroup],
     namespace: Option<&str>,
@@ -265,6 +278,8 @@ fn resolve_attribute_groups(
         .collect()
 }
 
+/// Resolves a slice of class methods by resolving their parameter types,
+/// return types, bodies, and attributes with the given namespace/import context.
 fn resolve_methods(
     methods: &[ClassMethod],
     namespace: Option<&str>,
@@ -294,6 +309,8 @@ fn resolve_methods(
         .collect()
 }
 
+/// Resolves a slice of class constants by resolving their value expressions
+/// and attributes with the given namespace/import context.
 fn resolve_class_consts(
     constants: &[ClassConst],
     namespace: Option<&str>,
@@ -315,6 +332,8 @@ fn resolve_class_consts(
         .collect()
 }
 
+/// Resolves a slice of class properties by resolving their type expressions,
+/// default value expressions, and attributes with the given namespace/import context.
 fn resolve_properties(
     properties: &[ClassProperty],
     namespace: Option<&str>,
@@ -343,6 +362,8 @@ fn resolve_properties(
         .collect()
 }
 
+/// Resolves a trait use statement by rewriting its trait names and adaptations
+/// (aliases and instead-of rules) through `resolved_class_name` and `php_symbol_key`.
 pub(super) fn resolve_trait_use(
     trait_use: &TraitUse,
     current_namespace: Option<&str>,

@@ -15,6 +15,25 @@ use crate::parser::ast::{CallableTarget, ClassMethod, Expr, ExprKind, InstanceOf
 use super::discovery::FunctionVariantRegistry;
 use super::engine::resolve_isolated;
 use super::state::ResolveState;
+/// Recursively resolves include effects and nested declarations in an expression AST node.
+///
+/// Walks the expression tree, dispatching on each `ExprKind` variant. For expression
+/// variants that contain child expressions (e.g. `BinaryOp`, `Ternary`, `Assignment`),
+/// recursively calls `resolve_expr` on each child. For variants that contain isolated
+/// nested bodies (e.g. `Closure`, `Assignment` with a `prelude`), invokes
+/// `resolve_isolated`. For `InstanceOf` targets and callable targets, delegates to
+/// the focused helpers `resolve_instanceof_target` and `resolve_callable_target`.
+///
+/// # Args
+/// - `expr`: The expression to resolve.
+/// - `base_dir`: Base directory for resolving relative include paths.
+/// - `declared_once`: Tracks files that have been processed exactly once via include/require.
+/// - `include_chain`: Current chain of include paths for cycle detection.
+/// - `state`: Shared resolver state (imports, constant definitions, etc.).
+/// - `function_variants`: Registry tracking declared function variants across all files.
+///
+/// # Returns
+/// The resolved expression with all nested includes and declarations resolved.
 pub(super) fn resolve_expr(
     expr: Expr,
     base_dir: &Path,
@@ -386,6 +405,13 @@ pub(super) fn resolve_expr(
     Ok(Expr::new(kind, span))
 }
 
+/// Maps `resolve_expr` over a vector of expressions, returning a vector of resolved expressions.
+///
+/// # Args
+/// Same as `resolve_expr`.
+///
+/// # Returns
+/// A vector of resolved expressions in the same order as the input.
 fn resolve_exprs(
     exprs: Vec<Expr>,
     base_dir: &Path,
@@ -409,6 +435,17 @@ fn resolve_exprs(
         .collect()
 }
 
+/// Resolves expressions inside a list of function/method parameters.
+///
+/// Each parameter may have a default value expression; this function resolves those
+/// default value expressions recursively. Parameter names and types are passed through
+/// unchanged.
+///
+/// # Args
+/// Same as `resolve_expr`.
+///
+/// # Returns
+/// A vector of resolved parameters with the same names, types, and reference flags.
 pub(super) fn resolve_params(
     params: Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)>,
     base_dir: &Path,
@@ -441,6 +478,13 @@ pub(super) fn resolve_params(
         .collect()
 }
 
+/// Resolves default value expressions in a list of class properties.
+///
+/// # Args
+/// Same as `resolve_expr`.
+///
+/// # Returns
+/// A vector of resolved properties with default values processed.
 pub(super) fn resolve_properties(
     properties: Vec<crate::parser::ast::ClassProperty>,
     base_dir: &Path,
@@ -470,6 +514,17 @@ pub(super) fn resolve_properties(
         .collect()
 }
 
+/// Resolves expressions inside a list of class methods.
+///
+/// Currently only resolves default value expressions in method parameters by delegating
+/// to `resolve_params`. The method body itself is handled separately during statement
+/// resolution.
+///
+/// # Args
+/// Same as `resolve_expr`.
+///
+/// # Returns
+/// A vector of resolved methods with parameter defaults processed.
 pub(super) fn resolve_method_exprs(
     methods: Vec<ClassMethod>,
     base_dir: &Path,
@@ -494,6 +549,16 @@ pub(super) fn resolve_method_exprs(
         .collect()
 }
 
+/// Resolves the object expression inside a callable `InstanceOf` or method-call target.
+///
+/// For `CallableTarget::Method`, resolves the object expression; for `Function` and
+/// `StaticMethod` variants, passes through unchanged since they contain no expressions.
+///
+/// # Args
+/// Same as `resolve_expr`.
+///
+/// # Returns
+/// The callable target with any nested expressions resolved.
 fn resolve_callable_target(
     target: CallableTarget,
     base_dir: &Path,
@@ -521,6 +586,16 @@ fn resolve_callable_target(
     })
 }
 
+/// Resolves the target expression inside an `InstanceOf` expression.
+///
+/// For `InstanceOfTarget::Expr`, resolves the contained expression; for `InstanceOfTarget::Name`,
+/// passes through unchanged since it contains only a bare name.
+///
+/// # Args
+/// Same as `resolve_expr`.
+///
+/// # Returns
+/// The instanceof target with any nested expressions resolved.
 fn resolve_instanceof_target(
     target: InstanceOfTarget,
     base_dir: &Path,

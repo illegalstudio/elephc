@@ -10,9 +10,18 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// file_put_contents: write data to a file (creating/truncating).
-/// Input:  x1/x2=filename string, x3/x4=data string
-/// Output: x0=bytes written
+/// Emits the `__rt_file_put_contents` runtime helper for PHP's `file_put_contents()`.
+///
+/// Dispatches to the target-specific implementation:
+/// - ARM64: `emit_file_put_contents_arm64` (default)
+/// - x86_64 Linux: `emit_file_put_contents_linux_x86_64`
+///
+/// # Input (ARM64 calling convention)
+/// - x1/x2: filename string (pointer/length)
+/// - x3/x4: data string (pointer/length)
+///
+/// # Output
+/// - x0: bytes written on success, -1 on error
 pub fn emit_file_put_contents(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_file_put_contents_linux_x86_64(emitter);
@@ -62,6 +71,17 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_file_put_contents`.
+///
+/// Uses the System V AMD64 ABI: rdi/rsi/rdx for the first three integer arguments.
+/// Calls `__rt_cstr` to convert the filename, then libc `open`, `write`, and `close`.
+///
+/// # Input (System V AMD64 ABI)
+/// - rdi/rsi: data string (pointer/length)
+/// - rdx/rcx: filename string (pointer/length)
+///
+/// # Output
+/// - rax: bytes written on success, -1 on error
 fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_put_contents ---");

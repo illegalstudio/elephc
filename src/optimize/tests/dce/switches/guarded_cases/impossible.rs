@@ -11,6 +11,7 @@
 use super::*;
 
 #[test]
+// Verifies DCE removes the nested if region inside a switch bool guard case when the condition is guaranteed false inside the case.
 fn test_eliminate_dead_code_prunes_nested_if_region_from_switch_bool_guard_case() {
     let strict_true = Expr::new(
         ExprKind::BinaryOp {
@@ -76,6 +77,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_switch_bool_guard_case(
 }
 
 #[test]
+// Verifies DCE removes case label 1 when the outer if guarantees value==0, leaving only case label 0.
 fn test_eliminate_dead_code_drops_impossible_switch_cases_from_outer_exact_guard() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -124,6 +126,7 @@ fn test_eliminate_dead_code_drops_impossible_switch_cases_from_outer_exact_guard
 }
 
 #[test]
+// Verifies DCE removes case label 1 when the outer if guarantees value!=1, leaving only case label 2 and the default.
 fn test_eliminate_dead_code_drops_impossible_switch_cases_from_outer_excluded_guard() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -179,6 +182,7 @@ fn test_eliminate_dead_code_drops_impossible_switch_cases_from_outer_excluded_gu
 }
 
 #[test]
+// Verifies DCE removes the strict_false case when the outer if guarantees flag==true, keeping only the strict_true case.
 fn test_eliminate_dead_code_drops_impossible_switch_true_cases_from_outer_guard() {
     let strict_true = Expr::new(
         ExprKind::BinaryOp {
@@ -241,6 +245,7 @@ fn test_eliminate_dead_code_drops_impossible_switch_true_cases_from_outer_guard(
 }
 
 #[test]
+// Verifies DCE does not prune a nested if guarded by strict_true when a prior assignment mutates the guard variable.
 fn test_eliminate_dead_code_invalidates_switch_bool_guard_after_local_write() {
     let strict_true = Expr::new(
         ExprKind::BinaryOp {

@@ -9,6 +9,8 @@
 
 use super::*;
 
+// Tests that `spl_autoload_register()` rejects more than 3 arguments.
+// Fixture: 4 arguments passed to a function that accepts at most 3.
 #[test]
 fn test_error_spl_autoload_register_wrong_args() {
     expect_error(
@@ -17,6 +19,8 @@ fn test_error_spl_autoload_register_wrong_args() {
     );
 }
 
+// Tests that `spl_autoload_unregister()` requires exactly 1 argument.
+// Fixture: zero arguments passed to a function that requires 1.
 #[test]
 fn test_error_spl_autoload_unregister_wrong_args() {
     expect_error(
@@ -25,6 +29,8 @@ fn test_error_spl_autoload_unregister_wrong_args() {
     );
 }
 
+// Tests that `spl_autoload_functions()` takes no arguments.
+// Fixture: 1 argument passed to a parameterless function.
 #[test]
 fn test_error_spl_autoload_functions_wrong_args() {
     expect_error(
@@ -33,6 +39,8 @@ fn test_error_spl_autoload_functions_wrong_args() {
     );
 }
 
+// Tests that `spl_autoload_call()` requires exactly 1 argument.
+// Fixture: zero arguments passed to a function that requires 1.
 #[test]
 fn test_error_spl_autoload_call_wrong_args() {
     expect_error(
@@ -41,6 +49,8 @@ fn test_error_spl_autoload_call_wrong_args() {
     );
 }
 
+// Tests that `spl_autoload()` requires 1 or 2 arguments.
+// Fixture: zero arguments passed to a function that requires 1 or 2.
 #[test]
 fn test_error_spl_autoload_wrong_args() {
     expect_error(
@@ -49,6 +59,8 @@ fn test_error_spl_autoload_wrong_args() {
     );
 }
 
+// Tests that `spl_classes()` takes no arguments.
+// Fixture: 1 argument passed to a parameterless function.
 #[test]
 fn test_error_spl_classes_wrong_args() {
     expect_error(
@@ -57,6 +69,8 @@ fn test_error_spl_classes_wrong_args() {
     );
 }
 
+// Tests that `spl_autoload_extensions()` rejects integer as first argument.
+// The setter form only accepts a string literal or null.
 #[test]
 fn test_error_spl_autoload_extensions_rejects_int_setter() {
     expect_error(
@@ -65,6 +79,8 @@ fn test_error_spl_autoload_extensions_rejects_int_setter() {
     );
 }
 
+// Tests that `spl_autoload_extensions()` rejects boolean as first argument.
+// The setter form only accepts a string literal or null.
 #[test]
 fn test_error_spl_autoload_extensions_rejects_bool_setter() {
     expect_error(
@@ -73,6 +89,8 @@ fn test_error_spl_autoload_extensions_rejects_bool_setter() {
     );
 }
 
+// Tests that `spl_autoload_extensions()` rejects array as first argument.
+// The setter form only accepts a string literal or null.
 #[test]
 fn test_error_spl_autoload_extensions_rejects_array_setter() {
     expect_error(
@@ -81,6 +99,8 @@ fn test_error_spl_autoload_extensions_rejects_array_setter() {
     );
 }
 
+// Tests that `spl_autoload_extensions()` rejects object as first argument.
+// The setter form only accepts a string literal or null.
 #[test]
 fn test_error_spl_autoload_extensions_rejects_object_setter() {
     expect_error(
@@ -89,6 +109,8 @@ fn test_error_spl_autoload_extensions_rejects_object_setter() {
     );
 }
 
+// Tests that `spl_autoload_extensions()` rejects a dynamic string variable.
+// The setter form only accepts a string literal or null, not a runtime value.
 #[test]
 fn test_error_spl_autoload_extensions_rejects_dynamic_string_setter() {
     expect_error(
@@ -97,6 +119,8 @@ fn test_error_spl_autoload_extensions_rejects_dynamic_string_setter() {
     );
 }
 
+// Tests that `spl_object_id()` argument must be an object.
+// Fixture: typed `mixed` parameter in a user function, passed a non-object.
 #[test]
 fn test_error_spl_object_id_rejects_mixed() {
     expect_error(
@@ -105,6 +129,8 @@ fn test_error_spl_object_id_rejects_mixed() {
     );
 }
 
+// Tests that `spl_object_hash()` argument must be an object.
+// Fixture: typed `mixed` parameter in a user function, passed a non-object.
 #[test]
 fn test_error_spl_object_hash_rejects_mixed() {
     expect_error(
@@ -113,6 +139,8 @@ fn test_error_spl_object_hash_rejects_mixed() {
     );
 }
 
+// Tests that `SplDoublyLinkedList` cannot be redeclared as a user class.
+// Built-in SPL classes are reserved and reject redefinition.
 #[test]
 fn test_error_spl_doubly_linked_list_cannot_be_redeclared() {
     expect_error(
@@ -121,6 +149,8 @@ fn test_error_spl_doubly_linked_list_cannot_be_redeclared() {
     );
 }
 
+// Tests that `SplFixedArray` cannot be redeclared as a user class.
+// Built-in SPL classes are reserved and reject redefinition.
 #[test]
 fn test_error_spl_fixed_array_cannot_be_redeclared() {
     expect_error(
@@ -129,6 +159,8 @@ fn test_error_spl_fixed_array_cannot_be_redeclared() {
     );
 }
 
+// Tests that `SplFixedArray::getIterator()` is deferred until the iterator phase.
+// The method exists at codegen time but the error is raised at runtime iteration.
 #[test]
 fn test_error_internal_iterator_cannot_be_redeclared() {
     expect_error(

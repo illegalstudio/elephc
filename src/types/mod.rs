@@ -8,17 +8,29 @@
 //! Key details:
 //! - `check()` runs after name resolution and before optimization/codegen so later passes receive canonical type metadata.
 
+/// Type checking module.
 pub mod checker;
+/// Trait flattening and resolution.
 pub mod traits;
+/// Array key type inference, normalization, and PHP integer/string coercion rules.
 mod array_keys;
+/// Call argument planning: named, positional, and spread semantics.
 pub(crate) mod call_args;
+/// Fiber/stack introspection for async and coroutine analysis.
 pub(crate) mod fibers;
+/// C FFI type mapping utilities.
 mod ffi;
+/// JSON literal constant type inference.
 pub(crate) mod json_constants;
+/// PHP type model and type environment for tracking variable types.
 mod model;
+/// Type checker result types and the `check` entry point.
 mod result;
+/// Class, interface, enum, and FFI schema definitions.
 mod schema;
+/// Function signature representation and builtin signature helpers.
 mod signatures;
+/// Type checker diagnostics and warnings.
 mod warnings;
 
 pub(crate) use array_keys::{
@@ -39,6 +51,9 @@ pub(crate) use signatures::{
 };
 pub use signatures::FunctionSig;
 
+/// Type checks the program after name resolution. Returns `CheckResult` with type
+/// metadata, function/class/interface/enum info, warnings, required libraries, and the
+/// internal `Mixed` type for heterogeneous assoc-array values. Runs before optimization/codegen.
 #[allow(dead_code)]
 pub fn check(
     program: &crate::parser::ast::Program,

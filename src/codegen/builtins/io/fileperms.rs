@@ -17,6 +17,19 @@ use crate::parser::ast::Expr;
 use crate::types::PhpType;
 use super::stat_result::box_stat_int_or_false_result;
 
+/// Emits the `fileperms` builtin call.
+///
+/// Evaluates the file path argument, calls the `__rt_fileperms` runtime helper
+/// which invokes `stat()` and extracts the `st_mode` field, then boxes the result
+/// as `PhpType::Mixed` (integer permission mask on success, PHP false on failure).
+///
+/// # Arguments
+/// - `_name`: unused, follows the builtin emitter convention
+/// - `args[0]`: the file path expression
+///
+/// # Returns
+/// Always returns `Some(PhpType::Mixed)` — the boxed result is never consumed by a caller
+/// that would interpret `None` as an error; the PHP false sentinel handles failure.
 pub fn emit(
     _name: &str,
     args: &[Expr],

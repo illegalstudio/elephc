@@ -25,10 +25,31 @@ pub(crate) use iterator::{
     emit_iterable_object_loop, emit_iterator_loop, reload_iterator_receiver, IteratorDispatchTarget,
 };
 
+/// Holds the original type of a value variable before it was converted to a by-reference
+/// binding in a foreach loop. Used to restore the correct type after the loop completes.
 pub(super) struct ForeachRefFallback {
     value_ty: PhpType,
 }
 
+/// Lowers a `foreach` statement into target assembly. Dispatches to the appropriate
+/// lowering path based on the resolved type of the iterable expression: indexed arrays,
+/// associative arrays, runtime `Mixed` iterables, or `Iterator`/`IteratorAggregate` objects.
+///
+/// Creates loop labels (`foreach_start`, `foreach_end`, `foreach_cont`) and emits the
+/// complete foreach control flow including initialization, iteration, and cleanup.
+/// Handles by-reference bindings (`$v => &$ref`) by preparing fallback cells and tracking
+/// ref-cell flags on the stack.
+///
+/// # Arguments
+/// * `array` - the iterable expression to traverse
+/// * `key_var` - optional key variable name (`$k` in `foreach ($arr as $k => $v)`)
+/// * `value_var` - value variable name (`$v` in `foreach ($arr as $v)`)
+/// * `value_by_ref` - true if the value is bound by reference (`&$v`)
+/// * `body` - the loop body statements
+/// * `span` - source location for label naming and diagnostics
+/// * `emitter` - the assembly emitter
+/// * `ctx` - codegen context with variable layout and ref tracking
+/// * `data` - runtime data section for literals and metadata
 pub(super) fn emit_foreach_stmt(
     array: &Expr,
     key_var: &Option<String>,
@@ -315,6 +336,8 @@ pub(super) fn emit_foreach_stmt(
     }
 }
 
+/// Pushes the low word of an unboxed Mixed payload onto the stack to preserve it
+/// across subsequent tag testing and dispatch. On AArch64 this is x1; on x86_64 this is rdi.
 fn push_mixed_payload_lo(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -326,14 +349,21 @@ fn push_mixed_payload_lo(emitter: &mut Emitter) {
     }
 }
 
+/// Pushes the boxed Mixed source cell onto the stack to preserve it while iterating
+/// over by-reference array payloads. The cell is discarded after the array foreach completes.
 fn push_mixed_source_cell(emitter: &mut Emitter) {
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the boxed Mixed source cell for by-reference array payload updates
 }
 
+/// Pops and discards the boxed Mixed source cell from the stack after a by-reference
+/// array foreach completes. Uses the target's temporary integer register for the pop.
 fn discard_mixed_source_cell(emitter: &mut Emitter) {
     abi::emit_pop_reg(emitter, abi::temp_int_reg(emitter.target));              // discard the preserved boxed Mixed source cell after array foreach completes
 }
 
+/// Converts a runtime unboxed indexed-array payload to boxed Mixed cells in-place,
+/// then publishes the unique indexed-array pointer into the preserved Mixed source cell.
+/// Called when a by-reference foreach iterates over a Mixed that contains an indexed array.
 fn convert_runtime_mixed_indexed_by_ref_source(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -356,6 +386,9 @@ fn convert_runtime_mixed_indexed_by_ref_source(emitter: &mut Emitter) {
     }
 }
 
+/// Converts a runtime unboxed hash payload to boxed Mixed cells in-place, then publishes
+/// the unique hash pointer into the preserved Mixed source cell. Called when a by-reference
+/// foreach iterates over a Mixed that contains an associative array.
 fn convert_runtime_mixed_hash_by_ref_source(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -372,6 +405,10 @@ fn convert_runtime_mixed_hash_by_ref_source(emitter: &mut Emitter) {
     }
 }
 
+/// Ensures the foreach source array/hash is uniquely owned before by-reference binding.
+/// Calls `__rt_array_ensure_unique` or `__rt_hash_ensure_unique` depending on the type.
+/// If the source variable is itself a referenced parameter, global, or local variable,
+/// stores the unique source pointer through the appropriate binding mechanism.
 fn ensure_unique_by_ref_source(
     receiver_var: Option<&str>,
     arr_ty: &PhpType,
@@ -430,6 +467,10 @@ fn ensure_unique_by_ref_source(
     }
 }
 
+/// Binds the foreach value variable to a by-reference alias target address.
+/// Stores the address from `value_addr_reg` into the value variable's stack slot,
+/// marks the variable as a ref parameter, and updates its type to a borrowed alias
+/// of `value_ty`.
 pub(super) fn bind_foreach_value_ref(
     value_var: &str,
     value_addr_reg: &str,
@@ -452,6 +493,11 @@ pub(super) fn bind_foreach_value_ref(
     );
 }
 
+/// Allocates a fallback reference cell for a by-reference foreach value variable
+/// that is not already a ref parameter. Copies the current local value into the cell,
+/// sets the ref-cell flag to 1, and updates the variable's type to a borrowed alias.
+/// Returns `Some(ForeachRefFallback)` with the original value type for later cleanup,
+/// or `None` if the variable is not defined or is already a ref parameter.
 pub(super) fn prepare_foreach_value_ref_slot(
     value_var: &str,
     value_ty: &PhpType,
@@ -519,6 +565,10 @@ pub(super) fn prepare_foreach_value_ref_slot(
     Some(ForeachRefFallback { value_ty: current_ty })
 }
 
+/// Releases the original local value after copying it into a by-reference fallback cell.
+/// Only releases values that are `Owned` and either `Str` or refcounted; other types
+/// are left unchanged since they don't carry heap ownership. Uses `__rt_heap_free_safe`
+/// for strings and `emit_decref_if_refcounted` for refcounted heap values.
 fn release_owned_local_value_after_ref_cell_copy(
     value_ty: &PhpType,
     ownership: HeapOwnership,
@@ -554,6 +604,9 @@ fn release_owned_local_value_after_ref_cell_copy(
     abi::emit_pop_reg(emitter, cell_reg);                                       // restore the fallback reference cell for storage in the local slot
 }
 
+/// Copies the current local value at `slot_offset` into the fallback reference cell
+/// at `cell_reg`. Handles all PHP types: strings (persisted), floats (direct store),
+/// refcounted values (retained before store), and primitives (direct store with zero tag).
 fn copy_local_value_to_ref_cell(
     value_ty: &PhpType,
     slot_offset: usize,
@@ -598,6 +651,10 @@ fn copy_local_value_to_ref_cell(
     }
 }
 
+/// Stores a foreach iteration value into the value variable's stack slot. When the
+/// variable is a ref parameter, stores through the alias pointer loaded from the
+/// slot. For strings, stores both the pointer (at offset 0) and length (at offset -8).
+/// Uses scratch registers appropriate to the target ABI.
 pub(super) fn store_foreach_value_from_regs(
     value_var: &str,
     value_ty: &PhpType,
@@ -649,6 +706,10 @@ pub(super) fn store_foreach_value_from_regs(
     }
 }
 
+/// Releases any owned ref cells held by the value variable across multiple foreach sites
+/// before rebinding to a new alias. Iterates over all ref-cell flags associated with the
+/// variable, skips sites that didn't allocate a cell (flag = 0), loads the old cell from
+/// the slot, releases it via `emit_release_local_ref_cell`, and resets the flag to 0.
 pub(super) fn release_foreach_value_ref_cell_before_rebind(
     value_var: &str,
     fallback: Option<&ForeachRefFallback>,
@@ -707,6 +768,9 @@ pub(super) fn release_foreach_value_ref_cell_before_rebind(
     abi::emit_pop_reg(emitter, address_reg);                                    // restore the new foreach alias target for binding
 }
 
+/// Writes a bound flag (value 1) to the ref-cell flag offset on the stack to record
+/// that this by-reference foreach site successfully bound at least one element.
+/// Used by loop cleanup to determine whether the fallback cell must be released.
 pub(super) fn mark_foreach_value_ref_bound(flag_offset: usize, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -719,6 +783,10 @@ pub(super) fn mark_foreach_value_ref_bound(flag_offset: usize, emitter: &mut Emi
     }
 }
 
+/// Finalizes a by-reference foreach value variable after loop completion. Inserts
+/// the variable into `ref_params` and updates its type to a borrowed alias of `value_ty`.
+/// The `_value_was_ref`, `_flag_offset`, and `_saved_ref_offset` parameters are unused
+/// but kept for API compatibility.
 pub(super) fn finish_foreach_value_ref(
     value_var: &str,
     value_ty: &PhpType,
@@ -737,6 +805,10 @@ pub(super) fn finish_foreach_value_ref(
     );
 }
 
+/// Emits conditional jumps on the unboxed Mixed tag in `x0`/`rax` to dispatch
+/// indexed-array (tag 4), hash (tag 5), and object (tag 6) payloads to their
+/// respective foreach lowering paths. Non-iterable tags fall through to a fatal
+/// diagnostic.
 fn branch_on_mixed_iterable_tag(
     indexed_case: &str,
     hash_case: &str,

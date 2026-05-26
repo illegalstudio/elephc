@@ -10,6 +10,9 @@
 
 use super::*;
 
+/// Computes a safe constant environment for a `for` loop by filtering out variables
+/// written within the loop's condition, body, and update expressions from the given environment.
+/// Returns an empty map conservatively if any expression cannot be analyzed.
 pub(crate) fn safe_loop_env(
     env: &ConstantEnv,
     conditions: &[Expr],
@@ -43,6 +46,9 @@ pub(crate) fn safe_loop_env(
         .collect()
 }
 
+/// Computes a safe constant environment for a `foreach` loop by filtering out variables
+/// written by the array expression, key/value loop variables, and the body from the given environment.
+/// Returns an empty map conservatively if the array expression cannot be analyzed.
 pub(crate) fn safe_foreach_env(
     env: &ConstantEnv,
     array: &Expr,
@@ -70,6 +76,8 @@ pub(crate) fn safe_foreach_env(
         .collect()
 }
 
+/// Collects all local variable names written within a block of statements.
+/// Returns `None` if any statement cannot be analyzed (conservative invalidation).
 pub(crate) fn block_local_writes(body: &[Stmt]) -> Option<HashSet<String>> {
     let mut writes = HashSet::new();
     for stmt in body {
@@ -78,6 +86,8 @@ pub(crate) fn block_local_writes(body: &[Stmt]) -> Option<HashSet<String>> {
     Some(writes)
 }
 
+/// Collects all local variable names written by a single statement (assignments, increments,
+/// foreach iterations, etc.). Returns `None` if the statement cannot be analyzed.
 pub(crate) fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
     match &stmt.kind {
         StmtKind::Synthetic(stmts) => block_local_writes(stmts),
@@ -270,6 +280,8 @@ pub(crate) fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
     }
 }
 
+/// Collects all local variable names written by evaluating an expression.
+/// Returns `None` if the expression has unknown side effects (e.g., function calls, `unset` on non-variables).
 pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
     match &expr.kind {
         ExprKind::StringLiteral(_)
@@ -393,6 +405,8 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
     }
 }
 
+/// Extracts local variable writes from an `InstanceOf` target expression.
+/// Returns an empty set for a class name, or recurses for an expression target.
 fn instanceof_target_local_writes(target: &InstanceOfTarget) -> Option<HashSet<String>> {
     match target {
         InstanceOfTarget::Name(_) => Some(HashSet::new()),
@@ -400,6 +414,9 @@ fn instanceof_target_local_writes(target: &InstanceOfTarget) -> Option<HashSet<S
     }
 }
 
+/// Extracts local variable writes from an assignment target expression and extends the provided HashSet.
+/// Handles simple variables, array accesses, property accesses, and dynamic property accesses.
+/// Returns `None` if any nested expression cannot be analyzed.
 fn collect_assignment_target_writes(
     target: &Expr,
     writes: &mut HashSet<String>,
@@ -431,6 +448,8 @@ fn collect_assignment_target_writes(
     Some(())
 }
 
+/// Merges multiple `HashSet<String>` collections into a single set containing all variable names.
+/// Used to combine write sets from multiple sub-expressions or statements.
 pub(crate) fn merge_write_sets<const N: usize>(sets: [HashSet<String>; N]) -> Option<HashSet<String>> {
     let mut merged = HashSet::new();
     for set in sets {
@@ -439,6 +458,8 @@ pub(crate) fn merge_write_sets<const N: usize>(sets: [HashSet<String>; N]) -> Op
     Some(merged)
 }
 
+/// Extracts variable names from the arguments of an `unset()` call for tracking which variables
+/// are being removed from scope. Returns `None` if any argument is not a simple variable.
 pub(crate) fn unset_target_names(expr: &Expr) -> Option<HashSet<String>> {
     match &expr.kind {
         ExprKind::FunctionCall { name, args } if name == "unset" => {

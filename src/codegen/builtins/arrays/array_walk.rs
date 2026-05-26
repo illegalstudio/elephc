@@ -17,6 +17,11 @@ use crate::parser::ast::Expr;
 use crate::types::PhpType;
 use super::callback_env;
 
+/// Lowers a `array_walk($array, $callback, $userdata?)` call into target assembly.
+/// Evaluates the array argument first, then the callback argument, preserving PHP source
+/// evaluation order. When the callback requires captures, emits a capture-environment
+/// wrapper and calls `__rt_array_walk` with the environment; otherwise passes the bare
+/// callback address and a null userdata pointer. Returns `PhpType::Void` on success.
 pub fn emit(
     _name: &str,
     args: &[Expr],

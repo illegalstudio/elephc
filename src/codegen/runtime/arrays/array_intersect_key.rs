@@ -11,9 +11,31 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_intersect_key: return entries from hash1 whose keys ARE in hash2.
-/// Input:  x0=hash1, x1=hash2
-/// Output: x0=new hash table with entries from hash1 found in hash2
+/// Emits the `__rt_array_intersect_key` runtime helper.
+///
+/// Returns entries from `hash1` whose string keys exist in `hash2`. The result is a
+/// new hash table; entries from `hash1` are copied (with appropriate retain/release
+/// for heap-backed values) when their key is found in `hash2`.
+///
+/// # Arguments
+/// * `emitter` - Target-aware code emitter
+///
+/// # ARM64 ABI
+/// * Input: `x0`=hash1, `x1`=hash2
+/// * Output: `x0`=new hash table with entries from hash1 found in hash2
+///
+/// # x86_64 ABI
+/// * Input: `rdi`=hash1, `rsi`=hash2
+/// * Output: `rax`=new hash table with entries from hash1 found in hash2
+///
+/// # Implementation notes
+/// * Iterates over `hash1` in insertion order via `__rt_hash_iter_next`.
+/// * Probes each key in `hash2` via `__rt_hash_get`; copies on match.
+/// * Heap-backed values (strings, arrays, objects) are retained via `__rt_incref`
+///   before insertion into the result. Scalar values are copied directly.
+/// * The result hash table is allocated with the same capacity as `hash1`.
+/// * Dispatches to `emit_array_intersect_key_linux_x86_64` on x86_64; uses ARM64
+///   codegen otherwise.
 pub fn emit_array_intersect_key(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_intersect_key_linux_x86_64(emitter);
@@ -111,6 +133,25 @@ pub fn emit_array_intersect_key(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = result hash table
 }
 
+/// x86_64 Linux implementation of the `__rt_array_intersect_key` runtime helper.
+///
+/// Same semantics as `emit_array_intersect_key` but emits x86_64 System V ABI
+/// assembly. Saves callee-saved registers `rbp`; uses `rbp`-relative addressing
+/// for the stack frame.
+///
+/// # Arguments
+/// * `emitter` - Target-aware code emitter (must be x86_64)
+///
+/// # x86_64 ABI
+/// * Input: `rdi`=hash1, `rsi`=hash2
+/// * Output: `rax`=new hash table
+///
+/// # Stack frame layout (80 bytes, rbp-relative)
+/// * `[rbp - 8]`   = hash1 pointer
+/// * `[rbp - 16]`  = hash2 pointer
+/// * `[rbp - 24]`  = result hash table pointer
+/// * `[rbp - 32]`  = iterator cursor
+/// * `[rbp - 40..72]` = temporary scratch for current entry (key_ptr, key_len, value_lo, value_hi, value_tag)
 fn emit_array_intersect_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_intersect_key ---");

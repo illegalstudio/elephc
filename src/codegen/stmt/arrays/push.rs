@@ -17,6 +17,10 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
+/// Emits `$array[] = value` (append to a named array variable).
+/// Handles `ArrayAccess` objects, by-ref parameters, `Mixed` conversions, and
+/// refcounted push cleanup. Routes to architecture-specific helpers for x86_64.
+/// Updates the variable's inferred element type when a heterogeneous value is appended.
 pub(super) fn emit_array_push_stmt(
     array: &str,
     value: &Expr,
@@ -164,6 +168,10 @@ pub(super) fn emit_array_push_stmt(
     }
 }
 
+/// x86_64-specific array-push lowering. Handles by-ref parameters and emits typed push
+/// runtime calls (`__rt_array_push_int`, `__rt_array_push_str`, `__rt_array_push_refcounted`).
+/// May trigger `__rt_array_to_mixed` if a heterogeneous value is appended to a typed array.
+/// Clobbers `rax`, `r11`, `rsi`, `rdi`, `xmm0`.
 fn emit_array_push_stmt_linux_x86_64(
     array: &str,
     value: &Expr,
@@ -281,6 +289,10 @@ fn emit_array_push_stmt_linux_x86_64(
     }
 }
 
+/// Determines the effective element type of an indexed-array push. Returns `Mixed` when
+/// the existing type and value type are incompatible, or when either is already `Mixed`
+/// or a `Union`. Otherwise preserves the existing or value type, with a common object
+/// type selected when both are objects.
 fn effective_indexed_push_type(existing: &PhpType, value: &PhpType, ctx: &Context) -> PhpType {
     if matches!(existing, PhpType::Never) {
         return if matches!(value, PhpType::Union(_)) {
@@ -303,6 +315,10 @@ fn effective_indexed_push_type(existing: &PhpType, value: &PhpType, ctx: &Contex
     }
 }
 
+/// Updates callables array metadata (`closure_sigs`, `closure_captures`,
+/// `first_class_callable_targets`, `variable_fcc_label`) when appending a callable
+/// value to a named array. Propagates metadata from closures, first-class callables,
+/// variables, and array-access sources; clears metadata for incompatible sources.
 fn update_callable_array_metadata(
     array: &str,
     value: &Expr,
@@ -340,6 +356,8 @@ fn update_callable_array_metadata(
     }
 }
 
+/// Copies callable array metadata (closure signatures, captures, FCC targets, FCC labels)
+/// from `src` to `dest` in the context. If `src` has no entry, removes the `dest` entry.
 fn copy_callable_metadata(dest: &str, src: &str, ctx: &mut Context) {
     if let Some(sig) = ctx.closure_sigs.get(src).cloned() {
         ctx.closure_sigs.insert(dest.to_string(), sig);
@@ -364,6 +382,8 @@ fn copy_callable_metadata(dest: &str, src: &str, ctx: &mut Context) {
     }
 }
 
+/// Clears all callable array metadata entries (`closure_sigs`, `closure_captures`,
+/// `first_class_callable_targets`, `variable_fcc_label`) for a named array variable.
 fn clear_callable_array_metadata(array: &str, ctx: &mut Context) {
     ctx.closure_sigs.remove(array);
     ctx.closure_captures.remove(array);

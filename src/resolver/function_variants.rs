@@ -19,6 +19,23 @@ use super::discovery::{
 };
 use super::state::namespace_string;
 
+/// Rewrites include-loaded function declarations into variant groups and registers them.
+///
+/// Scans all discovery entries for functions with mutually exclusive branches (e.g., inside
+/// `ifdef`/`ifndef` blocks), collects occurrences by public name, filters to supported variant
+/// groups, generates stable variant symbol names, builds a `FunctionVariantRegistry` for runtime
+/// activation, and rewrites the AST function declarations to use the variant local names.
+///
+/// Returns a vector of synthetic `FunctionVariantGroup` statements (used by codegen to emit
+/// variant metadata) and the registry mapping canonical public keys to variant infos.
+///
+/// # Arguments
+/// * `entries` — mutable slice of discovery entries from include resolution, each containing
+///   declarations from one source file along with exclusive group/branch metadata
+///
+/// # Registry invariant
+/// The registry maps `(canonical_path, public_name)` to `FunctionVariantInfo` so the runtime
+/// can activate the correct variant at link time based on which include branch was taken.
 pub(super) fn rewrite_include_loaded_function_variants(
     entries: &mut [DiscoveryEntry],
 ) -> (Vec<Stmt>, FunctionVariantRegistry) {
@@ -94,6 +111,10 @@ pub(super) fn rewrite_include_loaded_function_variants(
     (groups, registry)
 }
 
+/// Tracks a single function occurrence discovered during include resolution.
+///
+/// Used to collect all variants of a public function name across multiple include entries
+/// before filtering and rewriting.
 #[derive(Clone)]
 struct FunctionOccurrence {
     entry_index: usize,
@@ -108,11 +129,29 @@ struct FunctionOccurrence {
     exclusive_branch: Option<usize>,
 }
 
+/// Holds the new local name for a function declaration that was rewritten to a variant symbol.
+///
+/// The key in the rewrites map is `(entry_index, occurrence_index)` which uniquely identifies
+/// which function declaration in which entry this rewrite applies to.
 #[derive(Clone)]
 struct FunctionVariantRewrite {
     local_name: String,
 }
 
+/// Recursively collects function declarations from a statement list, tracking namespaces.
+///
+/// Pushes a `FunctionOccurrence` onto `occurrences` for every `FunctionDecl` encountered,
+/// carrying entry index, occurrence index (within the entry), canonical path, public name,
+/// public key (PHP symbol key for case-insensitive lookup), local name, namespace, source span,
+/// and exclusive group/branch metadata from the discovery entry.
+///
+/// # Arguments
+/// * `stmts` — statement list to walk
+/// * `entry_index` — index into the resolver's discovery entries (identifies the source file)
+/// * `entry` — the discovery entry providing exclusive group/branch metadata
+/// * `namespace` — current namespace scope, built up as we descend into `NamespaceBlock`
+/// * `occurrence_index` — incremented for each function found; passed by-mut to assign stable indices
+/// * `occurrences` — output vector appended to in depth-first order
 fn collect_function_occurrences(
     stmts: &[Stmt],
     entry_index: usize,
@@ -168,6 +207,15 @@ fn collect_function_occurrences(
     }
 }
 
+/// Returns true if a group of same-named function occurrences is supported for variant rewriting.
+///
+/// A group is supported when:
+/// - It has exactly one occurrence (no variant needed), OR
+/// - All occurrences share the same `exclusive_group` id AND each occurrence has a distinct
+///   `exclusive_branch` number (mutually exclusive branches with no overlap)
+///
+/// If any occurrence lacks `exclusive_group` or `exclusive_branch`, or if two occurrences share
+/// the same branch, the group is not supported and is skipped during rewriting.
 fn is_supported_include_loaded_function_group(occurrences: &[FunctionOccurrence]) -> bool {
     if occurrences.len() == 1 {
         return true;
@@ -194,6 +242,19 @@ fn is_supported_include_loaded_function_group(occurrences: &[FunctionOccurrence]
     true
 }
 
+/// Generates a stable, unique local name for a function variant.
+///
+/// The name encodes the include canonical path, public key, exclusive group, branch, and the
+/// original local function name. Uses a FNV-like hash for determinism so the same source file
+/// and branch produce identical variant names across compilations.
+///
+/// Format: `__elephc_include_variant_{hash}_{sanitized_local_name}`
+///
+/// # Arguments
+/// * `occurrence` — the function occurrence with canonical path, public key, exclusive metadata
+///
+/// # Sanitization
+/// Non-alphanumeric characters in the local name are replaced with `_`; empty names become `fn`.
 fn variant_local_name(occurrence: &FunctionOccurrence) -> String {
     let branch = occurrence
         .exclusive_branch
@@ -212,6 +273,10 @@ fn variant_local_name(occurrence: &FunctionOccurrence) -> String {
     )
 }
 
+/// Sanitizes a PHP identifier segment for use in a generated symbol name.
+///
+/// Keeps only ASCII alphanumerics and underscores; replaces all other characters with `_`.
+/// Returns `"fn"` if the input is empty after sanitization (prevents empty symbol segments).
 fn sanitize_identifier_segment(name: &str) -> String {
     let mut out = String::new();
     for ch in name.chars() {
@@ -227,6 +292,11 @@ fn sanitize_identifier_segment(name: &str) -> String {
     out
 }
 
+/// Computes a 64-bit FNV-1a hash of the concatenated input parts and returns it as a 16-digit hex string.
+///
+/// Used to produce deterministic, stable hashes for variant symbol names from include path,
+/// public key, exclusive group, and branch. The hash is NOT cryptographically secure; it only
+/// needs to be stable and collision-resistant for symbol formation within a compilation.
 fn stable_hash_hex(parts: &[&str]) -> String {
     let mut hash = 0xcbf29ce484222325u64;
     for part in parts {
@@ -240,6 +310,18 @@ fn stable_hash_hex(parts: &[&str]) -> String {
     format!("{:016x}", hash)
 }
 
+/// Recursively rewrites function declarations in place using a precomputed rewrite map.
+///
+/// Walks the statement tree depth-first; for each `FunctionDecl`, looks up
+/// `(entry_index, occurrence_index)` in `rewrites` and replaces the function's `name` with the
+/// stored variant local name. Updates `occurrence_index` as it visits each function to stay in
+/// sync with the indices assigned during collection.
+///
+/// # Arguments
+/// * `stmts` — statement list to walk and mutate in place
+/// * `entry_index` — index identifying which discovery entry this statement list belongs to
+/// * `rewrites` — map from `(entry_index, occurrence_index)` to the new local name
+/// * `occurrence_index` — current occurrence counter, incremented after each `FunctionDecl` visited
 fn rewrite_function_occurrences(
     stmts: &mut [Stmt],
     entry_index: usize,

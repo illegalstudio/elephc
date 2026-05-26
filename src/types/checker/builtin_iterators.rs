@@ -22,6 +22,15 @@ use crate::types::PhpType;
 use super::builtin_types::InterfaceDeclInfo;
 use super::Checker;
 
+/// Injects the built-in `Generator` class into the type checker's class map.
+///
+/// The `Generator` class implements the SPL `Iterator` interface. It is injected
+/// early in the pipeline so that yield expressions can resolve `Generator` as a valid
+/// type. Method bodies are stubbed with placeholder returns; codegen special-cases
+/// each method to dispatch to `__rt_gen_*` runtime helpers.
+///
+/// # Errors
+/// Returns `CompileError` if `Generator` is already declared as an interface or class.
 pub(crate) fn inject_builtin_iterators(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
@@ -93,6 +102,10 @@ fn stub_method_returning_null(name: &str) -> ClassMethod {
     }
 }
 
+/// A stub method with one parameter whose body is `return null;`.
+///
+/// Used for `Generator::send($value)` and `Generator::throw($exception)`.
+/// The parameter type is patched separately by `patch_builtin_generator_signatures`.
 fn stub_method_returning_null_with_param(name: &str, param: &str) -> ClassMethod {
     ClassMethod {
         name: name.to_string(),
@@ -113,6 +126,8 @@ fn stub_method_returning_null_with_param(name: &str, param: &str) -> ClassMethod
     }
 }
 
+/// A stub method returning `false` with body `return false;`.
+/// Used for `Generator::valid()`.
 fn stub_method_returning_false(name: &str) -> ClassMethod {
     ClassMethod {
         name: name.to_string(),
@@ -136,6 +151,8 @@ fn stub_method_returning_false(name: &str) -> ClassMethod {
     }
 }
 
+/// A stub method returning `void` with an empty body.
+/// Used for `Generator::next()` and `Generator::rewind()`.
 fn stub_void_method(name: &str) -> ClassMethod {
     ClassMethod {
         name: name.to_string(),
@@ -153,6 +170,13 @@ fn stub_void_method(name: &str) -> ClassMethod {
     }
 }
 
+/// Patches the return types and parameter types of `Generator` methods in the checker.
+///
+/// After `inject_builtin_iterators` registers the class with placeholder `mixed` types,
+/// this function corrects each method's signature to match the actual PHP built-in
+/// signatures: `current() -> mixed`, `key() -> mixed`, `next() -> void`,
+/// `valid() -> bool`, `rewind() -> void`, `send(mixed) -> mixed`,
+/// `throw(Throwable) -> mixed`, `getReturn() -> mixed`.
 pub(crate) fn patch_builtin_generator_signatures(checker: &mut Checker) {
     if let Some(class_info) = checker.classes.get_mut("Generator") {
         for (name, ty) in &[

@@ -104,6 +104,10 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_preg_match`.
+/// Called from `emit_preg_match` when `target.arch == Arch::X86_64`.
+/// Uses System V AMD64 ABI: pattern in rdi/rsi, subject in rdx/rcx, result in eax.
+/// Compiles a POSIX regex via `regcomp`, executes via `regexec`, then frees with `regfree`.
 fn emit_preg_match_linux_x86_64(emitter: &mut Emitter) {
     let regex_t_size = emitter.platform.regex_t_size();
     let regmatch_off = regex_t_size;

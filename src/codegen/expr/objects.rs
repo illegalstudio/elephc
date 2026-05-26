@@ -10,6 +10,7 @@
 
 mod access;
 mod allocation;
+/// dispatch
 pub(crate) mod dispatch;
 mod fiber_wrapper;
 mod instanceof;
@@ -26,6 +27,7 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, StaticReceiver};
 use crate::types::PhpType;
 
+/// Emits `new ClassName(...)` for a known class with constructor args.
 pub(crate) fn emit_new_object(
     class_name: &str,
     args: &[Expr],
@@ -36,6 +38,7 @@ pub(crate) fn emit_new_object(
     allocation::emit_new_object(class_name, args, emitter, ctx, data)
 }
 
+/// Emits a dynamic property access where the property name is a runtime expression.
 pub(crate) fn emit_dynamic_property_access(
     object: &Expr,
     property: &Expr,
@@ -46,6 +49,7 @@ pub(crate) fn emit_dynamic_property_access(
     access::emit_dynamic_property_access(object, property, false, emitter, ctx, data)
 }
 
+/// Emits a nullsafe dynamic property access (`?->`).
 pub(crate) fn emit_nullsafe_dynamic_property_access(
     object: &Expr,
     property: &Expr,
@@ -56,6 +60,7 @@ pub(crate) fn emit_nullsafe_dynamic_property_access(
     access::emit_dynamic_property_access(object, property, true, emitter, ctx, data)
 }
 
+/// Emits a property access on a `Mixed`-typed receiver by name.
 pub(crate) fn emit_mixed_property_access(
     property: &str,
     emitter: &mut Emitter,
@@ -65,10 +70,8 @@ pub(crate) fn emit_mixed_property_access(
     access::emit_mixed_property_access(property, emitter, ctx, data)
 }
 
-/// Resolve a non-late-bound `StaticReceiver` to a concrete class FQN at codegen time.
-/// Returns `None` if the receiver cannot be resolved (no enclosing class for
-/// `Self_`, or no parent for `Parent`). `Static` is intentionally not handled
-/// here because it must use the forwarded called-class id at runtime.
+/// Resolves a `StaticReceiver` (`self`/`parent`/`Named`) to a class name string.
+/// Returns `None` for `Static` (late-bound) which must be handled at runtime.
 fn resolve_scoped_receiver_to_class(receiver: &StaticReceiver, ctx: &Context) -> Option<String> {
     match receiver {
         StaticReceiver::Self_ => ctx.current_class.clone(),
@@ -82,6 +85,8 @@ fn resolve_scoped_receiver_to_class(receiver: &StaticReceiver, ctx: &Context) ->
     }
 }
 
+/// Emits a class constant access for `self`/`parent`/`Named` receivers.
+/// For `Static` receivers, dispatches to `emit_late_bound_class_constant` at runtime.
 pub(super) fn emit_class_constant(
     receiver: &StaticReceiver,
     emitter: &mut Emitter,
@@ -96,6 +101,7 @@ pub(super) fn emit_class_constant(
     scalars::emit_string_literal(&name, emitter, data)
 }
 
+/// Emits a scoped constant access (self/parent/named receiver with constant name).
 pub(super) fn emit_scoped_constant_access(
     receiver: &StaticReceiver,
     name: &str,
@@ -150,6 +156,7 @@ pub(super) fn emit_scoped_constant_access(
     super::emit_expr(&value, emitter, ctx, data)
 }
 
+/// Emits `new self/parent/Static(...)` with a late-bound class.
 pub(super) fn emit_new_scoped_object(
     receiver: &StaticReceiver,
     args: &[Expr],
@@ -166,6 +173,8 @@ pub(super) fn emit_new_scoped_object(
     allocation::emit_new_object(&class_name, args, emitter, ctx, data)
 }
 
+/// Collects all classes in the current inheritance hierarchy (same class or descendants)
+/// sorted by class ID, used for late-static-binding dispatch tables.
 fn sorted_late_bound_classes_by_id(ctx: &Context) -> Vec<(String, u64)> {
     let Some(base_class) = ctx.current_class.as_deref() else {
         return Vec::new();
@@ -180,6 +189,7 @@ fn sorted_late_bound_classes_by_id(ctx: &Context) -> Vec<(String, u64)> {
     classes
 }
 
+/// Returns true if `class_name` is the same as `base_class` or descends from it.
 fn class_is_same_or_descends_from(class_name: &str, base_class: &str, ctx: &Context) -> bool {
     let mut current = Some(class_name);
     while let Some(name) = current {
@@ -191,6 +201,7 @@ fn class_is_same_or_descends_from(class_name: &str, base_class: &str, ctx: &Cont
     false
 }
 
+/// Unboxes a Mixed value and emits a fatal if it is null instead of an object.
 pub(crate) fn emit_unbox_mixed_object_or_fatal(
     message: &[u8],
     emitter: &mut Emitter,
@@ -218,6 +229,7 @@ pub(crate) fn emit_unbox_mixed_object_or_fatal(
     }
 }
 
+/// Emits a null-check branch on a Mixed-object unbox result for nullsafe flows.
 pub(super) fn emit_unbox_mixed_object_or_null_branch(null_label: &str, emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // inspect the boxed nullable object before member access
     match emitter.target.arch {
@@ -234,6 +246,7 @@ pub(super) fn emit_unbox_mixed_object_or_null_branch(null_label: &str, emitter: 
     }
 }
 
+/// Emits a runtime warning diagnostic with the given message.
 pub(super) fn emit_runtime_warning(
     message: &[u8],
     emitter: &mut Emitter,
@@ -254,6 +267,7 @@ pub(super) fn emit_runtime_warning(
     abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the runtime warning under the current @ scope
 }
 
+/// Emits a boxed null value (tagged nullable pointer) into expression result registers.
 pub(super) fn emit_boxed_null(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(
         emitter,
@@ -263,12 +277,14 @@ pub(super) fn emit_boxed_null(emitter: &mut Emitter) {
     crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Void);
 }
 
+/// Boxes the current expression result as Mixed if the result type is not already Mixed.
 pub(super) fn box_nullable_result(result_ty: &PhpType, emitter: &mut Emitter) {
     if !matches!(result_ty.codegen_repr(), PhpType::Mixed) {
         crate::codegen::emit_box_current_value_as_mixed(emitter, result_ty);
     }
 }
 
+/// Emits the fatal-message sequence (write to stderr + exit) for null object derefs.
 fn emit_fatal_message(emitter: &mut Emitter, message_label: &str, message_len: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -293,6 +309,7 @@ fn emit_fatal_message(emitter: &mut Emitter, message_label: &str, message_len: u
     }
 }
 
+/// Emits the forwarded called-class ID or falls back to the lexical current-class ID.
 fn emit_late_bound_class_id_or_lexical_fallback(emitter: &mut Emitter, ctx: &Context) {
     if !dispatch::emit_forwarded_called_class_id(emitter, ctx) {
         let class_id = ctx
@@ -305,6 +322,8 @@ fn emit_late_bound_class_id_or_lexical_fallback(emitter: &mut Emitter, ctx: &Con
     }
 }
 
+/// Emits a comparison of the forwarded called-class ID against a concrete class ID,
+/// branching to `matched_label` if they match.
 fn emit_compare_current_class_id(emitter: &mut Emitter, class_id: u64, matched_label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -318,6 +337,8 @@ fn emit_compare_current_class_id(emitter: &mut Emitter, class_id: u64, matched_l
     }
 }
 
+/// Emits a late-bound class constant using the forwarded called-class ID,
+/// branching to the matching class's constant, with a lexical fallback.
 fn emit_late_bound_class_constant(
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -348,6 +369,8 @@ fn emit_late_bound_class_constant(
     PhpType::Str
 }
 
+/// Emits a `new static(...)` call using the forwarded called-class ID,
+/// branching to the matching class's constructor, with a lexical fallback.
 fn emit_late_bound_new_static(
     args: &[Expr],
     emitter: &mut Emitter,
@@ -381,6 +404,7 @@ fn emit_late_bound_new_static(
     PhpType::Object(fallback_class)
 }
 
+/// Emits a direct property access on a known class with a literal property name.
 pub(super) fn emit_property_access(
     object: &Expr,
     property: &str,
@@ -391,6 +415,7 @@ pub(super) fn emit_property_access(
     access::emit_property_access(object, property, emitter, ctx, data)
 }
 
+/// Emits a property access on a nullable class where the class is known at codegen time.
 pub(super) fn emit_nullable_object_property_access(
     class_name: &str,
     property: &str,
@@ -401,6 +426,7 @@ pub(super) fn emit_nullable_object_property_access(
     access::emit_nullable_object_property_access(class_name, property, emitter, ctx, data)
 }
 
+/// Emits a property access where the class is known but property is dynamically loaded.
 pub(super) fn emit_loaded_object_property_access(
     class_name: &str,
     property: &str,
@@ -411,6 +437,7 @@ pub(super) fn emit_loaded_object_property_access(
     access::emit_loaded_object_property_access(class_name, property, emitter, ctx, data)
 }
 
+/// Emits a nullsafe property access (`?.property`).
 pub(super) fn emit_nullsafe_property_access(
     object: &Expr,
     property: &str,
@@ -421,6 +448,7 @@ pub(super) fn emit_nullsafe_property_access(
     nullsafe::emit_nullsafe_property_access(object, property, emitter, ctx, data)
 }
 
+/// Emits a static property access (`StaticClass::$property`).
 pub(super) fn emit_static_property_access(
     receiver: &StaticReceiver,
     property: &str,
@@ -431,6 +459,7 @@ pub(super) fn emit_static_property_access(
     static_properties::emit_static_property_access(receiver, property, emitter, ctx, data)
 }
 
+/// Emits a `ClassName::Case` enum case singleton load.
 pub(super) fn emit_enum_case(
     enum_name: &str,
     case_name: &str,
@@ -448,6 +477,7 @@ pub(super) fn emit_enum_case(
     PhpType::Object(enum_name.to_string())
 }
 
+/// Pushes a magic `__property` name as a string argument pair for `__get`/`__set` calls.
 pub(crate) fn push_magic_property_name_arg(
     property: &str,
     emitter: &mut Emitter,
@@ -460,6 +490,7 @@ pub(crate) fn push_magic_property_name_arg(
     crate::codegen::abi::emit_push_reg_pair(emitter, ptr_reg, len_reg); // push the magic-property name argument pair onto the temporary call stack
 }
 
+/// Returns `[method_name_string, args_array]` for `__call`/`__callStatic` magic dispatch.
 pub(super) fn magic_method_args(method: &str, args: &[Expr], span: crate::span::Span) -> Vec<Expr> {
     vec![
         Expr::new(ExprKind::StringLiteral(method.to_string()), span),
@@ -467,6 +498,7 @@ pub(super) fn magic_method_args(method: &str, args: &[Expr], span: crate::span::
     ]
 }
 
+/// Emits an instance method call (`$object->method(...)`).
 pub(crate) fn emit_method_call(
     object: &Expr,
     method: &str,
@@ -478,6 +510,7 @@ pub(crate) fn emit_method_call(
     dispatch::emit_method_call(object, method, args, emitter, ctx, data)
 }
 
+/// Emits a nullsafe method call (`?->method(...)`).
 pub(super) fn emit_nullsafe_method_call(
     object: &Expr,
     method: &str,
@@ -489,6 +522,7 @@ pub(super) fn emit_nullsafe_method_call(
     nullsafe::emit_nullsafe_method_call(object, method, args, emitter, ctx, data)
 }
 
+/// Emits a method call on a known class with args already pushed to the stack.
 pub(crate) fn emit_method_call_with_pushed_args(
     class_name: &str,
     method: &str,
@@ -499,6 +533,7 @@ pub(crate) fn emit_method_call_with_pushed_args(
     dispatch::emit_method_call_with_pushed_args(class_name, method, arg_types, 0, emitter, ctx)
 }
 
+/// Emits a method call with the receiver saved below the pushed args on the stack.
 pub(super) fn emit_method_call_with_saved_receiver_below_args(
     class_name: &str,
     method: &str,
@@ -517,6 +552,7 @@ pub(super) fn emit_method_call_with_saved_receiver_below_args(
     )
 }
 
+/// Emits the args portion of a method call when args have already been pushed.
 pub(super) fn emit_pushed_method_args(
     args: &[Expr],
     sig: Option<&crate::types::FunctionSig>,
@@ -527,6 +563,7 @@ pub(super) fn emit_pushed_method_args(
     dispatch::emit_pushed_method_args(args, sig, emitter, ctx, data)
 }
 
+/// Emits a static method call (`ClassName::method(...)` or `self/parent/static`).
 pub(crate) fn emit_static_method_call(
     receiver: &StaticReceiver,
     method: &str,
@@ -538,6 +575,7 @@ pub(crate) fn emit_static_method_call(
     dispatch::emit_static_method_call(receiver, method, args, emitter, ctx, data)
 }
 
+/// Emits an instanceof type check expression.
 pub(super) fn emit_instanceof(
     value: &Expr,
     target: &InstanceOfTarget,

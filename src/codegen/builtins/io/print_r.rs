@@ -17,6 +17,26 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits PHP `print_r` diagnostic output to stdout for a single argument.
+///
+/// # Arguments
+/// - `_name`: The builtin name (unused, always `print_r`).
+/// - `args`: Single expression to print. Must not be empty.
+/// - `emitter`: Target-aware assembly emitter.
+/// - `ctx`: Codegen context carrying type information for the argument.
+/// - `data`: Writable data section for string/symbol materialization.
+///
+/// # Returns
+/// Always returns `Some(PhpType::Void)`.
+///
+/// # Behavior
+/// - `bool`: Prints `"1"` for `true`, nothing for `false`.
+/// - `void` (null): Prints nothing.
+/// - `array`: Prints `"Array\n"` label only (recursion not supported).
+/// - `int`, `float`, `string`: Same output as `echo` via `emit_write_stdout`.
+///
+/// # Side effects
+/// Writes to stdout. Does not consume ownership of the argument value.
 pub fn emit(
     _name: &str,
     args: &[Expr],

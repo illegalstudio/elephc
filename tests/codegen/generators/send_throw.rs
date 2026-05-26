@@ -11,6 +11,9 @@
 
 use crate::support::*;
 
+// Verifies `Generator::send(int)` routes the payload into a `YieldAssign` resume,
+// which unboxes the `sent_value` slot back to `int` and assigns it to the LHS local.
+// PHP: `send(100)` makes `$a = yield 1` resolve to `$a = 100` on resume.
 #[test]
 fn test_generator_send_int_arg_routes_into_yield_assign() {
     // `Generator::send($v)` stashes the boxed Mixed pointer in the
@@ -36,6 +39,9 @@ echo $g->current();
     assert_eq!(out, "1 100 200");
 }
 
+// Verifies bare `yield` (no expression) consumes `send()` value into the assignment
+// LHS local without requiring an explicit `yield <expr>` on the right side.
+// PHP: `yield` with no value still writes the sent value to `$x`.
 #[test]
 fn test_generator_bare_yield_assignment_consumes_send_value() {
     let out = compile_and_run(
@@ -53,6 +59,8 @@ echo $g->current();
     assert_eq!(out, "7");
 }
 
+// Verifies the `sent_value` slot is cleared after a plain `next()` resume that does
+// not assign the yield. A subsequent `current()` sees `0` (null/unset sent value).
 #[test]
 fn test_generator_send_value_is_cleared_after_plain_resume() {
     let out = compile_and_run(
@@ -74,6 +82,10 @@ echo $g->current();
     assert_eq!(out, "0");
 }
 
+// Verifies `Generator::throw($exc)` sets TERMINATED, publishes the exception in the
+// global slot, and tail-calls the unwinder so the caller's `catch` block receives it.
+// PHP: `throw` terminates the generator before unwinding and the exception propagates
+// to the enclosing `try/catch` in the caller.
 #[test]
 fn test_generator_throw_propagates_to_caller_catch() {
     // `Generator::throw($exc)` sets TERMINATED, publishes the exception
@@ -101,6 +113,9 @@ try {
     assert_eq!(out, "1 caught: boom");
 }
 
+// Verifies `Generator::send(string)` lands in a Mixed-typed local via refcount transfer
+// (no unboxing to int). The generator alternates `yield <prompt>` / `yield $reply` and
+// the sent string value propagates through the assignment chain.
 #[test]
 fn test_generator_send_with_string_payload_into_mixed_slot() {
     // `Generator::send($v)` with a string payload now lands in a
@@ -129,6 +144,9 @@ echo $g->current();
     assert_eq!(out, "first alpha second gamma");
 }
 
+// Verifies `send()` value participates in Mixed arithmetic when used in expressions
+// on the right side of `yield`. Tests `$a * 2` and `$a + $b` with sent int payloads,
+// and that `send()` on an already-terminated generator returns `null`.
 #[test]
 fn test_generator_send_value_supports_mixed_arithmetic() {
     let out = compile_and_run(

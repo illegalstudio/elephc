@@ -18,6 +18,7 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emit the `array_push` builtin call.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -126,6 +127,11 @@ pub fn emit(
     Some(PhpType::Void)
 }
 
+/// Emits `array_push` codegen for the x86_64 Linux target.
+/// Saves the array pointer before evaluating the value to push, restores it afterward,
+/// then calls the appropriate runtime helper based on the value type (int, float, string,
+/// refcounted). Handles COW splitting and mixed-type conversion when needed, then
+/// publishes the possibly-reallocated array pointer back through the mutating argument slot.
 fn emit_array_push_linux_x86_64(
     args: &[Expr],
     arr_ty: &PhpType,
@@ -219,6 +225,9 @@ fn emit_array_push_linux_x86_64(
     emit_store_mutating_arg(emitter, ctx, &args[0]);                             // publish the possibly-grown indexed-array pointer back through the mutating argument slot
 }
 
+/// Returns the element type of an indexed array type.
+/// For `PhpType::Array(elem_ty)` returns the unwrapped element type;
+/// for all other array types (including `PhpType::AssocArray`), defaults to `PhpType::Int`.
 fn indexed_array_elem_type(arr_ty: &PhpType) -> PhpType {
     match arr_ty {
         PhpType::Array(elem_ty) => *elem_ty.clone(),
@@ -226,6 +235,17 @@ fn indexed_array_elem_type(arr_ty: &PhpType) -> PhpType {
     }
 }
 
+/// Determines the effective element type after a push operation given the existing array element
+/// type and the type of the value being pushed.
+///
+/// Rules:
+/// - If the existing type is `Never`, returns the value type (or `Mixed` for `Union`).
+/// - If the value is `Never`, returns the existing type unchanged.
+/// - If either type is `Mixed` or `Union`, returns `Mixed`.
+/// - If both types match, returns that type.
+/// - For `Object` vs `Object`, returns the common object type via `ctx.common_object_type`,
+///   falling back to `Mixed` if unrelated.
+/// - Otherwise returns `Mixed`.
 fn effective_indexed_push_type(existing: &PhpType, value: &PhpType, ctx: &Context) -> PhpType {
     if matches!(existing, PhpType::Never) {
         return if matches!(value, PhpType::Union(_)) {
@@ -248,6 +268,9 @@ fn effective_indexed_push_type(existing: &PhpType, value: &PhpType, ctx: &Contex
     }
 }
 
+/// Updates the type annotation for a variable that received a pushed value, wrapping the
+/// element type back into `PhpType::Array` and updating the variable's type and ownership
+/// in the context. Only applies to simple variable expressions; no-op for other forms.
 fn update_array_push_arg_type(arg: &Expr, elem_ty: &PhpType, ctx: &mut Context) {
     if let crate::parser::ast::ExprKind::Variable(name) = &arg.kind {
         let updated_ty = PhpType::Array(Box::new(elem_ty.clone()));

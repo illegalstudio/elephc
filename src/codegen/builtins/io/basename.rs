@@ -16,6 +16,17 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `basename(path, suffix?)` builtin.
+///
+/// Handles both single-argument and two-argument forms. The path string is
+/// passed in the primary string-argument register pair (x1/x2 on AArch64, rax/rdx
+/// on x86_64). If a suffix is provided, it is evaluated after the path and placed
+/// in the secondary string-argument pair (x3/x4 or rdi/rsi) before restoring the
+/// path pair. When no suffix is supplied, null registers signal "no suffix" to
+/// the runtime helper.
+///
+/// Calls `__rt_basename` and returns `Some(PhpType::Str)` on success, or
+/// propagates a runtime error on failure.
 pub fn emit(
     _name: &str,
     args: &[Expr],

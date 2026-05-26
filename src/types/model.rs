@@ -14,6 +14,7 @@ use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)] // Callable used in match arms, constructed when closures are added
+/// PHP runtime type.
 pub enum PhpType {
     Int,
     Float,
@@ -38,10 +39,14 @@ pub enum PhpType {
 }
 
 impl PhpType {
+    /// Returns a `PhpType::Resource(Some("stream"))` representing a stream resource.
     pub fn stream_resource() -> PhpType {
         PhpType::Resource(Some("stream".to_string()))
     }
 
+    /// Returns true if `expected` is compatible with `actual` for resource type matching.
+    /// A typed resource (Some) is compatible with a generic resource (None), and two typed
+    /// resources are compatible when their kind strings match.
     pub fn resource_types_compatible(expected: &PhpType, actual: &PhpType) -> bool {
         match (expected, actual) {
             (PhpType::Resource(None), PhpType::Resource(_))
@@ -131,6 +136,8 @@ impl PhpType {
 }
 
 impl fmt::Display for PhpType {
+    /// Formats the type as a human-readable string using PHP-style syntax (e.g., `int`, `array<int>`,
+    /// `resource<stream>`, `ptr<MyClass>`). Used for error messages and debug output.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PhpType::Int => write!(f, "int"),

@@ -19,9 +19,18 @@ use super::{
     FIBER_STATE_OFFSET, FIBER_STATE_RUNNING, FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET,
 };
 
-/// __rt_fiber_entry: trampoline executed at the start of every fiber.
-/// On entry the fiber's saved stack has just been restored by __rt_fiber_switch.
-/// The active fiber is `_fiber_current`.
+/// Emits the `__rt_fiber_entry` trampoline for the current target.
+///
+/// This function is the first code executed when a Fiber resumes on a fresh stack.
+/// It installs a sentinel exception handler, marks the fiber Running, calls the
+/// generated Fiber wrapper closure, captures the return value, marks the fiber
+/// Terminated, and transfers control back to the caller.
+///
+/// On ARM64, x19 is used for the fiber pointer and is preserved across the closure
+/// call. On x86_64, r12 is used analogously. The sentinel handler catches any
+/// exception that escapes the user-visible try/catch chain; if no handler matches,
+/// the exception is parked in `pending_throw` and the fiber transitions to Terminated
+/// so the caller's resumption helper can re-raise it.
 pub fn emit_fiber_entry(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_x86_64(emitter);
@@ -113,6 +122,12 @@ pub fn emit_fiber_entry(emitter: &mut Emitter) {
     emitter.instruction("brk #0xfffe");                                         // defensive trap: a terminated fiber must never resume past the switch
 }
 
+/// Emits the x86_64-specific portion of the `__rt_fiber_entry` trampoline.
+///
+/// Identical in behavior to the ARM64 path but uses x86_64 registers and
+/// conventions: r12 for the fiber pointer, r10 as scratch, SysV ABI for the
+/// wrapper call, and ud2 for defensive traps. The sentinel setjmp/longjmp
+/// handler and termination sequence are preserved.
 fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_entry ---");

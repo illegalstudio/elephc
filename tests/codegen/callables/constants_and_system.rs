@@ -9,6 +9,9 @@
 
 use crate::support::*;
 
+// Compiles PHP `source` to a native binary, expects it to fail at runtime,
+// and returns the captured stderr. The temporary directory is cleaned up regardless
+// of success or failure.
 fn compile_and_run_expect_runtime_error(source: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -33,48 +36,59 @@ fn compile_and_run_expect_runtime_error(source: &str) -> String {
 
 // --- Constants (const / define) ---
 
+// Tests `const MAX = 100; echo MAX;` compiles and outputs "100".
 #[test]
 fn test_const_int() {
     let out = compile_and_run("<?php\nconst MAX = 100;\necho MAX;\n");
     assert_eq!(out, "100");
 }
 
+// Tests `const GREETING = "hello"; echo GREETING;` compiles and outputs "hello".
 #[test]
 fn test_const_string() {
     let out = compile_and_run("<?php\nconst GREETING = \"hello\";\necho GREETING;\n");
     assert_eq!(out, "hello");
 }
 
+// Tests `const PI = 3.14; echo PI;` compiles and outputs "3.14".
 #[test]
 fn test_const_float() {
     let out = compile_and_run("<?php\nconst PI = 3.14;\necho PI;\n");
     assert_eq!(out, "3.14");
 }
 
+// Tests `const DEBUG = true; echo DEBUG;` compiles and outputs "1" (PHP boolean true coercion).
 #[test]
 fn test_const_bool() {
     let out = compile_and_run("<?php\nconst DEBUG = true;\necho DEBUG;\n");
     assert_eq!(out, "1");
 }
 
+// Tests `define("MAX_SIZE", 256); echo MAX_SIZE;` compiles and outputs "256".
 #[test]
 fn test_define_int() {
     let out = compile_and_run("<?php\ndefine(\"MAX_SIZE\", 256);\necho MAX_SIZE;\n");
     assert_eq!(out, "256");
 }
 
+// Tests `define("APP_NAME", "elephc"); echo APP_NAME;` compiles and outputs "elephc".
 #[test]
 fn test_define_string() {
     let out = compile_and_run("<?php\ndefine(\"APP_NAME\", \"elephc\");\necho APP_NAME;\n");
     assert_eq!(out, "elephc");
 }
 
+// Tests `define()` returns `true` and the constant is usable: `echo define(...)` outputs "1",
+// and echoing the constant name outputs its value.
 #[test]
 fn test_define_returns_true() {
     let out = compile_and_run("<?php\necho define(\"FEATURE_ON\", true);\necho FEATURE_ON;\n");
     assert_eq!(out, "11");
 }
 
+// Tests that `@define(...)` suppresses the duplicate-constant warning.
+// `DUPLICATE_CONST` is defined twice, the second call is wrapped with `@`,
+// and the program must not emit a Warning to stderr.
 #[test]
 fn test_error_control_suppresses_duplicate_define_warning() {
     let out = compile_and_run_capture(
@@ -85,6 +99,9 @@ fn test_error_control_suppresses_duplicate_define_warning() {
     assert_eq!(out.stderr, "");
 }
 
+// Tests that a duplicate `define()` call without `@` emits a PHP warning at runtime.
+// The second `define("DUPLICATE_WARN", 2)` returns `false`, so "ok" is echoed,
+// and stderr must contain "Warning: define()".
 #[test]
 fn test_duplicate_define_emits_runtime_warning() {
     let out = compile_and_run_capture(
@@ -99,6 +116,9 @@ fn test_duplicate_define_emits_runtime_warning() {
     );
 }
 
+// Tests that `define()` checks for duplicate names at runtime (not compile time).
+// `once()` is called twice; the first call defines `RUNTIME_DUPLICATE` and returns `true`,
+// the second call (suppressed with `@`) returns `false`. No warning is emitted.
 #[test]
 fn test_define_duplicate_is_checked_at_runtime() {
     let out = compile_and_run_capture(
@@ -109,12 +129,16 @@ fn test_define_duplicate_is_checked_at_runtime() {
     assert_eq!(out.stderr, "");
 }
 
+// Tests that two `const` declarations can be used together in an expression:
+// `const X = 10; const Y = 20; echo X + Y;` outputs "30".
 #[test]
 fn test_const_in_expression() {
     let out = compile_and_run("<?php\nconst X = 10;\nconst Y = 20;\necho X + Y;\n");
     assert_eq!(out, "30");
 }
 
+// Tests that a `const` declared at the top level is visible inside a function:
+// `const LIMIT = 42; function test() { echo LIMIT; } test();` outputs "42".
 #[test]
 fn test_const_in_function() {
     let out =
@@ -122,6 +146,8 @@ fn test_const_in_function() {
     assert_eq!(out, "42");
 }
 
+// Tests that a `define()` call at the top level is visible inside a function:
+// `define("RATE", 100); function show() { echo RATE; } show();` outputs "100".
 #[test]
 fn test_define_in_function() {
     let out =
@@ -129,6 +155,8 @@ fn test_define_in_function() {
     assert_eq!(out, "100");
 }
 
+// Tests that a `const` string can be used with the concatenation operator:
+// `const PREFIX = "hello"; echo PREFIX . " world";` outputs "hello world".
 #[test]
 fn test_const_concat() {
     let out = compile_and_run("<?php\nconst PREFIX = \"hello\";\necho PREFIX . \" world\";\n");
@@ -137,6 +165,7 @@ fn test_const_concat() {
 
 // --- List unpacking ---
 
+// Tests `[$a, $b, $c] = [10, 20, 30]; echo $a . " " . $b . " " . $c;` outputs "10 20 30".
 #[test]
 fn test_list_unpack_int() {
     let out = compile_and_run(
@@ -145,12 +174,15 @@ fn test_list_unpack_int() {
     assert_eq!(out, "10 20 30");
 }
 
+// Tests `[$x, $y] = ["hello", "world"]; echo $x . " " . $y;` outputs "hello world".
 #[test]
 fn test_list_unpack_string() {
     let out = compile_and_run("<?php\n[$x, $y] = [\"hello\", \"world\"];\necho $x . \" \" . $y;\n");
     assert_eq!(out, "hello world");
 }
 
+// Tests unpacking from a variable array: `$arr = [1, 2, 3]; [$a, $b, $c] = $arr;`
+// outputs "1 2 3".
 #[test]
 fn test_list_unpack_from_variable() {
     let out = compile_and_run(
@@ -159,12 +191,15 @@ fn test_list_unpack_from_variable() {
     assert_eq!(out, "1 2 3");
 }
 
+// Tests `[$first, $second] = [42, 99]; echo $first + $second;` outputs "141".
 #[test]
 fn test_list_unpack_two_vars() {
     let out = compile_and_run("<?php\n[$first, $second] = [42, 99];\necho $first + $second;\n");
     assert_eq!(out, "141");
 }
 
+// Tests skipped entries in list unpacking: `[$first, , $third,] = [10, 20, 30];`
+// outputs "10 30". Commas without a variable name discard that element.
 #[test]
 fn test_list_unpack_skipped_entries() {
     let out = compile_and_run(
@@ -173,6 +208,8 @@ fn test_list_unpack_skipped_entries() {
     assert_eq!(out, "10 30");
 }
 
+// Tests nested list patterns: `[[$a, $b], [$c, $d]] = [[1, 2], [3, 4]];`
+// outputs "1234".
 #[test]
 fn test_list_unpack_nested_patterns() {
     let out = compile_and_run(
@@ -181,6 +218,8 @@ fn test_list_unpack_nested_patterns() {
     assert_eq!(out, "1234");
 }
 
+// Tests nested list with a heterogeneous inner array:
+// `[[$a, $b], $c] = [[10, 20], 30];` outputs "10:20:30\n".
 #[test]
 fn test_list_unpack_nested_pattern_from_heterogeneous_array() {
     let out = compile_and_run(
@@ -189,6 +228,8 @@ fn test_list_unpack_nested_pattern_from_heterogeneous_array() {
     assert_eq!(out, "10:20:30\n");
 }
 
+// Tests list unpacking with associative keys:
+// `["name" => $name, "id" => $id] = ["id" => 7, "name" => "Ada"];` outputs "7:Ada".
 #[test]
 fn test_list_unpack_associative_keys() {
     let out = compile_and_run(
@@ -197,12 +238,16 @@ fn test_list_unpack_associative_keys() {
     assert_eq!(out, "7:Ada");
 }
 
+// Tests list unpacking with an associative key and a trailing comma is accepted:
+// `["id" => $id,] = ["id" => 7];` outputs "7".
 #[test]
 fn test_list_unpack_associative_keys_allow_trailing_comma() {
     let out = compile_and_run("<?php\n[\"id\" => $id,] = [\"id\" => 7];\necho $id;\n");
     assert_eq!(out, "7");
 }
 
+// Tests that a variable key expression can be used as an associative key in list unpacking:
+// `$key = "id"; [$key => $id] = ["id" => 7];` outputs "7".
 #[test]
 fn test_list_unpack_dynamic_associative_key() {
     let out = compile_and_run(
@@ -211,12 +256,16 @@ fn test_list_unpack_dynamic_associative_key() {
     assert_eq!(out, "7");
 }
 
+// Tests the legacy `list()` syntax with skipped entries:
+// `list($a, , $c) = [1, 2, 3];` outputs "13".
 #[test]
 fn test_list_construct_unpack_with_skipped_entries() {
     let out = compile_and_run("<?php\nlist($a, , $c) = [1, 2, 3];\necho $a . $c;\n");
     assert_eq!(out, "13");
 }
 
+// Tests that list unpacking can target array-index mutations:
+// `$items = [0]; [$items[0], $items[]] = [5, 6];` outputs "5 6".
 #[test]
 fn test_list_unpack_array_append_target() {
     let out = compile_and_run(
@@ -225,6 +274,8 @@ fn test_list_unpack_array_append_target() {
     assert_eq!(out, "5 6");
 }
 
+// Tests that list unpacking can target an object property:
+// `[$box->x] = [42];` where `$box = new Box();` outputs "42".
 #[test]
 fn test_list_unpack_object_property_target() {
     let out = compile_and_run(
@@ -233,6 +284,9 @@ fn test_list_unpack_object_property_target() {
     assert_eq!(out, "42");
 }
 
+// Tests that list unpacking can target static properties with index access and append:
+// `class Bag { public static array $items = [0]; }`
+// `[Bag::$items[0], Bag::$items[]] = [7, 8];` outputs "7 8".
 #[test]
 fn test_list_unpack_static_property_targets() {
     let out = compile_and_run(
@@ -243,30 +297,40 @@ fn test_list_unpack_static_property_targets() {
 
 // --- call_user_func_array ---
 
+// Tests basic `call_user_func_array("add", [3, 4])` where `add($a, $b) { return $a + $b; }`
+// outputs "7".
 #[test]
 fn test_call_user_func_array_basic() {
     let out = compile_and_run("<?php\nfunction add($a, $b) { return $a + $b; }\necho call_user_func_array(\"add\", [3, 4]);\n");
     assert_eq!(out, "7");
 }
 
+// Tests `call_user_func_array("double", [21])` where `double($n) { return $n * 2; }`
+// outputs "42".
 #[test]
 fn test_call_user_func_array_single_arg() {
     let out = compile_and_run("<?php\nfunction double($n) { return $n * 2; }\necho call_user_func_array(\"double\", [21]);\n");
     assert_eq!(out, "42");
 }
 
+// Tests that `call_user_func_array("greet", ["World"])` returns a string:
+// `function greet($name) { return "Hello " . $name; }` outputs "Hello World".
 #[test]
 fn test_call_user_func_array_string_return() {
     let out = compile_and_run("<?php\nfunction greet($name) { return \"Hello \" . $name; }\necho call_user_func_array(\"greet\", [\"World\"]);\n");
     assert_eq!(out, "Hello World");
 }
 
+// Tests that `call_user_func_array` can invoke a builtin function by its string name:
+// `call_user_func_array("STRLEN", ["hello"])` outputs "5".
 #[test]
 fn test_call_user_func_array_string_builtin_callback() {
     let out = compile_and_run(r#"<?php echo call_user_func_array("STRLEN", ["hello"]);"#);
     assert_eq!(out, "5");
 }
 
+// Tests `call_user_func_array(summarize(...), [7, 8, 9])` with a variadic callback:
+// `summarize($head = 1, ...$rest)` outputs "7:2" (head=7, rest has 2 elements).
 #[test]
 fn test_call_user_func_by_ref_callable_parameter_uses_descriptor_entry() {
     let out = compile_and_run(
@@ -588,6 +652,8 @@ fn test_call_user_func_array_variadic_callback() {
     assert_eq!(out, "7:2");
 }
 
+// Tests that `call_user_func_array(count_parts(...), [1.5, 2.5])` correctly counts
+// a variadic parameter containing float values: outputs "2".
 #[test]
 fn test_call_user_func_array_dynamic_assoc_args_for_variadic_callback() {
     let out = compile_and_run(
@@ -735,6 +801,8 @@ fn test_call_user_func_array_variadic_float_tail_count() {
     assert_eq!(out, "2");
 }
 
+// Tests that a first-class callable (`$f = bump(...)`) preserves by-ref parameter
+// semantics when invoked via `call_user_func_array($f, [$value])`: `$value` is mutated to 6.
 #[test]
 fn test_call_user_func_array_first_class_callable_preserves_by_ref_params() {
     let out = compile_and_run(
@@ -752,6 +820,8 @@ echo $value;
     assert_eq!(out, "6");
 }
 
+// Tests that a string callback `"bump"` preserves by-ref parameter semantics when invoked
+// via `call_user_func_array("bump", [$value])`: `$value` is mutated to 6.
 #[test]
 fn test_call_user_func_array_string_callback_preserves_by_ref_params() {
     let out = compile_and_run(
@@ -768,6 +838,9 @@ echo $value;
     assert_eq!(out, "6");
 }
 
+// Tests that a method callable (`$f = $counter->bump(...)`) preserves by-ref parameter
+// semantics and captures `$counter` correctly when invoked via
+// `call_user_func_array($f, [$value])`: `$value` is mutated to 7.
 #[test]
 fn test_call_user_func_array_method_callable_preserves_by_ref_params_and_capture() {
     let out = compile_and_run(
@@ -809,18 +882,23 @@ echo $args[0];
 
 // -- v0.8 constants --
 
+// Tests `echo "a" . PHP_EOL . "b";` outputs "a\nb" (platform newline).
 #[test]
 fn test_php_eol() {
     let out = compile_and_run("<?php echo \"a\" . PHP_EOL . \"b\";");
     assert_eq!(out, "a\nb");
 }
 
+// Tests `echo PHP_OS;` outputs the platform-specific OS name (e.g. "Darwin" on macOS).
+// The expected value is retrieved from `target().platform.php_os_name()`.
 #[test]
 fn test_php_os() {
     let out = compile_and_run("<?php echo PHP_OS;");
     assert_eq!(out, target().platform.php_os_name());
 }
 
+// Tests `echo DIRECTORY_SEPARATOR;` outputs "/" (Unix path separator). PHP on Unix
+// uses "/" as the directory separator; Windows uses "\\".
 #[test]
 fn test_directory_separator() {
     let out = compile_and_run("<?php echo DIRECTORY_SEPARATOR;");
@@ -829,12 +907,14 @@ fn test_directory_separator() {
 
 // -- v0.8 time / microtime --
 
+// Tests `time()` returns a Unix timestamp greater than 1 billion (valid date after ~2001).
 #[test]
 fn test_time() {
     let out = compile_and_run("<?php $t = time(); if ($t > 1000000000) { echo \"ok\"; }");
     assert_eq!(out, "ok");
 }
 
+// Tests `microtime(true)` returns a float timestamp greater than 1 billion.
 #[test]
 fn test_microtime() {
     let out = compile_and_run("<?php $t = microtime(true); if ($t > 1000000000) { echo \"ok\"; }");
@@ -843,12 +923,14 @@ fn test_microtime() {
 
 // -- v0.8 sleep / usleep --
 
+// Tests `sleep(0)` succeeds (no-op sleep) and outputs "ok".
 #[test]
 fn test_sleep_zero() {
     let out = compile_and_run("<?php sleep(0); echo \"ok\";");
     assert_eq!(out, "ok");
 }
 
+// Tests `usleep(0)` succeeds (no-op microsecond sleep) and outputs "ok".
 #[test]
 fn test_usleep_zero() {
     let out = compile_and_run("<?php usleep(0); echo \"ok\";");
@@ -857,6 +939,7 @@ fn test_usleep_zero() {
 
 // -- v0.8 getenv --
 
+// Tests `getenv("HOME")` returns a non-empty string on the current platform.
 #[test]
 fn test_getenv_home() {
     let out =
@@ -864,6 +947,8 @@ fn test_getenv_home() {
     assert_eq!(out, "ok");
 }
 
+// Tests `getenv("ELEPHC_NONEXISTENT_VAR_XYZ")` returns an empty string (strlen=0)
+// for a non-existent environment variable.
 #[test]
 fn test_getenv_nonexistent() {
     let out = compile_and_run(
@@ -872,6 +957,8 @@ fn test_getenv_nonexistent() {
     assert_eq!(out, "0");
 }
 
+// Tests `putenv("ELEPHC_TEST_VAR=hello")` followed by `getenv("ELEPHC_TEST_VAR")`
+// returns "hello". Verifies environment variable set/get round-trip.
 #[test]
 fn test_putenv() {
     let out = compile_and_run(
@@ -885,12 +972,14 @@ echo getenv("ELEPHC_TEST_VAR");
 
 // -- v0.8 phpversion / php_uname --
 
+// Tests `phpversion()` returns the compiler version string (`CARGO_PKG_VERSION`).
 #[test]
 fn test_phpversion() {
     let out = compile_and_run("<?php echo phpversion();");
     assert_eq!(out, env!("CARGO_PKG_VERSION"));
 }
 
+// Tests `php_uname()` and `php_uname("a")` return identical strings (default "a" mode).
 #[test]
 fn test_php_uname() {
     let out = compile_and_run(
@@ -903,6 +992,9 @@ echo $default === $explicit ? "same" : "different";
     assert_eq!(out, "same");
 }
 
+// Tests `php_uname()` modes "s", "n", "r", "v", "m", and "a" all return non-empty strings,
+// and mode "a" contains the values from all other modes. Verifies each component is present
+// in the full "a" output.
 #[test]
 fn test_php_uname_modes() {
     let out = compile_and_run(
@@ -934,12 +1026,16 @@ if (
     assert_eq!(out, format!("{}\nok", target().platform.php_os_name()));
 }
 
+// Tests that `php_uname("sn")` (2-character mode string) fails at runtime with a
+// "must be a single character" error.
 #[test]
 fn test_php_uname_rejects_invalid_mode_length_at_runtime() {
     let err = compile_and_run_expect_runtime_error(r#"<?php $mode = "sn"; echo php_uname($mode);"#);
     assert!(err.contains("php_uname(): Argument #1 ($mode) must be a single character"));
 }
 
+// Tests that `php_uname("x")` (valid length but invalid mode character) fails at runtime
+// with a "must be one of" error.
 #[test]
 fn test_php_uname_rejects_invalid_mode_value_at_runtime() {
     let err = compile_and_run_expect_runtime_error(r#"<?php $mode = "x"; echo php_uname($mode);"#);
@@ -948,24 +1044,28 @@ fn test_php_uname_rejects_invalid_mode_value_at_runtime() {
 
 // -- v0.8 exec / shell_exec / system / passthru --
 
+// Tests `shell_exec("echo hello")` returns "hello" (trimmed).
 #[test]
 fn test_shell_exec() {
     let out = compile_and_run("<?php $out = shell_exec(\"echo hello\"); echo trim($out);");
     assert_eq!(out, "hello");
 }
 
+// Tests `exec("echo test")` returns only the last line "test" (trimmed).
 #[test]
 fn test_exec() {
     let out = compile_and_run("<?php $out = exec(\"echo test\"); echo trim($out);");
     assert_eq!(out, "test");
 }
 
+// Tests `system("echo hi")` outputs "hi\n" (writes directly to stdout).
 #[test]
 fn test_system() {
     let out = compile_and_run("<?php system(\"echo hi\");");
     assert_eq!(out, "hi\n");
 }
 
+// Tests `passthru("echo bye")` outputs "bye\n" (writes directly to stdout, like system).
 #[test]
 fn test_passthru() {
     let out = compile_and_run("<?php passthru(\"echo bye\");");

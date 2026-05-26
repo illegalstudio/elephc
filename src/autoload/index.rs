@@ -48,27 +48,32 @@ impl AutoloadIndex {
         }
     }
 
+    /// Look up the file path for a given fully-qualified class name.
     pub fn lookup(&self, fqn: &str) -> Option<&Path> {
         let key = fqn.trim_start_matches('\\');
         self.fqn_to_path.get(key).map(PathBuf::as_path)
     }
 
+    /// True when the index has no PSR-4 mappings and no files entries.
     pub fn is_empty(&self) -> bool {
         self.fqn_to_path.is_empty() && self.files_to_include.is_empty()
     }
 
+    /// Files listed under `autoload.files` / `autoload-dev.files`.
     pub fn files(&self) -> &[PathBuf] {
         &self.files_to_include
     }
 }
 
 #[derive(Default)]
+/// Helper that accumulates autoload index entries while reading composer.json files.
 struct IndexBuilder {
     fqn_to_path: HashMap<String, PathBuf>,
     files_to_include: Vec<PathBuf>,
 }
 
 impl IndexBuilder {
+    /// Load composer.json from a directory and merge its autoload sections.
     fn load_composer(&mut self, dir: &Path) {
         let composer_path = dir.join("composer.json");
         let Ok(content) = std::fs::read_to_string(&composer_path) else {
@@ -86,6 +91,7 @@ impl IndexBuilder {
         }
     }
 
+    /// Parse one autoload section (psr-4, psr-0, classmap, files) and update the index.
     fn load_section(&mut self, base_dir: &Path, section: &serde_json::Value) {
         let excludes = section
             .get("exclude-from-classmap")
@@ -130,6 +136,7 @@ impl IndexBuilder {
         }
     }
 
+    /// Scan a classmap entry and populate the FQN index.
     fn read_classmap(
         &mut self,
         base_dir: &Path,
@@ -145,6 +152,7 @@ impl IndexBuilder {
         }
     }
 
+    /// Read the `files` autoload entries and register files to always include.
     fn read_files(&mut self, base_dir: &Path, entries: &[serde_json::Value]) {
         for entry in entries {
             let Some(path_str) = entry.as_str() else {
@@ -161,6 +169,7 @@ impl IndexBuilder {
     }
 }
 
+/// Extract the path or paths from a JSON value (string or array of strings).
 fn extract_paths(value: &serde_json::Value) -> Vec<&str> {
     match value {
         serde_json::Value::String(s) => vec![s.as_str()],
@@ -171,6 +180,7 @@ fn extract_paths(value: &serde_json::Value) -> Vec<&str> {
 
 // --- PSR-4 walker ---
 
+/// Recursively walk a PSR-4 directory tree, mapping file paths to FQNs.
 fn walk_psr4(dir: &Path, ns_prefix: &str, root: &Path, index: &mut HashMap<String, PathBuf>) {
     if !dir.is_dir() {
         return;
@@ -277,6 +287,8 @@ fn walk_psr0(dir: &Path, ns_prefix: &str, root: &Path, index: &mut HashMap<Strin
 
 // --- classmap scanner ---
 
+/// Recursively scan a classmap path, descending into directories and
+/// skipping excluded paths, then index all discovered PHP files.
 fn scan_classmap_path(
     path: &Path,
     index: &mut HashMap<String, PathBuf>,
@@ -387,6 +399,8 @@ fn glob_match(pattern: &str, path: &str) -> bool {
     glob_match_bytes(pattern.as_bytes(), path.as_bytes())
 }
 
+/// Byte-level glob matcher called by `glob_match`. Handles `**`, `*`, `?`
+/// meta-characters across path segments.
 fn glob_match_bytes(p: &[u8], s: &[u8]) -> bool {
     let mut pi = 0;
     let mut si = 0;
@@ -476,6 +490,7 @@ mod tests {
     }
 }
 
+/// Parse a PHP file and index all class/interface/trait/enum declarations found.
 fn scan_classmap_file(path: &Path, index: &mut HashMap<String, PathBuf>) {
     if !path.extension().is_some_and(|ext| ext == "php") {
         return;
@@ -496,6 +511,7 @@ fn scan_classmap_file(path: &Path, index: &mut HashMap<String, PathBuf>) {
     }
 }
 
+/// Recursively extract classmap declarations from a statement, tracking current namespace context.
 fn extract_classmap_decls(
     stmt: &Stmt,
     current_namespace: &mut Option<String>,

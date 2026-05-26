@@ -14,9 +14,29 @@ use crate::codegen::runtime::data::STR_REPEAT_TIMES_MSG;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
-/// str_repeat: repeat a string N times into concat scratch storage or heap fallback.
-/// Input: x1=ptr, x2=len, x3=times
-/// Output: x1=result_ptr, x2=result_len
+/// Emits the `__rt_str_repeat` runtime helper for repeating a string N times.
+///
+/// Targets ARM64 (and other non-x86_64) architectures. The helper accepts a source
+/// string pointer/length and a repetition count, writing the repeated result into
+/// concat scratch storage when it fits within the 64 KiB limit, or into a heap-allocated
+/// buffer otherwise.
+///
+/// # Input (ARM64 calling convention)
+/// - `x1`: source string pointer
+/// - `x2`: source string length in bytes
+/// - `x3`: repetition count (must be non-negative; negative values cause fatal error)
+///
+/// # Output (ARM64 calling convention)
+/// - `x1`: result string pointer (null if result is empty)
+/// - `x2`: result string length in bytes
+///
+/// # Behavior
+/// - If `times == 0` or source length is 0, returns an empty string (null pointer, zero length).
+/// - If the repeated result fits within concat scratch (64 KiB), writes directly there and
+///   advances the concat scratch write offset.
+/// - If the result exceeds concat scratch capacity, allocates a heap buffer, stamps it as
+///   an owned string, and does NOT update concat scratch offset.
+/// - On negative repetition count, emits a fatal error message and terminates the process.
 pub fn emit_str_repeat(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_str_repeat_linux_x86_64(emitter);
@@ -118,6 +138,12 @@ pub fn emit_str_repeat(emitter: &mut Emitter) {
     emitter.syscall(1);
 }
 
+/// Emits the `__rt_str_repeat` runtime helper for repeating a string N times on Linux x86_64.
+///
+/// Uses the standard x86_64 System V ABI: source string in `rax/rdx`, repetition count in `rdi`.
+/// Result is returned in `rax/rdx` (pointer/length). Behavior mirrors the ARM64 variant:
+/// concat scratch fallback when the result fits within 64 KiB, heap allocation otherwise,
+/// fatal error on negative repetition count.
 fn emit_str_repeat_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_repeat ---");

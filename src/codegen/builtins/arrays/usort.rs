@@ -19,6 +19,15 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `usort($array, $callback)` builtin call.
+///
+/// Evaluates the array argument, preserves the array pointer across callback resolution,
+/// materializes the comparator callback address, and calls `__rt_usort` with either a
+/// captured comparator wrapper (when the callback captures variables) or the raw callback
+/// address and a null environment pointer.
+///
+/// Returns `PhpType::Void` on success.
+///
 pub fn emit(
     _name: &str,
     args: &[Expr],

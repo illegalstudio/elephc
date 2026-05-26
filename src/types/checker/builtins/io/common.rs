@@ -14,8 +14,12 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::Checker;
 
+/// Re-export of `Result<Option<PhpType>, CompileError>` for subsystem checkers.
 pub(super) type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
+/// Validates that `arg` is a stream resource (or a type that accepts a stream resource).
+///
+/// Emits a type error if the argument is not a compatible stream type.
 pub(super) fn ensure_stream_resource(
     checker: &mut Checker,
     name: &str,
@@ -34,6 +38,11 @@ pub(super) fn ensure_stream_resource(
     }
 }
 
+/// Checks whether `actual` can satisfy a stream resource expectation.
+///
+/// Returns true if `checker.type_accepts(expected, actual)` is true, if `actual` is `Mixed`,
+/// or if `actual` is a `Union` containing at least one resource-accepting member while all
+/// members are either resource-accepting or `Bool`. Called only by `ensure_stream_resource`.
 fn stream_arg_accepts(checker: &Checker, expected: &PhpType, actual: &PhpType) -> bool {
     if checker.type_accepts(expected, actual) || matches!(actual, PhpType::Mixed) {
         return true;

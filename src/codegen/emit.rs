@@ -12,6 +12,7 @@ use std::fmt::Write;
 
 use super::platform::{Arch, Platform, Target};
 
+/// Assembly emitter.
 pub struct Emitter {
     buf: String,
     pub target: Target,
@@ -19,6 +20,7 @@ pub struct Emitter {
 }
 
 impl Emitter {
+    /// Creates an emitter for the specified target platform.
     pub fn new(target: Target) -> Self {
         Self {
             buf: String::with_capacity(4096),
@@ -27,10 +29,12 @@ impl Emitter {
         }
     }
 
+    /// Emits a single assembly instruction with standard indentation.
     pub fn instruction(&mut self, instr: &str) {
         let _ = writeln!(self.buf, "    {}", instr);
     }
 
+    /// Emits a local label (name:).
     pub fn label(&mut self, name: &str) {
         let _ = writeln!(self.buf, "{}:", name);
     }
@@ -41,6 +45,7 @@ impl Emitter {
         let _ = writeln!(self.buf, "{}:", name);
     }
 
+    /// Emits a line comment using the target's comment prefix.
     pub fn comment(&mut self, text: &str) {
         let _ = writeln!(
             self.buf,
@@ -50,15 +55,18 @@ impl Emitter {
         );
     }
 
+    /// Emits a blank line for visual separation.
     pub fn blank(&mut self) {
         self.buf.push('\n');
     }
 
+    /// Emits raw text directly to the output buffer without formatting.
     pub fn raw(&mut self, text: &str) {
         self.buf.push_str(text);
         self.buf.push('\n');
     }
 
+    /// Emits the .text section prelude, including Intel syntax switch for x86_64.
     pub fn emit_text_prelude(&mut self) {
         if self.target.arch == Arch::X86_64 {
             self.raw(".intel_syntax noprefix");
@@ -66,6 +74,7 @@ impl Emitter {
         self.raw(".text");
     }
 
+    /// Returns the accumulated assembly output as a String.
     pub fn output(self) -> String {
         self.buf
     }

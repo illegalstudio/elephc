@@ -10,11 +10,31 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
+/// Magic high 32 bits for the owned-string heap kind word on x86_64.
+/// Combined with a low 32-bit kind index via `(X86_64_HEAP_MAGIC_HI32 << 32) | kind`.
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
-/// getcwd: get the current working directory.
-/// Input:  none
-/// Output: x1=string pointer, x2=string length
+/// Emits the `__rt_getcwd` runtime helper for retrieving the current working directory.
+///
+/// Dispatches to `emit_getcwd_linux_x86_64` on x86_64; emits a portable ARM64 implementation
+/// on other targets. Both paths allocate a 1024-byte heap buffer via `__rt_heap_alloc`, call
+/// the libc `getcwd()` function, scan for the null terminator to determine the string length,
+/// and return the result as a pointer/length pair in the platform ABI registers.
+///
+/// # Arguments
+/// * `emitter` - The assembly emitter used to write runtime helper instructions.
+///
+/// # Output (ARM64)
+/// * `x1` = string pointer (heap-allocated, owned by caller)
+/// * `x2` = string length
+///
+/// # Output (x86_64)
+/// * `rax` = string pointer (heap-allocated, owned-string heap header stamped)
+/// * `rdx` = string length
+///
+/// # Failure behavior
+/// On x86_64, if `getcwd()` fails (returns null), the heap buffer is freed and an empty
+/// string (null pointer, zero length) is returned. ARM64 currently assumes success.
 pub fn emit_getcwd(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_getcwd_linux_x86_64(emitter);
@@ -57,6 +77,25 @@ pub fn emit_getcwd(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux implementation of the `__rt_getcwd` runtime helper.
+///
+/// Allocates a 1024-byte heap buffer, stamps it with an owned-string heap header, calls
+/// the libc `getcwd()` function, scans for the null terminator to measure the string length,
+/// and returns the result via `rax` (pointer) and `rdx` (length).
+///
+/// On failure (null return from libc `getcwd()`), the allocated buffer is freed and an
+/// empty string (null pointer, zero length) is returned.
+///
+/// # Arguments
+/// * `emitter` - The assembly emitter used to write runtime helper instructions.
+///
+/// # Output on success
+/// * `rax` = string pointer (owned, heap-allocated with owned-string heap header)
+/// * `rdx` = string length
+///
+/// # Output on failure
+/// * `rax` = null pointer
+/// * `rdx` = 0
 fn emit_getcwd_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: getcwd ---");

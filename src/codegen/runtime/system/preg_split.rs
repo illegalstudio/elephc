@@ -10,9 +10,17 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// __rt_preg_split: split a string by regex pattern.
-/// Input:  x1=pattern ptr, x2=pattern len, x3=subject ptr, x4=subject len
-/// Output: x0=array pointer (string array)
+/// Emits the `__rt_preg_split` runtime helper.
+///
+/// Dispatches to the x86_64 Linux implementation or runs the generic ARM64 path.
+/// The helper accepts a PHP PCRE-flavored pattern and subject in x1/x2/x3/x4,
+/// strips slash delimiters via `__rt_preg_strip`, translates PCRE shorthands to
+/// POSIX via `__rt_pcre_to_posix`, compiles with `regcomp`, then loops with
+/// `regexec` to extract pre-match segments and push them to a string array.
+/// On `regcomp` failure it returns a small empty array.  The returned array
+/// owns its string slots (ptr/len pairs) and uses `__rt_array_push_str` for growth.
+/// ARM64 input: x1=pattern ptr, x2=pattern len, x3=subject ptr, x4=subject len
+/// ARM64 output: x0=array pointer
 pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_preg_split_linux_x86_64(emitter);
@@ -152,6 +160,13 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux-specific `__rt_preg_split` runtime helper.
+///
+/// Uses the System V AMD64 ABI: pattern ptr/len in rdi/rsi, subject ptr/len in
+/// rdx/rcx.  The helper strips delimiters, translates PCRE shorthands to POSIX,
+/// compiles via `regcomp`, then iterates `regexec` to collect pre-match segments
+/// in a string array (`__rt_array_push_str`).  Zero-length matches advance by one
+/// byte to avoid infinite loops.  On failure returns a small empty array.
 fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     let regex_t_size = emitter.platform.regex_t_size();
     let regmatch_off = regex_t_size;

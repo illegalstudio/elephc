@@ -10,9 +10,24 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// fputcsv: write array elements as a CSV line to a file descriptor.
-/// Input:  x0=fd, x1=array_ptr (array of strings)
-/// Output: x0=total bytes written
+/// Emits the `__rt_fputcsv` runtime helper that writes a PHP string array as a CSV line to a file descriptor.
+///
+/// Each array element is written as a CSV field. Fields containing comma (`,`), double quote (`"`), or
+/// newline are automatically wrapped in double quotes; internal quotes are escaped by doubling.
+///
+/// A trailing newline is written after the last field. The total byte count written (including separators,
+/// quotes, and newline) is returned in `x0` (ARM64) or `rax` (x86_64).
+///
+/// # Inputs
+/// - `x0` / `rdi`: file descriptor to write to
+/// - `x1` / `rsi`: pointer to a runtime array of PHP strings (each string has a 24-byte header followed by char* and length)
+///
+/// # Outputs
+/// - `x0` / `rax`: total bytes written across all fields, separators, quotes, and trailing newline
+///
+/// # ABI notes
+/// - ARM64: uses `syscall 4` (macOS `write`) directly; 96-byte stack frame
+/// - x86_64: calls libc `write()` for each segment; 80-byte stack frame with callee-saved `rbp`
 pub fn emit_fputcsv(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_fputcsv_linux_x86_64(emitter);
@@ -195,6 +210,22 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     emitter.instruction(".ascii \"\\n\"");                                      // newline character literal
 }
 
+/// x86_64 Linux implementation of the `__rt_fputcsv` runtime helper.
+///
+/// Uses the System V AMD64 ABI: `rdi` = fd, `rsi` = array pointer. Calls libc `write()` for each output
+/// segment (comma separators, field content, quotes, newline). Preserves and restores `rbp` as frame pointer.
+/// The total byte count is returned in `rax`.
+///
+/// # Stack layout (80 bytes)
+/// - `[rbp - 8]`  : file descriptor (preserved across all steps)
+/// - `[rbp - 16]` : array pointer (preserved across field loads)
+/// - `[rbp - 24]` : running total bytes written
+/// - `[rbp - 32]` : current field index
+/// - `[rbp - 40]` : array length (for loop termination)
+/// - `[rbp - 48]` : current field string pointer
+/// - `[rbp - 56]` : current field string length
+/// - `[rbp - 64]` : needs-quote flag (0 or 1)
+/// - `[rbp - 72]` : byte index inside quoted field loop
 fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fputcsv ---");

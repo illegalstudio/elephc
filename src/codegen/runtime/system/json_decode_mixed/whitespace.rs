@@ -12,7 +12,11 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// Emit `__rt_json_skip_ws`.
+/// Generates the `__rt_json_skip_ws` runtime helper that skips JSON whitespace.
+///
+/// Reads bytes from a caller-owned slice starting at `cursor` up to an exclusive
+/// `limit`, consuming RFC 8259 whitespace (space, tab, LF, CR) until a non-whitespace
+/// byte or the limit is reached. The advanced cursor is returned in the same register.
 ///
 /// Input/output ABI:
 ///   ARM64:  x1 = slice ptr, x2 = exclusive limit, x9 = cursor → x9 = first non-WS / limit
@@ -45,6 +49,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x9 holding the advanced cursor
 }
 
+/// Generates the x86_64 SysV ABI variant of the JSON whitespace skipper.
+///
+/// Identical behavior to the ARM64 variant: reads bytes from a caller-owned slice
+/// starting at `cursor` up to an exclusive `limit`, consuming RFC 8259 whitespace
+/// (space, tab, LF, CR) until a non-whitespace byte or the limit is reached.
+///
+/// Input/output (System V ABI):
+///   rax = slice ptr, rdx = exclusive limit, rcx = cursor → rcx = first non-WS / limit
 fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_skip_ws ---");

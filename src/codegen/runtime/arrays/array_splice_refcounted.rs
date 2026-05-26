@@ -11,9 +11,27 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_splice_refcounted: remove a portion of a refcounted array and return removed elements.
-/// Input:  x0=array_ptr, x1=offset, x2=length
-/// Output: x0=new array containing retained removed elements
+/// Emits the `__rt_array_splice_refcounted` runtime helper for array splice.
+///
+/// Removes a consecutive slice from a refcounted PHP array (at `offset` for `length`
+/// elements), shifts the trailing elements left to close the gap, and returns a newly
+/// allocated array containing the removed elements (which the caller owns).
+///
+/// # Arguments
+/// * `emitter` - The assembly emitter (ARM64 or x86_64 based on target).
+///
+/// # Input registers (ARM64 calling convention)
+/// * `x0` - source array pointer
+/// * `x1` - splice offset (starting position of removal)
+/// * `x2` - removal length; `-1` means "remove everything from offset to the end"
+///
+/// # Output registers (ARM64 calling convention)
+/// * `x0` - new array containing the removed elements (caller owns)
+///
+/// # ABI details
+/// * Clamps the removal length so it never exceeds the remaining elements.
+/// * Preserves source array metadata; updates the source array's logical length in-place.
+/// * Calls `__rt_array_new` and `__rt_array_push_refcounted` helpers.
 pub fn emit_array_splice_refcounted(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_splice_refcounted_linux_x86_64(emitter);
@@ -93,6 +111,13 @@ pub fn emit_array_splice_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return result array
 }
 
+/// Emits the x86_64 Linux variant of `__rt_array_splice_refcounted`.
+///
+/// Identical in behavior to the ARM64 variant but emits x86_64 instructions using the
+/// System V AMD64 ABI (registers: rdi=array, rsi=offset, rdx=length; return in rax).
+///
+/// The implementation mirrors the ARM64 logic: clamp length, copy removed elements into a
+/// new result array, shift remaining elements left in-place, and return the result array.
 fn emit_array_splice_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_splice_refcounted ---");

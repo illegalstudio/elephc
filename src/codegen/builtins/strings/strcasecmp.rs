@@ -16,6 +16,26 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `strcasecmp` builtin.
+///
+/// Compares two strings case-insensitively via the `__rt_strcasecmp` runtime helper.
+/// Stores both string pointers/lengths on the stack (ARM64) or in registers (X86_64) to
+/// preserve evaluation order before the call.
+///
+/// # Arguments
+/// * `_name` - Unused; present for dispatcher uniformity.
+/// * `args` - Two expressions: the first and second strings to compare.
+/// * `emitter` - Target-specific assembly emitter.
+/// * `ctx` - Codegen context (used for expression lowering).
+/// * `data` - Data section for string literals and constants.
+///
+/// # Returns
+/// Always returns `Some(PhpType::Int)`. PHP's `strcasecmp` returns integer 0 when strings
+/// are equal, a negative value if `s1` is less than `s2`, or a positive value otherwise.
+///
+/// # ABI Details
+/// - ARM64: first string pointer/length in x1/x2, second in x3/x4; order preserved via stack push/pop.
+/// - X86_64: first string pointer/length in rdi/rsi, second in rdx/rcx; order preserved via register stack.
 pub fn emit(
     _name: &str,
     args: &[Expr],

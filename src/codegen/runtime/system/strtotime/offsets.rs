@@ -13,7 +13,9 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// Emit the offsets strategy on both targets.
+/// Dispatches to the target-specific offsets emitter: ARM64 or x86_64 Linux.
+/// The offsets strategy handles `[+-]?N unit`, `a/an unit`, composite forms, and trailing `ago`,
+/// accumulating into `tm_*` fields before normalization via `mktime`.
 pub(crate) fn emit_offsets(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_offsets_linux_x86_64(emitter);
@@ -23,6 +25,12 @@ pub(crate) fn emit_offsets(emitter: &mut Emitter) {
     emit_offsets_arm64(emitter);
 }
 
+/// Emits the relative-offset parser sub-routine for ARM64.
+/// Parses `[+-]?N unit` terms (second/minute/hour/day/week/month/year), PHP articles
+/// `a`/`an` (= 1), composite forms, and an optional trailing `ago`. Accumulators are
+/// stored at `[sp+80..103]` (6 i32 slots). Week folds into day (× 7). The `ago` flag
+/// at `[sp+108]` causes all accumulators to be negated before adding to the base `tm`
+/// from `now_tm`. Finally calls libc `mktime` for normalization and DST-aware math.
 fn emit_offsets_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: offsets (+N unit / -N unit / N unit ago) sub-routine ---");
@@ -244,6 +252,7 @@ fn emit_offsets_arm64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_strtotime_ret");                                // return through shared epilogue
 }
 
+/// Emits the relative-offset parser sub-routine for x86_64 Linux.
 fn emit_offsets_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- strtotime: offsets sub-routine ---");

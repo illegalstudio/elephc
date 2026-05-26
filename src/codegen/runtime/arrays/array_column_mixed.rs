@@ -11,9 +11,24 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_column_mixed: extract a column from mixed associative rows.
-/// Input: x0=outer array (Array of AssocArray), x1=column key ptr, x2=column key len
-/// Output: x0=new array containing boxed Mixed column values
+/// Emits the `__rt_array_column_mixed` runtime helper.
+/// Dispatches to the target-specific implementation based on `emitter.target`.
+///
+/// Inputs (ARM64 AAPCS64):
+/// - x0: outer indexed array (Array of AssocArray)
+/// - x1: column key string pointer
+/// - x2: column key string length
+///
+/// Output:
+/// - x0: new indexed array containing boxed Mixed values for each row that has the key
+///
+/// Behavior:
+/// - Iterates every row in the outer indexed array.
+/// - For each row, performs a hash lookup for the requested key.
+/// - Skips rows that do not contain the key (cbz/jz check).
+/// - Boxes the found hash payload into an owned Mixed cell via `__rt_mixed_from_value`.
+/// - Appends the boxed Mixed pointer to the result array via `__rt_array_push_int`.
+/// - Returns the result array stamped with value_type 7 (boxed Mixed).
 pub fn emit_array_column_mixed(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_column_mixed_linux_x86_64(emitter);
@@ -90,6 +105,18 @@ pub fn emit_array_column_mixed(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to generated code
 }
 
+/// x86_64 Linux variant of `emit_array_column_mixed`.
+///
+/// Uses the System V AMD64 ABI:
+/// - rdi: outer indexed array (Array of AssocArray)
+/// - rsi: column key string pointer
+/// - rdx: column key string length
+///
+/// Output:
+/// - rax: new indexed array containing boxed Mixed values for each row that has the key
+///
+/// Behavior mirrors the ARM64 variant but uses AMD64 register conventions and
+/// metadata manipulation (0x700 mask for value_type 7 = boxed Mixed).
 fn emit_array_column_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_column_mixed ---");
@@ -119,7 +146,7 @@ fn emit_array_column_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // compare index against saved outer row count
     emitter.instruction("jae __rt_acm_done");                                   // finish once all rows have been examined
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload outer indexed-array pointer
-    emitter.instruction("mov rdi, QWORD PTR [r11 + r10 * 8 + 24]");             // load current inner associative-array hash pointer
+    emitter.instruction("mov rdi, QWORD PTR [r11 + r10 * 8 + 24]");             // load current inner associative-array with tag and payload
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload requested column key pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload requested column key length
     emitter.instruction("call __rt_hash_get");                                  // look up row value, returning found plus tag and payload words

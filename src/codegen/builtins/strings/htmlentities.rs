@@ -16,6 +16,25 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `htmlentities` PHP builtin call.
+///
+/// Loads the string argument (first element of `args`) and calls the shared
+/// `__rt_htmlspecialchars` runtime helper, which performs the HTML entity
+/// encoding. The runtime allocates and returns a new PHP string.
+///
+/// # Arguments
+/// * `args` - Must contain at least one expression producing a string value.
+/// * `emitter` - Target-aware instruction emitter.
+/// * `ctx` - Codegen context carrying variable layout and ownership state.
+/// * `data` - Data section for relocations and static data.
+///
+/// # Returns
+/// `Some(PhpType::Str)` indicating the result is a PHP string. `None` is
+/// returned only if the callee reports a type error (not applicable here).
+///
+/// # Notes
+/// `htmlentities()` currently delegates to the `htmlspecialchars` runtime
+/// helper. Both share the same encoding logic and runtime routine.
 pub fn emit(
     _name: &str,
     args: &[Expr],

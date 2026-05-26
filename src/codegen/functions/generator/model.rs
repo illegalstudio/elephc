@@ -88,6 +88,10 @@ pub(super) enum ResumeNode {
 }
 
 #[derive(Clone)]
+/// Statements inside a generator body that represent simple imperative actions:
+/// integer/mixed assignment, post-increment, and post-decrement. These are
+///terminal actions within a basic block, as opposed to control-flow nodes
+/// (If, While, etc.) which branch into sub-trees of ResumeNodes.
 pub(super) enum BodyStmt {
     AssignInt(usize, IntSource),
     /// `$local = <mixed_expr>` where `$local` is a Mixed-typed slot. The
@@ -99,7 +103,9 @@ pub(super) enum BodyStmt {
     PostDecrement(usize),
 }
 
-/// Per-slot type tracking for the unified params+locals slot table.
+/// Tracks the type of each slot in the unified params+locals table used by
+/// generator resume frames. Determines how the emitter materialises a value
+/// (integer register vs. boxed Mixed pointer) and whether cleanup is needed.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum SlotType {
     Int,
@@ -124,6 +130,9 @@ pub(super) enum YieldFromSource {
 }
 
 #[derive(Clone, Copy)]
+/// Where the result of a `yield from` delegation is sent: discarded,
+/// stored in a local slot, or propagated as the outer generator's return
+/// value. Controls whether and how the runtime result is captured.
 pub(super) enum YieldFromResult {
     Discard,
     /// `$local = yield from ...` stores the delegated return in a
@@ -135,6 +144,11 @@ pub(super) enum YieldFromResult {
 }
 
 #[derive(Clone)]
+/// Captures the key and value expressions of a `yield` or `yield from`
+/// expression. `key` is `None` for plain `yield <value>` (auto-incremented
+/// numeric key); `key` is `Some` for `yield <key> => <value>`. Both `key`
+/// and `value` are MixedSource so they can be integers, strings, or slot
+/// reads boxed at yield time.
 pub(super) struct YieldEntry {
     /// `None` means use the auto-incrementing counter.
     pub key: Option<MixedSource>,
@@ -160,6 +174,11 @@ pub(super) enum MixedSource {
     MixedSlot(usize),
 }
 
+/// Source of an integer value in generator codegen. Covers literal constants,
+/// reads of Int-typed slots, binary operations on two IntSources, and function
+/// calls whose return value is assumed to be an integer (v1 does not typecheck
+/// this assumption). Arguments to IntSource calls are evaluated left-to-right
+/// into a stack area before being loaded into x0..x7 for the branch.
 #[derive(Clone)]
 pub(super) enum IntSource {
     Literal(i64),
@@ -179,6 +198,9 @@ pub(super) enum IntSource {
 }
 
 #[derive(Clone, Copy)]
+/// Integer binary operations usable inside a BoolExpr or as part of an
+/// IntSource. Covers the four basic arithmetic operators; no modulo,
+/// bitwise, or comparison operators — those live in CmpOp/BoolExpr.
 pub(super) enum IntBinOp {
     Add,
     Sub,
@@ -186,6 +208,9 @@ pub(super) enum IntBinOp {
     Div,
 }
 
+/// A boolean comparison expression used in generator control-flow nodes
+/// (While, DoWhile, For). Compares two IntSources using a CmpOp and feeds
+/// the resulting bool into the loop condition for branching.
 #[derive(Clone)]
 pub(super) struct BoolExpr {
     pub left: IntSource,
@@ -194,6 +219,10 @@ pub(super) struct BoolExpr {
 }
 
 #[derive(Clone, Copy)]
+/// Comparison operators used in BoolExpr. All variants compare two IntSources.
+/// For integer operands: Lt (<), Le (<=), Gt (>), Ge (>=), Eq (==), Ne (!=).
+/// PHP loosely-typed comparison is NOT supported — both operands must be
+/// integer-typed IntSources.
 pub(super) enum CmpOp {
     Lt,
     Le,
@@ -203,15 +232,24 @@ pub(super) enum CmpOp {
     Ne,
 }
 
+/// Assigns sequential state indices to yield sites in a generator resume
+/// function. State 0 is reserved for the body entry point; yield sites
+/// receive 1, 2, ... in depth-first source order. This keeps the emit
+/// order and runtime dispatch table in lockstep.
 pub(super) struct StateNumberer {
     pub next_state: u32,
 }
 
 impl StateNumberer {
+    /// Creates a new numberer. State 0 is reserved for the body entry;
+    /// the first yield site receives state 1.
     pub fn new() -> Self {
-        // State 0 is reserved for the body entry. Yield sites occupy 1, 2, ...
         Self { next_state: 1 }
     }
+
+    /// Returns the next available state index and increments the counter.
+    /// Callers must use the returned index as the state number for a yield
+    /// site before requesting the next one.
     pub fn next(&mut self) -> u32 {
         let s = self.next_state;
         self.next_state += 1;

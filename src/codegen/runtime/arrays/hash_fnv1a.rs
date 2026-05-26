@@ -11,9 +11,19 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// hash_fnv1a: FNV-1a 64-bit hash function.
-/// Input:  x1=ptr, x2=len
-/// Output: x0=hash (64-bit)
+/// Emits the `__rt_hash_fnv1a` runtime helper for PHP array/string key hashing.
+///
+/// Dispatches to the x86_64 Linux variant or emits the ARM64 implementation
+/// directly. The emitted routine performs a 64-bit FNV-1a hash over the input
+/// buffer and returns the result in the standard return register.
+///
+/// # ARM64 calling convention
+/// - **Input**: `x1` = pointer to byte buffer, `x2` = byte length
+/// - **Output**: `x0` = 64-bit hash value
+///
+/// # x86_64 Linux calling convention
+/// - **Input**: `rdi` = pointer to byte buffer, `rsi` = byte length
+/// - **Output**: `rax` = 64-bit hash value
 pub fn emit_hash_fnv1a(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_fnv1a_linux_x86_64(emitter);
@@ -50,6 +60,10 @@ pub fn emit_hash_fnv1a(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_hash_fnv1a` runtime helper.
+///
+/// Uses the System V AMD64 ABI: `rdi` holds the buffer pointer, `rsi` holds the
+/// byte count, and the resulting 64-bit hash is returned in `rax`.
 fn emit_hash_fnv1a_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_fnv1a ---");

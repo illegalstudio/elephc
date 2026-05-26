@@ -16,6 +16,22 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `ctype_alpha` builtin.
+///
+/// `ctype_alpha($string)` returns `true` if every byte in `$string` is an
+/// ASCII letter (A-Z or a-z), and `false` otherwise. Empty strings return
+/// `false` per the PHP/Checker runtime contract.
+///
+/// # Arguments
+/// * `_name` - Unused builtin name (dispatch already performed).
+/// * `args` - Must contain exactly one expression producing a string in the
+///   platform string registers (x1/x2 on AArch64, rax/rdx on X86_64).
+/// * `emitter` - Assembly emitter for the target architecture.
+/// * `ctx` - Codegen context providing label generation and metadata.
+/// * `data` - Data section for embedded literals if needed.
+///
+/// # Returns
+/// Always returns `Some(PhpType::Bool)`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

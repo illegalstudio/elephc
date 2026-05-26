@@ -15,6 +15,10 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Returns `Some(class_name)` when the receiver's inferred type is a
+/// declared object class that does not have the property but does have a
+/// `__set` method, meaning property writes should route through the magic
+/// setter. Returns `None` otherwise.
 pub(super) fn resolve_magic_set_target(object: &Expr, property: &str, ctx: &Context) -> Option<String> {
     let obj_ty = crate::codegen::functions::infer_contextual_type(object, ctx);
     let PhpType::Object(class_name) = obj_ty else {
@@ -27,6 +31,13 @@ pub(super) fn resolve_magic_set_target(object: &Expr, property: &str, ctx: &Cont
     class_info.methods.contains_key("__set").then_some(class_name)
 }
 
+/// Emits a call to the `__set` magic method of `class_name` for the given
+/// property name and RHS value. Boxes the value as a `Mixed` cell, pushes
+/// the property name string, the boxed value, and the `$this` pointer, then
+/// dispatches to `__set` via `emit_method_call_with_pushed_args`. The
+/// `val_ty` is used to determine boxing strategy (void emits a boxed null,
+/// floats and strings require reload from the saved stack slot, other types
+/// are reloaded from the temporary stack).
 pub(super) fn emit_magic_set_call(
     class_name: &str,
     property: &str,

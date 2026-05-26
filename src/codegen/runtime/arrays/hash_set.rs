@@ -217,6 +217,13 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_hash_set`.
+///
+/// Implements the same linear-probe insert-or-update algorithm as the ARM64
+/// variant using the SystemV AMD64 ABI: rdi=hash_table_ptr, rsi=key_ptr,
+/// rdx=key_len, rcx=value_lo, r8=value_hi, r9=value_tag. Returns the table
+/// pointer (possibly new after grow) in rax. Preserves r12/r13/r14 as
+/// callee-saved registers; all other caller-saved regs are clobbered.
 fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_set ---");

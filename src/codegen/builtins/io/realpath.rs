@@ -16,8 +16,16 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// x86_64 heap marker: high 32 bits of the magic `0x454C5048` signature baked into
+/// mixed-cell heap kind words on this platform to distinguish allocated buffers from
+/// inline/special values during runtime verification.
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
+/// Emits a call to the `realpath` builtin.
+///
+/// Evaluates the path argument, calls `__rt_realpath` to resolve it via libc,
+/// then boxes the result into a `Mixed` cell: `String` on success or `Bool(false)`
+/// on failure (matching PHP semantics). The returned type is always `PhpType::Mixed`.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -32,12 +40,13 @@ pub fn emit(
     Some(PhpType::Mixed)
 }
 
-/// Mirrors the boxing dance used by `file_get_contents` and `readlink`. The
-/// runtime returns either an owned heap string in `(x1, x2)` / `(rax, rdx)` or
-/// `(0, 0)` on failure. The public type is `Union(Str, Bool)` (see the
-/// type-checker side), but the codegen-level value is a Mixed cell so the
-/// rest of the pipeline can treat it uniformly with `=== false` checks and
-/// direct string echo.
+/// Box the realpath runtime result into a Mixed cell.
+///
+/// The runtime helper returns either `(ptr, len)` in registers or `(0, 0)` on failure.
+/// On success, allocates a heap mixed cell, stamps it as kind 5, tags it as a string (tag 1),
+/// and stores the path pointer/length directly without copying the owned realpath buffer.
+/// On failure, calls `__rt_mixed_from_value` to box `false`. Caller is responsible for
+/// preserving any caller-saved registers required by the ABI before this call.
 fn box_realpath_result(emitter: &mut Emitter, ctx: &mut Context) {
     let false_label = ctx.next_label("realpath_false");
     let done_label = ctx.next_label("realpath_done");

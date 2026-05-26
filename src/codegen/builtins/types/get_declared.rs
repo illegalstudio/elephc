@@ -17,6 +17,19 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits `get_declared_classes()`, `get_declared_interfaces()`, and `get_declared_traits()`.
+/// Uses the compile-time declaration registry (from codegen pass) when available; falls back to
+/// `ctx.classes`/`ctx.interfaces`/`ctx.traits` sorted by key when the registry is empty (e.g., certain
+/// test harnesses or unusual codegen paths). Allocates an array via `__rt_array_new`, then populates
+/// it by pushing each name string through `emit_push_names`. Returns `Some(Array(Str))` on success
+/// or `None` if `name` does not match a known declaration-bucket builtin.
+///
+/// Arguments:
+/// - `name`: one of `"get_declared_classes"`, `"get_declared_interfaces"`, `"get_declared_traits"`
+/// - `_args`: not used by these builtins (they take no arguments)
+/// - `emitter`: target-aware instruction emission
+/// - `ctx`: declaration maps used for fallback path
+/// - `data`: data section for string literal allocation
 pub fn emit(
     name: &str,
     _args: &[Expr],
@@ -75,6 +88,16 @@ fn is_internal_synthetic_class_name(name: &str) -> bool {
 /// Push each name onto the array via `__rt_array_push_str`. The array
 /// pointer is parked on the stack between iterations because
 /// `__rt_array_push_str` may grow the storage and return a new pointer.
+/// Emits the per-name push sequence for the declared-names array. Parks the array pointer on the stack
+/// while iterating `names` so that `__rt_array_push_str` can grow the vector and return a new pointer.
+/// Each iteration: (1) reloads the current array pointer, (2) adds the name string to `data`, (3) calls
+/// `__rt_array_push_str` to append it, and (4) saves the returned pointer back to the park slot.
+/// On exit the final array pointer is restored to the register used for the call result.
+///
+/// Arguments:
+/// - `names`: ordered list of class/interface/trait names to push onto the array
+/// - `emitter`: target-aware instruction emission
+/// - `data`: data section for string literal allocation (each name is emitted as a literal)
 fn emit_push_names(names: &[String], emitter: &mut Emitter, data: &mut DataSection) {
     match emitter.target.arch {
         Arch::AArch64 => {

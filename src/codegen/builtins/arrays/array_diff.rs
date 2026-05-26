@@ -17,6 +17,25 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `array_diff($arr1, $arr2)` builtin call.
+///
+/// Compares `$arr1` against `$arr2` and returns all values from `$arr1` that are
+/// not present in `$arr2`. Only values are compared; keys are preserved.
+///
+/// # Arguments
+/// * `args` - Must contain exactly two array expressions (the two input arrays).
+///
+/// # Behavior
+/// - Pushes the first array pointer, evaluates the second array expression, then
+///   calls the appropriate runtime helper (`__rt_array_diff` or `__rt_array_diff_refcounted`)
+///   based on whether the first array uses refcounted heap storage.
+/// - On x86_64: uses register-based ABI (rdi/rsi for first/second array pointers).
+/// - On ARM64: uses stack-based push/pop and x0/x1 for array pointers.
+/// - Returns the array type of the first argument if it is already an Array,
+///   otherwise returns `Array<Int>` as the default value type.
+///
+/// # Return type
+/// `Some(PhpType::Array(...))` reflecting the first input array's inner type.
 pub fn emit(
     _name: &str,
     args: &[Expr],

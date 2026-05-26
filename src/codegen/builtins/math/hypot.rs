@@ -16,6 +16,24 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a `hypot($x, $y)` builtin call, delegating to the target libc.
+///
+/// # Arguments
+/// - `args`: Two expressions for the x and y operands.
+/// - `emitter`: Target instruction emitter.
+/// - `ctx`: Codegen context carrying variable layout and metadata.
+/// - `data`: Read-only data section for constants.
+///
+/// # Returns
+/// Always returns `Some(PhpType::Float)`. The `Option` satisfies the
+/// builtin-emitter interface even though `hypot` always produces a float.
+///
+/// # Implementation notes
+/// - Each argument is evaluated and normalized to a floating-point value.
+/// - The x operand is saved to the stack while y is evaluated to avoid
+///   clobbering the first argument register.
+/// - AArch64: passes x in `d0`, y in `d1`, calls `hypot` via `bl`.
+/// - X86_64 (SysV): passes x in `xmm0`, y in `xmm1`, calls `hypot` via `call`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

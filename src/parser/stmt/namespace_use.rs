@@ -16,6 +16,14 @@ use crate::span::Span;
 
 use super::{expect_semicolon, expect_token, parse_name, parse_stmt, recover_to_statement_boundary};
 
+/// Parses a `namespace` declaration or block.
+///
+/// Consumes the `namespace` keyword, then either:
+/// - Parses a simple `namespace Name;` declaration, or
+/// - Parses a `namespace Name { ... }` block containing statements.
+///
+/// Collects parse errors during block parsing and reports them all if the block
+/// closes successfully.
 pub(super) fn parse_namespace_stmt(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -68,6 +76,15 @@ pub(super) fn parse_namespace_stmt(
     Ok(Stmt::new(StmtKind::NamespaceBlock { name, body }, span))
 }
 
+/// Parses a `use` import statement.
+///
+/// Handles `use`, `use function`, and `use const` declarations, including:
+/// - Simple single-item imports (`use Foo\Bar;`)
+/// - Grouped imports (`use Foo\{Bar, Baz};`)
+/// - Multiple comma-separated imports (`use Foo, Bar;`)
+/// - Optional `as` aliasing on each imported name.
+///
+/// Emits a `StmtKind::UseDecl` containing the complete list of `UseItem`s.
 pub(super) fn parse_use_stmt(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -131,6 +148,10 @@ pub(super) fn parse_use_stmt(
     ))
 }
 
+/// Parses an optional `as Alias` clause after a use item name.
+///
+/// Returns `None` if no `as` keyword is present. Otherwise consumes `as` and the
+/// following identifier, returning the alias name.
 fn parse_optional_alias(tokens: &[(Token, Span)], pos: &mut usize) -> Option<String> {
     if *pos < tokens.len() && tokens[*pos].0 == Token::As {
         *pos += 1;
@@ -143,6 +164,10 @@ fn parse_optional_alias(tokens: &[(Token, Span)], pos: &mut usize) -> Option<Str
     None
 }
 
+/// Builds a `UseItem` from an already-parsed name and kind.
+///
+/// If an explicit `as Alias` clause follows, that alias is used; otherwise the
+/// last segment of `name` becomes the alias. Returns an error if the name is empty.
 fn parse_single_use_item_after_name(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -156,6 +181,11 @@ fn parse_single_use_item_after_name(
     Ok(UseItem { kind, name, alias })
 }
 
+/// Parses a grouped use block `Prefix { ... }`.
+///
+/// Consumes the opening `{`, then parses a comma-separated list of use items relative
+/// to `prefix`. Each item may override the `default_kind` with `function` or `const`.
+/// Fully-qualified items inside the group are rejected. Returns the list of `UseItem`s.
 fn parse_group_use_items(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -218,6 +248,12 @@ fn parse_group_use_items(
     Ok(imports)
 }
 
+/// Parses the name prefix before the optional grouped-use `{`.
+///
+/// Reads a sequence of identifiers separated by `\`. If the sequence begins with `\`,
+/// the name kind is `FullyQualified`; otherwise it is `Unqualified` or `Qualified`
+/// depending on whether an intermediate `\ ` was seen. Stops when a trailing `\`
+/// followed by `{` is encountered (the opening brace is consumed by the caller).
 fn parse_use_prefix(
     tokens: &[(Token, Span)],
     pos: &mut usize,

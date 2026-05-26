@@ -16,6 +16,18 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for PHP's `settype($var, $type)` builtin.
+///
+/// Converts the variable named in `args[0]` to the type specified by the string literal in
+/// `args[1]`. Supports `"int"`/`"integer"`, `"float"`/`"double"`, `"string"`, and `"bool"`/`"boolean"`.
+/// Updates the variable's type in the context and always returns `true` (bool).
+///
+/// # Arguments
+/// - `args[0]` must be a `Variable` expression naming the target variable.
+/// - `args[1]` must be a `StringLiteral` giving the target type name.
+/// - `emitter` drives assembly emission with target-aware ABI helpers.
+/// - `ctx` provides variable layout (stack offset) and is updated with the new type.
+/// - `_data` is used for string coercion runtime calls.
 pub fn emit(
     _name: &str,
     args: &[Expr],

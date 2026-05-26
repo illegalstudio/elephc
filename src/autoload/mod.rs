@@ -28,6 +28,9 @@ use crate::span::Span;
 
 use walk::{collect_declared_fqns, collect_reference_points};
 
+/// Built-in class-like names that exist in every PHP environment (e.g. `Exception`,
+/// `stdClass`, `Iterator`). Seeded into the declared FQN set so references to these
+/// types are never treated as autoload demands.
 const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "ArrayAccess",
     "AppendIterator",
@@ -158,6 +161,9 @@ pub fn collect_aliases(program: Program) -> Program {
     alias::collect_aliases(program)
 }
 
+/// Inserts PHP's built-in class-like names into `declared` so that references
+/// to types like `Exception`, `stdClass`, and `Iterator` are never treated as
+/// autoload demands. Called at the start of each autoload iteration.
 fn seed_builtin_declared_fqns(declared: &mut HashSet<String>) {
     for name in BUILTIN_CLASS_LIKE_NAMES {
         declared.insert((*name).to_string());
@@ -181,6 +187,7 @@ fn resolve_class(fqn: &str, registry: &Registry) -> Option<PathBuf> {
     None
 }
 
+/// Load, parse, and resolve a single autoloaded PHP file, returning its statements.
 fn load_autoloaded_file(path: &Path, base_dir: &Path) -> Result<Program, CompileError> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         CompileError::new(

@@ -17,6 +17,20 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `array_unique` builtin call, removing duplicate values from an indexed array.
+///
+/// Arguments:
+///   - `args[0]`: the source array expression
+///
+/// Runtime helpers:
+///   - `__rt_array_unique` for scalar indexed arrays
+///   - `__rt_array_unique_refcounted` for refcounted indexed arrays
+///
+/// On x86_64: moves the source array pointer from `rax` to `rdi` before the call.
+/// On ARM64: uses `bl` with the appropriate helper label.
+///
+/// Returns an `Array(Int)` type (keys are renumbered sequentially as integers).
+/// The `_name` parameter is unused; builtin resolution is handled by the caller.
 pub fn emit(
     _name: &str,
     args: &[Expr],

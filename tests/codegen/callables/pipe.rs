@@ -11,6 +11,7 @@
 
 use crate::support::*;
 
+// Verifies `value |> func(...)` pipes a value through a user function via FCC syntax.
 #[test]
 fn test_pipe_with_first_class_callable_user_function() {
     let out = compile_and_run(
@@ -23,6 +24,7 @@ echo $r;
     assert_eq!(out, "42");
 }
 
+// Verifies `value |> Namespace\func(...)` pipes through a namespaced user function.
 #[test]
 fn test_pipe_with_namespaced_first_class_callable_user_function() {
     let out = compile_and_run(
@@ -35,6 +37,7 @@ echo 21 |> double(...);
     assert_eq!(out, "42");
 }
 
+// Verifies `value |> func1(...) |> func2(...)` chains two FCC calls in sequence.
 #[test]
 fn test_pipe_chained_user_functions() {
     let out = compile_and_run(
@@ -48,6 +51,7 @@ echo $r;
     assert_eq!(out, "11");
 }
 
+// Verifies `value |> (function($v) { ... })` pipes through an anonymous function literal.
 #[test]
 fn test_pipe_with_closure_literal() {
     let out = compile_and_run(
@@ -59,6 +63,7 @@ echo $r;
     assert_eq!(out, "12");
 }
 
+// Verifies `value |> (fn($v) => expr)` pipes through a PHP arrow function.
 #[test]
 fn test_pipe_with_arrow_function() {
     let out = compile_and_run(
@@ -70,6 +75,7 @@ echo $r;
     assert_eq!(out, "107");
 }
 
+// Verifies `value |> $cb` pipes through a variable holding a callable.
 #[test]
 fn test_pipe_with_variable_callable() {
     let out = compile_and_run(
@@ -83,6 +89,7 @@ echo $r;
     assert_eq!(out, "12");
 }
 
+// Verifies `value |> Class::method(...)` pipes through a static method via FCC syntax.
 #[test]
 fn test_pipe_with_static_method() {
     let out = compile_and_run(
@@ -97,6 +104,7 @@ echo $r;
     assert_eq!(out, "20");
 }
 
+// Verifies `value |> $obj->method(...)` pipes through an instance method via FCC syntax.
 #[test]
 fn test_pipe_with_instance_method() {
     let out = compile_and_run(
@@ -114,6 +122,7 @@ echo $r;
     assert_eq!(out, "17");
 }
 
+// Verifies `5 + 2 |> double(...)` parses as `(5 + 2) |> double(...)` — arithmetic has lower precedence than pipe.
 #[test]
 fn test_pipe_precedence_with_arithmetic() {
     // 5 + 2 |> double(...) must parse as (5 + 2) |> double(...) = double(7) = 14.
@@ -126,6 +135,7 @@ echo 5 + 2 |> double(...);
     assert_eq!(out, "14");
 }
 
+// Verifies `"a" . "b" |> wrap(...)` parses as `("a" . "b") |> wrap(...)` — concat has lower precedence than pipe.
 #[test]
 fn test_pipe_precedence_with_concat() {
     // "a" . "b" |> wrap(...) must parse as ("a" . "b") |> wrap(...).
@@ -138,6 +148,7 @@ echo "a" . "b" |> wrap(...);
     assert_eq!(out, "[ab]");
 }
 
+// Verifies `'beep' |> strlen(...) == 4` evaluates as `(strlen('beep') == 4)` — pipe result feeds into comparison.
 #[test]
 fn test_pipe_precedence_with_comparison() {
     // 'beep' |> strlen(...) == 4 must compute strlen('beep')==4 -> "1".
@@ -149,6 +160,7 @@ echo (int)('beep' |> strlen(...) == 4);
     assert_eq!(out, "1");
 }
 
+// Verifies `value |> func(...)` uses default parameter values when optional args are omitted.
 #[test]
 fn test_pipe_with_default_parameters() {
     let out = compile_and_run(
@@ -161,6 +173,7 @@ echo $r;
     assert_eq!(out, "15");
 }
 
+// Verifies `value |> strtoupper(...)` pipes through a PHP builtin function via FCC routing.
 #[test]
 fn test_pipe_with_string_builtin() {
     // strtoupper is a PHP-visible builtin; pipe should route through builtin dispatch.
@@ -173,6 +186,7 @@ echo $r;
     assert_eq!(out, "HELLO");
 }
 
+// Verifies the LHS `(++$x)` is evaluated once before the RHS call; side effect must happen before pipe argument is read.
 #[test]
 fn test_pipe_lhs_evaluated_before_rhs_call() {
     // The LHS expression with side effects executes once, before the call.
@@ -187,6 +201,7 @@ echo "|" . $r;
     assert_eq!(out, "called(1)|1");
 }
 
+// Verifies LHS mutation `$box = $next` is visible to the RHS receiver `$box->read(...)` inside the pipe.
 #[test]
 fn test_pipe_lhs_mutation_visible_to_rhs_method_receiver() {
     let out = compile_and_run(
@@ -203,6 +218,7 @@ echo ($box = $next) |> $box->read(...);
     assert_eq!(out, "new");
 }
 
+// Verifies LHS mutation `$cb = second(...)` is visible to the RHS callable `$cb` inside the pipe.
 #[test]
 fn test_pipe_lhs_mutation_visible_to_rhs_callable_variable() {
     let out = compile_and_run(
@@ -216,6 +232,7 @@ echo ($cb = second(...)) |> $cb;
     assert_eq!(out, "second");
 }
 
+// Verifies `7 |> label(...)` where `label` returns `string` correctly captures the return type in assignment.
 #[test]
 fn test_pipe_result_string_assignment_uses_callable_return_type() {
     let out = compile_and_run(
@@ -228,6 +245,7 @@ echo $result;
     assert_eq!(out, "v7");
 }
 
+// Verifies `(3 |> double(...)) + 4` treats pipe as a grouped sub-expression in arithmetic context.
 #[test]
 fn test_pipe_in_arithmetic_context() {
     let out = compile_and_run(
@@ -239,6 +257,10 @@ echo (3 |> double(...)) + 4;
     assert_eq!(out, "10");
 }
 
+// Compiles a PHP source string to assembly in an isolated temp directory.
+//
+// Returns `(user_asm, libs, dir)` where `user_asm` is the compiled user code assembly,
+// `libs` are required runtime libraries, and `dir` is the temp directory to clean up.
 fn compile_pipe_fixture(source: &str, label: &str) -> (String, Vec<String>, std::path::PathBuf) {
     let dir = make_cli_test_dir(label);
     let (user_asm, _runtime_asm, libs) =
@@ -246,6 +268,8 @@ fn compile_pipe_fixture(source: &str, label: &str) -> (String, Vec<String>, std:
     (user_asm, libs, dir)
 }
 
+// Verifies FCC variable short-circuit emits `bl _fn_triple` directly and stubs the wrapper with `uninvoked FCC wrapper`.
+// Regression guard for the FCC variable short-circuit optimisation and dead-wrapper elimination.
 #[test]
 fn test_pipe_with_fcc_variable_function_target_emits_direct_call_and_stubs_wrapper() {
     // Asm-level guard for the FCC variable short-circuit AND the dead-wrapper
@@ -293,6 +317,8 @@ echo 14 |> $cb;
     let _ = fs::remove_dir_all(&dir);
 }
 
+// Verifies `Class::method(...)` FCC short-circuit emits `bl _static_<Class>_<method>` directly and stubs the wrapper.
+// Regression guard for the named static method short-circuit and dead-wrapper elimination.
 #[test]
 fn test_pipe_with_fcc_variable_static_method_named_target_emits_direct_call_and_stubs_wrapper() {
     // `Class::method(...)` short-circuit must lower to a direct `bl
@@ -331,6 +357,8 @@ echo 5 |> $cb;
     let _ = fs::remove_dir_all(&dir);
 }
 
+// Verifies `self::method(...)` resolves to a Named receiver and emits `bl _static_<Class>_<method>` directly;
+// confirms the wrapper is stubbed for self:: static targets. Regression guard.
 #[test]
 fn test_pipe_with_fcc_variable_self_static_method_resolves_and_stubs_wrapper() {
     // `self::method(...)` is resolved to a Named receiver at storage time and
@@ -372,6 +400,8 @@ echo Marker::wrap("ok");
     let _ = fs::remove_dir_all(&dir);
 }
 
+// Verifies instance method FCC variable short-circuit stubs the wrapper (vtable dispatch prevents direct symbol guard).
+// Regression guard for instance method short-circuit firing and dead-wrapper elimination.
 #[test]
 fn test_pipe_with_fcc_variable_method_target_stubs_wrapper() {
     // Instance methods dispatch via the class vtable rather than a stable
@@ -410,6 +440,8 @@ echo 7 |> $cb;
     let _ = fs::remove_dir_all(&dir);
 }
 
+// Verifies chained FCC variables `5 |> $a |> $b` stub both wrappers and emit direct calls to each stage.
+// Regression guard for the optimisation composing across chained pipe stages.
 #[test]
 fn test_pipe_chained_fcc_variables_stub_every_wrapper() {
     // Each FCC variable in the chain has its own wrapper. With short-circuit

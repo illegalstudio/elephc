@@ -16,6 +16,9 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Lowers the PHP `md5()` call by emitting code that evaluates the first argument,
+/// then invokes `__rt_md5` to compute the MD5 digest and return it as a lowercase
+/// hex string. Returns `PhpType::Str`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

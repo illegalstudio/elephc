@@ -10,7 +10,20 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// heap_debug_validate_free_list: verify ordered free-list state and small-bin caches.
+/// Emits the `__rt_heap_debug_validate_free_list` runtime helper for heap debug mode.
+///
+/// Validates the ordered free-list and small-bin caches by emitting target-specific
+/// assembly (x86_64 or ARM64). For each free block the helper checks: address lies
+/// within the live heap window, payload size meets the minimum (8 bytes), and blocks
+/// are strictly ascending with proper coalescing. For each small-bin chain it additionally
+/// verifies the payload size falls within the size-class bounds.
+///
+/// # Arguments
+/// * `emitter` - Target-specific assembly emitter (mutated by emitting instructions).
+///
+/// # Side effects
+/// * Returns normally via `ret` when all validation checks pass.
+/// * Jumps to `__rt_heap_debug_fail` with the corruption message when any check fails.
 pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
     let msg = "Fatal error: heap debug detected free-list corruption\n";
 

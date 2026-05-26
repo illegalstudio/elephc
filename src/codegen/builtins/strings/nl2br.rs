@@ -16,6 +16,25 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits codegen for the PHP `nl2br(string)` builtin.
+///
+/// Materializes `args[0]` (the input string) in registers per ABI, then calls the
+/// target-aware runtime helper `__rt_nl2br` which allocates and returns a new PHP string
+/// with every newline replaced by `<br />\n`. The returned string pointer/length is an
+/// owned runtime value; the caller is responsible for releasing it.
+///
+/// # Arguments
+/// - `args[0]`: the input string expression (other parameters are currently unsupported).
+/// - `ctx`: carries variable layout, ownership state, and class metadata through codegen.
+/// - `data`: receives any data-section allocations required by the call sequence.
+///
+/// # Output
+/// Always returns `Some(PhpType::Str)` — the runtime helper produces an owned PHP string.
+///
+/// # ABI
+/// `emit_expr` materializes the input string in `x1`/`x2` (pointer/length) or equivalent
+/// registers per target ABI; `__rt_nl2br` returns the result string pointer in `x1`,
+/// length in `x2`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

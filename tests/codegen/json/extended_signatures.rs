@@ -14,6 +14,7 @@ use super::*;
 // optional flag/depth parameters. These tests pin the signature surface so a
 // future regression in arg parsing fails loudly.
 
+// Verifies json_encode accepts the flags (second) argument and JSON_PRETTY_PRINT is observed.
 #[test]
 fn test_json_encode_with_flags_argument_compiles() {
     // JSON_PRETTY_PRINT is now observed by the encoder.
@@ -23,6 +24,7 @@ fn test_json_encode_with_flags_argument_compiles() {
     assert_eq!(out, "[\n    1,\n    2,\n    3\n]");
 }
 
+// Verifies json_encode accepts both flags and depth arguments (3-arg signature).
 #[test]
 fn test_json_encode_with_flags_and_depth_arguments_compiles() {
     let out = compile_and_run(
@@ -31,6 +33,7 @@ fn test_json_encode_with_flags_and_depth_arguments_compiles() {
     assert_eq!(out, "[1,2]");
 }
 
+// Verifies json_decode accepts the associative (second) argument and returns an array.
 #[test]
 fn test_json_decode_with_associative_argument_compiles() {
     let out = compile_and_run(
@@ -39,6 +42,7 @@ fn test_json_decode_with_associative_argument_compiles() {
     assert_eq!(out, "hi");
 }
 
+// Verifies json_decode accepts all optional arguments (4-arg signature: json, assoc, depth, flags).
 #[test]
 fn test_json_decode_with_all_optional_arguments_compiles() {
     let out = compile_and_run(
@@ -47,6 +51,7 @@ fn test_json_decode_with_all_optional_arguments_compiles() {
     assert_eq!(out, "x");
 }
 
+// Verifies json_validate is usable as a first-class callable via `json_validate(...)` syntax.
 #[test]
 fn test_json_validate_first_class_callable_compiles() {
     let out = compile_and_run(

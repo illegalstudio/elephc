@@ -17,18 +17,23 @@ mod diagnostics;
 mod emitters;
 mod exceptions;
 mod fibers;
+/// Runtime helpers for generator state management (yield, resume, stack frames).
 pub(crate) mod generators;
 mod io;
 mod objects;
 mod pointers;
 mod strings;
+/// Standard PHP library constants, functions, and classes.
 pub(crate) mod spl;
 mod system;
 mod x86_minimal;
 
 pub(crate) use data::emit_runtime_data_fixed;
+/// Emit fixed runtime data section (symbols, constants, type metadata).
 pub(crate) use data::emit_runtime_data_user;
+/// Emit user-program-specific runtime data section.
 pub(crate) use emitters::emit_runtime;
+/// Emit full runtime helpers (orchestrates all runtime sections).
 pub(crate) use fibers::{
     FIBER_CALLABLE_OFFSET, FIBER_FLOAT_ARGS_MAX, FIBER_FLOAT_ARGS_OFFSET,
     FIBER_PENDING_THROW_OFFSET, FIBER_STACK_BASE_OFFSET, FIBER_STACK_SIZE_OFFSET,

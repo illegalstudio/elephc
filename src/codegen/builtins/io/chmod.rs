@@ -16,6 +16,16 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `chmod` builtin call.
+///
+/// Evaluates the path argument first (ptr in x1, len in x2 on ARM64; rax/rdx on x86_64),
+/// preserves it on the stack while evaluating the mode argument, then calls `__rt_chmod`.
+///
+/// Arguments:
+/// - `args[0]`: path (string)
+/// - `args[1]`: mode (integer octal, e.g. 0o755)
+///
+/// Returns: `PhpType::Bool` (true on success, false on failure, matching PHP semantics)
 pub fn emit(
     _name: &str,
     args: &[Expr],

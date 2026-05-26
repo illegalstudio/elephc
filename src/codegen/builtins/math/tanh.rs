@@ -16,6 +16,22 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a PHP `tanh($arg)` call.
+///
+/// Normalizes integer operands to float (via `emit_int_result_to_float_result`) before
+/// the libc call, ensuring the floating-point argument register holds the correct value.
+/// Dispatches to the target-specific libc `tanh` symbol (AArch64 `bl_c`, x86_64 `call`).
+///
+/// # Arguments
+/// * `name` — builtin name (unused, only for signature compatibility)
+/// * `args` — single argument expression
+/// * `emitter` — target assembly emitter
+/// * `ctx` — codegen context (variable layout, ownership)
+/// * `data` — data section for literals/constants
+///
+/// # Returns
+/// Always returns `Some(PhpType::Float)`. NaN and infinity are produced by the underlying
+/// libc implementation and are PHP-compatible by construction.
 pub fn emit(
     _name: &str,
     args: &[Expr],

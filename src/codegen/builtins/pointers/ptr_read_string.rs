@@ -16,6 +16,21 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `ptr_read_string` builtin: copies raw bytes into an owned PHP string.
+ ///
+ /// ## Arguments
+ /// - `args[0]`: source pointer expression
+ /// - `args[1]`: byte length expression
+ ///
+ /// ## Sequence
+ /// 1. Evaluates the pointer expression and validates it against null via `__rt_ptr_check_nonnull` (aborts if null).
+ /// 2. Pushes the validated pointer onto the stack to preserve it while the length expression is evaluated.
+ /// 3. Evaluates the length expression (result lands in `x0`/`rax` per ABI).
+ /// 4. Moves the length into the string-length parameter register (`x1` on ARM64, `rdx` on x86_64), then pops the preserved pointer into `x0`/`rax`.
+ /// 5. Calls `__rt_ptr_read_string` which allocates a PHP string and copies exactly `length` bytes from the source pointer (no NUL scan).
+ ///
+ /// ## Returns
+ /// `PhpType::Str` — the owned PHP string result.
 pub fn emit(
     _name: &str,
     args: &[Expr],

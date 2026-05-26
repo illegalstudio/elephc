@@ -10,9 +10,20 @@
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
-/// __rt_shell_exec: execute a shell command and capture its output.
-/// Input:  x1=command ptr, x2=command len
-/// Output: x1=output ptr (in concat_buf), x2=output len
+/// Emits the `__rt_shell_exec` runtime helper.
+///
+/// Executes a shell command via `popen()` and reads its entire stdout
+/// into the runtime's `concat_buf`, returning a pointer/length pair.
+/// Uses `fgetc()` in a loop until EOF, then closes the pipe with `pclose()`.
+/// Falls back to empty string (ptr=0, len=0) if `popen()` fails.
+///
+/// # Input (ARM64)
+/// - `x1`: command string pointer
+/// - `x2`: command string length
+///
+/// # Output (ARM64)
+/// - `x1`: output string pointer in `concat_buf`
+/// - `x2`: output string length
 pub fn emit_shell_exec(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_shell_exec_linux_x86_64(emitter);
@@ -77,6 +88,11 @@ pub fn emit_shell_exec(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_shell_exec` runtime helper.
+/// Uses the System V ABI: command pointer in `rdi`, length in `rsi`.
+/// Returns output pointer in `rax`, length in `rdx`.
+/// On `popen()` failure, returns null pointer and zero length.
+/// Fallback label `__rt_shell_exec_empty` handles the NULL return path.
 fn emit_shell_exec_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: shell_exec ---");

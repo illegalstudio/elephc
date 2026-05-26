@@ -9,6 +9,9 @@
 
 use super::*;
 
+// Compiles `[["name" => "Alice"]]` then accesses `$data[0]["name"]` directly via
+// nested indexed-then-assoc indexing. Verifies the chained subscript path produces
+// "Alice".
 #[test]
 fn test_nested_indexed_assoc_direct() {
     let out = compile_and_run(
@@ -20,6 +23,8 @@ echo $data[0]["name"];
     assert_eq!(out, "Alice");
 }
 
+// Compiles `["items" => [10, 20, 30]]`, extracts `$map["items"]` to a variable,
+// then accesses `$items[1]`. Verifies assoc-then-indexed subscript path yields 20.
 #[test]
 fn test_nested_assoc_indexed() {
     let out = compile_and_run(
@@ -32,6 +37,8 @@ echo $items[1];
     assert_eq!(out, "20");
 }
 
+// Compiles `[["math" => 90, "eng" => 85]]`, extracts `$scores[0]` to a variable,
+// then accesses both string keys. Verifies multi-key assoc inside indexed array.
 #[test]
 fn test_nested_int_assoc_in_indexed() {
     let out = compile_and_run(
@@ -44,6 +51,9 @@ echo $s["math"] . "|" . $s["eng"];
     assert_eq!(out, "90|85");
 }
 
+// Compiles an indexed array of assoc arrays, iterates with a for loop,
+// extracts each inner assoc to a variable, and concatenates name|email pairs.
+// Verifies loop index bounds, variable extraction, and string concatenation.
 #[test]
 fn test_nested_string_assoc_loop() {
     let out = compile_and_run(
@@ -61,6 +71,9 @@ for ($i = 0; $i < 2; $i++) {
     assert_eq!(out, "Alice|alice@test\nBob|bob@test\n");
 }
 
+// Compiles `["fruits" => ["apple", "banana"], "vegs" => ["carrot", "pea"]]`,
+// extracts `$groups["fruits"]` to a variable, then accesses both indexed slots.
+// Verifies assoc-of-indexed nested structure.
 #[test]
 fn test_nested_assoc_of_indexed() {
     let out = compile_and_run(
@@ -73,6 +86,9 @@ echo $f[0] . "|" . $f[1];
     assert_eq!(out, "apple|banana");
 }
 
+// Compiles a `make_user` function returning an assoc array, builds an indexed array
+// by appending two calls, then iterates with count-based for loop. Verifies
+// function return, array push, and loop variable extraction from nested structure.
 #[test]
 fn test_nested_dynamic_building() {
     let out = compile_and_run(
@@ -92,6 +108,9 @@ for ($i = 0; $i < count($users); $i++) {
     assert_eq!(out, "Alice|a@t\nBob|b@t\n");
 }
 
+// Compiles `parse_row` that calls `explode("|", $line)` and returns an assoc array
+// built from the parts. Verifies explode integration with assoc return and
+// nested string access via returned value.
 #[test]
 fn test_nested_explode_to_assoc() {
     let out = compile_and_run(
@@ -107,6 +126,9 @@ echo $r["name"] . " <" . $r["email"] . ">";
     assert_eq!(out, "Alice <alice@test>");
 }
 
+// Compiles an indexed array of assoc arrays, iterates with foreach, and accesses
+// the "name" key on each iteration variable. Verifies foreach loop over nested
+// assoc without explicit index variable.
 #[test]
 fn test_nested_foreach_of_assoc() {
     let out = compile_and_run(
@@ -120,6 +142,9 @@ foreach ($people as $p) {
     assert_eq!(out, "Alice Bob ");
 }
 
+// Compiles a class `Item` with a constructor, creates `["items" => [new Item(...), new Item(...)]]`,
+// extracts the inner array, indexes it, and accesses an object property. Verifies
+// objects stored inside nested assoc-of-indexed structures are materialized correctly.
 #[test]
 fn test_nested_objects_in_assoc() {
     let out = compile_and_run(
@@ -136,6 +161,9 @@ echo $first->name;
     assert_eq!(out, "Sword");
 }
 
+// Compiles a `classify` function using switch with string return values across all
+// branches (case 0/1/default). Calls it three times and concatenates results
+// separated by spaces. Verifies switch fallthrough and string return routing.
 #[test]
 fn test_switch_return_string() {
     let out = compile_and_run(
@@ -158,6 +186,9 @@ echo $r;
     assert_eq!(out, "fizz buzz none");
 }
 
+// Compiles a `score` function using switch with integer return values across all
+// branches (case 1/2/3/default). Calls it four times and concatenates results
+// with pipe delimiters. Verifies switch with integer returns and default branch.
 #[test]
 fn test_switch_return_int() {
     let out = compile_and_run(

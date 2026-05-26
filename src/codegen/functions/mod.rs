@@ -42,6 +42,8 @@ pub(crate) use self::fiber_wrapper::emit_fiber_wrapper;
 pub use self::types::{infer_contextual_type, infer_local_type_with_ctx};
 pub(crate) use self::types::singular_object_class;
 
+/// Handles `yield`-containing bodies by delegating to `generator::emit_generator_function`,
+/// otherwise delegates to `emit_function_with_label` with a derived label/epilogue pair.
 #[allow(clippy::too_many_arguments)]
 pub fn emit_function(
     emitter: &mut Emitter,
@@ -102,6 +104,8 @@ pub fn emit_function(
     );
 }
 
+/// Handles `yield`-containing closure bodies by delegating to `generator::emit_generator_closure`,
+/// otherwise delegates to `emit_function_with_label_and_class` with an empty globals/statics set.
 pub fn emit_closure(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -168,6 +172,8 @@ pub fn emit_closure(
     );
 }
 
+/// Delegates to `emit_function_with_label_and_class` with an empty globals/statics set,
+/// using the given `label` as both the entry point and epilogue label.
 #[allow(clippy::too_many_arguments)]
 pub fn emit_method(
     emitter: &mut Emitter,
@@ -220,6 +226,8 @@ pub fn emit_method(
     );
 }
 
+/// Wraps `emit_function_with_label_and_class` with `callable_param_scope` set to `Some(scope)`,
+/// passing `None` for class context.
 #[allow(clippy::too_many_arguments)]
 fn emit_function_with_label(
     emitter: &mut Emitter,
@@ -273,6 +281,13 @@ fn emit_function_with_label(
     );
 }
 
+/// Allocates a local variable slot for an incoming call parameter and sets its ownership
+/// and cleanup mode based on the parameter name and type.
+///
+/// For reference parameters (`is_ref` true), allocates an `Int` slot and registers the
+/// parameter name in `ctx.ref_params`. For `$this` and `__elephc_fcc_*` hidden params,
+/// disables epilogue cleanup. For `Str` types, uses borrowed ownership; otherwise uses
+/// local ownership for the given `PhpType`.
 fn allocate_incoming_param(ctx: &mut Context, pname: &str, pty: &PhpType, is_ref: bool) {
     if is_ref {
         ctx.ref_params.insert(pname.to_string());
@@ -297,6 +312,9 @@ fn allocate_incoming_param(ctx: &mut Context, pname: &str, pty: &PhpType, is_ref
     }
 }
 
+/// Looks up callable-typed parameters in `ctx.callable_param_sigs` by scope and
+/// populates `ctx.closure_sigs` so that closure captures can resolve their signatures.
+/// No-ops if `scope` is `None`.
 fn seed_callable_param_sigs(ctx: &mut Context, scope: Option<&str>, sig: &FunctionSig) {
     let Some(scope) = scope else {
         return;
@@ -315,6 +333,10 @@ fn seed_callable_param_sigs(ctx: &mut Context, scope: Option<&str>, sig: &Functi
     }
 }
 
+/// Core function/method/closure emitter. Sets up the context, frame layout, incoming
+/// parameters, hidden locals, static variables, try slots, and control flow metadata,
+/// then emits the statement body and handles the epilogue including deferred closures,
+/// fiber wrappers, and callback wrappers.
 #[allow(clippy::too_many_arguments)]
 fn emit_function_with_label_and_class(
     emitter: &mut Emitter,
@@ -549,6 +571,9 @@ pub(crate) use self::cleanup::{
     emit_local_ref_cell_flag_zero_init, emit_owned_local_epilogue_cleanup,
 };
 
+/// Emits an abort sequence for functions with `PhpType::Never` return type that
+/// implicitly return. Writes a fatal diagnostic to stderr and exits with code 1
+/// using platform-specific syscall conventions.
 fn emit_never_implicit_return_abort(emitter: &mut Emitter, data: &mut DataSection) {
     let (message_label, message_len) =
         data.add_string(b"Fatal error: A never-returning function must not implicitly return\n");

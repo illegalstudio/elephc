@@ -46,6 +46,8 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Dispatches system builtins (process, environment, time, JSON, regex, constants)
+/// to their focused codegen leaf emitters.
 pub fn emit(
     name: &str,
     args: &[Expr],
@@ -88,6 +90,17 @@ pub fn emit(
     }
 }
 
+/// Resolves a class name to its canonical form stored in the context's class table.
+///
+/// Uses `php_symbol_key` for case-insensitive matching, stripping any leading backslash
+/// from `class_name` before lookup. Returns `None` if the class is not declared.
+///
+/// # Arguments
+/// * `ctx` - Compilation context containing known class declarations
+/// * `class_name` - PHP class name, optionally prefixed with `\`
+///
+/// # Returns
+/// The canonical class name as stored in `ctx.classes`, or `None` if not found.
 fn resolve_class_name<'a>(ctx: &'a Context, class_name: &str) -> Option<&'a str> {
     let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
     ctx.classes

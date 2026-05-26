@@ -17,6 +17,28 @@ use crate::parser::ast::Expr;
 use crate::types::PhpType;
 use super::stat_result::box_stat_int_or_false_result;
 
+/// Emits code for the PHP `fileatime()` builtin, which returns the last access time of a file.
+///
+/// # Arguments
+/// - `_name`: Unused parameter present for dispatcher uniformity.
+/// - `args`: Single argument providing the file path expression.
+/// - `emitter`: Target-aware assembly emitter.
+/// - `ctx`: Codegen context carrying variable layout and metadata.
+/// - `data`: Data section for relocatable literals.
+///
+/// # Returns
+/// Always returns `Some(PhpType::Mixed)` because the builtin can return an integer
+/// timestamp on success or `false` on failure.
+///
+/// # Behavior
+/// 1. Emits code to evaluate and push the file path argument.
+/// 2. Calls `__rt_fileatime`, the target-aware runtime helper that invokes `stat` and
+///    extracts `st_atime`.
+/// 3. Boxes the raw integer or `false` sentinel into a PHP `Mixed` value.
+///
+/// # Notes
+/// Filesystem state is observable; emitters must preserve call order and propagate
+/// the `false` sentinel on failure rather than raising a fatal error.
 pub fn emit(
     _name: &str,
     args: &[Expr],

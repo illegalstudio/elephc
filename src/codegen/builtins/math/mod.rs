@@ -46,6 +46,11 @@ use crate::codegen::emit::Emitter;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Dispatches to the appropriate math builtin emitter based on `name`.
+///
+/// Returns `Some(PhpType)` if `name` matches a known math builtin, or `None` if
+/// the builtin is not recognized. Callers must have already validated argument
+/// count and types via the type checker.
 pub fn emit(
     name: &str,
     args: &[Expr],

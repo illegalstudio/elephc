@@ -18,6 +18,13 @@ use super::names::{
 use super::statements::{resolve_params, resolve_stmt_list};
 use super::{resolved_name, rewrite_callback_literal_args, Imports, Symbols};
 
+/// Recursively resolves names in an expression, returning a new expression with
+/// all name references rewritten according to namespace and import rules.
+///
+/// Handles function calls, class/constant references, instanceof targets, closures,
+/// method calls, and all other expression variants. Unqualified names are resolved
+/// against current_namespace and imports. PHP builtin fallback applies to function
+/// names that remain unqualified after resolution.
 pub(super) fn resolve_expr(
     expr: &Expr,
     current_namespace: Option<&str>,
@@ -320,6 +327,10 @@ pub(super) fn resolve_expr(
     Expr::new(kind, expr.span)
 }
 
+/// Resolves the target of an instanceof expression.
+///
+/// If the target is a bare name, it is rewritten using resolve_special_or_class_name
+/// to apply namespace/use rules. Expression targets are recursively resolved.
 fn resolve_instanceof_target(
     target: &InstanceOfTarget,
     current_namespace: Option<&str>,

@@ -16,6 +16,10 @@ use crate::codegen::stmt::emit_stmt;
 use crate::parser::ast::Stmt;
 use crate::types::PhpType;
 
+/// Lowers `foreach ($arr as $key => $value)` over statically-typed indexed arrays on ARM64.
+/// Pushes 48 bytes (3×16-byte slots) for array pointer, length, and index; handles by-ref binding
+/// via `ref_flag_offset`; dispatches per-element storage to `store_foreach_value_from_regs`.
+/// Updates `$value`'s type/ownership to borrowed alias; pushes/pops `LoopLabels` around body emission.
 pub(crate) fn emit_indexed_foreach(
     key_var: &Option<String>,
     value_var: &str,
@@ -202,6 +206,11 @@ pub(crate) fn emit_indexed_foreach(
     }
 }
 
+/// Lowers `foreach ($arr as $key => $value)` over runtime-typed indexed iterables on ARM64.
+/// Pushes 64 bytes (4×16-byte slots) for array pointer, length, value-type tag, and index.
+/// Isolates the runtime `value_type` tag from the packed array header via right-shift and mask.
+/// Dispatches string vs scalar/payload branching; boxes runtime payloads as `PhpType::Mixed`;
+/// handles by-ref binding; emits `__rt_decref_mixed` cleanup when `$value` is not a ref param.
 pub(crate) fn emit_indexed_foreach_runtime_mixed(
     key_var: &Option<String>,
     value_var: &str,
@@ -375,6 +384,10 @@ pub(crate) fn emit_indexed_foreach_runtime_mixed(
     }
 }
 
+/// Lowers `foreach ($arr as $key => $value)` over statically-typed indexed arrays on x86_64 Linux.
+/// Pushes 48 bytes for array pointer, length, and index via `emit_push_reg`; handles by-ref binding
+/// via `ref_flag_offset`; dispatches per-element storage to `store_foreach_value_from_regs`.
+/// Updates `$value`'s type/ownership to borrowed alias; pushes/pops `LoopLabels` around body emission.
 fn emit_indexed_foreach_linux_x86_64(
     key_var: &Option<String>,
     value_var: &str,
@@ -545,6 +558,11 @@ fn emit_indexed_foreach_linux_x86_64(
     }
 }
 
+/// Lowers `foreach ($arr as $key => $value)` over runtime-typed indexed iterables on x86_64 Linux.
+/// Pushes 64 bytes for array pointer, length, value-type tag, and index; isolates the runtime
+/// `value_type` tag from the packed array header via right-shift and mask. Dispatches string vs
+/// scalar/payload branching; boxes runtime payloads as `PhpType::Mixed`; handles by-ref binding;
+/// emits `__rt_decref_mixed` cleanup when `$value` is not a ref param.
 fn emit_indexed_foreach_runtime_mixed_linux_x86_64(
     key_var: &Option<String>,
     value_var: &str,
@@ -703,6 +721,9 @@ fn emit_indexed_foreach_runtime_mixed_linux_x86_64(
     }
 }
 
+/// Boxes the current integer loop index as an owned `PhpType::Mixed` key and stores it into
+/// `$name`'s stack slot on ARM64. Saves/restores the index across the `__rt_mixed_from_value`
+/// call; clears prior owned key via `__rt_deincref_mixed` before storing the new box.
 fn store_runtime_mixed_index_key_aarch64(
     name: &str,
     offset: usize,
@@ -721,6 +742,9 @@ fn store_runtime_mixed_index_key_aarch64(
     ctx.update_var_type_and_ownership(name, PhpType::Mixed, HeapOwnership::Owned);
 }
 
+/// Boxes the current integer loop index as an owned `PhpType::Mixed` key and stores it into
+/// `$name`'s stack slot on x86_64 Linux. Saves/restores `rax` across the `__rt_mixed_from_value`
+/// call; clears prior owned key via `__rt_deincref_mixed` before storing the new box.
 fn store_runtime_mixed_index_key_x86_64(
     name: &str,
     offset: usize,
@@ -739,6 +763,10 @@ fn store_runtime_mixed_index_key_x86_64(
     ctx.update_var_type_and_ownership(name, PhpType::Mixed, HeapOwnership::Owned);
 }
 
+/// Computes the address of the current indexed-array element on ARM64 and performs by-ref
+/// binding: scales index by slot width (3 for scalar, 4 for string), skips array header,
+/// calls `release_foreach_value_ref_cell_before_rebind`, marks the ref flag, then calls
+/// `bind_foreach_value_ref` with the element address.
 fn bind_indexed_value_ref_aarch64(
     value_var: &str,
     elem_ty: &PhpType,
@@ -748,12 +776,12 @@ fn bind_indexed_value_ref_aarch64(
     ctx: &mut Context,
 ) {
     if matches!(elem_ty, PhpType::Str) {
-        emitter.instruction("lsl x10, x0, #4");                                 // scale the foreach index to the 16-byte string slot width
+        emitter.instruction("lsl x10, x0, #4");                               // scale the foreach index to the 16-byte string slot width
     } else {
-        emitter.instruction("lsl x10, x0, #3");                                 // scale the foreach index to the 8-byte payload slot width
+        emitter.instruction("lsl x10, x0, #3");                               // scale the foreach index to the 8-byte payload slot width
     }
-    emitter.instruction("add x9, x9, #24");                                     // skip the indexed-array header to reach payload storage
-    emitter.instruction("add x9, x9, x10");                                     // compute the address of the current indexed-array element
+    emitter.instruction("add x9, x9, #24");                                   // skip the indexed-array header to reach payload storage
+    emitter.instruction("add x9, x9, x10");                                   // compute the address of the current indexed-array element
     super::release_foreach_value_ref_cell_before_rebind(
         value_var,
         fallback,
@@ -765,6 +793,10 @@ fn bind_indexed_value_ref_aarch64(
     super::bind_foreach_value_ref(value_var, "x9", elem_ty, emitter, ctx);
 }
 
+/// Computes the address of the current indexed-array element on x86_64 and performs by-ref
+/// binding: scales index by slot width (3 for scalar, 4 for string), skips array header,
+/// calls `release_foreach_value_ref_cell_before_rebind`, marks the ref flag, then calls
+/// `bind_foreach_value_ref` with the element address.
 fn bind_indexed_value_ref_x86_64(
     value_var: &str,
     elem_ty: &PhpType,

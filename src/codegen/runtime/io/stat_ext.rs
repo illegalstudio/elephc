@@ -10,14 +10,14 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// Extra stat-derived metadata helpers: fileatime/filectime/fileperms/fileowner/
-/// filegroup/fileinode/filetype/is_executable/is_link.
+/// Emits the `__rt_filesize`, `__rt_filemtime` runtime helper assembly for stat ext.
+/// Keeps PHP filesystem/resource behavior, libc calls, and target-specific ABI variants in one focused emitter.
 ///
-/// These all share the same skeleton as the existing `__rt_filesize` /
-/// `__rt_filemtime` runtime helpers in `stat.rs`: stat() the path into a stack
-/// buffer and load the requested field. Scalar stat getters return the payload
-/// plus a success flag so codegen can distinguish legitimate zero values from
-/// PHP-compatible `false` failures.
+/// Called from:
+/// - `crate::codegen::runtime::emitters::emit_runtime()` via `crate::codegen::runtime::io`.
+///
+/// Key details:
+/// - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 pub fn emit_stat_ext(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_stat_ext_linux_x86_64(emitter);
@@ -257,6 +257,10 @@ pub fn emit_stat_ext(emitter: &mut Emitter) {
     emit_epilogue(emitter);
 }
 
+/// x86_64 Linux variant of `emit_stat_ext`. Uses the GNU libc stat()/lstat()/
+/// access() calling convention instead of raw syscalls. Frame layout and field
+/// offsets differ from the generic ARM64 path because it allocates the stat
+/// buffer in C ABI space rather than relying on a fixed syscall buffer layout.
 fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
     let frame_size = 144usize;
     let mode_off = 24usize;

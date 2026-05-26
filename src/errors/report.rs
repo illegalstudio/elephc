@@ -10,6 +10,15 @@
 
 use super::{CompileError, CompileWarning};
 
+/// Prints a compiler error to stderr with optional source location.
+///
+/// Format varies based on available metadata:
+/// - With file, line, and column: `error[file:line:col]: message`
+/// - With file only: `error[file]: message`
+/// - With line and column only: `error[line:col]: message`
+/// - With no location metadata: `error: message`
+///
+/// Recursively prints any related errors attached to the main error.
 pub fn print_error(error: &CompileError) {
     match (&error.file, error.span.line > 0) {
         (Some(file), true) => {
@@ -36,6 +45,11 @@ pub fn print_error(error: &CompileError) {
     }
 }
 
+/// Prints a compiler warning to stderr with optional line and column.
+///
+/// Format varies based on available metadata:
+/// - With line and column: `warning[line:col]: message`
+/// - With no location metadata: `warning: message`
 pub fn print_warning(warning: &CompileWarning) {
     if warning.span.line > 0 {
         eprintln!(

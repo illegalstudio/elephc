@@ -67,6 +67,12 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the boxed mixed pointer in x0
 }
 
+/// x86_64 Linux implementation of `__rt_mixed_from_value`.
+/// Detects the runtime value tag in `rax`, applies ownership normalization (string persistence or refcount retention),
+/// allocates a 24-byte mixed cell on the heap, and writes the tagged payload at offsets 0, 8, and 16.
+/// Input:  rax=value_tag, rdi=value_lo, rsi=value_hi
+/// Output: rax=boxed mixed pointer
+/// Clobbers: r10 as temporary scratch during header stamping and payload installation.
 fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_from_value ---");

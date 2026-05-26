@@ -11,8 +11,19 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// ucwords: uppercase first letter of each word (after whitespace).
-/// Input: x1=ptr, x2=len. Output: x1=new_ptr, x2=len.
+/// Emits the `__rt_ucwords` runtime helper for ARM64.
+///
+/// Uppercases the first character of each word in a PHP byte-string.
+/// Whitespace characters (space ASCII 32, tab ASCII 9, newline ASCII 10) are word separators.
+///
+/// Input registers (ARM64):
+///   - x1: pointer to the input string
+///   - x2: length of the input string
+/// Output registers:
+///   - x1: pointer to the result (heap-allocated via `__rt_strcopy`, refcounted)
+///   - x2: length of the result string
+///
+/// Clobbers: x9, x10, x11, x12.
 pub fn emit_ucwords(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_ucwords_linux_x86_64(emitter);
@@ -67,6 +78,19 @@ pub fn emit_ucwords(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x1/x2 from strcopy
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_ucwords` runtime helper.
+///
+/// Uppercases the first character of each word in a PHP byte-string.
+/// Whitespace characters (space ASCII 32, tab ASCII 9, newline ASCII 10) are word separators.
+///
+/// Input registers (x86_64 System V ABI):
+///   - rdi: pointer to the input string
+///   - rsi: length of the input string
+/// Output registers:
+///   - rax: pointer to the result (heap-allocated via `__rt_strcopy`, refcounted)
+///   - rdx: length of the result string
+///
+/// Clobbers: r8, rcx, r9, r10.
 fn emit_ucwords_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ucwords ---");

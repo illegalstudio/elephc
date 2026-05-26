@@ -10,6 +10,11 @@
 
 use super::*;
 
+/// Propagates constant values into default parameter expressions.
+///
+/// Maps over each parameter, recursively propagating constants in default values
+/// using an empty scalar environment (no prior bindings are in scope for params).
+/// Reference parameters and type annotations are preserved unchanged.
 pub(crate) fn propagate_params(
     params: Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)>,
 ) -> Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)> {
@@ -26,6 +31,11 @@ pub(crate) fn propagate_params(
         .collect()
 }
 
+/// Propagates constant values into a class property's default value expression.
+///
+/// Recursively propagates constants in the property's default value using an empty
+/// scalar environment. All other fields (name, visibility, type, hooks, etc.) are
+/// copied unchanged.
 pub(super) fn propagate_property(property: ClassProperty) -> ClassProperty {
     ClassProperty {
         name: property.name,
@@ -45,6 +55,11 @@ pub(super) fn propagate_property(property: ClassProperty) -> ClassProperty {
     }
 }
 
+/// Propagates constant values through a class method's parameters and body.
+///
+/// Recursively propagates constants in the method's parameter defaults and body block
+/// using a fresh empty scalar environment (no enclosing scope bindings). Other method
+/// metadata (name, visibility, attributes, return type, etc.) is copied unchanged.
 pub(super) fn propagate_method(method: ClassMethod) -> ClassMethod {
     ClassMethod {
         params: propagate_params(method.params),
@@ -53,6 +68,10 @@ pub(super) fn propagate_method(method: ClassMethod) -> ClassMethod {
     }
 }
 
+/// Propagates constant values into an enum case's value expression.
+///
+/// Recursively propagates constants in the enum case value using an empty scalar
+/// environment. Other case metadata (name, span, attributes) is copied unchanged.
 pub(super) fn propagate_enum_case(case: EnumCaseDecl) -> EnumCaseDecl {
     EnumCaseDecl {
         name: case.name,

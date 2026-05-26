@@ -10,6 +10,7 @@
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
+/// The fixed warning text emitted when `fopen()` fails to open a file.
 const FOPEN_FAILED_WARNING: &str = "Warning: fopen(): Failed to open stream\n";
 
 /// fopen: open a file and return its file descriptor.
@@ -100,6 +101,16 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller with fd in x0
 }
 
+/// Emits the x86_64 Linux variant of `__rt_fopen`.
+/// Accepts filename (rdi=ptr, rsi=len) and mode (rax=ptr, rdx=len) as ElephC string registers,
+/// converts both to null-terminated C strings via `__rt_cstr`/`__rt_cstr2`, parses the mode character
+/// to derive Linux `open()` flags, calls libc `open()`, and returns the file descriptor in rax
+/// (or -1 on failure). Clears the EOF flag entry for the newly opened descriptor before returning.
+///
+/// # Call-ABI
+/// - Filename: rdi=pointer, rsi=length
+/// - Mode: rax=pointer, rdx=length (ElephC string registers, caller-preserved across `__rt_cstr`)
+/// - Returns: rax=fd or -1
 fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fopen ---");
@@ -163,6 +174,10 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the libc open() file descriptor or negative error value in rax
 }
 
+/// Emits the fixed "fopen() failed" warning via the diagnostic runtime helper.
+/// AArch64: passes pointer in x1, length in x2, calls `__rt_diag_warning`.
+/// x86_64: passes pointer in rdi, length in esi, calls `__rt_diag_warning`.
+/// Uses `FOPEN_FAILED_WARNING` as the diagnostic text.
 fn emit_fopen_failed_warning(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {

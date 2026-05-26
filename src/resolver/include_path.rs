@@ -40,6 +40,10 @@ pub(super) fn fold_include_path(expr: &Expr, state: &ResolveState) -> Result<Str
     }
 }
 
+/// Formats the user-facing error message for a non-foldable include path expression.
+/// Handles both runtime-dynamic expressions (variables, calls, etc.) and other
+/// invalid expression types, delegating to `runtime_dynamic_include_path_detail`
+/// for dynamic expressions or `invalid_include_path_detail` for static invalid shapes.
 fn include_path_error_message(expr: &Expr) -> String {
     if let Some(detail) = runtime_dynamic_include_path_detail(expr) {
         return format!(
@@ -58,6 +62,10 @@ fn include_path_error_message(expr: &Expr) -> String {
     )
 }
 
+/// Classifies runtime-dynamic expression kinds for the include path error message.
+/// Returns `Some(description)` for expressions that resolve at runtime (variables,
+/// calls, ternaries, property access), `None` for expressions that could theoretically
+/// be foldable but are expressed in a dynamic way.
 fn runtime_dynamic_include_path_detail(expr: &Expr) -> Option<String> {
     match &expr.kind {
         ExprKind::Variable(name) => {
@@ -94,6 +102,10 @@ fn runtime_dynamic_include_path_detail(expr: &Expr) -> Option<String> {
     }
 }
 
+/// Classifies statically-invalid expression kinds for the include path error message.
+/// Returns a description for expressions that are invalid but not runtime-dynamic
+/// (e.g., wrong binary operator, non-string literals). Used when the expression
+/// shape is known at compile time but is not a valid include path.
 fn invalid_include_path_detail(expr: &Expr) -> String {
     match &expr.kind {
         ExprKind::BinaryOp { op, .. } if *op != BinOp::Concat => {

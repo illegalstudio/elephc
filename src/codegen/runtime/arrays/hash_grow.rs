@@ -11,11 +11,14 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// hash_grow: double the capacity of a hash table while preserving insertion order.
-/// Allocates a new table with 2x capacity, reinserts all owned entries in their
-/// original insertion sequence, frees the old table struct, and returns the new pointer.
-/// Input:  x0 = old hash table pointer
-/// Output: x0 = new hash table pointer (with doubled capacity)
+/// Emits the `__rt_hash_grow` runtime helper for the active target.
+/// Doubles hash table capacity while preserving insertion order: allocates a new
+/// table at 2× capacity, reinserts all owned entries, frees the old table, and
+/// returns the new pointer.
+/// - ARM64 input/output: x0 = old table → x0 = new table
+/// - x86_64 input/output: rdi = old table → rax = new table
+/// Calls `__rt_hash_ensure_unique` before rehash to split shared storage, then
+/// iterates via `__rt_hash_iter_next` and inserts via `__rt_hash_insert_owned`.
 pub fn emit_hash_grow(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_grow_linux_x86_64(emitter);
@@ -80,6 +83,10 @@ pub fn emit_hash_grow(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = new table
 }
 
+/// x86_64-specific implementation of `__rt_hash_grow` using the System V ABI.
+/// Follows the same grow/iterate/reinsert/free sequence as the ARM64 variant
+/// but uses callee-saved registers r12/r13, a frame-based spill layout, and
+/// the SysV register convention (rdi = first arg, rax = return).
 fn emit_hash_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_grow ---");

@@ -10,9 +10,15 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// explode: split string by delimiter into array of strings.
-/// Input: x1/x2=delimiter, x3/x4=string
-/// Output: x0 = array pointer
+/// Emits the `__rt_explode` runtime helper for splitting a string by a delimiter.
+///
+/// Dispatches to `emit_explode_linux_x86_64` on x86_64 Linux; falls through to the ARM64
+/// implementation on all other targets. Uses target ABI registers for the pointer/length
+/// pairs: x1/x2 = delimiter ptr/length, x3/x4 = subject string ptr/length, x0 = result
+/// array pointer. Allocates an initial indexed array with 16 string slots and pushes each
+/// extracted segment via `__rt_array_push_str`. The final segment (after the last delimiter
+/// or the entire string if no delimiter is found) is always pushed. Stack frame is 80 bytes
+/// on ARM64; red-zone frame is 64 bytes on x86_64 Linux.
 pub fn emit_explode(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_explode_linux_x86_64(emitter);
@@ -108,6 +114,14 @@ pub fn emit_explode(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_explode`.
+///
+/// Dispatches from `emit_explode` when targeting x86_64 Linux. Uses the AMD64 System V
+/// ABI: delimiter pointer/length in rdi/rdx, subject string pointer/length in rsi/rsi,
+/// result array pointer returned in rax. Uses rbp-relative frame layout in the red zone
+/// to preserve callee-saved registers (delimiter pair at [rbp-8]/[rbp-16], subject pair
+/// at [rbp-24]/[rbp-32], array pointer at [rbp-40], scan position at [rbp-48], segment
+/// start at [rbp-56]) across helper calls that may clobber caller-saved registers.
 fn emit_explode_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: explode ---");

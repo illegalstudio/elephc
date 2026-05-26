@@ -11,8 +11,16 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// rawurlencode: percent-encode non-alphanumeric chars except -_.~ (spaces become %20).
-/// Input: x1/x2=string. Output: x1/x2=result in concat_buf.
+/// Emits the `__rt_rawurlencode` runtime helper for rawurlencode (RFC 3986).
+///
+/// Percent-encodes all bytes except alphanumeric and `-_.~`. Each unsafe byte
+/// expands to three bytes (`%XX` where XX is uppercase hex). The result is appended
+/// to the concatenation buffer.
+///
+/// ABI (ARM64):
+/// - Input: x1=source pointer, x2=source length
+/// - Output: x1=result pointer, x2=result length
+/// - Clobbers: x6-x13, concat buffer offset is updated
 pub fn emit_rawurlencode(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_rawurlencode_linux_x86_64(emitter);
@@ -102,6 +110,15 @@ pub fn emit_rawurlencode(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_rawurlencode` runtime helper.
+///
+/// Same behavior as `emit_rawurlencode` but uses the x86_64 System V ABI.
+/// Percent-encodes all bytes except alphanumeric and `-_.~` (RFC 3986).
+///
+/// ABI (x86_64 System V):
+/// - Input: rax=source pointer, rdx=source length
+/// - Output: rax=result pointer, rdx=result length
+/// - Clobbers: rcx, rsi, rdx, r8-r11, concat buffer offset is updated
 fn emit_rawurlencode_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: rawurlencode ---");

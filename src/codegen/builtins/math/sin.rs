@@ -16,6 +16,18 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `sin` builtin call.
+ ///
+ /// ## Arguments
+ /// - `args[0]`: the operand (integer or float) — emits the expression and normalizes
+ ///   integer results to float before the libc call.
+ ///
+ /// ## Returns
+ /// - Always `PhpType::Float`. NaN/infinity follow from libm; type-checker signatures
+ ///   guarantee PHP-compatible behavior.
+ ///
+ /// ## Side effects
+ /// - Calls `sin` from the C library on the active floating-point register.
 pub fn emit(
     _name: &str,
     args: &[Expr],

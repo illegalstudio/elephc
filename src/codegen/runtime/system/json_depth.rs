@@ -66,6 +66,10 @@ pub(crate) fn emit_json_depth_exit(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the container encoder
 }
 
+/// x86_64-specific implementation of `__rt_json_depth_enter`.
+/// Uses RIP-relative addressing to load/store `_json_active_depth` and
+/// `_json_depth_limit`. Sets `rax = 1` (`JSON_ERROR_DEPTH`) before calling
+/// `__rt_json_throw_error` and restores the caller frame (`rbp`/`rsp`) on return.
 fn emit_enter_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_depth_enter ---");
@@ -87,6 +91,9 @@ fn emit_enter_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the container encoder
 }
 
+/// x86_64-specific implementation of `__rt_json_depth_exit`.
+/// Uses RIP-relative addressing to decrement `_json_active_depth` and
+/// stores the result back to the same symbol.
 fn emit_exit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_depth_exit ---");

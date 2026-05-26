@@ -19,12 +19,15 @@ use super::output::DiscoveryOutput;
 use super::stmts::discover_stmts;
 use super::super::state::ResolveState;
 
+/// Holds the result of discovering declarations within a single branch region.
+/// Tracks the output declarations and the set of paths loaded within that branch.
 pub(super) struct BranchDiscovery {
     output: DiscoveryOutput,
     loaded_paths: HashSet<PathBuf>,
 }
 
 impl BranchDiscovery {
+    /// Creates a `BranchDiscovery` with no declarations, preserving the loaded paths set.
     fn empty(loaded_paths: &HashSet<PathBuf>) -> Self {
         Self {
             output: DiscoveryOutput::default(),
@@ -33,6 +36,8 @@ impl BranchDiscovery {
     }
 }
 
+/// Discovers declarations in an isolated statement block, returning a fresh `DiscoveryOutput`.
+/// The caller receives all discovered declarations without modifying the shared output.
 pub(super) fn discover_isolated_output(
     stmts: &[Stmt],
     base_dir: &Path,
@@ -53,6 +58,7 @@ pub(super) fn discover_isolated_output(
     Ok(output)
 }
 
+/// Discovers declarations in an isolated statement block, merging into `output` in place.
 pub(super) fn discover_isolated(
     stmts: &[Stmt],
     base_dir: &Path,
@@ -71,6 +77,8 @@ pub(super) fn discover_isolated(
     Ok(())
 }
 
+/// Discovers declarations in a branch region, returning a `BranchDiscovery` that holds
+/// local copies of the state, loaded paths, and include chain specific to that branch.
 pub(super) fn discover_branch_output(
     stmts: &[Stmt],
     base_dir: &Path,
@@ -96,6 +104,9 @@ pub(super) fn discover_branch_output(
     })
 }
 
+/// Merges multiple branch discoveries into a single `DiscoveryOutput`.
+/// Loaded paths are intersection-based: only paths present in every branch survive.
+/// Alternatives are marked with `group_id` to track mutually exclusive declaration groups.
 fn merge_branch_discoveries(
     branches: Vec<BranchDiscovery>,
     loaded_paths: &mut HashSet<PathBuf>,
@@ -124,6 +135,12 @@ fn merge_branch_discoveries(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Processes if/elseif/else chains for declaration discovery.
+/// For each elseif clause, evaluates `constant_truthiness` to determine if the branch
+/// is statically reachable. If the condition is known true, explores only that branch
+/// and returns. If known false, skips it. If unknown, accumulates it as a potential branch.
+/// Finally, appends the else body (or an empty branch if no else) and merges all alternatives.
+/// Updates `loaded_paths` to retain only paths loaded in every branch explored so far.
 pub(super) fn discover_if_tail(
     elseif_clauses: &[(Expr, Vec<Stmt>)],
     else_body: Option<&[Stmt]>,
@@ -185,6 +202,9 @@ pub(super) fn discover_if_tail(
     Ok(())
 }
 
+/// Generates a unique group identifier for mutually exclusive declaration branches.
+/// Format: `"{owner_path}:{line}:{col}"` where `owner` is the last path in `include_chain`,
+/// or `base_dir` if the chain is empty. Used to correlate branches that cannot both be active.
 pub(super) fn exclusive_group_id(
     span: crate::span::Span,
     base_dir: &Path,
@@ -197,6 +217,10 @@ pub(super) fn exclusive_group_id(
     format!("{}:{}:{}", owner, span.line, span.col)
 }
 
+/// Evaluates a constant expression's truthiness statically.
+/// Returns `Some(true)` if the expression is a truthy literal, `Some(false)` if falsy,
+/// or `None` if the truthiness cannot be determined conservatively (e.g., variables,
+/// function calls, or runtime-dependent expressions).
 pub(super) fn constant_truthiness(expr: &Expr) -> Option<bool> {
     match &expr.kind {
         ExprKind::BoolLiteral(value) => Some(*value),

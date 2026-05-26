@@ -17,16 +17,19 @@ use super::super::context::HeapOwnership;
 use super::super::emit::Emitter;
 use super::super::expr::expr_result_heap_ownership;
 
+/// Retains a borrowed heap result if the type is refcounted and not already owned.
 pub(super) fn retain_borrowed_heap_result(emitter: &mut Emitter, expr: &Expr, ty: &PhpType) {
     if ty.is_refcounted() && expr_result_heap_ownership(expr) != HeapOwnership::Owned {
         abi::emit_incref_if_refcounted(emitter, ty);
     }
 }
 
+/// Returns the heap ownership for a local slot after a store operation.
 pub(super) fn local_slot_ownership_after_store(ty: &PhpType) -> HeapOwnership {
     HeapOwnership::local_owner_for_type(ty)
 }
 
+/// Releases the preserved Mixed value after coercion to a target type.
 pub(crate) fn release_preserved_mixed_after_coercion(emitter: &mut Emitter, target_ty: &PhpType) {
     match target_ty.codegen_repr() {
         PhpType::Float => {
@@ -60,6 +63,7 @@ pub(crate) fn release_preserved_mixed_after_coercion(emitter: &mut Emitter, targ
     }
 }
 
+/// Returns true if the owned Mixed value should be released after coercion.
 pub(crate) fn should_release_owned_mixed_after_coerce(
     value: &Expr,
     source_ty: &PhpType,
@@ -78,10 +82,12 @@ pub(crate) fn should_release_owned_mixed_after_coerce(
             ))
 }
 
+/// Returns the runtime value type tag for indexed arrays.
 pub(super) fn indexed_array_runtime_value_tag(ty: &PhpType) -> i64 {
     crate::codegen::runtime_value_tag(ty) as i64
 }
 
+/// Stamps the element type tag into an indexed array header.
 pub(super) fn stamp_indexed_array_value_type(
     emitter: &mut Emitter,
     array_reg: &str,
@@ -123,6 +129,7 @@ pub(super) fn stamp_indexed_array_value_type(
     }
 }
 
+/// Releases an owned value from a local slot before overwriting.
 pub(super) fn release_owned_slot(
     emitter: &mut Emitter,
     ty: &PhpType,
@@ -165,6 +172,7 @@ pub(super) fn release_owned_slot(
     }
 }
 
+/// Emits a static init guard that skips initialization if the flag is already set.
 pub(super) fn emit_static_init_guard(emitter: &mut Emitter, init_label: &str, skip_label: &str) {
     abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), init_label, 0);
     abi::emit_branch_if_int_result_nonzero(emitter, skip_label);
@@ -172,6 +180,8 @@ pub(super) fn emit_static_init_guard(emitter: &mut Emitter, init_label: &str, sk
     abi::emit_store_reg_to_symbol(emitter, abi::int_result_reg(emitter), init_label, 0);
 }
 
+/// Returns three scratch registers for array-header operations on the given architecture.
+/// Filters out `array_reg` from the candidate list so it is not reused.
 fn array_header_scratch_regs(arch: Arch, array_reg: &str) -> (&'static str, &'static str, &'static str) {
     let candidates = match arch {
         Arch::AArch64 => ["x12", "x13", "x14", "x15", "x16", "x17"].as_slice(),

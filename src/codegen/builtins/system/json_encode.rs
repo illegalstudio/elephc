@@ -17,6 +17,24 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `json_encode(value, flags, depth)` builtin call.
+///
+/// Dispatches to the appropriate runtime JSON encoder based on the PHP type of
+/// `value`. All arguments are evaluated before any global JSON state is mutated,
+/// preserving PHP's left-to-right evaluation semantics.
+///
+/// # Arguments
+/// * `_name` — unused, matches the builtin dispatcher signature
+/// * `args[0]` — the value to encode
+/// * `args[1]` — optional JSON encoding flags (e.g. `JSON_PRETTY_PRINT`)
+/// * `args[2]` — optional maximum nesting depth
+///
+/// # Returns
+/// Always returns `PhpType::Mixed` since `json_encode` can produce a string or `false`.
+///
+/// # Side effects
+/// Resets `_json_last_error`, `_json_active_depth`, `_json_indent_depth`,
+/// `_json_depth_limit`, and `_json_active_flags` global symbols before dispatch.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -153,6 +171,14 @@ pub fn emit(
     Some(PhpType::Mixed)
 }
 
+/// Emits dispatch code for `PhpType::Iterable` values.
+///
+/// Probes the iterable's runtime heap kind via `__rt_heap_kind` and branches to
+/// the appropriate JSON encoder: indexed array, associative array, object, or null.
+///
+/// Preserves the iterable pointer on the stack while probing and restores it for the
+/// selected encoder. Uses target-specific comparison instructions (AArch64 `cmp`/`b.eq`
+/// vs x86_64 `cmp`/`je`).
 fn emit_json_encode_iterable(emitter: &mut Emitter, ctx: &mut Context) {
     let indexed_case = ctx.next_label("json_encode_iter_indexed");
     let assoc_case = ctx.next_label("json_encode_iter_assoc");
@@ -205,12 +231,23 @@ fn emit_json_encode_iterable(emitter: &mut Emitter, ctx: &mut Context) {
     emitter.label(&done);
 }
 
+/// Persists the string result of `emit_expr` if the type is `PhpType::Str`.
+///
+/// Calls `__rt_str_persist` to ensure the string value is not invalidated by
+/// subsequent argument evaluations (e.g. nested `json_encode` calls).
 fn persist_string_result_if_needed(ty: &PhpType, emitter: &mut Emitter) {
     if ty.codegen_repr() == PhpType::Str {
         abi::emit_call_label(emitter, "__rt_str_persist");                      // keep the string value stable while later json_encode arguments evaluate
     }
 }
 
+/// Restores the expression result value from the stack after flags/depth are evaluated.
+///
+/// Pops the appropriate register or register pair depending on the type:
+/// * `Float` → `float_result_reg`
+/// * `Str` → register pair (ptr, len)
+/// * `Void`/`Never` → nothing
+/// * other → `int_result_reg`
 fn restore_result_value(emitter: &mut Emitter, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Float => {
@@ -227,6 +264,15 @@ fn restore_result_value(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
+/// Boxes the raw JSON string result into a `PhpType::Mixed` heap cell.
+///
+/// Checks `_json_last_error` after encoding. If an error occurred and
+/// `JSON_PARTIAL_OUTPUT_ON_ERROR` is not set, returns `false` as a `PhpType::Bool`
+/// boxed cell. Otherwise returns the JSON string as a `PhpType::Str` boxed cell.
+///
+/// Preserves the string result on the stack while checking error state; the string
+/// pointer/length are in `x1`/`x2` (AArch64) or `rax`/`rdx` (x86_64) after the
+/// runtime encoder returns.
 fn box_json_encode_result(emitter: &mut Emitter, ctx: &mut Context) {
     let string_label = ctx.next_label("json_encode_string_result");
     let done_label = ctx.next_label("json_encode_boxed_result");

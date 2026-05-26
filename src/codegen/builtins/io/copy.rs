@@ -16,6 +16,23 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the PHP `copy($source, $dest)` builtin call.
+///
+/// Evaluates the source path expression (`args[0]`) and destination path expression
+/// (`args[1]`), preserving PHP evaluation order (source first, destination second).
+/// Saves the source string pointer/length pair across the destination evaluation,
+/// then loads both into the appropriate ABI string slots before calling `__rt_copy`.
+///
+/// # Arguments
+/// - `args[0]`: source path (string)
+/// - `args[1]`: destination path (string)
+///
+/// # Returns
+/// `PhpType::Bool` — PHP `copy()` returns `false` on failure, `true` on success.
+///
+/// # ABI Details
+/// - AArch64: source pointer/length in `x1`/`x2`, dest pointer/length moved to `x3`/`x4`
+/// - X86_64: source pointer/length in `rax`/`rdx`, dest pointer/length moved to `rdi`/`rsi`
 pub fn emit(
     _name: &str,
     args: &[Expr],

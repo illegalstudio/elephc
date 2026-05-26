@@ -20,6 +20,9 @@ use super::super::validation::{
 };
 use super::state::{collect_attribute_args, collect_attribute_names, ClassBuildState};
 
+/// Validates and registers all methods of a flattened class into the build state.
+/// Enforces abstract/final modifiers, method body presence, and delegates to
+/// `apply_static_method` or `apply_instance_method` based on `method.is_static`.
 pub(super) fn apply_methods(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
@@ -36,6 +39,9 @@ pub(super) fn apply_methods(
     Ok(())
 }
 
+/// Validates shape constraints on a single method: abstract+final conflict,
+/// abstract method with a body, non-abstract method without a body, and
+/// private abstract methods are all rejected.
 fn validate_method_shape(
     class: &FlattenedClass,
     method: &ClassMethod,
@@ -79,6 +85,10 @@ fn validate_method_shape(
     Ok(())
 }
 
+/// Validates and registers a static method into `ClassBuildState`. Checks for
+/// final method conflicts, static/instance kind conflicts, visibility reduction,
+/// signature override compatibility, `#[Override]` attribute targets, and registers
+/// the method in the static vtable when visibility is non-private.
 fn apply_static_method(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
@@ -172,6 +182,10 @@ fn apply_static_method(
     Ok(())
 }
 
+/// Validates and registers an instance method into `ClassBuildState`. Checks for
+/// final method conflicts, static/instance kind conflicts, visibility reduction,
+/// signature override compatibility, `#[Override]` attribute targets, and registers
+/// the method in the instance vtable when visibility is non-private.
 fn apply_instance_method(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
@@ -263,6 +277,7 @@ fn apply_instance_method(
     Ok(())
 }
 
+/// Constructs a `CompileError` for overriding a `final` method.
 fn final_method_error(declaring_class: String, method: &ClassMethod) -> CompileError {
     CompileError::new(
         method.span,
@@ -273,6 +288,8 @@ fn final_method_error(declaring_class: String, method: &ClassMethod) -> CompileE
     )
 }
 
+/// Constructs a `CompileError` for attempting to change a static method to
+/// instance or vice versa when overriding a parent method.
 fn method_kind_error(class: &FlattenedClass, method: &ClassMethod) -> CompileError {
     CompileError::new(
         method.span,
@@ -321,6 +338,8 @@ fn interface_declares_method(
     false
 }
 
+/// Constructs a `CompileError` when a method carries `#[\Override]` but no
+/// matching parent method exists to override.
 fn missing_override_target(class: &FlattenedClass, method: &ClassMethod) -> CompileError {
     CompileError::new(
         method.span,

@@ -11,11 +11,18 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_push_str: push a string element (ptr+len) to an array, growing if needed.
-/// Always persists the string to heap first (ensures safety even when the
-/// string points to the volatile concat_buf).
-/// Input:  x0 = array pointer, x1 = str ptr, x2 = str len
-/// Output: x0 = array pointer (may differ if array was reallocated)
+/// Emits the `__rt_array_push_str` runtime helper for appending a string element to a PHP array.
+/// Input:  x0 = array pointer, x1 = string ptr, x2 = string len (ARM64 convention).
+/// Output: x0 = array pointer (may differ if the array was reallocated during growth).
+///
+/// Algorithm:
+/// 1. Calls `__rt_array_ensure_unique` to split the array if it is shared (COW).
+/// 2. On first append to an empty array, stamps the array header with elem_size=16 and
+///    value_type=string so future growth correctly copies 16-byte string slots.
+/// 3. Persists the incoming string to heap via `__rt_str_persist` (safety: the caller's
+///    string may point into the volatile concat_buf).
+/// 4. Checks capacity; if full, calls `__rt_array_grow` to double capacity and retry.
+/// 5. Stores the (ptr, len) pair into the next 16-byte slot, advances length, returns.
 pub fn emit_array_push_str(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_push_str_linux_x86_64(emitter);
@@ -85,6 +92,11 @@ pub fn emit_array_push_str(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_push_str_push");                          // go push into the grown array
 }
 
+/// Emits the x86_64 Linux variant of the array push string runtime helper.
+/// Uses System V AMD64 ABI: rdi = array ptr, rsi = str ptr, rdx = str len.
+/// Returns updated array pointer in rax.
+/// Shares the same algorithm as the ARM64 variant: persist string to heap, first-write
+/// shape specialization for empty arrays, capacity check, push or grow, then return.
 fn emit_array_push_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_push_str ---");

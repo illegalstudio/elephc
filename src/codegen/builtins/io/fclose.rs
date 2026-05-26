@@ -17,6 +17,9 @@ use crate::types::PhpType;
 
 use super::stream_arg::emit_stream_fd_arg;
 
+/// Emits PHP `fclose(stream)` by extracting the file descriptor from the stream
+/// resource, closing it via the target syscall/libc, and returning a bool indicating
+/// success (true) or failure (false). Consumes the stream resource in `args[0]`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -9,6 +9,9 @@
 
 use super::*;
 
+// Variant of `compile_source_to_asm_with_defines` that uses an empty define set.
+// Runs the full pipeline (tokenize → parse → resolve → type check → optimize → codegen)
+// and returns user assembly, runtime assembly, and required libraries for linking.
 pub(crate) fn compile_source_to_asm_with_options(
     source: &str,
     dir: &Path,
@@ -26,6 +29,11 @@ pub(crate) fn compile_source_to_asm_with_options(
     )
 }
 
+// Runs the full compiler pipeline with user-supplied conditional defines.
+// Substitutes magic constants (`__FILE__`, `__DIR__`, etc.), applies `ifdef` conditionals,
+// builds the autoload registry, resolves includes, runs name resolution, optimizes,
+// type-checks, and generates ARM64/x86_64 assembly for the current target.
+// Returns user assembly, runtime assembly, and library names required for linking.
 pub(crate) fn compile_source_to_asm_with_defines(
     source: &str,
     dir: &Path,
@@ -73,6 +81,10 @@ pub(crate) fn compile_source_to_asm_with_defines(
     (user_asm, runtime_asm, check_result.required_libraries)
 }
 
+// Injects an exit harness into user assembly before the final `ret` instruction.
+// Rewrites macOS-style syscall sequence to Linux-style syscall sequence if needed,
+// then patches the assembly in-place using a target-specific needle. Panics if the
+// needle is not found (indicates a codegen emit change that broke the harness injection).
 pub(crate) fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
     let needle = match (target().platform, target().arch) {
         (Platform::MacOS, Arch::AArch64) => "    mov x0, #0\n    mov x16, #1\n    svc #0x80",
@@ -91,6 +103,10 @@ pub(crate) fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
     patched
 }
 
+// Compiles a PHP source snippet and runs it with an injected harness, expecting a failure.
+// Captures stderr from the resulting process and returns it for assertion.
+// Used for error-test fixtures that verify compile-time diagnostic messages.
+// Cleans up the temporary directory after execution.
 pub(crate) fn compile_harness_expect_failure(source: &str, heap_size: usize, harness: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -115,6 +131,9 @@ pub(crate) fn compile_harness_expect_failure(source: &str, heap_size: usize, har
     stderr
 }
 
+// Compiles a PHP source snippet and runs it with an injected harness, capturing stdout.
+// Used for codegen tests that verify output against expected strings. Harness is provided
+// by the caller (e.g., a printf replacement). Cleans up the temporary directory after execution.
 pub(crate) fn compile_harness_and_run(source: &str, heap_size: usize, harness: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -139,6 +158,8 @@ pub(crate) fn compile_harness_and_run(source: &str, heap_size: usize, harness: &
     stdout
 }
 
+// Same as `compile_harness_and_run` but enables heap debug mode for ownership/GC testing.
+// Runs with a custom runtime assembled from the provided heap size.
 pub(crate) fn compile_harness_and_run_with_heap_debug(
     source: &str,
     heap_size: usize,
@@ -167,6 +188,9 @@ pub(crate) fn compile_harness_and_run_with_heap_debug(
     stdout
 }
 
+// Compiles a PHP source snippet and runs it with GC statistics enabled.
+// Captures stdout and stderr; stderr is expected to contain `GC: allocs=N frees=N`.
+// Uses the default 8_388_608-byte heap and enables gc_stats during codegen.
 pub(crate) fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -189,6 +213,8 @@ pub(crate) fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput {
     output
 }
 
+// Compiles a PHP source snippet and runs it with the default 8_388_608-byte heap,
+// capturing stdout and stderr from the resulting binary. Cleans up the temp directory.
 pub(crate) fn compile_and_run_capture(source: &str) -> ProgramOutput {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -211,6 +237,9 @@ pub(crate) fn compile_and_run_capture(source: &str) -> ProgramOutput {
     output
 }
 
+// Compiles a PHP source snippet and runs it with heap debug mode enabled.
+// Heap debug adds guard bytes and poisoning around allocations to catch GC bugs.
+// Uses the default 8_388_608-byte heap and enables heap_debug during codegen.
 pub(crate) fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -233,6 +262,9 @@ pub(crate) fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
     output
 }
 
+// Parses GC statistics from stderr output produced when gc_stats is enabled.
+// Expects a line matching `GC: allocs=N frees=N` and returns (allocs, frees).
+// Panics if the line is missing or the numbers cannot be parsed.
 pub(crate) fn parse_gc_stats(stderr: &str) -> (u64, u64) {
     let line = stderr
         .lines()
@@ -253,9 +285,9 @@ pub(crate) fn parse_gc_stats(stderr: &str) -> (u64, u64) {
     (allocs, frees)
 }
 
-/// Compile a PHP source string to a native binary, run it, and return stdout.
-/// Uses the elephc library directly (no subprocess) for tokenize → parse → check → codegen.
-/// Only spawns as + ld + binary execution.
+// Compile a PHP source string to a native binary, run it, and return stdout.
+// Uses the elephc library directly (no subprocess) for tokenize → parse → check → codegen.
+// Only spawns as + ld + binary execution.
 pub(crate) fn compile_and_run_with_heap_size(source: &str, heap_size: usize) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -304,6 +336,8 @@ pub(crate) fn compile_and_run_with_heap_size(source: &str, heap_size: usize) -> 
     elephc_out
 }
 
+// Convenience wrapper that calls `compile_and_run_with_heap_size` with the default
+// 8_388_608-byte heap. Most codegen tests use this directly.
 pub(crate) fn compile_and_run(source: &str) -> String {
     compile_and_run_with_heap_size(source, 8_388_608)
 }

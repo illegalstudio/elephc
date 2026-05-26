@@ -16,6 +16,13 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a call to the `stripslashes` runtime helper for the builtin `stripslashes()`.
+///
+/// Inputs:
+/// - `args[0]` is evaluated and passed as the string argument to strip backslashes from.
+/// - The runtime helper `__rt_stripslashes` removes escape backslashes following PHP rules.
+///
+/// Returns `PhpType::Str` as the result is always a PHP string.
 pub fn emit(
     _name: &str,
     args: &[Expr],

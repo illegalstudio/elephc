@@ -16,6 +16,9 @@ use crate::parser::ast::{Stmt, StmtKind};
 use super::discovery::{FunctionVariantKey, FunctionVariantRegistry};
 use super::state::namespace_string;
 
+/// Recursively extracts top-level and namespace-scoped declarations that can be
+/// discovered from included files, preserving their namespace and use contexts.
+/// Returns declarations wrapped in NamespaceBlock or Synthetic nodes to retain scoping.
 pub(super) fn extract_discoverable_declarations(stmts: &[Stmt]) -> Vec<Stmt> {
     let mut declarations = Vec::new();
     let mut context = Vec::new();
@@ -68,6 +71,10 @@ pub(super) fn extract_discoverable_declarations(stmts: &[Stmt]) -> Vec<Stmt> {
     declarations
 }
 
+/// Removes discoverable declarations from the statement list, replacing function
+/// declarations with FunctionVariantMark nodes that record the include-loaded variant.
+/// Uses `canonical` path and `function_variants` registry to determine which variant
+/// should be active in the including file's scope.
 pub(super) fn strip_discoverable_declarations(
     stmts: Vec<Stmt>,
     canonical: Option<&Path>,
@@ -76,6 +83,9 @@ pub(super) fn strip_discoverable_declarations(
     strip_stmts(stmts, canonical, function_variants, None)
 }
 
+/// Internal recursive helper that processes statements and strips discoverable
+/// declarations, tracking the current namespace context via `current_namespace`.
+/// The `namespace` parameter carries the effective namespace for the current block.
 fn strip_stmts(
     stmts: Vec<Stmt>,
     canonical: Option<&Path>,
@@ -99,6 +109,11 @@ fn strip_stmts(
     stripped
 }
 
+/// Processes a single statement, removing discoverable declarations while
+/// preserving namespace declarations and blocks. Function declarations are
+/// replaced with FunctionVariantMark using the canonical path and registry to
+/// resolve the correct variant. Updates `current_namespace` when entering a
+/// NamespaceDecl.
 fn strip_stmt(
     stmt: Stmt,
     canonical: Option<&Path>,
@@ -161,6 +176,8 @@ fn strip_stmt(
     }
 }
 
+/// Returns true if the statement kind is a discoverable declaration that
+/// should be extracted/stripped during include processing.
 fn is_discoverable_declaration(kind: &StmtKind) -> bool {
     matches!(
         kind,

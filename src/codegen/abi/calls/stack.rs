@@ -16,6 +16,10 @@ use super::super::registers::{
     float_result_reg, int_result_reg, string_result_regs,
 };
 
+/// Pushes a general-purpose register onto the temporary stack (pre-decrement on AArch64, sub rsp on x86_64).
+/// Used to preserve caller-saved registers across nested calls or stage arguments.
+///
+/// - `reg`: Register name to push (e.g., `"x0"`, `"rdi"`).
 pub fn emit_push_reg(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -28,6 +32,10 @@ pub fn emit_push_reg(emitter: &mut Emitter, reg: &str) {
     }
 }
 
+/// Pops a general-purpose register from the temporary stack (post-increment on AArch64, add rsp on x86_64).
+/// Complements `emit_push_reg` to restore caller-saved registers after nested calls.
+///
+/// - `reg`: Register name to pop (e.g., `"x0"`, `"rdi"`).
 pub fn emit_pop_reg(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -40,6 +48,10 @@ pub fn emit_pop_reg(emitter: &mut Emitter, reg: &str) {
     }
 }
 
+/// Pushes a floating-point register onto the temporary stack (pre-decrement store-pair on AArch64, sub rsp + movsd on x86_64).
+/// Used to preserve floating-point caller-saved registers across nested calls.
+///
+/// - `reg`: Floating-point register name (e.g., `"d0"`, `"xmm0"`).
 pub fn emit_push_float_reg(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -52,6 +64,10 @@ pub fn emit_push_float_reg(emitter: &mut Emitter, reg: &str) {
     }
 }
 
+/// Pops a floating-point register from the temporary stack (post-increment load-pair on AArch64, movsd + add rsp on x86_64).
+/// Complements `emit_push_float_reg` to restore floating-point caller-saved registers after nested calls.
+///
+/// - `reg`: Floating-point register name (e.g., `"d0"`, `"xmm0"`).
 pub fn emit_pop_float_reg(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -64,6 +80,11 @@ pub fn emit_pop_float_reg(emitter: &mut Emitter, reg: &str) {
     }
 }
 
+/// Pushes a pair of general-purpose registers onto the temporary stack as a single 16-byte slot.
+/// Used for 128-bit values (e.g., string pointer + length on AArch64) or paired scalar data.
+///
+/// - `lo_reg`: Low register (e.g., `"x0"`, `"rdi"`).
+/// - `hi_reg`: High register (e.g., `"x1"`, `"rsi"`).
 pub fn emit_push_reg_pair(emitter: &mut Emitter, lo_reg: &str, hi_reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -77,6 +98,11 @@ pub fn emit_push_reg_pair(emitter: &mut Emitter, lo_reg: &str, hi_reg: &str) {
     }
 }
 
+/// Pops a pair of general-purpose registers from the temporary stack as a single 16-byte slot.
+/// Complements `emit_push_reg_pair` to restore paired registers after nested calls.
+///
+/// - `lo_reg`: Low register to reload (e.g., `"x0"`, `"rdi"`).
+/// - `hi_reg`: High register to reload (e.g., `"x1"`, `"rsi"`).
 pub fn emit_pop_reg_pair(emitter: &mut Emitter, lo_reg: &str, hi_reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -90,6 +116,11 @@ pub fn emit_pop_reg_pair(emitter: &mut Emitter, lo_reg: &str, hi_reg: &str) {
     }
 }
 
+/// Pushes the current result value onto the temporary stack based on its PHP type.
+/// Dispatches to `emit_push_reg`, `emit_push_float_reg`, or `emit_push_reg_pair` depending on `ty`.
+/// No-op for `void` and `never` types (which have no result).
+///
+/// - `ty`: PHP type of the result value to push.
 pub fn emit_push_result_value(emitter: &mut Emitter, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Bool
@@ -118,18 +149,37 @@ pub fn emit_push_result_value(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
+/// Releases `amount` bytes from the temporary stack (adds to SP on x86_64, deallocates on AArch64).
+/// Called after arguments have been consumed to clean up stacked values from outgoing calls.
+///
+/// - `amount`: Number of bytes to release (must be a multiple of 16).
 pub fn emit_release_temporary_stack(emitter: &mut Emitter, amount: usize) {
     emit_adjust_sp(emitter, amount, false);
 }
 
+/// Reserves `amount` bytes on the temporary stack (subtracts from SP on x86_64, pre-allocates on AArch64).
+/// Called before staging arguments for an outgoing call to ensure sufficient stack space.
+///
+/// - `amount`: Number of bytes to reserve (must be a multiple of 16).
 pub fn emit_reserve_temporary_stack(emitter: &mut Emitter, amount: usize) {
     emit_adjust_sp(emitter, amount, true);
 }
 
+/// Computes the address of a temporary stack slot at a given `offset` and stores it in `scratch`.
+/// AArch64 uses `adrp + add`; x86_64 uses `lea rsp + offset`. Used to prepare indirect memory access to stacked values.
+///
+/// - `scratch`: Output register for the computed address (e.g., `"x9"`, `"rcx"`).
+/// - `offset`: Byte offset from the current stack pointer to the desired slot.
 pub fn emit_temporary_stack_address(emitter: &mut Emitter, scratch: &str, offset: usize) {
     emit_sp_address(emitter, scratch, offset);
 }
 
+/// Loads a value from a temporary stack slot into `reg`, supporting all offsets and register classes.
+/// Uses direct load for small offsets; goes through scratch register `x9` for large offsets on AArch64.
+/// Handles both integer (mov) and floating-point (movsd) registers on x86_64.
+///
+/// - `reg`: Destination register (e.g., `"x0"`, `"d0"`, `"rdi"`).
+/// - `offset`: Byte offset of the stack slot from the current SP.
 pub fn emit_load_temporary_stack_slot(emitter: &mut Emitter, reg: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -157,6 +207,13 @@ pub fn emit_load_temporary_stack_slot(emitter: &mut Emitter, reg: &str, offset: 
     }
 }
 
+/// Stores `reg` into a stack slot at a given `offset` in the outgoing stack-argument area.
+/// Used for passing arguments that don't fit in registers and must be laid out in the call frame.
+/// Uses direct store for small offsets; goes through scratch register `x9` for large offsets on AArch64.
+/// Handles both integer (mov) and floating-point (movsd) registers on x86_64.
+///
+/// - `reg`: Source register to store (e.g., `"x0"`, `"d0"`, `"rdi"`).
+/// - `offset`: Byte offset of the destination slot in the outgoing stack area.
 pub(super) fn emit_store_to_sp(emitter: &mut Emitter, reg: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {

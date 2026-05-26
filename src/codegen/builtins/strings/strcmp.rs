@@ -16,6 +16,24 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for a PHP `strcmp(left, right)` call.
+///
+/// Compares two strings lexicographically via the `__rt_strcmp` runtime helper.
+/// Evaluates both argument expressions (which must resolve to strings), materializes
+/// them as pointer/length pairs in the appropriate ABI registers, and calls the runtime
+/// routine. The result is always `PhpType::Int` (0 for equal, <0 or >0 for ordering).
+///
+/// # Arguments
+/// - `args` — exactly two expressions: the left and right strings to compare.
+/// - `emitter` — target-specific instruction emission.
+/// - `ctx` — codegen context carrying variable layout and metadata.
+/// - `data` — data section for relocations and static strings.
+///
+/// # ABI details
+/// - AArch64: first string in x1/x2, second string in x3/x4 via temporary stack spill.
+/// - x86_64: first string in rdi/rsi, second string in rdx/rcx via temporary stack spill.
+/// - Both targets call `__rt_strcmp` and the integer result is returned in the usual
+///   integer register (`x0` on AArch64, `rax` on x86_64).
 pub fn emit(
     _name: &str,
     args: &[Expr],

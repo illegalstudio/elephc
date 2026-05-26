@@ -11,10 +11,12 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// sha1: compute SHA1 hash of a string, return as 40-char hex string.
-/// Input: x1=string ptr, x2=string len
-/// Output: x1=hex string ptr, x2=40
-/// Uses macOS CommonCrypto CC_SHA1(data, len, md) which outputs 20 raw bytes.
+/// Emits the `__rt_sha1` runtime helper for SHA1 hashing on ARM64 macOS.
+/// Input: x1=string pointer, x2=string length (borrowed, PHP byte-string semantics)
+/// Output: x1=hex string pointer (heap-allocated via concat buffer), x2=40 (fixed length)
+/// Calls CommonCrypto `CC_SHA1(data, len, md)` to produce 20 raw bytes, then converts
+/// each byte to two lowercase hex digits written into the shared `_concat_buf` buffer.
+/// The concat buffer offset (`_concat_off`) is advanced by 40 to track the written region.
 pub fn emit_sha1(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_sha1_linux_x86_64(emitter);
@@ -82,6 +84,12 @@ pub fn emit_sha1(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits the `__rt_sha1` runtime helper for SHA1 hashing on x86_64 Linux.
+/// Input: rax=string pointer, rdx=string length (borrowed, PHP byte-string semantics)
+/// Output: rax=hex string pointer (heap-allocated via concat buffer), rdx=40 (fixed length)
+/// Calls the platform-mapped `CC_SHA1(data, len, output_buf)` to produce 20 raw bytes, then
+/// converts each byte to two lowercase hex digits written into the shared `_concat_buf` buffer.
+/// The concat buffer offset (`_concat_off`, accessed via RIP-relative loading) is advanced by 40.
 fn emit_sha1_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: sha1 ---");

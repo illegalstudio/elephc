@@ -20,6 +20,8 @@ const STATIC_PROP_PRIVATE_ACCESS_LABEL: &str = "_static_prop_private_access_msg"
 const STATIC_PROP_PRIVATE_ACCESS_MSG: &str =
     "Fatal error: Cannot access private static property\n";
 
+/// Describes a single late-bound dispatch branch for a static property.
+/// Each branch represents a redeclared static property in a descendant class with its class ID and visibility.
 #[derive(Clone)]
 pub(super) struct StaticPropertyBranch {
     pub(super) class_id: u64,
@@ -27,6 +29,8 @@ pub(super) struct StaticPropertyBranch {
     pub(super) private_inaccessible: bool,
 }
 
+/// Loads the called class ID (from `__elephc_called_class_id` or `$this`) and pushes it onto the stack for late-bound dispatch.
+/// Returns `true` if branches exist and the class ID was pushed; `false` otherwise.
 pub(super) fn emit_and_push_called_class_id_if_needed(
     branches: &[StaticPropertyBranch],
     emitter: &mut Emitter,
@@ -44,6 +48,8 @@ pub(super) fn emit_and_push_called_class_id_if_needed(
     true
 }
 
+/// Loads the called class ID from either `__elephc_called_class_id` or `$this->class_id` into `dest`.
+/// Returns `false` if neither is available in the current context.
 fn emit_called_class_id_into(emitter: &mut Emitter, ctx: &Context, dest: &str) -> bool {
     if let Some(var) = ctx.variables.get("__elephc_called_class_id") {
         abi::load_at_offset(emitter, abi::int_result_reg(emitter), var.stack_offset); // load the forwarded called-class id from the current static method frame
@@ -62,6 +68,8 @@ fn emit_called_class_id_into(emitter: &mut Emitter, ctx: &Context, dest: &str) -
     true
 }
 
+/// Emits a conditional load of a static property using late-bound dispatch.
+/// Branch label entries are emitted for each `StaticPropertyBranch`; falls back to `fallback_declaring_class` on no match.
 pub(super) fn emit_dynamic_load_static_property_reg(
     property: &str,
     class_id_reg: &str,
@@ -94,6 +102,8 @@ pub(super) fn emit_dynamic_load_static_property_reg(
     emitter.label(&done);
 }
 
+/// Emits a conditional store to a static property using late-bound dispatch with value in the ABI result register.
+/// `release_previous` controls whether the previous static property value is released before storing.
 pub(super) fn emit_dynamic_store_result_to_static_property(
     property: &str,
     class_id_reg: &str,
@@ -129,6 +139,8 @@ pub(super) fn emit_dynamic_store_result_to_static_property(
     emitter.label(&done);
 }
 
+/// Emits a conditional store to a static property using late-bound dispatch with value in `source_reg`.
+/// Used for array push operations where the value is already materialized in a specific register.
 pub(super) fn emit_dynamic_store_reg_to_static_property(
     property: &str,
     class_id_reg: &str,
@@ -164,6 +176,8 @@ pub(super) fn emit_dynamic_store_reg_to_static_property(
     emitter.label(&done);
 }
 
+/// Clears the uninitialized marker (a zeroed word) after a static property store.
+/// Strings are exempt since they use a separate pointer-plus-length representation.
 pub(super) fn clear_uninitialized_marker_after_static_store(
     emitter: &mut Emitter,
     symbol: &str,
@@ -174,6 +188,7 @@ pub(super) fn clear_uninitialized_marker_after_static_store(
     }
 }
 
+/// Emits a comparison and conditional branch when `class_id_reg` matches `class_id`, jumping to `label`.
 fn emit_branch_if_class_id_matches(
     emitter: &mut Emitter,
     class_id_reg: &str,
@@ -194,6 +209,7 @@ fn emit_branch_if_class_id_matches(
     }
 }
 
+/// Emits an unconditional jump to `label` using the target's native branch instruction.
 fn emit_jump(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -205,6 +221,7 @@ fn emit_jump(emitter: &mut Emitter, label: &str) {
     }
 }
 
+/// Returns the work register for holding a class ID during late-bound dispatch (x13 on ARM64, r13 on x86_64).
 pub(super) fn class_id_work_reg(emitter: &Emitter) -> &'static str {
     match emitter.target.arch {
         Arch::AArch64 => "x13",
@@ -212,6 +229,7 @@ pub(super) fn class_id_work_reg(emitter: &Emitter) -> &'static str {
     }
 }
 
+/// Returns the scratch register for comparing class IDs (x14 on ARM64, r14 on x86_64).
 fn class_id_compare_reg(emitter: &Emitter) -> &'static str {
     match emitter.target.arch {
         Arch::AArch64 => "x14",
@@ -219,6 +237,9 @@ fn class_id_compare_reg(emitter: &Emitter) -> &'static str {
     }
 }
 
+/// Collects all late-bound dispatch branches for a static property access on `receiver`.
+/// Only returns branches for classes that are descendants of the base class; skips the fallback declaring class.
+/// Private properties on non-declaring descendants are marked as inaccessible and cause a fatal on access.
 pub(super) fn dynamic_static_property_branches(
     receiver: &StaticReceiver,
     property: &str,
@@ -258,6 +279,7 @@ pub(super) fn dynamic_static_property_branches(
     branches
 }
 
+/// Returns `true` if `class_name` is the same as or a descendant of `ancestor` in the class hierarchy.
 fn is_same_or_descendant(class_name: &str, ancestor: &str, ctx: &Context) -> bool {
     let mut cursor = Some(class_name);
     while let Some(name) = cursor {
@@ -272,6 +294,8 @@ fn is_same_or_descendant(class_name: &str, ancestor: &str, ctx: &Context) -> boo
     false
 }
 
+/// Emits a fatal error for an inaccessible private static property access.
+/// Writes a message to stderr and terminates the process with exit code 1.
 fn emit_private_static_property_access_fatal(emitter: &mut Emitter) {
     let len = STATIC_PROP_PRIVATE_ACCESS_MSG.len();
     match emitter.target.arch {

@@ -20,6 +20,14 @@
 
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 
+/// Attempts to inline a `value |> (fn($v) => body)` pipe into a direct expression.
+///
+/// Returns `Some(ExprKind)` with the substituted body if the closure is eligible for
+/// inlining, or `None` if any eligibility check fails.
+///
+/// Eligibility: captureless, single non-ref param, single-return body, no variadic,
+/// non-static closure. Also skips inlining when the parameter is used multiple times
+/// and the value is non-trivial (avoids duplicating side effects or re-evaluating).
 pub(super) fn try_inline_closure_pipe(value: &Expr, callable: &Expr) -> Option<ExprKind> {
     let (params, body, captures, variadic, is_static) = match &callable.kind {
         ExprKind::Closure {
@@ -71,6 +79,8 @@ pub(super) fn try_inline_closure_pipe(value: &Expr, callable: &Expr) -> Option<E
     Some(substituted.kind)
 }
 
+/// Returns true if the expression is a trivial literal or variable (no observable
+/// side effects, cheap to duplicate).
 fn value_is_trivial(value: &Expr) -> bool {
     matches!(
         &value.kind,
@@ -83,6 +93,9 @@ fn value_is_trivial(value: &Expr) -> bool {
     )
 }
 
+/// Returns true if the expression is a pure literal (no variable reads, no observable
+/// side effects when dropped or copied). Super-conservative; excludes variables because
+/// reading them is observable in ownership-sensitive contexts.
 fn value_is_pure(value: &Expr) -> bool {
     // A super-conservative pure check: only literals. Variables are excluded
     // because reading them is itself observable when ownership matters
@@ -97,6 +110,9 @@ fn value_is_pure(value: &Expr) -> bool {
     )
 }
 
+/// Counts how many times `name` appears as a bare `Variable` node in the expression
+/// tree. Used to decide whether substituting a non-trivial value would duplicate
+/// side effects or re-evaluate a complex expression.
 fn count_uses(expr: &Expr, name: &str) -> usize {
     match &expr.kind {
         ExprKind::Variable(n) if n == name => 1,
@@ -122,6 +138,10 @@ fn count_uses(expr: &Expr, name: &str) -> usize {
     }
 }
 
+/// Returns true if the expression tree contains any call-like expression (`FunctionCall`,
+/// `MethodCall`, `ClosureCall`, `NewObject`, etc.) or a `Pipe` (which may carry calls
+/// in its callable operand). Used to bail out of inlining when the body contains
+/// observable call side effects that could be duplicated or mis-ordered.
 fn expr_contains_call(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::FunctionCall { .. }
@@ -157,6 +177,12 @@ fn expr_contains_call(expr: &Expr) -> bool {
     }
 }
 
+/// Replaces all occurrences of `name` as a `Variable` node in `expr` with `with`,
+/// returning the substituted expression. Only operates on a safe subset of `ExprKind`s
+/// (literals, variables, binary ops, unary ops, casts, null-coalesce, ternary,
+/// short-ternary, pipe, function calls). Returns `None` if any visited node falls
+/// outside the safe subset, in which case the caller should fall back to regular
+/// pipe lowering.
 fn substitute(expr: &Expr, name: &str, with: &Expr) -> Option<Expr> {
     let kind = match &expr.kind {
         ExprKind::Variable(n) if n == name => return Some(with.clone()),

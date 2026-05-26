@@ -24,14 +24,20 @@ pub(super) use calls::{
     static_method_call_effect,
 };
 
+/// Returns true if any statement in `stmts` may throw an exception.
+/// Shorthand for checking `block_effect(stmts).may_throw`.
 pub(super) fn block_may_throw(stmts: &[Stmt]) -> bool {
     block_effect(stmts).may_throw
 }
 
+/// Returns true if `stmt` may throw an exception.
+/// Shorthand for `stmt_effect(stmt).may_throw`.
 pub(super) fn stmt_may_throw(stmt: &Stmt) -> bool {
     stmt_effect(stmt).may_throw
 }
 
+/// Computes the combined `Effect` for a single statement, including all nested expressions.
+/// Covers all `StmtKind` variants, classifying reads, writes, calls, throws, output, and runtime-state interactions.
 pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
     match &stmt.kind {
         StmtKind::Synthetic(stmts) => block_effect(stmts),
@@ -182,10 +188,15 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
     }
 }
 
+/// Returns true if `expr` may produce observable side effects (writes, calls, output, or throws).
+/// Used by DCE to determine whether discarding the expression would be observable.
 pub(super) fn expr_is_observable(expr: &Expr) -> bool {
     expr_effect(expr).is_observable()
 }
 
+/// Computes the combined `Effect` for an expression, including all sub-expressions and call effects.
+/// Covers all `ExprKind` variants, classifying reads, writes, calls, throws, output, and runtime-state interactions.
+/// For `MagicConstant`, returns `unreachable!` because they must be lowered before optimizer passes.
 pub(super) fn expr_effect(expr: &Expr) -> Effect {
     match &expr.kind {
         ExprKind::StringLiteral(_)
@@ -323,6 +334,8 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
     }
 }
 
+/// Returns the effect for the target of an `InstanceOf` expression.
+/// Name targets are pure; expression targets require recursive `expr_effect` analysis.
 fn instanceof_target_effect(target: &InstanceOfTarget) -> Effect {
     match target {
         InstanceOfTarget::Name(_) => Effect::PURE,
@@ -330,6 +343,9 @@ fn instanceof_target_effect(target: &InstanceOfTarget) -> Effect {
     }
 }
 
+/// Computes the combined `Effect` for a block of statements, short-circuiting on non-falling terminators.
+/// Tracks callable aliases across statements to correctly model closure captures and callable aliases.
+/// Stops accumulating effects when a `return`/`break`/`continue`/`throw` is encountered.
 pub(super) fn block_effect(stmts: &[Stmt]) -> Effect {
     let mut aliases = current_callable_alias_effects();
     let mut effect = Effect::PURE;
@@ -344,6 +360,8 @@ pub(super) fn block_effect(stmts: &[Stmt]) -> Effect {
     effect
 }
 
+/// Combines an arbitrary iterator of `Effect` values into a single `Effect` by folding with `combine`.
+/// Returns `Effect::PURE` when the iterator is empty.
 pub(super) fn combine_effects(effects: impl IntoIterator<Item = Effect>) -> Effect {
     effects
         .into_iter()

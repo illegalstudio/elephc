@@ -15,6 +15,12 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::Checker;
 
 impl Checker {
+    /// Validates control-flow statements and updates the type environment for their assignment effects.
+    ///
+    /// Dispatches to specific handlers for `foreach`, `switch`, `if`, `do-while`, `while`, `for`,
+    /// `throw`, and `try` constructs. Each handler infers expression types, binds loop/scoped
+    /// variables to their PHP-determined types, tracks `break`/`continue` depth, and accumulates
+    /// errors for malformed or incompatible constructs. Returns `Ok(())` only when all checks pass.
     pub(crate) fn check_control_flow_stmt(
         &mut self,
         stmt: &crate::parser::ast::Stmt,
@@ -266,6 +272,11 @@ impl Checker {
         }
     }
 
+    /// Checks a loop body with `break`/`continue` target tracking.
+    ///
+    /// Increments `break_continue_depth` before checking the body and decrements it after,
+    /// so that `break`/`continue` validation knows the correct nesting level. Returns all
+    /// errors accumulated while checking the body; the caller decides whether to propagate them.
     fn check_break_continue_target_body(
         &mut self,
         body: &[Stmt],
@@ -277,6 +288,11 @@ impl Checker {
         errors
     }
 
+    /// Checks each statement in a body sequentially, collecting all errors.
+    ///
+    /// Unlike `check_break_continue_target_body`, this does not update `break_continue_depth`.
+    /// Used for `switch` cases, `if` branches, `try` blocks, and other bodies where the
+    /// break/continue level is managed at a higher level.
     fn check_body(&mut self, body: &[Stmt], env: &mut TypeEnv) -> Vec<CompileError> {
         let mut errors = Vec::new();
         for stmt in body {

@@ -11,6 +11,9 @@
 use super::*;
 
 #[test]
+// Tests that integer literals assigned to sequential local variables are propagated
+// through straight-line code (no control flow). The expression `x ** y` is folded to
+// `8.0` because both `x = 2` and `y = 3` are known constant values at the echo site.
 fn test_propagate_constants_through_straight_line_locals() {
     let program = vec![
         Stmt::assign("x", Expr::int_lit(2)),
@@ -31,6 +34,10 @@ fn test_propagate_constants_through_straight_line_locals() {
 }
 
 #[test]
+// Tests that when both branches of an If statement assign the same constant value
+// to a variable, the variable is treated as a uniform constant after the If.
+// The second statement (`echo base ** 3`) should fold to `8.0` because `base` is
+// known to be `2` regardless of which branch executes.
 fn test_propagate_constants_merges_identical_if_assignments() {
     let program = vec![
         Stmt::new(
@@ -54,6 +61,10 @@ fn test_propagate_constants_merges_identical_if_assignments() {
 }
 
 #[test]
+// Tests that reassignment of a variable to a non-scalar expression (a function call
+// with side effects) invalidates constant propagation for that variable.
+// The second assignment `x = strlen("abc")` is not a scalar literal, so `x` cannot
+// be propagated out of the echo; the expression remains as `x + 1` rather than folding.
 fn test_propagate_constants_invalidates_non_scalar_reassignment() {
     let program = vec![
         Stmt::assign("x", Expr::int_lit(2)),
@@ -79,6 +90,9 @@ fn test_propagate_constants_invalidates_non_scalar_reassignment() {
 }
 
 #[test]
+// Tests that when both branches of a ternary expression are the same constant,
+// the resulting assignment is treated as a uniform constant. `base = flag ? 2 : 2`
+// always yields `2`, so `base ** 3` folds to `8.0`.
 fn test_propagate_constants_tracks_uniform_ternary_assignment() {
     let program = vec![
         Stmt::assign(
@@ -104,6 +118,10 @@ fn test_propagate_constants_tracks_uniform_ternary_assignment() {
 }
 
 #[test]
+// Tests that when all arms of a match expression and its default clause yield the
+// same constant value, the resulting assignment is treated as a uniform constant.
+// `base = match(flag) { 1 => 2, default => 2 }` always yields `2`, so `base ** 3`
+// folds to `8.0`.
 fn test_propagate_constants_tracks_uniform_match_assignment() {
     let program = vec![
         Stmt::assign(
@@ -129,6 +147,10 @@ fn test_propagate_constants_tracks_uniform_match_assignment() {
 }
 
 #[test]
+// Tests that when a match expression's subject is a known constant, the optimizer
+// can determine which arm fires and propagate the resulting constant. Here the
+// subject `mode = 1` means the first arm matches, so `base = 2` and `base ** 3`
+// folds to `8.0`.
 fn test_propagate_constants_tracks_known_match_assignment() {
     let program = vec![
         Stmt::assign("mode", Expr::int_lit(1)),

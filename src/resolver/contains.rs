@@ -17,6 +17,8 @@ pub(super) fn has_includes(stmts: &[Stmt]) -> bool {
     stmts.iter().any(stmt_has_includes)
 }
 
+/// Returns true if the statement contains an `Include` or `IncludeOnce` node,
+/// recursing into nested statements, functions, methods, closures, and bodies.
 fn stmt_has_includes(stmt: &Stmt) -> bool {
     match &stmt.kind {
         StmtKind::Include { .. } => true,
@@ -115,6 +117,7 @@ fn stmt_has_includes(stmt: &Stmt) -> bool {
     }
 }
 
+/// Returns true if any method in the list has includes in its parameters or body.
 fn methods_have_includes(methods: &[ClassMethod]) -> bool {
     methods.iter().any(|method| {
         method.params.iter().any(|(_, _, default, _)| {
@@ -123,6 +126,9 @@ fn methods_have_includes(methods: &[ClassMethod]) -> bool {
     })
 }
 
+/// Returns true if the expression recursively contains an `Include`, checking
+/// binary operands, function arguments, array literals, closures, match arms,
+/// and all other expression variants.
 fn expr_has_includes(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::BinaryOp { left, right, .. } => {
@@ -234,6 +240,8 @@ fn expr_has_includes(expr: &Expr) -> bool {
     }
 }
 
+/// Returns true if the `InstanceOf` target expression contains an `Include`.
+/// Class name targets (`InstanceOfTarget::Name`) are always false since they cannot contain includes.
 fn instanceof_target_has_includes(target: &InstanceOfTarget) -> bool {
     match target {
         InstanceOfTarget::Name(_) => false,

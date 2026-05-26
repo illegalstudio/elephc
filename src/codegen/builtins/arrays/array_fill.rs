@@ -17,6 +17,16 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `array_fill(start_index, count, value)` builtin call.
+///
+/// Evaluates arguments left-to-right, pushing `start_index` and `count` on the stack
+/// before evaluating `value` to preserve ordering. Calls `__rt_array_fill` or
+/// `__rt_array_fill_refcounted` depending on whether `value` is refcounted.
+/// On x86_64 Linux, delegates to `emit_array_fill_linux_x86_64` for correct System V ABI
+/// register usage.
+///
+/// Returns `PhpType::Array(Box::new(value_ty))` where `value_ty` is the inferred type
+/// of the fill value.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -51,6 +61,14 @@ pub fn emit(
     Some(PhpType::Array(Box::new(value_ty)))
 }
 
+/// x86_64 Linux-specific entry point for `array_fill`.
+///
+/// Uses System V AMD64 ABI: `rdi` = start_index, `rsi` = count, `rdx` = fill value.
+/// Floats are moved via `movq` from `xmm0` into `rdx`. Calls either
+/// `__rt_array_fill_refcounted` or `__rt_array_fill` depending on whether the fill
+/// value type is refcounted.
+///
+/// Returns `PhpType::Array(Box::new(value_ty))`.
 fn emit_array_fill_linux_x86_64(
     args: &[Expr],
     emitter: &mut Emitter,

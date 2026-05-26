@@ -17,6 +17,11 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a PHP `passthru` call by executing a null-terminated command string via libc `system()`.
+/// The command is evaluated and null-terminated through `__rt_cstr` before the call.
+/// On x86_64 the null-terminated pointer is passed in `rdi` (SysV first-argument register).
+/// Output from the command writes directly to stdout and is not captured or returned.
+/// Returns `PhpType::Void`. The call is effectful and may terminate or emit output.
 pub fn emit(
     _name: &str,
     args: &[Expr],

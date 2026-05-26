@@ -31,22 +31,37 @@
 
 #![allow(dead_code)] // Some layout constants are only consumed by feature-specific generator paths.
 
+/// Generator heap kind marker.
 pub const HEAP_KIND_GENERATOR: u8 = 4;
 
+/// Generator frame offset: class ID.
 pub const OFF_CLASS_ID: usize = 0;
+/// Generator frame offset: resume function pointer.
 pub const OFF_RESUME_FN: usize = 8;
+/// Generator frame offset: state index.
 pub const OFF_STATE_IDX: usize = 16;
+/// Generator frame offset: flags.
 pub const OFF_FLAGS: usize = 20;
+/// Generator frame offset: auto key counter.
 pub const OFF_AUTO_KEY_COUNTER: usize = 24;
+/// Generator frame offset: last key.
 pub const OFF_LAST_KEY: usize = 32;
+/// Generator frame offset: last value.
 pub const OFF_LAST_VALUE: usize = 40;
+/// Generator frame offset: return value.
 pub const OFF_RETURN_VALUE: usize = 48;
+/// Generator frame offset: sent value.
 pub const OFF_SENT_VALUE: usize = 56;
+/// Generator frame offset: delegated iterator.
 pub const OFF_DELEGATED_ITER: usize = 64;
+/// Generator frame offset: layout ID.
 pub const OFF_LAYOUT_ID: usize = 72;
+/// Generator frame fixed header size in bytes.
 pub const FIXED_HEADER_BYTES: usize = 80;
 
+/// Generator flag: rewound.
 pub const FLAG_REWOUND: u32 = 1;
+/// Generator flag: terminated.
 pub const FLAG_TERMINATED: u32 = 2;
 
 /// 16-byte alignment is required because `__rt_heap_alloc` returns

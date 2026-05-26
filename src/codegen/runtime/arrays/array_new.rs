@@ -13,10 +13,21 @@ use crate::codegen::platform::Arch;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
-/// array_new: create a new array on the heap.
-/// Input: x0 = capacity, x1 = element size (8 or 16)
-/// Output: x0 = pointer to array header
-/// Layout: [length:8][capacity:8][elem_size:8][elements...]
+/// Emits the `__rt_array_new` runtime helper for array allocation.
+///
+/// Dispatches to the target-specific implementation (x86_64 or ARM64).
+///
+/// # Inputs (ARM64 calling convention)
+/// - `x0`: requested capacity (number of elements)
+/// - `x1`: element size in bytes (8 for scalar arrays, 16 for string arrays)
+///
+/// # Output
+/// - `x0`: pointer to the allocated array header on ARM64, `rax` on x86_64
+///
+/// # Memory layout
+/// `[length:8][capacity:8][elem_size:8][elements...]`
+///
+/// The kind word at `header - 8` encodes the array variant (indexed array, copy-on-write flag, string-array layout hint).
 pub fn emit_array_new(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_new_linux_x86_64(emitter);
@@ -61,6 +72,23 @@ pub fn emit_array_new(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = array pointer
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_array_new`.
+///
+/// Uses the System V AMD64 ABI: arguments in `rdi` (capacity) and `rsi` (element size),
+/// result returned in `rax`.
+///
+/// # Inputs
+/// - `rdi`: requested capacity (number of elements)
+/// - `rsi`: element size in bytes (8 for scalar arrays, 16 for string arrays)
+///
+/// # Output
+/// - `rax`: pointer to the allocated array header
+///
+/// # Memory layout
+/// `[length:8][capacity:8][elem_size:8][elements...]`
+///
+/// The kind word at `header - 8` includes the x86_64 heap magic marker (`0x454C5048_XXXX_XXXX`),
+/// the copy-on-write flag (`0x8000`), and the indexed-array kind tag (`2`).
 fn emit_array_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_new ---");

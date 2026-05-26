@@ -16,6 +16,13 @@ use crate::types::PhpType;
 
 use super::super::Checker;
 
+/// Patches the type signatures for magic methods `__get`, `__set`, and `__call`
+/// on user-declared classes to enforce PHP-correct parameter types.
+///
+/// For `__get`: parameter 0 is `PhpType::Str`.
+/// For `__set`: parameter 0 is `PhpType::Str`, parameter 1 is `PhpType::Mixed`.
+/// For `__call`: parameter 0 is `PhpType::Str`, parameter 1 is `PhpType::Array` of `PhpType::Never`.
+/// Does nothing for classes that do not declare these methods.
 pub(crate) fn patch_magic_method_signatures(checker: &mut Checker) {
     for class_info in checker.classes.values_mut() {
         if let Some(sig) = class_info.methods.get_mut("__get") {
@@ -42,6 +49,11 @@ pub(crate) fn patch_magic_method_signatures(checker: &mut Checker) {
     }
 }
 
+/// Validates that user-declared magic methods (`__toString`, `__get`, `__set`, `__call`, `__invoke`)
+/// conform to PHP's static/non-static, visibility, arity, and return-type rules.
+///
+/// Returns `Ok(())` if all declared magic methods are contract-compliant.
+/// Returns `Err(CompileError)` with all violations collected if any class fails.
 pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), CompileError> {
     let mut errors = Vec::new();
     for (class_name, class_info) in &checker.classes {

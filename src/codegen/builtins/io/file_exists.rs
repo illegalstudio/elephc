@@ -16,6 +16,11 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a `file_exists` filesystem check for a single path argument.
+///
+/// Evaluates the path expression (argument 0), then calls `__rt_file_exists`
+/// to perform the target-aware stat. Returns `PhpType::Bool` indicating whether
+/// the path exists; the runtime helper handles all platform-specific logic.
 pub fn emit(
     _name: &str,
     args: &[Expr],

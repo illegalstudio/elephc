@@ -10,6 +10,16 @@
 
 use crate::codegen::emit::Emitter;
 
+/// Emits the `__rt_gc_collect_cycles` and `__rt_gc_collect_cycles_done` runtime helpers for Linux x86_64.
+///
+/// This is a three-pass mark-sweep collector tailored to PHP array/hash/object storage on the managed heap:
+/// - **Pass 1 (clear):** clears the transient reachable bit on every live heap block while preserving kind, value_type, and heap marker bits.
+/// - **Pass 2 (root scan):** finds externally rooted nodes by recounting incoming heap edges for each candidate; nodes whose refcount exceeds incoming edges are marked reachable via `__rt_gc_mark_reachable`.
+/// - **Pass 3 (free):** frees every still-unreachable live refcounted node by dispatching to `__rt_array_free_deep`, `__rt_hash_free_deep`, `__rt_mixed_free_deep`, or `__rt_object_free_deep`.
+///
+/// Re-entry is guarded by the `_gc_collecting` flag — nested collection attempts are silently skipped.
+///
+/// Uses cdecl calling convention; all registers are caller-saved except the frame pointer.
 pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: gc_collect_cycles ---");

@@ -1,11 +1,12 @@
 //! Purpose:
-//! Groups the keywords integration test submodules into the parent suite.
+//! Wires keyword test submodules into the parent lexer suite.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for language keywords, runtime and extension keywords, operator tokens, doc comment and string-adjacent tokens, object-oriented keywords.
+//! - Submodules group fixtures for language, runtime, and operator keywords;
+//!   doc-comment/string-adjacent tokens; and object-oriented keywords.
 
 use super::*;
 

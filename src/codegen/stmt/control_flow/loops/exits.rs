@@ -18,6 +18,9 @@ use crate::codegen::expr::{
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a `break` statement targeting `levels` loops up in nested loop depth.
+/// Resolves the target loop's break label, cleans up skipped switch subjects, and
+/// branches through `finally` blocks if present.
 pub(crate) fn emit_break_stmt(levels: usize, emitter: &mut Emitter, ctx: &Context) {
     let (labels, sp_adjust) = target_loop_labels(ctx, levels, "break");
     emit_skipped_switch_stack_cleanup(emitter, sp_adjust);
@@ -28,6 +31,9 @@ pub(crate) fn emit_break_stmt(levels: usize, emitter: &mut Emitter, ctx: &Contex
     }
 }
 
+/// Emits a `return` statement, evaluating the optional expression, coercing to the
+/// function's return type, releasing temporary stack slots for switch subjects,
+/// and branching to the function epilogue (or through `finally` blocks if present).
 pub(crate) fn emit_return_stmt(
     expr: &Option<Expr>,
     emitter: &mut Emitter,
@@ -84,6 +90,10 @@ pub(crate) fn emit_return_stmt(
     }
 }
 
+/// Emits `__rt_str_persist` to persist a string return value before locals are freed.
+/// If `release_original` is true, the original owned string (stored at a fixed stack
+/// offset of 16 bytes) is copied and the original heap allocation is released afterward.
+/// Returns the persisted string in `x1`/`x2` registers.
 fn persist_string_return_result(emitter: &mut Emitter, release_original: bool) {
     if !release_original {
         crate::codegen::abi::emit_call_label(emitter, "__rt_str_persist");       // persist borrowed or concat-buffer string before locals are freed
@@ -104,6 +114,9 @@ fn persist_string_return_result(emitter: &mut Emitter, release_original: bool) {
     crate::codegen::abi::emit_release_temporary_stack(emitter, 16);              // discard the saved original string pointer
 }
 
+/// Emits a `continue` statement targeting `levels` loops up in nested loop depth.
+/// Resolves the target loop's continue label, cleans up skipped switch subjects, and
+/// branches through `finally` blocks if present.
 pub(crate) fn emit_continue_stmt(levels: usize, emitter: &mut Emitter, ctx: &Context) {
     let (labels, sp_adjust) = target_loop_labels(ctx, levels, "continue");
     emit_skipped_switch_stack_cleanup(emitter, sp_adjust);
@@ -114,6 +127,10 @@ pub(crate) fn emit_continue_stmt(levels: usize, emitter: &mut Emitter, ctx: &Con
     }
 }
 
+/// Resolves the loop-labels entry and accumulated `sp_adjust` for a break/continue
+/// targeting `levels` loops up. `keyword` is used only for the panic message.
+/// Returns the target `LoopLabels` and the sum of `sp_adjust` values from all
+/// intermediate loops that will be skipped by the exit.
 fn target_loop_labels<'a>(
     ctx: &'a Context,
     levels: usize,
@@ -134,6 +151,9 @@ fn target_loop_labels<'a>(
     (&ctx.loop_stack[index], sp_adjust)
 }
 
+/// Releases temporary stack slots for switch subjects skipped by a multi-level
+/// loop exit. Called when `sp_adjust > 0` to pop switch subject slots from the
+/// temporary stack before branching to the target loop's label.
 fn emit_skipped_switch_stack_cleanup(emitter: &mut Emitter, sp_adjust: usize) {
     if sp_adjust > 0 {
         crate::codegen::abi::emit_release_temporary_stack(emitter, sp_adjust);     // release switch subject slots skipped by a multi-level loop exit

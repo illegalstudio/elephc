@@ -16,6 +16,13 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Lowers a PHP `mktime(hour, min, sec, month, day, year)` call.
+///
+/// Evaluates all six integer arguments in source order, pushes them onto the
+/// temporary stack in reverse order, then pops them into the target ABI integer
+/// registers (AArch64: x0–x5; x86_64: rdi, rsi, rdx, rcx, r8, r9).  Calls the
+/// `__rt_mktime` runtime helper, which builds a libc `struct tm` from the six
+/// fields and invokes `mktime(3)`.  Returns the Unix timestamp as `PhpType::Int`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

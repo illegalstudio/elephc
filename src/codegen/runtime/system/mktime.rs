@@ -10,13 +10,25 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// __rt_mktime: create a Unix timestamp from date components.
-/// Input:  x0=hour, x1=minute, x2=second, x3=month (1-12), x4=day, x5=year
-/// Output: x0=Unix timestamp
-///
-/// Builds a struct tm on the stack and calls libc _mktime.
-/// struct tm layout: tm_sec(+0), tm_min(+4), tm_hour(+8), tm_mday(+12),
-///                   tm_mon(+16), tm_year(+20), tm_wday(+24), tm_yday(+28), tm_isdst(+32)
+/// Emits `__rt_mktime`, the runtime helper that converts date/time components into a Unix timestamp.
+ ///
+ /// ## Input registers (System V ABI)
+ /// - `x0` = hour, `x1` = minute, `x2` = second
+ /// - `x3` = month (1–12, PHP-style), `x4` = day, `x5` = year (full Gregorian year)
+ ///
+ /// ## Output
+ /// - `x0` = Unix timestamp (seconds since epoch)
+ ///
+ /// ## Behavior
+ /// - x86_64: delegates to `emit_mktime_linux_x86_64` (Linux System V AMD64 ABI)
+ /// - ARM64 (Linux): builds a `struct tm` on the stack and calls libc `mktime`
+ ///
+ /// ## struct tm memory layout (ARM64, 40 bytes at `sp+0`)
+ /// `tm_sec(+0)`, `tm_min(+4)`, `tm_hour(+8)`, `tm_mday(+12)`,
+ /// `tm_mon(+16)`, `tm_year(+20)`, `tm_wday(+24)`, `tm_yday(+28)`, `tm_isdst(+32)`
+ ///
+ /// Fields `tm_wday` and `tm_yday` are ignored by libc `mktime`. `tm_isdst = -1` instructs
+ /// libc to infer DST automatically.
 pub fn emit_mktime(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mktime_linux_x86_64(emitter);
@@ -58,6 +70,23 @@ pub fn emit_mktime(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_mktime`.
+ ///
+ /// ## Input registers (System V AMD64 ABI)
+ /// - `edi` = hour, `esi` = minute, `edx` = second
+ /// - `ecx` = month (1–12, PHP-style), `r8d` = day, `r9d` = year (full Gregorian year)
+ ///
+ /// ## Output
+ /// - `rax` = Unix timestamp (seconds since epoch)
+ ///
+ /// ## Behavior
+ /// - Pushes a frame pointer and reserves 64 bytes on the stack for a `struct tm`.
+ /// - Initializes all fields: `tm_sec`, `tm_min`, `tm_hour`, `tm_mday`, `tm_mon` (converted from
+ ///   1-based to 0-based), `tm_year` (converted from full year to years since 1900).
+ /// - `tm_wday` and `tm_yday` are set to 0 (ignored by libc `mktime`).
+ /// - `tm_isdst = -1` instructs libc to infer DST automatically.
+ /// - Calls `mktime(rdi)` where `rdi` points to the on-stack `struct tm`.
+ /// - Restores `rsp` and `rbp`, returns the timestamp in `rax`.
 fn emit_mktime_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mktime ---");

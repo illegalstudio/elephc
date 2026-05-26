@@ -11,9 +11,19 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_product: compute the product of all integer elements in an array.
-/// Input: x0 = array pointer
-/// Output: x0 = product of all elements (1 for empty arrays)
+/// Emits the `__rt_array_product` runtime helper that computes the product of all
+/// elements in a PHP array.
+///
+/// - **Input**: `x0` = pointer to the runtime array header (ARM64) / `rdi` = array pointer (x86_64)
+/// - **Output**: `x0` = product of all elements (ARM64) / `rax` = product (x86_64)
+/// - **Empty array**: returns 1 (multiplicative identity) when the array has no elements
+/// - **ABI**: uses `x9`–`x12` as scratch registers on ARM64; `r8`, `r10`, `r11`, `rcx` on x86_64
+/// - **Behavior**: iterates the array's data region, multiplying each element's raw value into
+///   an accumulator seeded with 1. No type checking is performed; the caller is responsible
+///   for ensuring the array contains integer/float values.
+///
+/// On x86_64 targets, dispatches to `emit_array_product_linux_x86_64`. ARM64 emits the helper
+/// inline using a compare-and-branch loop.
 pub fn emit_array_product(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_product_linux_x86_64(emitter);
@@ -45,6 +55,10 @@ pub fn emit_array_product(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_array_product` using the System V AMD64 ABI.
+/// Reads the array length from `[rdi]` (first QWORD of the header), iterates from the data
+/// region at `rdi + 24`, and returns the product in `rax`. Uses `rcx` as the loop counter,
+/// `rax` as the accumulator (seeded to 1), and `r8` as a temporary load slot.
 fn emit_array_product_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_product ---");

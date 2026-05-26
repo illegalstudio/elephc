@@ -16,6 +16,20 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `strrev` builtin.
+///
+/// Arguments:
+/// - `args[0]`: the input string (emitted via `emit_expr`)
+/// - The runtime helper `__rt_strrev` reverses the string and returns an owned result slice.
+///
+/// Outputs:
+/// - Calls `__rt_strrev` via `abi::emit_call_label`
+/// - Returns `PhpType::Str` (caller receives ownership of the returned string)
+///
+/// ABI constraints:
+/// - Input string passed as pointer/length pair following standard string ABI
+/// - Returned string pointer in `x1`, length in `x2` (ARM64 string return convention)
+/// - Caller owns the returned string; no lifetime aliasing
 pub fn emit(
     _name: &str,
     args: &[Expr],

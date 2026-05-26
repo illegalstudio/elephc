@@ -32,6 +32,19 @@ const BUILTIN_INTERFACE_NAMES: &[&str] = &[
     "Stringable",
 ];
 
+/// Injects PHP SPL builtin interfaces into the type environment.
+///
+/// Adds `Traversable`, `Iterator`, `IteratorAggregate`, `ArrayAccess`, `Countable`,
+/// `OuterIterator`, `RecursiveIterator`, `SeekableIterator`, `SplObserver`, `SplSubject`,
+/// and `Stringable` as declared interfaces with their full method signatures.
+///
+/// ## Errors
+/// Returns an error if any user-defined interface or class has a PHP-case-insensitive
+/// name collision with a builtin interface name.
+///
+/// ## Inputs
+/// - `interface_map`: target map receiving the builtin interface declarations
+/// - `class_map`: checked for name collisions before insertion
 pub(crate) fn inject_builtin_interfaces(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
@@ -250,6 +263,15 @@ pub(crate) fn inject_builtin_interfaces(
     Ok(())
 }
 
+/// Applies implicit `Stringable` interface to classes that implement `__toString`.
+///
+/// After all user class declarations are resolved, this scans every class and adds
+/// `Stringable` to its interface list if the class has a `public __toString(): string`
+/// method. This mirrors PHP's implicit interface behavior.
+///
+/// ## Inputs
+/// - `classes`: mutable map of `ClassInfo` entries; `Stringable` is pushed into each
+///   qualifying class's `interfaces` vector in-place
 pub(crate) fn apply_implicit_stringable_interfaces(
     classes: &mut HashMap<String, ClassInfo>,
 ) {
@@ -274,6 +296,10 @@ pub(crate) fn apply_implicit_stringable_interfaces(
     }
 }
 
+/// Constructs a marker `InterfaceDeclInfo` with no methods, no properties, and no extends.
+///
+/// Used for `Traversable` (which is an empty marker interface in SPL) and for any
+/// interface that needs no own members.
 fn marker_interface(name: &str) -> InterfaceDeclInfo {
     InterfaceDeclInfo {
         name: name.to_string(),
@@ -285,10 +311,16 @@ fn marker_interface(name: &str) -> InterfaceDeclInfo {
     }
 }
 
+/// Returns a `TypeExpr::Named("mixed")` used as the parameter/return type for
+/// generic interface methods.
 fn mixed_type() -> TypeExpr {
     TypeExpr::Named(Name::unqualified("mixed"))
 }
 
+/// Builds a parameterless `ClassMethod` for a builtin interface method.
+///
+/// The method is always `public`, non-static, `abstract`, no-body, and uses a dummy span.
+/// Used for simple methods like `current()`, `key()`, `valid()`, `rewind()`, `next()`.
 fn builtin_interface_method(name: &str, return_type: TypeExpr) -> ClassMethod {
     ClassMethod {
         name: name.to_string(),
@@ -306,6 +338,10 @@ fn builtin_interface_method(name: &str, return_type: TypeExpr) -> ClassMethod {
     }
 }
 
+/// Builds a `ClassMethod` with parameters for a builtin interface method.
+///
+/// The method is always `public`, non-static, `abstract`, no-body, and uses a dummy span.
+/// Used for methods that take typed parameters, such as `offsetGet(offset: mixed): mixed`.
 fn builtin_interface_method_with_params(
     name: &str,
     params: Vec<(&str, TypeExpr)>,

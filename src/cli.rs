@@ -13,8 +13,11 @@ use std::process;
 
 use crate::codegen::platform::Target;
 
+/// Usage string printed to stderr when command-line arguments are invalid or missing.
 pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-asm] [--check] [--timings] [--source-map] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>";
 
+/// Configuration derived from command-line arguments, passed to the compile pipeline.
+/// Controls heap allocation size, debug output, code generation options, and linking behavior.
 pub(crate) struct CliConfig {
     pub(crate) filename: String,
     pub(crate) heap_size: usize,
@@ -31,6 +34,7 @@ pub(crate) struct CliConfig {
     pub(crate) defines: HashSet<String>,
 }
 
+/// Parse command-line arguments into a CliConfig struct.
 pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     if args.len() < 2 {
         eprintln!("{USAGE}");
@@ -138,6 +142,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     }
 }
 
+/// Parse a heap size value, returning a value >= 65536 or exit with an error.
 fn parse_heap_size(value: &str) -> usize {
     match value.parse::<usize>() {
         Ok(n) if n >= 65536 => n,
@@ -145,6 +150,7 @@ fn parse_heap_size(value: &str) -> usize {
     }
 }
 
+/// Parse the required target argument at the given index, or fail if missing.
 fn parse_required_target(args: &[String], index: usize) -> Target {
     if index < args.len() {
         parse_target(&args[index])
@@ -153,6 +159,7 @@ fn parse_required_target(args: &[String], index: usize) -> Target {
     }
 }
 
+/// Parse a target string to a Target enum, or fail with an error message.
 fn parse_target(value: &str) -> Target {
     match Target::parse(value) {
         Ok(target) => target,
@@ -160,6 +167,7 @@ fn parse_target(value: &str) -> Target {
     }
 }
 
+/// Retrieve a required argument at index, or fail with the given message.
 fn required_value(args: &[String], index: usize, message: &str) -> String {
     if index < args.len() {
         args[index].clone()
@@ -168,6 +176,8 @@ fn required_value(args: &[String], index: usize, message: &str) -> String {
     }
 }
 
+/// Prints a message to stderr and exits the process with code 1.
+/// Never returns.
 fn fail(message: &str) -> ! {
     eprintln!("{}", message);
     process::exit(1);

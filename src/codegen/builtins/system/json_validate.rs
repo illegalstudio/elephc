@@ -17,6 +17,15 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `json_validate()` builtin call.
+///
+/// Evaluates arguments in PHP source order before configuring runtime JSON validation state.
+/// - `json_str` (arg 0): JSON string to validate; coerced to string and persisted before optional args evaluate.
+/// - `depth` (arg 1, optional): Nesting limit; defaults to 511, then decremented by 1 for strict semantics.
+/// - `flags` (arg 2, optional): Only `JSON_INVALID_UTF8_IGNORE` is accepted; all other flags are masked out.
+///
+/// Configures the runtime symbols `_json_last_error`, `_json_active_depth`, `_json_depth_limit`,
+/// and `_json_active_flags`. Calls `__rt_json_validate` and returns `PhpType::Bool`.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -87,6 +96,9 @@ pub fn emit(
     Some(PhpType::Bool)
 }
 
+/// Masks unsupported validate flags, keeping only `JSON_INVALID_UTF8_IGNORE` (bit 20).
+///
+/// Reads and modifies the current integer result register in-place.
 fn mask_json_validate_flags(emitter: &mut Emitter) {
     let reg = abi::int_result_reg(emitter);
     match emitter.target.arch {

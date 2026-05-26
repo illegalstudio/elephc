@@ -10,7 +10,25 @@
 
 use crate::codegen::emit::Emitter;
 
-/// x86_64 implementation of `__rt_json_encode_str`.
+/// Emits the `__rt_json_encode_str` x86_64 runtime helper.
+///
+/// Reads source string metadata from `rax` (pointer) and `rdx` (length).
+/// Returns result in `rax` (pointer) and `rdx` (length).
+///
+/// Behavior:
+/// - When `JSON_NUMERIC_CHECK` (bit 32) is active, numeric strings are copied
+///   verbatim without JSON quotes via the `__rt_json_str_is_numeric_x` helper.
+/// - Non-numeric strings are wrapped in double quotes and escaped:
+///   `\` → `\\`, `"` → `\"`, `\n` → `\n`, `\r` → `\r`, `\t` → `\t`,
+///   `\b` → `\b`, `\f` → `\f`, control bytes (< 0x20) → `\u00XX`.
+/// - Optional escapes when flags are set: `<`/`>` → `\u003C`/`\u003E` (`JSON_HEX_TAG`),
+///   `&` → `\u0026` (`JSON_HEX_AMP`), `'` → `\u0027` (`JSON_HEX_APOS`),
+///   `/` → `\/` (`JSON_UNESCAPED_SLASHES`), quotes → `\u0022` (`JSON_HEX_QUOT`).
+/// - Multi-byte UTF-8 sequences: emit `\uXXXX` unless `JSON_UNESCAPED_UNICODE`
+///   (bit 256) is set; `JSON_INVALID_UTF8_IGNORE` and `JSON_INVALID_UTF8_SUBSTITUTE`
+///   override unescaped-unicode and invoke the UTF-8 dispatcher.
+/// - Malformed UTF-8 triggers `JSON_ERROR_UTF8` via `__rt_json_throw_error`
+///   when neither sanitization flag is active.
 pub(super) fn emit(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_str ---");

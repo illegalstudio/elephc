@@ -10,6 +10,8 @@
 
 use super::*;
 
+/// Propagates constants through an `#ifdef` statement.
+/// Clones `env` for the then-branch, uses the original for the else-branch, then merges both paths.
 pub(super) fn propagate_ifdef_stmt(
     symbol: String,
     then_body: Vec<Stmt>,
@@ -38,6 +40,9 @@ pub(super) fn propagate_ifdef_stmt(
     )
 }
 
+/// Propagates constants through a `while` loop.
+/// Evaluates the condition, propagates into the body, then updates the environment based on loop exit.
+/// If the condition is known false, returns the original env; if known true, merges break paths.
 pub(super) fn propagate_while_stmt(
     condition: Expr,
     body: Vec<Stmt>,
@@ -58,6 +63,8 @@ pub(super) fn propagate_while_stmt(
     )
 }
 
+/// Propagates constants through a `do-while` loop.
+/// Executes the body first, then evaluates the condition to determine the exit environment.
 pub(super) fn propagate_do_while_stmt(
     body: Vec<Stmt>,
     condition: Expr,
@@ -83,6 +90,9 @@ pub(super) fn propagate_do_while_stmt(
     )
 }
 
+/// Propagates constants through a `for` loop.
+/// Processes init first, then builds the loop environment from the init result. Evaluates condition and update
+/// in that environment, propagates into the body, and derives the exit environment from the condition.
 pub(super) fn propagate_for_stmt(
     init: Option<Box<Stmt>>,
     condition: Option<Expr>,
@@ -125,6 +135,9 @@ pub(super) fn propagate_for_stmt(
     )
 }
 
+/// Propagates constants through a `foreach` loop.
+/// Builds the loop environment from the source array, removes the value variable (or the array itself if by-ref),
+/// propagates the array expression against the original env, then propagates the body in the loop env.
 pub(super) fn propagate_foreach_stmt(
     array: Expr,
     key_var: Option<String>,
@@ -157,6 +170,9 @@ pub(super) fn propagate_foreach_stmt(
     )
 }
 
+/// Propagates constants through a `switch` statement.
+/// Propagates the subject, then propagates each case pattern and body in the base env (empty if subject has side effects).
+/// The exit environment is derived by merging all case paths and the default branch.
 pub(super) fn propagate_switch_stmt(
     subject: Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
@@ -196,6 +212,9 @@ pub(super) fn propagate_switch_stmt(
     )
 }
 
+/// Propagates constants through a `try-catch-finally` statement.
+/// Propagates the try body and each catch clause against the original env, but the finally body in an empty env
+/// (because finally always executes regardless of control flow). Merges all paths to produce the exit environment.
 pub(super) fn propagate_try_stmt(
     try_body: Vec<Stmt>,
     catches: Vec<crate::parser::ast::CatchClause>,
@@ -227,10 +246,12 @@ pub(super) fn propagate_try_stmt(
     )
 }
 
+/// Extracts the exit environment from a loop path summary by merging all break paths.
 fn merge_loop_exit_paths(summary: ConstantLoopPathSummary) -> ConstantEnv {
     merge_constant_env_paths(summary.break_paths)
 }
 
+/// Extracts the exit environment for a do-while false condition by merging fallthrough, break, and continue paths.
 fn merge_do_while_false_exit_paths(mut summary: ConstantLoopPathSummary) -> ConstantEnv {
     let mut paths = Vec::new();
     paths.append(&mut summary.fallthrough_paths);
@@ -239,6 +260,9 @@ fn merge_do_while_false_exit_paths(mut summary: ConstantLoopPathSummary) -> Cons
     merge_constant_env_paths(paths)
 }
 
+/// Propagates constants through an `if-elseif-else` statement.
+/// Propagates the condition first; if it has side effects the base env is emptied. Processes each branch in
+/// a derived env, then merges all fallthrough paths to produce the exit environment.
 pub(super) fn propagate_if_stmt(
     condition: Expr,
     then_body: Vec<Stmt>,

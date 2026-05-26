@@ -17,6 +17,24 @@ use crate::types::PhpType;
 
 use super::super::{coerce_to_string, coerce_to_truthiness, emit_expr};
 
+/// Emits a PHP cast expression (`(int)`, `(float)`, `(string)`, `(bool)`, `(array)`).
+///
+/// # Arguments
+/// - `target` — the cast kind (Int, Float, String, Bool, Array)
+/// - `expr` — the expression to cast; must already be emitted so `ctx` holds the result type in `src_ty`
+/// - `emitter` — target-aware instruction emitter
+/// - `ctx` — codegen context; receives the cast result type
+/// - `data` — data section for relocations and static data
+///
+/// # Returns
+/// The `PhpType` that results from the cast (e.g., `PhpType::Int` for `(int)`).
+///
+/// # PHP cast semantics
+/// - `(int)` from string → calls `__rt_atoi`; from resource → native payload + 1; from array → container length
+/// - `(float)` from string → null-terminates via `__rt_cstr` then calls `atof`; from resource → id + conversion
+/// - `(bool)` → uses shared truthiness coercion (`coerce_to_truthiness`)
+/// - `(string)` → delegates to `coerce_to_string`
+/// - `(array)` from scalar → allocates 1-element array via `__rt_array_new` / `__rt_array_push_int`; otherwise empty 4-capacity array
 pub(in crate::codegen::expr) fn emit_cast(
     target: &crate::parser::ast::CastType,
     expr: &Expr,
@@ -151,6 +169,18 @@ pub(in crate::codegen::expr) fn emit_cast(
     }
 }
 
+/// Emits PHP iterable-to-int casting for `(int)` and `(float)` on `PhpType::Iterable`.
+///
+/// Classifies the iterable's heap kind (array/hash/object/null) then emits
+/// the PHP-appropriate integer: arrays/hashes → 1 if non-empty else 0; objects → 1; null → 0.
+///
+/// # Arguments
+/// - `emitter` — target-aware instruction emitter; must have the iterable pointer in `int_result_reg`
+/// - `ctx` — codegen context; used to allocate local labels
+///
+/// # Side effects
+/// - Caller must preserve the iterable pointer before calling (function pushes it on the stack)
+/// - Consumes the preserved pointer and stack space before branching to `done`
 fn emit_iterable_nonempty_as_int(emitter: &mut Emitter, ctx: &mut Context) {
     let array_case = ctx.next_label("iterable_cast_array");
     let true_case = ctx.next_label("iterable_cast_true");

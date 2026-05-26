@@ -15,6 +15,11 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a call to the `__rt_getcwd` runtime helper for PHP's `getcwd()` function.
+///
+/// `getcwd()` takes no arguments; the function name and argument list are ignored.
+/// Returns `Some(PhpType::Str)` on success, or `None` if the current working directory
+/// cannot be determined (the runtime helper handles the false/null failure convention).
 pub fn emit(
     _name: &str,
     _args: &[Expr],

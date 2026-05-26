@@ -11,9 +11,12 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// ltrim_mask: strip characters in mask from left of string.
+/// Emits the `__rt_ltrim_mask` runtime helper for ARM64.
+/// Strips characters in mask from the left of a byte string.
+///
 /// Input: x1=str_ptr, x2=str_len, x3=mask_ptr, x4=mask_len
-/// Output: x1=adjusted_ptr, x2=adjusted_len
+/// Output: x1=adjusted_ptr, x2=adjusted_len (updated in place)
+/// Preserves x3, x4 (mask pointer/length).
 pub fn emit_ltrim_mask(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_ltrim_mask_linux_x86_64(emitter);
@@ -50,6 +53,12 @@ pub fn emit_ltrim_mask(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with adjusted x1 and x2
 }
 
+/// Emits the `__rt_ltrim_mask` runtime helper for x86_64 Linux.
+/// Strips characters in mask from the left of a byte string.
+///
+/// Input: rax=str_ptr, rdx=str_len, rdi=mask_ptr, rsi=mask_len
+/// Output: rax=adjusted_ptr, rdx=adjusted_len
+/// Clobbers: rcx, r8, r9 (temporary scratch registers)
 fn emit_ltrim_mask_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ltrim_mask ---");

@@ -11,11 +11,13 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_union: PHP indexed-array union for dense elephc arrays.
-/// Duplicate numeric keys are kept from the left operand; only the right suffix
-/// whose indexes do not exist on the left is appended.
-/// Input:  x0=left_array_ptr, x1=right_array_ptr
-/// Output: x0=result_array_ptr
+/// Emits `__rt_array_union` runtime helper for PHP's `+` operator on dense indexed arrays.
+/// Duplicates from the left operand are preserved; only the right-side suffix whose
+/// numeric keys are absent from the left is appended. The result array owns its storage
+/// (COW-cloned from the left before appending).
+///
+/// ABI: `x0` = left array pointer, `x1` = right array pointer; returns result in `x0`.
+/// The result must be released by the caller.
 pub fn emit_array_union(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_union_linux_x86_64(emitter);
@@ -105,6 +107,9 @@ pub fn emit_array_union(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to generated code
 }
 
+/// x86_64 Linux implementation of `__rt_array_union`.
+/// Identical in behavior to the ARM64 path but uses System V AMD64 ABI conventions:
+/// `rdi` = left array pointer, `rsi` = right array pointer; result returned in `rax`.
 fn emit_array_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_union ---");

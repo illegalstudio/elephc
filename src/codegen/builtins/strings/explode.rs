@@ -16,6 +16,10 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `explode(delimiter, string)` builtin.
+/// Saves the delimiter (pointer in x1, length in x2), evaluates the subject string into
+/// argument registers, restores the delimiter, then calls `__rt_explode` to split the string.
+/// Returns an array of strings (`PhpType::Array(Str)`).
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -11,12 +11,15 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_grow: double the capacity of an array after copy-on-write splitting.
-/// Ensures the source array is unique, allocates a new array with 2x capacity,
-/// copies header + elements, frees the previous unique storage, and returns the
-/// new pointer.
-/// Input:  x0 = old array pointer
-/// Output: x0 = new array pointer (with doubled capacity)
+/// Emits the `__rt_array_grow` runtime helper for ARM64.
+/// Doubles the capacity of an array after copy-on-write splitting.
+///
+/// Input:  x0 = old array pointer (may be shared)
+/// Output: x0 = new array pointer (with doubled capacity, guaranteed unique)
+///
+/// Preserves array header fields (length, capacity, elem_size) and copies
+/// the element payload byte-by-byte. Frees the old storage before returning.
+/// The new capacity is max(old_capacity * 2, 8).
 pub fn emit_array_grow(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_grow_linux_x86_64(emitter);
@@ -100,6 +103,15 @@ pub fn emit_array_grow(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = new array
 }
 
+/// Emits the `__rt_array_grow` runtime helper for Linux x86_64.
+/// Doubles the capacity of an indexed array after copy-on-write splitting.
+///
+/// Input:  rdi = old array pointer (may be shared)
+/// Output: rax = new array pointer (with doubled capacity, guaranteed unique)
+///
+/// Uses rbp-relative spill slots to preserve values across helper calls.
+/// Preserves array header fields and copies the element payload byte-by-byte.
+/// Frees the old storage before returning. The new capacity is max(old_capacity * 2, 8).
 fn emit_array_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_grow ---");

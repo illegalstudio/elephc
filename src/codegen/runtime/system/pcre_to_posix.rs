@@ -269,6 +269,10 @@ pub(crate) fn emit_pcre_to_posix(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_pcre_to_posix` state machine.
+/// Mirrors the ARM64 behavior but uses x86_64 SysV ABI registers:
+/// Input:  rax=pattern ptr, rdx=pattern len
+/// Output: rax=pointer to null-terminated string in _cstr_buf
 fn emit_pcre_to_posix_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: pcre_to_posix ---");

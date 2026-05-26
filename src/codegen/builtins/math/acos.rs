@@ -16,6 +16,23 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a call to the PHP `acos` builtin, backed by the host libc `acos` routine.
+///
+/// # Arguments
+/// - `_name`: Unused; the builtin name is resolved by the dispatcher.
+/// - `args`: Exactly one expression producing a float or integer value.
+///
+/// # Behavior
+/// - Normalizes integer operands to the floating-point result register via
+///   `emit_int_result_to_float_result` before the libc call.
+/// - Calls `acos` through the target's native calling convention (AArch64 `bl_c`
+///   or x86_64 `call acos`).
+///
+/// # Returns
+/// `Some(PhpType::Float)` — `acos` always returns a float in PHP.
+///
+/// # Panics
+/// Requires `args.len() == 1` and a supported target architecture (AArch64, X86_64).
 pub fn emit(
     _name: &str,
     args: &[Expr],

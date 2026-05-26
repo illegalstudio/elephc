@@ -17,6 +17,29 @@ use crate::types::PhpType;
 
 use super::stream_arg::emit_stream_fd_arg;
 
+/// Emits code for the PHP `rewind()` builtin.
+///
+/// Unboxes the stream resource from `args[0]` to extract its file descriptor,
+/// then calls the platform lseek routine with offset=0 and whence=SEEK_SET to
+/// reset the file pointer to the start of the stream. On success, clears the
+/// EOF flag for the file descriptor. On failure, returns false without modifying
+/// the stream state.
+///
+/// # Arguments
+/// - `_name`: Ignored; present for dispatcher uniformity.
+/// - `args`: Must contain exactly one expression resolving to a stream resource.
+/// - `emitter`: Target-aware instruction emitter.
+/// - `ctx`: Codegen context providing labels, frame layout, and platform details.
+/// - `data`: Data section for literals and global symbol addresses.
+///
+/// # Returns
+/// Always returns `Some(PhpType::Bool)` — `true` on success, `false` on failure.
+///
+/// # Platform details
+/// - **AArch64**: Uses syscall 199 (`lseek`), preserves the fd across the call via
+///   stack push/pop, and clears `_eof_flags[x9]` on success.
+/// - **x86_64**: Calls libc `lseek()`, preserves the fd across the call via stack
+///   push/pop, and clears `_eof_flags[r10]` on success.
 pub fn emit(
     _name: &str,
     args: &[Expr],

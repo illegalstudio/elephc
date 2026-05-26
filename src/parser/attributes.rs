@@ -49,6 +49,10 @@ pub(crate) fn consume_attribute_lists(
     parse_attribute_lists(tokens, pos).map(|_| ())
 }
 
+/// Parse a single `#[...]` group: consumes the opening `#[`, parses
+/// comma-separated attributes until the closing `]`, and returns an
+/// `AttributeGroup`. Handles trailing commas. Returns an error on
+/// unterminated or empty groups.
 fn parse_one_group(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -100,6 +104,9 @@ fn parse_one_group(
     }
 }
 
+/// Parse a single attribute name (possibly namespaced) and optionally
+/// parenthesized arguments. Sets `fully_qualified` if the name started
+/// with `\`. Returns the `Attribute` with its name, parsed arguments, and span.
 fn parse_one_attribute(
     tokens: &[(Token, Span)],
     pos: &mut usize,

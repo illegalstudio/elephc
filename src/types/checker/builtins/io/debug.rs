@@ -15,6 +15,9 @@ use crate::types::{PhpType, TypeEnv};
 use super::common::BuiltinResult;
 use super::super::super::Checker;
 
+/// Type-checks `var_dump` and `print_r`.
+///
+/// Both take exactly one argument of any type and return `void`.
 pub(super) fn check_builtin(
     checker: &mut Checker,
     name: &str,

@@ -15,6 +15,14 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
+/// Emits the `ptr` builtin: takes the address of a variable as a raw integer.
+///
+/// - **Local variable**: computes the frame-slot address and stores it in the integer result register.
+/// - **Global variable**: materializes the static storage label address into the integer result register.
+/// - **Unknown / non-variable**: returns a null pointer (all bits zero).
+///
+/// Returns `PhpType::Pointer(None)` — a raw address, not a PHP boxed value.
+/// The result is placed in `abi::int_result_reg()` per the target ABI.
 pub fn emit(
     _name: &str,
     args: &[Expr],

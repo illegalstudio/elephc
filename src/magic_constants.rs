@@ -48,10 +48,16 @@ pub fn substitute_file_and_scope_constants(stmts: Vec<Stmt>, file_path: &Path) -
     substitute_scope_constants_in_file(stmts, file_path)
 }
 
+/// Resolves scope-dependent magic constants (`__FUNCTION__`, `__CLASS__`, `__METHOD__`,
+/// `__NAMESPACE__`, `__TRAIT__`) based on lexical position within `program`.
+/// `__FILE__` and `__DIR__` must already be lowered by `substitute_file_constants`.
 pub fn substitute_scope_constants_in_file(program: Program, file_path: &Path) -> Program {
     scope_pass::substitute_scope_constants_in_file(program, file_path)
 }
 
+/// Rebinds `__CLASS__` placeholders to `class_name` in `properties` and `methods`
+/// after a trait is flattened into a concrete class. `__METHOD__` and `__TRAIT__`
+/// retain the trait's identity, matching PHP semantics.
 pub fn bind_trait_class_constants(
     properties: Vec<ClassProperty>,
     methods: Vec<ClassMethod>,
@@ -60,10 +66,14 @@ pub fn bind_trait_class_constants(
     trait_binding::bind_trait_class_constants(properties, methods, class_name)
 }
 
+/// Converts `name` to its canonical string representation, or returns an empty
+/// string if `name` is `None`. Used to produce the `__NAMESPACE__` literal.
 fn namespace_string(name: &Option<Name>) -> String {
     name.as_ref().map(Name::as_canonical).unwrap_or_default()
 }
 
+/// Constructs a fully-qualified name by prepending `namespace` if present and non-empty,
+/// otherwise returns `name` unchanged. Used to build `__CLASS__` and `__TRAIT__` literals.
 fn qualify(namespace: Option<&str>, name: &str) -> String {
     match namespace {
         Some(ns) if !ns.is_empty() => format!("{}\\{}", ns, name),

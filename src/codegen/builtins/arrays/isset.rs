@@ -16,8 +16,23 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
+/// The null sentinel value used to represent PHP `null` in scalar runtime representations.
+///
+/// This value is distinct from all valid PHP scalar values (integers, booleans, floats)
+/// and is used by the runtime to distinguish a loaded null from false, zero, or empty.
 const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 
+/// Emits PHP `isset(...)` for one or more arguments.
+///
+/// Returns `PhpType::Int` to indicate the result is always treated as integer (0 or 1).
+/// When multiple arguments are given, all must be set for the result to be true.
+///
+/// # Arguments
+/// * `_name` - Unused; included for parity with the builtin call signature dispatcher.
+/// * `args` - The PHP expressions to check for set-ness.
+/// * `emitter` - The assembly emitter.
+/// * `ctx` - Codegen context (labels, scope).
+/// * `data` - Data section for constants and runtime symbols.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -50,6 +65,12 @@ pub fn emit(
     Some(PhpType::Int)
 }
 
+/// Emits `isset` checks for a single argument expression.
+///
+/// Dispatches to the appropriate specialized emitter based on the expression kind:
+/// - `ArrayAccess` on array/object types → object offset or array element check
+/// - `ArrayAccess` on strings → string offset bounds check
+/// - Other expressions → null-sentinel or type-based check on the loaded value
 fn emit_isset_arg(
     arg: &Expr,
     emitter: &mut Emitter,
@@ -92,6 +113,13 @@ fn emit_isset_arg(
     emit_loaded_result_isset(&ty, emitter);
 }
 
+/// Emits an `isset` check on a value whose type is already known.
+///
+/// Uses the type's codegen representation to determine null-ness:
+/// - `Void`/`Never` → false (these types cannot hold values)
+/// - `Mixed` → runtime unbox and null tag check
+/// - `Int`/`Bool` → compare against the null sentinel
+/// - All other types → true (e.g., arrays, objects, resources always exist)
 fn emit_loaded_result_isset(ty: &PhpType, emitter: &mut Emitter) {
     match ty.codegen_repr() {
         PhpType::Void | PhpType::Never => emit_bool_result(false, emitter),
@@ -101,6 +129,11 @@ fn emit_loaded_result_isset(ty: &PhpType, emitter: &mut Emitter) {
     }
 }
 
+/// Emits an `isset` check for an indexed array element access.
+///
+/// Loads the array pointer and index, validates the index is non-negative and within
+/// bounds, then checks the element type to determine null-ness. Uses the null sentinel
+/// for `Mixed` elements and unconditionally returns true for other non-void types.
 fn emit_indexed_array_isset(
     array: &Expr,
     index: &Expr,
@@ -150,6 +183,16 @@ fn emit_indexed_array_isset(
     emitter.label(&done_label);
 }
 
+/// Computes the element pointer for an indexed array element on AArch64 or x86_64.
+///
+/// Adds the indexed array header size (24 bytes) to the array pointer to skip the
+/// length field and type tag, then loads the boxed `Mixed` element pointer at
+/// `element_base + index * 8`.
+///
+/// # Arguments
+/// * `array_reg` - Register holding the indexed array pointer (modified in place).
+/// * `index_reg` - Register holding the element index.
+/// * `emitter` - The assembly emitter.
 fn load_indexed_array_element_pointer(array_reg: &str, index_reg: &str, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -163,6 +206,10 @@ fn load_indexed_array_element_pointer(array_reg: &str, index_reg: &str, emitter:
     }
 }
 
+/// Emits an `isset` check for an associative array element access.
+///
+/// Normalizes the index expression to a string key, calls `__rt_hash_get` to probe
+/// the hash table, then checks whether the lookup succeeded and the value is not null.
 fn emit_assoc_array_isset(
     array: &Expr,
     index: &Expr,
@@ -190,6 +237,13 @@ fn emit_assoc_array_isset(
     emit_hash_found_and_not_null(emitter, ctx);
 }
 
+/// Emits post-hash-lookup null check after `__rt_hash_get` returns.
+///
+/// Consumes the runtime return values from `__rt_hash_get`:
+/// - x86_64: `rax` = found flag, `rcx` = value tag
+/// - AArch64: `x0` = found flag, `x3` = value tag
+///
+/// Emits true when the key was found AND the value tag is not 8 (PHP null).
 fn emit_hash_found_and_not_null(emitter: &mut Emitter, ctx: &mut Context) {
     let false_label = ctx.next_label("isset_hash_false");
     let done_label = ctx.next_label("isset_hash_done");
@@ -213,6 +267,12 @@ fn emit_hash_found_and_not_null(emitter: &mut Emitter, ctx: &mut Context) {
     emitter.label(&done_label);
 }
 
+/// Emits the result of an `isset` check on a string offset expression.
+///
+/// After evaluating a string `ArrayAccess` expression (e.g., `$s[0]`), the string
+/// result registers contain the character (or null byte) and the length. This
+/// function returns true only when the length is non-zero, indicating a valid
+/// in-bounds offset was accessed.
 fn emit_string_offset_isset_result(emitter: &mut Emitter) {
     let (_, len_reg) = abi::string_result_regs(emitter);
     match emitter.target.arch {
@@ -228,6 +288,10 @@ fn emit_string_offset_isset_result(emitter: &mut Emitter) {
     }
 }
 
+/// Emits the result of an `isset` check on a `Mixed` runtime value.
+///
+/// Calls `__rt_mixed_unbox` to inspect the boxed `Mixed` payload tag. Returns true
+/// only when the tag is not 8 (PHP null).
 fn emit_mixed_result_not_null(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // inspect the boxed Mixed payload tag for PHP null
     match emitter.target.arch {
@@ -243,6 +307,11 @@ fn emit_mixed_result_not_null(emitter: &mut Emitter) {
     }
 }
 
+/// Emits the result of an `isset` check on a scalar (Int or Bool) runtime value.
+///
+/// Compares the scalar result register against the null sentinel and returns true
+/// only when they differ, indicating the value is not PHP null. On AArch64 uses
+/// `x9` as scratch; on x86_64 uses `r10`.
 fn emit_scalar_result_not_null(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -259,6 +328,10 @@ fn emit_scalar_result_not_null(emitter: &mut Emitter) {
     }
 }
 
+/// Emits a constant boolean result for `isset`.
+///
+/// Materializes `value` as an integer (1 for true, 0 for false) into the canonical
+/// integer result register (`x0` on AArch64, `rax` on x86_64).
 fn emit_bool_result(value: bool, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {

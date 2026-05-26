@@ -18,6 +18,24 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `arsort` builtin, which sorts an associative array by values
+/// in descending order while maintaining key-to-value associations.
+///
+/// Inputs:
+/// - `args[0]`: the array expression to sort (mutated in place)
+/// - `emitter`: target assembly emitter
+/// - `ctx`: codegen context (carries variable layout, ownership state)
+/// - `data`: data section for embedded literals
+///
+/// Behavior:
+/// - Evaluates the array expression and captures its type.
+/// - Prepares the array for mutation via COW (copy-on-write) if needed.
+/// - Stores the array pointer back to the caller-side storage for ref-like semantics.
+/// - Calls `__rt_arsort` to perform the sort in-place.
+///
+/// Returns `Some(PhpType::Void)` on success.
+///
+/// Note: `_name` is unused; the catalog resolves the builtin by canonical name.
 pub fn emit(
     _name: &str,
     args: &[Expr],

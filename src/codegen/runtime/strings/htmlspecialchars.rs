@@ -11,8 +11,18 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// htmlspecialchars: replace &, ", ', <, > with HTML entities.
-/// Input: x1/x2=string. Output: x1/x2=result in concat_buf.
+/// Emits the `__rt_htmlspecialchars` runtime helper for ARM64.
+///
+/// Replaces HTML-sensitive characters with their entity equivalents:
+/// `&` → `&amp;`, `"` → `&quot;`, `'` → `&#039;`, `<` → `&lt;`, `>` → `&gt;`.
+///
+/// # ABI (ARM64)
+/// - **Input**: `x1` = source string pointer, `x2` = source byte length
+/// - **Output**: `x1` = result pointer in `_concat_buf`, `x2` = result byte length
+/// - Writes into `_concat_buf`, advances `_concat_off` by the produced length.
+///
+/// # PHP compatibility
+/// Single-quote escape uses `&#039;` (numeric entity) to match PHP's default `ENT_QUOTES` behavior.
 pub fn emit_htmlspecialchars(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_htmlspecialchars_linux_x86_64(emitter);
@@ -139,6 +149,15 @@ pub fn emit_htmlspecialchars(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits the `__rt_htmlspecialchars` runtime helper for Linux x86_64.
+///
+/// Replaces HTML-sensitive characters with their entity equivalents:
+/// `&` → `&amp;`, `"` → `&quot;`, `'` → `&#039;`, `<` → `&lt;`, `>` → `&gt;`.
+///
+/// # ABI (x86_64 System V)
+/// - **Input**: `rax` = source string pointer, `rdx` = source byte length
+/// - **Output**: `rax` = result pointer in `_concat_buf`, `rdx` = result byte length
+/// - Writes into `_concat_buf`, advances `_concat_off` by the produced length.
 fn emit_htmlspecialchars_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: htmlspecialchars ---");

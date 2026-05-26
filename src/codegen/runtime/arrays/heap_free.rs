@@ -11,20 +11,26 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Magic high-word marker identifying valid x86_64 heap blocks. Stored in the
+/// upper 32 bits of the heap kind field to distinguish owned heap payloads from
+/// foreign/static pointers passed to `heap_free_safe`.
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
-/// heap_free: return a heap block to the free list.
-/// The block header (16 bytes before user pointer) contains the block size,
-/// refcount, and uniform heap kind metadata.
+/// Emits `__rt_heap_free` and `__rt_heap_free_safe` runtime helpers.
 ///
-/// Optimization: if the block is at the END of the heap (most recently
-/// bump-allocated), just decrement the bump pointer instead of adding to
-/// the free list. This makes .= loops O(1) with zero fragmentation.
+/// `__rt_heap_free(x0)` returns a heap block to the free list. The block header
+/// (16 bytes before user pointer) contains block size, refcount, and heap kind.
 ///
-/// Otherwise, small blocks are cached in segregated bins while larger blocks
-/// stay in the ordered free list that still coalesces and trims the heap tail.
-/// Free block layout: [size:4][refcnt:4][kind:8][next_ptr:8][...unused...]
-/// Input: x0 = user pointer (as returned by heap_alloc)
+/// Optimization: if the block is at the END of the heap (most recently bump-allocated),
+/// just decrement the bump pointer instead of adding to the free list. This makes free
+/// loops O(1) with zero fragmentation.
+///
+/// Otherwise, small blocks (≤64 bytes payload) go into segregated size-class bins.
+/// Larger blocks join the ordered coalescing free list.
+///
+/// Input: `x0` = user pointer (as returned by `heap_alloc`)
+///
+/// ABI: `x0` is callee-saved where needed; all other registers are scratch.
 pub fn emit_heap_free(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_heap_free_linux_x86_64(emitter);
@@ -257,6 +263,17 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return without freeing
 }
 
+/// Emits the x86_64-specific portion of `__rt_heap_free` and `__rt_heap_free_safe`.
+///
+/// Mirrors the ARM64 `emit_heap_free` logic for the x86_64 SYSV ABI:
+/// - Validates pointer is a live heap block via the `X86_64_HEAP_MAGIC_HI32` marker
+/// - Bump-reset for tail blocks (O(1))
+/// - Segregated small-bin cache for ≤64-byte payloads
+/// - Ordered coalescing free list for larger blocks
+/// - Optional payload poisoning and debug validation when `_heap_debug_enabled`
+///
+/// Input: `rax` = user pointer
+/// Output: `rax` preserved through the free path; all other scratch registers are clobbered.
 fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     let double_free_msg = "Fatal error: heap debug detected double free\n";
 

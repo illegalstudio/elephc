@@ -16,6 +16,23 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits inline assembly for PHP `abs($value)`.
+///
+/// # Arguments
+/// - `_name`: Unused; the caller guarantees this is `"abs"`.
+/// - `args`: Must contain exactly one expression — the numeric operand.
+/// - `emitter`: Write instruction stream here.
+/// - `ctx`: Variable/layout context; `emit_expr` may allocate temps or load values.
+/// - `data`: Data section for any literal payloads.
+///
+/// # Returns
+/// `Some(PhpType::Int)` if the operand is or promotes to integer, `Some(PhpType::Float)` otherwise.
+/// Returns `None` only if `emit_expr` returns `None` (e.g. unsupported expression type).
+///
+/// # Codegen behavior
+/// - Float: uses IEEE-754 sign-bit masking via `fabs` (AArch64) or integer register tricks (x86_64).
+/// - Integer: uses branchless two's-complement conditional-negate sequence.
+/// - The result type must stay consistent with the type inferrer's expectations in the caller.
 pub fn emit(
     _name: &str,
     args: &[Expr],

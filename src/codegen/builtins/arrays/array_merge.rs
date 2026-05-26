@@ -17,6 +17,29 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `array_merge` builtin.
+///
+/// Combines two PHP array operands into a single merged array at runtime.
+/// The returned `PhpType` reflects the first operand's inner type, or `Array(Int)`
+/// when the first operand is a scalar.
+///
+/// # Arguments
+/// * `_name` — unused, present to match the builtin emitter signature
+/// * `args` — two PHP expressions: `[0]` is the first array, `[1]` is the second
+/// * `emitter` — target-specific assembly emitter
+/// * `ctx` — codegen context (frame layout, variables, class metadata)
+/// * `data` — data section for relocations and static data
+///
+/// # ABI behavior
+/// * **x86_64**: pushes first array pointer in `rax` to the stack, evaluates second
+///   array into `rax`, then moves pointers into `rdi`/`rsi` for the runtime call.
+/// * **ARM64**: pushes first array pointer to the stack, evaluates second into `x0`,
+///   then loads both pointers into `x0`/`x1` for the runtime call.
+///
+/// # Runtime helpers
+/// * `__rt_array_merge` — merges two scalar/indexed arrays (no refcount management)
+/// * `__rt_array_merge_refcounted` — merges arrays with refcounted elements, retaining
+///   borrowed heap references
 pub fn emit(
     _name: &str,
     args: &[Expr],

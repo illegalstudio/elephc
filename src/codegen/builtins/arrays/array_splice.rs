@@ -19,6 +19,31 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `array_splice($array, $offset, $length, $replacement)` builtin call.
+///
+/// Removes the portion of `$array` starting at `$offset` (negative = from end) and
+/// optionally replaces it with `$replacement`. The array is mutated in place (ref-like
+/// COW semantics). Returns the removed elements as a new indexed array.
+///
+/// ## COW semantics
+/// - `emit_ensure_unique_arg` guarantees `$array` is uniquely held before mutation.
+/// - `emit_store_mutating_arg` writes the mutated array pointer back to the caller's
+///   storage slot so the caller sees the change.
+///
+/// ## Argument order
+/// - Args are evaluated in source order; temporaries are saved on the stack so the
+///   array pointer is preserved across offset/length/replacement evaluation.
+/// - On x86_64: arguments arrive in `rdi`, `rsi`, `rdx`; on ARM64: `x0`, `x1`, `x2`.
+/// - `-1` for `$length` signals "remove until end" (handled by the runtime helper).
+///
+/// ## Runtime helpers
+/// - `__rt_array_splice` for non-refcounted (scalar) arrays.
+/// - `__rt_array_splice_refcounted` for refcounted arrays (inner element type is refcounted).
+///
+/// ## Return type
+/// Returns `PhpType::Array` wrapping the inner type of `$array` (preserves element type
+/// for non-refcounted case; `PhpType::Int` fallback for the removed-elements return
+/// when the original type is unknown, matching PHP's `array_splice` returning `array`).
 pub fn emit(
     _name: &str,
     args: &[Expr],

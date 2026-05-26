@@ -22,6 +22,9 @@ const STATIC_PROP_PRIVATE_ACCESS_LABEL: &str = "_static_prop_private_access_msg"
 const STATIC_PROP_PRIVATE_ACCESS_MSG: &str =
     "Fatal error: Cannot access private static property\n";
 
+/// A single dispatch branch for a redeclared static property.
+/// Tracks the runtime class id, the class that actually declares the property,
+/// and whether the current context is forbidden from accessing it (private visibility).
 #[derive(Clone)]
 struct StaticPropertyBranch {
     class_id: u64,
@@ -29,6 +32,12 @@ struct StaticPropertyBranch {
     private_inaccessible: bool,
 }
 
+/// Emits the static property access sequence for a given receiver and property name.
+///
+/// Late-bound receiver resolution uses the forwarded `__elephc_called_class_id` or `$this`
+/// to determine the declaring class at runtime when `StaticReceiver::Static` is used.
+/// For static receivers without redeclarations, emits a direct symbol load.
+/// Returns the declared `PhpType` of the property.
 pub(super) fn emit_static_property_access(
     receiver: &StaticReceiver,
     property: &str,
@@ -72,6 +81,12 @@ pub(super) fn emit_static_property_access(
     prop_ty
 }
 
+/// Emits a branch-dispatch sequence for late-bound static property access.
+///
+/// Generates an if-else chain: one branch per redeclared static property owner
+/// (ordered by class id), plus a fallback to `fallback_declaring_class`.
+/// Each branch checks the uninitialized sentinel for typed properties before loading.
+/// Terminates with a fatal if a private property is inaccessible from the current context.
 fn emit_dynamic_load_static_property_result(
     property: &str,
     class_id_reg: &str,
@@ -125,6 +140,15 @@ fn emit_dynamic_load_static_property_result(
     emitter.label(&done);
 }
 
+/// Loads the late-bound "called class id" into `dest` and returns `true`.
+///
+/// Preference order:
+/// 1. `__elephc_called_class_id` variable (forwarded from static method frame)
+/// 2. `$this` variable (use its runtime class id for late static binding)
+/// 3. Neither available → returns `false` and `dest` is unchanged.
+///
+/// Used by dynamic static property dispatch to determine which class's
+/// redeclared property slot to access at runtime.
 fn emit_called_class_id_into(emitter: &mut Emitter, ctx: &Context, dest: &str) -> bool {
     if let Some(var) = ctx.variables.get("__elephc_called_class_id") {
         abi::load_at_offset(emitter, abi::int_result_reg(emitter), var.stack_offset); // load the forwarded called-class id from the current static method frame
@@ -143,6 +167,10 @@ fn emit_called_class_id_into(emitter: &mut Emitter, ctx: &Context, dest: &str) -
     true
 }
 
+/// Emits a compare-and-branch instruction for a specific class id.
+///
+/// Compares `class_id_reg` (runtime called class id) against `class_id`.
+/// On AArch64 emits `cmp`/`b.eq`; on x86_64 emits `cmp`/`je`.
 fn emit_branch_if_class_id_matches(
     emitter: &mut Emitter,
     class_id_reg: &str,
@@ -163,6 +191,8 @@ fn emit_branch_if_class_id_matches(
     }
 }
 
+/// Emits an unconditional jump to `label`.
+/// AArch64 uses `b`; x86_64 uses `jmp`.
 fn emit_jump(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -174,6 +204,8 @@ fn emit_jump(emitter: &mut Emitter, label: &str) {
     }
 }
 
+/// Returns the scratch register used to hold a class id during static property dispatch.
+/// AArch64: `x13`; x86_64: `r13`.
 fn class_id_work_reg(emitter: &Emitter) -> &'static str {
     match emitter.target.arch {
         Arch::AArch64 => "x13",
@@ -181,6 +213,8 @@ fn class_id_work_reg(emitter: &Emitter) -> &'static str {
     }
 }
 
+/// Returns the scratch register used to hold the immediate class id in branch comparisons.
+/// AArch64: `x14`; x86_64: `r14`.
 fn class_id_compare_reg(emitter: &Emitter) -> &'static str {
     match emitter.target.arch {
         Arch::AArch64 => "x14",
@@ -188,6 +222,13 @@ fn class_id_compare_reg(emitter: &Emitter) -> &'static str {
     }
 }
 
+/// Collects all redeclared static property branches for a late-bound static receiver.
+///
+/// Only applies when `receiver` is `StaticReceiver::Static` and the current class context
+/// is set. Walks the class hierarchy from the current class, collecting descendants that
+/// redeclare the property with a different declaring class. Private properties that the
+/// current context cannot access are marked `private_inaccessible`.
+/// Returns branches sorted and deduplicated by `class_id`.
 fn dynamic_static_property_branches(
     receiver: &StaticReceiver,
     property: &str,
@@ -227,6 +268,8 @@ fn dynamic_static_property_branches(
     branches
 }
 
+/// Returns `true` if `class_name` is `ancestor` or a descendant of it.
+/// Walks the parent chain via `ctx.classes`.
 fn is_same_or_descendant(class_name: &str, ancestor: &str, ctx: &Context) -> bool {
     let mut cursor = Some(class_name);
     while let Some(name) = cursor {
@@ -241,6 +284,16 @@ fn is_same_or_descendant(class_name: &str, ancestor: &str, ctx: &Context) -> boo
     false
 }
 
+/// Resolves a static property receiver and property name to class metadata.
+///
+/// Translates `StaticReceiver` variants to concrete class names:
+/// - `Named` → the specified class
+/// - `Self_` / `Static` → the current class from `ctx`
+/// - `Parent` → the parent of the current class
+///
+/// Returns `None` if no class context is available, the class is undefined,
+/// or the property does not exist on that class. On success returns
+/// `(class_name, declaring_class, prop_ty)`.
 pub(crate) fn resolve_static_property(
     receiver: &StaticReceiver,
     property: &str,
@@ -304,6 +357,11 @@ pub(crate) fn resolve_static_property(
     Some((class_name, declaring_class, prop_ty))
 }
 
+/// Emits a fatal error and terminates the process when a private static property
+/// cannot be accessed due to visibility rules.
+///
+/// Writes a fixed diagnostic string to stderr and exits with status 1.
+/// Target-specific: AArch64 uses `adrp`/`add-lo12` + syscall; x86_64 uses direct register setup + syscall.
 fn emit_private_static_property_access_fatal(emitter: &mut Emitter) {
     let len = STATIC_PROP_PRIVATE_ACCESS_MSG.len();
     match emitter.target.arch {
@@ -329,6 +387,10 @@ fn emit_private_static_property_access_fatal(emitter: &mut Emitter) {
     }
 }
 
+/// Returns `true` if `declaring_class` has an explicit declared type for `property`.
+///
+/// Checks whether `property` appears in `class_info.declared_static_properties`,
+/// indicating a typed static property that requires the uninitialized sentinel guard.
 fn static_property_has_declared_type(
     declaring_class: &str,
     property: &str,
@@ -339,6 +401,11 @@ fn static_property_has_declared_type(
         .is_some_and(|class_info| class_info.declared_static_properties.contains(property))
 }
 
+/// Emits a guard that checks the typed-property sentinel before loading.
+///
+/// Loads the sentinel value and compares it against the property's current value.
+/// Skips the load and jumps to `initialized_label` if the property is already initialized.
+/// Otherwise calls `emit_uninitialized_static_property_fatal` and terminates.
 fn emit_uninitialized_static_property_guard(
     class_name: &str,
     property: &str,
@@ -366,6 +433,12 @@ fn emit_uninitialized_static_property_guard(
     emitter.label(&initialized_label);
 }
 
+/// Emits a fatal error and terminates the process when a typed static property
+/// is accessed before initialization.
+///
+/// Formats the diagnostic message with the class and property name,
+/// adds it to the data section as a static string, writes it to stderr,
+/// and exits with status 1. Target-specific register sequences apply.
 fn emit_uninitialized_static_property_fatal(
     class_name: &str,
     property: &str,

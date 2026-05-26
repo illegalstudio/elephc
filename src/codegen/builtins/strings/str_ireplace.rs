@@ -16,6 +16,26 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for PHP's `str_ireplace` builtin, which performs case-insensitive
+/// string replacement across all occurrences.
+///
+/// # Arguments
+/// * `_name` — the builtin function name (unused, dispatch already happened)
+/// * `args` — `[search, replacement, subject]` expressions to evaluate
+/// * `emitter` — target-aware assembly emitter
+/// * `ctx` — codegen context with variable layout and class metadata
+/// * `data` — data section for relocatable constants and string literals
+///
+/// # Returns
+/// `Some(PhpType::Str)` indicating the result is a PHP string.
+///
+/// # ABI details
+/// Arguments are passed to `__rt_str_ireplace` via register pairs: x1/x2 or
+/// rax/rdx hold pointer/length for each string argument in order (search,
+/// replacement, subject). ARM64 uses x1,x2 and x5,x6 for the first two and
+/// third args respectively; x86_64 uses rdi,rsi and rcx,r8. The helper
+/// allocates and returns a new PHP string; callers must treat the return
+/// pointer/length as an owned runtime value.
 pub fn emit(
     _name: &str,
     args: &[Expr],

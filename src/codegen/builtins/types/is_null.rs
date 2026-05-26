@@ -16,6 +16,23 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits PHP `is_null($value)` builtin call.
+///
+/// Inspects the runtime value of `args[0]` and sets the integer result register
+/// to 1 (true) if the value is null, or 0 (false) otherwise.
+///
+/// For `Mixed` or `Union` types, peels nested mixed wrappers via `__rt_mixed_unbox`
+/// before testing the null sentinel (runtime tag 8). For scalar types, directly
+/// compares against the null sentinel (all-bits-set except LSB).
+///
+/// # Arguments
+/// - `args[0]`: the expression to check for null
+/// - `emitter`: assembly emitter
+/// - `ctx`: codegen context (variable layout, ownership state)
+/// - `data`: data section for relocations
+///
+/// # Returns
+/// `Some(PhpType::Bool)` since the result is always a PHP boolean.
 pub fn emit(
     _name: &str,
     args: &[Expr],

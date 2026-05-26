@@ -10,6 +10,10 @@
 
 use crate::codegen::emit::Emitter;
 
+/// Emits the top-level `__rt_json_validate` entry point and all sub-helpers.
+/// Publishes `_json_validate_ptr` / `_json_validate_len`, initializes depth to 0,
+/// skips leading whitespace, validates exactly one JSON value, and checks that the
+/// cursor reaches the end of input. Returns 1 in `rax` on success, 0 on failure.
 pub(super) fn emit(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_validate ---");
@@ -63,6 +67,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emit_object_parser_x(emitter);
 }
 
+/// Emits `__rt_json_validate_skip_ws_x`: advances `rcx` (cursor) past RFC 8259
+/// whitespace (space, tab, LF, CR) until a non-whitespace byte or end of input.
+/// Updates `_json_validate_idx` on exit.
 fn emit_skip_ws_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_skip_ws_x");
     emitter.instruction("push rbp");                                            // preserve or restore JSON validator scratch state
@@ -92,6 +99,9 @@ fn emit_skip_ws_x(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 }
 
+/// Emits `__rt_json_validate_value_x`: peeks the byte at the current cursor,
+/// dispatching to the appropriate literal/container helper based on RFC 8259
+/// production rules. Returns 1 in `rax` on success, 0 on propagate/failure.
 fn emit_value_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_value_x");
     emitter.instruction("push rbp");                                            // preserve or restore JSON validator scratch state
@@ -166,6 +176,9 @@ fn emit_value_x(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 }
 
+/// Emits a literal-match helper (e.g. `__rt_json_validate_match_true_x`).
+/// Validates `lit` (e.g. "true" → ['t','r','u','e']) at the current cursor.
+/// On mismatch or short input jumps to a syntax-error path; on success returns 1.
 fn emit_match_literal_x(emitter: &mut Emitter, suffix: &str, lit: &[char]) {
     let label = format!("__rt_json_validate_match_{}_x", suffix);
     let fail_label = format!("__rt_json_validate_match_{}_fail_x", suffix);
@@ -198,6 +211,10 @@ fn emit_match_literal_x(emitter: &mut Emitter, suffix: &str, lit: &[char]) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 }
 
+/// Emits `__rt_json_validate_string_x`: validates a RFC 8259 string literal.
+/// Consumes the opening `"`, scans content (allowable chars or escape sequences),
+/// handles `\u`-escaped codepoints including UTF-16 surrogate pairs, and
+/// consumes the closing `"`. Jumps to syntax error on malformed input; returns 1.
 fn emit_string_parser_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_string_x");
     emitter.instruction("push rbp");                                            // preserve or restore JSON validator scratch state
@@ -362,6 +379,9 @@ fn emit_uhex_loop_x(emitter: &mut Emitter, suffix: &str, error_label: &str) {
     emitter.label(&format!("__rt_json_validate_uhex_done_{suffix}_x"));
 }
 
+/// Emits `__rt_json_validate_number_x`: validates a RFC 8259 number token.
+/// Handles an optional leading `-`, zero vs. non-zero integer, optional fractional
+/// part, and optional exponent. Returns 1 on success; syntax error on malformed input.
 fn emit_number_parser_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_number_x");
     emitter.instruction("push rbp");                                            // preserve or restore JSON validator scratch state
@@ -491,6 +511,10 @@ fn emit_number_parser_x(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 }
 
+/// Emits `__rt_json_validate_array_x`: validates a JSON array.
+/// Increments `_json_active_depth` and checks against `_json_depth_limit`.
+/// Parses elements recursively via `__rt_json_validate_value_x`, separated by `,`.
+/// Returns 1 on success; propagates 0 on element failure; syntax error on malformed.
 fn emit_array_parser_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_array_x");
     emitter.instruction("push rbp");                                            // preserve or restore JSON validator scratch state
@@ -568,6 +592,11 @@ fn emit_array_parser_x(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON validator helper
 }
 
+/// Emits `__rt_json_validate_object_x`: validates a JSON object.
+/// Increments `_json_active_depth` and checks against `_json_depth_limit`.
+/// Parses `"key": value` pairs recursively via `__rt_json_validate_string_x`
+/// and `__rt_json_validate_value_x`. Returns 1 on success; propagates 0 on
+/// failure; syntax error on malformed input.
 fn emit_object_parser_x(emitter: &mut Emitter) {
     emitter.label("__rt_json_validate_object_x");
     emitter.instruction("push rbp");                                            // preserve or restore JSON validator scratch state

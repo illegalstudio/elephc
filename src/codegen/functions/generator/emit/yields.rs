@@ -31,6 +31,14 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::runtime::generators::frame as gen_frame;
 
+/// Emits the suspension point for a plain `yield <expr>` statement.
+///
+/// Stores the computed key and value into `OFF_LAST_KEY` / `OFF_LAST_VALUE`
+/// via refcount-replace (previous occupants are decrefd; NULL is safe),
+/// bumps `state_idx` to `state_idx`, jumps to the common epilogue, then
+/// emits the resume label that `dispatcher::emit_resume` branches to on
+/// re-entry. If `clear_sent_on_resume` is true the `sent_value` slot is
+/// cleared at the resume label to prevent stale data on subsequent `next()`.
 pub(super) fn emit_yield(
     emitter: &mut Emitter,
     entry: &YieldEntry,
@@ -67,6 +75,10 @@ pub(super) fn emit_yield(
     }
 }
 
+/// Clears the generator frame's `sent_value` slot and releases the boxed
+/// Mixed pointer it held (NULL is safe). Called immediately after the
+/// resume label for `YieldAssign` variants so that a subsequent `next()`
+/// does not observe a stale pointer from a prior `send()`.
 fn emit_clear_sent_value(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -177,6 +189,9 @@ pub(super) fn emit_yield_from_generator(
     // Fall through to the caller's continuation of the outer body.
 }
 
+/// x86_64 implementation of `emit_yield_from_generator`. Identical logic
+/// to the ARM64 version but uses 64-bit register conventions (rax/rdi,
+/// QWORD PTR [r12 + off]) and the System V ABI call convention.
 fn emit_yield_from_generator_x86_64(
     emitter: &mut Emitter,
     source: &YieldFromSource,
@@ -239,13 +254,18 @@ fn emit_yield_from_generator_x86_64(
     }
     if owns_delegated_iter {
         emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", gen_frame::OFF_DELEGATED_ITER)); // load the owned inner generator before clearing delegation state
-        emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_DELEGATED_ITER)); // clear delegated_iter so future yields do not re-enter
+        emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_DELEGATED_ITER)); // clear delegated_iter so future yields don't re-enter
         emitter.instruction("call __rt_decref_any");                            // release the inner generator produced by yield-from's direct call
     } else {
         emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_DELEGATED_ITER)); // clear borrowed delegated_iter without releasing the local owner
     }
 }
 
+/// Stores the inner generator's return value into `slot_off` using the
+/// refcount-replace pattern. Called on exit from `yield from` delegation
+/// when the inner generator is exhausted. `slot_off` is either a local
+/// slot offset or `OFF_RETURN_VALUE` when the `yield from` itself is the
+/// top-level expression of a function body.
 fn emit_store_yield_from_return(emitter: &mut Emitter, slot_off: usize) {
     emit_replace_mixed_slot(emitter, slot_off, |em| match em.target.arch {
         Arch::AArch64 => {
@@ -261,7 +281,8 @@ fn emit_store_yield_from_return(emitter: &mut Emitter, slot_off: usize) {
 
 /// After the resume label of a `YieldAssign` whose LHS is an Int slot,
 /// unbox the int payload that `Generator::send($v)` parked in the
-/// frame's `sent_value` slot and store it into the local.
+/// frame's `sent_value` slot and store it into the local. If no value
+/// was sent (i.e., `next()` was used), the local receives 0.
 pub(super) fn emit_yield_assign_unbox_int(
     emitter: &mut Emitter,
     local_idx: usize,
@@ -274,7 +295,7 @@ pub(super) fn emit_yield_assign_unbox_int(
 
     let null_lbl = ctx.fresh_label("send_null");
     let done_lbl = ctx.fresh_label("send_done");
-    emitter.instruction(&format!("ldr x20, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // load the boxed sent_value pointer
+    emitter.instruction(&format!("ldr x20, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // x20 = boxed sent_value pointer
     emitter.instruction("mov x0, x20");                                         // pass sent_value to the mixed unbox helper
     emitter.instruction(&format!("cbz x0, {}", null_lbl));                      // jump to null path when no send was performed
     emitter.instruction("bl __rt_mixed_unbox");                                 // x1 = unboxed low payload
@@ -289,6 +310,9 @@ pub(super) fn emit_yield_assign_unbox_int(
     emitter.instruction("bl __rt_decref_mixed");                                // release the consumed sent_value box (NULL is safe)
 }
 
+/// x86_64 implementation of `emit_yield_assign_unbox_int`. Unboxes the
+/// sent_value int payload and stores it into the local; if no value was
+/// sent the local receives 0. Uses the System V ABI (rax/rdi registers).
 fn emit_yield_assign_unbox_int_x86_64(
     emitter: &mut Emitter,
     local_idx: usize,
@@ -344,6 +368,10 @@ pub(super) fn emit_yield_assign_store_mixed(
     emitter.label(&done);
 }
 
+/// x86_64 implementation of `emit_yield_assign_store_mixed`. Transfers the
+/// boxed `sent_value` pointer into the target slot using a refcount-replace
+/// pattern on the System V ABI; NULL is safe for both the sent_value and the
+/// previous slot occupant.
 fn emit_yield_assign_store_mixed_x86_64(
     emitter: &mut Emitter,
     local_idx: usize,

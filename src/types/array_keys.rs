@@ -14,6 +14,14 @@ use crate::parser::ast::{Expr, ExprKind};
 
 use super::PhpType;
 
+/// Determines the normalized PHP type for an array key expression.
+///
+/// PHP integer-string key coercion: numeric strings like `"123"` become `PhpType::Int`
+/// when used as array keys. Float and boolean literals also coerce to integers.
+/// Non-numeric strings remain `PhpType::Str`. When `raw_ty` is `PhpType::Str` and the
+/// expression is not a string literal, returns `PhpType::Mixed` to indicate ambiguous key type.
+///
+/// Returns the key type to use during type checking and shape inference.
 pub(crate) fn normalized_array_key_type(expr: &Expr, raw_ty: PhpType) -> PhpType {
     match &expr.kind {
         ExprKind::IntLiteral(_) | ExprKind::BoolLiteral(_) | ExprKind::FloatLiteral(_) => {
@@ -34,6 +42,15 @@ pub(crate) fn normalized_array_key_type(expr: &Expr, raw_ty: PhpType) -> PhpType
     }
 }
 
+/// Returns true if a static array key forces hash-map (associative) storage in PHP.
+///
+/// An integer key forces hash storage unless it is exactly `0`.
+/// A string key forces hash storage if it is a valid PHP integer string and not `"0"`.
+/// Other expressions (variables, function calls, etc.) do not force hash storage
+/// and may use packed array optimization.
+///
+/// Used during array shape inference to determine whether a statically-known
+/// key requires associative lookup semantics.
 pub(crate) fn static_array_key_forces_hash_storage(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::IntLiteral(value) => *value != 0,
@@ -42,6 +59,12 @@ pub(crate) fn static_array_key_forces_hash_storage(expr: &Expr) -> bool {
     }
 }
 
+/// Merges two array key types from adjacent elements into a unified key type.
+///
+/// If both sides have the same type, returns that type. Otherwise returns `PhpType::Mixed`
+/// to indicate heterogeneous key types require associative storage.
+///
+/// Used when inferring array shape from initializer lists with multiple elements.
 pub(crate) fn merge_array_key_types(left: PhpType, right: PhpType) -> PhpType {
     if left == right {
         left
@@ -50,6 +73,13 @@ pub(crate) fn merge_array_key_types(left: PhpType, right: PhpType) -> PhpType {
     }
 }
 
+/// Infers the array key type from a value type when no explicit key is provided.
+///
+/// PHP uses this rule: `array_values()` on integers, booleans, or floats yields integer keys;
+/// strings yield `PhpType::Mixed` keys (ambiguous integer-string); other types preserve
+/// their own type as the key type.
+///
+/// Returns the key type for an array element when the key expression is absent.
 pub(crate) fn array_key_type_from_value_type(raw_ty: PhpType) -> PhpType {
     match raw_ty {
         PhpType::Int | PhpType::Bool | PhpType::Float => PhpType::Int,
@@ -58,6 +88,14 @@ pub(crate) fn array_key_type_from_value_type(raw_ty: PhpType) -> PhpType {
     }
 }
 
+/// Returns true if `value` is a PHP-valid integer array key.
+///
+/// A valid PHP integer string is a decimal integer (optionally signed) that fits in a signed
+/// 64-bit integer (`-9223372036854775808` to `9223372036854775807`). The string must contain
+/// no leading zeros (except `"0"` itself), no leading `+`, no whitespace, and only digits
+/// possibly prefixed by a single `-` or `+`.
+///
+/// Used to determine whether a string literal should be treated as an integer key.
 pub(crate) fn is_php_integer_array_key(value: &str) -> bool {
     if value == "0" {
         return true;
@@ -89,6 +127,14 @@ pub(crate) fn is_php_integer_array_key(value: &str) -> bool {
     digits.len() < limit.len() || (digits.len() == limit.len() && digits <= limit.as_bytes())
 }
 
+/// Parses a string literal as a PHP string-offset index, returning the integer value.
+///
+/// Accepts strings like `"42"`, `"+123"`, `"-7"`, with optional ASCII whitespace trimming.
+/// Returns `None` if the string is empty, contains non-digit characters (except leading `+`/`-`),
+/// or the parsed value overflows `i64`.
+///
+/// Used when lowering string offset access in codegen to determine if a literal offset
+/// can be treated as a static integer rather than requiring runtime parsing.
 pub(crate) fn parse_php_string_offset_literal(value: &str) -> Option<i64> {
     let trimmed = value.trim_matches(|ch: char| ch.is_ascii_whitespace());
     if trimmed.is_empty() {

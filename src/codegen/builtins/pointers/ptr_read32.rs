@@ -16,6 +16,8 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `ptr_read32` builtin: reads one 32-bit word through a pointer.
+/// Checks non-null; zero-extends to `PhpType::Int`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -17,6 +17,17 @@ use crate::parser::ast::Expr;
 use crate::types::PhpType;
 use super::stat_result::box_stat_string_or_false_result;
 
+/// Emits code for the PHP `filetype` builtin.
+///
+/// Evaluates the path argument, calls `__rt_filetype` to retrieve the filesystem
+/// type string (`"file"`, `"dir"`, `"link"`, etc.), boxes the result, and returns
+/// `PhpType::Mixed`. On failure (e.g., file not found), emits a PHP `false` sentinel.
+///
+/// - **args**: must contain exactly one path expression (checked by caller).
+/// - **emitter**: receives the evaluated path load, call to `__rt_filetype`, and box result.
+/// - **ctx**: carries variable layout and ownership state through codegen.
+/// - **data**: accumulates data-section entries for string literals and metadata.
+/// - **Returns**: `Some(PhpType::Mixed)` unconditionally; caller relies on runtime result.
 pub fn emit(
     _name: &str,
     args: &[Expr],

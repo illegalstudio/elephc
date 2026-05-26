@@ -10,7 +10,13 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// ltrim: strip whitespace from left. Adjusts x1 and x2.
+/// Emits the `__rt_ltrim` runtime helper for the current target.
+///
+/// dispatches to the target-specific emitter. On ARM64 uses x1 (pointer) and x2
+/// (length); on x86_64 uses rax (pointer) and rdx (length). Both registers are
+/// read and updated in place: on return, x1/rax points to the first non-whitespace
+/// byte and x2/rdx holds the remaining length. Trims space (0x20), tab (0x09),
+/// newline (0x0A), and carriage return (0x0D).
 pub fn emit_ltrim(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_ltrim_linux_x86_64(emitter);
@@ -43,6 +49,11 @@ pub fn emit_ltrim(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with adjusted x1 and x2
 }
 
+/// Emits the `__rt_ltrim` runtime helper for the x86_64 Linux target.
+///
+/// Reads rax (pointer) and rdx (length) in place. On return, rax points to the
+/// first non-whitespace byte and rdx holds the remaining length. Trims space (0x20),
+/// tab (0x09), newline (0x0A), and carriage return (0x0D).
 fn emit_ltrim_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ltrim ---");

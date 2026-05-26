@@ -16,6 +16,19 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `asin` builtin call with a single scalar argument, delegating to the
+/// platform's libc `asin` function. Integer operands are normalized into the floating-point
+/// result register before the call; floats are passed directly. Returns `PhpType::Float`.
+///
+/// # Arguments
+/// * `_name` - unused; kept for interface parity with other builtin emitters
+/// * `args` - must contain exactly one expression (the angle in radians)
+/// * `emitter` - drives instruction emission and exposes `target`
+/// * `ctx` - carries variable layout and ownership state
+/// * `data` - target data section for constants/literals
+///
+/// # Aborts
+/// Panics if `args` is empty or if `emitter.target` is an unsupported architecture.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -12,17 +12,9 @@ use crate::codegen::{emit::Emitter, platform::Arch};
 
 use super::modify_x86_64::emit_modify_linux_x86_64;
 
-/// File-modification helpers: touch / chmod / chown / chgrp / umask /
-/// ftruncate / fflush / fsync / fdatasync.
+/// Emits file-modification runtime helpers for ARM64 targets.
 ///
-/// All of these go through libc rather than the raw-syscall path used by
-/// `fs.rs`, because:
-/// - libc gives us a single ABI on both Darwin arm64 and Linux arm64 without
-///   needing additional `linux_transform` syscall remappings;
-/// - macOS lacks a `fdatasync` syscall, so we transparently fall back to
-///   `fsync` there;
-/// - `utimensat` (used by `__rt_touch`) is the modern portable API and avoids
-///   the legacy `utimes`/`utime` zoo.
+/// Dispatches to `emit_modify_linux_x86_64` on x86_64 Linux.
 pub fn emit_modify(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_modify_linux_x86_64(emitter);

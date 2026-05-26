@@ -16,6 +16,28 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Lowers a PHP `min()` call into target assembly.
+///
+/// Iterates arguments pairwise, pushing the current running minimum before evaluating
+/// the next candidate. After each candidate is evaluated, a target-specific comparison
+/// selects the smaller value back into the standard result register.
+///
+/// # Arguments
+/// * `_name` - Unused; present to match the builtin emitter signature.
+/// * `args`  - Non-empty slice of AST expressions passed to `min()`.
+/// * `emitter` - Code emitter for instruction emission and target information.
+/// * `ctx`    - Codegen context (variable layout, class metadata, etc.).
+/// * `data`   - Data section for embedded literal tables.
+///
+/// # Returns
+/// `Some(PhpType::Float)` if any argument is a float; `Some(PhpType::Int)` otherwise.
+/// Returns `None` only if `args` is empty (caller is responsible for validation).
+///
+/// # ABI constraints
+/// - ARM64: integer results in `x0`; float results in `d0`.
+/// - x86_64: integer results in `rax`; float results in `xmm0`.
+/// - Each comparison step preserves the running minimum on the stack or in a scratch
+///   register so the next candidate can be evaluated without clobbering it.
 pub fn emit(
     _name: &str,
     args: &[Expr],

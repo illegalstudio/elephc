@@ -27,6 +27,7 @@ enum Value {
 }
 
 impl Value {
+    /// Convert a Value to a string slice if it is a string variant.
     fn as_str(&self) -> Option<&str> {
         if let Value::Str(s) = self {
             Some(s.as_str())
@@ -35,6 +36,7 @@ impl Value {
         }
     }
 
+    /// Return true if the value is truthy according to PHP rules.
     fn truthy(&self) -> bool {
         match self {
             Value::Bool(b) => *b,
@@ -58,17 +60,20 @@ enum Flow {
     Unfoldable,
 }
 
+/// Interpreter for symbolically evaluating autoload closure bodies.
 struct Interpreter {
     vars: HashMap<String, Value>,
 }
 
 impl Interpreter {
+    /// Create a new interpreter with an empty variable map.
     fn new() -> Self {
         Interpreter {
             vars: HashMap::new(),
         }
     }
 
+    /// Execute a block of statements, returning the flow control result.
     fn exec_block(&mut self, stmts: &[Stmt]) -> Flow {
         for stmt in stmts {
             match self.exec_stmt(stmt) {
@@ -79,6 +84,7 @@ impl Interpreter {
         Flow::Continue
     }
 
+    /// Execute a single statement and return the resulting flow control.
     fn exec_stmt(&mut self, stmt: &Stmt) -> Flow {
         match &stmt.kind {
             StmtKind::Assign { name, value } => match self.eval(value) {
@@ -134,6 +140,7 @@ impl Interpreter {
         }
     }
 
+    /// Evaluate an expression to a Value, or return None if it cannot be folded.
     fn eval(&mut self, expr: &Expr) -> Option<Value> {
         match &expr.kind {
             ExprKind::StringLiteral(s) => Some(Value::Str(s.clone())),
@@ -180,6 +187,7 @@ impl Interpreter {
         }
     }
 
+    /// Evaluate a builtin function call, returning a Value if the builtin is supported.
     fn eval_builtin(&mut self, name: &str, args: &[Expr]) -> Option<Value> {
         match name {
             "str_replace" => {
@@ -362,10 +370,12 @@ fn fold_dirname(path: &str, levels: i64) -> Option<String> {
     Some(current)
 }
 
+/// Check if a path is readable (file or directory).
 fn is_readable_path(path: &Path) -> bool {
     fs::File::open(path).is_ok() || fs::read_dir(path).is_ok()
 }
 
+/// Convert a Value to a String representation.
 fn value_to_string(value: &Value) -> Option<String> {
     match value {
         Value::Str(s) => Some(s.clone()),

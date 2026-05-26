@@ -16,6 +16,13 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `tempnam(dir, prefix)` builtin call.
+///
+/// Evaluates `dir` (args[0]) first, then `prefix` (args[1]), marshaling both as
+/// string pairs into the runtime helper `__rt_tempnam`. On ARM64 the directory
+/// pair is saved/restored via the stack around the prefix evaluation; on x86_64
+/// it is preserved in `rax`/`rdx`. Returns `PhpType::Str` on success,
+/// or the caller handles PHP false-on-failure semantics.
 pub fn emit(
     _name: &str,
     args: &[Expr],

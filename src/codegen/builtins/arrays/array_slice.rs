@@ -16,6 +16,22 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `array_slice($array, $offset, $length)` builtin call.
+///
+/// Evaluates arguments in source order, materializes them into ABI register order,
+/// and calls `__rt_array_slice` (scalar) or `__rt_array_slice_refcounted` (refcounted
+/// elements) depending on the source array's element type. On x86_64 uses register-
+/// based argument passing; on ARM64 uses stack-based argument passing with x0–x2.
+/// A missing `$length` is signaled by passing -1 to request "until end of array".
+///
+/// # Arguments
+/// * `args[0]` — source array expression
+/// * `args[1]` — byte offset into the array
+/// * `args[2]` — optional slice length; absent means rest of array
+///
+/// # Returns
+/// `PhpType::Array` preserving the inner element type from the source array, or
+/// `PhpType::Array(Int)` when the source type is non-array (treated as integer-indexed).
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -11,8 +11,12 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// High 32 bits of the x86_64 Linux heap wrapper magic word.
+/// Stored in the uniform heap header's kind word; verified before mutating refcount state
+/// to distinguish foreign/static pointers from heap-backed array payloads.
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
+/// Emits the `__rt_decref_array` runtime helper.
 pub fn emit_decref_array(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_decref_array_linux_x86_64(emitter);
@@ -83,6 +87,10 @@ pub fn emit_decref_array(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_decref_array` runtime helper.
+///
+/// Uses the OS x86_64 ABI: array pointer in `rax`, preserves all caller-saved registers,
+/// and calls `__rt_gc_collect_cycles` / `__rt_array_free_deep` as needed.
 fn emit_decref_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: decref_array ---");

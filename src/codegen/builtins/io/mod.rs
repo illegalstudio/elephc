@@ -88,6 +88,21 @@ use crate::codegen::emit::Emitter;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Dispatches a PHP builtin call by name to its focused codegen emitter.
+///
+/// `name` must match a catalogued PHP builtin in the `io` category (e.g., `fopen`,
+/// `file_get_contents`, `copy`). The matching emitter receives the raw argument
+/// expressions and emits target-specific assembly for the call.
+///
+/// Returns `Some(PhpType)` with the return type on successful dispatch, or `None`
+/// if `name` is not a recognised io builtin.
+///
+/// # Arguments
+/// - `name`    — lowercase ASCII builtin name (case-insensitive per PHP semantics)
+/// - `args`    — parsed argument expressions from the call site
+/// - `emitter` — target-aware assembly emitter (controls instruction emission)
+/// - `ctx`     — shared codegen context (frame layout, locals, ownership)
+/// - `data`    — writable data section for relocations, string tables, and metadata
 pub fn emit(
     name: &str,
     args: &[Expr],

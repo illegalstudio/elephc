@@ -39,6 +39,11 @@ pub(crate) fn emit_json_encode_array_str(emitter: &mut Emitter) {
     emitter.instruction("b __rt_json_encode_array_dynamic");                    // tail-call the dispatcher-aware encoder so every element flows through __rt_json_encode_str
 }
 
+/// Emits x86_64 Linux machine code for `__rt_json_encode_array_str`.
+///
+/// Tail-calls `__rt_json_encode_array_dynamic` via `jmp` to reuse the
+/// dispatcher-aware encoder path. Identical runtime contract to the
+/// ARM64 fallback path in `emit_json_encode_array_str`.
 fn emit_json_encode_array_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_array_str ---");

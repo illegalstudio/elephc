@@ -31,6 +31,23 @@ mod termination;
 mod timings;
 mod types;
 
+/// Entry point for the `elephc` binary.
+///
+/// Collects command-line arguments, parses them into a `Config`, and delegates
+/// to the compile pipeline. Exits via `std::process::exit` if compilation fails
+/// (the pipeline handles fatal error reporting internally).
+///
+/// # Inputs
+/// - `std::env::args()`: OS-provided arguments, where `args[0]` is the program name.
+///
+/// # Outputs
+/// - Returns `()` on successful compilation (pipeline handles output binary creation).
+/// - Never returns on fatal error (calls `std::process::exit` internally).
+///
+/// # Side effects
+/// - Reads source files and writes the compiled binary alongside the source.
+/// - Emits warnings/errors to stderr.
+/// - May create temporary files during assembly and linking.
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let config = cli::parse_args(&args);

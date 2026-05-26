@@ -16,6 +16,7 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
+/// Emits integer offset computation for string index expressions with integer-like string literal support.
 pub(super) fn emit_string_offset_index(
     index: &Expr,
     emitter: &mut Emitter,

@@ -16,6 +16,31 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `max()` builtin with scalar numeric arguments.
+///
+/// Iterates over all arguments, maintaining the current maximum in the ABI result
+/// register. Each subsequent argument is evaluated and compared, with the larger
+/// value written back into the result register. Float arguments trigger promotion
+/// of all prior integer candidates before comparison.
+///
+/// # Arguments
+/// * `_name` — unused; present for dispatcher uniformity with other builtins
+/// * `args` — evaluated left-to-right; must contain at least one expression
+/// * `emitter` — receives the comparison/selection instructions; carries target arch
+/// * `ctx` — variable and type context for expression emission
+/// * `data` — data section for any literals or runtime constants
+///
+/// # Returns
+/// `Some(PhpType::Float)` if any argument was a float (all prior ints promoted);
+/// `Some(PhpType::Int)` if all arguments were integers.
+///
+/// # ABI behavior
+/// * AArch64: integer results in `x0`; floats in `d0`; scratch register `x1`/`d1`
+/// * X86_64: integer results in `rax`; floats in `xmm0`; scratch register `r9`/`xmm1`
+///
+/// # Side effects
+/// * Stack: one 16-byte slot is pushed per iteration to preserve the running maximum
+///   while the next candidate is evaluated; pops are architecture-aware (int vs float)
 pub fn emit(
     _name: &str,
     args: &[Expr],

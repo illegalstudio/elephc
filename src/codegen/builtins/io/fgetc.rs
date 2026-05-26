@@ -18,6 +18,21 @@ use crate::types::PhpType;
 
 use super::stream_arg::emit_stream_fd_arg;
 
+/// Emits code for the PHP `fgetc` builtin.
+///
+/// Reads exactly one byte from a stream resource via the `__rt_fgetc` runtime
+/// helper. The result is boxed as `PhpType::Mixed` to accommodate PHP's return
+/// type: a one-byte string on success, or `false` on EOF/read failure.
+///
+/// # Arguments
+/// * `name` — builtin name (unused, reserved for future overload resolution)
+/// * `args` — call arguments; `args[0]` must be a stream resource
+/// * `emitter` — target for emitted instructions
+/// * `ctx` — codegen context (label generation, target info)
+/// * `data` — data section for relocations
+///
+/// # Returns
+/// Always `Some(PhpType::Mixed)`.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -35,6 +50,18 @@ pub fn emit(
     Some(PhpType::Mixed)
 }
 
+/// Boxes the raw `fgetc` result into a `Mixed` runtime value.
+///
+/// After `__rt_fgetc` returns (x0/x1 = pointer/length, x2/rdx = byte count),
+/// this function branches on whether a byte was read:
+/// - **AArch64**: `x2 == 0` means EOF/failure → box `false`. Otherwise box a
+///   one-byte string (`tag = 1`) via `__rt_mixed_from_value`.
+/// - **x86_64**: `rdx == 0` means EOF/failure → box `false`. Otherwise `rax`
+///   holds the pointer and `rdx` holds the length; box as string (`eax = 1`).
+///
+/// # Arguments
+/// * `emitter` — target for emitted instructions
+/// * `ctx` — codegen context (label generation)
 fn box_fgetc_result(emitter: &mut Emitter, ctx: &mut Context) {
     let false_label = ctx.next_label("fgetc_false");
     let done_label = ctx.next_label("fgetc_done");

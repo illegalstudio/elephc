@@ -17,6 +17,26 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `array_search($needle, $array)` builtin call.
+///
+/// For associative arrays: performs inline insertion-order linear search, comparing each
+/// entry's value against the needle. Returns the matching key as `PhpType::Mixed` — integer
+/// keys use tag 0, string keys use tag 1. Not-found returns bool false (tag 3).
+///
+/// For indexed arrays: calls the `__rt_array_search` runtime helper, then boxes the raw
+/// integer result (found index ≥ 0 or not-found sentinel -1) into `PhpType::Mixed` so that
+/// index 0 remains distinguishable from false.
+///
+/// Stack layout (top to bottom) for associative path:
+///   sp+0:  iter_index (16 bytes)
+///   sp+16: needle (16 bytes)
+///   sp+32: hash_table_ptr (16 bytes)
+///
+/// Arguments:
+///   * `args[0]` — the needle to search for
+///   * `args[1]` — the array to search in (evaluated first to determine array type)
+///
+/// Returns: `Some(PhpType::Mixed)` always (PHP array_search returns int|false, which maps to Mixed).
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -268,6 +288,14 @@ pub fn emit(
     Some(PhpType::Mixed)
 }
 
+/// Boxes a raw integer index result from `__rt_array_search` into a `PhpType::Mixed` value.
+///
+/// Takes a raw result: index ≥ 0 means found (box as integer tag 0), -1 means not-found
+/// (box as bool false tag 3). Uses conditional branches and `__rt_mixed_from_value` to produce
+/// the correct boxed Mixed representation. The distinction between index 0 and false is
+/// preserved by the boxing scheme.
+///
+/// AArch64: result in x0; X86_64: result in rax.
 fn box_index_search_result(emitter: &mut Emitter, ctx: &mut Context) {
     let found_label = ctx.next_label("asearch_index_found");
     let end_label = ctx.next_label("asearch_index_done");

@@ -12,9 +12,24 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// resource_to_string: format a native resource payload as PHP's display marker.
-/// Input: x0 / rax = native resource payload.
-/// Output: x1/x2 or rax/rdx = "Resource id #N".
+/// Formats a native resource payload as the PHP display string "Resource id #N".
+///
+/// Uses the global concat buffer to build the result: copies the 13-byte prefix
+/// `"Resource id #"`, then appends the decimal digits of `(payload + 1)`. Updates
+/// `_concat_off` to reflect the total bytes written (prefix + digits). Returns the
+/// final string pointer in x1 and length in x2.
+///
+/// # Inputs
+/// - `x0 / rax`: native resource payload (0-based internal identifier)
+///
+/// # Outputs
+/// - `x1 / rax`: pointer to the formatted string inside `_concat_buf`
+/// - `x2 / rdx`: total byte length (13 + digit count)
+///
+/// # ABI details
+/// - Clobbers x9–x15 on ARM64; r8–r11 on x86_64.
+/// - Calls `__rt_itoa` which writes digits directly into `_concat_buf` starting at the
+///   current `_concat_off`, then this function copies them to the final output position.
 pub fn emit_resource_to_string(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_resource_to_string_linux_x86_64(emitter);
@@ -74,6 +89,8 @@ pub fn emit_resource_to_string(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the formatted resource string
 }
 
+/// x86_64-specific implementation of `emit_resource_to_string` for the Linux ABI.
+/// Mirrors the ARM64 logic: prefix copy loop → `__rt_itoa` call → digit copy loop.
 fn emit_resource_to_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: resource_to_string ---");

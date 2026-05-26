@@ -10,10 +10,22 @@
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
-/// str_loose_eq: compare two PHP strings with loose-comparison semantics.
-/// Input:  AArch64 x1/x2=left, x3/x4=right
-///         x86_64 rdi/rsi=left, rdx/rcx=right
-/// Output: integer result register = 1 when loosely equal, 0 otherwise
+/// Emits the `__rt_str_loose_eq` runtime routine.
+/// Compares two PHP strings using loose equality (== semantics).
+///
+/// Input registers:
+///   - ARM64: x1/x2 = left (ptr, len), x3/x4 = right (ptr, len)
+///   - x86_64: rdi/rsi = left (ptr, len), rdx/rcx = right (ptr, len)
+///
+/// Both operands are first parsed as PHP numeric strings via `__rt_str_to_number`.
+/// If both parse as numeric, their parsed float values are compared for equality.
+/// If either operand is non-numeric, falls back to byte-for-byte comparison via `__rt_str_eq`.
+///
+/// Output:
+///   - ARM64: x0 = 1 if loosely equal, 0 otherwise
+///   - x86_64: rax = 1 if loosely equal, 0 otherwise
+///
+/// Calls: `__rt_str_to_number` (twice) and `__rt_str_eq` (on fallback path).
 pub fn emit_str_loose_eq(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_str_loose_eq_linux_x86_64(emitter);
@@ -54,6 +66,16 @@ pub fn emit_str_loose_eq(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the loose string equality result in x0
 }
 
+/// x86_64 Linux implementation of the `__rt_str_loose_eq` runtime routine.
+/// Identical logic to the ARM64 path but uses the System V AMD64 ABI:
+///   - rdi/rsi = left (ptr, len), rdx/rcx = right (ptr, len)
+///   - rax = result (1 if loosely equal, 0 otherwise)
+///
+/// Saves the left string in `[rbp - 8..16]` and right string in `[rbp - 24..32]`
+/// to preserve them across the two `__rt_str_to_number` calls.
+/// Uses `[rbp - 40]` for the left numeric-flag and `[rbp - 48]` for the left numeric value.
+///
+/// Falls back to `__rt_str_eq` when either operand is non-numeric.
 fn emit_str_loose_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_loose_eq ---");

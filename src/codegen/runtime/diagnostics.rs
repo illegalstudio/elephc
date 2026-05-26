@@ -11,6 +11,20 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Emits runtime diagnostic helpers for suppression depth and warning output.
+///
+/// Dispatches to `emit_diagnostics_linux_x86_64` when targeting x86_64; otherwise
+/// emits architecture-agnostic ARM64 diagnostic helpers inline. Each helper set
+/// includes `__rt_diag_push_suppression`, `__rt_diag_pop_suppression`, and
+/// `__rt_diag_warning`.
+///
+/// # Arguments
+/// * `emitter` - The code emitter used to append instructions and labels.
+///
+/// # ABI behavior
+/// - `__rt_diag_push_suppression`: increments the global `_rt_diag_suppression` counter and returns.
+/// - `__rt_diag_pop_suppression`: decrements the counter (guarded against underflow) and returns.
+/// - `__rt_diag_warning`: writes to stderr when suppression depth is zero; silently returns when suppressed.
 pub(crate) fn emit_diagnostics(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_diagnostics_linux_x86_64(emitter);
@@ -49,6 +63,20 @@ pub(crate) fn emit_diagnostics(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return after either writing or suppressing the warning
 }
 
+/// Emits x86_64 Linux-specific diagnostic helpers for suppression depth and warning output.
+///
+/// Uses the System V AMD64 ABI: `rdi` holds the warning message pointer, `rsi` holds the
+/// length, `edi` holds the file descriptor (set to 2 for stderr), and `eax`/`syscall`
+/// invoke Linux `write`. The suppression counter `_rt_diag_suppression` is accessed via
+/// RIP-relative addressing.
+///
+/// # Arguments
+/// * `emitter` - The code emitter used to append instructions and labels.
+///
+/// # ABI constraints
+/// - `__rt_diag_push_suppression`: reads/writes `_rt_diag_suppression` via RIP-relative load/store.
+/// - `__rt_diag_pop_suppression`: guards decrement against zero to prevent underflow.
+/// - `__rt_diag_warning`: uses Linux `write` syscall (number 1) with arguments in rdi, rsi, rdx.
 fn emit_diagnostics_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: diagnostics ---");

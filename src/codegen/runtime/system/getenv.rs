@@ -10,9 +10,13 @@
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
-/// __rt_getenv: get environment variable value.
-/// Input:  x1=name ptr, x2=name len
-/// Output: x1=value ptr, x2=value len (empty string if not found)
+/// Emits `__rt_getenv` helper for ARM64 targets (macOS/Linux).
+///
+/// Converts a PHP string (name ptr in x1, name len in x2) to a C string via
+/// `__rt_cstr`, calls libc `getenv`, and returns the value as a PHP string
+/// (ptr in x1, len in x2) or an empty string (x1=0, x2=0) when the variable
+/// is not found. Preserves the PHP getenv semantics: missing env vars produce
+/// an empty string result, not an error.
 pub fn emit_getenv(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_getenv_linux_x86_64(emitter);
@@ -58,6 +62,12 @@ pub fn emit_getenv(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits `__rt_getenv` helper for x86_64 Linux targets.
+///
+/// Converts a PHP string (name in rdi via `__rt_cstr`) to a null-terminated C
+/// string, calls libc `getenv`, and returns the value as a PHP string (rax=ptr,
+/// rdx=len) or an empty string (rax=0, rdx=0) when not found. Uses the System V
+/// AMD64 ABI for register conventions and frame layout.
 fn emit_getenv_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: getenv ---");

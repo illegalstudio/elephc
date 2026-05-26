@@ -13,12 +13,18 @@ use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use super::{expr_result_heap_ownership, Expr, PhpType};
 
+/// Increments the refcount of a borrowed heap argument if the expression result is not already owned.
 pub(super) fn retain_borrowed_heap_arg(emitter: &mut Emitter, expr: &Expr, ty: &PhpType) {
     if ty.is_refcounted() && expr_result_heap_ownership(expr) != HeapOwnership::Owned {
         crate::codegen::abi::emit_incref_if_refcounted(emitter, ty);
     }
 }
 
+/// Returns the wider of two PhpType for mixed-type expression results.
+///
+/// The type priority is: Mixed > Union > Str > Float > (Int/Bool/Null) > Void.
+/// When one operand is Void, returns the other type. Otherwise returns the
+/// higher-priority type, or `a` if both are lower-priority types with no Void.
 pub(super) fn widen_codegen_type(a: &PhpType, b: &PhpType) -> PhpType {
     if a == b {
         return a.clone();
@@ -43,6 +49,7 @@ pub(super) fn widen_codegen_type(a: &PhpType, b: &PhpType) -> PhpType {
     a.clone()
 }
 
+/// Emits runtime coercion from source_ty to target_ty using appropriate __rt_* helpers.
 pub(crate) fn coerce_result_to_type(
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -97,6 +104,7 @@ pub(crate) fn coerce_result_to_type(
     }
 }
 
+/// Returns true if coerce_result_to_type would succeed for the given source/target pair.
 pub(crate) fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
     if source_ty == target_ty {
         return true;

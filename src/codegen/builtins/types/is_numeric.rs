@@ -16,6 +16,24 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits PHP `is_numeric()` for the given expression.
+///
+/// Dispatches on the known static type of `args[0]`:
+/// - `Int` / `Float`: returns `true` immediately (ARM64: x0=1, x86_64: rax=1).
+/// - `Str`: scans the string for an optional leading `-`, then digits, then an
+///   optional `.` followed by more digits. At least one digit is required.
+///   Returns `false` for empty strings or strings like `"-"`, `"."`, `"-."`.
+/// - All other types (`Bool`, `Array`, `Object`, `Null`, `Void`, `Never`): returns `false`.
+///
+/// # Arguments
+/// - `_name` — always `"is_numeric"`; unused in the body.
+/// - `args[0]` — the expression whose type is inspected.
+/// - `emitter` — target-aware instruction emission.
+/// - `ctx` — label generator and codegen context.
+/// - `data` — data section for relocations (unused here).
+///
+/// # Returns
+/// Always `Some(PhpType::Bool)`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

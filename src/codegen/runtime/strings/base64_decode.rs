@@ -10,9 +10,13 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// base64_decode: standard base64 decoding (4 input chars -> 3 output bytes).
-/// Input: x1/x2=string. Output: x1/x2=result in concat_buf.
-/// Uses _b64_decode_tbl data section for the reverse lookup table.
+/// Emits the `__rt_base64_decode` runtime helper.
+///
+/// ABI (ARM64): x0=input ptr, x2=input byte length; returns x1=result ptr, x2=result length.
+/// Output is appended to the shared `_concat_buf` / `_concat_off` concat buffer.
+/// Uses `_b64_decode_tbl` for the base64→byte reverse lookup table.
+/// Handles `=` padding: `==` produces 1 output byte, `=` produces 2 output bytes.
+/// Dispatches to `emit_base64_decode_linux_x86_64` on x86_64; uses inline ARM64 otherwise.
 pub fn emit_base64_decode(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_base64_decode_linux_x86_64(emitter);
@@ -114,6 +118,13 @@ pub fn emit_base64_decode(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits the `__rt_base64_decode` runtime helper for the Linux x86_64 target.
+///
+/// ABI (x86_64): rax=input ptr, rdx=input byte count; returns rax=result ptr, rdx=result length.
+/// Output is appended to the shared `_concat_buf` / `_concat_off` concat buffer.
+/// Uses `_b64_decode_tbl` for the base64→byte reverse lookup table.
+/// Handles `=` padding: `==` produces 1 output byte, `=` produces 2 output bytes.
+/// Called exclusively from `emit_base64_decode` when `emitter.target.arch == Arch::X86_64`.
 fn emit_base64_decode_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: base64_decode ---");

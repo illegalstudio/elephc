@@ -16,6 +16,14 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `fdiv(dividend, divisor)` builtin call.
+///
+/// Converts the dividend to a double-precision float if it is an integer, then
+/// preserves it in a float register while evaluating the divisor expression. The
+/// divisor is similarly converted to float if needed before the division is
+/// performed. On AArch64 the quotient is written directly to `d0`; on x86_64 the
+/// result is moved from the left-hand scratch register to the standard result
+/// register (`xmm0`). Returns `PhpType::Float`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

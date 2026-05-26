@@ -28,6 +28,8 @@ pub(crate) use declarations::propagate_params;
 use declarations::{propagate_enum_case, propagate_method, propagate_property};
 use env::{env_after_list_unpack, env_after_scalar_assign};
 
+/// Returns the input environment if no expression has side effects,
+/// otherwise returns an empty environment to force conservative invalidation.
 fn env_after_expr_side_effects(env: ConstantEnv, exprs: &[&Expr]) -> ConstantEnv {
     if exprs
         .iter()
@@ -39,6 +41,8 @@ fn env_after_expr_side_effects(env: ConstantEnv, exprs: &[&Expr]) -> ConstantEnv
     }
 }
 
+/// Iterates through a block of statements, propagating constants and stopping early
+/// when a terminal effect (return, throw, exit) is encountered.
 pub(crate) fn propagate_block(body: Vec<Stmt>, mut env: ConstantEnv) -> (Vec<Stmt>, ConstantEnv) {
     let mut propagated = Vec::new();
     for stmt in body {
@@ -53,6 +57,9 @@ pub(crate) fn propagate_block(body: Vec<Stmt>, mut env: ConstantEnv) -> (Vec<Stm
     (propagated, env)
 }
 
+/// Dispatches constant propagation for a single statement, applying expression-level
+/// propagation and computing the output environment for each statement variant.
+/// Returns the rewritten statement and the constant environment after the statement.
 pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
     let span = stmt.span;
     match stmt.kind {

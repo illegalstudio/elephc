@@ -15,6 +15,11 @@ use crate::types::PhpType;
 
 use super::super::Checker;
 
+/// Returns a dummy method body that returns `null`.
+///
+/// Used for Fiber methods whose runtime behavior is implemented elsewhere
+/// in the codegen runtime. The dummy body satisfies the parser's requirement
+/// that methods have a body.
 fn fiber_method_dummy_body_return_null() -> Vec<Stmt> {
     vec![Stmt::new(
         StmtKind::Return(Some(Expr::new(
@@ -25,6 +30,11 @@ fn fiber_method_dummy_body_return_null() -> Vec<Stmt> {
     )]
 }
 
+/// Returns a dummy method body that returns `false`.
+///
+/// Used for Fiber predicate methods (e.g., `isStarted`, `isTerminated`) whose
+/// runtime behavior is implemented elsewhere in the codegen runtime. The dummy
+/// body satisfies the parser's requirement that methods have a body.
 fn fiber_method_dummy_body_return_false() -> Vec<Stmt> {
     vec![Stmt::new(
         StmtKind::Return(Some(Expr::new(
@@ -35,6 +45,13 @@ fn fiber_method_dummy_body_return_false() -> Vec<Stmt> {
     )]
 }
 
+/// Returns synthetic `ClassMethod` declarations for all Fiber builtin methods.
+///
+/// These dummy declarations provide the checker with method names, signatures,
+/// and visibility so user code that references `Fiber` can be type-checked.
+/// Actual runtime behavior is handled by the codegen fiber entry wrapper.
+/// The returned methods include `__construct`, `start`, `resume`, `throw`,
+/// `getReturn`, the four `is*` predicates, `suspend`, and `getCurrent`.
 pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
     let span = crate::span::Span::dummy();
     let null_default = || Some(Expr::new(ExprKind::Null, span));
@@ -170,6 +187,24 @@ pub(super) fn builtin_fiber_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Patches Fiber method signatures in the checker after initial class registration.
+///
+/// This function refines the parametric types of Fiber methods that were
+/// registered with placeholder types. Specifically:
+///
+/// - `__construct`: first parameter becomes `Callable`, return type becomes `void`
+/// - `start`: expands to 7 `Mixed` parameters with `null` defaults (matching the
+///   AArch64 integer register limit), return type becomes `mixed`
+/// - `resume`: first parameter becomes `mixed`, return type becomes `mixed`
+/// - `throw`: first parameter becomes `Throwable`, return type becomes `mixed`
+/// - `getReturn`: return type becomes `mixed`
+/// - `isStarted`, `isSuspended`, `isRunning`, `isTerminated`: return type becomes `bool`
+/// - `suspend` (static): first parameter becomes `mixed`, return type becomes `mixed`
+/// - `getCurrent` (static): return type becomes `mixed`
+///
+/// Values transferred into or out of fibers are typed `mixed` so the codegen
+/// boxes scalars into `Mixed` cells at call sites; the runtime transfers only
+/// 8‑byte cell pointers.
 pub(crate) fn patch_builtin_fiber_signatures(checker: &mut Checker) {
     // Values transferred in/out of a fiber are typed `mixed` so the codegen
     // boxes scalars (int, string, …) into Mixed cells at the call site. The

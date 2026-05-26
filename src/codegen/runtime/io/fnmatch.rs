@@ -10,16 +10,13 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// fnmatch: shell-glob match between a pattern and a filename.
+/// Emits the `__rt_fnmatch` runtime helper as AArch64 assembly.
 ///
-/// AArch64 input: x1/x2 = pattern, x3/x4 = filename, x5 = flags
-/// AArch64 output: x0 = 1 on match, 0 otherwise
-///
-/// x86_64 input: rax/rdx = pattern, rdi/rsi = filename, rcx = flags
-/// x86_64 output: rax = 1 on match, 0 otherwise
-///
-/// Flag values are target-libc values. The codegen constant prescan emits the
-/// same platform-specific numbers PHP exposes on the selected target.
+/// Generates the helper that bridges PHP `fnmatch()` to libc's `fnmatch()`.
+/// Calls `__rt_cstr` and `__rt_cstr2` to convert PHP strings into
+/// null-terminated C strings before invoking libc. The caller must place
+/// pattern (ptr/len), filename (ptr/len), and flags in x1/x2, x3/x4, and x5
+/// respectively. Returns 1 in x0 on match, 0 otherwise.
 pub fn emit_fnmatch(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_fnmatch_linux_x86_64(emitter);
@@ -63,6 +60,7 @@ pub fn emit_fnmatch(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the boolean match result
 }
 
+/// Emits the `__rt_fnmatch` runtime helper as x86_64 Linux assembly.
 fn emit_fnmatch_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fnmatch ---");

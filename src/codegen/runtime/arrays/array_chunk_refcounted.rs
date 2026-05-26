@@ -99,6 +99,9 @@ pub fn emit_array_chunk_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return outer array
 }
 
+/// x86_64 Linux implementation of `emit_array_chunk_refcounted`.
+/// Dispatches to the shared x86_64 helper after setting up the frame and spill slots.
+/// Uses `__rt_array_push_refcounted` to retain each element before copying into inner arrays.
 fn emit_array_chunk_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_chunk_refcounted ---");

@@ -11,6 +11,10 @@ use super::*;
 
 #[test]
 fn test_parse_deep_property_assign_after_array_access() {
+    // Parses `$catalog->palette->colors[$i]->r = 12;` and verifies the AST
+    // is a `PropertyAssign` with the correct deep object chain:
+    // Variable($catalog) -> PropertyAccess(palette) -> PropertyAccess(colors)
+    // -> ArrayAccess($i) -> PropertyAssign(r, 12).
     let stmts = parse_source("<?php $catalog->palette->colors[$i]->r = 12;");
     match &stmts[0].kind {
         StmtKind::PropertyAssign {
@@ -50,6 +54,9 @@ fn test_parse_deep_property_assign_after_array_access() {
 
 #[test]
 fn test_parse_deep_property_array_assign_after_array_access() {
+    // Parses `$catalog->palette->colors[$i]->shades[1] = 12;` and verifies
+    // the AST is a `PropertyArrayAssign` with a deep object chain featuring
+    // a trailing array index on the `shades` property.
     let stmts = parse_source("<?php $catalog->palette->colors[$i]->shades[1] = 12;");
     match &stmts[0].kind {
         StmtKind::PropertyArrayAssign {
@@ -91,6 +98,9 @@ fn test_parse_deep_property_array_assign_after_array_access() {
 
 #[test]
 fn test_parse_deep_property_array_push_after_array_access() {
+    // Parses `$catalog->palette->colors[$i]->shades[] = 12;` and verifies
+    // the AST is a `PropertyArrayPush` with a deep object chain featuring
+    // a trailing empty array index on `shades`.
     let stmts = parse_source("<?php $catalog->palette->colors[$i]->shades[] = 12;");
     match &stmts[0].kind {
         StmtKind::PropertyArrayPush {
@@ -130,6 +140,8 @@ fn test_parse_deep_property_array_push_after_array_access() {
 
 #[test]
 fn test_parse_chained_access() {
+    // Parses `echo $obj->make()->prop;` and verifies method call result
+    // is correctly chained into property access inside an Echo statement.
     let stmts = parse_source("<?php echo $obj->make()->prop;");
     match &stmts[0].kind {
         StmtKind::Echo(expr) => match &expr.kind {
@@ -156,6 +168,8 @@ fn test_parse_chained_access() {
 
 #[test]
 fn test_parse_property_access_after_array_index() {
+    // Parses `echo $items[0]->name;` and verifies the AST is an Echo with
+    // a PropertyAccess whose object is an ArrayAccess on the variable.
     let stmts = parse_source("<?php echo $items[0]->name;");
     match &stmts[0].kind {
         StmtKind::Echo(expr) => match &expr.kind {
@@ -177,6 +191,10 @@ fn test_parse_property_access_after_array_index() {
 
 #[test]
 fn test_parse_deep_mixed_property_and_array_chain() {
+    // Parses `echo $catalog->palette->colors[$i]->r;` and verifies the AST
+    // is an Echo with a PropertyAccess whose object is an ArrayAccess,
+    // whose array is a deep PropertyAccess chain: Variable($catalog) ->
+    // PropertyAccess(palette) -> PropertyAccess(colors) -> ArrayAccess($i).
     let stmts = parse_source("<?php echo $catalog->palette->colors[$i]->r;");
     match &stmts[0].kind {
         StmtKind::Echo(expr) => match &expr.kind {
@@ -212,6 +230,9 @@ fn test_parse_deep_mixed_property_and_array_chain() {
 
 #[test]
 fn test_parse_property_access_after_array_access_on_method_call_result() {
+    // Parses `echo $shop->getItems()[0]->name;` and verifies the AST is an
+    // Echo with a PropertyAccess whose object is an ArrayAccess, whose array
+    // is a MethodCall (no arguments) on Variable($shop).
     let stmts = parse_source("<?php echo $shop->getItems()[0]->name;");
     match &stmts[0].kind {
         StmtKind::Echo(expr) => match &expr.kind {

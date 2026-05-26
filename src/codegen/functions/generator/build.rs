@@ -34,6 +34,12 @@ fn slot_idx_of_type(name: &str, slots: &[String], types: &[SlotType], expected: 
     }
 }
 
+/// Classify an expression that can be translated to a v1 `IntSource`.
+/// Returns `Some(IntSource)` for int literals, int-typed slot reads,
+/// binary ops on int operands, and function calls where all args are
+/// int-classifiable and arg count ≤ 8 (ARM64 register limit). Returns
+/// `None` for unsupported shapes — the builder turns those into
+/// `ResumeNode::Bail`.
 pub(super) fn classify_int_expr(
     expr: &ExprKind,
     slots: &[String],
@@ -73,6 +79,11 @@ pub(super) fn classify_int_expr(
     }
 }
 
+/// Classify an expression that can be translated to a `MixedSource`.
+/// Handles: null, string literals (emitted to data section), homogeneous
+/// int-array literals, Mixed-typed slot reads, and any int-classifiable
+/// expression (mapped to `MixedSource::Int`). Returns `None` for
+/// unsupported shapes, which become `ResumeNode::Bail`.
 pub(super) fn classify_mixed_expr(
     expr: &ExprKind,
     slots: &[String],
@@ -109,6 +120,10 @@ pub(super) fn classify_mixed_expr(
     classify_int_expr(expr, slots, types).map(MixedSource::Int)
 }
 
+/// Classify a boolean expression for v1 generator conditionals.
+/// Supports six comparison operators (`<`, `<=`, `>`, `>=`, `==`, `!=`)
+/// on int-classifiable operands. Returns `None` for non-comparisons or
+/// non-int operands — the builder turns those into `ResumeNode::Bail`.
 pub(super) fn classify_bool_expr(
     expr: &ExprKind,
     slots: &[String],
@@ -145,6 +160,11 @@ pub(super) fn collect_locals(body: &[Stmt], param_names: &[String]) -> Vec<(Stri
     locals
 }
 
+/// Recursively collects variable assignments within `body`, inferring
+/// each local's `SlotType` from the first assignment seen (source order).
+/// Skips parameters in `param_names`. Populates `probe`/`probe_types`
+/// incrementally so later assignments can reference previously-introduced
+/// locals during type inference.
 fn visit_assignments(
     body: &[Stmt],
     probe: &mut Vec<String>,
@@ -234,6 +254,9 @@ fn infer_slot_type(
     }
 }
 
+/// Walks the statement list, building a vector of `ResumeNode`s.
+/// Stops on the first `Bail` node and returns what was accumulated
+/// up to that point.
 pub(super) fn build_nodes(
     body: &[Stmt],
     slots: &[String],
@@ -260,6 +283,10 @@ pub(super) fn build_nodes(
     out
 }
 
+/// Translates a single statement into a `ResumeNode`. Returns `None`
+/// for unsupported constructs — the caller converts this to
+/// `ResumeNode::Bail`. Handles assign, expr-stmt, if/while/do-while/for
+/// loops, break/continue, return, switch, and yield/yield-from.
 fn build_node(
     stmt: &Stmt,
     slots: &[String],
@@ -452,6 +479,12 @@ fn build_node(
     }
 }
 
+/// Translates a `yield from` expression into a `ResumeNode`. Handles
+/// three shapes: array literal (unpacked into individual yields),
+/// function call (yield-from-generator with Call source, arg count ≤ 8),
+/// and variable (yield-from-generator with IntSlot or MixedSlot source).
+/// `result` indicates how the final value is consumed (Discard, Local,
+/// or Return). Returns `None` for unsupported shapes.
 fn build_yield_from_node(
     inner: &Expr,
     result: YieldFromResult,
@@ -520,6 +553,10 @@ fn build_yield_from_node(
     None
 }
 
+/// Recursively translates if/else-if/else chains into a flat vector of
+/// nested `ResumeNode::If` nodes. The else branch is resolved by
+/// re-invoking `build_nodes`. Returns `Some(nodes)` or `None` if any
+/// condition fails to classify.
 fn build_else_chain(
     elseif_clauses: &[(Expr, Vec<Stmt>)],
     else_body: &Option<Vec<Stmt>>,

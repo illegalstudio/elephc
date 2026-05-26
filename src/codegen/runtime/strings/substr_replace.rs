@@ -11,9 +11,24 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// substr_replace: replace portion of string.
-/// Input: x1/x2=subject, x3/x4=replacement, x0=offset, x7=length (-1=to end).
-/// Output: x1/x2=result.
+/// Emits the `__rt_substr_replace` runtime helper for PHP's `substr_replace`.
+///
+/// Replaces a slice of the subject string with the replacement string, returning
+/// the result via the standard string ABI (pointer in x1, length in x2).
+///
+/// ## Register conventions (ARM64)
+/// - `x0`: offset into subject (negative = count from end, -1 means replace to end)
+/// - `x1/x2`: subject string pointer/length
+/// - `x3/x4`: replacement string pointer/length
+/// - `x7`: replace length (-1 = sentinel meaning "replace from offset to end")
+///
+/// ## Behavior
+/// 1. Clamps offset to [0, subject_len]. Negative offset is converted to a
+///    tail-relative index; if still negative it is clamped to 0.
+/// 2. Expands length=-1 to "remaining bytes from offset". Clamps negative lengths to 0.
+/// 3. Clamps the slice end to subject_len.
+/// 4. Builds result in concat buffer as: prefix (subject[0..offset])
+///    + replacement + suffix (subject[slice_end..])
 pub fn emit_substr_replace(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_substr_replace_linux_x86_64(emitter);
@@ -98,6 +113,19 @@ pub fn emit_substr_replace(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits the x86_64 Linux variant of `__rt_substr_replace`.
+///
+/// Identical semantics to the ARM64 variant, but uses the x86_64 System V ABI:
+/// - `rdi/rsi`: subject string pointer/length
+/// - `rdx/rcx`: replacement string pointer/length
+/// - `r8`: replacement offset (clamped to [0, subject_len]; negative = from end, -1 = to end)
+/// - `r9`: replace length (clamped, -1 expands to remaining)
+///
+/// ## Output
+/// - `rax`: result string pointer (concat buffer start)
+/// - `rdx`: result string length
+///
+/// The concat buffer offset symbol (`_concat_off`) is updated to reflect bytes written.
 fn emit_substr_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: substr_replace ---");

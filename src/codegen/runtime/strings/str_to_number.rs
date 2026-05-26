@@ -11,9 +11,12 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// str_to_number: parse a PHP string as a PHP-8-style numeric string.
-/// Input:  AArch64 x1=ptr, x2=len; x86_64 rax=ptr, rdx=len
-/// Output: integer result register = 1 when numeric, 0 otherwise; d0/xmm0 = parsed number
+/// Emits `__rt_str_to_number`: converts a PHP string to a double and reports whether it is numeric.
+/// Copies the PHP string into the C-string scratch buffer via `__rt_cstr`, then parses it with libc `strtod`.
+/// The parsed double is returned in d0/xmm0; the integer result register is 1 when the string is fully
+/// numeric (strtod consumed at least one byte and trailing bytes are all ASCII space or tab/newline/form-feed/carriage-return),
+/// 0 otherwise.
+/// Dispatches to the x86_64-specific implementation when targeting that architecture.
 pub fn emit_str_to_number(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_str_to_number_linux_x86_64(emitter);
@@ -58,6 +61,11 @@ pub fn emit_str_to_number(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the numeric flag while preserving the parsed double in d0
 }
 
+/// Emits `__rt_str_to_number` for the Linux x86_64 target. Identical logic to the ARM64 path but using
+/// x86_64 calling conventions: copies the PHP string via `__rt_cstr`, parses with libc `strtod`, checks
+/// that strtod consumed at least one byte, then validates that all trailing bytes are ASCII space or
+/// tab/newline/form-feed/carriage-return. Returns 1 in rax when fully numeric, 0 otherwise; parsed
+/// double is preserved in xmm0.
 fn emit_str_to_number_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_to_number ---");

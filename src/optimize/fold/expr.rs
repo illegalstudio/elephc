@@ -16,6 +16,8 @@ use super::ops::{
     try_fold_not, try_fold_null_coalesce, try_fold_short_ternary, try_fold_ternary,
 };
 
+/// Folds default expressions in function parameters.
+/// Returns a new parameter list with each parameter's default expression folded.
 pub(in crate::optimize) fn fold_params(
     params: Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)>,
 ) -> Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)> {
@@ -27,6 +29,7 @@ pub(in crate::optimize) fn fold_params(
         .collect()
 }
 
+/// Folds default expressions in a class property declaration.
 pub(in crate::optimize) fn fold_property(property: ClassProperty) -> ClassProperty {
     ClassProperty {
         name: property.name,
@@ -44,6 +47,7 @@ pub(in crate::optimize) fn fold_property(property: ClassProperty) -> ClassProper
     }
 }
 
+/// Folds default expressions and block body in a class method declaration.
 pub(in crate::optimize) fn fold_method(method: ClassMethod) -> ClassMethod {
     ClassMethod {
         name: method.name,
@@ -61,6 +65,7 @@ pub(in crate::optimize) fn fold_method(method: ClassMethod) -> ClassMethod {
     }
 }
 
+/// Folds the optional value expression in an enum case declaration.
 pub(in crate::optimize) fn fold_enum_case(case: EnumCaseDecl) -> EnumCaseDecl {
     EnumCaseDecl {
         name: case.name,
@@ -70,6 +75,14 @@ pub(in crate::optimize) fn fold_enum_case(case: EnumCaseDecl) -> EnumCaseDecl {
     }
 }
 
+/// Recursively folds constant expressions in an AST expression.
+///
+/// Dispatches each `ExprKind` variant to the appropriate helper under `ops`,
+/// `casts`, `pipes`, or `inline_closure`. Returns the folded expression, or
+/// falls back to the original node when no fold is applicable. Division by
+/// zero, overflow, and other PHP-runtime behaviors are intentionally left as
+/// runtime decisions — this function only folds when the result is an
+/// unambiguous PHP equivalent.
 pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
     let span = expr.span;
     let kind = match expr.kind {
@@ -340,6 +353,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
     Expr { kind, span }
 }
 
+/// Folds the target of an instanceof expression, recursing into the expression form.
 fn fold_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
     match target {
         InstanceOfTarget::Name(name) => InstanceOfTarget::Name(name),
@@ -347,6 +361,7 @@ fn fold_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
     }
 }
 
+/// Folds the target of a first-class callable, recursing into object expressions.
 fn fold_callable_target(target: CallableTarget) -> CallableTarget {
     match target {
         CallableTarget::Function(name) => CallableTarget::Function(name),

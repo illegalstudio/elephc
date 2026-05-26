@@ -11,8 +11,11 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// __rt_json_encode_null: produce the "null" JSON string.
-/// Output: x1 = string ptr, x2 = string len
+/// Emits the `__rt_json_encode_null` runtime helper.
+///
+/// dispatches to the target-specific emitter. On ARM64 the result registers are
+/// `x1` (string ptr) and `x2` (string len). On x86_64 the result registers are
+/// `rax` (string ptr) and `rdx` (string len).
 pub(crate) fn emit_json_encode_null(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_json_encode_null_linux_x86_64(emitter);
@@ -29,6 +32,8 @@ pub(crate) fn emit_json_encode_null(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits the `__rt_json_encode_null` runtime helper for the x86_64 Linux ABI.
+/// Returns the address of the static `"null"` literal in `rax` and its byte length (4) in `rdx`.
 fn emit_json_encode_null_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_null ---");

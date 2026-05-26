@@ -17,6 +17,19 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a defensive codegen fallback for unsupported `class_alias` calls.
+///
+/// Evaluates all arguments for side effects, then returns `false` (0) to indicate
+/// the alias operation failed. This fallback should never be reached for valid
+/// programs since autoload handles AOT alias resolution before codegen.
+///
+/// Inputs:
+/// - `name`: the builtin name (unused, always `"class_alias"`)
+/// - `args`: the call arguments, evaluated for side effects
+/// - `emitter`, `ctx`, `data`: codegen state
+///
+/// Returns:
+/// - Always `Some(PhpType::Bool)` indicating `false` / failed alias
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -16,6 +16,13 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a `urlencode(...)` call: evaluates the first argument as a PHP string, calls the
+/// runtime helper `__rt_urlencode` to produce a percent-encoded query-string result, and
+/// returns `PhpType::Str` as an owned heap-allocated PHP string.
+///
+/// - Argument 0 is evaluated in source order and consumed by value.
+/// - Result pointer/length is returned via the target ABI (ARM64: x1, x2; x86_64: rsi, rdx).
+/// - The returned string is an owned runtime value; the caller owns the allocation.
 pub fn emit(
     _name: &str,
     args: &[Expr],

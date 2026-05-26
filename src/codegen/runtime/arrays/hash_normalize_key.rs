@@ -11,9 +11,13 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// hash_normalize_key: normalize a PHP array string key.
-/// Input:  x1=string_ptr, x2=string_len
-/// Output: x1=key_lo, x2=key_hi (-1 means integer key)
+/// Emits the `__rt_hash_normalize_key` runtime helper.
+///
+/// Dispatches to the target-specific implementation after a blank line and global label.
+/// For ARM64: input x1=string_ptr, x2=string_len; output x1=key_lo, x2=key_hi where
+/// key_hi=-1 indicates an integer key and key_hi=0 signals a string key (x1/x2 unchanged).
+/// For x86_64 Linux: input rdi=string_ptr, rsi=string_len; output rax=key_lo, rdx=key_hi
+/// with the same conventions. String keys return with rax/rdx (x1/x2) untouched.
 pub fn emit_hash_normalize_key(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_normalize_key_linux_x86_64(emitter);
@@ -98,6 +102,17 @@ pub fn emit_hash_normalize_key(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // leave x1/x2 unchanged for string keys
 }
 
+/// Emits the x86_64 Linux variant of `__rt_hash_normalize_key`.
+///
+/// Input registers: rdi=string_ptr, rsi=string_len.
+/// Output: rax=key_lo, rdx=key_hi where key_hi=-1 marks an integer key and key_hi=0
+/// means the original string pointer/length are returned unchanged (string key).
+/// The function validates numeric strings against PHP array-key semantics:
+/// - Empty strings remain string keys.
+/// - Exact `"0"` (unsigned) or `"0"` (negative) are integer zero.
+/// - Leading zeros beyond `"0"` keep the key as a string.
+/// - Overflow beyond i64 bounds keeps the key as a string.
+/// - A bare `"-"` is a string key, not an integer.
 fn emit_hash_normalize_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_normalize_key ---");

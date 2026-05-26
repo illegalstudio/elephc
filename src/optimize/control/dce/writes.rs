@@ -12,6 +12,9 @@ use super::*;
 use super::guards::{clear_guards_for_name, extend_guards};
 use super::state::GuardState;
 
+/// Invalidates guard state for any variable written by a statement.
+/// Collects all written variable names from the statement and removes
+/// corresponding entries from the guard state.
 pub(super) fn invalidate_guards_for_stmt(stmt: &Stmt, guards: &mut GuardState) {
     let mut written = Vec::new();
     collect_written_names(stmt, &mut written);
@@ -22,6 +25,10 @@ pub(super) fn invalidate_guards_for_stmt(stmt: &Stmt, guards: &mut GuardState) {
     invalidate_guards_for_written_names(guards, &written);
 }
 
+/// Computes guard state after a block of statements, accounting for variables
+/// written within the block. Returns a new guard state with guards for
+/// written variables removed; returns a clone of the input if no variables
+/// are written.
 fn invalidated_guards_for_block(guards: &GuardState, stmts: &[Stmt]) -> GuardState {
     let mut written = Vec::new();
     collect_written_names_in_block(stmts, &mut written);
@@ -34,6 +41,10 @@ fn invalidated_guards_for_block(guards: &GuardState, stmts: &[Stmt]) -> GuardSta
     next
 }
 
+/// Computes guard state after a block, assuming execution may throw at any point.
+/// If the block does not contain throwing statements, returns a clone of `guards`.
+/// Otherwise, collects all variables written on throw paths and invalidates
+/// corresponding guards in the returned state.
 pub(super) fn invalidated_guards_for_throw_paths(guards: &GuardState, stmts: &[Stmt]) -> GuardState {
     if !block_may_throw(stmts) {
         return guards.clone();
@@ -50,6 +61,11 @@ pub(super) fn invalidated_guards_for_throw_paths(guards: &GuardState, stmts: &[S
     next
 }
 
+/// Computes guard state through a try-catch-finally construct.
+/// Combines invalidation from the try body and each catch clause,
+/// and clears guards for the catch exception variable. Finally block
+/// statements do not propagate written-variable invalidation to the
+/// caller because finally always executes.
 pub(super) fn invalidated_guards_for_finally_paths(
     guards: &GuardState,
     try_body: &[Stmt],
@@ -65,6 +81,10 @@ pub(super) fn invalidated_guards_for_finally_paths(
     next
 }
 
+/// Recursively collects all variable names that may be written on throw paths
+/// through a block of statements, given a set of incoming paths representing
+/// variable names already known to be written before entering the block.
+/// Returns the set of paths that reach the end of the block (fallthrough paths).
 fn collect_written_names_on_throw_paths_in_block(
     stmts: &[Stmt],
     mut incoming_paths: Vec<Vec<String>>,
@@ -94,6 +114,10 @@ fn collect_written_names_on_throw_paths_in_block(
     incoming_paths
 }
 
+/// Recursively collects variable names written on throw paths through a single
+/// statement, updating `written` and `next_paths` accordingly. Handles if/ifdef,
+/// switch, try-catch-finally, and generic statements; updates guards for
+/// conditional branches and accumulates fallthrough paths.
 fn collect_written_names_on_throw_paths_in_stmt(
     stmt: &Stmt,
     path: Vec<String>,
@@ -279,6 +303,10 @@ fn collect_written_names_on_throw_paths_in_stmt(
     }
 }
 
+/// Recursively handles the false branch of an if-elseif-else chain,
+/// collecting variables written on throw paths within each elseif condition
+/// and body, and optionally the else body. Returns paths that reach the end
+/// of the processed branches.
 fn collect_written_names_on_throw_paths_in_if_false_path(
     elseif_clauses: &[(Expr, Vec<Stmt>)],
     else_body: &Option<Vec<Stmt>>,
@@ -315,12 +343,17 @@ fn collect_written_names_on_throw_paths_in_if_false_path(
     next_paths
 }
 
+/// Appends all variable names from `path` into `written`, deduplicating
+/// against existing entries.
 fn merge_written_path(written: &mut Vec<String>, path: &[String]) {
     for name in path {
         push_written_name(written, name);
     }
 }
 
+/// Removes all guard entries for names present in `written` from `guards`.
+/// Clears truthy, falsy, bool-true, bool-false, exact, excluded, and
+/// condition guards that reference any written variable.
 fn invalidate_guards_for_written_names(guards: &mut GuardState, written: &[String]) {
     guards
         .truthy_vars
@@ -345,6 +378,10 @@ fn invalidate_guards_for_written_names(guards: &mut GuardState, written: &[Strin
         .retain(|known| !known.names.iter().any(|name| written.iter().any(|written_name| written_name == name)));
 }
 
+/// Recursively collects all variable names written by a statement and its
+/// nested sub-statements, appending them to `written`. Handles assignments,
+/// increments/decrements, loop constructs, try-catch, switch, if/ifdef,
+/// list unpacking, and expression statements.
 fn collect_written_names(stmt: &Stmt, written: &mut Vec<String>) {
     match &stmt.kind {
         StmtKind::Assign { name, .. }
@@ -443,12 +480,18 @@ fn collect_written_names(stmt: &Stmt, written: &mut Vec<String>) {
     }
 }
 
+/// Iterates over a block of statements and collects all written variable
+/// names by delegating to `collect_written_names` for each statement.
 fn collect_written_names_in_block(stmts: &[Stmt], written: &mut Vec<String>) {
     for stmt in stmts {
         collect_written_names(stmt, written);
     }
 }
 
+/// Collects variable names written by expressions: pre/post increment/decrement
+/// and assignment expressions. For assignments, also collects names from the
+/// target (variable, array access, property access) and recursively from
+/// the value and any prelude statements.
 fn collect_expr_written_names(expr: &Expr, written: &mut Vec<String>) {
     match &expr.kind {
         ExprKind::PreIncrement(name)
@@ -471,6 +514,10 @@ fn collect_expr_written_names(expr: &Expr, written: &mut Vec<String>) {
     }
 }
 
+/// Collects variable names written through an assignment target expression.
+/// Handles plain variables, array accesses (collecting the array base name),
+/// and property accesses. Recurses for complex targets but stops at
+/// non-variable non-array-access expressions.
 fn collect_assignment_target_written_names(target: &Expr, written: &mut Vec<String>) {
     match &target.kind {
         ExprKind::Variable(name) => push_written_name(written, name),
@@ -489,6 +536,7 @@ fn collect_assignment_target_written_names(target: &Expr, written: &mut Vec<Stri
     }
 }
 
+/// Appends `name` to `written` if it is not already present (deduplication).
 fn push_written_name(written: &mut Vec<String>, name: &str) {
     if !written.iter().any(|known| known == name) {
         written.push(name.to_string());

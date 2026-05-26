@@ -9,6 +9,8 @@
 
 use super::*;
 
+// Verifies that a require_once chain preserves the original error location
+// in the deepest nested file rather than pointing back to the require_once line.
 #[test]
 fn test_require_once_chain_preserves_included_file_error_location() {
     let err = resolve_files_error(
@@ -41,12 +43,15 @@ fn test_require_once_chain_preserves_included_file_error_location() {
 
 // --- Float/math function errors ---
 
+// Verifies that `include ;` (empty expression) produces an "Unexpected token" parse error.
 #[test]
 fn test_error_include_missing_path() {
     // Empty `include ;` — parse_expr immediately sees `;` and errors out.
     expect_error("<?php include ;", "Unexpected token");
 }
 
+// Verifies that a non-compile-time-constant integer path in include produces a resolver
+// error about "compile-time-constant string", not a runtime-dynamic message.
 #[test]
 fn test_error_include_non_string_path() {
     // Non-foldable path — parses fine but the resolver rejects it because
@@ -64,6 +69,8 @@ fn test_error_include_non_string_path() {
     );
 }
 
+// Helper: asserts that a resolver error message rejects a runtime-dynamic include/require path
+// and mentions the specific runtime-resolved part.
 fn expect_runtime_dynamic_include_path_error(src: &str, expected_detail: &str) {
     let err = resolver_error(src);
     assert!(
@@ -80,6 +87,8 @@ fn expect_runtime_dynamic_include_path_error(src: &str, expected_detail: &str) {
     );
 }
 
+// Verifies that a variable used directly as require path is rejected with a note
+// that variable `$path` is resolved at runtime.
 #[test]
 fn test_error_include_variable_path_is_explicitly_rejected() {
     expect_runtime_dynamic_include_path_error(
@@ -88,6 +97,8 @@ fn test_error_include_variable_path_is_explicitly_rejected() {
     );
 }
 
+// Verifies that a concatenated variable path `'lib/' . $path` reports the variable
+// `$path` as the runtime-resolved part.
 #[test]
 fn test_error_include_concat_variable_path_reports_runtime_part() {
     expect_runtime_dynamic_include_path_error(
@@ -96,6 +107,8 @@ fn test_error_include_concat_variable_path_reports_runtime_part() {
     );
 }
 
+// Verifies that `include_once $path` with a variable path is rejected with a note
+// that variable `$path` is resolved at runtime.
 #[test]
 fn test_error_include_once_variable_path_is_explicitly_rejected() {
     expect_runtime_dynamic_include_path_error(
@@ -104,6 +117,8 @@ fn test_error_include_once_variable_path_is_explicitly_rejected() {
     );
 }
 
+// Verifies that a function call used as require path `require pick()` is rejected with a note
+// that the function call is resolved at runtime.
 #[test]
 fn test_error_include_function_call_path_is_explicitly_rejected() {
     expect_runtime_dynamic_include_path_error(
@@ -112,6 +127,8 @@ fn test_error_include_function_call_path_is_explicitly_rejected() {
     );
 }
 
+// Verifies that a ternary expression used as require path is rejected with a note
+// that ternary path selection is resolved at runtime.
 #[test]
 fn test_error_include_ternary_path_is_explicitly_rejected() {
     expect_runtime_dynamic_include_path_error(
@@ -120,6 +137,8 @@ fn test_error_include_ternary_path_is_explicitly_rejected() {
     );
 }
 
+// Verifies that a property access used as require path `require $config->path` is rejected
+// with a note that property access `->path` is resolved at runtime.
 #[test]
 fn test_error_include_property_path_is_explicitly_rejected() {
     expect_runtime_dynamic_include_path_error(

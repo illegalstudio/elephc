@@ -18,6 +18,25 @@ use crate::types::PhpType;
 
 use super::stream_arg::emit_stream_fd_arg;
 
+/// Emits a PHP `fwrite` call by unboxing the stream resource to a raw file descriptor,
+/// evaluating the data string expression, then invoking the platform `write` syscall
+/// (ARM64) or libc `write()` function (X86_64). The file descriptor is saved across
+/// the data expression evaluation to avoid register conflicts.
+///
+/// # Arguments
+/// * `_name` — unused, matches the builtin dispatcher signature
+/// * `args[0]` — stream resource; must be a valid open file handle
+/// * `args[1]` — string data to write
+/// * `emitter` — target-specific assembly emitter
+/// * `ctx` — codegen context (used by `emit_stream_fd_arg`)
+/// * `data` — data section for relocations and constants
+///
+/// # Returns
+/// Always `Some(PhpType::Int)` (bytes written), matching PHP `fwrite` semantics.
+///
+/// # Platform behavior
+/// * ARM64: pushes fd to stack, evaluates data into x0, restores fd from stack, invokes syscall 4
+/// * X86_64: preserves fd in rax, evaluates data into rax, moves to rdi/rsi for libc write()
 pub fn emit(
     _name: &str,
     args: &[Expr],

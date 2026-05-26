@@ -22,6 +22,15 @@ use super::super::expect_token;
 type MethodParam = (String, Option<TypeExpr>, Option<Expr>, bool);
 type ParsedMethodParams = (Vec<MethodParam>, Option<String>, Vec<ClassProperty>, Vec<Stmt>);
 
+/// Parses method or constructor parameters from `(` to `)`, including PHP 8.0 promoted
+/// properties. Returns the parameter list, optional variadic name, promoted property
+/// declarations, and synthetic constructor assignments for promoted parameters.
+///
+/// - `method_name` is used only to reject promoted properties in non-constructor methods.
+/// - Promoted properties are stored as `ClassProperty` with visibility, readonly, and type,
+///   but with no default (PHP keeps defaults on the parameter itself).
+/// - The caller is responsible for inserting the returned `promoted_assignments` statements
+///   into the constructor body after parsing.
 pub(super) fn parse_method_params(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -140,6 +149,10 @@ pub(super) fn parse_method_params(
     Ok((params, variadic, promoted_properties, promoted_assignments))
 }
 
+/// Scans the token stream for visibility modifiers (`public`/`protected`/`private`)
+/// and `readonly` in any order, returning `(Visibility, readonly, first_token_span)`.
+/// Returns `Ok(None)` if none are present. Rejects `static`/`abstract`/`final` with an
+/// error. Visibility defaults to `Public` if only `readonly` is present.
 fn parse_promoted_param_modifiers(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -215,6 +228,9 @@ fn parse_promoted_param_modifiers(
     )))
 }
 
+/// Builds a synthetic `PropertyAssign` statement: `$this-><name> = $<name>` using the
+/// given variable name and span. The statement models the implicit assignment that
+/// PHP performs for a promoted constructor parameter.
 fn promoted_property_assignment(name: &str, span: Span) -> Stmt {
     Stmt::new(
         StmtKind::PropertyAssign {

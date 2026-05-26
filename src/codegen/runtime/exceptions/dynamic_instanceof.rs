@@ -11,6 +11,18 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Emits the `__rt_instanceof_lookup`, `__rt_instanceof_lookup_no`, and
+/// `__rt_instanceof_invalid_target` runtime helpers for dynamic instanceof.
+/// Dispatches to the target-specific implementation based on `emitter.target.arch`.
+/// On x86_64, calls the Linux x86_64 variant; on ARM64, emits the generic implementation.
+///
+/// Input registers (ARM64): x0 = result (1=success, 0=failure), x1 = string pointer, x2 = string length
+/// Output registers (ARM64): x0 = 1 success / 0 failure, x1 = target id, x2 = 0 class / 1 interface
+/// Input registers (x86_64 Linux): rdi = string pointer, rsi = string length (System V ABI)
+/// Output registers (x86_64 Linux): rax = 1 success / 0 failure, rdi = target id, rdx = 0 class / 1 interface
+///
+/// The lookup scans `_instanceof_target_entries` (each entry: name ptr, name len, target id, target kind)
+/// case-insensitively and returns the first matching target's metadata or signals failure.
 pub fn emit_dynamic_instanceof(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_dynamic_instanceof_linux_x86_64(emitter);
@@ -91,6 +103,15 @@ pub fn emit_dynamic_instanceof(emitter: &mut Emitter) {
     emitter.syscall(1);
 }
 
+/// Emits the `__rt_instanceof_lookup` and `__rt_instanceof_invalid_target` helpers
+/// for Linux x86_64 (System V ABI). Performs case-insensitive string comparison against
+/// `_instanceof_target_entries` metadata table.
+///
+/// Input registers: rdi = string pointer, rsi = string length
+/// Output registers: rax = 1 success / 0 failure, rdi = target id, rdx = 0 class / 1 interface
+///
+/// Each table entry is 32 bytes: name ptr (8), name len (8), target id (8), target kind (8).
+/// Uses System V AMD64 ABI conventions for register usage and syscall invocation.
 fn emit_dynamic_instanceof_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: dynamic_instanceof ---");

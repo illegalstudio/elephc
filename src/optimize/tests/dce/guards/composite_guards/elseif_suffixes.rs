@@ -10,6 +10,10 @@
 
 use super::*;
 
+// Verifies that when an `elseif` clause becomes unreachable because its guard is always
+// false given the parent condition, the optimizer rebuilds the `elseif` tail as a nested
+// `if` inside `else`. The `elseif`'s body becomes the then-body of the rebuilt `if`,
+// and the `elseif`'s condition is negated to become the new condition.
 #[test]
 fn test_eliminate_dead_code_rebuilds_empty_elseif_tail_as_needed_guard() {
     let touch = Expr::new(
@@ -82,6 +86,11 @@ fn test_eliminate_dead_code_rebuilds_empty_elseif_tail_as_needed_guard() {
     );
 }
 
+// Verifies that when an `elseif` clause's guard is a cumulative false guard (identical to the
+// negated parent condition), the optimizer removes the unreachable `elseif` clause and
+// preserves the remaining conditional chain by moving subsequent `elseif` clauses into a
+// nested `if` inside `else`. The negated cumulative-false guard becomes the `else` branch's
+// condition.
 #[test]
 fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_cumulative_false_guards() {
     let program = vec![Stmt::new(
@@ -140,6 +149,10 @@ fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_cumulative_fal
     );
 }
 
+// Verifies that when an `elseif` clause's guard is a negated disjunction `(a || b)` and
+// the parent condition is the original disjunction, the negated guard is pruned as
+// unreachable. The subsequent `elseif` clause (which has a `true` guard) is preserved
+// and moved into a nested `if` inside `else`.
 #[test]
 fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_negated_composite_guards() {
     let disjunction = Expr::binop(Expr::var("a"), BinOp::Or, Expr::var("b"));
@@ -203,6 +216,10 @@ fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_negated_compos
     );
 }
 
+// Verifies that when an `elseif` clause's guard is De Morgan-equivalent to the negated
+// parent condition (`!(a && b)` vs `!a || !b`), the unreachable `elseif` clause is
+// pruned. Subsequent `elseif` clauses are preserved and moved into a nested `if`
+// inside `else`.
 #[test]
 fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_demorgan_equivalent_guards() {
     let conjunction = Expr::binop(Expr::var("a"), BinOp::And, Expr::var("b"));

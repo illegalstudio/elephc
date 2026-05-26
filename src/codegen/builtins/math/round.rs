@@ -16,6 +16,31 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `round(value [, precision])` builtin.
+///
+/// ## Single-argument form (`args.len() == 1`)
+/// Emits `frinta` (AArch64) or `call round` (x86_64) directly on the value,
+/// after promoting integers to float and normalising `Mixed`/`Union` payloads.
+///
+/// ## Two-argument form (`args.len() == 2`)
+/// Scales the value by `10^precision`, rounds to the nearest integer with ties
+/// away from zero, then divides back by the multiplier.  This produces PHP's
+/// documented rounding behaviour for non-zero precision.
+///
+/// # Arguments
+/// * `_name`  – builtin name (unused; the caller dispatches by name).
+/// * `args`   – expression tree for `value` and optionally `precision`.
+/// * `emitter`– target assembly emitter.
+/// * `ctx`    – codegen context (types, frame layout, etc.).
+/// * `data`   – data section for literal pools.
+///
+/// # Returns
+/// `Some(PhpType::Float)` because `round()` always returns a float in PHP.
+///
+/// # ABI notes
+/// AArch64: input in `x0`/`d0`, result in `d0`.  x86_64: input in `rax`/`xmm0`,
+/// result in `xmm0`.  `Mixed` payloads are normalised via `__rt_mixed_cast_float`
+/// before any operation.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -16,6 +16,11 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits codegen for the PHP `glob()` builtin.
+///
+/// Evaluates the pattern argument, then calls `__rt_glob` to expand the glob pattern
+/// into an array of matching file paths. Returns `Array<Str>` on success, or `false`
+/// on failure (handled by the runtime helper's false-on-failure return convention).
 pub fn emit(
     _name: &str,
     args: &[Expr],

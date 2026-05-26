@@ -16,6 +16,24 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `filemtime` builtin call.
+///
+/// Emits the path argument, calls the target-aware runtime helper `__rt_filemtime`,
+/// and returns `Some(PhpType::Int)`. The runtime handles the false sentinel on failure
+/// (missing file, permission error, etc.) and converts it to a Unix timestamp representation
+/// that remains distinguishable from valid timestamps.
+///
+/// # Arguments
+/// * `_name` - Unused, always "filemtime" (kept for dispatcher signature parity)
+/// * `args` - Exactly one argument: the path expression
+/// * `emitter` - Target assembly emitter
+/// * `ctx` - Codegen context (variable layout, class metadata)
+/// * `data` - Data section for relocations and string constants
+///
+/// # Returns
+/// `Some(PhpType::Int)` — the modification timestamp is always typed as Int,
+/// even when the underlying filesystem stat fails; the runtime sentinel preserves
+/// this distinction.
 pub fn emit(
     _name: &str,
     args: &[Expr],

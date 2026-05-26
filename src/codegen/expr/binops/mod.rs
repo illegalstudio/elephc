@@ -25,6 +25,9 @@ use arithmetic::{
 use array_union::{emit_array_union_binop, is_array_union_candidate};
 use comparison::{emit_loose_equality_binop, emit_order_compare_binop, emit_spaceship_binop};
 
+/// Dispatches a binary operator to the appropriate specialized emitter.
+/// Handles arithmetic, logical, comparison, concat, bitwise, and array-union operators
+/// with PHP-compatible value semantics.
 pub(super) fn emit_binop(
     left: &Expr,
     op: &BinOp,

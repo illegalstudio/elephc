@@ -11,9 +11,18 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_fill: create an array filled with a specified integer value.
-/// Input: x0 = start_index (ignored for indexed arrays), x1 = count, x2 = value
-/// Output: x0 = pointer to new array with count elements all set to value
+/// Emits the `__rt_array_fill` runtime helper that creates a PHP array filled with a scalar value.
+///
+/// ABI contract (ARM64):
+///   - Input: x0 = start_index (unused for indexed arrays), x1 = element count, x2 = fill value
+///   - Output: x0 = pointer to newly allocated array with `count` elements set to `value`
+///
+/// Behavior:
+///   - Delegates to `emit_array_fill_linux_x86_64` on x86_64 targets; ARM64 code is emitted inline.
+///   - Allocates a new array via `__rt_array_new`, then fills each slot with the scalar value
+///     using a tight loop. The array header length is set to `count` before return.
+///   - Respects COW semantics: the returned array owns its storage exclusively.
+///   - Takes ownership of caller-saved registers; all other registers are preserved.
 pub fn emit_array_fill(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_fill_linux_x86_64(emitter);
@@ -62,6 +71,17 @@ pub fn emit_array_fill(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = filled array
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_array_fill` runtime helper.
+///
+/// ABI contract (x86_64 System V):
+///   - Input: rdi = start_index (unused), rsi = element count, rdx = fill value
+///   - Output: rax = pointer to newly allocated array with `count` elements set to `value`
+///
+/// Behavior:
+///   - Mirrors the ARM64 variant but uses x86_64 registers and calling convention.
+///   - Allocates via `__rt_array_new`, fills payload slots in a tight loop, then sets the array header length.
+///   - Respects COW semantics; returned array owns its storage exclusively.
+///   - Preserves all callee-saved registers; takes ownership of caller-saved registers.
 fn emit_array_fill_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_fill ---");

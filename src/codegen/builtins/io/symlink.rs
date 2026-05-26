@@ -16,6 +16,21 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a call to the `symlink()` runtime helper.
+///
+/// # Arguments
+/// - `args[0]`: target path (the original file the link points to)
+/// - `args[1]`: link path (the symbolic link to create)
+///
+/// # Assembly sequence
+/// 1. Evaluate `args[0]` (target) → string ptr/len in ABI register pair
+/// 2. Preserve target registers across the second argument evaluation
+/// 3. Evaluate `args[1]` (link) → string ptr/len in ABI register pair
+/// 4. Restore target registers to primary string-argument position
+/// 5. Call `__rt_symlink(target, link)` via libc wrapper
+///
+/// # Return
+/// Always returns `Some(PhpType::Bool)` — `true` on success, `false` on failure.
 pub fn emit(
     _name: &str,
     args: &[Expr],

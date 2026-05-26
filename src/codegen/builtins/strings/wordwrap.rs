@@ -16,6 +16,27 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `wordwrap()` builtin.
+///
+/// # Arguments
+/// - `args[0]`: input string to wrap
+/// - `args[1]` (optional): wrap width, defaults to 75
+/// - `args[2]` (optional): break string, defaults to `"\n"`
+///
+/// # Register layout (AArch64)
+/// - x0/x1: input string pointer/length (preserved across arg evaluation)
+/// - x3: wrap width
+/// - x4/x5: break string pointer/length
+/// - calls `__rt_wordwrap` via ABI convention
+///
+/// # Register layout (x86_64)
+/// - rax/rdx: input string pointer/length (preserved across arg evaluation)
+/// - rdi: wrap width
+/// - rcx/r8: break string pointer/length
+/// - calls `__rt_wordwrap` via System V AMD64 ABI
+///
+/// # Returns
+/// `Some(PhpType::Str)` — the wrapped string is owned by the runtime.
 pub fn emit(
     _name: &str,
     args: &[Expr],

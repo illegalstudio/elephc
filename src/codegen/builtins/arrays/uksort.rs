@@ -19,6 +19,26 @@ use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the PHP `uksort` builtin call, which sorts an array by keys using a user-provided callback.
+///
+/// # Arguments
+/// - `_name`: Unused name for dispatch (actual function is determined by catalog).
+/// - `args`:[0] the array to sort, [1] the user callback callable.
+/// - `emitter`: Assembly emitter for the current target.
+/// - `ctx`: Codegen context (carries function metadata, variable layout).
+/// - `data`: Data section for literals and runtime symbols.
+///
+/// # Returns
+/// `Some(PhpType::Void)` since `uksort` has no return value.
+///
+/// # Behavior
+/// 1. Evaluates the array argument and extracts its element type.
+/// 2. Ensures array is unique (COW) and marks it as mutating.
+/// 3. Preserves the array pointer on the stack while resolving the callback address.
+/// 4. If the callback has captures: builds a captured wrapper environment, loads the array
+///    slot and wrapper address into argument registers, calls `__rt_usort`.
+/// 5. If no captures: restores the array pointer to the second argument register, moves the
+///    resolved callback address to the first argument register, sets env=0, calls `__rt_usort`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

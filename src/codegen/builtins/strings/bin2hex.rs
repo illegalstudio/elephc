@@ -16,6 +16,11 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `bin2hex` builtin call.
+///
+/// Evaluates `args[0]` as a string expression, then calls the `__rt_bin2hex`
+/// runtime helper which allocates and returns a new hexadecimal string.
+/// The original string is consumed by the helper; the result is always `PhpType::Str`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

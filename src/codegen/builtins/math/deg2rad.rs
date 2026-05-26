@@ -16,6 +16,26 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `deg2rad` builtin call.
+///
+/// Converts a degree value to radians by multiplying with `M_PI / 180.0`.
+///
+/// # Arguments
+/// - `_name`: Unused; the builtin name is fixed (`deg2rad`).
+/// - `args`: Single expression providing the degree value.
+/// - `emitter`: Target-specific instruction emission.
+/// - `ctx`: Codegen context (target architecture, current function frame).
+/// - `data`: Data section for embedding floating-point constants.
+///
+/// # Behavior
+/// - Integer operands are normalized into the floating-point result register before conversion.
+/// - Returns `Some(PhpType::Float)` since the result is always floating-point.
+/// - Uses architecture-specific multiplication (`fmul` on AArch64, `mulsd` on x86_64).
+/// - The conversion constant (`M_PI / 180.0`) is embedded in the data section.
+///
+/// # ABI constraints
+/// - AArch64: degree in `d0`, constant in `d1`, result in `d0`.
+/// - x86_64: degree in `xmm0`, constant in `xmm1`, result in `xmm0`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

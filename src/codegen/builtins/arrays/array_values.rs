@@ -17,6 +17,21 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `array_values()` builtin.
+///
+/// For associative arrays, iterates the hash table in insertion order and collects
+/// all values into a new indexed array. For indexed arrays, returns the input unchanged
+/// (with a reference-count increment to satisfy call-semantics as an owned result).
+///
+/// - Input: `args[0]` must be an array-typed expression. The PhpType of `args[0]` drives
+///   the element layout of the result array.
+/// - Output: Returns `PhpType::Array(Box::new(value_type))` wrapping the element type.
+///   String values are persisted via `__rt_str_persist`. Refcounted values have their
+///   reference counts incremented via `__rt_incref`. Mixed values are boxed if not
+///   already boxed, or incref'd if already boxed.
+/// - Stack layout: [iter_index(16)] [result_array(16)] [hash_ptr(16)] during iteration.
+///   All temporaries are cleaned up before return. Result pointer returned in the ABI
+///   integer result register.
 pub fn emit(
     _name: &str,
     args: &[Expr],

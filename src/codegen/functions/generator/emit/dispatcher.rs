@@ -22,6 +22,16 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::runtime::generators::frame as gen_frame;
 
+/// Emits the `_fn_<f>__resume` entry point for a generator: prologue, state-index
+/// dispatch table, body via `emit_nodes`, and the terminator/epilogue that releases
+/// retained Mixed slots.
+///
+/// On ARM64 the frame uses `x19` as the generator frame pointer and preserves
+/// `x19`/`x20`. On x86_64 the frame uses `r12` as the generator frame pointer and
+/// preserves `r12`/`r13`/`r14`. State 0 dispatches to `_<label>_entry`; states
+/// `1..highest_state` each dispatch to `_<label>_resume_K` labels produced by
+/// `yields::emit_yield`. Unknown states and body fall-through both jump to the
+/// terminator, which sets `FLAG_TERMINATED` then decrefs every Mixed-typed local.
 pub(in crate::codegen::functions::generator) fn emit_resume(
     emitter: &mut Emitter,
     label: &str,
@@ -93,6 +103,11 @@ pub(in crate::codegen::functions::generator) fn emit_resume(
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// x86_64-specific implementation of the generator resume entry point.
+/// Identical in structure to the ARM64 `emit_resume` but emits x86_64
+/// instructions using the System V AMD64 ABI frame layout: `r12` holds the
+/// generator frame pointer, `r13`/`r14` are preserved scratch, and the stack
+/// is kept 16-byte aligned across nested calls.
 fn emit_resume_x86_64(
     emitter: &mut Emitter,
     label: &str,

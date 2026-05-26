@@ -11,9 +11,17 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_diff: return elements in arr1 that are not in arr2 (int arrays).
-/// Input:  x0=arr1, x1=arr2
-/// Output: x0=new array containing elements from arr1 not found in arr2
+/// Emits `__rt_array_diff`: returns elements in `arr1` that are not present in `arr2` (integer arrays only).
+///
+/// dispatches to `emit_array_diff_linux_x86_64` when targeting x86_64; otherwise emits the ARM64 variant inline.
+///
+/// ABI contract:
+/// - ARM64: `x0` = `arr1` pointer, `x1` = `arr2` pointer, returns new array pointer in `x0`
+/// - x86_64: `rdi` = `arr1` pointer, `rsi` = `arr2` pointer, returns new array pointer in `rax`
+///
+/// The function performs an O(n*m) nested-loop comparison, adding each `arr1[i]` to the result
+/// array when no matching element is found in `arr2`. Both input arrays must be valid indexed arrays
+/// with 8-byte integer elements. The result array uses COW semantics; capacity is inherited from `arr1`.
 pub fn emit_array_diff(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_diff_linux_x86_64(emitter);
@@ -96,6 +104,15 @@ pub fn emit_array_diff(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = result array
 }
 
+/// Emits the x86_64 Linux variant of `__rt_array_diff` using the System V AMD64 ABI.
+///
+/// Uses rbp-fixed stack layout with 32 bytes of spill slots for the result pointer and loop indices.
+/// Preserves rbp, uses caller-saved registers for the nested-loop scan, and calls `__rt_array_new`
+/// and `__rt_array_push_int` for allocation and element appending.
+///
+/// ABI contract:
+/// - Input: `rdi` = `arr1` pointer, `rsi` = `arr2` pointer
+/// - Output: result array pointer in `rax`
 fn emit_array_diff_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_diff ---");

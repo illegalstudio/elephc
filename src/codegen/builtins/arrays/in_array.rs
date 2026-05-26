@@ -17,6 +17,27 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits PHP `in_array(needle, array, strict)` builtin call.
+///
+/// Searches for `needle` (args[0]) in `array` (args[1]) using linear/insertion-order
+/// iteration. Always returns `Some(PhpType::Int)` (1=true, 0=false). Strict mode
+/// (args[2]) is accepted but not yet implemented.
+///
+/// # Stack layout (associative arrays)
+/// - sp+0:  iter_index (16 bytes)
+/// - sp+16: needle (16 bytes)
+/// - sp+32: hash_table_ptr (16 bytes)
+///
+/// # Stack layout (indexed string arrays)
+/// - sp+0:  needle ptr+len (16 bytes)
+/// - sp+16: array pointer (16 bytes)
+///
+/// # ABI constraints
+/// - Needle evaluated after array (source order preserved).
+/// - For associative arrays: hash-table pointer preserved in `int_result_reg` during needle evaluation.
+/// - For string needles in assoc arrays: string ptr+len preserved in string result regs.
+/// - For indexed arrays: array pointer preserved in `int_result_reg` during needle evaluation.
+/// - Result returned in `int_result_reg` (x0 on ARM64, rax on x86_64).
 pub fn emit(
     _name: &str,
     args: &[Expr],

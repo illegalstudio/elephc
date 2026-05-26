@@ -10,9 +10,13 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// concat: concatenate two strings.
+/// Emits the `__rt_concat` runtime helper for concatenating two byte-strings.
+/// Writes the concatenated result into the global `_concat_buf` at the current `_concat_off`
+/// offset, then advances `_concat_off` by the total bytes written.
+/// Dispatches to `emit_concat_linux_x86_64` on x86_64; uses the ARM64 path otherwise.
+///
 /// Input:  x1=left_ptr, x2=left_len, x3=right_ptr, x4=right_len
-/// Output: x1=result_ptr, x2=result_len
+/// Output: x1=result_ptr (start of written region in _concat_buf), x2=result_len
 pub fn emit_concat(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_concat_linux_x86_64(emitter);
@@ -77,6 +81,10 @@ pub fn emit_concat(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_concat`.
+/// Uses the System V AMD64 ABI: left string in rax/rdx, right string in rdi/rsi.
+/// Result returned in rax (pointer) and rdx (length).
+/// The global `_concat_buf` / `_concat_off` machinery is shared with the ARM64 path.
 fn emit_concat_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: concat ---");
@@ -144,6 +152,8 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Verifies that the x86_64 Linux concat path uses native byte-copy loops and returns
+    /// the result pointer/length in rax/rdx per the AMD64 ABI convention.
     fn test_emit_concat_linux_x86_64_uses_native_copy_loop() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
         emit_concat(&mut emitter);

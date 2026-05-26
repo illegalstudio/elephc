@@ -17,6 +17,20 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code to compute the sum of all numeric values in a PHP `array` argument.
+///
+/// ## Arguments
+/// - `args[0]` — the array expression to sum; evaluated and loaded into `rax` before the call.
+/// - `_name` — unused; matches the builtin dispatch signature.
+///
+/// ## Codegen
+/// - Evaluates `args[0]` into `rax`.
+/// - **x86_64**: copies `rax` → `rdi` (first integer arg register), then calls `__rt_array_sum`.
+/// - **ARM64**: directly calls `__rt_array_sum` with the value already in `x0`.
+/// - Both architectures return the integer sum in `x0`/`rax` via the runtime helper.
+///
+/// ## Returns
+/// `Some(PhpType::Int)` — the summed integer result. Runtime helper handles empty arrays and non-integer elements per PHP semantics.
 pub fn emit(
     _name: &str,
     args: &[Expr],

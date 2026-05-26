@@ -20,11 +20,17 @@ use super::super::engine::resolve_stmts;
 use super::super::function_variants;
 use super::super::state::ResolveState;
 
+/// Accumulated output from include discovery across all walked branches.
+/// Contains all collected declarations organized by file, along with a registry
+/// mapping file+function pairs to their discovered variants.
 pub(in crate::resolver) struct IncludeDiscovery {
     pub(in crate::resolver) declarations: Vec<Stmt>,
     pub(in crate::resolver) function_variants: FunctionVariantRegistry,
 }
 
+/// A key identifying a specific function variant within a concrete file path.
+/// Combines the canonical file path with a case-normalized PHP function name
+/// to uniquely locate a function declaration across the include graph.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(in crate::resolver) struct FunctionVariantKey {
     canonical: PathBuf,
@@ -32,6 +38,7 @@ pub(in crate::resolver) struct FunctionVariantKey {
 }
 
 impl FunctionVariantKey {
+    /// Creates a new variant key from a file path and function name.
     pub(in crate::resolver) fn new(canonical: &Path, function_name: &str) -> Self {
         Self {
             canonical: canonical.to_path_buf(),
@@ -40,14 +47,23 @@ impl FunctionVariantKey {
     }
 }
 
+/// Metadata for a single discovered function variant.
+/// `public_name` is the name used in the including file; `variant_name` is the
+/// unique internal name assigned to disambiguate multiple definitions.
 #[derive(Clone, Debug)]
 pub(in crate::resolver) struct FunctionVariantInfo {
     pub(in crate::resolver) public_name: String,
     pub(in crate::resolver) variant_name: String,
 }
 
+/// A map from `FunctionVariantKey` to metadata about the discovered variant.
+/// Used to track which file+function pairs have been loaded and rename them
+/// to disambiguate multiple definitions in different include branches.
 pub(in crate::resolver) type FunctionVariantRegistry = HashMap<FunctionVariantKey, FunctionVariantInfo>;
 
+/// A single file's contribution to the discovery output.
+/// Tracks the file's canonical path, source statements, resolved declarations,
+/// include context, and exclusivity constraints for branching/looping scenarios.
 #[derive(Clone)]
 pub(in crate::resolver) struct DiscoveryEntry {
     pub(in crate::resolver) canonical: PathBuf,
@@ -62,12 +78,18 @@ pub(in crate::resolver) struct DiscoveryEntry {
     pub(in crate::resolver) exclusive_branch: Option<usize>,
 }
 
+/// Accumulates all discovery entries from a single include-walk pass.
+/// The entries preserve discovery order and carry exclusivity metadata used
+/// to deduplicate or branch across alternative include paths.
 #[derive(Default)]
 pub(super) struct DiscoveryOutput {
     entries: Vec<DiscoveryEntry>,
 }
 
 impl DiscoveryOutput {
+    /// Adds a new entry to the output if it has declarations and is either
+    /// repeatable or has not already been included. Entries become non-repeatable
+    /// unless explicitly marked otherwise.
     pub(super) fn push(
         &mut self,
         canonical: PathBuf,
@@ -99,16 +121,21 @@ impl DiscoveryOutput {
         });
     }
 
+    /// Appends all entries from another output in discovery order.
     pub(super) fn extend(&mut self, other: DiscoveryOutput) {
         self.entries.extend(other.entries);
     }
 
+    /// Returns true if any entry in this output has the given canonical path.
     fn contains_canonical(&self, canonical: &Path) -> bool {
         self.entries
             .iter()
             .any(|entry| entry.canonical.as_path() == canonical)
     }
 
+    /// Merges entries from a branch that should only contribute once.
+    /// Marks all entries from `other` as non-repeatable before appending so they
+    /// are excluded on subsequent encounters within the same branch.
     pub(super) fn extend_once_guarded(&mut self, mut other: DiscoveryOutput) {
         for entry in &mut other.entries {
             entry.repeatable = false;
@@ -116,6 +143,9 @@ impl DiscoveryOutput {
         self.extend(other);
     }
 
+    /// Merges entries from a loop body, replaying repeatable entries once more
+    /// after the full output is appended. Preserves the original discovery order
+    /// while ensuring loop-iterated files are included at least twice if marked repeatable.
     pub(super) fn extend_loop_body(&mut self, other: DiscoveryOutput) {
         let repeated = other
             .entries
@@ -127,6 +157,10 @@ impl DiscoveryOutput {
         self.entries.extend(repeated);
     }
 
+    /// Merges multiple alternative discovery outputs from branching conditionals.
+    /// Assigns a common `exclusive_group` to all entries and assigns each entry a
+    /// distinct `exclusive_branch` index. Entries appearing in multiple branches are
+    /// deduplicated by canonical path while preserving their repeatability flags.
     pub(super) fn merge_alternatives(alternatives: Vec<DiscoveryOutput>, group_id: String) -> DiscoveryOutput {
         let mut order: Vec<PathBuf> = Vec::new();
         let mut merged: HashMap<PathBuf, (DiscoveryEntry, usize)> = HashMap::new();
@@ -170,6 +204,9 @@ impl DiscoveryOutput {
         output
     }
 
+    /// Converts the accumulated discovery output into the final `IncludeDiscovery`.
+    /// Runs two passes of function-variant rewriting and rebuilds declarations
+    /// from source statements using the resolved function variant registry.
     pub(super) fn into_include_discovery(mut self) -> Result<IncludeDiscovery, CompileError> {
         let (_, preliminary_function_variants) =
             function_variants::rewrite_include_loaded_function_variants(&mut self.entries);
@@ -195,6 +232,9 @@ impl DiscoveryOutput {
         })
     }
 
+    /// Re-resolves all entries against the function variant registry and updates
+    /// their declarations. This is called after variant rewriting to ensure
+    /// declarations reflect the correct resolved symbols.
     fn rebuild_declarations(
         &mut self,
         function_variants: &FunctionVariantRegistry,

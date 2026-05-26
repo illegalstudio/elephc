@@ -17,6 +17,13 @@ use crate::types::{ClassInfo, FunctionSig, PhpType, PropertyHookContract};
 
 use super::constants::resolve_lexical_class_constant_value;
 
+/// Accumulates class metadata during schema validation, then emits the
+/// immutable `ClassInfo` that the type checker and codegen consume.
+///
+/// All fields start empty and are populated by the class-building pipeline.
+/// When inheriting from a parent, the four `inherit_*` methods copy
+/// non-private, non-final members so the child class correctly overrides
+/// or augments the parent's surface area.
 #[derive(Default)]
 pub(super) struct ClassBuildState {
     pub(super) allow_dynamic_properties: bool,
@@ -61,6 +68,11 @@ pub(super) struct ClassBuildState {
 }
 
 impl ClassBuildState {
+    /// Creates a fresh `ClassBuildState`, optionally inheriting metadata from
+    /// a parent `ClassInfo` by copying all inheritable properties, static
+    /// properties, methods, and static methods.  Private and final members
+    /// are excluded.  The parent's interface list and `allow_dynamic_properties`
+    /// flag are also propagated.
     pub(super) fn from_parent(parent_info: Option<&ClassInfo>) -> Self {
         let mut state = Self::default();
         if let Some(parent) = parent_info {
@@ -74,6 +86,12 @@ impl ClassBuildState {
         state
     }
 
+    /// Consumes `self` and assembles an immutable `ClassInfo` struct.
+    /// Resolves all class constant expressions via
+    /// `resolve_lexical_class_constant_value`, collects attributes, and
+    /// merges the accumulated property/method metadata with the flattened
+    /// class AST.  Returns `CompileError` if any constant expression is
+    /// ill-formed.
     pub(super) fn into_class_info(
         self,
         class_id: u64,
@@ -229,6 +247,10 @@ pub(super) fn class_has_allow_dynamic_properties(class: &FlattenedClass) -> bool
 }
 
 impl ClassBuildState {
+    /// Copies all inheritable instance property metadata from `parent` into
+    /// `self`: types, offsets, defaults, visibilities, declaring classes, and
+    /// attributes.  Final, private, and abstract flags are propagated.
+    /// Skips properties that are not declared on `parent` itself.
     fn inherit_properties(&mut self, parent: &ClassInfo) {
         for (index, (name, ty)) in parent.properties.iter().enumerate() {
             self.prop_types.push((name.clone(), ty.clone()));
@@ -272,6 +294,9 @@ impl ClassBuildState {
         }
     }
 
+    /// Copies all inheritable static property metadata from `parent` into
+    /// `self`: types, defaults, visibilities, declaring classes, and
+    /// attributes.  Final and declared flags are propagated.
     fn inherit_static_properties(&mut self, parent: &ClassInfo) {
         for (index, (name, ty)) in parent.static_properties.iter().enumerate() {
             self.static_prop_types.push((name.clone(), ty.clone()));
@@ -302,6 +327,10 @@ impl ClassBuildState {
         }
     }
 
+    /// Copies all non-private, non-final method metadata from `parent` into
+    /// `self`: signatures, visibilities, declaring/implementing classes, and
+    /// attributes.  Also copies the parent's vtable so the child starts
+    /// with the parent's method order and slot mapping.
     fn inherit_methods(&mut self, parent: &ClassInfo) {
         for (name, sig) in &parent.methods {
             if parent.method_visibilities.get(name) == Some(&Visibility::Private) {
@@ -336,6 +365,9 @@ impl ClassBuildState {
         self.vtable_slots = parent.vtable_slots.clone();
     }
 
+    /// Copies all non-private, non-final static method metadata from `parent`
+    /// into `self`: signatures, visibilities, declaring/implementing classes,
+    /// and attributes.  Also copies the parent's static vtable.
     fn inherit_static_methods(&mut self, parent: &ClassInfo) {
         for (name, sig) in &parent.static_methods {
             if parent.static_method_visibilities.get(name) == Some(&Visibility::Private) {

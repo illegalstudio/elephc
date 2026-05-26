@@ -11,9 +11,24 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_intersect: return elements present in both arr1 and arr2 (int arrays).
-/// Input:  x0=arr1, x1=arr2
-/// Output: x0=new array containing elements found in both arrays
+/// Emits the `__rt_array_intersect` runtime helper for integer arrays.
+///
+/// Computes the set intersection of two integer arrays using nested loops: for each
+/// element in `arr1`, scans `arr2` linearly. Matching elements are appended to a result
+/// array in their original order from `arr1`. Result array capacity matches `arr1`.
+///
+/// # Input (ARM64)
+/// - `x0`: pointer to first input array (arr1)
+/// - `x1`: pointer to second input array (arr2)
+///
+/// # Output
+/// - `x0`: pointer to newly allocated result array containing elements present in both arrays
+///
+/// # ABI and helpers
+/// - Allocates a 48-byte stack frame with saved registers and spill slots
+/// - Calls `__rt_array_new` to allocate the result array
+/// - Calls `__rt_array_push_int` to append matching elements
+/// - On x86_64 Linux, dispatches to `emit_array_intersect_linux_x86_64`
 pub fn emit_array_intersect(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_intersect_linux_x86_64(emitter);
@@ -96,6 +111,15 @@ pub fn emit_array_intersect(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = result array
 }
 
+/// Emits the x86_64 Linux variant of `__rt_array_intersect`.
+///
+/// Identical algorithm to the ARM64 variant: nested-loop set intersection of two integer arrays.
+/// Uses x86_64 System V ABI registers: `rdi`=arr1, `rsi`=arr2, `rax`=result.
+/// Frame pointer in `rbp`, 32-byte spill area below it.
+///
+/// # Helpers called
+/// - `__rt_array_new` for result allocation
+/// - `__rt_array_push_int` for appending matches
 fn emit_array_intersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_intersect ---");

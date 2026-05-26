@@ -18,6 +18,10 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 use super::super::Checker;
 
 impl Checker {
+    /// Determines the element type for a variadic parameter's container.
+    ///
+    /// If the element type is `Iterable`, returns `Mixed` since iterables can
+    /// hold heterogeneous values at runtime. Otherwise returns the element type unchanged.
     fn variadic_container_elem_ty(elem_ty: PhpType) -> PhpType {
         if matches!(elem_ty, PhpType::Iterable) {
             PhpType::Mixed
@@ -26,6 +30,12 @@ impl Checker {
         }
     }
 
+    /// Returns true if any named argument in `args` does not correspond to a
+    /// declared regular (non-variadic) parameter in `regular_params`.
+    ///
+    /// Used to decide whether a variadic parameter should receive type `Iterable`
+    /// (when unknown named args may flow into it) or `Array<elem>` (when all
+    /// named args are known).
     fn has_unknown_named_variadic_arg(args: &[Expr], regular_params: &[String]) -> bool {
         args.iter().any(|arg| {
             matches!(
@@ -35,6 +45,17 @@ impl Checker {
         })
     }
 
+    /// Resolves a function call by name, normalizes arguments (named, spread),
+    /// validates arity and types, applies specialization if needed, and returns
+    /// the function's return type.
+    ///
+    /// Handles three lookup paths:
+    /// - Declared functions already in `self.functions`
+    /// - Function variant groups (which may emit a provisional signature)
+    /// - Forward declarations from `fn_decls` (where type hints are resolved here)
+    ///
+    /// Emits a deprecation warning if the function is deprecated.
+    /// Re-specializes resolved function parameters when the call site demands it.
     pub fn check_function_call(
         &mut self,
         name: &str,
@@ -326,6 +347,12 @@ impl Checker {
         self.resolve_function_signature(name, &decl, param_types)
     }
 
+    /// Checks a function call where arguments are already normalized (named,
+    /// spread, and order resolved) against a function already present in
+    /// `self.functions`.
+    ///
+    /// Used by variant-group resolution and other paths that have a pre-resolved
+    /// signature and do not need re-specialization or deprecation warnings.
     pub(crate) fn check_function_call_pre_normalized(
         &mut self,
         name: &str,
@@ -349,6 +376,13 @@ impl Checker {
         )
     }
 
+    /// Validates a resolved, normalized function call against its effective
+    /// signature: arity constraints, by-ref argument validation, and type
+    /// compatibility for each argument position (regular and variadic).
+    ///
+    /// Does **not** re-specialize or check deprecation — those are handled by
+    /// the caller before dispatching here. Returns the signature's return type
+    /// on success.
     fn check_normalized_resolved_function_call(
         &mut self,
         name: &str,

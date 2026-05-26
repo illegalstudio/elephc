@@ -12,8 +12,12 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// resource_write_stdout: print a PHP resource marker for echo/print.
-/// Input: x0 / rax = native resource payload.
+/// Emits the `__rt_resource_write_stdout` runtime helper.
+///
+/// Writes `"Resource id #<id>"` to stdout, where `<id>` is the 1-based display
+/// form of the resource index passed in `x0` (0-based internally, converted to
+/// 1-based for display). Calls `__rt_itoa` to format the decimal id. Falls through
+/// to the ARM64 default after the x86_64 Linux branch.
 pub fn emit_resource_write_stdout(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_resource_write_stdout_linux_x86_64(emitter);
@@ -42,6 +46,7 @@ pub fn emit_resource_write_stdout(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller
 }
 
+/// Emits the `__rt_resource_write_stdout` runtime helper for Linux x86_64.
 fn emit_resource_write_stdout_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: resource_write_stdout ---");

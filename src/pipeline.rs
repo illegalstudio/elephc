@@ -20,6 +20,7 @@ use crate::{
     optimize, parser, resolver, runtime_cache, source_map, types,
 };
 
+/// Holds the paths for all compilation output files (assembly, object, binary, source map).
 struct OutputPaths {
     asm: PathBuf,
     obj: PathBuf,
@@ -27,6 +28,9 @@ struct OutputPaths {
     source_map: PathBuf,
 }
 
+/// Runs the full compilation pipeline from PHP source to native binary.
+/// Reads PHP source, tokenizes, parses, resolves names, type-checks, optimizes,
+/// generates assembly, and links into a native binary. Exits on any error.
 pub(crate) fn compile(config: CliConfig) {
     let CliConfig {
         filename,
@@ -259,6 +263,8 @@ pub(crate) fn compile(config: CliConfig) {
     println!("Compiled '{}' -> '{}'", filename, output_paths.bin.display());
 }
 
+/// Computes output paths for .s (assembly), .o (object), binary, and .map (source map) files
+/// derived from the input filename.
 fn output_paths(filename: &str) -> OutputPaths {
     let path = Path::new(filename);
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");

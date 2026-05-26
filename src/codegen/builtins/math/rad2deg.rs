@@ -16,6 +16,25 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Converts a radian value to degrees by multiplying by `180.0 / PI`.
+///
+/// Loads the radian input from `args[0]` into the floating-point result register,
+/// normalizing integer operands to float first. Multiplies by the `180.0 / PI`
+/// constant and returns `PhpType::Float`.
+///
+/// # Arguments
+/// * `_name` — unused; the builtin name is inferred from the call site
+/// * `args` — single argument: the radian value (int or float)
+/// * `emitter` — target-aware instruction emitter
+/// * `ctx` — codegen context carrying variable layout and class metadata
+/// * `data` — mutable data section for embedding the conversion constant
+///
+/// # Returns
+/// Always returns `Some(PhpType::Float)` as the result is always a float.
+///
+/// # ABI notes
+/// - AArch64: input in `d0`, constant loaded via `adrp`/`ldr_lo12` into `d1`, result in `d0`
+/// - x86_64: input in `xmm0`, constant loaded via `movsd` into `xmm1`, result in `xmm0`
 pub fn emit(
     _name: &str,
     args: &[Expr],

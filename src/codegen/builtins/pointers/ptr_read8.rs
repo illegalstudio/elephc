@@ -16,6 +16,18 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `ptr_read8` builtin: reads one unsigned byte from a pointer address.
+///
+/// # Arguments
+/// - `args[0]`: the pointer expression to dereference.
+///
+/// # Behavior
+/// - Calls `__rt_ptr_check_nonnull` to abort with a fatal error if the pointer is null.
+/// - Architecture-specific load: `ldrb w0, [x0]` on AArch64, `movzx eax, BYTE PTR [rax]` on X86_64.
+/// - The loaded byte is zero-extended through the integer result register.
+///
+/// # Return
+/// Returns `Some(PhpType::Int)` representing a PHP integer value.
 pub fn emit(
     _name: &str,
     args: &[Expr],

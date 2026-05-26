@@ -19,6 +19,10 @@ pub(crate) use temps::pushed_temp_bytes;
 
 use crate::parser::ast::Expr;
 
+/// Describes the origin of a final call argument.
+///
+/// Variants cover: a previously-evaluated source temp, a prefix-array element
+/// (with optional named-key preference and default fallback), or a plain default expression.
 #[derive(Clone)]
 enum FinalArgSource {
     SourceTemp(usize),
@@ -31,12 +35,23 @@ enum FinalArgSource {
     Default(Expr),
 }
 
+/// Tracks one individual variadic argument's key and source.
+///
+/// The key is `None` for positional variadic elements and `Some(String)` for
+/// named variadic arguments. The source follows the same taxonomy as regular
+/// slot arguments.
 #[derive(Clone)]
 struct VariadicArgSource {
     key: Option<String>,
     source: FinalArgSource,
 }
 
+/// Records the source prefix array and the starting index for a variadic tail.
+///
+/// When a spread prefix array supplies elements beyond the regular parameter
+/// count, this struct captures which prefix temp to read from and the first
+/// variadic index in that prefix. Used to lazily splice prefix tail elements
+/// into the variadic array during final argument materialization.
 #[derive(Clone)]
 struct PrefixVariadicTail {
     prefix_temp_idx: usize,

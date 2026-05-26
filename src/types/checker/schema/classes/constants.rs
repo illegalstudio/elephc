@@ -17,6 +17,13 @@ use crate::parser::ast::{
 use crate::span::Span;
 use crate::types::traits::FlattenedClass;
 
+/// Normalizes a class-constant value expression by resolving lexical `self::` and
+/// `parent::` constant receivers to their concrete class names. Rejects `static::`
+/// since class constants are early-bound in PHP.
+///
+/// - `self::CONST` is rewritten to `ClassName::CONST`
+/// - `parent::CONST` is rewritten to `ParentClassName::CONST`
+/// - `static::CONST` produces a compile error
 pub(super) fn resolve_lexical_class_constant_value(
     value: &Expr,
     class: &FlattenedClass,
@@ -24,6 +31,8 @@ pub(super) fn resolve_lexical_class_constant_value(
     rewrite_expr(value, &class.name, class.extends.as_deref())
 }
 
+/// Recursively rewrites all expressions in a class-constant value, resolving lexical
+/// constant receivers found in `ClassConstant` and `ScopedConstantAccess` nodes.
 fn rewrite_expr(
     expr: &Expr,
     class_name: &str,
@@ -297,6 +306,7 @@ fn rewrite_expr(
     Ok(Expr::new(kind, expr.span))
 }
 
+/// Applies `rewrite_expr` over a list of expressions, returning the transformed list.
 fn rewrite_expr_list(
     exprs: &[Expr],
     class_name: &str,
@@ -308,6 +318,8 @@ fn rewrite_expr_list(
         .collect()
 }
 
+/// Rewrites the target of an `instanceof` expression. If the target is a bare name,
+/// it is returned unchanged; if it is an expression, `rewrite_expr` is applied.
 fn rewrite_instanceof_target(
     target: &InstanceOfTarget,
     class_name: &str,
@@ -323,6 +335,9 @@ fn rewrite_instanceof_target(
     }
 }
 
+/// Rewrites the target of a first-class callable (e.g. `ClassName::method(...)`).
+/// Static method receivers are cloned unchanged; instance method targets have their
+/// object expression rewritten.
 fn rewrite_callable_target(
     target: &CallableTarget,
     class_name: &str,
@@ -341,6 +356,9 @@ fn rewrite_callable_target(
     }
 }
 
+/// Resolves a constant receiver (`self::`, `parent::`, `static::`, or a bare name).
+/// Returns a `StaticReceiver::Named` with the fully-qualified name, or an error for
+/// `static::` or an unresolvable `parent::`.
 fn rewrite_constant_receiver(
     receiver: &StaticReceiver,
     class_name: &str,
@@ -363,6 +381,8 @@ fn rewrite_constant_receiver(
     }
 }
 
+/// Builds a fully-qualified `Name` from a class name string, splitting on `\\` and
+/// marking the resulting parts as fully-qualified.
 fn fqn_name(name: &str) -> Name {
     Name::from_parts(
         NameKind::FullyQualified,

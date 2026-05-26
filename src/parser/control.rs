@@ -108,7 +108,8 @@ pub fn parse_while(
     Ok(Stmt::new(StmtKind::While { condition, body }, span))
 }
 
-/// Parse: foreach ($array as $value) { stmts }
+/// Parses a foreach loop: `foreach ($array as $value)` or `foreach ($array as $key => $value)`.
+/// Supports by-reference values via `&` prefix and by-reference loop variables.
 pub fn parse_foreach(
     tokens: &[(Token, Span)],
     pos: &mut usize,

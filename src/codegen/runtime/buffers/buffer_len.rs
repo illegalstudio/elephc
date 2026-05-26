@@ -11,6 +11,13 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Emits the `__rt_buffer_len` runtime helper.
+///
+/// On entry, `x0` holds the buffer pointer. On exit, `x0` holds the logical element count.
+///
+/// Falls through to `__rt_buffer_use_after_free` when the buffer pointer is null
+/// (indicating the buffer has been freed). The ARM64 path checks `cbz x0, ...`;
+/// the x86_64 path checks `test rax, rax` / `jz ...`.
 pub fn emit_buffer_len(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_buffer_len_linux_x86_64(emitter);
@@ -25,6 +32,9 @@ pub fn emit_buffer_len(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return length in x0
 }
 
+/// Emits `__rt_buffer_len` for the x86_64 Linux target.
+/// Identical behavior to the ARM64 variant but uses x86_64 syscalls instead of ARM64 instructions.
+/// On entry rax holds the buffer pointer; on exit rax holds the logical element count.
 fn emit_buffer_len_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_len ---");

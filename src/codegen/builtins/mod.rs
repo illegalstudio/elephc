@@ -9,6 +9,10 @@
 //! - Builtin names arrive after type/catalog resolution, including PHP case-insensitive and namespace fallback behavior.
 
 pub(crate) mod arrays;
+/// Resolves string-literal function names used by callable/introspection builtins.
+/// Shares PHP case-insensitive lookup between string-callback and introspection builtins.
+/// Include variants, externs, builtins, and user functions stay distinguishable so callers
+/// can choose the right lowering path.
 pub(crate) mod callable_lookup;
 mod io;
 mod math;
@@ -25,8 +29,13 @@ use crate::parser::ast::Expr;
 use crate::span::Span;
 use crate::types::PhpType;
 
-/// Emit code for a built-in function call.
-/// Returns Some(return_type) if the function is a known built-in, None otherwise.
+/// Routes a normalized PHP builtin call to its category dispatcher and emits the call.
+ ///
+ /// Handles named-argument reordering, spread unpacking, and call argument preevaluation
+ /// before delegating to the first category `emit()` that recognizes the builtin name.
+ ///
+ /// Returns `Some(return_type)` if a dispatcher handled the call, or `None` if no
+ /// category recognized the name (caller should treat it as a user function call).
 pub fn emit_builtin_call(
     name: &str,
     args: &[Expr],

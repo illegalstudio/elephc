@@ -12,12 +12,18 @@ use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// iterable_unsupported_kind: emit a fatal error and exit when foreach receives
-/// an `iterable` value whose underlying heap kind is not yet supported (currently
-/// objects are rejected until PHP's Traversable protocol is modeled).
+/// Emits the `__rt_iterable_unsupported_kind` runtime helper.
 ///
-/// Input: x0 = unused (caller does not need to preserve any payload).
-/// Behavior: writes a fixed message to stderr and exits with status 70 (EX_SOFTWARE).
+/// Dispatches to the target-specific implementation. Currently only Linux x86_64
+/// is distinguished; all other targets fall through to the ARM64 path.
+///
+/// # Behavior
+/// Writes a fixed diagnostic message to stderr and exits the process with
+/// status 70 (EX_SOFTWARE) to indicate a fatal runtime error.
+///
+/// # ABI
+/// Input: `x0` is unused (caller does not preserve any payload in this register).
+/// Output: never returns (process terminates).
 pub fn emit_iterable_unsupported_kind(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_iterable_unsupported_kind_linux_x86_64(emitter);
@@ -36,6 +42,11 @@ pub fn emit_iterable_unsupported_kind(emitter: &mut Emitter) {
     emitter.syscall(1);
 }
 
+/// Linux x86_64 implementation of `__rt_iterable_unsupported_kind`.
+///
+/// Writes `_iterable_unsupported_kind_msg` to stderr (fd 2) via Linux `write()`
+/// syscall, then exits with status 70 via Linux `exit()` syscall. Both the message
+/// length (57 bytes) and exit status (70) are hardcoded constants.
 fn emit_iterable_unsupported_kind_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: iterable_unsupported_kind ---");

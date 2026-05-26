@@ -11,12 +11,19 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// __rt_json_encode_assoc: encode an assoc array as JSON '{"key":"value",...}'.
-/// Input:  x0 = hash table pointer
-/// Output: x1 = result ptr (in concat_buf), x2 = result len
+/// Emits the `__rt_json_encode_assoc` runtime helper for encoding PHP associative arrays as JSON objects.
+/// Input:  x0 = hash table pointer.
+/// Output: x1 = result ptr (in concat_buf), x2 = result len.
 ///
-/// Uses __rt_hash_iter_next to iterate the hash table entries in insertion order.
-/// Hash table iter yields: x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi, x5=val_tag per entry.
+/// Uses `__rt_hash_iter_next` to iterate hash table entries in insertion order. Hash table iter yields:
+/// x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi, x5=val_tag per entry.
+///
+/// List-shape detection: associative arrays are emitted with object syntax `{"0":...}` first.
+/// If every key is the sequential integer `0..count-1` and `JSON_FORCE_OBJECT` is unset, the finished
+/// buffer is compacted in-place to `[...]` array form after the walk. The provisional `{`/`}` delimiters
+/// are rewritten to `[`/`]` and the generated `"index":` key prefixes are dropped from the output.
+///
+/// Recursion depth is tracked via `__rt_json_depth_enter` / `__rt_json_depth_exit` around the whole encode.
 pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_json_encode_assoc_linux_x86_64(emitter);
@@ -428,6 +435,9 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// x86_64-specific implementation of `__rt_json_encode_assoc`. Mirrors the ARM64 behavior but uses the
+/// x86_64 ABI: associative array pointer in rdi, iterator cursor in rsi, result registers rax/rdx.
+/// List-shape compaction and depth tracking are identical to the ARM64 path but use x86_64 registers.
 fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_assoc ---");

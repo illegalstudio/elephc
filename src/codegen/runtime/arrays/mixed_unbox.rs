@@ -11,9 +11,10 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// mixed_unbox: unwrap nested mixed cells into a concrete runtime payload triple.
-/// Input:  x0 = boxed mixed pointer
+/// Unwraps a boxed mixed cell into a concrete runtime payload triple, peeling nested mixed wrappers until a concrete tag is reached.
+/// Input:  x0 = boxed mixed pointer (may be null)
 /// Output: x0 = runtime value tag, x1 = value_lo, x2 = value_hi
+/// Handles null pointers and nested mixed cells by peeling wrappers until the concrete payload is exposed.
 pub fn emit_mixed_unbox(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_unbox_linux_x86_64(emitter);
@@ -50,6 +51,7 @@ pub fn emit_mixed_unbox(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the normalized null payload triple
 }
 
+/// x86_64 Linux variant of `emit_mixed_unbox` using System V ABI register conventions.
 fn emit_mixed_unbox_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_unbox ---");

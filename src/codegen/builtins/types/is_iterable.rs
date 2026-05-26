@@ -16,6 +16,14 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `is_iterable` builtin call.
+///
+/// dispatches based on the resolved type of `args[0]`:
+/// - For `PhpType::Mixed` or `PhpType::Union`: unboxes the runtime value at runtime and
+///   checks the payload tag (indexed array, assoc hash, or object implementing
+///   Iterator/IteratorAggregate). Returns true or false via the `true_case`/`done` control flow.
+/// - For `PhpType::Array`, `PhpType::AssocArray`, `PhpType::Iterable`, or a known object
+///   implementing Iterator/IteratorAggregate: folds to a compile-time `1` or `0`.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -85,6 +93,11 @@ pub fn emit(
     Some(PhpType::Bool)
 }
 
+/// Emits the runtime check for whether a boxed object payload implements Iterator or IteratorAggregate.
+///
+/// Saves the object pointer from `x1`/`rdi` onto the stack, then tests it against both interface IDs
+/// via `__rt_exception_matches`. Jumps to `true_case` on either match, otherwise falls through to
+/// load `0` and jump to `done`. Preserves stack balance on both paths.
 fn emit_runtime_object_iterable_check(
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -133,6 +146,11 @@ fn emit_runtime_object_iterable_check(
     }
 }
 
+/// Emits a single interface-implements check for a previously saved object pointer.
+///
+/// Reloads the saved object from the stack and calls `__rt_exception_matches` with the given
+/// `interface_id`. On success (non-zero result), jumps to `true_case`. This function does not
+/// modify the stack pointer; the caller manages push/pop around the two checks.
 fn emit_saved_object_interface_check(interface_id: u64, true_case: &str, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -154,6 +172,10 @@ fn emit_saved_object_interface_check(interface_id: u64, true_case: &str, emitter
     }
 }
 
+/// Statically checks whether a named class or interface implements Iterator or IteratorAggregate.
+///
+/// For classes, checks the `interfaces` list directly. For interfaces, performs a DFS up the
+/// parent hierarchy. Returns `false` if the type is unknown or implements neither interface.
 fn object_type_implements_iterable(ctx: &Context, type_name: &str) -> bool {
     if ctx.classes.contains_key(type_name) {
         return ctx.classes.get(type_name).is_some_and(|class_info| {
@@ -170,6 +192,10 @@ fn object_type_implements_iterable(ctx: &Context, type_name: &str) -> bool {
     false
 }
 
+/// Returns `true` if `interface_name` is or transitively extends `ancestor_name`.
+///
+/// Uses an iterative DFS with a visited set to avoid cycles. The `interface_name == ancestor_name`
+/// check handles the direct-match case before the search loop.
 fn interface_extends_interface(ctx: &Context, interface_name: &str, ancestor_name: &str) -> bool {
     if interface_name == ancestor_name {
         return true;

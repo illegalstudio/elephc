@@ -15,6 +15,12 @@ use crate::types::{PhpType, TypeEnv};
 use super::common::BuiltinResult;
 use super::super::super::Checker;
 
+/// Type-checks a filesystem builtin call by name, validating argument count, argument
+/// categories, and return type. Delegates to `check_touch` for `touch()` timestamp validation.
+///
+/// Returns `Ok(Some(PhpType))` with the return type on recognized builtins,
+/// `Ok(None)` when `name` is not a filesystem builtin (caller should try the next
+/// builtin category), or `Err(CompileError)` on arity/type mismatch.
 pub(super) fn check_builtin(
     checker: &mut Checker,
     name: &str,
@@ -191,6 +197,17 @@ pub(super) fn check_builtin(
     }
 }
 
+/// Validates `touch()` arity (1–3 args) and timestamp argument types.
+/// Timestamp args must be `int` (a Unix timestamp) or `null` (omit to use current time).
+///
+/// # Errors
+/// Returns an error if:
+/// - Arity is 0 or greater than 3
+/// - Any timestamp arg is neither `int` nor `null`
+/// - `atime` is `null` but `mtime` is non-null (atime implies current time, so mtime cannot be set separately)
+///
+/// # Returns
+/// `Ok(PhpType::Bool)` on success.
 fn check_touch(
     checker: &mut Checker,
     args: &[Expr],

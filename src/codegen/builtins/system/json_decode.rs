@@ -17,6 +17,15 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
+/// Emits the `json_decode` builtin call.
+///
+/// Handles PHP argument evaluation order: all arguments are evaluated before the
+/// builtin mutates JSON error state or call configuration. Emits zero to
+/// `_json_last_error`, `_json_active_depth`, and `_json_active_flags` before
+/// decoding. The depth argument is decremented by 1 to match PHP's strict
+/// `active_depth >= depth` semantics (depth=1 → limit=0 → top-level fails).
+/// Returns `PhpType::Mixed` regardless of decode success/failure; callers
+/// receive a uniform boxed result shape.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -158,6 +167,10 @@ fn evaluate_assoc_arg(
     AssocArg::Explicit
 }
 
+/// Extracts `JSON_OBJECT_AS_ARRAY` from the flags register and stores it in
+/// `_json_decode_assoc`. Called when `$associative` is null/missing and flags
+/// were provided; the flag bit determines whether decoded objects become arrays
+/// or stdClass instances.
 fn write_assoc_from_flags(emitter: &mut Emitter) {
     let reg = abi::int_result_reg(emitter);
     match emitter.target.arch {
@@ -171,6 +184,7 @@ fn write_assoc_from_flags(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, reg, "_json_decode_assoc", 0);
 }
 
+/// Tracks how the `$associative` argument was provided to `json_decode`.
 enum AssocArg {
     Explicit,
     FromFlags,

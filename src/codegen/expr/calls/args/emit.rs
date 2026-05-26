@@ -23,6 +23,23 @@ use super::spread::{emit_spread_into_named_params, emit_spread_tail_variadic_arr
 use super::variadic::{emit_empty_variadic_array_arg, emit_variadic_array_arg_from_exprs};
 use super::EmittedCallArgs;
 
+/// Emits all call arguments from an expression list, handling named args, spreads, and variadic params.
+///
+/// Dispatches to `named::emit_source_order_named_call_args` when named arguments are present and a
+/// signature is available. Otherwise normalizes arguments via `prepare_call_args` and emits them
+/// as regular positional arguments, handling by-ref parameters and building variadic arrays as needed.
+///
+/// Returns `EmittedCallArgs` containing the collected argument types. The `source_temp_bytes` field
+/// is always zero here; it is populated by the caller for source-level temp tracking.
+///
+/// # Parameters
+/// - `args_exprs`: Raw argument expressions from the PHP call site.
+/// - `sig`: Function signature when known; `None` forces positional-only path.
+/// - `regular_param_count`: Number of caller-visible regular (non-variadic) parameters.
+/// - `ref_arg_context_label`: Label for ref-arg address emission diagnostics.
+/// - `retain_non_variable_ref_args`: Whether to retain addresses for non-variable ref args.
+/// - `coerce_inferred_params`: Whether to coerce arguments to inferred parameter types.
+/// - `emitter`/`ctx`/`data`: Codegen state passed through to sub-emitters.
 pub(crate) fn emit_pushed_call_args(
     args_exprs: &[Expr],
     sig: Option<&FunctionSig>,
@@ -120,6 +137,27 @@ pub(crate) fn emit_pushed_call_args(
     }
 }
 
+/// Emits regular (non-variadic) call arguments from a prepared argument list.
+///
+/// Iterates over `all_args` and emits each argument according to its role:
+/// - **By-ref parameters** (`is_ref=true`): emits the variable's address (for `Variable` expressions)
+///   or the address of a temporary (for non-variable expressions), then pushes `PhpType::Int`.
+/// - **Regular parameters**: delegates to `push_expr_arg` which evaluates, materializes, and returns
+///   the runtime type for each argument.
+///
+/// By-ref emission uses `emit_ref_arg_variable_address` for simple variable references, falling back
+/// to `push_non_variable_ref_arg_address` for expressions that require a temporary address.
+///
+/// # Parameters
+/// - `all_args`: Prepared argument expressions to emit.
+/// - `sig`: Function signature providing `ref_params` and target-type information.
+/// - `ref_arg_context_label`: Diagnostic label passed through to ref-arg emitters.
+/// - `_retain_non_variable_ref_args`: Currently unused; retained for API compatibility.
+/// - `coerce_inferred_params`: Passed to `call_target_ty` to control type coercion behavior.
+/// - `emitter`/`ctx`/`data`: Codegen state passed through to sub-emitters.
+///
+/// # Returns
+/// A `Vec<PhpType>` listing the runtime type of each emitted argument, in argument order.
 pub(crate) fn emit_pushed_non_variadic_args(
     all_args: &[Expr],
     sig: Option<&FunctionSig>,

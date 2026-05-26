@@ -16,6 +16,17 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code to call `__rt_rawurlencode`, which encodes a PHP string using RFC 3986
+/// percent-encoding (`%XX` for unescaped characters, no `+` for spaces).
+///
+/// Arguments:
+///   - `args[0]`: the expression producing the string to encode
+///   - `emitter`: instruction emission context
+///   - `ctx`: variable layout and ownership state
+///   - `data`: runtime data section for relocations and string constants
+///
+/// Returns `Some(PhpType::Str)` — the helper allocates and returns the encoded string,
+/// which must be treated as an owned runtime value.
 pub fn emit(
     _name: &str,
     args: &[Expr],

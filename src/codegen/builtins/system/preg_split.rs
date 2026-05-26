@@ -16,6 +16,18 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `preg_split` builtin call.
+///
+/// # Arguments
+/// - `args[0]`: pattern string
+/// - `args[1]`: subject string
+///
+/// # ABI Details
+/// - ARM64: pattern in x1/x2, subject in x3/x4, result array pointer in x0
+/// - x86_64: pattern in rdi/rdx, subject in rsi/rcx, result array pointer in rax
+///
+/// # Returns
+/// `PhpType::Array(Box::new(PhpType::Str))` — array of string segments from the split.
 pub fn emit(
     _name: &str,
     args: &[Expr],

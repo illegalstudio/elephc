@@ -11,6 +11,8 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Describes how a control-flow path terminates: whether it falls through to the next statement,
+/// breaks out of a loop/switch, exits the function entirely, or has unknown behavior.
 pub(crate) enum TailPathKind {
     NoTail,
     FallsThrough,
@@ -19,6 +21,8 @@ pub(crate) enum TailPathKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Reachability analysis for an if/elseif/else statement, describing which branches
+/// may fall through to the statement following the if.
 pub(crate) struct IfTailReachability {
     pub(crate) then_sinks_tail: bool,
     pub(crate) elseif_sinks_tail: Vec<bool>,
@@ -27,6 +31,8 @@ pub(crate) struct IfTailReachability {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Reachability analysis for an ifdef/else statement, describing which branches
+/// may fall through to the statement following the ifdef.
 pub(crate) struct IfDefTailReachability {
     pub(crate) then_sinks_tail: bool,
     pub(crate) else_sinks_tail: bool,
@@ -34,12 +40,17 @@ pub(crate) struct IfDefTailReachability {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Reachability analysis for a switch statement, describing the tail path kind
+/// for each case and the default branch.
 pub(crate) struct SwitchTailReachability {
     pub(crate) case_tail_paths: Vec<TailPathKind>,
     pub(crate) default_tail_path: Option<TailPathKind>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Reachability analysis for a try/catch/finally statement, describing the tail path
+/// for the try body, each catch block, and the finally block. Also indicates whether
+/// an exception thrown in the try body can sink into the finally block.
 pub(crate) struct TryTailReachability {
     pub(crate) try_tail_path: TailPathKind,
     pub(crate) catch_tail_paths: Vec<TailPathKind>,
@@ -47,10 +58,15 @@ pub(crate) struct TryTailReachability {
     pub(crate) can_sink_into_finally: bool,
 }
 
+/// Returns `true` if the given statement block falls through to the following statement,
+/// rather than terminating, breaking, or unconditionally throwing.
 pub(crate) fn block_reaches_following_stmt(stmts: &[Stmt]) -> bool {
     matches!(block_terminal_effect(stmts), TerminalEffect::FallsThrough)
 }
 
+/// Analyzes the tail paths of an if/elseif/else statement and returns reachability
+/// information for each branch. `then_body`, `elseif_clauses`, and `else_body` are the
+/// statement lists for the respective branches.
 pub(crate) fn analyze_if_tail_paths(
     then_body: &[Stmt],
     elseif_clauses: &[(Expr, Vec<Stmt>)],
@@ -74,6 +90,9 @@ pub(crate) fn analyze_if_tail_paths(
     }
 }
 
+/// Analyzes the tail paths of an ifdef/else statement and returns reachability
+/// information for the then and else branches. `else_body` of `None` represents
+/// an implicit empty else (which implicitly falls through).
 pub(crate) fn analyze_ifdef_tail_paths(
     then_body: &[Stmt],
     else_body: &Option<Vec<Stmt>>,
@@ -87,6 +106,9 @@ pub(crate) fn analyze_ifdef_tail_paths(
     }
 }
 
+/// Analyzes the tail paths of a switch statement and returns reachability information
+/// for each case and the default branch. `cases` is a list of (match expressions, statements)
+/// pairs, and `default` is the optional default block statements.
 pub(crate) fn analyze_switch_tail_paths(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: &Option<Vec<Stmt>>,
@@ -106,6 +128,10 @@ pub(crate) fn analyze_switch_tail_paths(
     }
 }
 
+/// Analyzes the tail paths of a try/catch/finally statement and returns reachability
+/// information for the try body, each catch block, and the finally block. Sets
+/// `can_sink_into_finally` to true only when there are no catches, the try body may
+/// fall through, and the finally block also falls through.
 pub(crate) fn analyze_try_tail_paths(
     try_body: &[Stmt],
     catches: &[crate::parser::ast::CatchClause],
@@ -132,6 +158,8 @@ pub(crate) fn analyze_try_tail_paths(
     }
 }
 
+/// Converts a `BasicBlockSuccessor` into a `TailPathKind`. Panics if the successor
+/// is a `Block` variant, as this function only handles terminal successors.
 fn cfg_successor_tail_path(successor: BasicBlockSuccessor) -> TailPathKind {
     match successor {
         BasicBlockSuccessor::FallsThrough => TailPathKind::FallsThrough,

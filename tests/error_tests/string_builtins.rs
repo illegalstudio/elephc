@@ -45,11 +45,13 @@ expect_builtin_arity_error!(
     "ctype_space() takes exactly 1 argument"
 );
 
+// Verifies that `substr()` with only one string argument produces the correct arity error.
 #[test]
 fn test_error_substr_wrong_args() {
     expect_error("<?php substr(\"hi\");", "substr() takes 2 or 3 arguments");
 }
 
+// Verifies that `strpos()` with only one argument produces the correct arity error.
 #[test]
 fn test_error_strpos_wrong_args() {
     expect_error(
@@ -58,6 +60,9 @@ fn test_error_strpos_wrong_args() {
     );
 }
 
+// Verifies that a function returning `int` that returns `strpos()` directly is rejected,
+// because `strpos()` returns `Int|Bool` (false on miss), not `int`. This is a type
+// incompatibility regression test.
 #[test]
 fn test_error_strpos_false_return_rejects_int_return_type() {
     expect_error(
@@ -70,6 +75,7 @@ function pos(): int {
     );
 }
 
+// Verifies that `str_replace()` with only two arguments produces the correct arity error.
 #[test]
 fn test_error_str_replace_wrong_args() {
     expect_error(
@@ -78,21 +84,25 @@ fn test_error_str_replace_wrong_args() {
     );
 }
 
+// Verifies that `sprintf()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_sprintf_no_args() {
     expect_error("<?php sprintf();", "sprintf() requires at least 1 argument");
 }
 
+// Verifies that `printf()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_printf_no_args() {
     expect_error("<?php printf();", "printf() requires at least 1 argument");
 }
 
+// Verifies that `ord()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_ord_wrong_args() {
     expect_error("<?php ord();", "ord() takes exactly 1 argument");
 }
 
+// Verifies that `explode()` with only one argument produces the correct arity error.
 #[test]
 fn test_error_explode_wrong_args() {
     expect_error(
@@ -101,21 +111,25 @@ fn test_error_explode_wrong_args() {
     );
 }
 
+// Verifies that `str_pad()` with only one argument produces the correct arity error.
 #[test]
 fn test_error_str_pad_wrong_args() {
     expect_error("<?php str_pad(\"x\");", "str_pad() takes 2 to 4 arguments");
 }
 
+// Verifies that `md5()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_md5_wrong_args() {
     expect_error("<?php md5();", "md5() takes exactly 1 argument");
 }
 
+// Verifies that `sha1()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_sha1_wrong_args() {
     expect_error("<?php sha1();", "sha1() takes exactly 1 argument");
 }
 
+// Verifies that `htmlspecialchars()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_htmlspecialchars_wrong_args() {
     expect_error(
@@ -124,11 +138,13 @@ fn test_error_htmlspecialchars_wrong_args() {
     );
 }
 
+// Verifies that `urlencode()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_urlencode_wrong_args() {
     expect_error("<?php urlencode();", "urlencode() takes exactly 1 argument");
 }
 
+// Verifies that `base64_encode()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_base64_encode_wrong_args() {
     expect_error(
@@ -137,6 +153,7 @@ fn test_error_base64_encode_wrong_args() {
     );
 }
 
+// Verifies that `ctype_alpha()` with no arguments produces the correct arity error.
 #[test]
 fn test_error_ctype_alpha_wrong_args() {
     expect_error(
@@ -145,11 +162,13 @@ fn test_error_ctype_alpha_wrong_args() {
     );
 }
 
+// Verifies that `hash()` with only one argument produces the correct arity error.
 #[test]
 fn test_error_hash_wrong_args() {
     expect_error(r#"<?php hash("md5");"#, "hash() takes exactly 2 arguments");
 }
 
+// Verifies that `sscanf()` with only one argument produces the correct arity error.
 #[test]
 fn test_error_sscanf_wrong_args() {
     expect_error(
@@ -160,6 +179,8 @@ fn test_error_sscanf_wrong_args() {
 
 // --- v0.5: I/O function errors ---
 
+// Verifies that `ptr_set()` rejects a string value, since ptr_set only accepts
+// int, bool, null, or pointer. This is an I/O function error regression test.
 #[test]
 fn test_error_ptr_set_requires_word_value() {
     expect_error(

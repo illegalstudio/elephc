@@ -16,6 +16,12 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for PHP `strrpos(haystack, needle)`.
+///
+/// Pushes the haystack pointer/length registers, evaluates the needle argument,
+/// loads both strings into the ABI string-helper registers, calls `__rt_strrpos`,
+/// then boxes the raw integer result (position or sentinel) into a `PhpType::Mixed`
+/// value so PHP's `false | int` return type is preserved correctly.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -47,6 +53,14 @@ pub fn emit(
     Some(PhpType::Mixed)
 }
 
+/// Box the raw search result in `x0`/`rax` into a `PhpType::Mixed` value.
+///
+/// - If the result is negative (sentinel), emits `bool false` (tag 3).
+/// - If the result is non-negative (found position), emits `int` (tag 0).
+///
+/// The distinction matters because PHP's `strrpos` returns `int 0` for a match
+/// at position zero but `false` when nothing is found — both fit in a raw
+/// integer register but have different PHP runtime representations.
 fn box_search_result(emitter: &mut Emitter, ctx: &mut Context) {
     let found_label = ctx.next_label("strrpos_found");
     let end_label = ctx.next_label("strrpos_done");

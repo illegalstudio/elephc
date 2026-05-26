@@ -17,6 +17,27 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `array_reverse` builtin.
+///
+/// # Arguments
+/// - `_name`: Unused name for dispatcher compatibility (builtin is identified by signature).
+/// - `args[0]`: The array expression to reverse. Must be evaluated first; result is in `x0`/`rax`.
+/// - `emitter`: Target-aware instruction emitter.
+/// - `ctx`: Codegen context carrying variable layout and class metadata.
+/// - `data`: Read-only data section for relocations and static data.
+///
+/// # Returns
+/// `Some(PhpType::Array(...))` matching the input array's element type, or
+/// `Some(PhpType::Array(Box::new(PhpType::Int)))` if the input type is not an `Array`
+/// (defaulting to `int`-indexed array on return).
+///
+/// # Behavior
+/// - Evaluates `args[0]` to produce the source array in `x0`/`rax`.
+/// - On x86_64: moves the array pointer to `rdi` (first calling-convention arg) and calls
+///   `__rt_array_reverse` or `__rt_array_reverse_refcounted` based on `arr_ty`.
+/// - On ARM64: uses `bl` to call `__rt_array_reverse` or `__rt_array_reverse_refcounted`.
+/// - Result array is returned in `x0`/`rax`.
+/// - Preserves `ctx` state; emits a `"array_reverse()"` comment for debug traceability.
 pub fn emit(
     _name: &str,
     args: &[Expr],

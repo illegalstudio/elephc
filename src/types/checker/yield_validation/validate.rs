@@ -36,12 +36,24 @@ pub(crate) fn validate_yield_contexts(program: &Program) -> Vec<CompileError> {
     state.errors
 }
 
+/// Tracks the current traversal state while checking yield contexts.
 struct State {
+    /// Number of enclosing function/method/closure scopes (excluding the global
+    /// program level). A yield is only valid when `function_depth > 0`.
     function_depth: u32,
+    /// Number of enclosing `try`/`catch`/`finally` blocks. Elephc v1 generators
+    /// cannot resume through unwinding, so yield is forbidden when this is > 0.
     try_finally_depth: u32,
+    /// All yield-context errors collected during the program walk. Multiple
+    /// violations surface in a single pass so the user sees all problems at once.
     errors: Vec<CompileError>,
 }
 
+/// Recursively walks a statement, visiting each nested expression via
+/// `visit_expr`. Tracks `function_depth` by incrementing on function/method
+/// bodies and closures, and `try_finally_depth` by incrementing on `Try`
+/// blocks. Skips `InterfaceDecl` bodies (abstract/placeholder methods contain
+/// no executable code).
 fn visit_stmt(stmt: &Stmt, st: &mut State) {
     match &stmt.kind {
         StmtKind::FunctionDecl { body, .. } => {
@@ -238,6 +250,11 @@ fn visit_stmt(stmt: &Stmt, st: &mut State) {
     }
 }
 
+/// Recursively walks an expression. When a `Yield` or `YieldFrom` node is
+/// encountered, calls `check_yield_context` to validate placement.
+/// A `Closure` introduces a fresh generator scope: `function_depth` is
+/// incremented and `try_finally_depth` is reset to 0 for that closure's body,
+/// preserving the outer value on exit.
 fn visit_expr(expr: &Expr, st: &mut State) {
     match &expr.kind {
         ExprKind::Yield { key, value } => {
@@ -390,6 +407,10 @@ fn visit_expr(expr: &Expr, st: &mut State) {
     }
 }
 
+/// Emits a `CompileError` if `yield` appears outside a function/method body
+/// or inside a `try`/`catch`/`finally` block, based on the current state.
+/// Appends to `st.errors` rather than returning to allow multiple violations
+/// to be collected in a single pass.
 fn check_yield_context(span: crate::span::Span, st: &mut State) {
     if st.function_depth == 0 {
         st.errors.push(CompileError::new(

@@ -8,7 +8,23 @@
 //! Key details:
 //! - Data symbol names are consumed directly by JSON helpers and must not drift from scanner logic.
 
-/// Emit JSON string constants and the json_last_error_msg lookup table.
+/// Emits fixed JSON literal constants and error-message lookup data as assembly.
+///
+/// Returns a `String` containing `.globl`, `.ascii`, `.quad`, and `.balign`
+/// directives for the following symbols:
+///
+/// - `_json_true`, `_json_false`, `_json_null` — JSON keywords
+/// - `_json_int_max_str`, `_json_int_min_str` — overflow thresholds for
+///   `json_decode`'s `JSON_BIGINT_AS_STRING` logic (i64 bounds)
+/// - `_json_err_msg_0` through `_json_err_msg_10` — per-error human-readable
+///   messages matching PHP's `json_last_error_msg()` exactly
+/// - `_json_err_msg_table` — parallel ptr/len pairs indexed by error code
+/// - `_json_err_msg_count` — total error message count
+///
+/// The table uses `.balign 8` to ensure 8-byte alignment after the
+/// variable-length `.ascii` strings. The pointer/length layout allows a
+/// single bounds-checked load to materialize a string slice in the runtime
+/// helper.
 pub(crate) fn emit_json_data() -> String {
     let mut out = String::new();
     out.push_str(".globl _json_true\n_json_true:\n    .ascii \"true\"\n");

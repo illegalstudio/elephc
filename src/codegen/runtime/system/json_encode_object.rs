@@ -384,6 +384,34 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the encoded object slice in the standard string registers
 }
 
+/// x86_64 SysV ABI implementation of `__rt_json_encode_object`.
+///
+/// Mirrors the ARM64 path but uses rbp-relative stack slots and System V
+/// calling conventions. Dispatches to `jsonSerialize()` when the class
+/// implements `JsonSerializable`, otherwise walks the public-property table.
+///
+/// Input:
+///   rax = object pointer (SysV first integer argument)
+///
+/// Output:
+///   rax = ptr in concat_buf, rdx = length
+///
+/// Stack layout (rbp-relative, 96 bytes):
+///   [rbp - 8]  = object pointer
+///   [rbp - 16] = output start ptr
+///   [rbp - 24] = current write pos
+///   [rbp - 32] = descriptor pointer / prefix length
+///   [rbp - 40] = property loop index / _json_last_error
+///   [rbp - 48] = property count / _json_active_flags
+///   [rbp - 56] = scratch (prop_index)
+///   [rbp - 64] = scratch (type_tag) / saved prefix ptr
+///   [rbp - 72] = scratch (prop value lo)
+///   [rbp - 80] = scratch (prop value hi) / _json_active_depth
+///   [rbp - 88] = scratch (prop name_ptr) / _json_indent_depth
+///   [rbp - 96] = scratch (prop name_len) / _json_depth_limit
+///
+/// Called from:
+/// - `emit_json_encode_object` when `emitter.target.arch == Arch::X86_64`.
 fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_object ---");

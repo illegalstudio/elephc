@@ -15,6 +15,9 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, ClassProperty};
 use crate::span::Span;
 
+/// Validates that `properties` and `methods` within one class or trait body
+/// have no duplicate names (case-sensitive). Used to catch direct member conflicts
+/// before trait expansion. Returns `Ok(())` or a fatal `CompileError`.
 pub(super) fn validate_direct_members(
     properties: &[ClassProperty],
     methods: &[ClassMethod],
@@ -33,6 +36,10 @@ pub(super) fn validate_direct_members(
     validate_direct_method_duplicates(methods, span, owner_name)
 }
 
+/// Validates that `methods` within one class or trait body have no duplicate
+/// (name, is_static) keys. Used during merge to catch direct method conflicts
+/// before they can be hidden by trait aliasing or insteadof adaptation.
+/// Returns `Ok(())` or a fatal `CompileError`.
 pub(super) fn validate_direct_method_duplicates(
     methods: &[ClassMethod],
     span: Span,

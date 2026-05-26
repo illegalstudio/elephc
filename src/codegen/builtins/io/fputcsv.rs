@@ -18,6 +18,14 @@ use crate::types::PhpType;
 
 use super::stream_arg::emit_stream_fd_arg;
 
+/// Emits a PHP `fputcsv(stream, fields, separator, enclosure, escape)` builtin call.
+///
+/// Validates `stream` via `emit_stream_fd_arg` to extract a raw file descriptor,
+/// then preserves it on the stack while `fields` (args[1]) is evaluated as a
+/// string-array expression. After evaluation, the array pointer is moved into the
+/// second ABI argument register and the file descriptor is restored to the first
+/// register before calling `__rt_fputcsv`. Returns `PhpType::Int` (bytes written
+/// or false on failure).
 pub fn emit(
     _name: &str,
     args: &[Expr],

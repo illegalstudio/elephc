@@ -17,6 +17,8 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 use super::super::inference::syntactic::wider_type_syntactic;
 use super::super::Checker;
 
+/// Holds the resolved signature components for a closure: parameters with types, captured
+/// environment bindings, default value expressions, by-reference flags, and declared-param flags.
 pub(crate) struct ClosureSignatureContext {
     pub params: Vec<(String, PhpType)>,
     pub env: TypeEnv,
@@ -26,6 +28,11 @@ pub(crate) struct ClosureSignatureContext {
 }
 
 impl Checker {
+    /// Validates captured variables exist in the current environment, then builds a
+    /// `ClosureSignatureContext` by resolving parameter type annotations, default value
+    /// compatibility, and inserting parameter bindings into a cloned environment that
+    /// includes variadic and capture bindings. Returns the context for use in closure
+    /// return type inference.
     pub(crate) fn prepare_closure_signature_context(
         &mut self,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
@@ -92,6 +99,11 @@ impl Checker {
         })
     }
 
+    /// Infers the return type of a closure body by collecting all return statements, then
+    /// comparing against an optional declared return type annotation. Validates coverage,
+    /// compatibility, never-return constraints, and Generator yield semantics. Returns
+    /// the inferred (or declared) return type and a boolean indicating whether a declared
+    /// return type was present.
     pub(crate) fn resolve_closure_return_type(
         &mut self,
         body: &[Stmt],
@@ -165,6 +177,10 @@ impl Checker {
         }
     }
 
+    /// Extracts the callable signature from an expression that may be a closure literal,
+    /// first-class callable, variable referencing a callable, array-access callable,
+    /// assignment-wrapped callable, or ternary/merge chains. Returns `None` for expressions
+    /// that cannot be invoked as a callable at the type-check level.
     pub(crate) fn resolve_expr_callable_sig(
         &mut self,
         expr: &Expr,
@@ -235,6 +251,10 @@ impl Checker {
         }
     }
 
+    /// Resolves the callable signature for a ternary or merge branch pair by recursively
+    /// resolving each branch and returning the signature only if both branches resolve to
+    /// the same signature. Used for `?:` and `??` expressions whose both branches must
+    /// agree on the callable type for the expression to be callable.
     fn resolve_matching_branch_callable_sig(
         &mut self,
         left: &Expr,

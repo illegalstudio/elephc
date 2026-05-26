@@ -57,6 +57,9 @@ pub fn emit_str_to_cstr(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of the `__rt_str_to_cstr` runtime helper.
+/// Saves the source pointer and length across the heap allocation call, copies the
+/// payload byte-by-byte, appends a trailing null, and returns the destination pointer in `rax`.
 fn emit_str_to_cstr_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_to_cstr ---");

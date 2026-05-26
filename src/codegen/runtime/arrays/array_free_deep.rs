@@ -13,9 +13,20 @@ use crate::codegen::platform::Arch;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
-/// array_free_deep: free an array and release any owned heap-backed elements.
-/// Input:  x0 = array pointer
-/// Output: none
+/// Emits `__rt_array_free_deep` and `__rt_array_free_deep_done` helpers.
+///
+/// Recursively frees the array struct and every owned heap-backed child element by
+/// dispatching on architecture. For ARM64 emits the full helper inline; for x86_64 Linux
+/// delegates to `emit_array_free_deep_linux_x86_64`. Child payloads (strings, nested
+/// arrays, objects, boxed mixed) are released through `__rt_decref_any`. The collector
+/// run suppression flag is set before the walk and cleared before freeing the struct.
+///
+/// Called from:
+/// - `crate::codegen::runtime::emitters::emit_runtime()` via `crate::codegen::runtime::arrays`
+///
+/// ABI:
+/// - Input: `x0` / `rax` = array pointer
+/// - Output: none (control returns to caller)
 pub fn emit_array_free_deep(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_free_deep_linux_x86_64(emitter);
@@ -123,6 +134,21 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits x86_64 Linux–specific deep free for heap-backed indexed arrays.
+///
+/// Validates the array pointer is a non-null, elefhc-owned indexed-array heap allocation,
+/// then recursively releases each owned child payload through `__rt_decref_any` before
+/// freeing the array struct itself via `__rt_heap_free`. Suppresses nested collector runs
+/// for the duration of the walk to prevent premature collection during recursive cleanup.
+///
+/// Called from:
+/// - `emit_array_free_deep` when `emitter.target.arch == Arch::X86_64`
+///
+/// ABI:
+/// - Input: `rax` = array pointer
+/// - Preserves: `rbp`, `r10–r11` (scratch after save), `rcx` (tag extract)
+/// - Kills: `rax` (reloaded per element), `r10` (length), `r11` (index/offset)
+/// - Output: `rax` = 0 / garbage, stack restored, control returns to caller
 fn emit_array_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_free_deep ---");

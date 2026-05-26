@@ -11,10 +11,7 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// range: create an integer array from start to end (inclusive).
-/// Input: x0 = start, x1 = end
-/// Output: x0 = pointer to new array containing values from start to end
-/// Supports both ascending (start <= end) and descending (start > end) ranges.
+/// Dispatches to the architecture-specific range-emitter implementation.
 pub fn emit_range(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_range_linux_x86_64(emitter);
@@ -84,6 +81,11 @@ pub fn emit_range(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = array [start..end]
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_range` for both ascending and descending integer ranges.
+/// Input: rdi = start (inclusive), rsi = end (inclusive)
+/// Output: rax = pointer to new indexed array containing values from start to end
+/// Uses rbp-based frame with spill slots for start, end, count, step, and array pointer.
+/// Preserves 16-byte stack alignment for nested calls.
 fn emit_range_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: range ---");

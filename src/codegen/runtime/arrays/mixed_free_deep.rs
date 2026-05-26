@@ -54,6 +54,10 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_mixed_free_deep`.
+/// Input: rax = mixed cell pointer
+/// Output: none
+/// ABI: preserves rbp, uses rax for input/output, calls `__rt_decref_any` and `__rt_heap_free` as needed.
 fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_free_deep ---");

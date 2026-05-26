@@ -15,6 +15,11 @@ use crate::types::{PhpType, TypeEnv};
 use super::common::BuiltinResult;
 use super::super::super::Checker;
 
+/// Type-checks path builtins (`basename`, `dirname`, `fnmatch`, `realpath`, `pathinfo`)
+/// and returns the return `PhpType` on success, `BuiltinResult` with diagnostic on failure.
+///
+/// Arity and argument types are validated; `checker.infer_type()` is called on each argument
+/// to populate type information. Returns `Ok(None)` for unrecognized names so callers can fall through.
 pub(super) fn check_builtin(
     checker: &mut Checker,
     name: &str,
@@ -75,6 +80,12 @@ pub(super) fn check_builtin(
     }
 }
 
+/// Validates `pathinfo()` arity (1–2 args), checks the optional flag is `int`,
+/// and returns `string` for a known flag, `assoc-array<string,string>` when no flag
+/// or `PATHINFO_ALL` (15) is given, or a union in the mixed case.
+///
+/// Calls `pathinfo_static_flag_value()` to resolve `PATHINFO_*` constants at compile time.
+/// Falls back to a union type when the flag is dynamic or missing.
 fn check_pathinfo(
     checker: &mut Checker,
     args: &[Expr],
@@ -113,6 +124,12 @@ fn check_pathinfo(
     }
 }
 
+/// Extracts a literal `PATHINFO_*` constant value from `flag` expression at compile time.
+///
+/// Handles integer literals, `PATHINFO_*` constants (`PATHINFO_DIRNAME`=1, `PATHINFO_BASENAME`=2,
+/// `PATHINFO_EXTENSION`=4, `PATHINFO_FILENAME`=8, `PATHINFO_ALL`=15), negation, and bitwise
+/// combinators (`|`, `&`, `^`). Returns `None` for non-static expressions (variables, function
+/// calls, etc.) so `check_pathinfo` can fall back to a union type.
 fn pathinfo_static_flag_value(flag: &Expr) -> Option<i64> {
     match &flag.kind {
         ExprKind::IntLiteral(value) => Some(*value),

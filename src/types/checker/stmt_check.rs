@@ -18,7 +18,18 @@ use crate::types::TypeEnv;
 
 use super::Checker;
 
+/// Statement-level type checking for the Checker context.
 impl Checker {
+    /// Dispatches to assignment or control-flow checking based on statement kind.
+    ///
+    /// Synthetic, include-once-mark, and variant-mark statements are no-ops.
+    /// Unresolved ifdef, namespace, use, and include statements produce errors.
+    /// Echo and expression statements run inference with assignment effects.
+    /// All class/function/enum/interface/trait/extern declarations are no-ops.
+    ///
+    /// # Errors
+    /// Returns an error for unresolved conditionals, namespace/use directives,
+    /// includes, or invalid break/continue levels.
     pub fn check_stmt(&mut self, stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileError> {
         match &stmt.kind {
             StmtKind::Synthetic(stmts) => {
@@ -99,6 +110,11 @@ impl Checker {
         }
     }
 
+    /// Validates a `break` or `continue` statement against the current loop depth.
+    ///
+    /// `keyword` is either `"break"` or `"continue"`. `levels` is the number of
+    /// enclosing loops to exit. Errors if `levels` exceeds the available loop
+    /// nesting depth or if the jump would escape a `finally` block.
     fn check_loop_exit(
         &self,
         span: crate::span::Span,
@@ -122,6 +138,12 @@ impl Checker {
         }
     }
 
+    /// Returns `true` if a loop exit of `levels` enclosing loops stays inside all
+    /// `finally` blocks that enclose the target.
+    ///
+    /// If no `finally` block applies to the target depth, returns `true` (safe).
+    /// Otherwise computes whether `levels` stays within the innermost `finally`
+    /// block's range.
     fn loop_exit_stays_inside_finally(&self, levels: usize) -> bool {
         let Some(finally_base_depth) = self.finally_break_continue_bases.last() else {
             return true;

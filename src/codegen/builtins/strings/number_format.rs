@@ -16,6 +16,20 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `number_format` builtin call.
+///
+/// Prepares arguments on the stack in reverse order, then pops them into ABI registers
+/// and calls `__rt_number_format`. Handles all four parameters:
+///
+/// - `_name`: Unused name for dispatcher compatibility.
+/// - `args[0]`: Numeric value as float (passed via `push_float_arg`).
+/// - `args[1]`: Decimal count (default 0 when absent).
+/// - `args[2]`: Decimal separator byte (default `.`, 46 ASCII).
+/// - `args[3]`: Thousands separator byte (default `,`, 44 ASCII).
+///
+/// Emits architecture-specific assembly for x86_64 and AArch64 using stacked
+/// arguments and the SysV / AArch64 calling conventions respectively.
+/// Returns `Some(PhpType::Str)` as the runtime helper allocates a PHP string.
 pub fn emit(
     _name: &str,
     args: &[Expr],

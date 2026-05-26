@@ -10,6 +10,30 @@
 
 use crate::codegen::emit::Emitter;
 
+/// Emits the `__rt_json_decode` and `__rt_json_decode_empty` runtime helper assembly
+/// for Linux x86_64.
+///
+/// # Inputs (ABI)
+/// - `rax`: pointer to the borrowed JSON input slice
+/// - `rdx`: length of the borrowed JSON input slice
+///
+/// # Outputs (ABI)
+/// - `rax`: pointer to the decoded string (or null for empty input)
+/// - `rdx`: length of the decoded string slice
+///
+/// # Behavior
+/// Trims JSON whitespace from both ends, then either:
+///
+/// 1. **Quoted strings**: decode escape sequences (`\n`, `\t`, `\r`, `\b`, `\f`, `\"`, `\\`, `\/`, `\uXXXX`)
+///    including UTF-8 encoding of BMP code points and surrogate pairs.
+///    Malformed unicode escapes are preserved literally.
+///
+/// 2. **Non-string payloads** (arrays, objects, literals): return the trimmed slice as-is.
+///
+/// 3. **Empty/whitespace-only input**: returns a null pointer with zero length.
+///
+/// The concat buffer at `_concat_buf` is used as the output accumulator for decoded strings;
+/// `_concat_off` tracks the current write position across calls.
 pub(super) fn emit_json_decode_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_decode ---");

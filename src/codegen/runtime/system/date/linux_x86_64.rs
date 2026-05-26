@@ -10,6 +10,34 @@
 
 use crate::codegen::emit::Emitter;
 
+/// Emits the `__rt_date` and `__rt_date_have_time_linux_x86_64` runtime helpers for Linux x86_64.
+///
+/// # Input ABI
+/// - `rax`: Unix timestamp (i64); pass -1 to query current time via libc `time()`.
+/// - `rdi`: pointer to the PHP date format string.
+/// - `rsi`: byte length of the format string.
+///
+/// # Output ABI
+/// - `rax`: pointer to the formatted date string inside the concat buffer.
+/// - `rdx`: byte length of the formatted string.
+///
+/// # Behavior
+/// Decomposes the timestamp via libc `localtime()`, then scans the format string
+/// byte-by-byte dispatching each token ('Y', 'm', 'd', 'H', 'i', 's', 'j', 'n', 'G',
+/// 'g', 'N', 'A', 'a', 'U', 'l', 'D', 'F', 'M') to a dedicated helper that appends
+/// the formatted field to the shared concat buffer. Non-token bytes are copied
+/// verbatim. The global concat-buffer offset is updated atomically before return.
+///
+/// # Local frame layout (128 bytes, aligned)
+/// - `[rbp - 8]`: saved timestamp (rax)
+/// - `[rbp - 16]`: saved format string pointer (rdi)
+/// - `[rbp - 24]`: saved format string length (rsi)
+/// - `[rbp - 32]`: pointer to libc `struct tm` returned by `localtime()`
+/// - `[rbp - 40]`: live concat-buffer write cursor
+/// - `[rbp - 48]`: formatted-string start pointer (returned as result)
+/// - `[rbp - 56]`: format string scan index
+/// - `[rbp - 64]`: original concat-buffer offset (for global update)
+/// - `[rbp - 96..rbp - 128]`: scratch area for decimal digit staging in `__rt_date_write_int64_linux_x86_64`
 pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: date ---");

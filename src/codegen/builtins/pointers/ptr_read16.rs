@@ -16,6 +16,24 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `ptr_read16` builtin: reads one unsigned 16-bit word through a pointer.
+/// Checks for null before reading; aborts with a fatal error if the pointer is null.
+/// Zero-extends the 16-bit payload into a PHP integer (`PhpType::Int`).
+///
+/// # Arguments
+/// - `_name`: unused, matches the builtin dispatcher signature
+/// - `args`: single expression producing the pointer value
+/// - `emitter`: target assembly emitter
+/// - `ctx`: codegen context (contains target, variable layout, etc.)
+/// - `data`: mutable data section for literals/relocs
+///
+/// # Returns
+/// `Some(PhpType::Int)` — the result type is always a PHP integer.
+///
+/// # Side effects
+/// - Calls `__rt_ptr_check_nonnull` which aborts if the pointer is null
+/// - Clobbers `x0`/`rax` (the loaded integer value) and `x1`/`rax` may be used as scratch
+/// - Returns the result value in the integer register per target ABI
 pub fn emit(
     _name: &str,
     args: &[Expr],

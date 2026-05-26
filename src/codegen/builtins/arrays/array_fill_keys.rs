@@ -18,6 +18,22 @@ use crate::parser::ast::Expr;
 use crate::types::{array_key_type_from_value_type, PhpType};
 use super::hash_value_type_tag::hash_value_type_tag;
 
+/// Emits the `array_fill_keys($keys, $value)` builtin call.
+///
+/// Dispatches to the x86_64 Linux implementation or uses ARM64 conventions.
+/// Pushes the keys array onto the stack, evaluates the fill value into `x0`,
+/// calls `__rt_array_fill_keys` (or `_refcounted` variant), and returns an
+/// `AssocArray` type with the inferred key element type and value type.
+///
+/// # Arguments
+/// * `_name` - Unused; present for dispatcher uniformity.
+/// * `args` - Two expressions: `$keys` (array of keys) and `$value` (fill value).
+/// * `emitter` - Target-specific assembly emitter.
+/// * `ctx` - Codegen context (variable layout, ownership state).
+/// * `data` - Data section for literals and runtime metadata.
+///
+/// # Returns
+/// `Some(PhpType::AssocArray { key, value })` describing the result array.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -58,6 +74,20 @@ pub fn emit(
     })
 }
 
+/// x86_64 Linux implementation of `array_fill_keys` using System V AMD64 ABI.
+///
+/// Preserves the keys array in `rax` while evaluating the fill value expression,
+/// then arranges arguments per AMD64 calling convention (rdi=keys, rsi=value, rdx=type_tag)
+/// before calling the appropriate runtime helper.
+///
+/// # Arguments
+/// * `args` - Two expressions: `$keys` (indexed array) and `$value` (fill scalar).
+/// * `emitter` - x86_64 assembly emitter.
+/// * `ctx` - Codegen context.
+/// * `data` - Data section.
+///
+/// # Returns
+/// `Some(PhpType::AssocArray { key, value })` describing the result array.
 fn emit_array_fill_keys_linux_x86_64(
     args: &[Expr],
     emitter: &mut Emitter,

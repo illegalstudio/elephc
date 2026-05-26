@@ -10,6 +10,14 @@
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
+/// Emits the `__rt_match_unhandled` runtime helper for both AArch64 and x86_64.
+///
+/// This fatal handler writes a hardcoded error message to stderr and terminates the
+/// process with exit code 70 (EX_SOFTWARE). It is invoked by generated code when a
+/// match expression has no corresponding arm for a given discriminant value.
+///
+/// AArch64 path: uses syscall 4 (sys_write) then syscall 1 (sys_exit).
+/// x86_64 path: uses syscall 1 (write) then syscall 60 (exit).
 pub fn emit_match_unhandled(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: match_unhandled ---");

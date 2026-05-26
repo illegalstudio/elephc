@@ -49,6 +49,10 @@ pub fn emit_str_starts_with(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// x86_64 Linux implementation: checks if haystack starts with needle.
+/// Input: rdi=haystack ptr, rdx=needle ptr, rcx=needle length, rsi=haystack length
+/// Output: eax = 1 if haystack starts with needle, 0 otherwise
+/// Called from: `emit_str_starts_with` when target is x86_64
 fn emit_str_starts_with_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_starts_with ---");

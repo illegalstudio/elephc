@@ -10,9 +10,17 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// fgetcsv: read one line from fd and parse as CSV into an array of strings.
-/// Input:  x0=fd
-/// Output: x0=array pointer (array of field strings)
+/// Reads one line from a file descriptor and parses it as CSV, returning an array of field strings.
+/// Input:  x0=fd (file descriptor)
+/// Output: x0=array pointer (indexed array of owned string field values)
+///
+/// Uses `__rt_fgets` to read a line, then scans the line byte-by-byte handling:
+/// - Comma-separated unquoted fields
+/// - Quoted fields with RFC 4180 escaped-quote support (`""` → `"`)
+/// - Trailing `\n` and `\r` as field terminators
+///
+/// Stack frame: 80 bytes for parsing state (line ptr/len, field start/length, in_quotes flag).
+/// Returns an array allocated via `__rt_array_new` with 64-field initial capacity.
 pub fn emit_fgetcsv(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_fgetcsv_linux_x86_64(emitter);
@@ -160,6 +168,16 @@ pub fn emit_fgetcsv(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fgetcsv_loop");                                 // continue parsing
 }
 
+/// x86_64 Linux variant of `emit_fgetcsv` using the System V ABI.
+/// Reads one line from a file descriptor and parses it as CSV, returning an array of field strings.
+/// Input:  rdi=fd (file descriptor)
+/// Output: rax=array pointer (indexed array of owned string field values)
+///
+/// Same CSV parsing logic as the ARM64 variant but uses x86_64 registers and the System V ABI.
+/// Spills parser state (scan ptr, end ptr, field start, field length, in_quotes flag) to stack
+/// via rbp-relative offsets to survive helper calls (`__rt_fgets`, `__rt_str_persist`, `__rt_array_push_str`).
+/// Returns the result array in rax.
+/// Stack: 80 bytes allocated via `sub rsp, 80` with `push rbp` / `pop rbp` frame.
 fn emit_fgetcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fgetcsv ---");

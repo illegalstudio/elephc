@@ -14,9 +14,12 @@ const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 const PTR_READ_STRING_NEG_LEN_MSG_LEN: usize =
     "Fatal error: ptr_read_string() length must be non-negative\n".len();
 
-/// __rt_ptr_read_string: copy len bytes from raw memory into an owned elephc string.
-/// AArch64 input: x0 = source pointer, x1 = byte length. Output: x1 = string pointer, x2 = length.
-/// x86_64 input: rax = source pointer, rdx = byte length. Output: rax = string pointer, rdx = length.
+/// Emits the `__rt_ptr_read_string` runtime helper that copies raw memory into an owned PHP string.
+///
+/// Dispatches to the architecture-specific implementation. On ARM64 the input is x0=source, x1=length
+/// and the output is x1=string pointer, x2=length. On x86_64 the input is rax=source, rdx=length and
+/// the output is rax=string pointer, rdx=length. Negative lengths are fatal; zero length returns the
+/// canonical empty string pair (null pointer, zero length). The heap kind stamped is 1 (owned string).
 pub(crate) fn emit_ptr_read_string(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_ptr_read_string_linux_x86_64(emitter);
@@ -79,6 +82,12 @@ pub(crate) fn emit_ptr_read_string(emitter: &mut Emitter) {
     emitter.syscall(1);
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_ptr_read_string`.
+///
+/// Input registers: rax = source pointer, rdx = byte length. Output: rax = string pointer, rdx = length.
+/// The function checks for negative length (fatal), zero length (returns canonical empty pair), and
+/// copies exactly the requested byte count into a heap-allocated owned string stamped with heap kind 1.
+/// Uses the x86_64 System V ABI calling convention with aligned spill slots.
 fn emit_ptr_read_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ptr_read_string ---");

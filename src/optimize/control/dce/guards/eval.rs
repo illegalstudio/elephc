@@ -11,6 +11,12 @@
 use super::super::*;
 use super::super::state::{GuardLiteral, GuardState};
 
+/// Extracts a variable name and its expected truthiness from a simple guard condition.
+///
+/// Returns `Some((name, truthy_if_true))` where `truthy_if_true` indicates whether
+/// the variable is expected to be truthy (true) or falsy (false) when the condition
+/// evaluates to true. Handles bare variables (`$x`) and negated variables (`!$x`).
+/// Returns `None` for any other expression shape.
 pub(in crate::optimize::control::dce) fn guard_variable_name(condition: &Expr) -> Option<(&str, bool)> {
     match &condition.kind {
         ExprKind::Variable(name) => Some((name.as_str(), true)),
@@ -21,6 +27,10 @@ pub(in crate::optimize::control::dce) fn guard_variable_name(condition: &Expr) -
         _ => None,
     }
 }
+/// Converts a scalar literal expression into a `GuardLiteral`.
+///
+/// Handles `bool`, `null`, `int`, `float`, and `string` literals.
+/// Returns `None` for variables, operators, or any non-literal expression.
 pub(in crate::optimize::control::dce) fn scalar_guard_value(expr: &Expr) -> Option<GuardLiteral> {
     match &expr.kind {
         ExprKind::BoolLiteral(value) => Some(GuardLiteral::Bool(*value)),
@@ -32,6 +42,14 @@ pub(in crate::optimize::control::dce) fn scalar_guard_value(expr: &Expr) -> Opti
     }
 }
 
+/// Matches a strict equality/inequality guard condition against a scalar value.
+///
+/// Unwraps a `BinaryOp` expression and returns `Some((name, value, expects_equal))` when:
+/// - One side is a variable and the other is a scalar literal
+/// - The operator is `===` (expects_equal=true) or `!==` (expects_equal=false)
+///
+/// Used by `exact_literal_from_guard_branch` and `excluded_literal_from_guard_branch`
+/// to record precise variable value constraints from guard branches.
 pub(in crate::optimize::control::dce) fn strict_scalar_guard(condition: &Expr) -> Option<(&str, GuardLiteral, bool)> {
     let ExprKind::BinaryOp { left, op, right } = &condition.kind else {
         return None;
@@ -50,6 +68,10 @@ pub(in crate::optimize::control::dce) fn strict_scalar_guard(condition: &Expr) -
     }
 }
 
+/// Evaluates the truthiness of a `GuardLiteral` value.
+///
+/// Returns `true` for truthy values (non-zero int/float, non-empty non-"0" string, true),
+/// `false` for falsy values (null, zero, empty string, "0", false).
 pub(in crate::optimize::control::dce) fn guard_literal_truthy(value: &GuardLiteral) -> bool {
     match value {
         GuardLiteral::Bool(value) => *value,
@@ -60,6 +82,10 @@ pub(in crate::optimize::control::dce) fn guard_literal_truthy(value: &GuardLiter
     }
 }
 
+/// Looks up a variable's known exact value from `exact_guards`.
+///
+/// Scans `guards.exact_guards` for an entry with matching `name` and returns
+/// a reference to its `GuardLiteral` value, or `None` if no exact value is known.
 pub(in crate::optimize::control::dce) fn known_exact_guard<'a>(guards: &'a GuardState, name: &str) -> Option<&'a GuardLiteral> {
     guards
         .exact_guards
@@ -68,6 +94,10 @@ pub(in crate::optimize::control::dce) fn known_exact_guard<'a>(guards: &'a Guard
         .map(|known| &known.value)
 }
 
+/// Checks whether a variable has an excluded guard for a specific value.
+///
+/// Returns `true` if `guards.excluded_guards` contains an entry with the given
+/// `name` and `value`, indicating the variable provably cannot equal that value.
 pub(in crate::optimize::control::dce) fn has_excluded_guard(guards: &GuardState, name: &str, value: &GuardLiteral) -> bool {
     guards
         .excluded_guards
@@ -75,11 +105,21 @@ pub(in crate::optimize::control::dce) fn has_excluded_guard(guards: &GuardState,
         .any(|known| known.name == name && known.value == *value)
 }
 
+/// Entry point for determining whether a guard condition has a known boolean value.
+///
+/// Wraps `known_condition_value_inner` with a fresh `visiting` set to detect
+/// cyclic references (e.g., `while ($x && !$x)`) and short-circuit recursion.
 pub(in crate::optimize::control::dce) fn known_condition_value(condition: &Expr, guards: &GuardState) -> Option<bool> {
     let mut visiting = Vec::new();
     known_condition_value_inner(condition, guards, &mut visiting)
 }
 
+/// Recursively evaluates whether a condition is known to be true or false under the guard state.
+///
+/// Uses `visiting` to track expressions currently on the recursion stack and avoid cycles.
+/// First checks direct `condition_guards` and `Not`/`And`/`Or` short-circuit logic,
+/// then falls back to `infer_condition_value_from_composite_guards` to derive values
+/// from composite guards that contain the condition as a subexpression.
 pub(in crate::optimize::control::dce) fn known_condition_value_inner(
     condition: &Expr,
     guards: &GuardState,
@@ -100,6 +140,16 @@ pub(in crate::optimize::control::dce) fn known_condition_value_inner(
     value
 }
 
+/// Core evaluator for direct condition lookups in `GuardState`.
+///
+/// Checks, in order:
+/// 1. `condition_guards` — explicit recorded conditions
+/// 2. `Not` — recursively evaluates the inner expression and inverts
+/// 3. `And`/`Or` — short-circuit evaluation using recursive `known_condition_value_inner`
+/// 4. Variable truthiness via `guard_variable_name` against `truthy_vars`/`falsy_vars`
+/// 5. Strict equality guards via `strict_scalar_guard` against `exact_guards`/`excluded_guards`
+///
+/// Returns `Some(true)`, `Some(false)`, or `None` if the value cannot be determined.
 pub(in crate::optimize::control::dce) fn known_condition_value_base(
     condition: &Expr,
     guards: &GuardState,
@@ -168,6 +218,10 @@ pub(in crate::optimize::control::dce) fn known_condition_value_base(
     None
 }
 
+/// Returns `true` if `target` is a subexpression of `expr`, recursively.
+///
+/// Performs structural comparison across `Not`, `Negate`, `BitNot`, and `BinaryOp`
+/// nodes. Used to determine whether a condition appears within a composite guard.
 fn expr_contains_subexpr(expr: &Expr, target: &Expr) -> bool {
     if expr == target {
         return true;
@@ -184,6 +238,14 @@ fn expr_contains_subexpr(expr: &Expr, target: &Expr) -> bool {
     }
 }
 
+/// Infers the value of one child operand of a composite guard given the composite's value.
+///
+/// Used when solving for a sub-condition within an `And` or `Or` expression.
+/// For `And`: if composite is true, both children are true; if composite is false
+/// and the sibling is true, this child is false.
+/// For `Or`: if composite is false, both children are false; if composite is true
+/// and the sibling is false, this child is true.
+/// Returns `None` when inference is not possible with the given data.
 fn infer_child_value_from_composite_guard(
     op: BinOp,
     composite_value: bool,
@@ -198,6 +260,13 @@ fn infer_child_value_from_composite_guard(
     }
 }
 
+/// Recursively traverses a composite guard tree to extract a sub-condition's value.
+///
+/// Given a `condition` and a composite `composite` with known `composite_value`,
+/// identifies which child of the composite contains the condition (via `expr_contains_subexpr`)
+/// and infers the child's value using `infer_child_value_from_composite_guard`.
+/// Then recurses into the child to propagate the inferred value, handling `Not` wrappers
+/// and `BinaryOp` nodes. Returns `Some(value)` or `None` if traversal fails.
 fn infer_condition_value_from_composite_tree(
     condition: &Expr,
     composite: &Expr,
@@ -247,6 +316,11 @@ fn infer_condition_value_from_composite_tree(
     )
 }
 
+/// Searches recorded `condition_guards` for a composite guard containing the target condition.
+///
+/// Iterates over all `condition_guards` and, for each whose condition contains the target
+/// (checked via `expr_contains_subexpr`), calls `infer_condition_value_from_composite_tree`
+/// to solve for the target's value. Returns the first found inferred value or `None`.
 fn infer_condition_value_from_composite_guards(
     condition: &Expr,
     guards: &GuardState,

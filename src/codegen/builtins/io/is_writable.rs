@@ -16,6 +16,21 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `is_writable` builtin call.
+///
+/// # Arguments
+/// - `_name`: Unused name matching the builtin catalog entry.
+/// - `args`: Single argument supplying the filesystem path to check.
+/// - `emitter`: Target assembly emitter.
+/// - `ctx`: Codegen context carrying variable layout and scope.
+/// - `data`: Data section for relocations and static data.
+///
+/// # Returns
+/// Always returns `Some(PhpType::Bool)` since `is_writable` is a predicate.
+///
+/// # Codegen behavior
+/// Emits the path argument expression, then calls `__rt_is_writable` to perform
+/// the platform-specific stat operation. The result is a PHP boolean.
 pub fn emit(
     _name: &str,
     args: &[Expr],

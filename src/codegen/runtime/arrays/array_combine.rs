@@ -95,6 +95,10 @@ pub fn emit_array_combine(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = hash table
 }
 
+/// x86_64 Linux variant of `emit_array_combine`.
+/// Input:  rdi=keys_array (string array), rsi=values_array, rdx=value_type_tag
+/// Output: rax=new hash table
+/// Both arrays must have the same length.
 fn emit_array_combine_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_combine ---");

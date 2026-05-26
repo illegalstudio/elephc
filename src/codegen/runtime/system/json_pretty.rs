@@ -13,6 +13,17 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Emits the four JSON pretty-print runtime helpers: `__rt_json_pretty_push`,
+/// `__rt_json_pretty_pop`, `__rt_json_pretty_line`, and `__rt_json_pretty_colon_space`.
+///
+/// `push` increments `_json_indent_depth` when `JSON_PRETTY_PRINT` is active.
+/// `pop` decrements it, guarded against underflow.
+/// `line` appends a newline followed by `depth × 4` spaces to the output buffer,
+/// returning the updated write pointer in `x11` (ARM64) or `r11` (x86_64).
+/// `colon_space` appends a single space after an object key colon when pretty-printing.
+///
+/// All four helpers are no-ops when the active flags do not include `JSON_PRETTY_PRINT`
+/// (flag bit 128), leaving buffer state and depth unchanged.
 pub(crate) fn emit_json_pretty_helpers(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_json_pretty_helpers_x86_64(emitter);
@@ -82,6 +93,10 @@ pub(crate) fn emit_json_pretty_helpers(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return x11 as the updated write pointer
 }
 
+/// x86_64-specific implementation of the four JSON pretty-print helpers.
+/// Mirrors the ARM64 helpers but uses x86_64 registers (`r10`, `r11`, `rcx`) and
+/// RIP-relative symbol addresses. Underflow guards and flag checks are identical
+/// to the ARM64 path; labels use `_x` suffix to avoid collisions.
 fn emit_json_pretty_helpers_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_pretty_helpers ---");

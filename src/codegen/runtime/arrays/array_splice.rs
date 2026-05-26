@@ -11,10 +11,20 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_splice: remove a portion of an array and return removed elements.
-/// Input:  x0=array_ptr, x1=offset, x2=length (number of elements to remove)
-/// Output: x0=new array containing removed elements
-/// The original array is modified in-place (remaining elements shifted left).
+/// Emits the `__rt_array_splice` runtime helper for ARM64 and x86_64.
+///
+/// Removes a contiguous slice from the source array starting at `offset` containing
+/// `length` elements and returns those removed elements in a new array.
+///
+/// ## ARM64 ABI
+/// - **Input**: `x0` = source array pointer, `x1` = offset (element index), `x2` = removal length
+/// - **Output**: `x0` = new array containing the removed elements
+/// - **Behavior**: The original array is modified in-place; remaining elements shift left to fill the gap.
+///   A negative `length` (via `cmp x2, #-1` in caller) acts as an "until-end" sentinel that removes
+///   all elements from `offset` to the array end.
+/// - **Clamping**: The removal length is clamped to `max(0, array_length - offset)` to prevent out-of-bounds reads.
+/// - **COW contract**: The result array is freshly allocated; callers receive owned storage.
+/// - **Stack frame**: 48 bytes allocated; saves x29, x30 and four stack slots for array ptr / offset / length / result ptr.
 pub fn emit_array_splice(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_splice_linux_x86_64(emitter);
@@ -106,6 +116,17 @@ pub fn emit_array_splice(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = removed elements array
 }
 
+/// Emits the `__rt_array_splice` runtime helper for the x86_64 Linux ABI.
+///
+/// Identical in behavior to the ARM64 variant but uses x86_64 calling conventions and register set.
+///
+/// ## x86_64 ABI
+/// - **Input**: `rdi` = source array pointer, `rsi` = offset, `rdx` = removal length (or `-1` sentinel for until-end)
+/// - **Output**: `rax` = new array containing the removed elements
+/// - **Behavior**: Same semantics as ARM64 — in-place mutation, left-shift to fill gap, clamped length.
+/// - **Frame layout**: 32-byte aligned spill area at `[rbp - 8]` through `[rbp - 32]` preserves:
+///   source array pointer, offset, clamped length, and result array pointer across constructor calls.
+/// - **Preserves**: `rbp` across the helper; all other registers are caller-saved.
 fn emit_array_splice_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_splice ---");

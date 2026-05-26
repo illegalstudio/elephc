@@ -18,6 +18,14 @@ use crate::types::PhpType;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
+/// Emits code for PHP's `pathinfo($path, $options)` builtin.
+///
+/// `args[0]` is the path string (emitted first, returning ptr/len in x0/x1 or rax/rdx).
+/// `args[1]`, if present, is the options flag.
+///
+/// Returns `PhpType::AssocArray{Str, Str}` when no flag or `PATHINFO_ALL` is determined at
+/// compile time, `PhpType::Str` for a static single-flag value, or `PhpType::Mixed` when the
+/// flag is dynamic or involves runtime-only constants.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -62,6 +70,13 @@ pub fn emit(
     Some(PhpType::Str)
 }
 
+/// Emits code for a runtime-dynamic `pathinfo($path, $flag)` call.
+///
+/// The path ptr/len is already in registers from emitting `args[0]`. This function evaluates
+/// the flag expression, then dispatches to either `__rt_pathinfo_str` (single component) or
+/// `__rt_pathinfo_array` (PATHINFO_ALL), boxing the result as `PhpType::Mixed`. For non-all
+/// flags the returned string is boxed as a mixed scalar; for PATHINFO_ALL the associative
+/// array is boxed as a mixed container.
 fn emit_dynamic_pathinfo(
     flag: &Expr,
     emitter: &mut Emitter,
@@ -109,6 +124,14 @@ fn emit_dynamic_pathinfo(
     }
 }
 
+/// Boxes a freshly owned pathinfo hash as a `PhpType::Mixed` cell in the runtime heap.
+///
+/// The owned hash pointer is consumed from x0/rax (caller's result register). Allocates a
+/// 24-byte mixed cell (tag + two payload words), stamps it with heap kind 5, stores the
+/// associative-array tag (5) at mixed[0] and the hash pointer at mixed[8], and zero-fills
+/// mixed[16] (associative-array payloads do not use the high word). Preserves the hash
+/// pointer by pushing/popping through a scratch register so the allocation itself does not
+/// consume the owner.
 fn box_owned_pathinfo_array_as_mixed(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -137,6 +160,12 @@ fn box_owned_pathinfo_array_as_mixed(emitter: &mut Emitter) {
     }
 }
 
+/// Statically evaluates a `pathinfo` options argument at compile time.
+///
+/// Walks the expression tree to extract a literal integer or known `PATHINFO_*` constants.
+/// Handles negation and bitwise AND/OR/XOR combinations of static operands. Returns `None`
+/// when the flag cannot be resolved statically (e.g., variable, function call, or unsupported
+/// operator), allowing the caller to emit runtime-dynamic dispatch.
 fn pathinfo_static_flag_value(flag: Option<&Expr>) -> Option<i64> {
     match flag.map(|expr| &expr.kind) {
         Some(ExprKind::IntLiteral(value)) => Some(*value),

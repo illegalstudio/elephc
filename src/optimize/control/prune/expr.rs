@@ -11,6 +11,10 @@
 use super::super::*;
 use super::statements::{prune_block, prune_stmt};
 
+/// Recursively rewrites an expression tree, pruning constant subexpressions while
+/// preserving side effects. Applies to all expression variants including literals,
+/// variables, binary ops, ternaries, and calls. Retains evaluation of effectful
+/// subexpressions even when their result is unused.
 pub(crate) fn prune_expr(expr: Expr) -> Expr {
     let span = expr.span;
     let kind = match expr.kind {
@@ -233,6 +237,8 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
     Expr { kind, span }
 }
 
+/// Lowers an instanceof target expression or name, applying prune_expr recursively
+/// to any expression variant.
 fn prune_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
     match target {
         InstanceOfTarget::Name(name) => InstanceOfTarget::Name(name),
@@ -240,10 +246,16 @@ fn prune_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
     }
 }
 
+/// Returns true if the expression has observable side effects (function calls,
+/// assignments, increments, prints, throws, etc.). Used to decide whether an
+/// expression must be retained even when its result is unused.
 pub(crate) fn expr_has_side_effects(expr: &Expr) -> bool {
     expr_effect(expr).has_side_effects
 }
 
+/// Returns the effect summary for a callable target. Static methods and plain
+/// functions are treated as PURE; instance methods carry the effect of the
+/// receiver expression.
 pub(crate) fn callable_target_effect(target: &CallableTarget) -> Effect {
     match target {
         CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => Effect::PURE,
@@ -251,6 +263,10 @@ pub(crate) fn callable_target_effect(target: &CallableTarget) -> Effect {
     }
 }
 
+/// Eliminates pure/constant subexpressions in ternary, short-ternary, null coalesce,
+/// and short-circuit AND/OR expressions when the unused branch has no side effects.
+/// For example, `$cond ? $a : $b` becomes just `$a` when `cond` is known truthy and
+/// `$b` has no side effects.
 pub(crate) fn prune_unused_pure_subexpressions(kind: ExprKind) -> ExprKind {
     match kind {
         ExprKind::Ternary {
@@ -297,6 +313,8 @@ pub(crate) fn prune_unused_pure_subexpressions(kind: ExprKind) -> ExprKind {
     }
 }
 
+/// Rewrites a callable target by recursively pruning the receiver/object expression
+/// while preserving function names, static method receivers, and method names unchanged.
 pub(crate) fn prune_callable_target(target: CallableTarget) -> CallableTarget {
     match target {
         CallableTarget::Function(name) => CallableTarget::Function(name),

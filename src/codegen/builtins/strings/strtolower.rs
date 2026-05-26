@@ -16,6 +16,18 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a `strtolower` call for a single string argument.
+///
+/// # Arguments
+/// - `args[0]`: The string expression to convert to lowercase.
+///
+/// # Behavior
+/// Emits code to evaluate `args[0]` as a string, then calls `__rt_strtolower` to
+/// perform the case conversion and return an owned PHP string. The returned string
+/// pointer/length is treated as an owned runtime value.
+///
+/// # Returns
+/// `PhpType::Str` — the lowered string.
 pub fn emit(
     _name: &str,
     args: &[Expr],

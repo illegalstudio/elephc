@@ -15,6 +15,20 @@ use crate::codegen::expr::{coerce_to_truthiness, emit_expr};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `boolval()` builtin, converting a value to boolean.
+///
+/// Converts `args[0]` to PHP truthiness/falsiness using the shared
+/// `coerce_to_truthiness` helper. The result is always `PhpType::Bool`.
+///
+/// # Arguments
+/// - `_name`: Unused; dispatch is already resolved.
+/// - `args`: Single expression to convert.
+/// - `emitter`: Target assembly emitter.
+/// - `ctx`: Codegen context (variable layout, class metadata).
+/// - `data`: Data section for literals and runtime symbols.
+///
+/// # Returns
+/// Always `Some(PhpType::Bool)`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

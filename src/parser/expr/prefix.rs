@@ -22,6 +22,10 @@ use super::prefix_complex::{
 use super::pratt::parse_expr_bp;
 use super::{parse_args, parse_expr};
 
+/// Parses a prefix (unary or primary) PHP expression and returns the resulting AST node.
+/// Dispatched from `parse_expr_bp` for the leftmost expression in a binding-power loop.
+/// Advances `pos` past all tokens consumed by the prefix; the caller continues with the
+/// remaining token stream. Returns an error on unexpected end of input or unrecognized tokens.
 pub(super) fn parse_prefix(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -239,6 +243,9 @@ pub(super) fn parse_prefix(
     }
 }
 
+/// Parses `yield` and `yield from` expressions. Consumes the `yield` token and optionally
+/// parses a following expression or key => value pair. Returns a `Yield` or `YieldFrom` node
+/// using the given span. On end of input or a terminating token, returns bare `Yield { key: None, value: None }`.
 fn parse_yield(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -303,6 +310,7 @@ fn parse_yield(
     ))
 }
 
+/// Advances `pos` by one and wraps the given `ExprKind` and `Span` in a new `Expr`.
 fn parse_simple(
     _tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -313,6 +321,10 @@ fn parse_simple(
     Ok(Expr::new(kind, span))
 }
 
+/// Parses a unary operator expression. Consumes the operator token, advances `pos`,
+/// then recursively parses the inner expression with the given binding power `bp` to
+/// enforce precedence. The `ctor` function constructs the target `ExprKind` variant
+/// (e.g., `Negate`, `Not`, `BitNot`). Returns the wrapped unary expression.
 fn parse_unary(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -325,6 +337,9 @@ fn parse_unary(
     Ok(Expr::new(ctor(Box::new(inner)), span))
 }
 
+/// Parses a prefix `++` or `--` increment/decrement operator. Consumes the operator,
+/// then expects a `Variable` token next. Returns `PreIncrement` or `PreDecrement` with the
+/// variable name. Returns an error if a variable does not follow the operator.
 fn parse_prefix_inc_dec(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -356,6 +371,10 @@ fn parse_prefix_inc_dec(
     ))
 }
 
+/// Parses a variable expression starting with a `Variable` token. Consumes the variable name,
+/// then checks for a following `++`, `--` (postfix form), or `(` (closure-call syntax like `$var(...)`).
+/// Returns `Variable`, `PostIncrement`, `PostDecrement`, or `ClosureCall`. Advances `pos` past
+/// any consumed postfix tokens.
 fn parse_variable(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -384,6 +403,10 @@ fn parse_variable(
     Ok(Expr::new(ExprKind::Variable(name), span))
 }
 
+/// Parses a grouped expression `(...)` or a type cast `(type) expr`. If `peek_cast` detects
+/// a cast, consumes the cast syntax and returns a `Cast` node with the target type and inner
+/// expression parsed at binding power 27. Otherwise parses as a grouped expression: consumes
+/// `(` and `)`, then checks for an immediate call (`inner(args)`) to support expression-call syntax.
 fn parse_group_or_cast(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -422,6 +445,10 @@ fn parse_group_or_cast(
     Ok(inner)
 }
 
+/// Parses a `[...]` array literal. Distinguishes between indexed (`[a, b]`) and associative
+/// (`[key => value, ...]`) forms by scanning for `=>` tokens. Supports spread elements via
+/// `...`. Returns `ArrayLiteral` or `ArrayLiteralAssoc`. Raises an error if associative
+/// and indexed elements are mixed within the same literal.
 fn parse_array_literal(
     tokens: &[(Token, Span)],
     pos: &mut usize,

@@ -10,8 +10,11 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// bin2hex: convert binary string to hex representation.
-/// Input: x1/x2=string. Output: x1/x2=result (2x length).
+/// Emits the `__rt_bin2hex` runtime helper for the `bin2hex` builtin.
+/// Dispatches to target-specific implementations. On ARM64, uses x1/x2 for input
+/// string pointer/length and returns result pointer/length in x1/x2. On x86_64 Linux,
+/// uses rax/rdx for string result, rsi for source pointer, rdx for source length.
+/// Both variants append to the shared `_concat_buf` global and advance `_concat_off`.
 pub fn emit_bin2hex(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_bin2hex_linux_x86_64(emitter);
@@ -64,6 +67,7 @@ pub fn emit_bin2hex(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits `__rt_bin2hex` for x86_64 Linux using the System V ABI.
 fn emit_bin2hex_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: bin2hex ---");

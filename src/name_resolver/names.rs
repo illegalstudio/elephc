@@ -14,6 +14,9 @@ use crate::parser::ast::{TypeExpr, UseItem, UseKind};
 
 use super::{resolved_name, Imports, Symbols};
 
+/// Recursively resolves a type expression, applying namespace/import rules to named types.
+/// Primitive types (int, float, bool, string, etc.) are returned unchanged.
+/// Pointer types and named types are resolved via `resolve_special_or_class_name`.
 pub(super) fn resolve_type_expr(
     type_expr: &TypeExpr,
     current_namespace: Option<&str>,
@@ -80,6 +83,8 @@ pub(super) fn resolve_type_expr(
     }
 }
 
+/// Registers use-item aliases (class, function, const) into the imports map by kind.
+/// Returns a `DuplicateImport` error if an alias is already registered.
 pub(super) fn register_imports(
     imports: &mut Imports,
     use_items: &[UseItem],
@@ -102,6 +107,8 @@ pub(super) fn register_imports(
     Ok(())
 }
 
+/// Resolves "self", "parent", "static" to their lowercase special-name form;
+/// delegates to `resolved_class_name` for all other names.
 pub(super) fn resolve_special_or_class_name(
     name: &Name,
     current_namespace: Option<&str>,
@@ -116,6 +123,9 @@ pub(super) fn resolve_special_or_class_name(
     }
 }
 
+/// Resolves a class-like name to its canonical form using imports, current namespace,
+/// and the symbol table. Handles fully-qualified, unqualified, and aliased names.
+/// Falls back to the candidate string if no canonical form is found.
 pub(super) fn resolved_class_name(
     name: &Name,
     current_namespace: Option<&str>,
@@ -162,6 +172,8 @@ pub(super) fn resolved_class_name(
     symbols.canonical_class_like(&candidate).unwrap_or(candidate)
 }
 
+/// Resolves a class constant name to its canonical form using imports and current namespace.
+/// Unlike `resolved_class_name`, this does not consult the symbol table for canonicalization.
 pub(super) fn resolved_class_constant_name(
     name: &Name,
     current_namespace: Option<&str>,
@@ -194,6 +206,9 @@ pub(super) fn resolved_class_constant_name(
     name.as_canonical()
 }
 
+/// Resolves a function name to its canonical form using imports, current namespace,
+/// and the symbol table. When unqualified and not imported, falls back to the local
+/// namespace before attempting the global symbol table (PHP-style builtin fallback).
 pub(super) fn resolve_function_name(
     name: &Name,
     current_namespace: Option<&str>,
@@ -259,6 +274,8 @@ pub(super) fn resolve_function_name(
     symbols.canonical_function(&candidate).unwrap_or(candidate)
 }
 
+/// Resolves a constant name to its canonical form using imports, current namespace,
+/// the symbol table, and builtin globals (e.g., PHP_OS, STDIN, STDOUT, STDERR).
 pub(super) fn resolve_constant_name(
     name: &Name,
     current_namespace: Option<&str>,
@@ -315,6 +332,8 @@ pub(super) fn resolve_constant_name(
     name.as_canonical()
 }
 
+/// Returns true if `name` is a builtin global constant that should bypass symbol-table
+/// resolution (e.g., PHP_OS, STDIN, STDOUT, STDERR, FNM_* pathinfo flags).
 fn is_builtin_global_constant(name: &str) -> bool {
     matches!(
         name,

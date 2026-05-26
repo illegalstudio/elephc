@@ -16,6 +16,8 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `ptr_offset` builtin: adds a byte offset to a raw pointer.
+/// Coerces the offset argument to integer; returns the derived `PhpType::Pointer`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

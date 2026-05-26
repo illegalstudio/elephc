@@ -16,6 +16,14 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `is_bool` type predicate.
+///
+/// Evaluates the first argument's type at runtime or compile time:
+/// - **Mixed/Union**: unboxes the runtime tag and compares it against `3` (boolean).
+/// - **Concrete Bool**: returns `1`.
+/// - **All other types**: returns `0`.
+///
+/// Result is always returned as an integer (`x0` on ARM64, `rax` on x86_64).
 pub fn emit(
     _name: &str,
     args: &[Expr],

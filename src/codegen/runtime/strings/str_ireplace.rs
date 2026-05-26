@@ -11,8 +11,20 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// str_ireplace: case-insensitive str_replace.
-/// Input: x1/x2=search, x3/x4=replace, x5/x6=subject. Output: x1/x2=result.
+/// Emits the `__rt_str_ireplace` runtime helper and its inner loop labels.
+/// Dispatches to the x86_64 Linux variant when targeting that architecture;
+/// emits an ARM64-compatible implementation inline for other targets.
+///
+/// # ABI
+/// - ARM64: search in x1/x2, replace in x3/x4, subject in x5/x6; result returned in x1/x2.
+/// - x86_64 Linux: search in rdi/rdx, replace in rsi/rcx, subject in r8/r9; result returned in rax/rdx.
+/// Both variants write directly to the shared concat buffer and publish the updated write offset.
+///
+/// # Behavior
+/// Performs a single left-to-right pass over the subject string, replacing each
+/// case-insensitive occurrence of the search string with the replacement string.
+/// Uses the concat buffer for output; the caller must ensure sufficient space is available.
+/// Returns the result pointer/length pair for the generated call site.
 pub fn emit_str_ireplace(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_str_ireplace_linux_x86_64(emitter);
@@ -112,6 +124,19 @@ pub fn emit_str_ireplace(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits the x86_64 Linux variant of `__rt_str_ireplace` and its inner loop labels.
+/// Called from `emit_str_ireplace` when targeting Linux on x86_64.
+///
+/// # ABI
+/// Input registers: search in rdi/rdx, replace in rsi/rcx, subject in r8/r9.
+/// Output: result pointer in rax, result length in rdx.
+/// Writes to the shared concat buffer and updates `_concat_off` upon completion.
+///
+/// # Behavior
+/// Case-insensitive single-pass replacement using ASCII tolower on bytes in ['A'..'Z'].
+/// Preserves all callee-saved registers (rbp, rbx, r12-r15) as required by the x86_64 SysV ABI.
+/// Uses a 80-byte spill area on the stack for saved input pointers/lengths and loop bookkeeping.
+/// The concat-buffer write offset is published atomically after the full result is written.
 fn emit_str_ireplace_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_ireplace ---");

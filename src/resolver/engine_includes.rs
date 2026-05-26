@@ -22,6 +22,18 @@ use super::include_once::include_once_label;
 use super::include_path::fold_include_path;
 use super::state::ResolveState;
 
+/// Resolves a single include/require statement by parsing the target file,
+/// recursively resolving its statements, and returning them wrapped in
+/// appropriate include_once guards.
+///
+/// - `once`: when true, skips already-included files and wraps output in `IncludeOnceGuard`
+/// - `required`: when true, returns an error if the target file does not exist
+/// - `declared_once`: tracks files already processed; updated on return
+/// - `include_chain`: current include path for cycle detection; must not contain `canonical`
+/// - State (`namespace`, `const_imports`) is saved before recursion and restored after
+/// - Returns `None` if the file does not exist and `required` is false, or if a once file was already included
+/// - For `once`: wraps body in `IncludeOnceGuard` with the file's label
+/// - For non-once: emits `IncludeOnceMark` before the body for later once/require_once checks
 pub(super) fn resolve_include_stmt(
     stmt: &Stmt,
     path: &Expr,

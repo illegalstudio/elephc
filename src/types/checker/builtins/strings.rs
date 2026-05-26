@@ -16,6 +16,15 @@ use super::super::Checker;
 
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
+/// Type-checks a string builtin call, validating arity, argument types, and return type.
+///
+/// Dispatches on `name` to validate the call and infer the return `PhpType`.
+/// Calls `checker.infer_type()` on each argument to propagate type constraints.
+/// For cryptographic builtins (`hash`, `md5`, `sha1`), records a Linux library requirement.
+///
+/// Returns `Ok(Some(PhpType))` with the inferred return type, `Ok(None)` for unknown
+/// builtins (caller will fall through to other handlers), or `Err(CompileError)` on
+/// arity/type mismatch.
 pub(super) fn check_builtin(
     checker: &mut Checker,
     name: &str,

@@ -16,6 +16,8 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `ptr_write16` builtin: writes one 16-bit word through a pointer.
+/// Checks non-null, coerces value to integer, truncates to low 16 bits. Returns `PhpType::Void`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

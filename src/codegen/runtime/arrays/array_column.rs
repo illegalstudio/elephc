@@ -11,9 +11,17 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_column: extract a column from an array of associative arrays.
-/// Input: x0=outer array (Array of AssocArray), x1=column key ptr, x2=column key len
-/// Output: x0=new array containing the column values
+/// Emits the `__rt_array_column` runtime helper for extracting a column from an
+/// associative array.
+///
+/// Iterates over the outer array of associative arrays, looks up `column_key`
+/// in each inner hash table, and appends found values to a new result array.
+///
+/// ABI:
+/// - ARM64: x0=outer array (Array of AssocArray), x1=column key ptr, x2=column key len → x0=result array
+/// - x86_64 Linux: rdi=outer array, rsi=column key ptr, rdx=column key len → rax=result array
+///
+/// Calls `__rt_array_new`, `__rt_hash_get`, and `__rt_array_push_int`.
 pub fn emit_array_column(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_column_linux_x86_64(emitter);
@@ -86,6 +94,14 @@ pub fn emit_array_column(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// x86_64 Linux variant of `emit_array_column`. Emits `__rt_array_column`
+/// using the System V AMD64 ABI with caller-saved register conventions.
+///
+/// Spill slots at [rbp-8..rbp-48] preserve: outer array pointer (rdi clone),
+/// column key ptr/len (rsi/rdx clones), outer length, result array pointer,
+/// and loop cursor across helper calls.
+///
+/// Calls `__rt_array_new`, `__rt_hash_get`, and `__rt_array_push_int`.
 fn emit_array_column_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_column ---");

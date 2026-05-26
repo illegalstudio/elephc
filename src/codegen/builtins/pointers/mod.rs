@@ -32,6 +32,15 @@ use crate::codegen::expr::{can_coerce_result_to_type, coerce_result_to_type};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Dispatches pointer builtin calls by name to their leaf emitters.
+/// Returns `Some(PhpType)` on recognized builtin, `None` for unknown names.
+///
+/// # Arguments
+/// * `name` — the builtin function name (e.g. `"ptr"`, `"ptr_null"`)
+/// * `args` — the parsed call arguments
+/// * `emitter` — target assembly emitter
+/// * `ctx` — codegen context (variables, classes, globals)
+/// * `data` — mutable data section for relocations and constants
 pub fn emit(
     name: &str,
     args: &[Expr],
@@ -59,6 +68,18 @@ pub fn emit(
     }
 }
 
+/// Coerces the current integer result to a specific PHP type, handling Mixed ownership.
+/// If `arg` owns a boxed Mixed value that must be released after coercion, preserves it
+/// on the stack, performs the coercion, then releases the preserved value.
+///
+/// # Arguments
+/// * `arg` — the expression that produced the current result (used for ownership tracking)
+/// * `source_ty` — the current result PHP type before coercion
+/// * `emitter` — target assembly emitter
+/// * `ctx` — codegen context
+/// * `data` — mutable data section
+/// # Returns
+/// The `PhpType` after coercion (always `PhpType::Int` on success)
 pub(super) fn coerce_current_result_to_int_arg(
     arg: &Expr,
     source_ty: &PhpType,

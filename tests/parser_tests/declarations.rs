@@ -10,6 +10,7 @@
 use super::*;
 
 #[test]
+// Verifies that `<?php const MAX = 100;` parses to a `ConstDecl` with name "MAX" and an `IntLiteral(100)` value.
 fn test_const_decl_int() {
     let stmts = parse_source("<?php const MAX = 100;");
     assert_eq!(stmts.len(), 1);
@@ -23,6 +24,7 @@ fn test_const_decl_int() {
 }
 
 #[test]
+// Verifies that `<?php const NAME = "hello";` parses to a `ConstDecl` with name "NAME" and a `StringLiteral` value.
 fn test_const_decl_string() {
     let stmts = parse_source("<?php const NAME = \"hello\";");
     assert_eq!(stmts.len(), 1);
@@ -36,6 +38,8 @@ fn test_const_decl_string() {
 }
 
 #[test]
+// Verifies that `<?php echo MAX;` parses to an `Echo` of a `ConstRef("MAX")` expression.
+// Constant references are resolved at parse time to this AST node.
 fn test_const_ref_in_echo() {
     let stmts = parse_source("<?php echo MAX;");
     assert_eq!(stmts.len(), 1);
@@ -48,6 +52,8 @@ fn test_const_ref_in_echo() {
 }
 
 #[test]
+// Verifies that `<?php enum Color: int { case Red = 1; case Green = 2; }` parses to an
+// `EnumDecl` with backing type `Some(Int)`, two cases with integer values.
 fn test_parse_backed_enum_decl() {
     let stmts = parse_source("<?php enum Color: int { case Red = 1; case Green = 2; }");
     assert_eq!(stmts.len(), 1);
@@ -76,6 +82,9 @@ fn test_parse_backed_enum_decl() {
 }
 
 #[test]
+// Verifies that `<?php echo Color::Red;` parses to an `Echo` containing a `ScopedConstantAccess`
+// with receiver "Color" and member "Red". The parser emits `ScopedConstantAccess`; the type
+// checker disambiguates between enum cases and class constants.
 fn test_parse_enum_case_expr() {
     // The parser now emits `ScopedConstantAccess` for `Foo::BAR`; the type
     // checker disambiguates between enum cases and class constants. Either
@@ -95,6 +104,8 @@ fn test_parse_enum_case_expr() {
 }
 
 #[test]
+// Verifies that `<?php [$a, $b] = [1, 2];` parses to a `ListUnpack` with vars `["a", "b"]`.
+// Destructuring via list literal unpacks the source array into named variables.
 fn test_list_unpack() {
     let stmts = parse_source("<?php [$a, $b] = [1, 2];");
     assert_eq!(stmts.len(), 1);
@@ -107,6 +118,7 @@ fn test_list_unpack() {
 }
 
 #[test]
+// Verifies that `<?php [$x, $y, $z] = [10, 20, 30];` parses to a `ListUnpack` with three vars.
 fn test_list_unpack_three_vars() {
     let stmts = parse_source("<?php [$x, $y, $z] = [10, 20, 30];");
     assert_eq!(stmts.len(), 1);
@@ -119,6 +131,9 @@ fn test_list_unpack_three_vars() {
 }
 
 #[test]
+// Verifies that `<?php [$a, , $c] = [10, 20, 30];` (skipped list entry) lowers to a `Synthetic`
+// node containing three `Assign` stmts. The middle entry is skipped — the array index is not
+// bound to any variable.
 fn test_list_unpack_skipped_entries_lowers_to_synthetic_assignments() {
     let stmts = parse_source("<?php [$a, , $c] = [10, 20, 30];");
     assert_eq!(stmts.len(), 1);
@@ -153,6 +168,8 @@ fn test_list_unpack_skipped_entries_lowers_to_synthetic_assignments() {
 }
 
 #[test]
+// Verifies that `<?php ["id" => $id, "name" => $name] = $row;` (keyed list entries) lowers to a
+// `Synthetic` node with three `Assign` stmts using string-keyed array accesses.
 fn test_list_unpack_keyed_entries_lowers_with_key_accesses() {
     let stmts = parse_source("<?php [\"id\" => $id, \"name\" => $name] = $row;");
     assert_eq!(stmts.len(), 1);
@@ -175,6 +192,8 @@ fn test_list_unpack_keyed_entries_lowers_with_key_accesses() {
 }
 
 #[test]
+// Verifies that `<?php [[$a, $b], $c] = [[1, 2], [3, 4]];` (nested list pattern) lowers to a
+// `Synthetic` node with 5 stmts: a temp assignment, then three variable assignments.
 fn test_list_unpack_nested_pattern_lowers_to_nested_temp() {
     let stmts = parse_source("<?php [[$a, $b], $c] = [[1, 2], [3, 4]];");
     assert_eq!(stmts.len(), 1);
@@ -189,6 +208,8 @@ fn test_list_unpack_nested_pattern_lowers_to_nested_temp() {
 }
 
 #[test]
+// Verifies that `<?php list($a, $b) = [1, 2];` (legacy `list()` construct) parses to a
+// `ListUnpack` with vars `["a", "b"]`. The `list()` keyword form is an alias for `[]`.
 fn test_list_construct_unpack_is_supported() {
     let stmts = parse_source("<?php list($a, $b) = [1, 2];");
     assert_eq!(stmts.len(), 1);
@@ -201,6 +222,9 @@ fn test_list_construct_unpack_is_supported() {
 }
 
 #[test]
+// Verifies that `<?php [$items[], $box->x] = [1, 2];` (non-local list targets) lowers to a
+// `Synthetic` node with three stmts: a temp assignment, an `ArrayPush` for `$items[]`, and a
+// `PropertyAssign` for `$box->x`. Non-local targets are not simple variable assignments.
 fn test_list_unpack_non_local_targets_lowers_to_target_assignments() {
     let stmts = parse_source("<?php [$items[], $box->x] = [1, 2];");
     assert_eq!(stmts.len(), 1);
@@ -215,6 +239,7 @@ fn test_list_unpack_non_local_targets_lowers_to_target_assignments() {
 // --- Global ---
 
 #[test]
+// Verifies that `<?php global $x;` parses to a `Global` stmt with a single variable "x".
 fn test_parse_global_single() {
     let stmts = parse_source("<?php global $x;");
     assert_eq!(stmts.len(), 1);
@@ -227,6 +252,7 @@ fn test_parse_global_single() {
 }
 
 #[test]
+// Verifies that `<?php global $a, $b, $c;` parses to a `Global` stmt with three variables.
 fn test_parse_global_multiple() {
     let stmts = parse_source("<?php global $a, $b, $c;");
     assert_eq!(stmts.len(), 1);

@@ -43,6 +43,10 @@ pub fn emit_trim_mask(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// x86_64 Linux-specific implementation of `__rt_trim_mask`.
+/// Saves the mask pointer/length in red zone slots, delegates to `__rt_ltrim_mask`
+/// then `__rt_rtrim_mask`, and restores the frame before returning.
+/// The adjusted string pointer/length is returned via the standard x86_64 string ABI.
 fn emit_trim_mask_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: trim_mask ---");

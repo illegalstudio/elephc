@@ -16,6 +16,11 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::super::Checker;
 
 impl Checker {
+    /// Validates `new` expressions on late-bound static constructor targets by inferring
+    /// the object type for every class that descends from `base_class`.
+    ///
+    /// Used when `$obj::new(...)` or similar late-bound constructor syntax is used,
+    /// to ensure each possible class variant is well-typed.
     pub(super) fn validate_late_bound_constructor_targets(
         &mut self,
         base_class: &str,
@@ -38,6 +43,8 @@ impl Checker {
         Ok(())
     }
 
+    /// Checks whether `class_name` is either `base_class` itself or a descendant of it
+    /// by walking the parent chain.
     fn class_is_same_or_descends_from(&self, class_name: &str, base_class: &str) -> bool {
         let mut current = Some(class_name);
         while let Some(name) = current {
@@ -52,6 +59,12 @@ impl Checker {
         false
     }
 
+    /// Infers the type of a class constant or enum case accessed via scope resolution
+    /// (e.g., `MyClass::CONSTANT` or `Color::Red`).
+    ///
+    /// Searches the class/interface hierarchy for the named constant, preferring enum cases
+    /// when the receiver is an enum. Falls back to interface constants and finally returns
+    /// an error if the constant is not found.
     pub(crate) fn infer_scoped_constant_access(
         &mut self,
         receiver: &StaticReceiver,
@@ -92,6 +105,8 @@ impl Checker {
         ))
     }
 
+    /// Looks up a constant by name on an interface, traversing parent interfaces breadth-first
+    /// to find it. Returns the constant's value expression if found.
     fn lookup_interface_constant(
         &self,
         interface_name: &str,
@@ -113,6 +128,11 @@ impl Checker {
         None
     }
 
+    /// Resolves a `StaticReceiver` to its canonical class name string.
+    ///
+    /// - `Named` returns the class name directly.
+    /// - `Self_` / `Static` return the current class, or error if not inside a class.
+    /// - `Parent` returns the parent of the current class, or error if there is no parent.
     fn resolve_static_receiver_class(
         &self,
         receiver: &StaticReceiver,
@@ -141,6 +161,9 @@ impl Checker {
         }
     }
 
+    /// Validates that `self::class`, `static::class`, or `parent::class` is used in an
+    /// appropriate class context. Returns an error for invalid scope (e.g., outside a class
+    /// or on a class with no parent for `parent::class`).
     pub(super) fn validate_class_constant_receiver(
         &self,
         receiver: &StaticReceiver,

@@ -11,7 +11,11 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// __rt_json_encode_bool: convert boolean to "true" or "false" JSON string.
+/// Emits the `__rt_json_encode_bool` runtime helper.
+///
+/// Dispatches to `emit_json_encode_bool_linux_x86_64` on x86_64; on other targets
+/// emits an ARM64 `cbnz` branch sequence.
+///
 /// Input:  x0 = bool value (0 or 1)
 /// Output: x1 = string ptr, x2 = string len
 pub(crate) fn emit_json_encode_bool(emitter: &mut Emitter) {
@@ -40,6 +44,12 @@ pub(crate) fn emit_json_encode_bool(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_json_encode_bool`.
+///
+/// Uses the System V AMD64 ABI: boolean in `rax`, result string in `rax` (ptr) and `rdx` (len).
+///
+/// Input:  rax = bool value (0 or 1)
+/// Output: rax = string ptr, rdx = string len
 fn emit_json_encode_bool_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_bool ---");

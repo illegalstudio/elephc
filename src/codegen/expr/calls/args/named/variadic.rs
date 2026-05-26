@@ -19,6 +19,7 @@ use super::super::{
     store_current_array_element, variadic_container_elem_ty,
 };
 
+/// Builds the variadic array from named sources, including optional prefix tail.
 pub(super) fn emit_variadic_array_arg_from_sources(
     variadic_sources: &[VariadicArgSource],
     prefix_variadic_tail: Option<&PrefixVariadicTail>,
@@ -105,6 +106,13 @@ pub(super) fn emit_variadic_array_arg_from_sources(
     PhpType::Array(Box::new(container_elem_ty))
 }
 
+/// Copies spread-tail elements from a prefix array into a named variadic hash table.
+/// Uses a pre-allocated scratch area on the stack to hold loop counters and hash state
+/// across iterations. Emits a dynamic loop that walks the tail portion of the prefix
+/// array and inserts each element into the hash via `__rt_hash_set`. The loop stops
+/// when the tail index reaches the computed tail length. Preserves PHP semantics:
+/// numeric keys are generated from zero-based tail indices, and strings are persisted
+/// before insertion. Returns the final array length in the scratch slot.
 fn emit_prefix_tail_into_variadic_hash(
     tail: &PrefixVariadicTail,
     container_elem_ty: &PhpType,
@@ -287,6 +295,12 @@ fn emit_prefix_tail_into_variadic_hash(
     abi::emit_release_temporary_stack(emitter, SCRATCH_BYTES);
 }
 
+/// Builds a named (associative) variadic array from source temps and an optional prefix tail.
+/// Dispatches to `emit_prefix_tail_into_variadic_hash` for the prefix tail, then iterates over
+/// `variadic_sources` to insert each named element into a hash table via `__rt_hash_set`.
+/// Numeric keys use a length of `-1`; string keys are loaded from the data section.
+/// Returns the final `PhpType::AssocArray` with `Mixed` keys and a uniform `container_elem_ty`.
+/// Side effects (incref, str_persist) occur in source order before hash insertion.
 fn emit_variadic_assoc_arg_from_sources(
     variadic_sources: &[VariadicArgSource],
     prefix_variadic_tail: Option<&PrefixVariadicTail>,

@@ -9,6 +9,8 @@
 
 use super::*;
 
+// Parses `static $count = 0;` and verifies the AST produces a `StaticVar` with
+// name "count" and an `IntLiteral(0)` initializer.
 #[test]
 fn test_parse_static_var() {
     let stmts = parse_source("<?php static $count = 0;");
@@ -24,6 +26,8 @@ fn test_parse_static_var() {
 
 // --- Pass by reference ---
 
+// Parses `parent::boot();` and verifies the AST produces a `StaticMethodCall` with
+// `StaticReceiver::Parent`, method "boot", and no arguments.
 #[test]
 fn test_parse_parent_static_receiver() {
     let stmts = parse_source("<?php parent::boot();");
@@ -44,6 +48,8 @@ fn test_parse_parent_static_receiver() {
     }
 }
 
+// Parses `self::boot();` and verifies the AST produces a `StaticMethodCall` with
+// `StaticReceiver::Self_`, method "boot", and no arguments.
 #[test]
 fn test_parse_self_static_receiver() {
     let stmts = parse_source("<?php self::boot();");
@@ -64,6 +70,8 @@ fn test_parse_self_static_receiver() {
     }
 }
 
+// Parses `static::boot();` and verifies the AST produces a `StaticMethodCall` with
+// `StaticReceiver::Static`, method "boot", and no arguments.
 #[test]
 fn test_parse_static_static_receiver() {
     let stmts = parse_source("<?php static::boot();");
@@ -84,6 +92,8 @@ fn test_parse_static_static_receiver() {
     }
 }
 
+// Parses `Foo::build(...);` and verifies the AST produces a `FirstClassCallable`
+// wrapping a `StaticMethod` target with a named receiver "Foo" and method "build".
 #[test]
 fn test_parse_first_class_callable_static_method() {
     let stmts = parse_source("<?php Foo::build(...);");
@@ -102,6 +112,8 @@ fn test_parse_first_class_callable_static_method() {
     }
 }
 
+// Parses `$f = static function() { return 1; };` and verifies the closure expression
+// has `is_static = true` and `is_arrow = false`.
 #[test]
 fn test_parse_static_closure_sets_is_static() {
     let stmts = parse_source("<?php $f = static function() { return 1; };");
@@ -117,6 +129,8 @@ fn test_parse_static_closure_sets_is_static() {
     }
 }
 
+// Parses `$g = static fn($x) => $x;` and verifies the closure expression
+// has `is_static = true` and `is_arrow = true`.
 #[test]
 fn test_parse_static_arrow_function_sets_is_static() {
     let stmts = parse_source("<?php $g = static fn($x) => $x;");
@@ -132,6 +146,8 @@ fn test_parse_static_arrow_function_sets_is_static() {
     }
 }
 
+// Parses `$f = function() { return 1; };` (no static keyword) and verifies
+// the closure expression has `is_static = false`.
 #[test]
 fn test_parse_non_static_closure_keeps_is_static_false() {
     let stmts = parse_source("<?php $f = function() { return 1; };");

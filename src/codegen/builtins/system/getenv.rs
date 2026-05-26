@@ -16,6 +16,21 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `getenv()` builtin.
+///
+/// Emits the environment variable name expression, then calls `__rt_getenv`
+/// to perform the runtime environment lookup. The result is always a string
+/// on success, or `false` if the variable is not set.
+///
+/// # Arguments
+/// * `_name` — unused, matches the dispatcher signature
+/// * `args` — must contain exactly one expression: the environment variable name
+/// * `emitter` — target assembly emitter
+/// * `ctx` — codegen context (variables, scope)
+/// * `data` — data section for literal payloads
+///
+/// # Returns
+/// `Some(PhpType::Str)` — the lookup result is typed as a string (may be false at runtime)
 pub fn emit(
     _name: &str,
     args: &[Expr],

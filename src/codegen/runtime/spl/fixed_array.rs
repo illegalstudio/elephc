@@ -29,6 +29,8 @@ const SPL_FIXED_OFFSET_RANGE_MSG_LEN: usize = "Index invalid or out of range".le
 const SPL_FIXED_FROM_ARRAY_KEYS_MSG_LEN: usize =
     "array must contain only positive integer keys".len();
 
+/// Emits the complete `SplFixedArray` runtime helpers for the target architecture.
+/// Routes to either aarch64 or x86_64 emitters based on `emitter.target.arch`.
 pub(crate) fn emit_fixed_array_runtime(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_x86_64(emitter);
@@ -37,6 +39,8 @@ pub(crate) fn emit_fixed_array_runtime(emitter: &mut Emitter) {
     }
 }
 
+/// Emits all aarch64 `SplFixedArray` runtime helpers via a blank line, section comment,
+/// and sequential emission of constructor, Countable, ArrayAccess, and import/export helpers.
 fn emit_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: spl fixed array ---");
@@ -53,6 +57,10 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emit_copy_from_array_aarch64(emitter);
 }
 
+/// Emits `__rt_spl_fixed_new` on aarch64: constructs an initialized SplFixedArray object.
+/// Allocates the object header and fixed-size storage array, stamps the heap kind, stores
+/// the class id, zeroes all slots to unset/null, and returns the object pointer.
+/// Clobbers: x0, x1, x2, x9, x10, x11, x12. Saves and restores x29, x30.
 fn emit_new_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_new");
     emitter.instruction("sub sp, sp, #48");                                     // reserve constructor spill slots
@@ -103,6 +111,8 @@ fn emit_new_aarch64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits `__rt_spl_fixed_count` on aarch64: returns the logical fixed size of the array.
+/// x0 = receiver SplFixedArray object. Returns the fixed size in x0.
 fn emit_count_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_count");
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
@@ -110,6 +120,10 @@ fn emit_count_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return count/getSize result
 }
 
+/// Emits `__rt_spl_fixed_set_size` on aarch64: resizes the fixed array.
+/// x0 = receiver SplFixedArray object, x1 = new size (must be >= 0).
+/// Grows storage if capacity is insufficient; releases truncated tail slots via `__rt_decref_mixed`;
+/// zero-fills newly exposed slots. Throws ValueError if size is negative.
 fn emit_set_size_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_set_size");
     emitter.instruction("sub sp, sp, #64");                                     // reserve resize state and call frame
@@ -182,6 +196,10 @@ fn emit_set_size_aarch64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits `__rt_spl_fixed_offset_exists` on aarch64: ArrayAccess `offsetExists`.
+/// x0 = receiver, x1 = boxed offset. Returns true (1) if the offset is within range
+/// and the slot is neither unset nor explicitly null; otherwise returns false.
+/// Throws TypeError if offset is not an integer.
 fn emit_offset_exists_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_exists");
     emit_offset_prefix_aarch64(
@@ -214,6 +232,10 @@ fn emit_offset_exists_aarch64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits `__rt_spl_fixed_offset_get` on aarch64: ArrayAccess `offsetGet`.
+/// x0 = receiver, x1 = boxed offset. Returns the retained Mixed cell at the offset,
+/// or a newly boxed null if the slot is unset. Throws TypeError if offset is not an integer;
+/// throws OutOfBoundsException if offset is negative or >= fixed size.
 fn emit_offset_get_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_get");
     emit_offset_prefix_aarch64(
@@ -253,6 +275,10 @@ fn emit_offset_get_aarch64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits `__rt_spl_fixed_offset_set` on aarch64: ArrayAccess `offsetSet`.
+/// x0 = receiver, x1 = boxed offset, x2 = owned Mixed value to store.
+/// Releases the previous slot value via `__rt_decref_mixed` before overwriting.
+/// Throws TypeError if offset is not an integer; throws OutOfBoundsException if out of range.
 fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_set");
     emitter.instruction("sub sp, sp, #80");                                     // reserve offset-set frame
@@ -312,6 +338,10 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return void
 }
 
+/// Emits `__rt_spl_fixed_offset_unset` on aarch64: ArrayAccess `offsetUnset`.
+/// x0 = receiver, x1 = boxed offset. Releases the existing Mixed cell at the slot
+/// via `__rt_decref_mixed` and marks the slot as unset/null.
+/// Throws TypeError if offset is not an integer; throws OutOfBoundsException if out of range.
 fn emit_offset_unset_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_unset");
     emit_offset_prefix_aarch64(
@@ -351,6 +381,11 @@ fn emit_offset_unset_aarch64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits the common offset validation prefix for aarch64 offset operations.
+/// Saves frame state, unboxes the offset argument, validates it is a non-negative integer
+/// within the fixed array range, and branches to `type_label` on TypeError or `range_label`
+/// on out-of-range. On success, x9 = storage pointer, x10 = integer offset.
+/// Clobbers: x0, x1, x9, x10, x11, x12. Saves and restores x29, x30.
 fn emit_offset_prefix_aarch64(emitter: &mut Emitter, type_label: &str, range_label: &str) {
     emitter.instruction("sub sp, sp, #64");                                     // reserve common offset frame
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
@@ -371,6 +406,10 @@ fn emit_offset_prefix_aarch64(emitter: &mut Emitter, type_label: &str, range_lab
     emitter.instruction(&format!("b.hs {}", range_label));                      // reject offsets outside fixed range
 }
 
+/// Emits the aarch64 helper that unboxes the saved boxed offset argument.
+/// Loads the boxed offset from [sp+#8], calls `__rt_mixed_unbox` to produce tag (x0) and
+/// integer payload candidate (x1), saves them to [sp+#24] and [sp+#32], then releases
+/// the boxed offset via `__rt_decref_mixed`. Result: offset tag at [sp+#24], integer at [sp+#32].
 fn emit_unbox_saved_offset_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload boxed offset argument
     emitter.instruction("bl __rt_mixed_unbox");                                 // unbox offset into tag and payload words
@@ -380,6 +419,9 @@ fn emit_unbox_saved_offset_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_decref_mixed");                                // release owned boxed offset argument
 }
 
+/// Emits `__rt_spl_fixed_to_array` on aarch64: converts the SplFixedArray to a PHP array.
+/// Allocates a PHP array of the same logical length, copies each slot's Mixed cell
+/// (retaining it for the result array), or boxed null for unset slots. Returns the new array in x0.
 fn emit_to_array_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_to_array");
     emitter.instruction("sub sp, sp, #64");                                     // reserve toArray frame
@@ -427,6 +469,11 @@ fn emit_to_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return PHP array
 }
 
+/// Emits `__rt_spl_fixed_from_array` on aarch64: constructs a SplFixedArray from a PHP array.
+/// x0 = SplFixedArray class id, x1 = source PHP array, x2 = preserveKeys flag.
+/// Computes the required size from indexed or hash sources, allocates via `__rt_spl_fixed_new`,
+/// then imports values via `__rt_spl_fixed_copy_from_array`. Throws InvalidArgumentException
+/// if a hash source with preserveKeys=true contains non-integer or negative keys.
 fn emit_from_array_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_from_array");
     emitter.instruction("sub sp, sp, #96");                                     // reserve fromArray frame and hash sizing cursor
@@ -491,12 +538,20 @@ fn emit_from_array_aarch64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits `__rt_spl_fixed_unserialize` on aarch64: serialization entry point.
+/// Sets x2=0 (ignore PHP array keys) and tail-calls `__rt_spl_fixed_copy_from_array`.
 fn emit_unserialize_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_unserialize");
     emitter.instruction("mov x2, xzr");                                         // __unserialize packs source values and ignores PHP array keys
     emitter.instruction("b __rt_spl_fixed_copy_from_array");                    // __unserialize reuses the generic array import path
 }
 
+/// Emits `__rt_spl_fixed_copy_from_array` on aarch64: populates a SplFixedArray from a PHP array.
+/// x0 = receiver SplFixedArray, x1 = source PHP array, x2 = preserveKeys flag.
+/// For indexed sources: normalizes slots to boxed Mixed, resizes receiver, copies slot values.
+/// For hash sources (preserveKeys=false): imports values in insertion order at packed indices.
+/// For hash sources (preserveKeys=true): resizes to max numeric key + 1, copies only integer-keyed
+/// entries at their preserved offsets. Releases any overwritten destination cells via `__rt_decref_mixed`.
 fn emit_copy_from_array_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_copy_from_array");
     emitter.instruction("sub sp, sp, #128");                                    // reserve import frame, hash cursor, and value spills
@@ -648,6 +703,9 @@ fn emit_copy_from_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return void
 }
 
+/// Emits a tail-call sequence to construct a boxed null Mixed cell on aarch64.
+/// Sets NULL_TAG (8) as runtime tag, zero payload words, and tail-calls `__rt_mixed_from_value`.
+/// Used when returning null from a leaf call path (e.g., offsetGet on unset slot).
 fn emit_tail_boxed_null_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x0, #{}", NULL_TAG));                     // runtime tag 8 = null
     emitter.instruction("mov x1, xzr");                                         // null payload low word is empty
@@ -655,6 +713,9 @@ fn emit_tail_boxed_null_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_from_value");                             // tail-call boxed Mixed construction
 }
 
+/// Emits a call sequence to construct a boxed null Mixed cell on aarch64.
+/// Sets NULL_TAG (8) as runtime tag, zero payload words, and calls `__rt_mixed_from_value`.
+/// Used when a null must be allocated (e.g., unset slot in toArray).
 fn emit_boxed_null_call_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x0, #{}", NULL_TAG));                     // runtime tag 8 = null
     emitter.instruction("mov x1, xzr");                                         // null payload low word is empty
@@ -662,6 +723,8 @@ fn emit_boxed_null_call_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_from_value");                            // allocate boxed null Mixed cell
 }
 
+/// Emits all x86_64 `SplFixedArray` runtime helpers via a blank line, section comment,
+/// and sequential emission of constructor, Countable, ArrayAccess, and import/export helpers.
 fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: spl fixed array ---");
@@ -678,6 +741,10 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emit_copy_from_array_x86_64(emitter);
 }
 
+/// Emits `__rt_spl_fixed_new` on x86_64: constructs an initialized SplFixedArray object.
+/// Allocates the object header and fixed-size storage array, stamps the heap kind, stores
+/// the class id, zeroes all slots to unset/null, and returns the object pointer in rax.
+/// Clobbers: rax, r9, r10, r11, r12. Preserves rbp.
 fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_new");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for constructor spills
@@ -728,6 +795,8 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return object pointer
 }
 
+/// Emits `__rt_spl_fixed_count` on x86_64: returns the logical fixed size of the array.
+/// rdi = receiver SplFixedArray object. Returns the fixed size in rax.
 fn emit_count_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_count");
     emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
@@ -735,6 +804,10 @@ fn emit_count_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return count/getSize result
 }
 
+/// Emits `__rt_spl_fixed_set_size` on x86_64: resizes the fixed array.
+/// rdi = receiver SplFixedArray object, rsi = new size (must be >= 0).
+/// Grows storage if capacity is insufficient; releases truncated tail slots via `__rt_decref_mixed`;
+/// zero-fills newly exposed slots. Throws ValueError if size is negative.
 fn emit_set_size_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_set_size");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for resize state
@@ -804,6 +877,10 @@ fn emit_set_size_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return void
 }
 
+/// Emits `__rt_spl_fixed_offset_exists` on x86_64: ArrayAccess `offsetExists`.
+/// rdi = receiver, rsi = boxed offset. Returns true (1) if the offset is within range
+/// and the slot is neither unset nor explicitly null; otherwise returns false.
+/// Throws TypeError if offset is not an integer.
 fn emit_offset_exists_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_exists");
     emit_offset_prefix_x86_64(
@@ -837,6 +914,10 @@ fn emit_offset_exists_x86_64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits `__rt_spl_fixed_offset_get` on x86_64: ArrayAccess `offsetGet`.
+/// rdi = receiver, rsi = boxed offset. Returns the retained Mixed cell at the offset,
+/// or a newly boxed null if the slot is unset. Throws TypeError if offset is not an integer;
+/// throws OutOfBoundsException if offset is negative or >= fixed size.
 fn emit_offset_get_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_get");
     emit_offset_prefix_x86_64(
@@ -877,6 +958,10 @@ fn emit_offset_get_x86_64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits `__rt_spl_fixed_offset_set` on x86_64: ArrayAccess `offsetSet`.
+/// rdi = receiver, rsi = boxed offset, rdx = owned Mixed value to store.
+/// Releases the previous slot value via `__rt_decref_mixed` before overwriting.
+/// Throws TypeError if offset is not an integer; throws OutOfBoundsException if out of range.
 fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_set");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for offsetSet
@@ -936,6 +1021,10 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return void
 }
 
+/// Emits `__rt_spl_fixed_offset_unset` on x86_64: ArrayAccess `offsetUnset`.
+/// rdi = receiver, rsi = boxed offset. Releases the existing Mixed cell at the slot
+/// via `__rt_decref_mixed` and marks the slot as unset/null.
+/// Throws TypeError if offset is not an integer; throws OutOfBoundsException if out of range.
 fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_offset_unset");
     emit_offset_prefix_x86_64(
@@ -975,6 +1064,11 @@ fn emit_offset_unset_x86_64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits the common offset validation prefix for x86_64 offset operations.
+/// Saves frame state, unboxes the offset argument, validates it is a non-negative integer
+/// within the fixed array range, and branches to `type_label` on TypeError or `range_label`
+/// on out-of-range. On success, r9 = storage pointer, r10 = integer offset.
+/// Clobbers: rax, rdi, r9, r10, r11, r12. Preserves rbp.
 fn emit_offset_prefix_x86_64(emitter: &mut Emitter, type_label: &str, range_label: &str) {
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for offset helper
     emitter.instruction("mov rbp, rsp");                                        // establish common offset frame
@@ -995,6 +1089,10 @@ fn emit_offset_prefix_x86_64(emitter: &mut Emitter, type_label: &str, range_labe
     emitter.instruction(&format!("jae {}", range_label));                       // reject offsets outside fixed range
 }
 
+/// Emits the x86_64 helper that unboxes the saved boxed offset argument.
+/// Loads the boxed offset from [rbp-16], calls `__rt_mixed_unbox` to produce tag (rax) and
+/// integer payload candidate (rdi), saves them to [rbp-32] and [rbp-40], then releases
+/// the boxed offset via `__rt_decref_mixed`. Result: offset tag at [rbp-32], integer at [rbp-40].
 fn emit_unbox_saved_offset_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload boxed offset argument
     emitter.instruction("call __rt_mixed_unbox");                               // unbox offset into tag and payload words
@@ -1004,6 +1102,9 @@ fn emit_unbox_saved_offset_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_decref_mixed");                              // release owned boxed offset argument
 }
 
+/// Emits `__rt_spl_fixed_to_array` on x86_64: converts the SplFixedArray to a PHP array.
+/// Allocates a PHP array of the same logical length, copies each slot's Mixed cell
+/// (retaining it for the result array), or boxed null for unset slots. Returns the new array in rax.
 fn emit_to_array_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_to_array");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for toArray
@@ -1052,6 +1153,11 @@ fn emit_to_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return PHP array
 }
 
+/// Emits `__rt_spl_fixed_from_array` on x86_64: constructs a SplFixedArray from a PHP array.
+/// rdi = SplFixedArray class id, rsi = source PHP array, rdx = preserveKeys flag.
+/// Computes the required size from indexed or hash sources, allocates via `__rt_spl_fixed_new`,
+/// then imports values via `__rt_spl_fixed_copy_from_array`. Throws InvalidArgumentException
+/// if a hash source with preserveKeys=true contains non-integer or negative keys.
 fn emit_from_array_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_from_array");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for fromArray
@@ -1116,12 +1222,20 @@ fn emit_from_array_x86_64(emitter: &mut Emitter) {
     );
 }
 
+/// Emits `__rt_spl_fixed_unserialize` on x86_64: serialization entry point.
+/// Sets edx=0 (ignore PHP array keys) and jumps to `__rt_spl_fixed_copy_from_array`.
 fn emit_unserialize_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_unserialize");
     emitter.instruction("xor edx, edx");                                        // __unserialize packs source values and ignores PHP array keys
     emitter.instruction("jmp __rt_spl_fixed_copy_from_array");                  // __unserialize reuses the generic array import path
 }
 
+/// Emits `__rt_spl_fixed_copy_from_array` on x86_64: populates a SplFixedArray from a PHP array.
+/// rdi = receiver SplFixedArray, rsi = source PHP array, rdx = preserveKeys flag.
+/// For indexed sources: normalizes slots to boxed Mixed, resizes receiver, copies slot values.
+/// For hash sources (preserveKeys=false): imports values in insertion order at packed indices.
+/// For hash sources (preserveKeys=true): resizes to max numeric key + 1, copies only integer-keyed
+/// entries at their preserved offsets. Releases any overwritten destination cells via `__rt_decref_mixed`.
 fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_copy_from_array");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for import
@@ -1269,6 +1383,9 @@ fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return void
 }
 
+/// Emits a tail-call sequence to construct a boxed null Mixed cell on x86_64.
+/// Sets NULL_TAG (8) as runtime tag, zero payload registers, and tail-calls `__rt_mixed_from_value`.
+/// Used when returning null from a leaf call path (e.g., offsetGet on unset slot).
 fn emit_tail_boxed_null_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rax, {}", NULL_TAG));                     // runtime tag 8 = null
     emitter.instruction("xor rdi, rdi");                                        // null payload low word is empty
@@ -1276,6 +1393,9 @@ fn emit_tail_boxed_null_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_from_value");                           // tail-call boxed Mixed construction
 }
 
+/// Emits a call sequence to construct a boxed null Mixed cell on x86_64.
+/// Sets NULL_TAG (8) as runtime tag, zero payload registers, and calls `__rt_mixed_from_value`.
+/// Used when a null must be allocated (e.g., unset slot in toArray).
 fn emit_boxed_null_call_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rax, {}", NULL_TAG));                     // runtime tag 8 = null
     emitter.instruction("xor rdi, rdi");                                        // null payload low word is empty
@@ -1283,6 +1403,11 @@ fn emit_boxed_null_call_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // allocate boxed null Mixed cell
 }
 
+/// Emits the aarch64 exception-throw sequence for SplFixedArray runtime errors.
+/// Allocates a 32-byte Throwable payload, stamps it as heap kind 6 (object), stores the
+/// class id from `class_id_symbol`, the static message pointer, the message length,
+/// zero exception code, publishes the exception to `_exc_value`, and branches to `__rt_throw_current`.
+/// Clobbers: x0, x1, x2, x9.
 fn emit_throw_exception_aarch64(
     emitter: &mut Emitter,
     class_id_symbol: &str,
@@ -1306,6 +1431,11 @@ fn emit_throw_exception_aarch64(
     emitter.instruction("b __rt_throw_current");                                // enter the standard exception unwinder
 }
 
+/// Emits the x86_64 exception-throw sequence for SplFixedArray runtime errors.
+/// Allocates a 32-byte Throwable payload, stamps it with the x86_64 heap-kind word (HEAP_MAGIC_LO
+/// + kind 6), stores the class id via RIP-relative Lea, the static message pointer,
+/// the message length, zero exception code, publishes the exception to `_exc_value`,
+/// and jumps to `__rt_throw_current`. Preserves rbp, keeps stack 16-byte aligned.
 fn emit_throw_exception_x86_64(
     emitter: &mut Emitter,
     class_id_symbol: &str,

@@ -11,9 +11,9 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_search: find a value in an integer array and return its index.
-/// Input: x0 = array pointer, x1 = needle (integer value)
-/// Output: x0 = index of first match, or -1 if not found
+/// Emits the `__rt_array_search` runtime helper for linear search of integer arrays.
+/// Dispatches to x86_64 or ARM64 implementations based on `emitter.target`.
+/// ARM64 ABI: x0 = array pointer, x1 = needle → x0 returns index or -1 sentinel.
 pub fn emit_array_search(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_search_linux_x86_64(emitter);
@@ -50,6 +50,9 @@ pub fn emit_array_search(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits x86_64 Linux implementation of `__rt_array_search`.
+/// Uses System V AMD64 ABI: rdi = array pointer, rsi = needle → rax returns index or -1.
+/// Performs linear scan through the 8-byte element payload region, skipping the 24-byte header.
 fn emit_array_search_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_search ---");

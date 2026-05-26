@@ -18,12 +18,18 @@ use crate::types::PhpType;
 
 use super::super::callable_lookup::lookup_function;
 
-/// is_callable(value): bool
+/// Emits code for `is_callable(value): bool`.
 ///
-/// Static evaluation when the argument's compile-time type is Callable
+/// Static evaluation when the argument's compile-time type is `Callable`
 /// (closures, first-class callables) or a string literal that resolves
-/// to a known builtin / user function. Dynamic strings, callable arrays,
+/// to a known builtin or user function. Dynamic strings, callable arrays,
 /// objects, and type-erased payloads route to runtime metadata lookup.
+///
+/// # Arguments
+/// - `args[0]`: the value to check
+///
+/// # Returns
+/// Always `PhpType::Bool` — the result is in `int_result_reg`.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -74,6 +80,11 @@ pub fn emit(
     Some(PhpType::Bool)
 }
 
+/// Emits code to call a runtime `__rt_is_callable_*` helper for non-literal types.
+///
+/// Sets up the pointer argument in the correct ABI register for the target
+/// and dispatches to the selected label. Used for arrays, objects, Mixed,
+/// and erased iterables where compile-time resolution is not possible.
 fn emit_pointer_lookup(emitter: &mut Emitter, label: &str) {
     if emitter.target.arch == crate::codegen::platform::Arch::X86_64 {
         emitter.instruction("mov rdi, rax");                                    // move pointer-shaped result into SysV helper argument 0
@@ -81,6 +92,12 @@ fn emit_pointer_lookup(emitter: &mut Emitter, label: &str) {
     abi::emit_call_label(emitter, label);                                       // call the selected pointer-shaped runtime callable fallback
 }
 
+/// Emits code to resolve a dynamic (non-literal) string as a callable name.
+///
+/// Loads the string pointer and length from the expression result registers
+/// into the correct ABI argument registers for the target architecture, then
+/// calls `__rt_is_callable_string` to perform runtime lookup against builtin
+/// and user function metadata.
 fn emit_dynamic_string_lookup(emitter: &mut Emitter) {
     match emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => {

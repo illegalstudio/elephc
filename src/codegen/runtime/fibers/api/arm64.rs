@@ -422,6 +422,11 @@ pub(super) fn emit_throw(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the value yielded by the fiber
 }
 
+/// __rt_fiber_get_current: return the currently executing Fiber or PHP null if
+/// called from the main thread.
+/// Output: x0 = boxed PHP null when called outside any fiber; otherwise a PHP
+///         object wrapping the current Fiber instance (mixed tag 6, low word
+///         holds the object pointer, high word is unused).
 pub(super) fn emit_get_current(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_get_current ---");

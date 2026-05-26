@@ -26,6 +26,12 @@ pub fn collect_aliases(program: Program) -> Program {
     cleaned
 }
 
+/// Iterates over top-level statements, removing each `class_alias("Orig", "Alias")`
+/// call with literal arguments and appending the corresponding synthesized
+/// `class Alias extends Orig {}` declaration to `alias_decls`. Returns the
+/// filtered program with all collected alias declarations appended at the end.
+/// Non-literal or runtime-dependent `class_alias` calls remain in the program
+/// and are not collected — the caller is responsible for rejecting them.
 fn collect_aliases_in_top_level(program: Program, alias_decls: &mut Vec<Stmt>) -> Program {
     program
         .into_iter()
@@ -33,6 +39,11 @@ fn collect_aliases_in_top_level(program: Program, alias_decls: &mut Vec<Stmt>) -
         .collect()
 }
 
+/// Inspects a single statement for a `class_alias` call. If found, pushes the
+/// synthesized subclass declaration to `alias_decls` and returns `None` to remove
+/// the original call from the program. Descends into `NamespaceBlock`,
+/// `IncludeOnceGuard`, and `Synthetic` wrappers; all other statement kinds are
+/// returned unchanged after the alias check.
 fn collect_aliases_in_stmt(stmt: Stmt, alias_decls: &mut Vec<Stmt>) -> Option<Stmt> {
     if let Some((orig, alias)) = extract_class_alias(&stmt) {
         alias_decls.push(synthesise_alias_decl(&orig, &alias, stmt.span));
@@ -71,6 +82,7 @@ fn collect_aliases_in_stmt(stmt: Stmt, alias_decls: &mut Vec<Stmt>) -> Option<St
     }
 }
 
+/// Extract class alias pair from a statement if it is a literal `class_alias` call.
 fn extract_class_alias(stmt: &Stmt) -> Option<(String, String)> {
     let StmtKind::ExprStmt(expr) = &stmt.kind else {
         return None;
@@ -100,6 +112,7 @@ fn extract_class_alias(stmt: &Stmt) -> Option<(String, String)> {
     Some((orig, alias))
 }
 
+/// Extract a string value from a literal string expression.
 fn literal_string(expr: &Expr) -> Option<&str> {
     match &expr.kind {
         ExprKind::StringLiteral(s) => Some(s.as_str()),

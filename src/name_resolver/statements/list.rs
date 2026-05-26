@@ -17,6 +17,15 @@ use super::super::declarations::resolve_decl_stmt;
 use super::super::names::register_imports;
 use super::super::{namespace_name, Imports, Symbols};
 
+/// Resolves a list of statements, applying namespace boundaries and use imports.
+///
+/// Iterates through statements in order, maintaining the current namespace and import
+/// context. `NamespaceDecl` switches the active namespace and resets imports.
+/// `NamespaceBlock` is flattened into the parent list via recursive resolution.
+/// `UseDecl` registers imports that affect subsequent statements. All other statements
+/// are routed through declaration resolution first, then regular statement resolution.
+///
+/// Returns the resolved statement list with rewritten names and imported symbols.
 pub(in crate::name_resolver) fn resolve_stmt_list(
     stmts: &[Stmt],
     current_namespace: Option<&str>,

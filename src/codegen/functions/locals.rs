@@ -16,6 +16,7 @@ use crate::types::{
 };
 use super::types::{codegen_declared_type, codegen_static_type, infer_local_type};
 
+/// Collects all local and hidden frame slots required by a function body before frame sizing.
 pub fn collect_local_vars(
     stmts: &[crate::parser::ast::Stmt],
     ctx: &mut Context,
@@ -257,6 +258,10 @@ pub fn collect_local_vars(
     }
 }
 
+/// Refines the type of a local array variable when assigned with a keyed write.
+/// When a numeric index is used on an array with `Never` element type, promotes
+/// the array to an associative array. Does nothing if the variable is not tracked
+/// or is not an array type.
 fn refine_local_array_type_for_keyed_write(
     array: &str,
     index: &Expr,
@@ -306,6 +311,10 @@ fn refine_local_array_type_for_keyed_write(
     );
 }
 
+/// Recursively collects variables referenced within an assignment expression tree.
+/// Handles named argument temps, conditional assignment temps, pipe temps, and closure
+/// capture receiver temps. Visits all sub-expressions to ensure all referenced locals
+/// are allocated before frame sizing.
 fn collect_assignment_expr_vars(expr: &Expr, ctx: &mut Context, sig: &FunctionSig) {
     match &expr.kind {
         ExprKind::Assignment {
@@ -484,6 +493,9 @@ fn collect_assignment_expr_vars(expr: &Expr, ctx: &mut Context, sig: &FunctionSi
     }
 }
 
+/// Infers the static type for a conditional assignment temporary variable.
+/// Returns the type of the `default` branch for null coalesce, otherwise the value type.
+/// This determines the slot type for the hidden temp that holds the result.
 fn infer_conditional_assignment_temp_type(
     value: &Expr,
     sig: &FunctionSig,
@@ -495,6 +507,9 @@ fn infer_conditional_assignment_temp_type(
     }
 }
 
+/// Returns true if a numeric expression may widen beyond i32 at runtime.
+/// Used to decide whether an assignment target needs a Mixed slot instead of Int.
+/// Only Add/Sub/Mul on Int-typed results can widen; other ops and float ops are safe.
 fn runtime_numeric_result_may_widen(value: &Expr, sig: &FunctionSig, ctx: &Context) -> bool {
     matches!(
         value.kind,
@@ -505,6 +520,10 @@ fn runtime_numeric_result_may_widen(value: &Expr, sig: &FunctionSig, ctx: &Conte
     ) && infer_local_type(value, sig, Some(ctx)) == PhpType::Int
 }
 
+/// Allocates temporary variables for named arguments in builtin or extern calls.
+/// Only allocates when the call has named args; skips externs without signatures or
+/// calls using only positional arguments. The temps hold positional prefix arrays
+/// and individual named argument values that must be materialized before the call.
 fn collect_named_builtin_or_extern_call_temps(
     name: &str,
     call_span: crate::span::Span,
@@ -603,6 +622,10 @@ fn collect_named_call_temps_for_sig(
     }
 }
 
+/// Allocates a temporary for a single planned call argument value when needed.
+/// A temp is allocated unless the argument is a ref param or a side-effect-free literal
+/// (which can be reused inline without a frame slot). Uses the call signature to determine
+/// whether the parameter is by-reference.
 fn collect_planned_call_value_temp(
     call_sig: &FunctionSig,
     call_span: crate::span::Span,
@@ -621,6 +644,9 @@ fn collect_planned_call_value_temp(
     }
 }
 
+/// Determines which call arguments are associative spread sources for local collection purposes.
+/// Maps each argument to true if it is a spread of an AssocArray type, false otherwise.
+/// Used to plan named argument temps in calls with mixed positional/spread arguments.
 fn assoc_spread_sources_for_locals(
     args: &[Expr],
     current_sig: &FunctionSig,
@@ -638,6 +664,9 @@ fn assoc_spread_sources_for_locals(
         .collect()
 }
 
+/// Returns true if an expression is a literal with no observable side effects.
+/// Covers string, int, float, bool, and null literals. These can be used inline
+/// without allocating a temporary frame slot since they are cheap to recreate.
 fn is_side_effect_free_literal(expr: &Expr) -> bool {
     matches!(
         expr.kind,
@@ -649,6 +678,9 @@ fn is_side_effect_free_literal(expr: &Expr) -> bool {
     )
 }
 
+/// Allocates a temporary variable for a single named call argument.
+/// The temp holds the argument value at the call site so it can be passed as a
+/// named parameter. Only allocated if not already present in the variable table.
 fn collect_call_arg_temp(
     call_span: crate::span::Span,
     arg_idx: usize,
@@ -663,6 +695,9 @@ fn collect_call_arg_temp(
     }
 }
 
+/// Collects variables referenced in an instanceof target expression.
+/// Only the Expr variant contains variables; class-name literals require no locals.
+/// Delegates to `collect_assignment_expr_vars` for the expression case.
 fn collect_instanceof_target_vars(
     target: &InstanceOfTarget,
     ctx: &mut Context,
@@ -673,6 +708,9 @@ fn collect_instanceof_target_vars(
     }
 }
 
+/// Resolves a PHP catch type name to its codegen form.
+/// Handles `self` and `parent` keywords by substituting the current class name;
+/// other names are returned as-is. Used when allocating the catch exception variable.
 fn resolve_codegen_catch_type_name(ctx: &Context, raw_name: &str) -> String {
     match raw_name {
         "self" => ctx

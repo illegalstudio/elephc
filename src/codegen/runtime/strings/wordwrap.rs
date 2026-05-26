@@ -11,8 +11,16 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// wordwrap: wrap text at word boundaries.
-/// Input: x1/x2=string, x3=width, x4/x5=break_str. Output: x1/x2=result.
+/// Emits the `__rt_wordwrap` runtime helper entry point, dispatching to the
+/// target-specific implementation. On x86_64, delegates to `emit_wordwrap_linux_x86_64`;
+/// on ARM64 (the default fallback), emits the full wordwrap loop using the concat buffer.
+///
+/// Input registers (ARM64): x1=source ptr, x2=source len, x3=width, x4=break str ptr, x5=break str len
+/// Output registers (ARM64): x1=result ptr, x2=result len
+/// Output registers (x86_64): rax=result ptr, rdx=result len
+///
+/// Uses globals `_concat_buf` / `_concat_off` for output; the result is a heap-backed
+/// refcount-compatible PHP string written into the concat buffer.
 pub fn emit_wordwrap(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_wordwrap_linux_x86_64(emitter);
@@ -83,6 +91,14 @@ pub fn emit_wordwrap(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return
 }
 
+/// Emits the x86_64 Linux implementation of the `__rt_wordwrap` runtime helper.
+///
+/// Input registers: rdi=source ptr, rdx=source len, rcx=width, r8=break str ptr, [rbp-16]=break str len
+/// Output registers: rax=result ptr, rdx=result len
+///
+/// Uses stack slots at `[rbp-8..48]` for spill: break string ptr/len, width, result start pointer,
+/// concat-offset symbol address, and current line-length counter. Writes wrapped output to the
+/// concat buffer globals `_concat_buf` / `_concat_off` and advances `_concat_off` on completion.
 fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: wordwrap ---");

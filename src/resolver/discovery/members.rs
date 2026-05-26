@@ -19,6 +19,23 @@ use super::exprs::discover_expr;
 use super::output::DiscoveryOutput;
 use super::super::state::ResolveState;
 
+/// Discovers include effects in function or method parameter defaults.
+///
+/// Iterates over each parameter and, if it has a default expression, passes it to
+/// `discover_expr` to scan for `include`/`require` effects. The state is shared
+/// across all parameters — declarations found in one default are visible to
+/// subsequent defaults and to the caller.
+///
+/// # Inputs
+/// - `params`: slice of `(name, type, default, is_ref)` parameter tuples
+/// - `base_dir`: directory used to resolve relative include paths
+/// - `loaded_paths`: set of already-loaded paths (accumulated across discovery)
+/// - `include_chain`: current include chain for cycle detection
+/// - `state`: shared resolver state (mutated in place)
+/// - `output`: discovery output accumulator (mutated in place)
+///
+/// # Returns
+/// `Ok(())` on success; first `CompileError` aborts discovery.
 pub(super) fn discover_params(
     params: &[(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)],
     base_dir: &Path,
@@ -35,6 +52,22 @@ pub(super) fn discover_params(
     Ok(())
 }
 
+/// Discovers include effects in class property defaults.
+///
+/// Iterates over each `ClassProperty` and, if it has a default expression, passes
+/// it to `discover_expr`. Declarations found are accumulated into `state` and
+/// `output` for downstream use.
+///
+/// # Inputs
+/// - `properties`: slice of class property AST nodes
+/// - `base_dir`: directory used to resolve relative include paths
+/// - `loaded_paths`: set of already-loaded paths (accumulated across discovery)
+/// - `include_chain`: current include chain for cycle detection
+/// - `state`: shared resolver state (mutated in place)
+/// - `output`: discovery output accumulator (mutated in place)
+///
+/// # Returns
+/// `Ok(())` on success; first `CompileError` aborts discovery.
 pub(super) fn discover_properties(
     properties: &[ClassProperty],
     base_dir: &Path,
@@ -51,6 +84,24 @@ pub(super) fn discover_properties(
     Ok(())
 }
 
+/// Discovers include effects in class method bodies and their parameter defaults.
+///
+/// Clones the resolver state for each method to create an isolated scope, then
+/// runs `discover_params` on the method's parameters and `discover_isolated` on
+/// the method body. The cloned state is discarded after each method — effects
+/// found inside a method body are NOT propagated back to the caller, preserving
+/// lexical isolation.
+///
+/// # Inputs
+/// - `methods`: slice of class method AST nodes
+/// - `base_dir`: directory used to resolve relative include paths
+/// - `loaded_paths`: set of already-loaded paths (accumulated across discovery)
+/// - `include_chain`: current include chain for cycle detection
+/// - `state`: original resolver state (used as base for cloning; not mutated)
+/// - `output`: discovery output accumulator (mutated in place)
+///
+/// # Returns
+/// `Ok(())` on success; first `CompileError` aborts discovery.
 pub(super) fn discover_methods(
     methods: &[ClassMethod],
     base_dir: &Path,

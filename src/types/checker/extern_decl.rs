@@ -15,6 +15,24 @@ use crate::types::PhpType;
 use super::Checker;
 
 impl Checker {
+    /// Validates an extern function declaration against PHP-side types and C ABI constraints.
+    ///
+    /// Checks:
+    /// - Parameter names are unique within the declaration.
+    /// - No parameter uses `void` C type.
+    /// - PHP parameter types are supported for FFI (int, float, str, bool, resource, pointer, buffer, callable).
+    /// - Integer and float register argument counts each stay within the ARM64 ABI limit of 8.
+    /// - Return type is not callable, array, assoc-array, or object.
+    ///
+    /// Inputs:
+    /// - `name`: function name for error messages.
+    /// - `params`: C-side extern parameter list with names and C types.
+    /// - `return_type`: C return type.
+    /// - `php_params`: PHP types for each parameter (zipped with `params`).
+    /// - `php_ret`: PHP return type derived from the function body.
+    /// - `span`: source location for error reporting.
+    ///
+    /// Returns `Ok(())` if valid, `Err(CompileError)` otherwise.
     pub(crate) fn validate_extern_function_decl(
         &self,
         name: &str,
@@ -94,6 +112,14 @@ impl Checker {
         Ok(())
     }
 
+    /// Validates an extern class field declaration's C type.
+    ///
+    /// Rejects `void` and `callable` C types on extern fields; all other C types are permitted.
+    ///
+    /// Inputs:
+    /// - `class_name`: class name for error messages.
+    /// - `field`: the extern field with its name and C type.
+    /// - `span`: source location for error reporting.
     pub(crate) fn validate_extern_field_decl(
         &self,
         class_name: &str,
@@ -112,6 +138,17 @@ impl Checker {
         Ok(())
     }
 
+    /// Validates an extern global variable declaration.
+    ///
+    /// Checks:
+    /// - Name is not `argc` or `argv` (reserved superglobals).
+    /// - No duplicate extern global with the same name already registered.
+    /// - C type is not `void` or `callable`.
+    ///
+    /// Inputs:
+    /// - `name`: variable name (without `$` prefix) for error messages.
+    /// - `c_type`: the C type of the global.
+    /// - `span`: source location for error reporting.
     pub(crate) fn validate_extern_global_decl(
         &self,
         name: &str,
@@ -142,6 +179,9 @@ impl Checker {
         Ok(())
     }
 
+    /// Returns `true` if `ty` is a PHP type that is representable in C for callbacks.
+    ///
+    /// C-compatible callback types are: `int`, `float`, `bool`, `pointer`, and `void`.
     pub(crate) fn callback_type_is_c_compatible(ty: &PhpType) -> bool {
         matches!(
             ty,
@@ -149,6 +189,22 @@ impl Checker {
         )
     }
 
+    /// Registers a PHP function as a C callback after validating C ABI compatibility.
+    ///
+    /// Validates that the function:
+    /// - Is not variadic.
+    /// - Has no default parameter values.
+    /// - Has no pass-by-reference parameters.
+    /// - Has C-compatible return and parameter types (int, float, bool, pointer, void).
+    ///
+    /// If the function signature is not yet resolved, resolves it first via
+    /// `initial_function_param_types` and `resolve_function_signature`.
+    ///
+    /// Inputs:
+    /// - `callback_name`: name of the function to register as a callback.
+    /// - `span`: source location for error reporting.
+    ///
+    /// Returns `Ok(())` if compatible, `Err(CompileError)` if validation fails.
     pub(crate) fn register_callback_function(
         &mut self,
         callback_name: &str,

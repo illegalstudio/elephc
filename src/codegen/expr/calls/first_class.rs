@@ -21,11 +21,15 @@ const FCC_CALLED_CLASS_ID_PARAM: &str = "__elephc_fcc_called_class_id";
 const FCC_THIS_PARAM: &str = "__elephc_fcc_this";
 const FCC_RECEIVER_PARAM: &str = "__elephc_fcc_receiver";
 
+/// Returns a unique temporary name for first-class callable method receiver storage.
 pub(crate) fn method_receiver_temp_name(span: Span) -> String {
     format!("__elephc_fcc_receiver_{}_{}", span.line, span.col)
 }
 
 fn resolved_static_callable_target(receiver: &StaticReceiver, ctx: &Context) -> Option<StaticReceiver> {
+    // Resolves `self` and `parent` static receivers to their concrete class names.
+    // Returns `None` for `Static` receiver, which relies on late-static binding and
+    // cannot be resolved at compile time.
     match receiver {
         StaticReceiver::Named(name) => Some(StaticReceiver::Named(name.clone())),
         StaticReceiver::Self_ => ctx
@@ -42,6 +46,11 @@ fn resolved_static_callable_target(receiver: &StaticReceiver, ctx: &Context) -> 
 }
 
 fn static_callable_lookup_class(receiver: &StaticReceiver, ctx: &Context) -> Option<String> {
+    // Looks up the concrete class name for a static callable receiver.
+    // - `Named`: returns the explicit class name.
+    // - `Self_` / `Static`: returns the current class from context.
+    // - `Parent`: returns the parent class of the current class.
+    // Returns `None` when the current class is unset or the parent chain is exhausted.
     match receiver {
         StaticReceiver::Named(name) => Some(name.as_str().to_string()),
         StaticReceiver::Self_ | StaticReceiver::Static => ctx.current_class.clone(),
@@ -52,6 +61,7 @@ fn static_callable_lookup_class(receiver: &StaticReceiver, ctx: &Context) -> Opt
     }
 }
 
+/// Returns the wrapper signature for a first-class callable from a callable target, if resolvable.
 pub(super) fn first_class_callable_sig(target: &CallableTarget, ctx: &Context) -> Option<FunctionSig> {
     let sig = match target {
         CallableTarget::Function(name) => ctx
@@ -80,6 +90,9 @@ pub(super) fn first_class_callable_sig(target: &CallableTarget, ctx: &Context) -
 }
 
 fn unique_hidden_param(base: &str, sig: &FunctionSig) -> String {
+    // Generates a unique hidden parameter name by appending an index suffix if `base`
+    // already exists in `sig.params`. Checks all existing parameter names to avoid
+    // collisions when multiple hidden params are needed.
     if !sig.params.iter().any(|(name, _)| name == base) {
         return base.to_string();
     }
@@ -94,6 +107,9 @@ fn unique_hidden_param(base: &str, sig: &FunctionSig) -> String {
 }
 
 fn capture_for_static_target(ctx: &Context) -> Option<(String, PhpType)> {
+    // Captures the late-static binding context for a static method first-class callable.
+    // Prefers `__elephc_called_class_id` (set when `static::` is used) over `this`.
+    // Returns `None` if neither is available in the variable scope.
     if ctx.variables.contains_key("__elephc_called_class_id") {
         return Some(("__elephc_called_class_id".to_string(), PhpType::Int));
     }
@@ -135,6 +151,12 @@ fn capture_for_method_receiver(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> Option<(String, PhpType)> {
+    // Captures the receiver expression for a method first-class callable.
+    // - For variables and `this`, captures the existing variable directly.
+    // - For complex expressions, creates a temporary storage slot, emits the
+    //   receiver expression, increments its refcount if needed, and stores the
+    //   result to the temporary. Returns the temporary name and its inferred type.
+    // Returns `None` if the variable lookup or type inference fails.
     match &object.kind {
         ExprKind::Variable(name) => {
             let ty = ctx
@@ -187,6 +209,13 @@ fn normalized_target_and_captures(
     Vec<(String, PhpType, bool)>,
     Vec<(String, PhpType, bool)>,
 )> {
+    // Normalizes a callable target and computes its captures and hidden parameters.
+    // - For `Static` receiver with late-static binding: captures `__elephc_called_class_id`
+    //   or `this` as the visible capture and adds a hidden param for the receiver.
+    // - For `Self_`/`Parent` receiver: resolves to concrete class name, no captures needed.
+    // - For instance method: captures the receiver variable or temporary, adds a hidden
+    //   param to pass the captured value when the wrapper is called.
+    // Returns `None` if static resolution fails or receiver capture is impossible.
     match target {
         CallableTarget::StaticMethod { receiver, method } => match receiver {
             StaticReceiver::Static => {
@@ -239,6 +268,10 @@ fn normalized_target_and_captures(
 }
 
 fn wrapper_body(target: &CallableTarget, sig: &FunctionSig) -> Vec<Stmt> {
+    // Builds the AST body for a first-class callable wrapper function.
+    // Creates parameter variables, forwards them as arguments to the underlying call,
+    // and wraps the result in a return statement. For void return types, emits an
+    // expression statement followed by an empty return to satisfy the ABI.
     let last_param_idx = sig.params.len().saturating_sub(1);
     let args: Vec<Expr> = sig
         .params
@@ -296,6 +329,7 @@ fn wrapper_body(target: &CallableTarget, sig: &FunctionSig) -> Vec<Stmt> {
     }
 }
 
+/// Emits first-class callable creation for functions, methods, and builtins.
 pub(super) fn emit_first_class_callable(
     target: &CallableTarget,
     emitter: &mut Emitter,

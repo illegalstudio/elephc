@@ -16,6 +16,31 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `umask()` PHP builtin.
+///
+/// When called with no arguments, reads the current umask without modifying it.
+/// Implemented as `umask(0)` then `umask(result)` to probe the previous value
+/// portably; the saved previous mask is restored and returned as an integer.
+///
+/// When called with one argument (mode), sets the umask to that value and
+/// returns the previous umask as an integer.
+///
+/// # Arguments
+/// * `_name` — ignored; the builtin name is resolved via the catalog dispatch
+/// * `args` — 0 or 1 expressions: the mode to set (int or expression coercing to int)
+/// * `emitter` — target-aware instruction emitter
+/// * `ctx` — codegen context (variable layout, ownership, class metadata)
+/// * `data` — data section for relocations and literal storage
+///
+/// # Returns
+/// Always `Some(PhpType::Int)` — the previous umask value in both branches.
+///
+/// # ABI
+/// * ARM64: mask in `x0`, return in `x0`
+/// * x86_64: mask in `rax`, return in `rax`
+///
+/// # Effects
+/// Calls `__rt_umask` runtime routine (effectful OS syscall).
 pub fn emit(
     _name: &str,
     args: &[Expr],

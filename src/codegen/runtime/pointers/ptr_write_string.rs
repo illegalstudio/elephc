@@ -10,9 +10,13 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// __rt_ptr_write_string: copy string bytes into raw memory and return the byte count.
-/// AArch64 input: x0 = destination pointer, x1 = string pointer, x2 = byte length. Output: x0 = length.
-/// x86_64 input: rdi = destination pointer, rax = string pointer, rdx = byte length. Output: rax = length.
+/// Emits the `__rt_ptr_write_string` runtime helper for copying PHP string bytes into raw memory.
+/// Dispatches to architecture-specific implementation (ARM64 or x86_64).
+///
+/// ARM64 ABI: x0 = destination pointer, x1 = source string pointer, x2 = byte length; returns x0 = byte count.
+/// x86_64 ABI: rdi = destination pointer, rax = source string pointer, rdx = byte length; returns rax = byte count.
+///
+/// The source string is borrowed (not consumed) and no trailing NUL is written.
 pub(crate) fn emit_ptr_write_string(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_ptr_write_string_linux_x86_64(emitter);
@@ -42,6 +46,10 @@ pub(crate) fn emit_ptr_write_string(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller without touching the borrowed source string
 }
 
+/// Emits the x86_64 Linux implementation of `__rt_ptr_write_string`.
+/// Input: rdi = destination pointer, rax = source string pointer, rdx = byte length.
+/// Output: rax = number of bytes written (same as input length).
+/// Does not write a trailing NUL; caller retains ownership of destination buffer.
 fn emit_ptr_write_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ptr_write_string ---");

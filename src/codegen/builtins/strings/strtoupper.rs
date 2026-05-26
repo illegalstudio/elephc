@@ -16,6 +16,25 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `strtoupper` builtin.
+///
+/// # Arguments
+/// - `_name`: Unused parameter present for dispatcher uniformity.
+/// - `args`: Must contain exactly one expression producing a string value.
+/// - `emitter`: Target-aware assembly emitter.
+/// - `ctx`: Codegen context carrying variable layout and ownership state.
+/// - `data`: Data section for relocations and static data.
+///
+/// # Behavior
+/// 1. Emits code to evaluate and materialize the first argument onto the stack.
+/// 2. Calls `__rt_strtoupper`, a target-aware runtime helper that converts the
+///    string in-place to uppercase using PHP's locale-aware rules.
+/// 3. Returns `PhpType::Str` indicating the result is an owned PHP string.
+///
+/// # ABI Constraints
+/// The runtime helper expects the input string in the standard string ABI registers
+/// (`x1`=ptr, `x2`=len on ARM64; `rdi`=ptr, `rsi`=len on x86_64) and returns the
+/// transformed string pointer/length pair via the same registers.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -9,8 +9,9 @@
 //! - Tables are read-only ASCII and are addressed by absolute symbol names (`_strtotime_keyword_tab`, ...).
 //! - Names stored pre-lowercased so the matcher only lowercases the input once into the dispatcher's lc16 buffer.
 
-/// Keyword table entries (lowercased name → kind code).
+/// Keyword table entries indexed by the strtotime lexer.
 ///
+/// Each entry maps a lowercased keyword string to a kind code.
 /// Kinds 0-5: bare keywords. Kinds 6-8: modifiers consumed by the weekday strategy.
 /// Kind 9: `ago` (consumed by the offsets strategy as a trailing suffix).
 /// Kinds 10-16: weekday names (10=Sun..16=Sat) — full and abbreviated forms share the same kind.
@@ -44,9 +45,9 @@ const KEYWORDS: &[(&str, u8)] = &[
     ("sat", 16),
 ];
 
-/// Unit table entries (lowercased name → kind code).
+/// Unit table entries indexed by the strtotime lexer.
 ///
-/// Kinds map to accumulator indices: 0=sec, 1=min, 2=hour, 3=day, 4=week, 5=month, 6=year.
+/// Maps lowercased unit strings to accumulator indices: 0=sec, 1=min, 2=hour, 3=day, 4=week, 5=month, 6=year.
 /// Plural forms share the same kind as their singular counterparts.
 const UNITS: &[(&str, u8)] = &[
     ("seconds", 0),
@@ -69,7 +70,11 @@ const UNITS: &[(&str, u8)] = &[
     ("year", 6),
 ];
 
-/// Emit the strtotime read-only data tables.
+/// Emits NASM assembly directives for the strtotime keyword and unit lookup tables.
+///
+/// Writes two global symbols (`_strtotime_keyword_tab` and `_strtotime_unit_tab`) each followed
+/// by their entries, then a 12-byte sentinel terminator (12 zero bytes). Entries are emitted by `entry()`.
+/// Returns the complete assembly string.
 pub(crate) fn emit_strtotime_data() -> String {
     let mut out = String::new();
     out.push_str(".globl _strtotime_keyword_tab\n_strtotime_keyword_tab:\n");
@@ -86,7 +91,14 @@ pub(crate) fn emit_strtotime_data() -> String {
     out
 }
 
-/// Format one fixed-stride table entry (10 bytes name zero-padded + 1 length byte + 1 kind byte).
+/// Formats one fixed-stride table entry for the strtotime data section.
+///
+/// Each entry occupies exactly 12 bytes: up to 10 bytes for the name (zero-padded on the right),
+/// followed by a length byte and a kind byte. The returned string contains three assembly directives
+/// (`.ascii` for the name, `.byte` for the length, `.byte` for the kind) with a trailing newline.
+///
+/// # Panics
+/// Panics if `name` exceeds 10 characters.
 fn entry(name: &str, kind: u8) -> String {
     debug_assert!(name.len() <= 10, "strtotime table entry too long: {}", name);
     let mut padded = name.to_string();

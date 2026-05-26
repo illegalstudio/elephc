@@ -15,6 +15,27 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `substr(string, offset, length?)` builtin call.
+///
+/// Evaluates arguments in source order, materializes them into ABI registers,
+/// then emits platform-specific instructions that compute the resulting substring
+/// pointer and length. Handles negative offsets (converted relative to end), offset
+/// clamping to string length, and optional negative length clamping to zero.
+///
+/// # Arguments
+/// - `_name`: unused, always `null` (name resolved by catalog lookup)
+/// - `args`: exactly 2 or 3 expressions: `(string, offset, length?)`
+/// - `emitter`: drives instruction emission and label allocation
+/// - `ctx`: carries target arch, vtable, and local variable layout
+/// - `data`: scratch area for relocatable immediates and string data
+///
+/// # Returns
+/// `Some(PhpType::Str)` — the result is always a PHP string.
+///
+/// # Side effects
+/// Clobbers temporary registers used for integer materialization. On x86_64,
+/// also clobbers `r8` as a zero materialized for negative clamping. String result
+/// is returned as borrowed pointer/length in `x1`/`x2` (AArch64) or `rax`/`rdx` (x86_64).
 pub fn emit(
     _name: &str,
     args: &[Expr],

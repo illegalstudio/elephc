@@ -17,6 +17,22 @@ use crate::types::PhpType;
 
 use super::stream_arg::emit_stream_fd_arg;
 
+/// Emits code to call the PHP `fgetcsv` builtin, which reads one row from a CSV file into an array of strings.
+///
+/// Inputs:
+/// - `args[0]`: a PHP stream resource whose file descriptor is extracted and passed to the runtime helper.
+/// - `emitter`: target-aware instruction emitter.
+/// - `ctx`: codegen context carrying target, layout, and state.
+/// - `data`: mutable data section for relocatable labels.
+///
+/// Side effects:
+/// - Calls `emit_stream_fd_arg` to unbox the stream resource to a raw file descriptor.
+/// - On x86_64, moves the descriptor into `rdi` per the SysV ABI.
+/// - Calls `__rt_fgetcsv` runtime helper which reads one CSV row and returns a string array.
+///
+/// Output:
+/// - Returns `Some(PhpType::Array(Box::new(PhpType::Str)))` indicating the result is an array of strings.
+/// - Returns `None` only on error path (handled by caller).
 pub fn emit(
     _name: &str,
     args: &[Expr],

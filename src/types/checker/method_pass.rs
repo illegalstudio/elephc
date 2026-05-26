@@ -16,6 +16,20 @@ use crate::types::{traits::FlattenedClass, PhpType, TypeEnv};
 use super::Checker;
 
 impl Checker {
+    /// Runs method-body validation in passes until class type information stabilizes.
+    ///
+    /// Each pass type-checks every non-abstract method body, collecting return types and
+    /// errors. If a pass changes `self.classes` (e.g., via inferred return types), another
+    /// pass runs. Iteration stops when types stabilize or `2 * class_count + 1` passes
+    /// are exhausted.
+    ///
+    /// For non-static methods, `$this` is inserted into the per-method `TypeEnv` as an
+    /// `Object` of the declaring class. Parameters are resolved against declared type hints
+    /// or inferred from the class signature; variadic parameters use `PhpType::Array(Int)`
+    /// as a fallback.
+    ///
+    /// Sets `self.current_class`, `self.current_method`, and `self.current_method_is_static`
+    /// during body checking to enable context-sensitive diagnostics.
     pub(super) fn type_check_methods_until_stable(
         &mut self,
         flattened_classes: &[FlattenedClass],
@@ -118,6 +132,14 @@ impl Checker {
         Ok(())
     }
 
+    /// Patches untyped constructor parameters with property types when the constructor
+    /// property-promotion rule applies.
+    ///
+    /// For each constructor parameter without an explicit type hint, if the class has a
+    /// matching promoted property (`constructor_param_to_prop`), that property's declared
+    /// type is injected into `method_env` for the parameter and also propagated back into
+    /// the class signature's `params[i].1`. Skips parameters that have explicit type
+    /// annotations or whose promoted property is redeclared as a normal property.
     fn patch_constructor_method_env(
         &mut self,
         class: &FlattenedClass,
@@ -148,6 +170,19 @@ impl Checker {
         }
     }
 
+    /// Infers the return type from method body `return` statements, validates it against
+    /// any declared return type hint, and writes the effective return type back into
+    /// `self.classes`.
+    ///
+    /// Return type inference scans `method.body` for `return` statements, widens all
+    /// observed types to the common supertype, and falls back to `PhpType::Void` when
+    /// the body is empty. If a declared hint exists, `require_declared_return_coverage`
+    /// checks for unreachable returns and `require_compatible_return_type` checks each
+    /// observed return for assignability to the declared type. A `Never` declared return
+    /// suppresses the compatibility check (the body is allowed to have no returns when
+    /// it always throws/exits/loops). `Never` combined with a body that *does* contain
+    /// return statements produces a compile error. Generic array hints are passed
+    /// through as-is to preserve inference.
     fn update_method_return_type(
         &mut self,
         class: &FlattenedClass,

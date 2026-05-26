@@ -18,8 +18,9 @@ use crate::codegen::platform::{Arch, Platform};
 /// uses 4 KB but accepts oversized protection ranges silently.
 const FIBER_GUARD_PAGE_SIZE: i32 = 16384;
 
-/// Combined `MAP_PRIVATE | MAP_ANON` flag word per platform. macOS uses
-/// `MAP_ANON = 0x1000`; Linux uses `MAP_ANONYMOUS = 0x20`.
+/// Returns the platform-specific flag word for `MAP_PRIVATE | MAP_ANONYMOUS`.
+/// - macOS: `0x1002` (MAP_PRIVATE | MAP_ANON)
+/// - Linux: `0x22` (MAP_PRIVATE | MAP_ANONYMOUS)
 fn map_anon_private_flags(platform: Platform) -> i32 {
     match platform {
         Platform::MacOS => 0x1002, // MAP_PRIVATE | MAP_ANON
@@ -121,6 +122,11 @@ pub fn emit_fiber_free_stack(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // hand control back to the caller (NULL/zero-length path also lands here)
 }
 
+/// x86_64-specific implementation of `__rt_fiber_alloc_stack`.
+/// Uses the System V AMD64 ABI convention for mmap/mprotect calls.
+/// Mirrors the ARM64 path in `emit_fiber_alloc_stack` but emits x86_64
+/// instructions and preserves callee-saved registers (r12–r15, rbp) across
+/// libc calls.
 fn emit_alloc_stack_x86_64(emitter: &mut Emitter) {
     let map_flags = map_anon_private_flags(emitter.target.platform);
 
@@ -187,6 +193,9 @@ fn emit_alloc_stack_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // bail out with the failure triple
 }
 
+/// x86_64-specific implementation of `__rt_fiber_free_stack`.
+/// Uses the System V AMD64 ABI convention for the munmap call.
+/// Preserves rbp around the libc call to maintain stack alignment.
 fn emit_free_stack_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_free_stack (munmap) ---");

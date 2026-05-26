@@ -10,6 +10,10 @@
 
 use super::*;
 
+// Verifies that DCE drops all catch clauses when the try body cannot throw.
+//
+// Non-throwing try bodies make all catch clauses unreachable dead code.
+// The finally block (if present) is preserved.
 #[test]
 fn test_eliminate_dead_code_drops_unreachable_catches_after_non_throwing_try() {
     let program = vec![Stmt::new(
@@ -42,6 +46,11 @@ fn test_eliminate_dead_code_drops_unreachable_catches_after_non_throwing_try() {
     assert_eq!(body, &vec![Stmt::echo(Expr::int_lit(7))]);
 }
 
+// Verifies that DCE drops all catch clauses when the try body cannot throw,
+// even when a finally block is present.
+//
+// The finally block executes regardless of whether an exception occurs,
+// so it must be preserved even when catches are unreachable.
 #[test]
 fn test_eliminate_dead_code_drops_unreachable_catches_before_finally() {
     let program = vec![Stmt::new(
@@ -74,6 +83,11 @@ fn test_eliminate_dead_code_drops_unreachable_catches_before_finally() {
     assert_eq!(body, &vec![Stmt::echo(Expr::int_lit(7)), Stmt::echo(Expr::int_lit(8))]);
 }
 
+// Verifies that when a Throwable catch appears before a more specific type,
+// the more specific catch is pruned as shadowed dead code.
+//
+// Throwable is the root of PHP's exception hierarchy; any catch for a
+// subclass is unconditionally shadowed and unreachable.
 #[test]
 fn test_eliminate_dead_code_drops_catches_shadowed_by_throwable() {
     let program = vec![Stmt::new(
@@ -123,6 +137,10 @@ fn test_eliminate_dead_code_drops_catches_shadowed_by_throwable() {
     assert_eq!(catches[0].body, vec![Stmt::echo(Expr::int_lit(7))]);
 }
 
+// Verifies that when multiple consecutive catches have identical exception types,
+// all but the first are pruned as shadowed dead code.
+//
+// PHP uses first-match semantics; later catches with the same type are unreachable.
 #[test]
 fn test_eliminate_dead_code_drops_duplicate_shadowed_catch_types() {
     let program = vec![Stmt::new(
@@ -172,6 +190,12 @@ fn test_eliminate_dead_code_drops_duplicate_shadowed_catch_types() {
     assert_eq!(catches[0].body, vec![Stmt::echo(Expr::int_lit(7))]);
 }
 
+// Verifies that when pruning shadowed catches exposes identical adjacent catches,
+// DCE merges them into a single catch with multiple exception types.
+//
+// After dropping the shadowed Exception catch (duplicate of the first),
+// the remaining Error and Exception catches have identical bodies and must
+// be merged into a single catch clause listing both types.
 #[test]
 fn test_eliminate_dead_code_merges_identical_catches_exposed_by_shadow_drop() {
     let program = vec![Stmt::new(

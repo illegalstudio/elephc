@@ -11,10 +11,20 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_chunk: split an int array into chunks of a given size.
-/// Input:  x0=array_ptr, x1=chunk_size
-/// Output: x0=outer array (array of array pointers, elem_size=8)
-/// Each inner array is an int array containing up to chunk_size elements.
+/// Emits `__rt_array_chunk`, a runtime helper that splits an input indexed integer array
+/// into an outer array of inner indexed-array chunks.
+///
+/// # ABI (ARM64)
+/// - Input: `x0` = source array pointer, `x1` = chunk size
+/// - Output: `x0` = pointer to outer indexed array (each element is an inner indexed-array pointer)
+/// - Preserves all callee-saved registers (`x19`-`x28`, `x29`, `sp`)
+/// - Calls `__rt_array_new` and `__rt_array_push_int` for allocation/push operations
+///
+/// # Behavior
+/// - Computes `ceil(source_length / chunk_size)` to determine outer array capacity
+/// - Creates one inner indexed array per chunk; the last chunk may be partially filled
+/// - Inner arrays use `elem_size=8` to store raw integer payloads
+/// - Returns immediately if source array is empty
 pub fn emit_array_chunk(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_chunk_linux_x86_64(emitter);
@@ -111,6 +121,20 @@ pub fn emit_array_chunk(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = outer array
 }
 
+/// Emits `__rt_array_chunk` for the x86_64 Linux target.
+///
+/// # ABI (x86_64 System V)
+/// - Input: `rdi` = source array pointer, `rsi` = chunk size
+/// - Output: `rax` = pointer to outer indexed array
+/// - Preserves `rbp`; uses `rbp - 8/16/24/32/40` for spill slots
+/// - Calls `__rt_array_new` and `__rt_array_push_int` via the System V call convention
+///
+/// # Stack layout
+/// - `[rbp - 8]` = source array pointer
+/// - `[rbp - 16]` = chunk size
+/// - `[rbp - 24]` = outer array pointer
+/// - `[rbp - 32]` = source index
+/// - `[rbp - 40]` = current inner array pointer
 fn emit_array_chunk_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_chunk ---");

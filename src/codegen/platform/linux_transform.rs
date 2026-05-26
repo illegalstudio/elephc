@@ -90,16 +90,26 @@ const C_SYMBOLS: &[&str] = &[
     "usleep",
 ];
 
+/// Returns true if `name` is a known C runtime symbol that follows C calling conventions.
+/// Used to decide whether to emit a `bl` call with the bare symbol name (Linux) or with
+/// an underscore prefix (macOS).
 #[allow(dead_code)]
 fn is_c_symbol(name: &str) -> bool {
     C_SYMBOLS.binary_search(&name).is_ok()
 }
 
+/// Returns true for macOS syscall numbers that require an AT_FDCWD placeholder as the
+/// first argument on Linux (syscall 5 = open, 10 = creat, 33 = access, 128 = mkdir, 136 = rmdir,
+/// 137 = unlink, 338 = lstat, 340 = lchown).
 #[allow(dead_code)]
 pub(super) fn needs_at_fdcwd(macos_num: u32) -> bool {
     matches!(macos_num, 5 | 10 | 33 | 128 | 136 | 137 | 338 | 340)
 }
 
+/// Transforms macOS ARM64 assembly to Linux ARM64 syntax.
+/// Handles: syscall number rewriting, AT_FDCWD argument reordering for path-based syscalls,
+/// relocation suffix conversion (@GOTPAGEOFF → :got_lo12:, etc.), svc #0x80 → svc #0,
+/// underscore-prefixed symbol names, and comment delimiter conversion (; → //).
 #[allow(dead_code)]
 pub(super) fn transform_for_linux(asm: &str) -> String {
     let mut result = String::with_capacity(asm.len());
@@ -238,6 +248,9 @@ pub(super) fn transform_for_linux(asm: &str) -> String {
     result
 }
 
+/// Rewrites macOS-style GOT and PAGE relocation directives to their Linux equivalents.
+/// Converts @GOTPAGEOFF → :got_lo12:, @GOTPAGE → :got:, @PAGEOFF → :lo12:, and strips @PAGE.
+/// Returns None if the line contains no macOS relocations.
 #[allow(dead_code)]
 pub(super) fn transform_relocation(line: &str) -> Option<String> {
     if !line.contains("@PAGE") && !line.contains("@GOT") {
@@ -300,6 +313,8 @@ pub(super) fn transform_relocation(line: &str) -> Option<String> {
     Some(result)
 }
 
+/// Parses a macOS syscall instruction of the form "mov x16, #N" and returns the syscall number.
+/// Returns None if the line does not match the expected pattern.
 #[allow(dead_code)]
 pub(super) fn parse_syscall_mov(trimmed: &str) -> Option<u32> {
     let rest = trimmed.strip_prefix("mov x16, #")?;
@@ -307,6 +322,9 @@ pub(super) fn parse_syscall_mov(trimmed: &str) -> Option<u32> {
     num_str.parse::<u32>().ok()
 }
 
+/// Remaps macOS-specific CommonCrypto symbol names to their portable Linux equivalents.
+/// CC_MD5 → MD5, CC_SHA1 → SHA1, CC_SHA256 → SHA256.
+/// Other symbols are returned unchanged.
 #[allow(dead_code)]
 fn remap_symbol(name: &str) -> &str {
     match name {
@@ -317,6 +335,9 @@ fn remap_symbol(name: &str) -> &str {
     }
 }
 
+/// Transforms a macOS `bl _Symbol` call to Linux syntax.
+/// Strips the leading underscore from known C symbols and remaps CryptoCommon symbols.
+/// Returns None if the line is not a macOS-style C function call.
 #[allow(dead_code)]
 pub(super) fn transform_c_call(trimmed: &str) -> Option<String> {
     let rest = trimmed.strip_prefix("bl _")?;

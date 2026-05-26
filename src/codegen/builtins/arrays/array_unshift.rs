@@ -19,6 +19,28 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `array_unshift` builtin call, which prepends a value to an array in place.
+///
+/// # Arguments
+/// - `_name`: Unused; the builtin name is implicit.
+/// - `args[0]`: The array to modify (mutating/ref-like).
+/// - `args[1]`: The value to prepend.
+///
+/// # Returns
+/// Always `PhpType::Int` (the new array length), matching PHP's return value.
+///
+/// # Codegen strategy
+/// 1. Ensures the array argument is uniquely owned (COW).
+/// 2. Stores the array pointer back to caller storage.
+/// 3. Evaluates the prepend value while preserving the array pointer.
+/// 4. Calls `__rt_array_unshift` with array pointer (x0/di) and value (x1/si) registers.
+/// 5. The runtime returns the new array length in x0/di.
+///
+/// # ABI notes
+/// - x86_64: pushes `rax` to preserve the unique array pointer while evaluating the payload,
+///   then moves array pointer to `rdi` and payload to `rsi` before the call.
+/// - ARM64: pushes array pointer to the stack, evaluates the payload into x0,
+///   then swaps to x0=array, x1=payload via stack load.
 pub fn emit(
     _name: &str,
     args: &[Expr],

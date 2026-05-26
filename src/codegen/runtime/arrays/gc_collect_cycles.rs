@@ -13,9 +13,23 @@ use crate::codegen::platform::Arch;
 
 use super::gc_collect_cycles_x86_64::emit_gc_collect_cycles_linux_x86_64;
 
-/// gc_collect_cycles: reclaim unreachable refcounted array/hash/object graphs.
-/// The collector uses existing refcounts plus a transient heap-edge count stored
-/// in the upper 32 bits of the 64-bit heap kind word.
+/// Emits `__rt_gc_collect_cycles` and `__rt_gc_collect_cycles_done` runtime helpers.
+///
+/// Reclaims unreachable refcounted array/hash/object graphs via a four-pass algorithm:
+/// 1. **Clear pass** – clears transient GC metadata while preserving kind + value_type bits
+/// 2. **Count pass** – counts incoming heap edges for every live refcounted block; the
+///    edge count is stored in the upper 32 bits of the 64-bit heap kind word
+/// 3. **Mark pass** – marks externally-rooted blocks (refcount > incoming edges) and
+///    recursively marks their reachable children via `__rt_gc_mark_reachable`
+/// 4. **Free pass** – frees every block whose reachable bit was not set, using
+///    `__rt_array_free_deep`, `__rt_hash_free_deep`, `__rt_mixed_free_deep`, or
+///    `__rt_object_free_deep` as appropriate
+///
+/// Input: `emitter` must be initialized for the target architecture.
+/// Side effects: may invoke `__rt_gc_note_child_ref`, `__rt_gc_mark_reachable`, and
+/// deep-free helpers; sets `_gc_collecting` flag for re-entry suppression.
+///
+/// On x86_64 Linux, delegates to the target-specific emitter.
 pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_gc_collect_cycles_linux_x86_64(emitter);

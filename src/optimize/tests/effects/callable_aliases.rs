@@ -10,5 +10,7 @@
 
 use super::*;
 
+// Tests that local variable aliases of closures are tracked through assignment chains.
 mod tracking;
+// Tests that callable aliases are merged across control-flow paths (if/try/switch).
 mod path_merges;

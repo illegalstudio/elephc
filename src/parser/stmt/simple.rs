@@ -17,6 +17,11 @@ use crate::span::Span;
 use super::assign::try_parse_postfix_assignment;
 use super::{expect_semicolon, expect_token};
 
+/// Parses `include`/`require` (with optional `_once`) statements.
+///
+/// Consumes the keyword, optionally the parentheses, then the path expression.
+/// Produces a `StmtKind::Include` with `once` and `required` flags set.
+/// The path expression is preserved for resolver include discovery.
 pub(super) fn parse_include(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -52,6 +57,11 @@ pub(super) fn parse_include(
     ))
 }
 
+/// Parses `echo` statements with one or more comma-separated expressions.
+///
+/// Consumes `echo`, then parses expressions until a non-comma token is encountered.
+/// Returns a single `Echo` statement for one expression, or a `Synthetic` wrapper
+/// containing multiple `Echo` statements for PHP's multi-argument echo syntax.
 pub(super) fn parse_echo(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -79,6 +89,10 @@ pub(super) fn parse_echo(
     }
 }
 
+/// Parses a bare expression statement: an expression followed by a semicolon.
+///
+/// Parses the expression, consumes the trailing semicolon, and wraps it in
+/// `StmtKind::ExprStmt`.
 pub(super) fn parse_expr_stmt(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -89,6 +103,11 @@ pub(super) fn parse_expr_stmt(
     Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
 }
 
+/// Parses a statement prefixed with `@` error suppression.
+///
+/// Checks the next token to detect an include/require variant; if found,
+/// delegates to `parse_include` with error-suppression semantics. Otherwise,
+/// falls back to `parse_expr_stmt`.
 pub(super) fn parse_error_suppressed_stmt(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -115,6 +134,10 @@ pub(super) fn parse_error_suppressed_stmt(
     }
 }
 
+/// Parses a `return` statement, with or without a value.
+///
+/// Consumes `return`. If the next token is a semicolon, returns `Return(None)`.
+/// Otherwise parses an expression and consumes the trailing semicolon.
 pub(super) fn parse_return(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -132,6 +155,9 @@ pub(super) fn parse_return(
     Ok(Stmt::new(StmtKind::Return(Some(expr)), span))
 }
 
+/// Parses a `throw` statement: consumes `throw`, then the exception expression.
+///
+/// Consumes the trailing semicolon and wraps the expression in `StmtKind::Throw`.
 pub(super) fn parse_throw(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -143,7 +169,13 @@ pub(super) fn parse_throw(
     Ok(Stmt::new(StmtKind::Throw(expr), span))
 }
 
-/// Handle statements starting with $this: $this->prop = value; or $this->method();
+/// Parses statements starting with `$this`.
+///
+/// First attempts to parse a postfix assignment via `try_parse_postfix_assignment`.
+/// If that yields nothing, parses the expression. If the next token after the
+/// expression is `=` and the expression is a property access, produces a
+/// `StmtKind::PropertyAssign`; otherwise returns an `ExprStmt`. Consumes the
+/// trailing semicolon in all cases.
 pub(super) fn parse_this_stmt(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -179,6 +211,11 @@ pub(super) fn parse_this_stmt(
     Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
 }
 
+/// Parses a `const` declaration: `const NAME = value;`.
+///
+/// Consumes `const`, expects an identifier for the name, then `=`, then the
+/// value expression, and consumes the trailing semicolon. Returns a
+/// `StmtKind::ConstDecl` with the name and value.
 pub(super) fn parse_const_decl(
     tokens: &[(Token, Span)],
     pos: &mut usize,

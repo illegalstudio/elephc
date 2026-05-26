@@ -18,6 +18,18 @@ use crate::types::PhpType;
 
 use super::stream_arg::emit_stream_fd_arg;
 
+/// Lowers the PHP `fread` builtin call to target assembly.
+///
+/// Arguments:
+///   - `args[0]`: stream resource (validated via `emit_stream_fd_arg`)
+///   - `args[1]`: byte count expression
+///
+/// Emits:
+///   - Stream unboxing and fd preservation on stack while length is evaluated
+///   - ABI-aligned argument materialization for `__rt_fread` (fd in arg0, length in arg1)
+///   - Tail call to `__rt_fread`, which returns an owned PHP string in x0/x1 or x0=0 on error
+///
+/// Returns `Some(PhpType::Str)` unconditionally; caller must handle false/null from runtime.
 pub fn emit(
     _name: &str,
     args: &[Expr],

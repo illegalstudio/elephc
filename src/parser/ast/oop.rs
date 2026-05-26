@@ -27,6 +27,7 @@ pub struct Attribute {
 }
 
 impl PartialEq for Attribute {
+    /// Compares two attributes by name and arguments, ignoring span.
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name && self.args == other.args
     }
@@ -43,12 +44,14 @@ pub struct AttributeGroup {
 }
 
 impl PartialEq for AttributeGroup {
+    /// Compares two attribute groups by their attributes, ignoring span.
     fn eq(&self, other: &Self) -> bool {
         self.attributes == other.attributes
     }
 }
 
 #[derive(Debug, Clone)]
+/// Enum case declaration.
 pub struct EnumCaseDecl {
     pub name: String,
     pub value: Option<Expr>,
@@ -57,6 +60,7 @@ pub struct EnumCaseDecl {
 }
 
 impl PartialEq for EnumCaseDecl {
+    /// Compares two enum cases by name, value, and attributes; span is not compared.
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name && self.value == other.value
             && self.attributes == other.attributes
@@ -66,6 +70,7 @@ impl PartialEq for EnumCaseDecl {
 // --- OOP ---
 
 #[derive(Debug, Clone, PartialEq)]
+/// Visibility modifier.
 pub enum Visibility {
     Public,
     Protected,
@@ -73,6 +78,7 @@ pub enum Visibility {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
+/// Property hooks.
 pub struct PropertyHooks {
     pub get: bool,
     pub set: bool,
@@ -80,20 +86,24 @@ pub struct PropertyHooks {
 }
 
 impl PropertyHooks {
+    /// Returns a `PropertyHooks` with all hooks disabled (no get/set/get_by_ref).
     pub fn none() -> Self {
         Self::default()
     }
 
+    /// Returns true if any hook (get, set, or get_by_ref) is present.
     pub fn any(&self) -> bool {
         self.get || self.set || self.get_by_ref
     }
 
+    /// Returns true if a getter is required (either value or by-ref getter present).
     pub fn requires_get(&self) -> bool {
         self.get || self.get_by_ref
     }
 }
 
 #[derive(Debug, Clone)]
+/// Trait use.
 pub struct TraitUse {
     pub trait_names: Vec<Name>,
     pub adaptations: Vec<TraitAdaptation>,
@@ -102,12 +112,14 @@ pub struct TraitUse {
 }
 
 impl PartialEq for TraitUse {
+    /// Compares two trait uses by trait names and adaptations; span is not compared.
     fn eq(&self, other: &Self) -> bool {
         self.trait_names == other.trait_names && self.adaptations == other.adaptations
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Trait adaptation.
 pub enum TraitAdaptation {
     Alias {
         trait_name: Option<Name>,
@@ -123,6 +135,7 @@ pub enum TraitAdaptation {
 }
 
 #[derive(Debug, Clone)]
+/// Class property.
 pub struct ClassProperty {
     pub name: String,
     pub visibility: Visibility,
@@ -140,6 +153,8 @@ pub struct ClassProperty {
 }
 
 impl PartialEq for ClassProperty {
+    /// Compares class properties by name, visibility, type, hooks, modifiers,
+    /// by-ref flag, default value, and attributes; span is not compared.
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name && self.visibility == other.visibility
             && self.type_expr == other.type_expr
@@ -171,6 +186,8 @@ pub struct ClassConst {
 }
 
 impl PartialEq for ClassConst {
+    /// Compares class constants by name, visibility, is_final, value, and attributes;
+    /// span is not compared.
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
             && self.visibility == other.visibility
@@ -181,6 +198,7 @@ impl PartialEq for ClassConst {
 }
 
 #[derive(Debug, Clone)]
+/// Class method.
 pub struct ClassMethod {
     pub name: String,
     pub visibility: Visibility,
@@ -199,6 +217,8 @@ pub struct ClassMethod {
 }
 
 impl PartialEq for ClassMethod {
+    /// Compares class methods by name, visibility, static/abstract/final flags,
+    /// has_body, and attributes; span, params, return_type, and body are not compared.
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name && self.visibility == other.visibility
             && self.is_static == other.is_static

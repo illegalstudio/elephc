@@ -10,6 +10,7 @@
 
 use super::super::*;
 
+/// Extracts an i64 from an integer literal expression.
 pub(in crate::optimize) fn int_literal(expr: &Expr) -> Option<i64> {
     match expr.kind {
         ExprKind::IntLiteral(value) => Some(value),
@@ -17,6 +18,7 @@ pub(in crate::optimize) fn int_literal(expr: &Expr) -> Option<i64> {
     }
 }
 
+/// Extracts an f64 from an integer or float literal expression.
 pub(in crate::optimize) fn numeric_literal(expr: &Expr) -> Option<f64> {
     match expr.kind {
         ExprKind::IntLiteral(value) => Some(value as f64),
@@ -25,6 +27,7 @@ pub(in crate::optimize) fn numeric_literal(expr: &Expr) -> Option<f64> {
     }
 }
 
+/// Extracts a ScalarValue from a scalar literal expression (Null, Bool, Int, Float, String).
 pub(in crate::optimize) fn scalar_value(expr: &Expr) -> Option<ScalarValue> {
     match &expr.kind {
         ExprKind::Null => Some(ScalarValue::Null),
@@ -36,6 +39,11 @@ pub(in crate::optimize) fn scalar_value(expr: &Expr) -> Option<ScalarValue> {
     }
 }
 
+/// Extracts a ScalarValue from an expression, unwrapping ternary/match branches when both arms yield the same value.
+///
+/// Returns `None` if the expression is not a scalar literal or a ternary/match whose
+/// arms are all identical scalars. Used by DCE to determine whether an assignment
+/// target has a known compile-time value.
 pub(in crate::optimize) fn assigned_scalar_value(expr: &Expr) -> Option<ScalarValue> {
     scalar_value(expr).or_else(|| match &expr.kind {
         ExprKind::Ternary {
@@ -66,12 +74,16 @@ pub(in crate::optimize) fn assigned_scalar_value(expr: &Expr) -> Option<ScalarVa
     })
 }
 
+/// Returns `Some(true)` if two scalar expressions are strictly equal (===), `Some(false)` if not,
+/// or `None` if either operand is not a scalar literal.
 pub(in crate::optimize) fn strict_eq(left: &Expr, right: &Expr) -> Option<bool> {
     let left = scalar_value(left)?;
     let right = scalar_value(right)?;
     Some(left == right)
 }
 
+/// Returns `Some(true)` if two scalar expressions are loosely equal (==) per PHP coercion rules,
+/// `Some(false)` if not, or `None` if either operand is not a scalar literal.
 pub(in crate::optimize) fn loose_eq(left: &Expr, right: &Expr) -> Option<bool> {
     let left = scalar_value(left)?;
     let right = scalar_value(right)?;
@@ -110,6 +122,10 @@ pub(in crate::optimize) fn loose_eq(left: &Expr, right: &Expr) -> Option<bool> {
     }
 }
 
+/// Parses a numeric string (int or float) from a trimmed string, returning the f64 value or None if the string is not purely numeric.
+///
+/// Handles leading sign, integer part, optional fractional part, and optional exponent.
+/// Returns `None` for non-numeric strings, empty strings, or non-finite results.
 fn php_numeric_string(value: &str) -> Option<f64> {
     let trimmed = value.trim_matches(|c: char| c.is_ascii_whitespace());
     if trimmed.is_empty() {
@@ -162,6 +178,8 @@ fn php_numeric_string(value: &str) -> Option<f64> {
     trimmed.parse::<f64>().ok().filter(|value| value.is_finite())
 }
 
+/// Returns `Some(true)` if two numeric expressions satisfy the given comparison function,
+/// or `None` if either operand is not a numeric literal.
 pub(in crate::optimize) fn compare_numeric(
     left: &Expr,
     right: &Expr,
@@ -172,6 +190,8 @@ pub(in crate::optimize) fn compare_numeric(
     Some(cmp(left, right))
 }
 
+/// Returns the result of the spaceship operator (<=>) on two numeric literals as an i64 (-1, 0, or 1),
+/// or `None` if either operand is not a numeric literal.
 pub(in crate::optimize) fn spaceship_numeric(left: &Expr, right: &Expr) -> Option<i64> {
     let left = numeric_literal(left)?;
     let right = numeric_literal(right)?;
@@ -184,6 +204,8 @@ pub(in crate::optimize) fn spaceship_numeric(left: &Expr, right: &Expr) -> Optio
     })
 }
 
+/// Represents a scalar value extracted from a literal expression.
+/// Used during constant folding to compare, coerce, and reconstruct literal expressions.
 #[derive(Debug, Clone, PartialEq)]
 pub(in crate::optimize) enum ScalarValue {
     Null,
@@ -194,6 +216,7 @@ pub(in crate::optimize) enum ScalarValue {
 }
 
 impl ScalarValue {
+    /// Returns whether this scalar value is truthy per PHP rules.
     pub(in crate::optimize) fn truthy(&self) -> bool {
         match self {
             ScalarValue::Null => false,
@@ -204,6 +227,7 @@ impl ScalarValue {
         }
     }
 
+    /// Converts this scalar value back into the equivalent `ExprKind` literal node.
     pub(in crate::optimize) fn into_expr_kind(self) -> ExprKind {
         match self {
             ScalarValue::Null => ExprKind::Null,

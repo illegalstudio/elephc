@@ -11,6 +11,12 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Emits the `__rt_mixed_write_stdout` runtime helper for the active target.
+///
+/// Takes a boxed `Mixed` pointer in `x0` (ARM64) or `rax` (x86_64) and dispatches
+/// on the runtime tag to write the appropriate scalar representation to stdout.
+/// Handles null, bool, int, float, resource, and string payloads; non-scalar
+/// types (array, object, callable, etc.) print nothing consistent with PHP echo semantics.
 pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_write_stdout_linux_x86_64(emitter);
@@ -77,6 +83,11 @@ pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_mixed_write_stdout` using the Linux syscall ABI.
+///
+/// Takes a boxed `Mixed` pointer in `rax` and dispatches on the runtime tag to write
+/// scalar values to stdout via Linux `syscall 1` (`write`). Preserves `rbp` as frame
+/// pointer and maintains 16-byte stack alignment for nested helper calls.
 fn emit_mixed_write_stdout_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_write_stdout ---");

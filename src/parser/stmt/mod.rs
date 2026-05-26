@@ -12,6 +12,7 @@ mod assign;
 mod ffi;
 mod namespace_use;
 mod oop;
+/// Parameter parsing helpers for function declarations, including typed parameters and return types.
 pub(crate) mod params;
 mod simple;
 
@@ -27,6 +28,7 @@ pub use ffi::parse_extern_stmts;
 pub(crate) use params::{looks_like_typed_param, parse_type_expr};
 pub(crate) use assign::can_replay_assignment_target;
 
+/// Parses a single PHP statement, including optional PHP 8 attribute groups.
 pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, CompileError> {
     // PHP attribute groups (`#[...]`) may decorate any statement-level
     // declaration. We capture them here and attach the result to the parsed
@@ -43,6 +45,10 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
     attach_attributes_to_stmt(stmt, attributes, span)
 }
 
+/// Attaches parsed attribute groups to a statement, validating that the statement kind supports attributes.
+///
+/// Returns an error if attributes are attached to a statement type that does not support them
+/// (e.g., expressions, control flow). Callable only after `stmt_kind_supports_attributes` confirms eligibility.
 fn attach_attributes_to_stmt(
     mut stmt: Stmt,
     attributes: Vec<AttributeGroup>,
@@ -63,6 +69,10 @@ fn attach_attributes_to_stmt(
     }
 }
 
+/// Returns true if the given statement kind supports PHP 8 attribute groups.
+///
+/// Only class-like declarations (class, interface, trait, enum, function, packed class)
+/// accept attribute groups per PHP syntax rules.
 fn stmt_kind_supports_attributes(kind: &StmtKind) -> bool {
     matches!(
         kind,
@@ -75,6 +85,11 @@ fn stmt_kind_supports_attributes(kind: &StmtKind) -> bool {
     )
 }
 
+/// Dispatches to the appropriate statement parser based on the current token.
+///
+/// This is the top-level statement parser entry point. It handles all PHP statement types
+/// including declarations, expressions, control flow, includes, and assignments.
+/// Recovery errors within this function stop at PHP statement boundaries to preserve follow-up diagnostics.
 fn parse_stmt_dispatch(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -181,6 +196,11 @@ fn parse_stmt_dispatch(
     }
 }
 
+/// Parses the exit level for `break` or `continue` statements.
+///
+/// Accepts an optional positive integer literal to specify the number of loop levels to exit.
+/// Returns 1 if no level is specified. Fails if the expression is not a positive integer literal
+/// or exceeds `usize` range.
 fn parse_loop_exit_level(
     keyword: &str,
     tokens: &[(Token, Span)],
@@ -209,6 +229,11 @@ fn parse_loop_exit_level(
     }
 }
 
+/// Scans tokens from `start` forward to detect whether a `::` appears outside of parentheses or brackets.
+///
+/// Used to disambiguate scoped property accesses (e.g., `Foo::$bar`) from comparison operators
+/// in expression statements. Stops scanning when it encounters an assignment operator at depth 0,
+/// returning false in that case.
 fn statement_lhs_contains_double_colon(tokens: &[(Token, Span)], start: usize) -> bool {
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
@@ -244,6 +269,12 @@ fn statement_lhs_contains_double_colon(tokens: &[(Token, Span)], start: usize) -
     false
 }
 
+/// Advances `pos` to the next PHP statement boundary following a parse error.
+///
+/// Skips tokens while tracking parenthesis and bracket depth, stopping at `;`, `}`, or `EOF`
+/// when depth is zero. Also stops when a statement-starting keyword is encountered (after the
+/// first token), allowing recovery to continue from the next statement without consuming it.
+/// If already at a boundary token, advances by one to avoid infinite loops.
 pub(crate) fn recover_to_statement_boundary(tokens: &[(Token, Span)], pos: &mut usize) {
     let start = *pos;
     let mut paren_depth = 0usize;
@@ -333,6 +364,7 @@ pub(crate) fn recover_to_statement_boundary(tokens: &[(Token, Span)], pos: &mut 
     }
 }
 
+/// Parses a braced block `{ stmts }`, returning statements or errors.
 pub fn parse_block(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Vec<Stmt>, CompileError> {
     let span = if *pos < tokens.len() {
         tokens[*pos].1
@@ -376,6 +408,10 @@ pub fn parse_body(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Vec<Stmt>
     }
 }
 
+/// Consumes a semicolon token, or returns an error if the current token is not a semicolon.
+///
+/// Used to terminate expression statements, return statements, throw statements, and similar
+/// constructs that require explicit semicolons in PHP.
 pub(crate) fn expect_semicolon(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -393,6 +429,10 @@ pub(crate) fn expect_semicolon(
     }
 }
 
+/// Consumes the expected token, advancing `pos`, or returns an error with the given message.
+///
+/// Used for mandatory syntax elements like `{` in blocks or specific keywords where absence
+/// indicates a syntax error.
 pub(crate) fn expect_token(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -412,6 +452,9 @@ pub(crate) fn expect_token(
     }
 }
 
+/// Returns true if the token at `pos` is the start of a PHP name (identifier or backslash).
+///
+/// Used to distinguish name-based declarations from generic expression statements.
 pub(crate) fn name_starts_at(tokens: &[(Token, Span)], pos: usize) -> bool {
     matches!(
         tokens.get(pos).map(|(t, _)| t),
@@ -419,6 +462,12 @@ pub(crate) fn name_starts_at(tokens: &[(Token, Span)], pos: usize) -> bool {
     )
 }
 
+/// Parses a PHP qualified or unqualified name from the token stream.
+///
+/// Handles backslash-prefixed fully-qualified names (`\Foo\Bar`), qualified names (`Foo\Bar`),
+/// and simple identifiers (`Foo`). Sets `NameKind` based on leading backslash presence and
+/// tracks whether any intermediate backslashes appeared. Returns an error if no identifier
+/// is found or if a backslash appears at the end of the sequence.
 pub(crate) fn parse_name(
     tokens: &[(Token, Span)],
     pos: &mut usize,

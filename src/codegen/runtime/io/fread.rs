@@ -10,9 +10,24 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// fread: read N bytes from a file descriptor.
-/// Input:  x0=fd, x1=length to read
-/// Output: x1=string pointer (in concat_buf), x2=actual bytes read
+/// Emits the `__rt_fread` runtime helper for reading bytes from a file descriptor.
+///
+/// On ARM64: reads into the concat buffer, updates `_concat_off`, sets `_eof_flags[fd]` on EOF,
+/// and returns (pointer, byte_count) in x1:x2.
+///
+/// On x86_64: same semantics but uses libc `read()` and returns (pointer, byte_count) in rax:rdx.
+///
+/// # Inputs
+/// - x0/rdi: file descriptor
+/// - x1/rsi: number of bytes to read
+///
+/// # Outputs
+/// - x1/x86_64 rax: pointer to bytes in concat buffer (borrowed, not owned)
+/// - x2/rdx: actual bytes read (0 on EOF/error)
+///
+/// # Side effects
+/// - Advances `_concat_off` by actual bytes read.
+/// - Sets `_eof_flags[fd] = 1` when the stream is exhausted.
 pub fn emit_fread(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_fread_linux_x86_64(emitter);
@@ -79,6 +94,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_fread` using libc `read()`.
 fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fread ---");

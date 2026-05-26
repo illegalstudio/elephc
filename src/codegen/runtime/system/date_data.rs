@@ -8,7 +8,14 @@
 //! Key details:
 //! - Data symbol names are consumed directly by __rt_date and must not drift from formatter lookups.
 
-/// Emit day and month name lookup tables as data.
+/// Emits `.globl` day-name and month-name lookup tables as NASM/OS X assembler directives.
+///
+/// Each entry is 12 bytes: 10 characters (null-padded), 1 length byte, 1 zero padding byte.
+/// Sunday=0…Saturday=6 (7 entries); January=0…December=11 (12 entries).
+///
+/// Returns a `String` containing `.globl _day_names` / `_month_names` symbols with
+/// `.ascii` and `.byte` directives. The symbol names (`_day_names`, `_month_names`) and
+/// the fixed 12-byte stride must stay in sync with `__rt_date` formatter lookups.
 pub(crate) fn emit_date_data() -> String {
     let mut out = String::new();
     // Day names: 7 entries, each 12 bytes (10 chars + 1 length + 1 padding)

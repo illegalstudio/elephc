@@ -21,6 +21,21 @@ use crate::types::PhpType;
 
 use super::super::callable_lookup::{lookup_function, FunctionLookup};
 
+/// Emits the `preg_replace_callback` builtin call.
+///
+/// Evaluates arguments in PHP source order (pattern, callback, subject),
+/// materializes the callback address, and calls the `__rt_preg_replace_callback`
+/// runtime helper. Returns `PhpType::Str` on success.
+///
+/// # Arguments
+/// * `_name` - Unused, follows dispatcher convention
+/// * `args` - `[pattern, callback, subject]`
+/// * `emitter` - Target assembly emitter
+/// * `ctx` - Codegen context (variables, deferred closures)
+/// * `data` - Data section for constants/symbols
+///
+/// # Returns
+/// `Some(PhpType::Str)` on success, `None` if the call was deferred
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -81,10 +96,21 @@ pub fn emit(
     Some(PhpType::Str)
 }
 
+/// Returns the PHP type for preg_replace_callback closure parameters.
+///
+/// `preg_replace_callback` passes `array<string>` (matches) to the callback,
+/// so untyped closure params must be specialized to `array<Str>` before emission.
 fn preg_matches_type() -> PhpType {
     PhpType::Array(Box::new(PhpType::Str))
 }
 
+/// Specializes the most recently deferred inline closure's first parameter type.
+///
+/// When `callback` is an inline `Closure` expression, this updates the closure's
+/// signature so its first parameter is `preg_matches_type()` (`array<Str>`),
+/// matching what `preg_replace_callback` passes at runtime.
+///
+/// No-op for non-closure callbacks or when no deferred closure is pending.
 fn specialize_recent_inline_callback(callback: &Expr, ctx: &mut Context) {
     if !matches!(callback.kind, ExprKind::Closure { .. }) {
         return;
@@ -100,6 +126,14 @@ fn specialize_recent_inline_callback(callback: &Expr, ctx: &mut Context) {
     }
 }
 
+/// Loads the callback address into `call_reg` and returns capture variables.
+///
+/// Handles three callback forms:
+/// - **String literal**: looks up the function name and emits its symbol address
+/// - **Variable**: loads the callable value from the stack slot
+/// - **Other expression**: emits the expression and moves the result address
+///
+/// Returns capture metadata `(name, PhpType, by_ref)` from `callable_captures`.
 fn materialize_callback_address(
     callback: &Expr,
     call_reg: &str,
@@ -143,6 +177,17 @@ fn materialize_callback_address(
     }
 }
 
+/// Emits a capture environment on the temporary stack and registers a wrapper.
+///
+/// If `captures` is empty, passes the direct callback address with no environment.
+/// Otherwise:
+/// - Reserves `env_bytes` on the temporary stack (slot 0 = callback, slots 1+ = captures)
+/// - Stores each capture variable into the corresponding environment slot
+/// - Registers a `DeferredCallbackWrapper` for later wrapper emission
+/// - Returns the environment size in bytes
+///
+/// # Returns
+/// Bytes of reserved temporary stack, or 0 if no captures
 fn materialize_capture_env(
     captures: &[(String, PhpType, bool)],
     callback_reg: &str,
@@ -205,12 +250,22 @@ fn materialize_capture_env(
     env_bytes
 }
 
+/// Stores a raw register value into an environment slot at `offset`.
+///
+/// Uses `symbol_scratch_reg` to compute the slot address on the temporary stack,
+/// then stores `reg` at that address.
 fn store_reg_to_env_slot(emitter: &mut Emitter, reg: &str, offset: usize) {
     let scratch = abi::symbol_scratch_reg(emitter);
     abi::emit_temporary_stack_address(emitter, scratch, offset);
     abi::emit_store_to_address(emitter, reg, scratch, 0);
 }
 
+/// Stores the current expression result into an environment slot at `offset`.
+///
+/// Reads the ABI result registers appropriate for `ty` (int, float, or string
+/// pointer+length) and stores them into the environment slot. For `Float`,
+/// uses `float_result_reg`; for `Str`, uses both pointer and length registers;
+/// otherwise uses `int_result_reg`. No-op for `Void`/`Never`.
 fn store_current_result_to_env_slot(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     let scratch = abi::symbol_scratch_reg(emitter);
     abi::emit_temporary_stack_address(emitter, scratch, offset);

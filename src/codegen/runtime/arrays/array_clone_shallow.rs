@@ -11,11 +11,12 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_clone_shallow: duplicate an indexed array for copy-on-write semantics.
-/// Scalar payloads are byte-copied, string payloads are re-persisted, and
-/// refcounted child pointers are retained for the cloned owner.
-/// Input:  x0 = source array pointer
-/// Output: x0 = cloned array pointer
+/// Emits `__rt_array_clone_shallow` for the current target.
+/// Duplicates an indexed array for copy-on-write semantics: scalar payloads are
+/// byte-copied, string payloads are re-persisted for the cloned owner, and
+/// refcounted child pointers (arrays, objects, boxed mixed) are retained.
+/// Input: `x0` (ARM64) / `rdi` (x86_64) = source array pointer
+/// Output: `x0` (ARM64) / `rax` (x86_64) = cloned array pointer
 pub fn emit_array_clone_shallow(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_clone_shallow_linux_x86_64(emitter);
@@ -122,6 +123,14 @@ pub fn emit_array_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = cloned array pointer
 }
 
+/// Emits `__rt_array_clone_shallow` for the Linux x86_64 target.
+/// Allocates a clone with the same capacity and layout as the source, byte-copies
+/// the payload, then applies ownership fixups based on the `value_type` tag:
+/// - String arrays: re-persist each string slot so the clone owns independent copies.
+/// - Nested arrays/objects/boxed mixed: retain each child pointer for the cloned owner.
+/// - Scalars/floats: already correct after the byte copy.
+/// Input: `rdi` = source indexed-array pointer
+/// Output: `rax` = cloned indexed-array pointer
 fn emit_array_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_clone_shallow ---");
@@ -233,6 +242,9 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Verifies the x86_64 clone helper's stack frame keeps locals (source pointer at
+    /// `[rbp - 40]`, cloned pointer at `[rbp - 48]`) below the saved callee-saved
+    /// registers, which sit at `[rbp - 8]` through `[rbp - 32]` after the `sub rsp, 32`.
     fn test_x86_clone_frame_keeps_locals_below_saved_callee_registers() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
         emit_array_clone_shallow(&mut emitter);
@@ -246,6 +258,10 @@ mod tests {
     }
 
     #[test]
+    /// Verifies the x86_64 clone helper recomputes the string slot address after
+    /// `__rt_str_persist` clobbers caller-saved registers (r10, r11, r8, rax, rdx),
+    /// confirming the loop reloads indices from spill slots rather than assuming
+    /// they survive the helper call.
     fn test_x86_clone_string_fixup_recomputes_slot_after_persist() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
         emit_array_clone_shallow(&mut emitter);

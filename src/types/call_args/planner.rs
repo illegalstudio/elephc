@@ -22,6 +22,12 @@ use super::static_spread::{
     expand_static_assoc_spread_args_with_origins, ExpandedArgOrigin,
 };
 
+/// Validates and normalizes call-site arguments against `sig`, inferring the
+/// caller-visible regular parameter count from the signature.
+///
+/// - `trim_trailing_defaults`: when `true`, elide trailing default-only slots from the plan.
+/// - `allow_unknown_named_variadic`: when `true`, unknown named args are allowed and routed
+///   to the variadic parameter if the signature is variadic.
 pub(crate) fn plan_call_args(
     sig: &FunctionSig,
     args: &[Expr],
@@ -39,6 +45,10 @@ pub(crate) fn plan_call_args(
     )
 }
 
+/// Validates and normalizes call-site arguments against `sig` using an explicitly
+/// supplied `regular_param_count` rather than inferring it from the signature.
+/// Use this when the caller knows the visible parameter count (e.g., internal
+/// signatures with hidden implementation parameters).
 pub(crate) fn plan_call_args_with_regular_param_count(
     sig: &FunctionSig,
     args: &[Expr],
@@ -86,6 +96,10 @@ pub(crate) fn plan_call_args_with_regular_param_count(
     )
 }
 
+/// Like `plan_call_args_with_regular_param_count` but accepts a caller-supplied
+/// `assoc_spread_sources` vector that marks which arguments come from associative
+/// spread expansions. Used by codegen when propagating spread-source information
+/// through multiple call layers.
 pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
     sig: &FunctionSig,
     args: &[Expr],
@@ -136,6 +150,8 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
     )
 }
 
+/// Returns `Ok` if no positional argument appears after a spread expression,
+/// otherwise returns `PositionalAfterSpread` for the offending argument.
 fn validate_positional_spread_order(args: &[Expr]) -> Result<(), CallArgPlanError> {
     let mut seen_spread = false;
     for arg in args {
@@ -148,6 +164,9 @@ fn validate_positional_spread_order(args: &[Expr]) -> Result<(), CallArgPlanErro
     Ok(())
 }
 
+/// Core named-argument planning: resolves named params, spreads, positional prefixes,
+/// and defaults into a `CallArgPlan`. Handles duplicate detection, ordering constraints,
+/// spread bounds, and dynamic named prefixes.
 #[allow(clippy::too_many_arguments)]
 fn plan_named_call_args(
     sig: &FunctionSig,
@@ -428,6 +447,7 @@ fn plan_named_call_args(
     })
 }
 
+/// Temporary tracker for a named argument that was resolved to a regular parameter slot.
 #[derive(Clone)]
 struct NamedValue {
     source_index: usize,
@@ -436,6 +456,9 @@ struct NamedValue {
     name: String,
 }
 
+/// A source argument being accumulated in the positional prefix before named args begin.
+/// Used to distinguish positional expressions, spread expressions, and static-named-cursor
+/// markers that track progress through a `...unpack_named` array.
 enum PrefixSourceArg {
     Positional {
         source_index: usize,
@@ -451,6 +474,10 @@ enum PrefixSourceArg {
     },
 }
 
+/// Returns the spread expression from the first `PrefixSourceArg::Spread` that
+/// is marked `is_assoc_named_provider`, or `None` if no such spread is present.
+/// This represents the dynamic named-prefix array that must fill remaining parameter
+/// slots when static analysis cannot determine which keys are present.
 fn dynamic_named_prefix_expr(prefix_args: &[PrefixSourceArg], _call_span: Span) -> Option<Expr> {
     if let Some(PrefixSourceArg::Spread { expr, .. }) = prefix_args
         .iter()
@@ -461,10 +488,15 @@ fn dynamic_named_prefix_expr(prefix_args: &[PrefixSourceArg], _call_span: Span) 
     None
 }
 
+/// Returns `true` if the two spans refer to the same line and column.
 fn same_span(left: Span, right: Span) -> bool {
     left.line == right.line && left.col == right.col
 }
 
+/// After expanding static associative spreads, checks whether any `Spread` argument
+/// appears after a static `...unpack_named` with no direct named args between them.
+/// If so, the spread's elements become additional positional arguments (tail elements)
+/// rather than feeding into named-parameter slots.
 fn expand_static_tail_spreads_after_unpack_named(
     args: Vec<Expr>,
     origins: Vec<ExpandedArgOrigin>,
@@ -509,6 +541,8 @@ fn expand_static_tail_spreads_after_unpack_named(
     (expanded_args, expanded_origins, expanded_assoc_sources)
 }
 
+/// If `expr` is a plain `ArrayLiteral` with no nested spreads, returns its elements
+/// as positional tail arguments that can be inlined after a `...unpack_named` spread.
 fn static_positional_tail_elements(expr: &Expr) -> Option<Vec<Expr>> {
     let ExprKind::ArrayLiteral(elements) = &expr.kind else {
         return None;

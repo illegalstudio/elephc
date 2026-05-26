@@ -21,6 +21,14 @@ use super::super::Checker;
 use super::syntactic::wider_type_syntactic;
 use static_closure::body_must_not_use_this;
 impl Checker {
+    /// Infers the PHP return type of `expr` in the given `env`.
+    ///
+    /// This is the top-level dispatcher for expression type inference. It
+    /// handles literals, variables, operators, array access, ternaries,
+    /// function calls, closures, and all other expression forms. Errors are
+    /// returned for type mismatches (e.g. negating a string) or undefined
+    /// references. The result feeds statement checking, function call
+    /// validation, and optimizer-visible type metadata.
     pub fn infer_type(&mut self, expr: &Expr, env: &TypeEnv) -> Result<PhpType, CompileError> {
         match &expr.kind {
             ExprKind::BoolLiteral(_) => Ok(PhpType::Bool),
@@ -581,6 +589,12 @@ impl Checker {
         }
     }
 
+    /// Returns the element type of an array literal that contains at least one
+    /// spread of an associative array.
+    ///
+    /// Iterates over `elems`, extracting the value type from each `Spread` that
+    /// wraps an `AssocArray`. All spread value types must agree, otherwise
+    /// `Mixed` is returned. Non-spread elements are ignored.
     fn assoc_spread_literal_value_type(&mut self, elems: &[Expr], env: &TypeEnv) -> PhpType {
         let mut value_ty = PhpType::Never;
         for elem in elems {
@@ -605,6 +619,12 @@ impl Checker {
         }
     }
 
+    /// Returns the return type of the `offsetGet` method for `class_name`,
+    /// or `Mixed` if no `offsetGet` method is found.
+    ///
+    /// Looks up `offsetGet` in the class's method table first, then falls back
+    /// to the `ArrayAccess` interface. Used when indexing an `Object` that
+    /// implements `ArrayAccess`.
     fn array_access_offset_get_type(&self, class_name: &str) -> PhpType {
         self.classes
             .get(class_name)
@@ -621,6 +641,10 @@ impl Checker {
 
 }
 
+/// Returns `true` if `index` is a valid string offset index for a string receiver.
+///
+/// A valid index is an integer type, or a string literal whose value can be
+/// parsed as a PHP string offset (e.g. `"0"`, `"-1"`, `"10"`).
 fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
     *idx_ty == PhpType::Int
         || matches!(

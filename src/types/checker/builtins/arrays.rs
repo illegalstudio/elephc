@@ -16,6 +16,18 @@ use super::super::Checker;
 
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
+/// Type-checks array builtin functions.
+///
+/// Dispatches on `name` to validate arity, argument types, and return type for each
+/// supported array function (count, array_pop, in_array, array_keys, array_values, sort,
+/// rsort, shuffle, natsort, natcasesort, asort, arsort, ksort, krsort, isset, array_push,
+/// array_reverse, array_unique, array_flip, array_shift, array_sum, array_product, array_rand,
+/// array_key_exists, array_search, array_merge, array_diff, array_intersect, array_diff_key,
+/// array_intersect_key, array_unshift, array_combine, array_fill_keys, array_pad, array_fill,
+/// array_slice, array_splice, array_chunk, array_column, range).
+///
+/// Returns `Ok(Some(PhpType))` with the inferred return type, `Ok(None)` for unknown
+/// builtins (deferred to caller), or `Err(CompileError)` on arity/type mismatch.
 pub(super) fn check_builtin(
     checker: &mut Checker,
     name: &str,

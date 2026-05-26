@@ -11,10 +11,14 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_reduce: reduce an integer array to a single value using a callback.
+/// Reduces a PHP array to a single accumulated value by iteratively applying a callback.
+/// Dispatches to the target-specific implementation. On ARM64 uses the native implementation;
+/// on Linux x86_64 dispatches to `emit_array_reduce_linux_x86_64`.
 /// Input: x0 = callback function address, x1 = source array pointer, x2 = initial value, x3 = optional callback environment pointer
 /// Output: x0 = accumulated result
-/// The callback receives (accumulator, element) and returns the new accumulator.
+/// Preserves all callee-saved registers. The callback receives (accumulator, element) in
+/// the first two argument registers and returns the new accumulator. When x3 is non-null,
+/// a third argument (capture environment pointer) is passed to the callback.
 pub fn emit_array_reduce(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_reduce_linux_x86_64(emitter);
@@ -79,6 +83,15 @@ pub fn emit_array_reduce(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = accumulated value
 }
 
+/// Reduces a PHP array to a single accumulated value on Linux x86_64.
+/// Target-specific entry point called from `emit_array_reduce`.
+/// Caller-saves registers and preserves callee-saved registers.
+/// Input: rdi = callback address, rsi = source array pointer, rdx = initial accumulator, rcx = optional callback environment pointer
+/// Output: rax = accumulated result
+/// Callback ABI: (accumulator, element) in (rdi, rsi), result in rax. When rcx is non-null,
+/// rdx carries the capture environment pointer as the third argument. Array element at index i
+/// is loaded from `array_pointer + 24 + i * 8` (skipping the 24-byte array header).
+/// Loop index stored in callee-saved r13; accumulator in callee-saved r14.
 fn emit_array_reduce_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_reduce ---");

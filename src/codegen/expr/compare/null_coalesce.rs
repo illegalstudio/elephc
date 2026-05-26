@@ -17,6 +17,22 @@ use crate::types::PhpType;
 
 use super::super::{coerce_result_to_type, emit_expr, widen_codegen_type};
 
+/// Emits the null coalescing operator (`??`) for PHP expressions with short-circuit evaluation.
+///
+/// # Arguments
+/// - `value` — the left-hand side expression to check for null
+/// - `default` — the right-hand side expression evaluated when `value` is null
+///
+/// # Returns
+/// The `PhpType` of the result after applying PHP type coercion rules to the operands.
+///
+/// # Behavior
+/// - If `value` evaluates to null (or a boxed Mixed/Union tagged null), the `default` expression
+///   is evaluated and returned.
+/// - If `value` is non-null, the original value is kept (subject to type coercion).
+/// - For `PhpType::Mixed` and `PhpType::Union`, a runtime unbox routine inspects the payload tag.
+/// - For scalar types, a sentinel value (0x7fff_ffff_ffff_fffe) is used as the null marker.
+/// - The result type is widened according to PHP's type coercion rules (`widen_codegen_type`).
 pub(in crate::codegen::expr) fn emit_null_coalesce(
     value: &Expr,
     default: &Expr,

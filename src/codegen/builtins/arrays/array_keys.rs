@@ -17,6 +17,14 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits PHP `array_keys($arr)` builtin — returns all keys of an array.
+///
+/// For `PhpType::AssocArray` keys, iterates the hash table in insertion order,
+/// persists string keys via `__rt_str_persist`, boxes mixed keys via `__rt_mixed_from_value`,
+/// and returns an `Array<key_type>`. For indexed arrays, allocates `Array<Int>` with keys
+/// `[0, 1, …, length-1]` via a counted loop. Both paths preserve ABI register conventions
+/// per target (x86_64: rax/rdi/rsi, ARM64: x0/x1/x2) and push/pop preserved registers
+/// across runtime helper calls. Stack layout (assoc path): `[iter_index(16)] [result_array(16)] [hash_ptr(16)]`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

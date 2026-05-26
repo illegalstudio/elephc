@@ -10,9 +10,20 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// file: read a file into an array of lines.
-/// Input:  x1/x2=filename string
-/// Output: x0=array pointer (array of strings, each line includes trailing \n)
+/// Emits the `__rt_file` runtime helper: reads a file and splits it into an array of lines.
+///
+/// Each line includes its trailing newline character (`\n`) except for the last line if the file
+/// does not end with a newline. Returns a pointer to a runtime array of strings.
+///
+/// Stack frame (ARM64, 64 bytes):
+/// - sp+#0..#7:   file data pointer and length (saved across calls)
+/// - sp+#8..#15:  scratch
+/// - sp+#16..#23: result array pointer (preserved across `__rt_array_push_str` calls)
+/// - sp+#24..#31: saved scan cursor when calling `__rt_array_push_str`
+/// - sp+#32..#47: scratch
+/// - sp+#48..#63: saved x29/x30
+///
+/// On x86_64 Linux, delegates to `emit_file_linux_x86_64` which follows the System V AMD64 ABI.
 pub fn emit_file(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_file_linux_x86_64(emitter);
@@ -88,6 +99,18 @@ pub fn emit_file(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_file` using the System V AMD64 ABI.
+///
+/// Follows the same semantics as the ARM64 version: reads a file via `__rt_file_get_contents`,
+/// splits on newlines, and returns a runtime array of strings. Each line includes its trailing
+/// `\n` except the final line if the file has no trailing newline.
+///
+/// Stack frame (64 bytes, aligned to 16):
+/// - rbp-8:   owned file payload pointer (preserved across array operations)
+/// - rbp-16:  owned file payload length (preserved across array operations)
+/// - rbp-24:  result array pointer (updated after each `__rt_array_push_str` call)
+/// - rbp-32:  scan cursor spill (preserved across `__rt_array_push_str`)
+/// Caller-saved registers r8–r11 and rcx hold the scan state.
 fn emit_file_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file ---");

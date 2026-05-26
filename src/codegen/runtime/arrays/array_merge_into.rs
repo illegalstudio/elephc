@@ -11,9 +11,25 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_merge_into: append all elements from source array to dest array (in-place).
-/// Input: x0 = dest array pointer, x1 = source array pointer
-/// Both arrays must have 8-byte elements.
+/// Emits the `__rt_array_merge_into` runtime helper that appends all elements from a source
+/// array to a destination array in-place.
+///
+/// # ABI (ARM64)
+/// - `x0`: destination array pointer (input, may be updated if growth occurs)
+/// - `x1`: source array pointer (input, never mutated by this routine)
+/// - Returns: updated destination array pointer in `x0` (may differ from input if reallocated)
+///
+/// # ABI (x86_64)
+/// - `rdi`: destination array pointer
+/// - `rsi`: source array pointer
+/// - Returns: updated destination array pointer in `rax`
+///
+/// # Behavior
+/// - If the source array is empty, returns the destination unchanged.
+/// - Grows the destination capacity if needed before copying.
+/// - Copies all source elements after the last live element of the destination (numeric keys only).
+/// - Source elements are copied by value; both arrays must use 8-byte element slots.
+/// - The caller owns the returned destination pointer; the source array is not modified.
 pub fn emit_array_merge_into(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_merge_into_linux_x86_64(emitter);
@@ -86,6 +102,10 @@ pub fn emit_array_merge_into(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits the x86_64 Linux variant of `__rt_array_merge_into`.
+/// Internal routine — callers should use `emit_array_merge_into` which dispatches by target.
+/// Preserves frame pointer in `rbp`, uses `[rbp - 8]` and `[rbp - 16]` for spill slots.
+/// Returns the destination array pointer in `rax`.
 fn emit_array_merge_into_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_merge_into ---");

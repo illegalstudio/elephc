@@ -10,15 +10,24 @@
 
 use crate::codegen::emit::Emitter;
 
-/// __rt_json_decode_mixed_object_real (ARM64): recursive-descent parser for
-/// non-empty JSON objects. Walks the slice between the leading `{` and
-/// trailing `}`, parses each key (a JSON string) and value (any JSON
-/// value, recursively decoded), and inserts the pair into a hash via
-/// __rt_hash_set. Result boxes as Mixed(tag=5, lo=hash_ptr).
+/// Generates ARM64 assembly for `__rt_json_decode_mixed_object_real`.
+/// A recursive-descent JSON object parser that walks the slice between the
+/// leading `{` and trailing `}`. Parses each key (JSON string) and value
+/// (any JSON value, recursively decoded), inserting pairs into a hash via
+/// `__rt_hash_set`. The hash is boxed as Mixed(tag=5, lo=hash_ptr) on
+/// success; on parse error the routine returns 0 after recording JSON state.
 ///
-/// Input:  x1 = slice ptr (with leading `{` and trailing `}`),
+/// Stack frame (80 bytes, negative offsets from x29):
+///   [x29 + 0]  = slice_ptr      [x29 + 48] = value_start / value Mixed*
+///   [x29 + 8]  = slice_len      [x29 + 56] = after_comma flag
+///   [x29 + 16] = cursor         [x29 + 64] = saved x29
+///   [x29 + 24] = hash_ptr       [x29 + 72] = saved x30
+///   [x29 + 32] = key_start      [x29 + 80] = alloc for local frame
+///   [x29 + 40] = key Mixed*
+///
+/// Input:  x1 = slice ptr (with leading `{` and trailing `}`)
 ///         x2 = slice length
-/// Output: x0 = Mixed* on success, 0 on parse error after recording JSON state
+/// Output: x0 = Mixed* on success, 0 on parse error
 pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_decode_mixed_object_real ---");
@@ -275,8 +284,19 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return from the JSON decoder helper
 }
 
-/// __rt_json_decode_mixed_object_real (x86_64): mirrors the ARM64 recursive
-/// object parser. See the ARM64 docstring for the parser's semantics.
+/// Generates x86_64 assembly for `__rt_json_decode_mixed_object_real`.
+/// Mirrors the ARM64 recursive object parser; see `emit_aarch64` for semantics.
+/// The frame layout uses rbp-relative offsets (64 bytes reserved).
+///
+/// Frame layout (negative offsets from rbp):
+///   [rbp - 8]  = slice_ptr       [rbp - 48] = key Mixed*
+///   [rbp - 16] = slice_len       [rbp - 56] = value_start / value Mixed*
+///   [rbp - 24] = cursor          [rbp - 64] = after_comma flag
+///   [rbp - 32] = hash_ptr
+///   [rbp - 40] = key_start
+///
+/// Input:  rax = slice ptr (with leading `{` and trailing `}`), rdx = slice length
+/// Output: rax = Mixed* on success, 0 on parse error
 pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_decode_mixed_object_real ---");

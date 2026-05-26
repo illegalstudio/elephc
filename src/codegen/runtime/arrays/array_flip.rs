@@ -11,10 +11,14 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
-/// array_flip: swap keys and values for an indexed int array.
-/// Creates a hash table where the integer value becomes the key and the index becomes the value.
-/// Input:  x0=array_ptr (indexed int array)
-/// Output: x0=new hash table
+/// Emits the `__rt_array_flip` runtime helper for indexed int arrays.
+/// Exchanges keys and values: each integer value becomes a hash key, and its
+/// original index becomes the hash value. Allocates a new hash table via
+/// `__rt_hash_new`, then inserts flipped key/value pairs through `__rt_hash_set`.
+/// Dispatches to the target-specific implementation (x86_64 or ARM64).
+///
+/// Input:  x0 = source indexed int array pointer
+/// Output: x0 = new hash table containing the flipped key/value pairs
 pub fn emit_array_flip(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_flip_linux_x86_64(emitter);
@@ -85,6 +89,7 @@ pub fn emit_array_flip(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = hash table
 }
 
+/// Emits `__rt_array_flip` for the x86_64-linux ABI target.
 fn emit_array_flip_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_flip ---");

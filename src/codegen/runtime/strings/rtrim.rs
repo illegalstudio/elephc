@@ -10,7 +10,11 @@
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
-/// rtrim: strip whitespace from right. Adjusts x2.
+/// Emits the `__rt_rtrim` runtime helper for ARM64 or x86_64 Linux.
+///
+/// On entry the borrowed string slice lives in `(x1, x2)` for ARM64 or `(rax, rdx)` for x86_64.
+/// On exit the length is reduced by stripping trailing whitespace bytes (space, tab, newline, CR).
+/// ARM64 dispatches directly; x86_64 invokes `emit_rtrim_linux_x86_64`.
 pub fn emit_rtrim(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_rtrim_linux_x86_64(emitter);
@@ -43,6 +47,10 @@ pub fn emit_rtrim(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with adjusted x2
 }
 
+/// Emits the x86_64 Linux variant of `__rt_rtrim`.
+///
+/// On entry the borrowed string slice is in `(rax, rdx)` where rax holds the pointer and rdx holds the length.
+/// On exit rdx holds the reduced length after stripping trailing whitespace (space, tab, newline, CR).
 fn emit_rtrim_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: rtrim ---");

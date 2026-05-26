@@ -16,6 +16,25 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `fmod(x, y)` builtin call, returning the floating-point remainder of x / y.
+///
+/// # Arguments
+/// - `_name`: unused, matches the dispatcher contract.
+/// - `args`: two expressions — the dividend `x` and the divisor `y`.
+/// - `emitter`: target instruction emission.
+/// - `ctx`: variable layout, ownership state, class/FFI metadata.
+/// - `data`: read-only data section for relocations.
+///
+/// # Returns
+/// `Some(PhpType::Float)` — `fmod` always returns a float.
+///
+/// # Behavior
+/// Both operands are evaluated in source order. The dividend is preserved on the stack while
+/// the divisor is evaluated so the ABI argument order can be satisfied.
+/// - ARM64: converts integers to double (`scvtf`), then computes `dividend - trunc(dividend/divisor) * divisor`
+///   using `frintz` + `fmsub` to match PHP/C `fmod` truncation-toward-zero semantics.
+/// - x86_64: converts integers to double (`cvtsi2sd`), then delegates to `libc::fmod` via `call fmod`.
+/// Division-by-zero and NaN inputs produce PHP-expected results via the underlying libm routines.
 pub fn emit(
     _name: &str,
     args: &[Expr],

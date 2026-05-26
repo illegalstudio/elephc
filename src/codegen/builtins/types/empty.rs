@@ -16,6 +16,23 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for PHP's `empty(expr)` builtin.
+///
+/// Evaluates whether `args[0]` is "empty" according to PHP truthiness rules,
+/// then writes a boolean result to the canonical integer result register.
+/// Handles all PHP types: int/float/bool compare against zero, null returns true,
+/// strings compare length, arrays inspect element count, objects/resources/callables
+/// return false, pointers check for null, and Mixed delegates to `__rt_mixed_is_empty`.
+///
+/// # Arguments
+/// * `name` - Unused; present to match the builtin emitter signature
+/// * `args` - The expression to evaluate (exactly one)
+/// * `emitter` - Target-aware instruction emitter
+/// * `ctx` - Codegen context (labels, frame layout, types)
+/// * `data` - Data section for relocations
+///
+/// # Returns
+/// `Some(PhpType::Bool)` as `empty()` always produces a boolean.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -14,14 +14,21 @@ use crate::types::{packed_type_size, PhpType};
 use super::super::Checker;
 
 impl Checker {
+    /// Returns true if `ty` is a `PhpType::Pointer`.
     pub(crate) fn is_pointer_type(ty: &PhpType) -> bool {
         matches!(ty, PhpType::Pointer(_))
     }
 
+    /// Returns true if both `left` and `right` are `PhpType::Pointer` (any target).
+    /// Pointers of different target types are considered compatible at this level.
     pub(crate) fn pointer_types_compatible(left: &PhpType, right: &PhpType) -> bool {
         matches!((left, right), (PhpType::Pointer(_), PhpType::Pointer(_)))
     }
 
+    /// Normalizes a pointer target type name string to its canonical form.
+    /// Maps PHP aliases (int/integer, float/double/real, bool/boolean, ptr/pointer) to
+    /// their canonical equivalents, validates class/packed/extern names, and returns
+    /// `None` for unknown types.
     pub(crate) fn normalize_pointer_target_type(&self, target_type: &str) -> Option<String> {
         match target_type {
             "int" | "integer" => Some("int".to_string()),
@@ -40,6 +47,9 @@ impl Checker {
         }
     }
 
+    /// Resolves a `TypeExpr` AST node to a `PhpType`. Handles all primitive types, nullable,
+    /// union, pointer, buffer, and named (class/interface/packed/extern) type expressions.
+    /// Validates that buffer element types are POD-sized.
     pub(crate) fn resolve_type_expr(
         &self,
         type_expr: &crate::parser::ast::TypeExpr,
@@ -116,6 +126,8 @@ impl Checker {
         }
     }
 
+    /// Looks up the `PhpType` of an `extern` class field by `class_name` and `field_name`.
+    /// Returns `None` if the class or field does not exist.
     pub(crate) fn extern_field_type(&self, class_name: &str, field_name: &str) -> Option<PhpType> {
         self.extern_classes.get(class_name).and_then(|class_info| {
             class_info
@@ -126,6 +138,8 @@ impl Checker {
         })
     }
 
+    /// Looks up the `PhpType` of a `packed class` field by `class_name` and `field_name`.
+    /// Returns `None` if the class or field does not exist.
     pub(crate) fn packed_field_type(&self, class_name: &str, field_name: &str) -> Option<PhpType> {
         self.packed_classes.get(class_name).and_then(|class_info| {
             class_info
@@ -136,6 +150,7 @@ impl Checker {
         })
     }
 
+    /// Validates that `ty` is a pointer type. Emits an error with `context` if not.
     pub(crate) fn ensure_pointer_type(
         &self,
         ty: &PhpType,
@@ -152,6 +167,8 @@ impl Checker {
         }
     }
 
+    /// Validates that `ty` is a valid word-pointer value for `ptr_set()`: must be `Int`,
+    /// `Bool`, `Void`, or `Pointer`. Emits a specific error otherwise.
     pub(crate) fn ensure_word_pointer_value(
         &self,
         ty: &PhpType,

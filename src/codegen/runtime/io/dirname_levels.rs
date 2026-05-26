@@ -12,9 +12,11 @@ use crate::codegen::{emit::Emitter, platform::Arch};
 
 use super::super::data::DIRNAME_LEVELS_MSG;
 
-/// dirname_levels: apply dirname() repeatedly for PHP's second argument.
-/// Input:  x1/x2 = path string, x3 = levels
+/// Emits the `__rt_dirname_levels` runtime helper.
+/// Applies `dirname()` repeatedly `levels` times to the path in x1/x2.
+/// Inputs: x1=path pointer, x2=path length, x3=levels
 /// Output: x1/x2 = parent directory after `levels` applications
+/// Fatal: exits with diagnostic if levels < 1 (PHP requires levels >= 1).
 pub fn emit_dirname_levels(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_dirname_levels_linux_x86_64(emitter);
@@ -57,6 +59,9 @@ pub fn emit_dirname_levels(emitter: &mut Emitter) {
     emitter.syscall(1);
 }
 
+/// Emits the x86_64 Linux variant of `__rt_dirname_levels`.
+/// ABI: rdi=path_ptr, rdx=path_len, rsi=levels. Returns rax/rdx.
+/// Fatal: exits with diagnostic if levels < 1 (PHP requires levels >= 1).
 fn emit_dirname_levels_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: dirname levels ---");

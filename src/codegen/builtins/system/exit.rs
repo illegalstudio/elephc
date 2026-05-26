@@ -16,6 +16,17 @@ use crate::codegen::platform::{Arch, Platform};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits code for the PHP `exit` builtin, which terminates the current process.
+///
+/// If `args` contains an expression, it is evaluated first and its integer value is used as
+/// the exit code. If `args` is empty, the exit code is 0.
+///
+/// Arguments are evaluated in source order before the exit syscall/instruction is emitted,
+/// ensuring any side effects (e.g. `echo`) are observable. After evaluation the process is
+/// terminated via the target's native exit ABI — there is no return.
+///
+/// Returns `PhpType::Void`. All platforms set the integer result register to the exit code
+/// before invoking the exit syscall/instruction.
 pub fn emit(
     _name: &str,
     args: &[Expr],

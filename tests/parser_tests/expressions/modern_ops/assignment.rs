@@ -10,6 +10,10 @@
 use super::*;
 
 #[test]
+// Verifies that a parenthesized expression on the RHS of a word logical operator
+// (`and`) parses as a `BinaryOp(And)` within the assignment's value field, not as
+// some other expression wrapper. Regression check for precedence handling when
+// parentheses wrap the RHS of a word logical operator inside an assignment.
 fn test_parenthesized_word_logical_assignment_rhs() {
     let stmts = parse_source("<?php $x = (true and false);");
     match &stmts[0].kind {
@@ -22,6 +26,11 @@ fn test_parenthesized_word_logical_assignment_rhs() {
 }
 
 #[test]
+// Verifies that an assignment expression (`$x = true`) binds tighter than the word
+// logical operator `and`. The source `$x = true and false` must parse as
+// `BinaryOp(And, Assignment(...), BoolLiteral(false))` — i.e. the assignment is
+// the left operand of `and`. Regression check for precedence between assignment
+// and word logical operators.
 fn test_assignment_expression_binds_tighter_than_word_and() {
     let stmts = parse_source("<?php $x = true and false;");
     match &stmts[0].kind {
@@ -44,6 +53,9 @@ fn test_assignment_expression_binds_tighter_than_word_and() {
 }
 
 #[test]
+// Verifies that chained assignment expressions are right associative: `$x = $y = 1`
+// parses as `$x = ($y = 1)`, where the outer `Assign` has `$y = 1` as its value.
+// Regression check that nested assignment expressions nest to the right.
 fn test_assignment_expression_is_right_associative() {
     let stmts = parse_source("<?php $x = $y = 1;");
     match &stmts[0].kind {
@@ -62,6 +74,10 @@ fn test_assignment_expression_is_right_associative() {
 }
 
 #[test]
+// Verifies that a bare array access (`$items[$i]`) parses as the `target` of an
+// assignment expression used in a non-local context (e.g. inside `echo`). The
+// `prelude` must be empty when the RHS is a literal (no container snapshot needed).
+// Regression check for array target parsing in expression contexts.
 fn test_non_local_assignment_expression_parses_array_target() {
     let stmts = parse_source("<?php echo ($items[$i] = 2);");
     match &stmts[0].kind {
@@ -86,6 +102,10 @@ fn test_non_local_assignment_expression_parses_array_target() {
 }
 
 #[test]
+// Verifies that when the RHS of an assignment is a variable identical to the array
+// being accessed (`$items[0] = $items`), the prelude contains exactly one entry
+// — a snapshot of the RHS container before the index is evaluated. Ensures the
+// parser records the correct container capture for COW semantics.
 fn test_non_local_assignment_expression_snapshots_rhs_container() {
     let stmts = parse_source("<?php echo ($items[0] = $items);");
     match &stmts[0].kind {
@@ -101,6 +121,10 @@ fn test_non_local_assignment_expression_snapshots_rhs_container() {
 }
 
 #[test]
+// Verifies that an object property access (`$box->value += 2`) parses as the
+// `target` of an assignment expression in a non-local context. The prelude must
+// have exactly one entry (the object temp) and `result_target` must be `Some`.
+// Regression check for property target parsing with compound assignment.
 fn test_non_local_assignment_expression_parses_property_target() {
     let stmts = parse_source("<?php echo ($box->value += 2);");
     match &stmts[0].kind {
@@ -124,6 +148,9 @@ fn test_non_local_assignment_expression_parses_property_target() {
 }
 
 #[test]
+// Verifies that a static property access (`Registry::$count ??= 1`) parses as the
+// `target` of a null-coalesce assignment expression. The RHS is a `NullCoalesce`
+// node. Regression check for static property target in compound assignment.
 fn test_non_local_assignment_expression_parses_static_property_target() {
     let stmts = parse_source("<?php echo (Registry::$count ??= 1);");
     match &stmts[0].kind {
@@ -139,6 +166,11 @@ fn test_non_local_assignment_expression_parses_static_property_target() {
 }
 
 #[test]
+// Verifies that when the array index of the assignment target is itself an
+// effectful expression (`idx()`), the prelude has exactly 2 entries (object temp
+// plus index temp) and `result_target` is `Some`. This forces stabilization so
+// the effectful index expression is evaluated once and its result reused.
+// Regression check for effectful index stabilization in assignment targets.
 fn test_non_local_assignment_expression_stabilizes_effectful_index() {
     let stmts = parse_source("<?php echo ($items[idx()] = value());");
     match &stmts[0].kind {
@@ -167,6 +199,10 @@ fn test_non_local_assignment_expression_stabilizes_effectful_index() {
 }
 
 #[test]
+// Verifies that when the array index is a simple variable (no effects), the
+// parser records only one prelude entry — the index variable itself. No
+// stabilization overhead is needed for trivial indices. Regression check for
+// simple variable index handling in non-local assignment expressions.
 fn test_non_local_assignment_expression_delays_simple_variable_index() {
     let stmts = parse_source("<?php echo ($items[$i] = ($i = 1));");
     match &stmts[0].kind {
@@ -195,6 +231,11 @@ fn test_non_local_assignment_expression_delays_simple_variable_index() {
 }
 
 #[test]
+// Verifies that a null-coalesce assignment with a parenthesized assignment as
+// the RHS (`$items[$i] ??= ($i = 1)`) emits a `conditional_value_temp` slot.
+// The prelude is empty (no index stabilization), `result_target` is `Some`,
+// and `conditional_value_temp` is `Some`. Regression check for the null-coalesce
+// conditional-value temp allocation.
 fn test_null_coalesce_assignment_expression_uses_conditional_value_temp() {
     let stmts = parse_source("<?php echo ($items[$i] ??= ($i = 1));");
     match &stmts[0].kind {
@@ -224,6 +265,10 @@ fn test_null_coalesce_assignment_expression_uses_conditional_value_temp() {
 }
 
 #[test]
+// Verifies that a null-coalesce assignment with a computed index (`$items[$i + 0]`
+// as the target) records one prelude entry (index stabilization) and a
+// `conditional_value_temp` slot. Regression check for computed index handling
+// in null-coalesce assignment expressions.
 fn test_null_coalesce_assignment_expression_stabilizes_computed_mutated_index() {
     let stmts = parse_source("<?php echo ($items[$i + 0] ??= ($i = 1));");
     match &stmts[0].kind {

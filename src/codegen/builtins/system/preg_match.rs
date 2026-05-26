@@ -16,6 +16,13 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits a `preg_match` call against a PCRE pattern.
+///
+/// `args[0]` is the pattern (string), `args[1]` is the subject (string).
+/// Calls `__rt_preg_match` which returns 1 in the result register on match, 0 otherwise.
+///
+/// AArch64: pattern ptr/len in x0/x1, subject ptr/len pushed then popped into x3/x4, result in x0.
+/// X86_64: pattern ptr/len in rdi/rsi (SysV), subject ptr/len pushed then popped into rdx/rcx, result in rax.
 pub fn emit(
     _name: &str,
     args: &[Expr],

@@ -11,6 +11,11 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Emits the `__rt_rethrow_current` runtime helper.
+///
+/// Transfers control to `__rt_throw_current` using a tail-jump, reusing the
+/// current active exception state without re-throwing. Used when the compiler
+/// needs to re-raise an exception that is already active on the unwinding stack.
 pub fn emit_rethrow_current(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: rethrow_current ---");

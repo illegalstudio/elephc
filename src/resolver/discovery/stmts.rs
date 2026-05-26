@@ -29,6 +29,12 @@ use super::super::state::{
     register_const_imports, ResolveState,
 };
 
+/// Iterates over a statement list, discovering include-reachable declarations for each.
+///
+/// Calls `discover_stmt` for each statement in order, preserving PHP's statement-order
+/// semantics for constants and namespace context that affect later includes.
+/// Modifies `state` (namespace, constants, imports) and `output` (discovery results).
+/// Short-circuits on the first error.
 pub(super) fn discover_stmts(
     stmts: &[Stmt],
     base_dir: &Path,
@@ -43,6 +49,13 @@ pub(super) fn discover_stmts(
     Ok(())
 }
 
+/// Dispatches on `StmtKind` to discover include-reachable declarations for a single statement.
+///
+/// Handles: includes, const/define, expressions, namespace/use blocks, conditionals, loops,
+/// try-catch-finally, function declarations, class/trait/interface/enum declarations, and
+/// various assignment forms. Delegates to `discover_include`, `discover_expr`, branch
+/// helpers, member discovery helpers, and `discover_isolated` for unconditionally executed code.
+/// May modify `state` (current namespace, constant table, const imports) and `output`.
 fn discover_stmt(
     stmt: &Stmt,
     base_dir: &Path,

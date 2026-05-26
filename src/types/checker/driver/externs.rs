@@ -19,6 +19,9 @@ use crate::types::{
 use super::super::Checker;
 
 impl Checker {
+    /// Iterates program statements, dispatching `ExternFunctionDecl`, `ExternClassDecl`,
+    /// `PackedClassDecl`, and `ExternGlobalDecl` nodes to their respective prescan handlers.
+    /// Collects validation errors without halting early, ensuring all declarations are processed.
     pub(super) fn prescan_extern_decls(
         &mut self,
         program: &Program,
@@ -51,6 +54,8 @@ impl Checker {
         }
     }
 
+    /// Checks whether a class name is already registered in `classes`, `extern_classes`, or
+    /// `packed_classes`, using PHP-symbol key comparison for case-insensitive matching.
     pub(super) fn has_class_decl_folded(&self, name: &str) -> bool {
         let key = php_symbol_key(name);
         self.classes
@@ -66,6 +71,9 @@ impl Checker {
                 .any(|existing| php_symbol_key(existing) == key)
     }
 
+    /// Validates and registers an extern function declaration if no prior declaration exists.
+    /// Converts C types to PHP types, builds a `FunctionSig` and `ExternFunctionSig`, inserts
+    /// both into `functions` and `extern_functions`, and appends the required library.
     #[allow(clippy::too_many_arguments)]
     fn prescan_extern_function(
         &mut self,
@@ -129,6 +137,9 @@ impl Checker {
         }
     }
 
+    /// Validates and registers an extern class declaration if no prior declaration exists.
+    /// Computes field offsets sequentially, checks for duplicate fields, converts C types
+    /// to PHP types, and stores an `ExternClassInfo` with total size and field metadata.
     fn prescan_extern_class(
         &mut self,
         name: &str,
@@ -186,6 +197,9 @@ impl Checker {
         );
     }
 
+    /// Validates and registers a packed class declaration if no prior declaration exists.
+    /// Resolves PHP types from field type expressions, validates POD constraints, computes
+    /// sequential offsets, checks for duplicate fields, and stores a `PackedClassInfo`.
     fn prescan_packed_class(
         &mut self,
         name: &str,

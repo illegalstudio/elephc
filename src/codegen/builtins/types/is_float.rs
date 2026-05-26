@@ -16,6 +16,11 @@ use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+/// Emits the `is_float` builtin call.
+///
+/// Inspects the compile-time type of `args[0]`. Returns a PHP boolean in the
+/// active integer result register: 1 if the resolved type is `PhpType::Float`,
+/// 0 otherwise. Always returns `Some(PhpType::Bool)`.
 pub fn emit(
     _name: &str,
     args: &[Expr],

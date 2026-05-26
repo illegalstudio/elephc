@@ -9,6 +9,9 @@
 
 use super::*;
 
+// Verifies the parser collects multiple errors from malformed PHP with sequential
+// `echo ;` statements missing expressions. Uses `tokenize` + `parse_with_recovery`
+// to confirm at least 2 parse errors are reported.
 #[test]
 fn test_parser_recovery_collects_multiple_errors() {
     let tokens = tokenize("<?php echo ; echo ;").unwrap();
@@ -16,6 +19,9 @@ fn test_parser_recovery_collects_multiple_errors() {
     assert!(errors.len() >= 2, "expected multiple parse errors, got {:?}", errors);
 }
 
+// Verifies the parser collects multiple errors inside a function block with sequential
+// `echo ;` statements missing expressions. Uses `parse` (not `parse_with_recovery`)
+// to confirm the flattened error list contains at least 2 parse errors.
 #[test]
 fn test_parser_block_recovery_collects_multiple_errors() {
     let tokens = tokenize("<?php function foo() { echo ; echo ; }").unwrap();
@@ -27,6 +33,9 @@ fn test_parser_block_recovery_collects_multiple_errors() {
     );
 }
 
+// Verifies the type checker collects multiple errors when referencing undefined
+// variables across consecutive `echo` statements. Uses `check_source_full` to confirm
+// at least 2 checker errors are reported with their messages.
 #[test]
 fn test_type_checker_recovery_collects_multiple_errors() {
     let error = check_source_full("<?php echo $missing; echo $also_missing;").unwrap_err();
@@ -38,6 +47,9 @@ fn test_type_checker_recovery_collects_multiple_errors() {
     );
 }
 
+// Verifies the type checker collects multiple early-errors from duplicate interface
+// names and duplicate extern function signatures in the same source. Uses
+// `check_source_full` to confirm at least 2 errors are reported with their messages.
 #[test]
 fn test_type_checker_recovery_collects_multiple_early_errors() {
     let error = check_source_full(
@@ -52,6 +64,9 @@ fn test_type_checker_recovery_collects_multiple_early_errors() {
     );
 }
 
+// Verifies the type checker collects multiple method return type mismatch errors from
+// two methods in the same class that return an integer where string is expected. Uses
+// `check_source_full` to confirm at least 2 errors are reported with their messages.
 #[test]
 fn test_type_checker_recovery_collects_multiple_method_return_errors() {
     let error = check_source_full(

@@ -21,6 +21,11 @@ use crate::types::TypeEnv;
 
 use common::BuiltinResult;
 
+/// Type-checks a builtin call by delegating to the appropriate I/O subsystem checker.
+///
+/// Checks `debug`, `streams`, `stats`, `files`, and `paths` submodules in order.
+/// Returns `Ok(Some(result))` if the builtin was recognized by a subsystem,
+/// `Ok(None)` if no subsystem handles the name, or an error if validation fails.
 pub(super) fn check_builtin(
     checker: &mut Checker,
     name: &str,

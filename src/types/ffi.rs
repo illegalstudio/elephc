@@ -15,7 +15,10 @@ use crate::parser::ast::CType;
 
 use super::{PackedClassInfo, PhpType};
 
-/// Convert a parser CType to a PhpType.
+/// Maps a parser CType to its corresponding PhpType for FFI and extern declaration lowering.
+///
+/// Used when lowering `extern` declarations to connect the parser's C types (Int, Float,
+/// Str, Bool, Void, Ptr, TypedPtr, Callable) to the compiler's internal PhpType representation.
 pub fn ctype_to_php_type(ct: &CType) -> PhpType {
     match ct {
         CType::Int => PhpType::Int,
@@ -29,7 +32,11 @@ pub fn ctype_to_php_type(ct: &CType) -> PhpType {
     }
 }
 
-/// Size in bytes used by a C-facing FFI type.
+/// Returns the stack frame size in bytes for a C-facing FFI type.
+///
+/// All integer, float, bool, pointer, typed pointer, callable, and string (char*) types
+/// occupy 8 bytes on the stack. Void occupies 0 bytes. Used during codegen frame layout
+/// to determine how callee-saved registers and local variables are sized.
 pub fn ctype_stack_size(ct: &CType) -> usize {
     match ct {
         CType::Int
@@ -43,6 +50,7 @@ pub fn ctype_stack_size(ct: &CType) -> usize {
     }
 }
 
+/// Returns the ABI size for a PhpType, or None if the type has no fixed size.
 pub fn packed_type_size(
     ty: &PhpType,
     packed_classes: &HashMap<String, PackedClassInfo>,
