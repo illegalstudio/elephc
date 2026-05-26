@@ -205,6 +205,7 @@ pub(crate) fn emit_iterable_object_foreach(
     emitter.label(&done);
 }
 
+/// Emits assembly for iterable object loop.
 pub(crate) fn emit_iterable_object_loop<S, P, B, A>(
     label_prefix: &str,
     emitter: &mut Emitter,
@@ -284,6 +285,7 @@ pub(crate) fn emit_iterable_object_loop<S, P, B, A>(
     emitter.label(&done);
 }
 
+/// Emits assembly for iterator loop.
 pub(crate) fn emit_iterator_loop<S, P, B, A>(
     class_name: &str,
     loop_start: &str,
@@ -341,6 +343,7 @@ pub(crate) enum IteratorDispatchTarget {
 /// appropriate class vtable or interface dispatch path. Returns the PHP return
 /// type of the dispatched method.
 impl IteratorDispatchTarget {
+    /// Provides the Dispatch helper used by the iterator module.
     pub(crate) fn dispatch(
         &self,
         method: &str,

@@ -469,6 +469,7 @@ pub(super) fn check_builtin(
     }
 }
 
+/// Provides the Union member is countable array helper used by the arrays module.
 fn union_member_is_countable_array(ty: &PhpType) -> bool {
     matches!(
         ty,

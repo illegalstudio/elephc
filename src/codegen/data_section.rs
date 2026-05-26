@@ -92,6 +92,7 @@ impl DataSection {
         label
     }
 
+    /// Adds words to the current runtime or metadata collection.
     pub fn add_words(&mut self, words: Vec<DataWord>) -> String {
         if let Some(label) = self.word_dedup.get(&words) {
             return label.clone();
@@ -158,6 +159,7 @@ impl DataSection {
 mod tests {
     use super::DataSection;
 
+    /// Verifies that float constants use power of two alignment directive.
     #[test]
     fn test_float_constants_use_power_of_two_alignment_directive() {
         let mut data = DataSection::new();
@@ -169,6 +171,7 @@ mod tests {
         assert!(!asm.contains(".align 3\n"));
     }
 
+    /// Verifies that non printable string bytes use bounded octal escapes.
     #[test]
     fn test_non_printable_string_bytes_use_bounded_octal_escapes() {
         let mut data = DataSection::new();
@@ -180,6 +183,7 @@ mod tests {
         assert!(!asm.contains(r#"\x00b"#));
     }
 
+    /// Verifies that symbol word records emit quad symbols.
     #[test]
     fn test_symbol_word_records_emit_quad_symbols() {
         let mut data = DataSection::new();

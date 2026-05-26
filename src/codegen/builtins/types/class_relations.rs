@@ -29,6 +29,7 @@ enum ClassLikeTarget {
     Unknown,
 }
 
+/// Emits the class relations entry point for this module.
 pub fn emit(
     name: &str,
     args: &[Expr],
@@ -56,6 +57,7 @@ pub fn emit(
     Some(class_relation_return_type())
 }
 
+/// Computes relation array type for the PHP class-introspection builtin.
 fn class_relation_array_type() -> PhpType {
     PhpType::AssocArray {
         key: Box::new(PhpType::Str),
@@ -63,10 +65,12 @@ fn class_relation_array_type() -> PhpType {
     }
 }
 
+/// Computes relation return type for the PHP class-introspection builtin.
 fn class_relation_return_type() -> PhpType {
     PhpType::Union(vec![class_relation_array_type(), PhpType::Bool])
 }
 
+/// Resolves target using the available compile-time metadata.
 fn resolve_target(arg: Option<&Expr>, arg_ty: Option<&PhpType>, ctx: &Context) -> ClassLikeTarget {
     if let Some(Expr {
         kind: ExprKind::StringLiteral(raw),
@@ -94,6 +98,7 @@ fn resolve_target(arg: Option<&Expr>, arg_ty: Option<&PhpType>, ctx: &Context) -
     ClassLikeTarget::Unknown
 }
 
+/// Provides the Relation names helper used by the class relations module.
 fn relation_names(name: &str, target: &ClassLikeTarget, ctx: &Context) -> Option<Vec<String>> {
     match name {
         "class_implements" => Some(class_implements(target, ctx)),
@@ -103,6 +108,7 @@ fn relation_names(name: &str, target: &ClassLikeTarget, ctx: &Context) -> Option
     }
 }
 
+/// Computes implements for the PHP class-introspection builtin.
 fn class_implements(target: &ClassLikeTarget, ctx: &Context) -> Vec<String> {
     match target {
         ClassLikeTarget::Class(class_name) => lookup_class(ctx, class_name)
@@ -117,6 +123,7 @@ fn class_implements(target: &ClassLikeTarget, ctx: &Context) -> Vec<String> {
     }
 }
 
+/// Computes parents for the PHP class-introspection builtin.
 fn class_parents(target: &ClassLikeTarget, ctx: &Context) -> Vec<String> {
     let ClassLikeTarget::Class(class_name) = target else {
         return Vec::new();
@@ -135,6 +142,7 @@ fn class_parents(target: &ClassLikeTarget, ctx: &Context) -> Vec<String> {
     names
 }
 
+/// Computes uses for the PHP class-introspection builtin.
 fn class_uses(target: &ClassLikeTarget, ctx: &Context) -> Vec<String> {
     match target {
         ClassLikeTarget::Class(class_name) => lookup_class(ctx, class_name)
@@ -145,6 +153,7 @@ fn class_uses(target: &ClassLikeTarget, ctx: &Context) -> Vec<String> {
     }
 }
 
+/// Collects interface parents for the surrounding analysis or metadata result.
 fn collect_interface_parents(ctx: &Context, interface_name: &str, names: &mut Vec<String>) {
     let Some(interface) = lookup_interface(ctx, interface_name) else {
         return;
@@ -161,6 +170,7 @@ fn collect_interface_parents(ctx: &Context, interface_name: &str, names: &mut Ve
     }
 }
 
+/// Emits assembly for assoc string set.
 fn emit_assoc_string_set(
     names: &[String],
     span: Option<Span>,
@@ -185,23 +195,28 @@ fn emit_assoc_string_set(
     emit_assoc_array_literal(&pairs, emitter, ctx, data);
 }
 
+/// Emits assembly for false result.
 fn emit_false_result(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
     emit_box_current_value_as_mixed(emitter, &PhpType::Bool);
 }
 
+/// Looks up class name and returns the matching metadata when present.
 fn lookup_class_name(ctx: &Context, raw: &str) -> Option<String> {
     lookup_folded(ctx.classes.keys(), raw)
 }
 
+/// Looks up interface name and returns the matching metadata when present.
 fn lookup_interface_name(ctx: &Context, raw: &str) -> Option<String> {
     lookup_folded(ctx.interfaces.keys(), raw)
 }
 
+/// Looks up trait name and returns the matching metadata when present.
 fn lookup_trait_name(ctx: &Context, raw: &str) -> Option<String> {
     lookup_folded(ctx.traits.iter(), raw)
 }
 
+/// Looks up folded and returns the matching metadata when present.
 fn lookup_folded<'a>(names: impl Iterator<Item = &'a String>, raw: &str) -> Option<String> {
     let clean = raw.trim_start_matches('\\');
     let key = php_symbol_key(clean);
@@ -211,11 +226,13 @@ fn lookup_folded<'a>(names: impl Iterator<Item = &'a String>, raw: &str) -> Opti
         .cloned()
 }
 
+/// Looks up class and returns the matching metadata when present.
 fn lookup_class<'a>(ctx: &'a Context, raw: &str) -> Option<&'a ClassInfo> {
     let name = lookup_class_name(ctx, raw)?;
     ctx.classes.get(&name)
 }
 
+/// Looks up interface and returns the matching metadata when present.
 fn lookup_interface<'a>(ctx: &'a Context, raw: &str) -> Option<&'a InterfaceInfo> {
     let name = lookup_interface_name(ctx, raw)?;
     ctx.interfaces.get(&name)

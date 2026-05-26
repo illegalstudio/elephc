@@ -26,6 +26,7 @@ use crate::types::{FunctionSig, PhpType};
 
 use super::iterator_common;
 
+/// Emits the iterator apply entry point for this module.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -243,6 +244,7 @@ enum CallbackArgsExpr<'a> {
     },
 }
 
+/// Builds the AST expression for callback args.
 fn callback_args_expr(args: &[Expr]) -> CallbackArgsExpr<'_> {
     match args.get(2) {
         Some(arg) => match &arg.kind {
@@ -263,6 +265,7 @@ fn callback_args_expr(args: &[Expr]) -> CallbackArgsExpr<'_> {
     }
 }
 
+/// Returns true when static callback arg literal.
 fn is_static_callback_arg_literal(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::StringLiteral(_)
@@ -278,6 +281,7 @@ fn is_static_callback_arg_literal(expr: &Expr) -> bool {
     }
 }
 
+/// Emits assembly for callback invocation.
 fn emit_callback_invocation(
     callback_arg_source: &CallbackArgSource<'_>,
     captures: &[(String, PhpType, bool)],
@@ -415,6 +419,7 @@ fn emit_callback_invocation(
     emit_branch_if_callback_false(emitter, loop_end);
 }
 
+/// Emits assembly for apply loaded iterable.
 fn emit_apply_loaded_iterable(
     callback_arg_source: &CallbackArgSource<'_>,
     captures: &[(String, PhpType, bool)],
@@ -467,6 +472,7 @@ fn emit_apply_loaded_iterable(
     );
 }
 
+/// Emits assembly for branch if callback false.
 fn emit_branch_if_callback_false(emitter: &mut Emitter, loop_end: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {

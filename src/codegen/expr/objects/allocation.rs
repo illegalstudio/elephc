@@ -32,6 +32,7 @@ const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
 const ITERATOR_ITERATOR_DOWNCAST_MESSAGE: &str =
     "Class to downcast to not found or not base class or does not implement Traversable";
 
+/// Emits assembly for new object.
 pub(super) fn emit_new_object(
     class_name: &str,
     args: &[Expr],
@@ -65,6 +66,7 @@ pub(super) fn emit_new_object(
     emit_new_object_core(class_name, args, true, emitter, ctx, data)
 }
 
+/// Emits assembly for new object core.
 pub(super) fn emit_new_object_core(
     class_name: &str,
     args: &[Expr],
@@ -335,10 +337,12 @@ pub(super) fn emit_new_object_core(
     PhpType::Object(class_name.to_string())
 }
 
+/// Returns true when SPL doubly linked list family.
 fn is_spl_doubly_linked_list_family(class_name: &str) -> bool {
     matches!(class_name, "SplDoublyLinkedList" | "SplStack" | "SplQueue")
 }
 
+/// Emits assembly for new SPL doubly linked list.
 fn emit_new_spl_doubly_linked_list(
     class_name: &str,
     args: &[Expr],
@@ -366,6 +370,7 @@ fn emit_new_spl_doubly_linked_list(
     PhpType::Object(class_name.to_string())
 }
 
+/// Emits assembly for new SPL fixed array.
 fn emit_new_spl_fixed_array(
     args: &[Expr],
     emitter: &mut Emitter,
@@ -395,6 +400,7 @@ fn emit_new_spl_fixed_array(
     PhpType::Object("SplFixedArray".to_string())
 }
 
+/// Emits assembly for new SPL array storage object.
 fn emit_new_spl_array_storage_object(
     class_name: &str,
     args: &[Expr],
@@ -473,6 +479,7 @@ fn emit_new_spl_array_storage_object(
     PhpType::Object(class_name.to_string())
 }
 
+/// Emits assembly for new iterator iterator.
 fn emit_new_iterator_iterator(
     args: &[Expr],
     emitter: &mut Emitter,
@@ -506,6 +513,7 @@ fn emit_new_iterator_iterator(
     PhpType::Object("IteratorIterator".to_string())
 }
 
+/// Emits assembly for new callback filter iterator.
 fn emit_new_callback_filter_iterator(
     class_name: &str,
     args: &[Expr],
@@ -586,6 +594,7 @@ fn emit_new_callback_filter_iterator(
     PhpType::Object(class_name.to_string())
 }
 
+/// Normalizes iterator iterator constructor args into the representation expected by later lowering.
 fn normalize_iterator_iterator_constructor_args(
     class_info: &crate::types::ClassInfo,
     args: &[Expr],
@@ -596,6 +605,7 @@ fn normalize_iterator_iterator_constructor_args(
     normalize_constructor_args(class_info, args, emitter, ctx, data)
 }
 
+/// Normalizes constructor args into the representation expected by later lowering.
 fn normalize_constructor_args(
     class_info: &crate::types::ClassInfo,
     args: &[Expr],
@@ -624,6 +634,7 @@ fn normalize_constructor_args(
     .args
 }
 
+/// Computes the callable signature metadata for callback filter callable.
 fn callback_filter_callable_sig() -> FunctionSig {
     FunctionSig {
         params: vec![
@@ -641,6 +652,7 @@ fn callback_filter_callable_sig() -> FunctionSig {
     }
 }
 
+/// Provides the Callback filter visible arg types helper used by the allocation module.
 fn callback_filter_visible_arg_types() -> Vec<PhpType> {
     vec![
         PhpType::Mixed,
@@ -649,6 +661,7 @@ fn callback_filter_visible_arg_types() -> Vec<PhpType> {
     ]
 }
 
+/// Emits assembly for callback filter callable arg.
 fn emit_callback_filter_callable_arg(
     callback_expr: &Expr,
     emitter: &mut Emitter,
@@ -679,6 +692,7 @@ fn emit_callback_filter_callable_arg(
     (callback_ty, captures, target_visible_arg_types)
 }
 
+/// Provides the Callback filter target arg types helper used by the allocation module.
 fn callback_filter_target_arg_types(callback_expr: &Expr, ctx: &Context) -> Vec<PhpType> {
     let sig = match &callback_expr.kind {
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => {
@@ -697,6 +711,7 @@ fn callback_filter_target_arg_types(callback_expr: &Expr, ctx: &Context) -> Vec<
     .unwrap_or_else(callback_filter_visible_arg_types)
 }
 
+/// Emits assembly for iterator iterator downcast arg status.
 fn emit_iterator_iterator_downcast_arg_status(
     class_expr: Option<&Expr>,
     emitter: &mut Emitter,
@@ -721,6 +736,7 @@ fn emit_iterator_iterator_downcast_arg_status(
     }
 }
 
+/// Emits assembly for push iterator iterator downcast status from string.
 fn emit_push_iterator_iterator_downcast_status_from_string(
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -729,6 +745,7 @@ fn emit_push_iterator_iterator_downcast_status_from_string(
     emit_push_iterator_iterator_downcast_status_from_lookup(emitter, ctx);
 }
 
+/// Emits assembly for push iterator iterator downcast status from mixed.
 fn emit_push_iterator_iterator_downcast_status_from_mixed(
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -773,6 +790,7 @@ fn emit_push_iterator_iterator_downcast_status_from_mixed(
     emitter.label(&done);
 }
 
+/// Emits assembly for push iterator iterator downcast status from lookup.
 fn emit_push_iterator_iterator_downcast_status_from_lookup(
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -812,6 +830,7 @@ fn emit_push_iterator_iterator_downcast_status_from_lookup(
     }
 }
 
+/// Emits assembly for push iterator iterator downcast status.
 fn emit_push_iterator_iterator_downcast_status(
     emitter: &mut Emitter,
     status: i64,
@@ -831,6 +850,7 @@ fn emit_push_iterator_iterator_downcast_status(
     }
 }
 
+/// Emits assembly for normalize saved traversable to iterator.
 fn emit_normalize_saved_traversable_to_iterator(
     source_expr: &Expr,
     source_ty: &PhpType,
@@ -875,6 +895,7 @@ fn emit_normalize_saved_traversable_to_iterator(
     emitter.label(&done);
 }
 
+/// Emits assembly for branch if saved traversable implements.
 fn emit_branch_if_saved_traversable_implements(
     interface_id: u64,
     candidate_stack_offset: usize,
@@ -901,6 +922,7 @@ fn emit_branch_if_saved_traversable_implements(
     }
 }
 
+/// Emits assembly for validate iterator iterator aggregate downcast.
 fn emit_validate_iterator_iterator_aggregate_downcast(
     aggregate_interface_id: u64,
     emitter: &mut Emitter,
@@ -953,6 +975,7 @@ fn emit_validate_iterator_iterator_aggregate_downcast(
     emitter.label(&skip);
 }
 
+/// Emits assembly for throw iterator iterator downcast logic exception.
 fn emit_throw_iterator_iterator_downcast_logic_exception(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -994,12 +1017,14 @@ fn emit_throw_iterator_iterator_downcast_logic_exception(emitter: &mut Emitter) 
     }
 }
 
+/// Moves loaded result to receiver arg into the register or storage slot expected by the next operation.
 fn move_loaded_result_to_receiver_arg(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emitter.instruction("mov rdi, rax");                                    // move the object result into the SysV receiver argument register
     }
 }
 
+/// Stores iterator inner property from result into runtime storage or stack state.
 fn store_iterator_inner_property_from_result(emitter: &mut Emitter, inner_offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -1016,6 +1041,7 @@ fn store_iterator_inner_property_from_result(emitter: &mut Emitter, inner_offset
     }
 }
 
+/// Stores callable property from result into runtime storage or stack state.
 fn store_callable_property_from_result(emitter: &mut Emitter, property_offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -1031,6 +1057,7 @@ fn store_callable_property_from_result(emitter: &mut Emitter, property_offset: u
     }
 }
 
+/// Stores pointer property from result into runtime storage or stack state.
 fn store_pointer_property_from_result(emitter: &mut Emitter, property_offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -1046,6 +1073,7 @@ fn store_pointer_property_from_result(emitter: &mut Emitter, property_offset: us
     }
 }
 
+/// Stores pointer property zero into runtime storage or stack state.
 fn store_pointer_property_zero(emitter: &mut Emitter, property_offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -1061,6 +1089,7 @@ fn store_pointer_property_zero(emitter: &mut Emitter, property_offset: usize) {
     }
 }
 
+/// Emits assembly for empty mixed array.
 fn emit_empty_mixed_array(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -1076,6 +1105,7 @@ fn emit_empty_mixed_array(emitter: &mut Emitter) {
     emit_convert_loaded_indexed_array_to_mixed(&PhpType::Array(Box::new(PhpType::Int)), emitter);
 }
 
+/// Loads storage source from stack from runtime storage or stack state.
 fn load_storage_source_from_stack(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -1087,6 +1117,7 @@ fn load_storage_source_from_stack(emitter: &mut Emitter) {
     }
 }
 
+/// Emits assembly for convert loaded indexed array to mixed.
 fn emit_convert_loaded_indexed_array_to_mixed(array_ty: &PhpType, emitter: &mut Emitter) {
     let elem_ty = match array_ty {
         PhpType::Array(elem_ty) => elem_ty.as_ref(),
@@ -1105,6 +1136,7 @@ fn emit_convert_loaded_indexed_array_to_mixed(array_ty: &PhpType, emitter: &mut 
     abi::emit_call_label(emitter, "__rt_array_to_mixed");                      // normalize SPL storage arrays to boxed Mixed slots
 }
 
+/// Stores storage array property from result into runtime storage or stack state.
 fn store_storage_array_property_from_result(
     emitter: &mut Emitter,
     property_offset: usize,
@@ -1125,6 +1157,7 @@ fn store_storage_array_property_from_result(
     }
 }
 
+/// Stores storage integer property from stack into runtime storage or stack state.
 fn store_storage_int_property_from_stack(
     emitter: &mut Emitter,
     property_offset: usize,
@@ -1147,6 +1180,7 @@ fn store_storage_int_property_from_stack(
     }
 }
 
+/// Stores storage zero property into runtime storage or stack state.
 fn store_storage_zero_property(
     emitter: &mut Emitter,
     property_offset: usize,

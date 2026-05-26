@@ -389,6 +389,7 @@ fn emit_generator_intrinsic(
     ret_ty
 }
 
+/// Emits assembly for callback filter accept intrinsic.
 fn emit_callback_filter_accept_intrinsic(
     intrinsic: IntrinsicCall,
     emitter: &mut Emitter,
@@ -453,6 +454,7 @@ fn emit_callback_filter_accept_intrinsic(
     PhpType::Bool
 }
 
+/// Emits assembly for recursive assume iterator intrinsic.
 fn emit_recursive_assume_iterator_intrinsic(
     emitter: &mut Emitter,
     ctx: &mut Context,

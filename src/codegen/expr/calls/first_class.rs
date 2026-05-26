@@ -26,6 +26,7 @@ pub(crate) fn method_receiver_temp_name(span: Span) -> String {
     format!("__elephc_fcc_receiver_{}_{}", span.line, span.col)
 }
 
+/// Provides the Resolved static callable target helper used by the first class module.
 fn resolved_static_callable_target(receiver: &StaticReceiver, ctx: &Context) -> Option<StaticReceiver> {
     // Resolves `self` and `parent` static receivers to their concrete class names.
     // Returns `None` for `Static` receiver, which relies on late-static binding and
@@ -45,6 +46,7 @@ fn resolved_static_callable_target(receiver: &StaticReceiver, ctx: &Context) -> 
     }
 }
 
+/// Provides the Static callable lookup class helper used by the first class module.
 fn static_callable_lookup_class(receiver: &StaticReceiver, ctx: &Context) -> Option<String> {
     // Looks up the concrete class name for a static callable receiver.
     // - `Named`: returns the explicit class name.
@@ -89,6 +91,7 @@ pub(super) fn first_class_callable_sig(target: &CallableTarget, ctx: &Context) -
     Some(callable_wrapper_sig(&sig))
 }
 
+/// Builds the parameter metadata for unique hidden.
 fn unique_hidden_param(base: &str, sig: &FunctionSig) -> String {
     // Generates a unique hidden parameter name by appending an index suffix if `base`
     // already exists in `sig.params`. Checks all existing parameter names to avoid
@@ -106,6 +109,7 @@ fn unique_hidden_param(base: &str, sig: &FunctionSig) -> String {
     }
 }
 
+/// Provides the Capture for static target helper used by the first class module.
 fn capture_for_static_target(ctx: &Context) -> Option<(String, PhpType)> {
     // Captures the late-static binding context for a static method first-class callable.
     // Prefers `__elephc_called_class_id` (set when `static::` is used) over `this`.
@@ -145,6 +149,7 @@ fn unsupported_fcc_diagnostic(target: &CallableTarget) -> String {
     }
 }
 
+/// Provides the Capture for method receiver helper used by the first class module.
 fn capture_for_method_receiver(
     object: &Expr,
     emitter: &mut Emitter,
@@ -198,6 +203,7 @@ fn capture_for_method_receiver(
     }
 }
 
+/// Provides the Normalized target and captures helper used by the first class module.
 fn normalized_target_and_captures(
     target: &CallableTarget,
     sig: &FunctionSig,
@@ -267,6 +273,7 @@ fn normalized_target_and_captures(
     }
 }
 
+/// Builds the synthetic method body for wrapper.
 fn wrapper_body(target: &CallableTarget, sig: &FunctionSig) -> Vec<Stmt> {
     // Builds the AST body for a first-class callable wrapper function.
     // Creates parameter variables, forwards them as arguments to the underlying call,

@@ -18,6 +18,7 @@ use crate::types::traits::FlattenedClass;
 
 use super::common::*;
 
+/// Inserts classes into the supplied builtin metadata registry.
 pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
     class_map.insert(
         "SplDoublyLinkedList".to_string(),
@@ -117,6 +118,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
     );
 }
 
+/// Builds the method list for SPL internal iterator.
 fn spl_internal_iterator_methods() -> Vec<ClassMethod> {
     let mut construct = method_with_body(
         "__construct",
@@ -136,6 +138,7 @@ fn spl_internal_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds the property list for internal iterator.
 fn internal_iterator_properties() -> Vec<ClassProperty> {
     vec![
         storage_property("owner", named_type("SplFixedArray")),
@@ -143,6 +146,7 @@ fn internal_iterator_properties() -> Vec<ClassProperty> {
     ]
 }
 
+/// Builds the method list for SPL doubly linked list.
 fn spl_doubly_linked_list_methods() -> Vec<ClassMethod> {
     vec![
         method(
@@ -221,6 +225,7 @@ fn spl_doubly_linked_list_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds the method list for SPL fixed array.
 fn spl_fixed_array_methods() -> Vec<ClassMethod> {
     vec![
         method(
@@ -283,6 +288,7 @@ fn spl_fixed_array_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Provides the SPL doubly linked list constants helper used by the containers module.
 fn spl_doubly_linked_list_constants() -> Vec<ClassConst> {
     vec![
         class_const("IT_MODE_LIFO", 2),
@@ -292,14 +298,17 @@ fn spl_doubly_linked_list_constants() -> Vec<ClassConst> {
     ]
 }
 
+/// Builds the AST expression for internal iterator owner.
 fn internal_iterator_owner_expr() -> Expr {
     property_access(this_expr(), "owner")
 }
 
+/// Builds the AST expression for internal iterator position.
 fn internal_iterator_position_expr() -> Expr {
     property_access(this_expr(), "position")
 }
 
+/// Builds the synthetic method body for internal iterator construct.
 fn internal_iterator_construct_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "owner", var_expr("owner")),
@@ -307,6 +316,7 @@ fn internal_iterator_construct_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for internal iterator current.
 fn internal_iterator_current_body() -> Vec<Stmt> {
     return_body(method_call(
         internal_iterator_owner_expr(),
@@ -315,6 +325,7 @@ fn internal_iterator_current_body() -> Vec<Stmt> {
     ))
 }
 
+/// Builds the synthetic method body for internal iterator next.
 fn internal_iterator_next_body() -> Vec<Stmt> {
     vec![property_assign_stmt(
         this_expr(),
@@ -323,10 +334,12 @@ fn internal_iterator_next_body() -> Vec<Stmt> {
     )]
 }
 
+/// Builds the synthetic method body for internal iterator rewind.
 fn internal_iterator_rewind_body() -> Vec<Stmt> {
     vec![property_assign_stmt(this_expr(), "position", int_expr(0))]
 }
 
+/// Builds the synthetic method body for internal iterator valid.
 fn internal_iterator_valid_body() -> Vec<Stmt> {
     return_body(binary_expr(
         internal_iterator_position_expr(),
@@ -335,10 +348,12 @@ fn internal_iterator_valid_body() -> Vec<Stmt> {
     ))
 }
 
+/// Builds the synthetic method body for fixed array get iterator.
 fn fixed_array_get_iterator_body() -> Vec<Stmt> {
     return_body(new_object_expr("InternalIterator", vec![this_expr()]))
 }
 
+/// Provides the Dll items snapshot prelude helper used by the containers module.
 fn dll_items_snapshot_prelude() -> Vec<Stmt> {
     vec![
         assign_stmt("items", expr(ExprKind::ArrayLiteral(Vec::new()))),
@@ -354,6 +369,7 @@ fn dll_items_snapshot_prelude() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for dll serialize array.
 fn dll_serialize_array_body() -> Vec<Stmt> {
     let mut body = dll_items_snapshot_prelude();
     body.push(return_stmt(expr(ExprKind::ArrayLiteral(vec![
@@ -364,6 +380,7 @@ fn dll_serialize_array_body() -> Vec<Stmt> {
     body
 }
 
+/// Builds the synthetic method body for dll debug info.
 fn dll_debug_info_body() -> Vec<Stmt> {
     let mut body = vec![
         assign_stmt("mode", method_call(this_expr(), "getIteratorMode", Vec::new())),
@@ -388,6 +405,7 @@ fn dll_debug_info_body() -> Vec<Stmt> {
     body
 }
 
+/// Builds the synthetic method body for dll unserialize.
 fn dll_unserialize_body() -> Vec<Stmt> {
     vec![
         expr_stmt(method_call(

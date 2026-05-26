@@ -16,6 +16,7 @@ use crate::types::traits::FlattenedClass;
 
 use super::common::*;
 
+/// Inserts class into the supplied builtin metadata registry.
 pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
     class_map.insert(
         "__ElephcAppendIteratorArrayIterator".to_string(),
@@ -35,6 +36,7 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
     );
 }
 
+/// Appends iterator array iterator properties to the current runtime or metadata collection.
 fn append_iterator_array_iterator_properties() -> Vec<ClassProperty> {
     vec![
         storage_property("owner", named_type("AppendIterator")),
@@ -42,6 +44,7 @@ fn append_iterator_array_iterator_properties() -> Vec<ClassProperty> {
     ]
 }
 
+/// Builds the method list for SPL append iterator array iterator.
 fn spl_append_iterator_array_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
@@ -90,18 +93,22 @@ fn spl_append_iterator_array_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Appends array iterator owner expr to the current runtime or metadata collection.
 fn append_array_iterator_owner_expr() -> Expr {
     property_access(this_expr(), "owner")
 }
 
+/// Appends array iterator position expr to the current runtime or metadata collection.
 fn append_array_iterator_position_expr() -> Expr {
     property_access(this_expr(), "appendPosition")
 }
 
+/// Appends array iterator owner call to the current runtime or metadata collection.
 fn append_array_iterator_owner_call(method: &str, args: Vec<Expr>) -> Expr {
     method_call(append_array_iterator_owner_expr(), method, args)
 }
 
+/// Appends array iterator construct body to the current runtime or metadata collection.
 fn append_array_iterator_construct_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "owner", var_expr("owner")),
@@ -109,10 +116,12 @@ fn append_array_iterator_construct_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends array iterator count body to the current runtime or metadata collection.
 fn append_array_iterator_count_body() -> Vec<Stmt> {
     return_body(append_array_iterator_owner_call("__elephcStorageCount", Vec::new()))
 }
 
+/// Appends array iterator append body to the current runtime or metadata collection.
 fn append_array_iterator_append_body() -> Vec<Stmt> {
     vec![expr_stmt(append_array_iterator_owner_call(
         "__elephcStorageAppend",
@@ -120,6 +129,7 @@ fn append_array_iterator_append_body() -> Vec<Stmt> {
     ))]
 }
 
+/// Appends array iterator offset set body to the current runtime or metadata collection.
 fn append_array_iterator_offset_set_body() -> Vec<Stmt> {
     vec![expr_stmt(append_array_iterator_owner_call(
         "__elephcStorageOffsetSet",
@@ -127,6 +137,7 @@ fn append_array_iterator_offset_set_body() -> Vec<Stmt> {
     ))]
 }
 
+/// Appends array iterator offset exists body to the current runtime or metadata collection.
 fn append_array_iterator_offset_exists_body() -> Vec<Stmt> {
     return_body(append_array_iterator_owner_call(
         "__elephcStorageOffsetExists",
@@ -134,6 +145,7 @@ fn append_array_iterator_offset_exists_body() -> Vec<Stmt> {
     ))
 }
 
+/// Appends array iterator offset get body to the current runtime or metadata collection.
 fn append_array_iterator_offset_get_body() -> Vec<Stmt> {
     return_body(append_array_iterator_owner_call(
         "__elephcStorageOffsetGet",
@@ -141,6 +153,7 @@ fn append_array_iterator_offset_get_body() -> Vec<Stmt> {
     ))
 }
 
+/// Appends array iterator offset unset body to the current runtime or metadata collection.
 fn append_array_iterator_offset_unset_body() -> Vec<Stmt> {
     vec![expr_stmt(append_array_iterator_owner_call(
         "__elephcStorageOffsetUnset",
@@ -148,6 +161,7 @@ fn append_array_iterator_offset_unset_body() -> Vec<Stmt> {
     ))]
 }
 
+/// Appends array iterator copy body to the current runtime or metadata collection.
 fn append_array_iterator_copy_body() -> Vec<Stmt> {
     return_body(append_array_iterator_owner_call(
         "__elephcStorageGetArrayCopy",
@@ -155,10 +169,12 @@ fn append_array_iterator_copy_body() -> Vec<Stmt> {
     ))
 }
 
+/// Appends array iterator rewind body to the current runtime or metadata collection.
 fn append_array_iterator_rewind_body() -> Vec<Stmt> {
     vec![property_assign_stmt(this_expr(), "appendPosition", int_expr(0))]
 }
 
+/// Appends array iterator next body to the current runtime or metadata collection.
 fn append_array_iterator_next_body() -> Vec<Stmt> {
     vec![property_assign_stmt(
         this_expr(),
@@ -167,6 +183,7 @@ fn append_array_iterator_next_body() -> Vec<Stmt> {
     )]
 }
 
+/// Appends array iterator valid body to the current runtime or metadata collection.
 fn append_array_iterator_valid_body() -> Vec<Stmt> {
     vec![
         while_stmt(
@@ -195,6 +212,7 @@ fn append_array_iterator_valid_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends array iterator key body to the current runtime or metadata collection.
 fn append_array_iterator_key_body() -> Vec<Stmt> {
     return_body(append_array_iterator_owner_call(
         "__elephcStorageKey",
@@ -202,6 +220,7 @@ fn append_array_iterator_key_body() -> Vec<Stmt> {
     ))
 }
 
+/// Appends array iterator current body to the current runtime or metadata collection.
 fn append_array_iterator_current_body() -> Vec<Stmt> {
     return_body(append_array_iterator_owner_call(
         "__elephcStorageCurrent",

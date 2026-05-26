@@ -88,6 +88,7 @@ pub(crate) fn callable_sig(callback: &Expr, ctx: &Context) -> Option<FunctionSig
     }
 }
 
+/// Computes the callable signature metadata for direct first class function.
 pub(crate) fn direct_first_class_function_sig(
     callback: &Expr,
     ctx: &Context,

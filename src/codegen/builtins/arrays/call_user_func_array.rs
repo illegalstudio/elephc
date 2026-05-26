@@ -260,6 +260,7 @@ pub fn emit(
     Some(ret_ty)
 }
 
+/// Returns true when use unknown indexed dispatch.
 fn should_use_unknown_indexed_dispatch(
     sig: &FunctionSig,
     arg_array_ty: &PhpType,
@@ -273,6 +274,7 @@ fn should_use_unknown_indexed_dispatch(
         && sig.declared_params.iter().all(|declared| !*declared)
 }
 
+/// Provides the Callback is runtime string helper used by the call user func array module.
 pub(crate) fn callback_is_runtime_string(callback: &Expr, ctx: &Context) -> bool {
     !matches!(callback.kind, ExprKind::StringLiteral(_))
         && matches!(
@@ -281,6 +283,7 @@ pub(crate) fn callback_is_runtime_string(callback: &Expr, ctx: &Context) -> bool
         )
 }
 
+/// Emits assembly for dynamic string callback with array expr.
 pub(crate) fn emit_dynamic_string_callback_with_array_expr(
     callback: &Expr,
     arg_array: &Expr,
@@ -310,6 +313,7 @@ pub(crate) fn emit_dynamic_string_callback_with_array_expr(
     ret_ty
 }
 
+/// Emits assembly for spread callback call from array expr.
 fn emit_spread_callback_call_from_array_expr(
     arg_array: &Expr,
     call_reg: &str,
@@ -367,6 +371,7 @@ fn emit_spread_callback_call_from_array_expr(
     ret_ty
 }
 
+/// Emits assembly for loaded array callback call.
 pub(crate) fn emit_loaded_array_callback_call(
     array_source: LoadedArraySource,
     arr_ty: &PhpType,
@@ -802,6 +807,7 @@ pub(crate) fn emit_loaded_array_callback_call(
     ret_ty
 }
 
+/// Provides the Callback arg target ty helper used by the call user func array module.
 fn callback_arg_target_ty<'a>(
     sig: &'a FunctionSig,
     index: usize,
@@ -818,6 +824,7 @@ fn callback_arg_target_ty<'a>(
     }
 }
 
+/// Emits assembly for indexed required arg count check.
 fn emit_indexed_required_arg_count_check(
     sig: &FunctionSig,
     regular_param_count: usize,
@@ -849,6 +856,7 @@ fn emit_indexed_required_arg_count_check(
     emitter.label(&ok_label);
 }
 
+/// Emits assembly for loaded assoc array callback call.
 fn emit_loaded_assoc_array_callback_call(
     array_source: LoadedArraySource,
     arr_ty: &PhpType,
@@ -988,6 +996,7 @@ fn emit_loaded_assoc_array_callback_call(
     ret_ty
 }
 
+/// Emits assembly for loaded assoc variadic array arg.
 fn emit_loaded_assoc_variadic_array_arg(
     source_hash_reg: &str,
     elem_ty: &PhpType,
@@ -1035,6 +1044,7 @@ fn emit_loaded_assoc_variadic_array_arg(
     variadic_ty
 }
 
+/// Emits assembly for loaded assoc variadic entries.
 fn emit_loaded_assoc_variadic_entries(
     source_hash_reg: &str,
     sig: &FunctionSig,
@@ -1170,6 +1180,7 @@ fn emit_loaded_assoc_variadic_entries(
     abi::emit_release_temporary_stack(emitter, SCRATCH_BYTES);
 }
 
+/// Emits assembly for skip if consumed numeric key.
 fn emit_skip_if_consumed_numeric_key(
     regular_param_count: usize,
     skip_label: &str,
@@ -1191,6 +1202,7 @@ fn emit_skip_if_consumed_numeric_key(
     }
 }
 
+/// Emits assembly for use next variadic numeric key.
 fn emit_use_next_variadic_numeric_key(
     key_ptr_off: usize,
     key_len_off: usize,
@@ -1217,6 +1229,7 @@ fn emit_use_next_variadic_numeric_key(
     }
 }
 
+/// Emits assembly for skip if key matches param.
 fn emit_skip_if_key_matches_param(
     param_name: &str,
     skip_label: &str,
@@ -1246,6 +1259,7 @@ fn emit_skip_if_key_matches_param(
     }
 }
 
+/// Emits assembly for prepare and insert assoc variadic entry.
 #[allow(clippy::too_many_arguments)]
 fn emit_prepare_and_insert_assoc_variadic_entry(
     hash_slot_off: usize,
@@ -1329,6 +1343,7 @@ fn emit_prepare_and_insert_assoc_variadic_entry(
     }
 }
 
+/// Emits assembly for loaded array unknown callback call.
 pub(crate) fn emit_loaded_array_unknown_callback_call(
     array_source: LoadedArraySource,
     arr_ty: &PhpType,
@@ -1380,6 +1395,7 @@ pub(crate) fn emit_loaded_array_unknown_callback_call(
     )
 }
 
+/// Emits assembly for loaded array string callback call.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_loaded_array_string_callback_call(
     array_source: LoadedArraySource,
@@ -1466,6 +1482,7 @@ pub(crate) fn emit_loaded_array_string_callback_call(
     PhpType::Mixed
 }
 
+/// Emits assembly for loaded indexed array unknown callback call.
 #[allow(clippy::too_many_arguments)]
 fn emit_loaded_indexed_array_unknown_callback_call(
     array_source: LoadedArraySource,
@@ -1535,6 +1552,7 @@ fn emit_loaded_indexed_array_unknown_callback_call(
     PhpType::Mixed
 }
 
+/// Emits assembly for loaded array unknown callback call by arity.
 #[allow(clippy::too_many_arguments)]
 fn emit_loaded_array_unknown_callback_call_by_arity(
     array_source: LoadedArraySource,
@@ -1628,6 +1646,7 @@ fn emit_loaded_array_unknown_callback_call_by_arity(
     PhpType::Int
 }
 
+/// Emits assembly for loaded assoc array unknown callback call.
 fn emit_loaded_assoc_array_unknown_callback_call(
     array_source: LoadedArraySource,
     arr_ty: &PhpType,
@@ -1685,6 +1704,7 @@ fn emit_loaded_assoc_array_unknown_callback_call(
     PhpType::Mixed
 }
 
+/// Provides the Callback array elem ty helper used by the call user func array module.
 fn callback_array_elem_ty(arr_ty: &PhpType) -> PhpType {
     match arr_ty {
         PhpType::Array(elem_ty) => *elem_ty.clone(),
@@ -1693,6 +1713,7 @@ fn callback_array_elem_ty(arr_ty: &PhpType) -> PhpType {
     }
 }
 
+/// Provides the Unknown callback register arg capacity helper used by the call user func array module.
 fn unknown_callback_register_arg_capacity(target: crate::codegen::platform::Target, elem_ty: &PhpType) -> usize {
     match elem_ty.codegen_repr() {
         PhpType::Float => 8,
@@ -1708,6 +1729,7 @@ fn unknown_callback_register_arg_capacity(target: crate::codegen::platform::Targ
     }
 }
 
+/// Emits assembly for unknown captured callback overflow dynamic.
 #[allow(clippy::too_many_arguments)]
 fn emit_unknown_captured_callback_overflow_dynamic(
     array_reg: &str,
@@ -1816,6 +1838,7 @@ fn emit_unknown_captured_callback_overflow_dynamic(
     abi::emit_jump(emitter, done_label);
 }
 
+/// Provides the Unknown dynamic capture assignments helper used by the call user func array module.
 fn unknown_dynamic_capture_assignments(
     target: crate::codegen::platform::Target,
     elem_ty: &PhpType,
@@ -1836,6 +1859,7 @@ fn unknown_dynamic_capture_assignments(
         .collect()
 }
 
+/// Emits assembly for loaded array unknown callback call dynamic.
 fn emit_loaded_array_unknown_callback_call_dynamic(
     array_source: LoadedArraySource,
     arr_ty: &PhpType,
@@ -1917,6 +1941,7 @@ fn emit_loaded_array_unknown_callback_call_dynamic(
     ret_ty
 }
 
+/// Emits assembly for unknown dynamic overflow size.
 fn emit_unknown_dynamic_overflow_size(
     len_reg: &str,
     overflow_count_reg: &str,
@@ -1953,6 +1978,7 @@ fn emit_unknown_dynamic_overflow_size(
     }
 }
 
+/// Emits assembly for dynamic stack adjust.
 fn emit_dynamic_stack_adjust(emitter: &mut Emitter, bytes_reg: &str, subtract: bool) {
     match (emitter.target.arch, subtract) {
         (Arch::AArch64, true) => {
@@ -1970,6 +1996,7 @@ fn emit_dynamic_stack_adjust(emitter: &mut Emitter, bytes_reg: &str, subtract: b
     }
 }
 
+/// Emits assembly for unknown dynamic register arg temps.
 fn emit_unknown_dynamic_register_arg_temps(
     array_reg: &str,
     len_reg: &str,
@@ -2006,6 +2033,7 @@ fn emit_unknown_dynamic_register_arg_temps(
     }
 }
 
+/// Emits assembly for unknown dynamic stack args.
 fn emit_unknown_dynamic_stack_args(
     array_reg: &str,
     overflow_count_reg: &str,
@@ -2066,6 +2094,7 @@ fn emit_unknown_dynamic_stack_args(
     emitter.label(&done_label);
 }
 
+/// Emits assembly for dynamic array element to result.
 fn emit_dynamic_array_element_to_result(
     array_reg: &str,
     index_reg: &str,
@@ -2096,6 +2125,7 @@ fn emit_dynamic_array_element_to_result(
     args::load_array_element_to_result(emitter, elem_ty, source_reg, 0);
 }
 
+/// Emits assembly for unknown dynamic stack arg address.
 fn emit_unknown_dynamic_stack_arg_address(
     idx_reg: &str,
     dest_reg: &str,
@@ -2119,6 +2149,7 @@ fn emit_unknown_dynamic_stack_arg_address(
     }
 }
 
+/// Emits assembly for unknown dynamic load register args.
 fn emit_unknown_dynamic_load_register_args(
     len_reg: &str,
     elem_ty: &PhpType,
@@ -2147,6 +2178,7 @@ fn emit_unknown_dynamic_load_register_args(
     }
 }
 
+/// Emits assembly for unknown dynamic capture args.
 fn emit_unknown_dynamic_capture_args(
     captures: &[(String, PhpType, bool)],
     assignments: &[(PhpType, abi::OutgoingArgAssignment)],
@@ -2182,6 +2214,7 @@ fn emit_unknown_dynamic_capture_args(
     register_temps
 }
 
+/// Emits assembly for capture arg to result.
 fn emit_capture_arg_to_result(
     capture_name: &str,
     capture_ty: &PhpType,
@@ -2211,6 +2244,7 @@ fn emit_capture_arg_to_result(
     abi::emit_load(emitter, capture_ty, capture_info.stack_offset);
 }
 
+/// Emits assembly for store current result to dynamic capture stack.
 fn emit_store_current_result_to_dynamic_capture_stack(
     overflow_count_reg: &str,
     register_temp_bytes: usize,
@@ -2233,6 +2267,7 @@ fn emit_store_current_result_to_dynamic_capture_stack(
     emit_store_current_result_to_address(emitter, ty, dest_reg);
 }
 
+/// Emits assembly for dynamic capture stack arg address.
 fn emit_dynamic_capture_stack_arg_address(
     overflow_count_reg: &str,
     dest_reg: &str,
@@ -2263,6 +2298,7 @@ fn emit_dynamic_capture_stack_arg_address(
     }
 }
 
+/// Emits assembly for unknown dynamic load capture register args.
 fn emit_unknown_dynamic_load_capture_register_args(
     register_temps: &[(PhpType, abi::OutgoingArgAssignment, usize)],
     emitter: &mut Emitter,
@@ -2272,6 +2308,7 @@ fn emit_unknown_dynamic_load_capture_register_args(
     }
 }
 
+/// Emits assembly for store current result to sp offset.
 fn emit_store_current_result_to_sp_offset(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     let stack_reg = match emitter.target.arch {
         Arch::AArch64 => "sp",
@@ -2280,10 +2317,12 @@ fn emit_store_current_result_to_sp_offset(emitter: &mut Emitter, ty: &PhpType, o
     emit_store_current_result_to_address_offset(emitter, ty, stack_reg, offset);
 }
 
+/// Emits assembly for store current result to address.
 fn emit_store_current_result_to_address(emitter: &mut Emitter, ty: &PhpType, address_reg: &str) {
     emit_store_current_result_to_address_offset(emitter, ty, address_reg, 0);
 }
 
+/// Emits assembly for store current result to address offset.
 fn emit_store_current_result_to_address_offset(
     emitter: &mut Emitter,
     ty: &PhpType,
@@ -2306,6 +2345,7 @@ fn emit_store_current_result_to_address_offset(
     }
 }
 
+/// Emits assembly for load sp offset to arg register.
 fn emit_load_sp_offset_to_arg_register(
     emitter: &mut Emitter,
     ty: &PhpType,
@@ -2331,6 +2371,7 @@ fn emit_load_sp_offset_to_arg_register(
     }
 }
 
+/// Emits assembly for load sp offset to assignment register.
 fn emit_load_sp_offset_to_assignment_register(
     emitter: &mut Emitter,
     ty: &PhpType,
@@ -2356,6 +2397,7 @@ fn emit_load_sp_offset_to_assignment_register(
     }
 }
 
+/// Emits assembly for unknown callback case.
 #[allow(clippy::too_many_arguments)]
 fn emit_unknown_callback_case(
     arg_count: usize,
@@ -2396,6 +2438,7 @@ fn emit_unknown_callback_case(
     abi::emit_jump(emitter, done_label);
 }
 
+/// Emits assembly for call user func array missing arg abort.
 fn emit_call_user_func_array_missing_arg_abort(emitter: &mut Emitter, data: &mut DataSection) {
     let (message_label, message_len) = data.add_string(
         b"Fatal error: call_user_func_array() argument array is missing a required callback parameter\n",
@@ -2420,6 +2463,7 @@ fn emit_call_user_func_array_missing_arg_abort(emitter: &mut Emitter, data: &mut
     }
 }
 
+/// Emits assembly for call user func array unknown assoc abort.
 fn emit_call_user_func_array_unknown_assoc_abort(emitter: &mut Emitter, data: &mut DataSection) {
     let (message_label, message_len) = data.add_string(
         b"Fatal error: call_user_func_array() could not resolve named callback arguments for this callable\n",
@@ -2444,6 +2488,7 @@ fn emit_call_user_func_array_unknown_assoc_abort(emitter: &mut Emitter, data: &m
     }
 }
 
+/// Emits assembly for dynamic string callback abort.
 fn emit_dynamic_string_callback_abort(emitter: &mut Emitter, data: &mut DataSection) {
     let (message_label, message_len) = data.add_string(
         b"Fatal error: dynamic string callback could not be resolved\n",
@@ -2468,6 +2513,7 @@ fn emit_dynamic_string_callback_abort(emitter: &mut Emitter, data: &mut DataSect
     }
 }
 
+/// Computes the type metadata for widen callback arg.
 fn widen_callback_arg_type(a: &PhpType, b: &PhpType) -> PhpType {
     if a == b {
         return a.clone();

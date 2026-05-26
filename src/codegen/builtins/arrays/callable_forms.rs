@@ -17,6 +17,7 @@ use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
 use crate::types::PhpType;
 
+/// Emits assembly for call user func form.
 pub(crate) fn emit_call_user_func_form(
     callback: &Expr,
     callback_args: &[Expr],
@@ -59,6 +60,7 @@ pub(crate) fn emit_call_user_func_form(
     }
 }
 
+/// Emits assembly for call user func array form.
 pub(crate) fn emit_call_user_func_array_form(
     callback: &Expr,
     arg_array: &Expr,
@@ -87,6 +89,7 @@ enum CallableForm {
     },
 }
 
+/// Resolves callable form using the available compile-time metadata.
 fn resolve_callable_form(callback: &Expr, ctx: &Context) -> Option<CallableForm> {
     if let ExprKind::Variable(var_name) = &callback.kind {
         if let Some(target) = ctx.callable_array_targets.get(var_name) {
@@ -131,6 +134,7 @@ fn resolve_callable_form(callback: &Expr, ctx: &Context) -> Option<CallableForm>
     }
 }
 
+/// Provides the Callable target form helper used by the callable forms module.
 fn callable_target_form(target: &CallableTarget) -> Option<CallableForm> {
     match target {
         CallableTarget::Method { object, method } => Some(CallableForm::InstanceMethod {
@@ -145,6 +149,7 @@ fn callable_target_form(target: &CallableTarget) -> Option<CallableForm> {
     }
 }
 
+/// Provides the Callable array parts helper used by the callable forms module.
 fn callable_array_parts(callback: &Expr) -> Option<(&Expr, &str)> {
     let elems = match &callback.kind {
         ExprKind::ArrayLiteral(elems) => elems,
@@ -159,6 +164,7 @@ fn callable_array_parts(callback: &Expr) -> Option<(&Expr, &str)> {
     Some((&elems[0], method.as_str()))
 }
 
+/// Provides the Static callable receiver helper used by the callable forms module.
 fn static_callable_receiver(receiver: &Expr, ctx: &Context) -> Option<StaticReceiver> {
     let class_name = match &receiver.kind {
         ExprKind::StringLiteral(class_name) => {
@@ -170,6 +176,7 @@ fn static_callable_receiver(receiver: &Expr, ctx: &Context) -> Option<StaticRece
     Some(StaticReceiver::Named(Name::from(class_name)))
 }
 
+/// Resolves static receiver class using the available compile-time metadata.
 fn resolve_static_receiver_class(receiver: &StaticReceiver, ctx: &Context) -> Option<String> {
     match receiver {
         StaticReceiver::Named(name) => resolve_class_name(ctx, name.as_str()).map(str::to_string),
@@ -182,6 +189,7 @@ fn resolve_static_receiver_class(receiver: &StaticReceiver, ctx: &Context) -> Op
     }
 }
 
+/// Resolves class name using the available compile-time metadata.
 fn resolve_class_name<'a>(ctx: &'a Context, class_name: &str) -> Option<&'a str> {
     let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
     ctx.classes

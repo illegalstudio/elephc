@@ -19,6 +19,7 @@ use super::filters::callback_filter_construct_body;
 use super::forwarding::{inner_expr, iterator_iterator_construct_body, recursive_inner_return_body};
 use super::recursive_array::assume_recursive_iterator_expr;
 
+/// Inserts classes into the supplied builtin metadata registry.
 pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
     class_map.insert(
         "RecursiveFilterIterator".to_string(),
@@ -72,6 +73,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
     );
 }
 
+/// Builds the method list for SPL recursive filter iterator.
 fn spl_recursive_filter_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
@@ -96,6 +98,7 @@ fn spl_recursive_filter_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds the method list for SPL recursive callback filter iterator.
 fn spl_recursive_callback_filter_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
@@ -123,6 +126,7 @@ fn spl_recursive_callback_filter_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds the method list for SPL parent iterator.
 fn spl_parent_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
@@ -147,6 +151,7 @@ fn spl_parent_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds the synthetic method body for recursive filter get children.
 fn recursive_filter_get_children_body() -> Vec<Stmt> {
     vec![
         assign_stmt("child", method_call(inner_expr(), "getChildren", Vec::new())),
@@ -159,6 +164,7 @@ fn recursive_filter_get_children_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for recursive callback filter get children.
 fn recursive_callback_filter_get_children_body() -> Vec<Stmt> {
     vec![
         assign_stmt("child", method_call(inner_expr(), "getChildren", Vec::new())),
@@ -186,6 +192,7 @@ fn recursive_callback_filter_get_children_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for parent iterator get children.
 fn parent_iterator_get_children_body() -> Vec<Stmt> {
     vec![
         assign_stmt("child", method_call(inner_expr(), "getChildren", Vec::new())),

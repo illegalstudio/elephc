@@ -11,6 +11,7 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+/// Emits assembly for class implements interface.
 pub fn emit_class_implements_interface(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_class_implements_interface_linux_x86_64(emitter);
@@ -51,6 +52,7 @@ pub fn emit_class_implements_interface(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // finish the metadata-only interface test
 }
 
+/// Emits assembly for class implements interface linux x86 64.
 fn emit_class_implements_interface_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: class_implements_interface ---");

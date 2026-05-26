@@ -238,6 +238,7 @@ fn inferred_specific_array_type_from_infos(
     specific
 }
 
+/// Computes the callable signature metadata for matching callable.
 fn matching_callable_sig(return_sigs: &[FunctionSig]) -> Option<FunctionSig> {
     let first = return_sigs.first()?.clone();
     if return_sigs.iter().all(|sig| sig == &first) {
@@ -247,6 +248,7 @@ fn matching_callable_sig(return_sigs: &[FunctionSig]) -> Option<FunctionSig> {
     }
 }
 
+/// Computes the callable signature metadata for callable return codegen.
 fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig {
     for (idx, (_, ty)) in sig.params.iter_mut().enumerate() {
         if !sig.declared_params.get(idx).copied().unwrap_or(false)

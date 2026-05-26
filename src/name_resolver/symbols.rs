@@ -153,6 +153,7 @@ pub(super) fn collect_symbols(
     }
 }
 
+/// Inserts folded symbol into the supplied builtin metadata registry.
 fn insert_folded_symbol(symbols: &mut std::collections::HashMap<String, String>, name: String) {
     symbols.entry(php_symbol_key(&name)).or_insert(name);
 }

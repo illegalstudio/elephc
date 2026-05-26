@@ -41,6 +41,7 @@ pub(super) fn specialize_dynamic_assoc_variadic_user_callback(
     Ok(())
 }
 
+/// Validates call user func array dynamic arg array and returns a compile error when it is unsupported.
 fn validate_call_user_func_array_dynamic_arg_array(
     checker: &mut Checker,
     _sig: &crate::types::FunctionSig,
@@ -61,6 +62,7 @@ fn validate_call_user_func_array_dynamic_arg_array(
     Ok(())
 }
 
+/// Provides the Specialize dynamic assoc variadic first class callback helper used by the callables module.
 fn specialize_dynamic_assoc_variadic_first_class_callback(
     checker: &mut Checker,
     target: &CallableTarget,
@@ -94,6 +96,7 @@ fn dummy_arg_for_array_scalar_elem(arr_ty: &PhpType, span: crate::span::Span) ->
     }
 }
 
+/// Checks object or array callable call and reports a compile error when it is invalid.
 fn check_object_or_array_callable_call(
     checker: &mut Checker,
     callback: &Expr,
@@ -144,6 +147,7 @@ fn check_object_or_array_callable_call(
         .map(Some)
 }
 
+/// Checks callable target call and reports a compile error when it is invalid.
 fn check_callable_target_call(
     checker: &mut Checker,
     target: &CallableTarget,
@@ -176,6 +180,7 @@ fn check_callable_target_call(
     }
 }
 
+/// Provides the Callable array parts helper used by the callables module.
 fn callable_array_parts(callback: &Expr) -> Option<(&Expr, &str)> {
     let elems = match &callback.kind {
         ExprKind::ArrayLiteral(elems) => elems,
@@ -190,6 +195,7 @@ fn callable_array_parts(callback: &Expr) -> Option<(&Expr, &str)> {
     Some((&elems[0], method.as_str()))
 }
 
+/// Provides the Static callable receiver helper used by the callables module.
 fn static_callable_receiver(
     checker: &Checker,
     receiver: &Expr,
@@ -206,6 +212,7 @@ fn static_callable_receiver(
     Ok(class_name.map(|class_name| StaticReceiver::Named(Name::from(class_name))))
 }
 
+/// Resolves static receiver class using the available compile-time metadata.
 fn resolve_static_receiver_class(
     checker: &Checker,
     receiver: &StaticReceiver,
@@ -237,6 +244,7 @@ fn resolve_static_receiver_class(
     }
 }
 
+/// Resolves class name using the available compile-time metadata.
 fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a str> {
     let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
     checker

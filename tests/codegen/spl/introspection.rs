@@ -10,6 +10,7 @@
 
 use crate::support::*;
 
+/// Verifies that class implements returns assoc interface names.
 #[test]
 fn test_class_implements_returns_assoc_interface_names() {
     let out = compile_and_run(
@@ -29,6 +30,7 @@ foreach (class_implements("ImplMarker") as $name => $value) {
     assert_eq!(out, "ChildMarker=ChildMarker;BaseMarker=BaseMarker;");
 }
 
+/// Verifies that class implements accepts object static type.
 #[test]
 fn test_class_implements_accepts_object_static_type() {
     let out = compile_and_run(
@@ -44,6 +46,7 @@ echo isset($interfaces["Countable"]) ? "yes" : "no";
     assert_eq!(out, "yes");
 }
 
+/// Verifies that class implements builtin SPL class includes inherited interfaces.
 #[test]
 fn test_class_implements_builtin_spl_class_includes_inherited_interfaces() {
     let out = compile_and_run(
@@ -63,6 +66,7 @@ foreach ($interfaces as $name => $value) {
     );
 }
 
+/// Verifies that class parents returns immediate parent then ancestors.
 #[test]
 fn test_class_parents_returns_immediate_parent_then_ancestors() {
     let out = compile_and_run(
@@ -82,6 +86,7 @@ foreach (class_parents("Leaf") as $name => $value) {
     assert_eq!(out, "Middle=Middle;Root=Root;");
 }
 
+/// Verifies that class uses returns direct class traits only.
 #[test]
 fn test_class_uses_returns_direct_class_traits_only() {
     let out = compile_and_run(
@@ -108,6 +113,7 @@ foreach (class_uses("ChildWithTrait") as $name => $value) {
     assert_eq!(out, "LocalTrait=LocalTrait;");
 }
 
+/// Verifies that class uses accepts trait name.
 #[test]
 fn test_class_uses_accepts_trait_name() {
     let out = compile_and_run(
@@ -128,6 +134,7 @@ foreach (class_uses("CombinedTrait") as $name => $value) {
     assert_eq!(out, "BaseTrait=BaseTrait;");
 }
 
+/// Verifies that class relation helpers return false for unknown literal names.
 #[test]
 fn test_class_relation_helpers_return_false_for_unknown_literal_names() {
     let out = compile_and_run(

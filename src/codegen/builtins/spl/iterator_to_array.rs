@@ -22,6 +22,7 @@ use crate::types::PhpType;
 
 use super::iterator_common::{self, PreserveKeysArg};
 
+/// Emits the iterator to array entry point for this module.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -51,6 +52,7 @@ pub fn emit(
     ))
 }
 
+/// Emits assembly for to array loaded source.
 fn emit_to_array_loaded_source(
     source_ty: &PhpType,
     preserve_keys: bool,
@@ -100,6 +102,7 @@ fn emit_to_array_loaded_source(
     static_result_ty(source_ty, preserve_keys)
 }
 
+/// Emits assembly for dynamic preserve keys.
 fn emit_dynamic_preserve_keys(
     source_ty: &PhpType,
     preserve_arg: &Expr,
@@ -143,6 +146,7 @@ fn emit_dynamic_preserve_keys(
     Some(dynamic_result_ty(source_ty))
 }
 
+/// Emits assembly for to array loaded iterator object.
 fn emit_to_array_loaded_iterator_object(
     class_name: &str,
     preserve_keys: bool,
@@ -197,6 +201,7 @@ fn emit_to_array_loaded_iterator_object(
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // return the completed iterator_to_array() result container
 }
 
+/// Provides the Static result ty helper used by the iterator to array module.
 fn static_result_ty(source_ty: &PhpType, preserve_keys: bool) -> PhpType {
     match source_ty.codegen_repr() {
         PhpType::Array(elem_ty) => PhpType::Array(elem_ty),
@@ -210,6 +215,7 @@ fn static_result_ty(source_ty: &PhpType, preserve_keys: bool) -> PhpType {
     }
 }
 
+/// Provides the Dynamic result ty helper used by the iterator to array module.
 fn dynamic_result_ty(source_ty: &PhpType) -> PhpType {
     merge_result_types(
         static_result_ty(source_ty, true),
@@ -217,6 +223,7 @@ fn dynamic_result_ty(source_ty: &PhpType) -> PhpType {
     )
 }
 
+/// Provides the Merge result types helper used by the iterator to array module.
 fn merge_result_types(a: PhpType, b: PhpType) -> PhpType {
     if a == b {
         a
@@ -225,6 +232,7 @@ fn merge_result_types(a: PhpType, b: PhpType) -> PhpType {
     }
 }
 
+/// Emits assembly for box owned result as mixed.
 fn emit_box_owned_result_as_mixed(result_ty: &PhpType, emitter: &mut Emitter) {
     let result_ty = result_ty.codegen_repr();
     match emitter.target.arch {
@@ -249,6 +257,7 @@ fn emit_box_owned_result_as_mixed(result_ty: &PhpType, emitter: &mut Emitter) {
     }
 }
 
+/// Emits assembly for to array loaded traversable object.
 fn emit_to_array_loaded_traversable_object(
     preserve_keys: bool,
     emitter: &mut Emitter,
@@ -296,6 +305,7 @@ fn emit_to_array_loaded_traversable_object(
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // return the completed iterator_to_array() result container
 }
 
+/// Emits assembly for to array loaded iterable.
 fn emit_to_array_loaded_iterable(
     preserve_keys: bool,
     emitter: &mut Emitter,

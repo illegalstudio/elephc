@@ -19,6 +19,7 @@ use super::common::*;
 use super::append_storage::*;
 use super::forwarding::{inner_call, inner_expr};
 
+/// Inserts classes into the supplied builtin metadata registry.
 pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
     class_map.insert(
         "AppendIterator".to_string(),
@@ -39,6 +40,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
     append_array_iterator::insert_class(class_map);
 }
 
+/// Appends iterator properties to the current runtime or metadata collection.
 fn append_iterator_properties() -> Vec<ClassProperty> {
     vec![
         storage_property("iterators", array_type()),
@@ -49,6 +51,7 @@ fn append_iterator_properties() -> Vec<ClassProperty> {
     ]
 }
 
+/// Builds the method list for SPL append iterator.
 fn spl_append_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body("__construct", Vec::new(), Some(TypeExpr::Void), append_construct_body()),
@@ -150,22 +153,27 @@ fn spl_append_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Appends array iterator expr to the current runtime or metadata collection.
 fn append_array_iterator_expr() -> Expr {
     property_access(this_expr(), "arrayIterator")
 }
 
+/// Appends index expr to the current runtime or metadata collection.
 fn append_index_expr() -> Expr {
     property_access(this_expr(), "index")
 }
 
+/// Appends current key expr to the current runtime or metadata collection.
 fn append_current_key_expr() -> Expr {
     append_key_at_position_expr(append_index_expr())
 }
 
+/// Appends current iterator expr to the current runtime or metadata collection.
 fn append_current_iterator_expr() -> Expr {
     array_access(append_iterators_expr(), append_index_expr())
 }
 
+/// Appends construct body to the current runtime or metadata collection.
 fn append_construct_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "inner", new_object_expr("EmptyIterator", Vec::new())),
@@ -181,10 +189,12 @@ fn append_construct_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends append body to the current runtime or metadata collection.
 fn append_append_body() -> Vec<Stmt> {
     append_storage_append_body()
 }
 
+/// Appends rewind body to the current runtime or metadata collection.
 fn append_rewind_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "index", int_expr(0)),
@@ -201,6 +211,7 @@ fn append_rewind_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends valid body to the current runtime or metadata collection.
 fn append_valid_body() -> Vec<Stmt> {
     let mut active_body = vec![
         typed_assign_stmt("iterator", named_type("Iterator"), append_current_iterator_expr()),
@@ -229,6 +240,7 @@ fn append_valid_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends advance index body to the current runtime or metadata collection.
 fn append_advance_index_body() -> Vec<Stmt> {
     vec![
         append_advance_index_stmt(),
@@ -244,6 +256,7 @@ fn append_advance_index_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends advance index stmt to the current runtime or metadata collection.
 fn append_advance_index_stmt() -> Stmt {
     property_assign_stmt(
         this_expr(),
@@ -252,6 +265,7 @@ fn append_advance_index_stmt() -> Stmt {
     )
 }
 
+/// Appends current body to the current runtime or metadata collection.
 fn append_current_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -263,6 +277,7 @@ fn append_current_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends key body to the current runtime or metadata collection.
 fn append_key_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -274,6 +289,7 @@ fn append_key_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends next body to the current runtime or metadata collection.
 fn append_next_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -307,6 +323,7 @@ fn append_next_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends get inner iterator body to the current runtime or metadata collection.
 fn append_get_inner_iterator_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -318,6 +335,7 @@ fn append_get_inner_iterator_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends get iterator index body to the current runtime or metadata collection.
 fn append_get_iterator_index_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -329,6 +347,7 @@ fn append_get_iterator_index_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends get array iterator body to the current runtime or metadata collection.
 fn append_get_array_iterator_body() -> Vec<Stmt> {
     return_body(append_array_iterator_expr())
 }

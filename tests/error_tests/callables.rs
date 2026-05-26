@@ -9,6 +9,7 @@
 
 use super::*;
 
+/// Verifies that error call user func wrong args.
 #[test]
 fn test_error_call_user_func_wrong_args() {
     // Verifies `call_user_func()` with no arguments produces a diagnostic about
@@ -19,6 +20,7 @@ fn test_error_call_user_func_wrong_args() {
     );
 }
 
+/// Verifies that error function exists wrong args.
 #[test]
 fn test_error_function_exists_wrong_args() {
     // Verifies `function_exists()` with no arguments produces a diagnostic about
@@ -29,6 +31,7 @@ fn test_error_function_exists_wrong_args() {
     );
 }
 
+/// Verifies that error class exists requires literal name.
 #[test]
 fn test_error_class_exists_requires_literal_name() {
     // Verifies `class_exists()` with a runtime variable as the first argument
@@ -39,6 +42,7 @@ fn test_error_class_exists_requires_literal_name() {
     );
 }
 
+/// Verifies that error class exists requires literal autoload flag.
 #[test]
 fn test_error_class_exists_requires_literal_autoload_flag() {
     // Verifies `class_exists()` with a runtime variable as the autoload flag
@@ -49,6 +53,7 @@ fn test_error_class_exists_requires_literal_autoload_flag() {
     );
 }
 
+/// Verifies that error interface exists wrong args.
 #[test]
 fn test_error_interface_exists_wrong_args() {
     // Verifies `interface_exists()` with no arguments produces a diagnostic about
@@ -59,6 +64,7 @@ fn test_error_interface_exists_wrong_args() {
     );
 }
 
+/// Verifies that error trait exists wrong args.
 #[test]
 fn test_error_trait_exists_wrong_args() {
     // Verifies `trait_exists()` with no arguments produces a diagnostic about
@@ -69,6 +75,7 @@ fn test_error_trait_exists_wrong_args() {
     );
 }
 
+/// Verifies that error enum exists wrong args.
 #[test]
 fn test_error_enum_exists_wrong_args() {
     // Verifies `enum_exists()` with no arguments produces a diagnostic about
@@ -79,6 +86,7 @@ fn test_error_enum_exists_wrong_args() {
     );
 }
 
+/// Verifies that error class implements wrong args.
 #[test]
 fn test_error_class_implements_wrong_args() {
     expect_error(
@@ -87,6 +95,7 @@ fn test_error_class_implements_wrong_args() {
     );
 }
 
+/// Verifies that error class implements requires literal or object.
 #[test]
 fn test_error_class_implements_requires_literal_or_object() {
     expect_error(
@@ -95,6 +104,7 @@ fn test_error_class_implements_requires_literal_or_object() {
     );
 }
 
+/// Verifies that error class parents requires literal autoload flag.
 #[test]
 fn test_error_class_parents_requires_literal_autoload_flag() {
     expect_error(
@@ -103,6 +113,7 @@ fn test_error_class_parents_requires_literal_autoload_flag() {
     );
 }
 
+/// Verifies that error class uses wrong args.
 #[test]
 fn test_error_class_uses_wrong_args() {
     expect_error(
@@ -111,6 +122,7 @@ fn test_error_class_uses_wrong_args() {
     );
 }
 
+/// Verifies that error get class wrong args.
 #[test]
 fn test_error_get_class_wrong_args() {
     // Verifies `get_class()` with a second argument produces a diagnostic about
@@ -121,6 +133,7 @@ fn test_error_get_class_wrong_args() {
     );
 }
 
+/// Verifies that error get parent class wrong args.
 #[test]
 fn test_error_get_parent_class_wrong_args() {
     // Verifies `get_parent_class()` with a second argument produces a diagnostic
@@ -131,6 +144,7 @@ fn test_error_get_parent_class_wrong_args() {
     );
 }
 
+/// Verifies that error is subclass of wrong args.
 #[test]
 fn test_error_is_subclass_of_wrong_args() {
     // Verifies `is_subclass_of()` with only 1 argument produces a diagnostic
@@ -141,6 +155,7 @@ fn test_error_is_subclass_of_wrong_args() {
     );
 }
 
+/// Verifies that error is a wrong args.
 #[test]
 fn test_error_is_a_wrong_args() {
     // Verifies `is_a()` with only 1 argument produces a diagnostic about
@@ -151,6 +166,7 @@ fn test_error_is_a_wrong_args() {
     );
 }
 
+/// Verifies that error get declared classes wrong args.
 #[test]
 fn test_error_get_declared_classes_wrong_args() {
     // Verifies `get_declared_classes()` with an extra argument produces a
@@ -161,6 +177,7 @@ fn test_error_get_declared_classes_wrong_args() {
     );
 }
 
+/// Verifies that error get declared interfaces wrong args.
 #[test]
 fn test_error_get_declared_interfaces_wrong_args() {
     // Verifies `get_declared_interfaces()` with an extra argument produces a
@@ -171,6 +188,7 @@ fn test_error_get_declared_interfaces_wrong_args() {
     );
 }
 
+/// Verifies that error get declared traits wrong args.
 #[test]
 fn test_error_get_declared_traits_wrong_args() {
     // Verifies `get_declared_traits()` with an extra argument produces a
@@ -181,6 +199,7 @@ fn test_error_get_declared_traits_wrong_args() {
     );
 }
 
+/// Verifies that error class alias rejects runtime call shape.
 #[test]
 fn test_error_class_alias_rejects_runtime_call_shape() {
     // Verifies `class_alias()` with a runtime variable as the second argument
@@ -194,6 +213,7 @@ fn test_error_class_alias_rejects_runtime_call_shape() {
 
 // --- Closure / arrow function errors ---
 
+/// Verifies that error call non callable variable.
 #[test]
 fn test_error_call_non_callable_variable() {
     // Verifies invoking a non-callable variable (integer) produces a "not a callable"
@@ -201,6 +221,7 @@ fn test_error_call_non_callable_variable() {
     expect_error(r#"<?php $x = 5; $x(1);"#, "not a callable");
 }
 
+/// Verifies that error call user func ref param requires variable.
 #[test]
 fn test_error_call_user_func_ref_param_requires_variable() {
     // Verifies `call_user_func()` with a closure that has a by-reference
@@ -212,6 +233,7 @@ fn test_error_call_user_func_ref_param_requires_variable() {
     );
 }
 
+/// Verifies that error call user func string literal ref param requires variable.
 #[test]
 fn test_error_call_user_func_string_literal_ref_param_requires_variable() {
     // Verifies `call_user_func()` with a named function string and a by-reference
@@ -223,6 +245,7 @@ fn test_error_call_user_func_string_literal_ref_param_requires_variable() {
     );
 }
 
+/// Verifies that error case insensitive function string introspection keeps callback checks.
 #[test]
 fn test_error_case_insensitive_function_string_introspection_keeps_callback_checks() {
     // Verifies that case-insensitive function string introspection via
@@ -235,6 +258,7 @@ fn test_error_case_insensitive_function_string_introspection_keeps_callback_chec
     );
 }
 
+/// Verifies that error closure return type rejects mismatch.
 #[test]
 fn test_error_closure_return_type_rejects_mismatch() {
     // Verifies a closure with an explicit return type that returns a mismatched
@@ -245,6 +269,7 @@ fn test_error_closure_return_type_rejects_mismatch() {
     );
 }
 
+/// Verifies that error arrow return type rejects mismatch.
 #[test]
 fn test_error_arrow_return_type_rejects_mismatch() {
     // Verifies an arrow function with an explicit return type that returns a
@@ -255,6 +280,7 @@ fn test_error_arrow_return_type_rejects_mismatch() {
     );
 }
 
+/// Verifies that error closure return type requires return value.
 #[test]
 fn test_error_closure_return_type_requires_return_value() {
     // Verifies a closure with an explicit return type and an empty body (no return)
@@ -265,6 +291,7 @@ fn test_error_closure_return_type_requires_return_value() {
     );
 }
 
+/// Verifies that error closure return type rejects partial fallthrough.
 #[test]
 fn test_error_closure_return_type_rejects_partial_fallthrough() {
     // Verifies a closure with an explicit return type where only some branches
@@ -276,6 +303,7 @@ fn test_error_closure_return_type_rejects_partial_fallthrough() {
     );
 }
 
+/// Verifies that error closure return type rejects bare return.
 #[test]
 fn test_error_closure_return_type_rejects_bare_return() {
     // Verifies a closure with `mixed` return type and a bare `return;` (no value)
@@ -286,6 +314,7 @@ fn test_error_closure_return_type_rejects_bare_return() {
     );
 }
 
+/// Verifies that error closure void return type rejects value.
 #[test]
 fn test_error_closure_void_return_type_rejects_value() {
     // Verifies a closure with `void` return type that returns a value produces
@@ -296,6 +325,7 @@ fn test_error_closure_void_return_type_rejects_value() {
     );
 }
 
+/// Verifies that error fiber callback rejects too many start args.
 #[test]
 fn test_error_fiber_callback_rejects_too_many_start_args() {
     // Verifies a `Fiber` with a callback accepting 8 start arguments produces
@@ -306,6 +336,7 @@ fn test_error_fiber_callback_rejects_too_many_start_args() {
     );
 }
 
+/// Verifies that error fiber callback rejects by ref start arg.
 #[test]
 fn test_error_fiber_callback_rejects_by_ref_start_arg() {
     // Verifies a `Fiber` with a callback that receives a start argument
@@ -317,6 +348,7 @@ fn test_error_fiber_callback_rejects_by_ref_start_arg() {
     );
 }
 
+/// Verifies that error fiber callback rejects variadic arg.
 #[test]
 fn test_error_fiber_callback_rejects_variadic_arg() {
     // Verifies a `Fiber` with a callback that is variadic produces a diagnostic
@@ -327,6 +359,7 @@ fn test_error_fiber_callback_rejects_variadic_arg() {
     );
 }
 
+/// Verifies that error fiber variable callback rejects variadic arg.
 #[test]
 fn test_error_fiber_variable_callback_rejects_variadic_arg() {
     // Verifies a `Fiber` constructed from a pre-existing variable holding a
@@ -341,6 +374,7 @@ $fiber = new Fiber($fn);
     );
 }
 
+/// Verifies that error fiber direct callback rejects capture slot overflow.
 #[test]
 fn test_error_fiber_direct_callback_rejects_capture_slot_overflow() {
     // Verifies a `Fiber` with a callback that captures 4 variables via `use()`
@@ -357,6 +391,7 @@ $fiber = new Fiber(function() use ($a, $b, $c, $d): void {});
     );
 }
 
+/// Verifies that error fiber variable callback rejects capture slot overflow.
 #[test]
 fn test_error_fiber_variable_callback_rejects_capture_slot_overflow() {
     // Verifies a `Fiber` constructed from a pre-existing variable holding a
@@ -374,6 +409,7 @@ $fiber = new Fiber($fn);
 
 // --- PHP 8.5 pipe operator ---
 
+/// Verifies that error pipe rhs integer not callable.
 #[test]
 fn test_error_pipe_rhs_int_not_callable() {
     // Verifies the pipe operator (`|>`) with a plain integer on the right-hand
@@ -384,6 +420,7 @@ fn test_error_pipe_rhs_int_not_callable() {
     );
 }
 
+/// Verifies that error pipe rhs string literal not callable.
 #[test]
 fn test_error_pipe_rhs_string_literal_not_callable() {
     // Verifies the pipe operator (`|>`) with a bare string literal on the RHS
@@ -395,6 +432,7 @@ fn test_error_pipe_rhs_string_literal_not_callable() {
     );
 }
 
+/// Verifies that error pipe rejects by ref parameter.
 #[test]
 fn test_error_pipe_rejects_by_ref_parameter() {
     // Verifies the pipe operator (`|>`) with a function that has by-reference
@@ -406,6 +444,7 @@ fn test_error_pipe_rejects_by_ref_parameter() {
     );
 }
 
+/// Verifies that error pipe target requires more than one required arg.
 #[test]
 fn test_error_pipe_target_requires_more_than_one_required_arg() {
     // Verifies the pipe operator (`|>`) with a callable that requires more than
@@ -417,6 +456,7 @@ fn test_error_pipe_target_requires_more_than_one_required_arg() {
     );
 }
 
+/// Verifies that error pipe closure literal requires two args.
 #[test]
 fn test_error_pipe_closure_literal_requires_two_args() {
     // Verifies the pipe operator (`|>`) with a closure literal that expects two
@@ -428,6 +468,7 @@ fn test_error_pipe_closure_literal_requires_two_args() {
     );
 }
 
+/// Verifies that error pipe closure literal rejects by ref parameter.
 #[test]
 fn test_error_pipe_closure_literal_rejects_by_ref_parameter() {
     // Verifies the pipe operator (`|>`) with a closure literal containing a
@@ -439,6 +480,7 @@ fn test_error_pipe_closure_literal_rejects_by_ref_parameter() {
     );
 }
 
+/// Verifies that error pipe closure literal typed parameter mismatch.
 #[test]
 fn test_error_pipe_closure_literal_typed_parameter_mismatch() {
     // Verifies the pipe operator (`|>`) with a closure literal that has a typed

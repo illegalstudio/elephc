@@ -42,6 +42,7 @@ pub(super) const SPL_CLASS_NAMES: &[&str] = &[
     "MultipleIterator",
 ];
 
+/// Ensures no redeclarations is available before the caller continues.
 pub(super) fn ensure_no_redeclarations(
     interface_map: &HashMap<String, InterfaceDeclInfo>,
     class_map: &HashMap<String, FlattenedClass>,

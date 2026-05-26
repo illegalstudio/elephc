@@ -33,6 +33,7 @@ pub(in crate::codegen) fn collect_required_class_names(program: &Program) -> Has
     names
 }
 
+/// Collects required class names in stmts for the surrounding analysis or metadata result.
 pub(in crate::codegen) fn collect_required_class_names_in_stmts(
     stmts: &[Stmt],
     names: &mut HashSet<String>,

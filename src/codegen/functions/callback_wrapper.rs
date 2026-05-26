@@ -120,6 +120,7 @@ fn wrapper_arg_types(wrapper: &DeferredCallbackWrapper) -> Vec<PhpType> {
         .collect()
 }
 
+/// Provides the Wrapper target visible arg types helper used by the callback wrapper module.
 fn wrapper_target_visible_arg_types(wrapper: &DeferredCallbackWrapper) -> Vec<PhpType> {
     wrapper
         .target_visible_arg_types
@@ -320,6 +321,7 @@ fn push_spilled_args_as_call_temporaries_x86_64(
     }
 }
 
+/// Provides the Callback target arg types helper used by the callback wrapper module.
 fn callback_target_arg_types(
     target_visible_arg_types: &[PhpType],
     capture_types: &[PhpType],
@@ -331,6 +333,7 @@ fn callback_target_arg_types(
         .collect()
 }
 
+/// Pushes AArch64 visible arg as target onto the temporary call stack or synthetic metadata list.
 fn push_aarch64_visible_arg_as_target(
     emitter: &mut Emitter,
     frame_slot_offset: usize,
@@ -372,6 +375,7 @@ fn push_aarch64_visible_arg_as_target(
     }
 }
 
+/// Pushes AArch64 prepared arg onto the temporary call stack or synthetic metadata list.
 fn push_aarch64_prepared_arg(emitter: &mut Emitter, frame_slot_offset: usize, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Float => {
@@ -391,6 +395,7 @@ fn push_aarch64_prepared_arg(emitter: &mut Emitter, frame_slot_offset: usize, ty
     }
 }
 
+/// Pushes x86 64 visible arg as target onto the temporary call stack or synthetic metadata list.
 fn push_x86_64_visible_arg_as_target(
     emitter: &mut Emitter,
     slot_offset: usize,
@@ -432,6 +437,7 @@ fn push_x86_64_visible_arg_as_target(
     }
 }
 
+/// Pushes x86 64 prepared arg onto the temporary call stack or synthetic metadata list.
 fn push_x86_64_prepared_arg(emitter: &mut Emitter, slot_offset: usize, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Float => {

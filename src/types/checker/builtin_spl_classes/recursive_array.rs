@@ -16,6 +16,7 @@ use crate::types::traits::FlattenedClass;
 
 use super::common::*;
 
+/// Inserts class into the supplied builtin metadata registry.
 pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
     class_map.insert(
         "RecursiveArrayIterator".to_string(),
@@ -35,6 +36,7 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
     );
 }
 
+/// Builds the method list for SPL recursive array iterator.
 fn spl_recursive_array_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
@@ -62,6 +64,7 @@ fn spl_recursive_array_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds the synthetic method body for recursive array iterator construct.
 fn recursive_array_iterator_construct_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "keys", empty_array_expr()),
@@ -80,6 +83,7 @@ fn recursive_array_iterator_construct_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the AST expression for gettype is array.
 fn gettype_is_array_expr(value: Expr) -> Expr {
     binary_expr(
         function_call("gettype", vec![value]),
@@ -88,14 +92,17 @@ fn gettype_is_array_expr(value: Expr) -> Expr {
     )
 }
 
+/// Builds the AST expression for recursive current.
 fn recursive_current_expr() -> Expr {
     method_call(this_expr(), "current", Vec::new())
 }
 
+/// Builds the AST expression for assume recursive iterator.
 pub(super) fn assume_recursive_iterator_expr(value: Expr) -> Expr {
     method_call(this_expr(), "__elephcAssumeRecursiveIterator", vec![value])
 }
 
+/// Builds the synthetic method body for recursive array has children.
 fn recursive_array_has_children_body() -> Vec<Stmt> {
     vec![
         assign_stmt("value", recursive_current_expr()),
@@ -107,6 +114,7 @@ fn recursive_array_has_children_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for recursive array get children.
 fn recursive_array_get_children_body() -> Vec<Stmt> {
     vec![
         assign_stmt("value", recursive_current_expr()),

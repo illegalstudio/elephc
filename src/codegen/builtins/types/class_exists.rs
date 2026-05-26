@@ -82,6 +82,7 @@ fn contains_folded<'a>(
     names.any(|name| php_symbol_key(name) == needle_key)
 }
 
+/// Returns true when internal synthetic class name.
 fn is_internal_synthetic_class_name(name: &str) -> bool {
     php_symbol_key(name).starts_with("__elephc")
 }

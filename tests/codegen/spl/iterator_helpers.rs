@@ -10,6 +10,7 @@
 
 use crate::support::*;
 
+/// Verifies that iterator count accepts arrays.
 #[test]
 fn test_iterator_count_accepts_arrays() {
     let out = compile_and_run(
@@ -22,6 +23,7 @@ echo iterator_count(["a" => 1, "b" => 2]);
     assert_eq!(out, "3:2");
 }
 
+/// Verifies that iterator count rewinds and exhausts iterator.
 #[test]
 fn test_iterator_count_rewinds_and_exhausts_iterator() {
     let out = compile_and_run(
@@ -46,6 +48,7 @@ echo $r->pos();
     assert_eq!(out, "3:3");
 }
 
+/// Verifies that iterator count accepts iterator aggregate.
 #[test]
 fn test_iterator_count_accepts_iterator_aggregate() {
     let out = compile_and_run(
@@ -69,6 +72,7 @@ echo iterator_count(new Bag());
     assert_eq!(out, "4");
 }
 
+/// Verifies that iterator count accepts runtime iterable sources.
 #[test]
 fn test_iterator_count_accepts_runtime_iterable_sources() {
     let out = compile_and_run(
@@ -96,6 +100,7 @@ echo size(new Range(4));
     assert_eq!(out, "2:3:4");
 }
 
+/// Verifies that iterator to array accepts arrays.
 #[test]
 fn test_iterator_to_array_accepts_arrays() {
     let out = compile_and_run(
@@ -112,6 +117,7 @@ foreach ($items as $k => $v) {
     assert_eq!(out, "a=10 b=20 ");
 }
 
+/// Verifies that iterator to array reindexes associative array without preserving keys.
 #[test]
 fn test_iterator_to_array_reindexes_associative_array_without_preserving_keys() {
     let out = compile_and_run(
@@ -128,6 +134,7 @@ foreach ($items as $k => $v) {
     assert_eq!(out, "0=10 1=20 ");
 }
 
+/// Verifies that iterator to array accepts runtime iterable sources.
 #[test]
 fn test_iterator_to_array_accepts_runtime_iterable_sources() {
     let out = compile_and_run(
@@ -171,6 +178,7 @@ dump_preserved(new Range());
     assert_eq!(out, "a=10 b=20 |0=10 1=20 |0=3 1=4 |k0=7 k1=8 ");
 }
 
+/// Verifies that iterator to array accepts dynamic preserve keys.
 #[test]
 fn test_iterator_to_array_accepts_dynamic_preserve_keys() {
     let out = compile_and_run(
@@ -207,6 +215,7 @@ dump(new Range(), false);
     assert_eq!(out, "2:a=10 b=20 |2:0=10 1=20 |2:k0=5 k1=6 |2:0=5 1=6 ");
 }
 
+/// Verifies that iterator to array without preserving keys.
 #[test]
 fn test_iterator_to_array_without_preserving_keys() {
     let out = compile_and_run(
@@ -233,6 +242,7 @@ foreach ($items as $k => $v) {
     assert_eq!(out, "0=10 1=11 2=12 ");
 }
 
+/// Verifies that iterator to array preserves iterator keys.
 #[test]
 fn test_iterator_to_array_preserves_iterator_keys() {
     let out = compile_and_run(
@@ -259,6 +269,7 @@ foreach ($items as $k => $v) {
     assert_eq!(out, "k0=20 k1=21 k2=22 ");
 }
 
+/// Verifies that iterator apply counts callback invocations.
 #[test]
 fn test_iterator_apply_counts_callback_invocations() {
     let out = compile_and_run(
@@ -289,6 +300,7 @@ echo $r->pos();
     assert_eq!(out, "xxx:3:3");
 }
 
+/// Verifies that iterator apply stops before next when callback returns false.
 #[test]
 fn test_iterator_apply_stops_before_next_when_callback_returns_false() {
     let out = compile_and_run(
@@ -320,6 +332,7 @@ echo $r->pos();
     assert_eq!(out, "12:2:1");
 }
 
+/// Verifies that iterator apply passes literal args to callback.
 #[test]
 fn test_iterator_apply_passes_literal_args_to_callback() {
     let out = compile_and_run(
@@ -343,6 +356,7 @@ echo iterator_apply(new Range(), "label", ["A"]);
     assert_eq!(out, "AA2");
 }
 
+/// Verifies that iterator apply evaluates literal arg array once before loop.
 #[test]
 fn test_iterator_apply_evaluates_literal_arg_array_once_before_loop() {
     let out = compile_and_run(
@@ -370,6 +384,7 @@ echo iterator_apply(new Range(), "label", [make_label()]);
     assert_eq!(out, "!AA2");
 }
 
+/// Verifies that iterator apply accepts static args for callable without known signature.
 #[test]
 fn test_iterator_apply_accepts_static_args_for_callable_without_known_signature() {
     let out = compile_and_run(
@@ -404,6 +419,7 @@ echo iterator_apply(new Range(), $cb, ["A"]);
     assert_eq!(out, "xx2:AA2");
 }
 
+/// Verifies that iterator apply dynamic args for callable without known signature.
 #[test]
 fn test_iterator_apply_dynamic_args_for_callable_without_known_signature() {
     let out = compile_and_run(
@@ -430,6 +446,7 @@ echo iterator_apply(new Range(), make_label(), $args);
     assert_eq!(out, "BB2");
 }
 
+/// Verifies that iterator apply unknown signature captured callback dynamic args overflow stack.
 #[test]
 fn test_iterator_apply_unknown_signature_captured_callback_dynamic_args_overflow_stack() {
     let out = compile_and_run(
@@ -468,6 +485,7 @@ echo iterator_apply(new Range(), $cb, $args);
     assert_eq!(out, ":2201");
 }
 
+/// Verifies that iterator apply dynamic assoc args for returned callable signature.
 #[test]
 fn test_iterator_apply_dynamic_assoc_args_for_returned_callable_signature() {
     let out = compile_and_run(
@@ -494,6 +512,7 @@ echo iterator_apply(new Range(), make_label(), $args);
     assert_eq!(out, "NN2");
 }
 
+/// Verifies that iterator apply dynamic assoc args for returned untyped callable signature.
 #[test]
 fn test_iterator_apply_dynamic_assoc_args_for_returned_untyped_callable_signature() {
     let out = compile_and_run(
@@ -520,6 +539,7 @@ echo iterator_apply(new Range(), make_label(), $args);
     assert_eq!(out, "12122");
 }
 
+/// Verifies that iterator apply dynamic assoc args for callable without static signature.
 #[test]
 fn test_iterator_apply_dynamic_assoc_args_for_callable_without_static_signature() {
     let out = compile_and_run(
@@ -552,6 +572,7 @@ echo iterator_apply(new Range(), $cb, $args);
     assert_eq!(out, "12122");
 }
 
+/// Verifies that iterator apply dynamic assoc unknown signature uses string truthiness.
 #[test]
 fn test_iterator_apply_dynamic_assoc_unknown_signature_uses_string_truthiness() {
     let out = compile_and_run(
@@ -584,6 +605,7 @@ echo iterator_apply(new Range(), $cb, $args);
     assert_eq!(out, "121");
 }
 
+/// Verifies that iterator apply dynamic indexed unknown signature uses string truthiness.
 #[test]
 fn test_iterator_apply_dynamic_indexed_unknown_signature_uses_string_truthiness() {
     let out = compile_and_run(
@@ -612,6 +634,7 @@ echo iterator_apply(new Range(), $cb, $args);
     assert_eq!(out, "X1");
 }
 
+/// Verifies that iterator apply dynamic assoc args for known signature.
 #[test]
 fn test_iterator_apply_dynamic_assoc_args_for_known_signature() {
     let out = compile_and_run(
@@ -636,6 +659,7 @@ echo iterator_apply(new Range(), "label_tick", $args);
     assert_eq!(out, "LL2");
 }
 
+/// Verifies that iterator apply dynamic string callback without args.
 #[test]
 fn test_iterator_apply_dynamic_string_callback_without_args() {
     let out = compile_and_run(
@@ -660,6 +684,7 @@ echo iterator_apply(new Range(), $callback);
     assert_eq!(out, "xx2");
 }
 
+/// Verifies that iterator apply dynamic string callback assoc args.
 #[test]
 fn test_iterator_apply_dynamic_string_callback_assoc_args() {
     let out = compile_and_run(
@@ -685,6 +710,7 @@ echo iterator_apply(new Range(), $callback, $args);
     assert_eq!(out, "SS2");
 }
 
+/// Verifies that iterator apply dynamic string builtin callback assoc args.
 #[test]
 fn test_iterator_apply_dynamic_string_builtin_callback_assoc_args() {
     let out = compile_and_run(
@@ -706,6 +732,7 @@ echo iterator_apply(new Range(), $callback, $args);
     assert_eq!(out, "2");
 }
 
+/// Verifies that iterator apply dynamic args for by ref callback use temp cells.
 #[test]
 fn test_iterator_apply_dynamic_args_for_by_ref_callback_use_temp_cells() {
     let out = compile_and_run(
@@ -734,6 +761,7 @@ echo $value;
     assert_eq!(out, "662:5");
 }
 
+/// Verifies that iterator apply dynamic assoc args for variadic callback.
 #[test]
 fn test_iterator_apply_dynamic_assoc_args_for_variadic_callback() {
     let out = compile_and_run(
@@ -761,6 +789,7 @@ echo iterator_apply(new Range(), "label_tick", $args);
     assert_eq!(out, "Lsuffix=!;Lsuffix=!;2");
 }
 
+/// Verifies that iterator apply first class dynamic assoc args for variadic callback.
 #[test]
 fn test_iterator_apply_first_class_dynamic_assoc_args_for_variadic_callback() {
     let out = compile_and_run(
@@ -791,6 +820,7 @@ echo iterator_apply(new Range(), label_tick(...), $args);
     assert_eq!(out, "Lsuffix=!;1|Lsuffix=!;1");
 }
 
+/// Verifies that iterator apply accepts traversable typed source and dynamic args.
 #[test]
 fn test_iterator_apply_accepts_traversable_typed_source_and_dynamic_args() {
     let out = compile_and_run(

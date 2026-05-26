@@ -16,6 +16,7 @@ use crate::types::traits::FlattenedClass;
 
 use super::common::*;
 
+/// Inserts class into the supplied builtin metadata registry.
 pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
     class_map.insert(
         "MultipleIterator".to_string(),
@@ -35,6 +36,7 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
     );
 }
 
+/// Builds the property list for multiple iterator.
 fn multiple_iterator_properties() -> Vec<ClassProperty> {
     vec![
         storage_property("iterators", array_type()),
@@ -43,6 +45,7 @@ fn multiple_iterator_properties() -> Vec<ClassProperty> {
     ]
 }
 
+/// Builds the method list for SPL multiple iterator.
 fn spl_multiple_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
@@ -98,6 +101,7 @@ fn spl_multiple_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Provides the Multiple iterator constants helper used by the multiple module.
 fn multiple_iterator_constants() -> Vec<ClassConst> {
     vec![
         class_const("MIT_NEED_ANY", 0),
@@ -107,26 +111,32 @@ fn multiple_iterator_constants() -> Vec<ClassConst> {
     ]
 }
 
+/// Builds the AST expression for multiple iterators.
 fn multiple_iterators_expr() -> Expr {
     property_access(this_expr(), "iterators")
 }
 
+/// Builds the AST expression for multiple infos.
 fn multiple_infos_expr() -> Expr {
     property_access(this_expr(), "infos")
 }
 
+/// Builds the AST expression for multiple flags.
 fn multiple_flags_expr() -> Expr {
     property_access(this_expr(), "flags")
 }
 
+/// Provides the Multiple iterator at helper used by the multiple module.
 fn multiple_iterator_at(index: Expr) -> Expr {
     array_access(multiple_iterators_expr(), index)
 }
 
+/// Provides the Multiple info at helper used by the multiple module.
 fn multiple_info_at(index: Expr) -> Expr {
     array_access(multiple_infos_expr(), index)
 }
 
+/// Builds the AST expression for multiple need all.
 fn multiple_need_all_expr() -> Expr {
     binary_expr(
         binary_expr(multiple_flags_expr(), BinOp::BitAnd, int_expr(1)),
@@ -135,6 +145,7 @@ fn multiple_need_all_expr() -> Expr {
     )
 }
 
+/// Builds the AST expression for multiple assoc keys.
 fn multiple_assoc_keys_expr() -> Expr {
     binary_expr(
         binary_expr(multiple_flags_expr(), BinOp::BitAnd, int_expr(2)),
@@ -143,6 +154,7 @@ fn multiple_assoc_keys_expr() -> Expr {
     )
 }
 
+/// Builds the synthetic method body for multiple construct.
 fn multiple_construct_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "iterators", empty_array_expr()),
@@ -151,6 +163,7 @@ fn multiple_construct_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for multiple attach iterator.
 fn multiple_attach_iterator_body() -> Vec<Stmt> {
     vec![
         assign_stmt("i", int_expr(0)),
@@ -174,6 +187,7 @@ fn multiple_attach_iterator_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for multiple detach iterator.
 fn multiple_detach_iterator_body() -> Vec<Stmt> {
     vec![
         assign_stmt("newIterators", empty_array_expr()),
@@ -200,6 +214,7 @@ fn multiple_detach_iterator_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for multiple contains iterator.
 fn multiple_contains_iterator_body() -> Vec<Stmt> {
     vec![
         assign_stmt("i", int_expr(0)),
@@ -219,6 +234,7 @@ fn multiple_contains_iterator_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for multiple each iterator.
 fn multiple_each_iterator_body(method: &str) -> Vec<Stmt> {
     vec![
         assign_stmt("i", int_expr(0)),
@@ -234,14 +250,17 @@ fn multiple_each_iterator_body(method: &str) -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for multiple rewind.
 fn multiple_rewind_body() -> Vec<Stmt> {
     multiple_each_iterator_body("rewind")
 }
 
+/// Builds the synthetic method body for multiple next.
 fn multiple_next_body() -> Vec<Stmt> {
     multiple_each_iterator_body("next")
 }
 
+/// Builds the synthetic method body for multiple valid.
 fn multiple_valid_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -286,6 +305,7 @@ fn multiple_valid_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for multiple output.
 fn multiple_output_body(method: &str) -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -359,6 +379,7 @@ fn multiple_output_body(method: &str) -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for multiple debug info.
 fn multiple_debug_info_body() -> Vec<Stmt> {
     return_body(expr(ExprKind::ArrayLiteralAssoc(vec![
         (string_expr("\0MultipleIterator\0iterators"), multiple_iterators_expr()),

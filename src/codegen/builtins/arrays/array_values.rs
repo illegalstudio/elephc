@@ -44,6 +44,7 @@ pub fn emit(
     emit_loaded_values(&arr_ty, emitter, ctx, data)
 }
 
+/// Emits assembly for loaded values.
 pub(crate) fn emit_loaded_values(
     arr_ty: &PhpType,
     emitter: &mut Emitter,

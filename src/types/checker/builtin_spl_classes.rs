@@ -33,6 +33,7 @@ mod recursive_iterator_iterator_traversal;
 mod registry;
 mod storage;
 
+/// Injects builtin SPL classes into the compiler metadata registry.
 pub(crate) fn inject_builtin_spl_classes(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
@@ -53,6 +54,7 @@ pub(crate) fn inject_builtin_spl_classes(
     Ok(())
 }
 
+/// Patches builtin SPL storage signatures in the compiler metadata registry.
 pub(crate) fn patch_builtin_spl_storage_signatures(checker: &mut Checker) {
     patch::patch_builtin_spl_storage_signatures(checker);
 }

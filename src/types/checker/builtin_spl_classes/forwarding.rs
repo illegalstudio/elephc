@@ -16,6 +16,7 @@ use crate::types::traits::FlattenedClass;
 
 use super::common::*;
 
+/// Inserts classes into the supplied builtin metadata registry.
 pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
     class_map.insert(
         "IteratorIterator".to_string(),
@@ -86,10 +87,12 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
     );
 }
 
+/// Builds the property list for iterator iterator.
 fn iterator_iterator_properties() -> Vec<ClassProperty> {
     vec![storage_property("inner", named_type("Iterator"))]
 }
 
+/// Builds the property list for limit iterator.
 fn limit_iterator_properties() -> Vec<ClassProperty> {
     vec![
         storage_property("position", TypeExpr::Int),
@@ -98,6 +101,7 @@ fn limit_iterator_properties() -> Vec<ClassProperty> {
     ]
 }
 
+/// Builds the method list for SPL iterator iterator.
 fn spl_iterator_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
@@ -127,6 +131,7 @@ fn spl_iterator_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds the method list for SPL limit iterator.
 fn spl_limit_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
@@ -152,6 +157,7 @@ fn spl_limit_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds the method list for SPL no rewind iterator.
 fn spl_no_rewind_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
@@ -164,6 +170,7 @@ fn spl_no_rewind_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds the method list for SPL infinite iterator.
 fn spl_infinite_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
@@ -176,42 +183,52 @@ fn spl_infinite_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds the synthetic method body for iterator iterator construct.
 pub(super) fn iterator_iterator_construct_body() -> Vec<Stmt> {
     vec![property_assign_stmt(this_expr(), "inner", var_expr("iterator"))]
 }
 
+/// Builds the AST expression for inner.
 pub(super) fn inner_expr() -> Expr {
     property_access(this_expr(), "inner")
 }
 
+/// Provides the Inner call helper used by the forwarding module.
 pub(super) fn inner_call(method: &str) -> Expr {
     method_call(inner_expr(), method, Vec::new())
 }
 
+/// Builds the synthetic method body for inner return.
 fn inner_return_body(method: &str) -> Vec<Stmt> {
     return_body(inner_call(method))
 }
 
+/// Builds the synthetic method body for inner void.
 pub(super) fn inner_void_body(method: &str) -> Vec<Stmt> {
     vec![expr_stmt(inner_call(method))]
 }
 
+/// Builds the synthetic method body for recursive inner return.
 pub(super) fn recursive_inner_return_body(method: &str) -> Vec<Stmt> {
     return_body(method_call(inner_expr(), method, Vec::new()))
 }
 
+/// Builds the AST expression for limit position.
 fn limit_position_expr() -> Expr {
     property_access(this_expr(), "position")
 }
 
+/// Builds the AST expression for limit offset.
 fn limit_offset_expr() -> Expr {
     property_access(this_expr(), "offset")
 }
 
+/// Builds the AST expression for limit bound.
 fn limit_bound_expr() -> Expr {
     property_access(this_expr(), "limit")
 }
 
+/// Builds the synthetic method body for limit iterator construct.
 fn limit_iterator_construct_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "inner", var_expr("iterator")),
@@ -221,6 +238,7 @@ fn limit_iterator_construct_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for limit rewind.
 fn limit_rewind_body() -> Vec<Stmt> {
     vec![
         expr_stmt(inner_call("rewind")),
@@ -240,6 +258,7 @@ fn limit_rewind_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for limit next.
 fn limit_next_body() -> Vec<Stmt> {
     vec![
         expr_stmt(inner_call("next")),
@@ -251,6 +270,7 @@ fn limit_next_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for limit valid.
 fn limit_valid_body() -> Vec<Stmt> {
     vec![
         if_stmt(not_expr(inner_call("valid")), return_body(bool_expr(false)), None),
@@ -267,6 +287,7 @@ fn limit_valid_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for limit seek.
 fn limit_seek_body() -> Vec<Stmt> {
     vec![
         expr_stmt(method_call(this_expr(), "rewind", Vec::new())),
@@ -284,6 +305,7 @@ fn limit_seek_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for infinite next.
 fn infinite_next_body() -> Vec<Stmt> {
     vec![
         expr_stmt(inner_call("next")),

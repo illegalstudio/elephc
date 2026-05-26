@@ -19,6 +19,7 @@ use crate::codegen::stmt::{reload_iterator_receiver, IteratorDispatchTarget};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
+/// Provides the Iterator object name helper used by the iterator common module.
 pub(super) fn iterator_object_name(ty: &PhpType) -> Option<&str> {
     match ty {
         PhpType::Object(class_name) => Some(class_name.as_str()),
@@ -32,6 +33,7 @@ pub(super) enum PreserveKeysArg {
     Dynamic,
 }
 
+/// Builds the argument metadata for preserve keys.
 pub(super) fn preserve_keys_arg(args: &[Expr]) -> PreserveKeysArg {
     match args.get(1).map(|arg| &arg.kind) {
         Some(kind) => static_truthiness(kind)
@@ -41,6 +43,7 @@ pub(super) fn preserve_keys_arg(args: &[Expr]) -> PreserveKeysArg {
     }
 }
 
+/// Provides the Static truthiness helper used by the iterator common module.
 fn static_truthiness(kind: &ExprKind) -> Option<bool> {
     match kind {
         ExprKind::BoolLiteral(value) => Some(*value),
@@ -57,6 +60,7 @@ fn static_truthiness(kind: &ExprKind) -> Option<bool> {
     }
 }
 
+/// Emits assembly for count loaded array.
 pub(super) fn emit_count_loaded_array(source_ty: &PhpType, emitter: &mut Emitter) -> bool {
     match source_ty.codegen_repr() {
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
@@ -72,6 +76,7 @@ pub(super) fn emit_count_loaded_array(source_ty: &PhpType, emitter: &mut Emitter
     }
 }
 
+/// Emits assembly for clone loaded array.
 pub(super) fn emit_clone_loaded_array(source_ty: &PhpType, emitter: &mut Emitter) -> Option<PhpType> {
     match source_ty.codegen_repr() {
         PhpType::Array(elem_ty) => {
@@ -92,6 +97,7 @@ pub(super) fn emit_clone_loaded_array(source_ty: &PhpType, emitter: &mut Emitter
     }
 }
 
+/// Emits assembly for clone loaded runtime indexed array as mixed.
 pub(super) fn emit_clone_loaded_runtime_indexed_array_as_mixed(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emitter.instruction("mov rdi, rax");                                    // pass the runtime indexed array to the shallow-clone helper
@@ -100,6 +106,7 @@ pub(super) fn emit_clone_loaded_runtime_indexed_array_as_mixed(emitter: &mut Emi
     emit_loaded_runtime_indexed_array_as_mixed(emitter);
 }
 
+/// Emits assembly for loaded runtime indexed array as mixed.
 pub(super) fn emit_loaded_runtime_indexed_array_as_mixed(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -118,6 +125,7 @@ pub(super) fn emit_loaded_runtime_indexed_array_as_mixed(emitter: &mut Emitter) 
     }
 }
 
+/// Emits assembly for clone loaded runtime hash as mixed.
 pub(super) fn emit_clone_loaded_runtime_hash_as_mixed(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emitter.instruction("mov rdi, rax");                                    // pass the runtime hash to the shallow-clone helper
@@ -134,6 +142,7 @@ pub(super) fn emit_clone_loaded_runtime_hash_as_mixed(emitter: &mut Emitter) {
     }
 }
 
+/// Emits assembly for new mixed indexed array.
 pub(super) fn emit_new_mixed_indexed_array(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 16);
     abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 1), 8);
@@ -145,6 +154,7 @@ pub(super) fn emit_new_mixed_indexed_array(emitter: &mut Emitter) {
     );
 }
 
+/// Emits assembly for new mixed hash.
 pub(super) fn emit_new_mixed_hash(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 16);
     abi::emit_load_int_immediate(
@@ -155,10 +165,12 @@ pub(super) fn emit_new_mixed_hash(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_hash_new");
 }
 
+/// Emits assembly for save result under receiver.
 pub(super) fn emit_save_result_under_receiver(emitter: &mut Emitter) {
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
 }
 
+/// Emits assembly for restore receiver from preserved reg.
 pub(super) fn emit_restore_receiver_from_preserved_reg(emitter: &mut Emitter, receiver_reg: &str) {
     emitter.instruction(&format!(
         "mov {}, {}",
@@ -167,10 +179,12 @@ pub(super) fn emit_restore_receiver_from_preserved_reg(emitter: &mut Emitter, re
     )); // restore the iterator receiver as the next loop-driver input
 }
 
+/// Emits assembly for increment saved count.
 pub(super) fn emit_increment_saved_count(emitter: &mut Emitter) {
     emit_increment_saved_count_at_offset(16, emitter);
 }
 
+/// Emits assembly for increment saved count at offset.
 pub(super) fn emit_increment_saved_count_at_offset(offset: usize, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -184,6 +198,7 @@ pub(super) fn emit_increment_saved_count_at_offset(offset: usize, emitter: &mut 
     }
 }
 
+/// Emits assembly for append current to saved array.
 pub(super) fn emit_append_current_to_saved_array(
     dispatch_target: &IteratorDispatchTarget,
     emitter: &mut Emitter,
@@ -213,6 +228,7 @@ pub(super) fn emit_append_current_to_saved_array(
     }
 }
 
+/// Emits assembly for insert current with iterator key.
 pub(super) fn emit_insert_current_with_iterator_key(
     dispatch_target: &IteratorDispatchTarget,
     emitter: &mut Emitter,
@@ -251,6 +267,7 @@ pub(super) fn emit_insert_current_with_iterator_key(
     }
 }
 
+/// Provides the Normalized key regs helper used by the iterator common module.
 fn normalized_key_regs(emitter: &Emitter) -> (&'static str, &'static str) {
     match emitter.target.arch {
         Arch::AArch64 => ("x1", "x2"),
@@ -258,6 +275,7 @@ fn normalized_key_regs(emitter: &Emitter) -> (&'static str, &'static str) {
     }
 }
 
+/// Emits assembly for normalized key from result.
 fn emit_normalized_key_from_result(
     key_ty: &PhpType,
     emitter: &mut Emitter,
@@ -275,6 +293,7 @@ fn emit_normalized_key_from_result(
     }
 }
 
+/// Emits assembly for integer key from result.
 fn emit_integer_key_from_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -287,6 +306,7 @@ fn emit_integer_key_from_result(emitter: &mut Emitter) {
     }
 }
 
+/// Emits assembly for float key from result.
 fn emit_float_key_from_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -300,6 +320,7 @@ fn emit_float_key_from_result(emitter: &mut Emitter) {
     }
 }
 
+/// Emits assembly for mixed key from result.
 fn emit_mixed_key_from_result(emitter: &mut Emitter, ctx: &mut Context, data: &mut DataSection) {
     let string_label = ctx.next_label("iterator_key_string");
     let int_label = ctx.next_label("iterator_key_int");

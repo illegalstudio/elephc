@@ -163,6 +163,7 @@ pub(crate) fn push_loaded_hash_value_arg(
     pushed_ty
 }
 
+/// Pushes loaded hash value ref arg onto the temporary call stack or synthetic metadata list.
 pub(crate) fn push_loaded_hash_value_ref_arg(
     source_elem_ty: &PhpType,
     target_ty: Option<&PhpType>,

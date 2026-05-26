@@ -415,6 +415,7 @@ fn closure_captures_name_by_ref(value: &Expr, name: &str) -> bool {
     )
 }
 
+/// Provides the Update callable array target metadata helper used by the locals module.
 fn update_callable_array_target_metadata(name: &str, value: &Expr, ctx: &mut Context) {
     if let Some(target) = resolve_callable_array_target(value, ctx) {
         ctx.callable_array_targets.insert(name.to_string(), target);
@@ -429,6 +430,7 @@ fn update_callable_array_target_metadata(name: &str, value: &Expr, ctx: &mut Con
     }
 }
 
+/// Resolves callable array target using the available compile-time metadata.
 fn resolve_callable_array_target(expr: &Expr, ctx: &Context) -> Option<CallableTarget> {
     let elems = match &expr.kind {
         ExprKind::ArrayLiteral(elems) => elems,
@@ -456,6 +458,7 @@ fn resolve_callable_array_target(expr: &Expr, ctx: &Context) -> Option<CallableT
     None
 }
 
+/// Provides the Static callable receiver helper used by the locals module.
 fn static_callable_receiver(receiver: &Expr, ctx: &Context) -> Option<StaticReceiver> {
     let class_name = match &receiver.kind {
         ExprKind::StringLiteral(class_name) => {
@@ -467,6 +470,7 @@ fn static_callable_receiver(receiver: &Expr, ctx: &Context) -> Option<StaticRece
     Some(StaticReceiver::Named(Name::from(class_name)))
 }
 
+/// Resolves static receiver class using the available compile-time metadata.
 fn resolve_static_receiver_class(receiver: &StaticReceiver, ctx: &Context) -> Option<String> {
     match receiver {
         StaticReceiver::Named(name) => resolve_class_name(ctx, name.as_str()).map(str::to_string),
@@ -479,6 +483,7 @@ fn resolve_static_receiver_class(receiver: &StaticReceiver, ctx: &Context) -> Op
     }
 }
 
+/// Resolves class name using the available compile-time metadata.
 fn resolve_class_name<'a>(ctx: &'a Context, class_name: &str) -> Option<&'a str> {
     let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
     ctx.classes

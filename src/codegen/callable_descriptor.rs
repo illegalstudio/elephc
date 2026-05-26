@@ -19,6 +19,7 @@ pub(crate) const CALLABLE_DESC_KIND_CALLBACK_ADAPTER: u64 = 3;
 
 pub(crate) const CALLABLE_DESC_ENTRY_OFFSET: usize = 8;
 
+/// Provides the Static descriptor helper used by the callable descriptor module.
 pub(crate) fn static_descriptor(
     data: &mut DataSection,
     entry_label: &str,
@@ -47,6 +48,7 @@ pub(crate) fn static_descriptor(
     ])
 }
 
+/// Emits assembly for load descriptor address.
 pub(crate) fn emit_load_descriptor_address(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -59,6 +61,7 @@ pub(crate) fn emit_load_descriptor_address(
     abi::emit_symbol_address(emitter, dest_reg, &descriptor_label);
 }
 
+/// Emits assembly for load entry from descriptor.
 pub(crate) fn emit_load_entry_from_descriptor(
     emitter: &mut Emitter,
     dest_reg: &str,

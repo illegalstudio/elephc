@@ -222,6 +222,7 @@ pub(super) fn check_builtin(
     }
 }
 
+/// Checks iterator source and reports a compile error when it is invalid.
 fn check_iterator_source(
     checker: &mut Checker,
     arg: &Expr,
@@ -242,6 +243,7 @@ fn check_iterator_source(
     ))
 }
 
+/// Provides the Iterator source supported helper used by the SPL module.
 fn iterator_source_supported(checker: &Checker, ty: &PhpType) -> bool {
     match ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => true,
@@ -250,6 +252,7 @@ fn iterator_source_supported(checker: &Checker, ty: &PhpType) -> bool {
     }
 }
 
+/// Checks iterator apply source and reports a compile error when it is invalid.
 fn check_iterator_apply_source(
     checker: &mut Checker,
     arg: &Expr,
@@ -268,6 +271,7 @@ fn check_iterator_apply_source(
     ))
 }
 
+/// Provides the Traversable object supported helper used by the SPL module.
 fn traversable_object_supported(checker: &Checker, name: &str) -> bool {
     if name == "Traversable" {
         return true;
@@ -276,6 +280,7 @@ fn traversable_object_supported(checker: &Checker, name: &str) -> bool {
         || checker.object_type_implements_interface(name, "IteratorAggregate")
 }
 
+/// Checks iterator to array preserve keys and reports a compile error when it is invalid.
 fn check_iterator_to_array_preserve_keys(
     checker: &mut Checker,
     arg: &Expr,
@@ -294,6 +299,7 @@ fn check_iterator_to_array_preserve_keys(
     ))
 }
 
+/// Provides the Preserve keys type supported helper used by the SPL module.
 fn preserve_keys_type_supported(ty: &PhpType) -> bool {
     match ty {
         PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Void => true,
@@ -302,6 +308,7 @@ fn preserve_keys_type_supported(ty: &PhpType) -> bool {
     }
 }
 
+/// Provides the Static preserve keys helper used by the SPL module.
 fn static_preserve_keys(expr: &Expr) -> Option<bool> {
     match &expr.kind {
         ExprKind::BoolLiteral(value) => Some(*value),
@@ -318,6 +325,7 @@ fn static_preserve_keys(expr: &Expr) -> Option<bool> {
     }
 }
 
+/// Computes the type metadata for iterator to array return.
 fn iterator_to_array_return_type(
     checker: &Checker,
     source_ty: &PhpType,
@@ -332,6 +340,7 @@ fn iterator_to_array_return_type(
     }
 }
 
+/// Computes the type metadata for iterator to array static return.
 fn iterator_to_array_static_return_type(source_ty: &PhpType, preserve_keys: bool) -> PhpType {
     match source_ty {
         PhpType::Array(elem_ty) => PhpType::Array(elem_ty.clone()),
@@ -353,6 +362,7 @@ enum IteratorApplyArgs<'a> {
     Dynamic { associative: bool },
 }
 
+/// Builds the argument list for iterator apply callback.
 fn iterator_apply_callback_args<'a>(
     checker: &mut Checker,
     args_expr: Option<&'a Expr>,
@@ -394,6 +404,7 @@ fn iterator_apply_callback_args<'a>(
     }
 }
 
+/// Checks iterator apply dynamic callback and reports a compile error when it is invalid.
 fn check_iterator_apply_dynamic_callback(
     checker: &mut Checker,
     callback: &Expr,
@@ -489,6 +500,7 @@ fn check_iterator_apply_dynamic_callback(
     ))
 }
 
+/// Checks iterator apply static callback and reports a compile error when it is invalid.
 fn check_iterator_apply_static_callback(
     checker: &mut Checker,
     callback: &Expr,
@@ -519,6 +531,7 @@ fn check_iterator_apply_static_callback(
     }
 }
 
+/// Builds the argument list for reject dynamic ref.
 fn reject_dynamic_ref_args(
     _sig: &crate::types::FunctionSig,
     _span: crate::span::Span,
@@ -526,6 +539,7 @@ fn reject_dynamic_ref_args(
     Ok(())
 }
 
+/// Provides the Specialize iterator apply dynamic assoc variadic target helper used by the SPL module.
 fn specialize_iterator_apply_dynamic_assoc_variadic_target(
     checker: &mut Checker,
     target: &CallableTarget,
@@ -545,6 +559,7 @@ fn specialize_iterator_apply_dynamic_assoc_variadic_target(
     Ok(())
 }
 
+/// Returns true when static callback arg literal.
 fn is_static_callback_arg_literal(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::StringLiteral(_)

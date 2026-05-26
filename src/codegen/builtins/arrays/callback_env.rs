@@ -186,6 +186,7 @@ pub(crate) fn emit_captured_callback_env(
     }
 }
 
+/// Emits assembly for persistent callback env from result.
 pub(crate) fn emit_persistent_callback_env_from_result(
     captures: &[(String, PhpType, bool)],
     visible_arg_types: Vec<PhpType>,
@@ -305,6 +306,7 @@ fn store_current_result_to_env_slot(emitter: &mut Emitter, ty: &PhpType, offset:
     }
 }
 
+/// Stores saved callback to persistent env into runtime storage or stack state.
 fn store_saved_callback_to_persistent_env(emitter: &mut Emitter) {
     let env_reg = abi::symbol_scratch_reg(emitter);
     let callback_reg = abi::secondary_scratch_reg(emitter);
@@ -313,6 +315,7 @@ fn store_saved_callback_to_persistent_env(emitter: &mut Emitter) {
     abi::emit_store_to_address(emitter, callback_reg, env_reg, 0);
 }
 
+/// Stores current result to persistent env slot into runtime storage or stack state.
 fn store_current_result_to_persistent_env_slot(
     emitter: &mut Emitter,
     ty: &PhpType,
@@ -336,6 +339,7 @@ fn store_current_result_to_persistent_env_slot(
     }
 }
 
+/// Retains persistent capture result so ownership remains valid across runtime calls.
 fn retain_persistent_capture_result(emitter: &mut Emitter, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Str => {

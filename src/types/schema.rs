@@ -41,6 +41,7 @@ pub struct PropertyHookContract {
 /// Does not compare span — two contracts at different source positions
 /// are considered equivalent if their types and declaring class match.
 impl PartialEq for PropertyHookContract {
+    /// Provides the Eq helper used by the schema module.
     fn eq(&self, other: &Self) -> bool {
         self.get_type == other.get_type
             && self.set_type == other.set_type

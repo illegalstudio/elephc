@@ -21,6 +21,7 @@ use crate::types::PhpType;
 
 use super::iterator_common;
 
+/// Emits the iterator count entry point for this module.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -52,6 +53,7 @@ pub fn emit(
     Some(PhpType::Int)
 }
 
+/// Emits assembly for count loaded iterator object.
 fn emit_count_loaded_iterator_object(
     class_name: &str,
     emitter: &mut Emitter,
@@ -86,6 +88,7 @@ fn emit_count_loaded_iterator_object(
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // return the final saved iterator_count() counter
 }
 
+/// Emits assembly for count loaded traversable object.
 fn emit_count_loaded_traversable_object(
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -113,6 +116,7 @@ fn emit_count_loaded_traversable_object(
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // return the final saved iterator_count() counter
 }
 
+/// Emits assembly for count loaded iterable.
 fn emit_count_loaded_iterable(
     emitter: &mut Emitter,
     ctx: &mut Context,

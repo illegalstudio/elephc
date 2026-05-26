@@ -86,6 +86,7 @@ pub(crate) fn declared_trait_names() -> Vec<String> {
     DECLARED_TRAIT_NAMES.with(|names| names.borrow().clone())
 }
 
+/// Provides the Declared trait uses helper used by the codegen module.
 pub(crate) fn declared_trait_uses(name: &str) -> Vec<String> {
     let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
     DECLARED_TRAIT_USES.with(|uses| {
@@ -350,6 +351,7 @@ fn collect_declared_trait_names(program: &Program) -> Vec<String> {
     names
 }
 
+/// Collects declared trait uses for the surrounding analysis or metadata result.
 fn collect_declared_trait_uses(program: &Program) -> HashMap<String, Vec<String>> {
     let mut uses = HashMap::new();
     for stmt in program {
@@ -429,6 +431,7 @@ fn prepend_internal_names<'a>(
     names
 }
 
+/// Returns true when internal synthetic class name.
 fn is_internal_synthetic_class_name(name: &str) -> bool {
     crate::names::php_symbol_key(name).starts_with("__elephc")
 }

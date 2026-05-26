@@ -13,26 +13,32 @@ use crate::parser::ast::{BinOp, Expr, Stmt};
 
 use super::common::*;
 
+/// Appends iterators expr to the current runtime or metadata collection.
 pub(super) fn append_iterators_expr() -> Expr {
     property_access(this_expr(), "iterators")
 }
 
+/// Appends iterator keys expr to the current runtime or metadata collection.
 pub(super) fn append_iterator_keys_expr() -> Expr {
     property_access(this_expr(), "iteratorKeys")
 }
 
+/// Appends iterator active expr to the current runtime or metadata collection.
 pub(super) fn append_iterator_active_expr() -> Expr {
     property_access(this_expr(), "iteratorActive")
 }
 
+/// Appends key at position expr to the current runtime or metadata collection.
 pub(super) fn append_key_at_position_expr(position: Expr) -> Expr {
     array_access(append_iterator_keys_expr(), position)
 }
 
+/// Appends active at position expr to the current runtime or metadata collection.
 pub(super) fn append_active_at_position_expr(position: Expr) -> Expr {
     array_access(append_iterator_active_expr(), position)
 }
 
+/// Appends storage append body to the current runtime or metadata collection.
 pub(super) fn append_storage_append_body() -> Vec<Stmt> {
     vec![
         property_array_push_stmt(this_expr(), "iteratorKeys", count_expr(append_iterator_keys_expr())),
@@ -41,6 +47,7 @@ pub(super) fn append_storage_append_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends storage offset set body to the current runtime or metadata collection.
 pub(super) fn append_storage_offset_set_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -82,6 +89,7 @@ pub(super) fn append_storage_offset_set_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends storage count body to the current runtime or metadata collection.
 pub(super) fn append_storage_count_body() -> Vec<Stmt> {
     vec![
         assign_stmt("count", int_expr(0)),
@@ -105,6 +113,7 @@ pub(super) fn append_storage_count_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends storage offset exists body to the current runtime or metadata collection.
 pub(super) fn append_storage_offset_exists_body() -> Vec<Stmt> {
     let mut body = vec![
         assign_stmt("i", int_expr(0)),
@@ -133,6 +142,7 @@ pub(super) fn append_storage_offset_exists_body() -> Vec<Stmt> {
     body
 }
 
+/// Appends storage offset get body to the current runtime or metadata collection.
 pub(super) fn append_storage_offset_get_body() -> Vec<Stmt> {
     vec![
         assign_stmt("i", int_expr(0)),
@@ -160,6 +170,7 @@ pub(super) fn append_storage_offset_get_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends storage offset unset body to the current runtime or metadata collection.
 pub(super) fn append_storage_offset_unset_body() -> Vec<Stmt> {
     vec![
         assign_stmt("i", int_expr(0)),
@@ -186,6 +197,7 @@ pub(super) fn append_storage_offset_unset_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends storage get array copy body to the current runtime or metadata collection.
 pub(super) fn append_storage_get_array_copy_body() -> Vec<Stmt> {
     vec![
         assign_stmt("out", empty_array_expr()),
@@ -210,6 +222,7 @@ pub(super) fn append_storage_get_array_copy_body() -> Vec<Stmt> {
     ]
 }
 
+/// Appends storage current body to the current runtime or metadata collection.
 pub(super) fn append_storage_current_body() -> Vec<Stmt> {
     vec![
         assign_stmt("i", var_expr("position")),

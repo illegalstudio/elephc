@@ -170,6 +170,7 @@ pub(crate) fn push_non_variable_ref_arg_address(
     PhpType::Int
 }
 
+/// Pushes current result ref arg address onto the temporary call stack or synthetic metadata list.
 pub(crate) fn push_current_result_ref_arg_address(
     source_ty: &PhpType,
     target_ty: Option<&PhpType>,

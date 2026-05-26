@@ -11,6 +11,7 @@
 
 use crate::support::*;
 
+/// Verifies that recursive classes are declared and implement contracts.
 #[test]
 fn test_recursive_classes_are_declared_and_implement_contracts() {
     let out = compile_and_run(
@@ -69,6 +70,7 @@ var_dump(new ParentIterator(new RecursiveArrayIterator([])) instanceof Recursive
     );
 }
 
+/// Verifies that recursive array iterator children from mixed values.
 #[test]
 fn test_recursive_array_iterator_children_from_mixed_values() {
     let out = compile_and_run(
@@ -92,6 +94,7 @@ echo $it->hasChildren() ? ":bad" : ":leaf";
     assert_eq!(out, "a:children:child:x=1b:leaf");
 }
 
+/// Verifies that recursive iterator iterator traversal modes.
 #[test]
 fn test_recursive_iterator_iterator_traversal_modes() {
     let out = compile_and_run(
@@ -152,6 +155,7 @@ foreach ($child as $key => $value) {
     );
 }
 
+/// Verifies that recursive iterator iterator sees source mutation after rewind.
 #[test]
 fn test_recursive_iterator_iterator_sees_source_mutation_after_rewind() {
     let out = compile_and_run(
@@ -172,6 +176,7 @@ while ($it->valid()) {
     assert_eq!(out, "0:a;1:x;0:b;");
 }
 
+/// Verifies that recursive iterator iterator sub iterators track live cursors.
 #[test]
 fn test_recursive_iterator_iterator_sub_iterators_track_live_cursors() {
     let out = compile_and_run(
@@ -201,6 +206,7 @@ foreach ($it as $key => $value) {
     assert_eq!(out, "0:a:a:a;1:x:x:x:a:x;0:b:b:b;");
 }
 
+/// Verifies that recursive callback filter iterator preserves callback for children.
 #[test]
 fn test_recursive_callback_filter_iterator_preserves_callback_for_children() {
     let out = compile_and_run(
@@ -224,6 +230,7 @@ foreach ($it as $key => $value) {
     assert_eq!(out, "y=2;b=3;");
 }
 
+/// Verifies that parent iterator filters parents recursively.
 #[test]
 fn test_parent_iterator_filters_parents_recursively() {
     let out = compile_and_run(

@@ -542,6 +542,7 @@ fn collect_named_builtin_or_extern_call_temps(
     collect_named_call_temps_for_sig(&call_sig, call_span, args, ctx, current_sig);
 }
 
+/// Collects named constructor call temps for the surrounding analysis or metadata result.
 fn collect_named_constructor_call_temps(
     class_name: &str,
     call_span: crate::span::Span,
@@ -560,6 +561,7 @@ fn collect_named_constructor_call_temps(
     collect_named_call_temps_for_sig(&call_sig, call_span, args, ctx, current_sig);
 }
 
+/// Collects named call temps for sig for the surrounding analysis or metadata result.
 fn collect_named_call_temps_for_sig(
     call_sig: &FunctionSig,
     call_span: crate::span::Span,

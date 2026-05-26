@@ -17,6 +17,7 @@ use crate::types::traits::FlattenedClass;
 use super::common::*;
 use super::forwarding::{inner_call, inner_expr, inner_void_body, iterator_iterator_construct_body};
 
+/// Inserts classes into the supplied builtin metadata registry.
 pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
     class_map.insert(
         "FilterIterator".to_string(),
@@ -53,6 +54,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
     );
 }
 
+/// Builds the property list for callback filter iterator.
 fn callback_filter_iterator_properties() -> Vec<ClassProperty> {
     vec![
         protected_storage_property_untyped("callback"),
@@ -60,6 +62,7 @@ fn callback_filter_iterator_properties() -> Vec<ClassProperty> {
     ]
 }
 
+/// Builds the method list for SPL filter iterator.
 fn spl_filter_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
@@ -74,6 +77,7 @@ fn spl_filter_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds the method list for SPL callback filter iterator.
 fn spl_callback_filter_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
@@ -105,18 +109,21 @@ fn spl_callback_filter_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds the synthetic method body for filter rewind.
 fn filter_rewind_body() -> Vec<Stmt> {
     let mut body = inner_void_body("rewind");
     body.extend(filter_skip_rejected_body());
     body
 }
 
+/// Builds the synthetic method body for filter next.
 fn filter_next_body() -> Vec<Stmt> {
     let mut body = inner_void_body("next");
     body.extend(filter_skip_rejected_body());
     body
 }
 
+/// Builds the synthetic method body for filter skip rejected.
 fn filter_skip_rejected_body() -> Vec<Stmt> {
     vec![while_stmt(
         binary_expr(
@@ -128,6 +135,7 @@ fn filter_skip_rejected_body() -> Vec<Stmt> {
     )]
 }
 
+/// Builds the synthetic method body for callback filter construct.
 pub(super) fn callback_filter_construct_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "inner", var_expr("iterator")),
@@ -135,6 +143,7 @@ pub(super) fn callback_filter_construct_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for callback filter accept.
 fn callback_filter_accept_body() -> Vec<Stmt> {
     return_body(cast_expr(
         CastType::Bool,

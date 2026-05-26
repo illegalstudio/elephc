@@ -819,6 +819,7 @@ mod tests {
 
     use super::emit_runtime_data_user;
 
+    /// Provides the Empty class info helper used by the user module.
     fn empty_class_info(class_id: u64, method_name: &str) -> ClassInfo {
         let mut method_impl_classes = HashMap::new();
         method_impl_classes.insert(method_name.to_string(), "Exception".to_string());
@@ -878,6 +879,7 @@ mod tests {
         }
     }
 
+    /// Verifies that emit runtime data user can filter built in classes.
     #[test]
     fn test_emit_runtime_data_user_can_filter_built_in_classes() {
         let mut classes = HashMap::new();
@@ -910,6 +912,7 @@ mod tests {
         assert!(!asm.contains("_method_Exception__construct"));
     }
 
+    /// Verifies that emit runtime data user keeps dense class tables when ids start at one.
     #[test]
     fn test_emit_runtime_data_user_keeps_dense_class_tables_when_ids_start_at_one() {
         let mut classes = HashMap::new();

@@ -14,42 +14,52 @@ use crate::parser::ast::{BinOp, Expr, Stmt, TypeExpr};
 use super::common::*;
 use super::recursive_array::assume_recursive_iterator_expr;
 
+/// Builds the AST expression for recursive iterator iterator root.
 fn recursive_iterator_iterator_root_expr() -> Expr {
     property_access(this_expr(), "root")
 }
 
+/// Builds the AST expression for recursive iterator iterator mode.
 fn recursive_iterator_iterator_mode_expr() -> Expr {
     property_access(this_expr(), "mode")
 }
 
+/// Builds the AST expression for recursive iterator iterator iterators.
 fn recursive_iterator_iterator_iterators_expr() -> Expr {
     property_access(this_expr(), "iterators")
 }
 
+/// Builds the AST expression for recursive iterator iterator states.
 fn recursive_iterator_iterator_states_expr() -> Expr {
     property_access(this_expr(), "states")
 }
 
+/// Builds the AST expression for recursive iterator iterator depths.
 fn recursive_iterator_iterator_depths_expr() -> Expr {
     property_access(this_expr(), "depths")
 }
 
+/// Builds the AST expression for recursive iterator iterator depth.
 fn recursive_iterator_iterator_depth_expr() -> Expr {
     property_access(this_expr(), "depth")
 }
 
+/// Builds the AST expression for recursive iterator iterator slot.
 fn recursive_iterator_iterator_slot_expr() -> Expr {
     property_access(this_expr(), "slot")
 }
 
+/// Builds the AST expression for recursive iterator iterator current valid.
 fn recursive_iterator_iterator_current_valid_expr() -> Expr {
     property_access(this_expr(), "currentValid")
 }
 
+/// Builds the AST expression for recursive iterator iterator valid.
 fn recursive_iterator_iterator_valid_expr() -> Expr {
     recursive_iterator_iterator_current_valid_expr()
 }
 
+/// Provides the Recursive iterator iterator iterator at depth helper used by the recursive iterator iterator traversal module.
 fn recursive_iterator_iterator_iterator_at_depth(depth: Expr) -> Expr {
     array_access(
         recursive_iterator_iterator_iterators_expr(),
@@ -57,6 +67,7 @@ fn recursive_iterator_iterator_iterator_at_depth(depth: Expr) -> Expr {
     )
 }
 
+/// Provides the Recursive iterator iterator state at current slot helper used by the recursive iterator iterator traversal module.
 fn recursive_iterator_iterator_state_at_current_slot() -> Expr {
     array_access(
         recursive_iterator_iterator_states_expr(),
@@ -64,6 +75,7 @@ fn recursive_iterator_iterator_state_at_current_slot() -> Expr {
     )
 }
 
+/// Provides the Recursive iterator iterator depth at current slot helper used by the recursive iterator iterator traversal module.
 fn recursive_iterator_iterator_depth_at_current_slot() -> Expr {
     array_access(
         recursive_iterator_iterator_depths_expr(),
@@ -71,14 +83,17 @@ fn recursive_iterator_iterator_depth_at_current_slot() -> Expr {
     )
 }
 
+/// Builds the AST expression for recursive iterator iterator current iterator.
 fn recursive_iterator_iterator_current_iterator_expr() -> Expr {
     recursive_iterator_iterator_iterator_at_depth(recursive_iterator_iterator_slot_expr())
 }
 
+/// Builds the AST expression for recursive iterator iterator slot for depth.
 fn recursive_iterator_iterator_slot_for_depth_expr(depth: Expr) -> Expr {
     method_call(this_expr(), "__elephcSlotForDepth", vec![depth])
 }
 
+/// Builds the synthetic method body for recursive iterator iterator construct.
 pub(super) fn recursive_iterator_iterator_construct_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "root", var_expr("iterator")),
@@ -93,6 +108,7 @@ pub(super) fn recursive_iterator_iterator_construct_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for recursive iterator iterator rewind.
 pub(super) fn recursive_iterator_iterator_rewind_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "iterators", empty_array_expr()),
@@ -119,10 +135,12 @@ pub(super) fn recursive_iterator_iterator_rewind_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for recursive iterator iterator valid.
 pub(super) fn recursive_iterator_iterator_valid_body() -> Vec<Stmt> {
     return_body(recursive_iterator_iterator_valid_expr())
 }
 
+/// Builds the synthetic method body for recursive iterator iterator current.
 pub(super) fn recursive_iterator_iterator_current_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -138,6 +156,7 @@ pub(super) fn recursive_iterator_iterator_current_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for recursive iterator iterator key.
 pub(super) fn recursive_iterator_iterator_key_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -153,6 +172,7 @@ pub(super) fn recursive_iterator_iterator_key_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for recursive iterator iterator next.
 pub(super) fn recursive_iterator_iterator_next_body() -> Vec<Stmt> {
     vec![if_stmt(
         recursive_iterator_iterator_valid_expr(),
@@ -161,6 +181,7 @@ pub(super) fn recursive_iterator_iterator_next_body() -> Vec<Stmt> {
     )]
 }
 
+/// Builds the synthetic method body for recursive iterator iterator get depth.
 pub(super) fn recursive_iterator_iterator_get_depth_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -172,6 +193,7 @@ pub(super) fn recursive_iterator_iterator_get_depth_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for recursive iterator iterator get inner iterator.
 pub(super) fn recursive_iterator_iterator_get_inner_iterator_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -183,6 +205,7 @@ pub(super) fn recursive_iterator_iterator_get_inner_iterator_body() -> Vec<Stmt>
     ]
 }
 
+/// Builds the synthetic method body for recursive iterator iterator get sub iterator.
 pub(super) fn recursive_iterator_iterator_get_sub_iterator_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -217,6 +240,7 @@ pub(super) fn recursive_iterator_iterator_get_sub_iterator_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for recursive iterator iterator slot for depth.
 pub(super) fn recursive_iterator_iterator_slot_for_depth_body() -> Vec<Stmt> {
     vec![
         typed_assign_stmt("i", TypeExpr::Int, int_expr(0)),
@@ -241,6 +265,7 @@ pub(super) fn recursive_iterator_iterator_slot_for_depth_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for recursive iterator iterator advance.
 pub(super) fn recursive_iterator_iterator_advance_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "currentValid", bool_expr(false)),
@@ -281,6 +306,7 @@ pub(super) fn recursive_iterator_iterator_advance_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for recursive iterator iterator pop invalid frame.
 fn recursive_iterator_iterator_pop_invalid_frame_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -312,6 +338,7 @@ fn recursive_iterator_iterator_pop_invalid_frame_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for recursive iterator iterator advance self first.
 fn recursive_iterator_iterator_advance_self_first_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -345,6 +372,7 @@ fn recursive_iterator_iterator_advance_self_first_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for recursive iterator iterator advance children first or leaves.
 fn recursive_iterator_iterator_advance_children_first_or_leaves_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -378,6 +406,7 @@ fn recursive_iterator_iterator_advance_children_first_or_leaves_body() -> Vec<St
     ]
 }
 
+/// Builds the synthetic method body for recursive iterator iterator non self child.
 fn recursive_iterator_iterator_non_self_child_body() -> Vec<Stmt> {
     let mut body = recursive_iterator_iterator_descend_current_child_body(int_expr(2));
     body.push(if_stmt(
@@ -396,6 +425,7 @@ fn recursive_iterator_iterator_non_self_child_body() -> Vec<Stmt> {
     body
 }
 
+/// Builds the synthetic method body for recursive iterator iterator descend current child.
 fn recursive_iterator_iterator_descend_current_child_body(parent_state: Expr) -> Vec<Stmt> {
     vec![
         assign_stmt(

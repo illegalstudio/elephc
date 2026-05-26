@@ -12,6 +12,7 @@ use crate::support::*;
 // --- Callback-based array functions ---
 
 // Tests `array_map` with a user-defined callback that doubles each element.
+/// Verifies that array map.
 #[test]
 fn test_array_map() {
     let out = compile_and_run(
@@ -26,6 +27,7 @@ echo $b[0] . $b[1] . $b[2];
 }
 
 // Tests `array_map` on a single-element array with a user-defined increment callback.
+/// Verifies that array map single.
 #[test]
 fn test_array_map_single() {
     let out = compile_and_run(
@@ -41,6 +43,7 @@ echo $b[0];
 
 // Tests `array_map` with a typed builtin callback (`strlen`) applied to string values,
 // verifying mixed-type result handling in array_map codegen.
+/// Verifies that array map string values to ints.
 #[test]
 fn test_array_map_string_values_to_ints() {
     let out = compile_and_run(
@@ -58,6 +61,7 @@ echo $b[1];
 
 // Tests `array_filter` with a predicate that keeps even integers, verifying correct
 // iteration, element removal, and count/foreach output.
+/// Verifies that array filter.
 #[test]
 fn test_array_filter() {
     let out = compile_and_run(
@@ -74,6 +78,7 @@ foreach ($b as $v) { echo $v; }
 
 // Tests `array_filter` with a typed builtin callback (`str_starts_with`) applied to
 // string values, verifying correct filtering and mixed string output.
+/// Verifies that array filter string values.
 #[test]
 fn test_array_filter_string_values() {
     let out = compile_and_run(
@@ -90,6 +95,7 @@ foreach ($b as $value) { echo $value; }
 
 // Tests `array_filter` when the callback returns falsy for every element, producing
 // an empty array and confirming count is 0.
+/// Verifies that array filter none pass.
 #[test]
 fn test_array_filter_none_pass() {
     let out = compile_and_run(
@@ -105,6 +111,7 @@ echo count($b);
 
 // Tests `array_reduce` with a two-argument user callback (carry + item) over a five-element
 // array, providing an explicit initial value of 0.
+/// Verifies that array reduce.
 #[test]
 fn test_array_reduce() {
     let out = compile_and_run(
@@ -120,6 +127,7 @@ echo $sum;
 
 // Tests `array_reduce` with a user callback (carry * item) and an explicit initial
 // value of 1, verifying the carry accumulates correctly across the array.
+/// Verifies that array reduce with initial.
 #[test]
 fn test_array_reduce_with_initial() {
     let out = compile_and_run(
@@ -135,6 +143,7 @@ echo $product;
 
 // Tests `array_walk` with a callback that echoes each element, verifying the function
 // walks by reference and mutates the array in place.
+/// Verifies that array walk.
 #[test]
 fn test_array_walk() {
     let out = compile_and_run(
@@ -149,6 +158,7 @@ array_walk($a, "show");
 
 // Tests `usort` with a comparison callback that sorts an unsorted array in ascending
 // order, verifying both value ordering and that the array is modified in place.
+/// Verifies that usort.
 #[test]
 fn test_usort() {
     let out = compile_and_run(
@@ -164,6 +174,7 @@ foreach ($a as $v) { echo $v; }
 
 // Tests `usort` with a comparison callback that reverses order (`b - a`), verifying
 // values are re-sorted in descending order.
+/// Verifies that usort reverse.
 #[test]
 fn test_usort_reverse() {
     let out = compile_and_run(
@@ -179,6 +190,7 @@ foreach ($a as $v) { echo $v; }
 
 // Tests `uksort` with a comparison callback, verifying keys are reordered while values
 // stay associated with their original keys.
+/// Verifies that uksort.
 #[test]
 fn test_uksort() {
     let out = compile_and_run(
@@ -194,6 +206,7 @@ foreach ($a as $v) { echo $v; }
 
 // Tests `uasort` with a comparison callback, verifying values are sorted while preserving
 // key-to-value associations.
+/// Verifies that uasort.
 #[test]
 fn test_uasort() {
     let out = compile_and_run(
@@ -208,6 +221,7 @@ foreach ($a as $value) { echo $value . " "; }
 }
 
 // Tests `call_user_func` with a user-defined function and a single argument.
+/// Verifies that call user func.
 #[test]
 fn test_call_user_func() {
     let out = compile_and_run(
@@ -221,6 +235,7 @@ echo $result;
 }
 
 // Tests `call_user_func` with a user-defined function that takes no arguments.
+/// Verifies that call user func no args.
 #[test]
 fn test_call_user_func_no_args() {
     let out = compile_and_run(
@@ -235,6 +250,7 @@ echo $result;
 
 // Tests `call_user_func` with a function accepting 9 parameters and 9 overflow arguments
 // passed on the stack, verifying stack-passed overflow argument handling.
+/// Verifies that call user func supports stack passed overflow args.
 #[test]
 fn test_call_user_func_supports_stack_passed_overflow_args() {
     let out = compile_and_run(
@@ -250,6 +266,7 @@ echo call_user_func("sum9", 1, 2, 3, 4, 5, 6, 7, 8, 9);
 
 // Tests `call_user_func` with a builtin function name (`STRLEN`) passed as a string,
 // verifying case-insensitive builtin callback resolution.
+/// Verifies that call user func string builtin callback.
 #[test]
 fn test_call_user_func_string_builtin_callback() {
     let out = compile_and_run(r#"<?php echo call_user_func("STRLEN", "hello");"#);
@@ -257,6 +274,7 @@ fn test_call_user_func_string_builtin_callback() {
 }
 
 // Tests `function_exists` returns true for a user-defined function.
+/// Verifies that call user func accepts callable without known signature.
 #[test]
 fn test_call_user_func_accepts_callable_without_known_signature() {
     let out = compile_and_run(
@@ -272,6 +290,7 @@ echo call_user_func(make_callback(), 2, 3, 4);
     assert_eq!(out, "9");
 }
 
+/// Verifies that function exists true.
 #[test]
 fn test_function_exists_true() {
     let out = compile_and_run(
@@ -284,6 +303,7 @@ if (function_exists("my_func")) { echo "yes"; } else { echo "no"; }
 }
 
 // Tests `function_exists` returns false for a non-existent function name.
+/// Verifies that function exists false.
 #[test]
 fn test_function_exists_false() {
     let out = compile_and_run(
@@ -296,6 +316,7 @@ if (function_exists("nonexistent")) { echo "yes"; } else { echo "no"; }
 
 // Tests `usort` on an already-sorted array, verifying the comparator is still called and
 // the output is unchanged (regression: no sorting skipped incorrectly).
+/// Verifies that usort already sorted.
 #[test]
 fn test_usort_already_sorted() {
     let out = compile_and_run(
@@ -311,6 +332,7 @@ foreach ($a as $v) { echo $v; }
 
 // Tests `usort` on a single-element array, verifying the comparator is called and the
 // array remains unchanged.
+/// Verifies that usort single element.
 #[test]
 fn test_usort_single_element() {
     let out = compile_and_run(
@@ -326,6 +348,7 @@ echo $a[0];
 
 // Tests `array_map` with a callback that squares each element, verifying correct
 // element mapping on a four-element array.
+/// Verifies that array map with complex callback.
 #[test]
 fn test_array_map_with_complex_callback() {
     let out = compile_and_run(
@@ -341,6 +364,7 @@ echo $b[0] . " " . $b[1] . " " . $b[2] . " " . $b[3];
 
 // Tests `array_reduce` on a single-element array with an initial carry value of 100,
 // verifying the callback is invoked once with the carry and item.
+/// Verifies that array reduce single.
 #[test]
 fn test_array_reduce_single() {
     let out = compile_and_run(

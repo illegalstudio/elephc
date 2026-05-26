@@ -12,6 +12,7 @@ use super::*;
 // Creates an isolated temporary directory for CLI tests using a unique prefix,
 // process ID, thread ID, and auto-incrementing counter. Used to avoid file collisions
 // when tests run in parallel.
+/// Creates cli test dir for the surrounding test or metadata fixture.
 pub(crate) fn make_cli_test_dir(prefix: &str) -> std::path::PathBuf {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -24,6 +25,7 @@ pub(crate) fn make_cli_test_dir(prefix: &str) -> std::path::PathBuf {
 // Returns the path to the `elephc` CLI binary built by cargo.
 // Resolves `CARGO_BIN_EXE_elephc` env var or falls back to locating the binary
 // relative to the current test executable (handles `deps/` suffix stripping).
+/// Provides the Elephc cli bin helper used by the projects module.
 pub(crate) fn elephc_cli_bin() -> String {
     std::env::var("CARGO_BIN_EXE_elephc").unwrap_or_else(|_| {
         let mut path = std::env::current_exe().expect("failed to resolve current test binary");
@@ -38,6 +40,7 @@ pub(crate) fn elephc_cli_bin() -> String {
 // Constructs a `Command` preconfigured to run the `elephc` CLI in a given directory.
 // Sets `XDG_CACHE_HOME` to an isolated cache subdirectory and sets the working directory.
 // Used by CLI tests that invoke `elephc` as a subprocess.
+/// Provides the Elephc cli command helper used by the projects module.
 pub(crate) fn elephc_cli_command(dir: &Path) -> Command {
     let mut cmd = Command::new(elephc_cli_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
@@ -48,6 +51,7 @@ pub(crate) fn elephc_cli_command(dir: &Path) -> Command {
 // Compiles a PHP source string with conditional defines and runs the resulting binary.
 // Uses the full compiler pipeline (no CLI subprocess) with the default 8_388_608-byte heap.
 // Returns stdout. Cleans up the temporary directory after execution.
+/// Provides the Compile and run with defines helper used by the projects module.
 pub(crate) fn compile_and_run_with_defines(source: &str, defines: &[&str]) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -75,6 +79,7 @@ pub(crate) fn compile_and_run_with_defines(source: &str, defines: &[&str]) -> St
 // (not the library). Passes `--define` flags for each define in `defines`.
 // Runs the resulting binary and returns stdout. Cleans up the temp directory.
 // Used for CLI integration tests that exercise the binary interface end-to-end.
+/// Provides the Compile cli file and run helper used by the projects module.
 pub(crate) fn compile_cli_file_and_run(source: &str, defines: &[&str]) -> String {
     let dir = make_cli_test_dir("elephc_cli_test");
 
@@ -107,6 +112,7 @@ pub(crate) fn compile_cli_file_and_run(source: &str, defines: &[&str]) -> String
 // Compiles a PHP source string and runs the resulting binary, asserting that it
 // terminates with a non-zero exit code. Returns stderr from the failed binary.
 // Uses the library directly (not CLI), with default heap size 8_388_608 bytes.
+/// Provides the Compile and run expect failure helper used by the projects module.
 pub(crate) fn compile_and_run_expect_failure(source: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -133,6 +139,7 @@ pub(crate) fn compile_and_run_expect_failure(source: &str) -> String {
 // main entry point is `main_file`. Writes all files to an isolated temp directory,
 // runs the full pipeline, links, and asserts the binary exits successfully.
 // Returns stdout and cleans up.
+/// Provides the Compile and run files helper used by the projects module.
 pub(crate) fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
     compile_and_run_files_with_defines(files, main_file, &[])
 }
@@ -142,6 +149,7 @@ pub(crate) fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> 
 // links with the runtime, and captures stderr from the failed process.
 // Used for error/regression fixtures that verify runtime failures (e.g., type mismatches,
 // missing properties, undefined behavior that only surfaces at execution time).
+/// Provides the Compile and run files expect failure helper used by the projects module.
 pub(crate) fn compile_and_run_files_expect_failure(
     files: &[(&str, &str)],
     main_file: &str,
@@ -213,6 +221,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
 // Compiles a multi-file PHP project with user-supplied conditional defines.
 // Writes all files to an isolated temp directory, builds the autoload registry,
 // resolves includes, and runs the full pipeline. Returns stdout from the binary.
+/// Provides the Compile and run files with defines helper used by the projects module.
 pub(crate) fn compile_and_run_files_with_defines(
     files: &[(&str, &str)],
     main_file: &str,
@@ -290,6 +299,7 @@ pub(crate) fn compile_and_run_files_with_defines(
 // Returns true if compilation of a multi-file PHP project fails (type-check or earlier).
 // Writes all files to an isolated temp directory. Runs the full pipeline up to type checking;
 // does not assemble or link. Used for negative test fixtures.
+/// Provides the Compile files fails helper used by the projects module.
 pub(crate) fn compile_files_fails(files: &[(&str, &str)], main_file: &str) -> bool {
     compile_files_fails_with_defines(files, main_file, &[])
 }
@@ -297,6 +307,7 @@ pub(crate) fn compile_files_fails(files: &[(&str, &str)], main_file: &str) -> bo
 // Attempts compilation of a multi-file PHP project with conditional defines.
 // Returns true if the type-check pass fails. Does not assemble or link.
 // Used for negative test fixtures that require specific defines to trigger the failure.
+/// Provides the Compile files fails with defines helper used by the projects module.
 pub(crate) fn compile_files_fails_with_defines(
     files: &[(&str, &str)],
     main_file: &str,
@@ -342,6 +353,7 @@ pub(crate) fn compile_files_fails_with_defines(
 // Compiles a PHP source string, links it, runs it with stdin wired to `stdin_data`,
 // and returns stdout. Writes the binary to an isolated temp directory.
 // Used for tests that verify runtime behavior with specific input (e.g., read(), fgets).
+/// Provides the Compile and run with stdin helper used by the projects module.
 pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -446,6 +458,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
 // Compiles a PHP source string, runs the binary, and returns stdout alongside the
 // temp directory path. The directory is preserved after the run so callers can
 // inspect written files (e.g., for file I/O fixture verification).
+/// Provides the Compile and run in dir helper used by the projects module.
 pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();

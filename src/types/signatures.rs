@@ -780,6 +780,7 @@ fn null_lit() -> Expr {
 mod tests {
     use super::*;
 
+    /// Computes the callable signature metadata for variadic.
     fn variadic_sig(params: Vec<(String, PhpType)>) -> FunctionSig {
         FunctionSig {
             defaults: vec![None; params.len()],
@@ -793,6 +794,7 @@ mod tests {
         }
     }
 
+    /// Builds the parameter metadata for callable wrapper sig retypes existing non array variadic.
     #[test]
     fn callable_wrapper_sig_retypes_existing_non_array_variadic_param() {
         let sig = variadic_sig(vec![
@@ -815,6 +817,7 @@ mod tests {
         assert_eq!(wrapper_sig.declared_params.len(), 2);
     }
 
+    /// Builds the parameter metadata for callable wrapper sig appends missing variadic.
     #[test]
     fn callable_wrapper_sig_appends_missing_variadic_param() {
         let sig = variadic_sig(vec![("format".to_string(), PhpType::Str)]);

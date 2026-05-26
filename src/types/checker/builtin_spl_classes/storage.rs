@@ -16,6 +16,7 @@ use crate::types::traits::FlattenedClass;
 
 use super::common::*;
 
+/// Inserts classes into the supplied builtin metadata registry.
 pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
     class_map.insert(
         "EmptyIterator".to_string(),
@@ -78,6 +79,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
     );
 }
 
+/// Builds the method list for SPL empty iterator.
 fn spl_empty_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body("current", Vec::new(), Some(mixed_type()), null_return_body()),
@@ -88,6 +90,7 @@ fn spl_empty_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds the property list for array iterator.
 fn array_iterator_properties() -> Vec<ClassProperty> {
     vec![
         protected_storage_property("keys", array_type()),
@@ -97,6 +100,7 @@ fn array_iterator_properties() -> Vec<ClassProperty> {
     ]
 }
 
+/// Builds the property list for array object.
 fn array_object_properties() -> Vec<ClassProperty> {
     vec![
         storage_property("keys", array_type()),
@@ -105,6 +109,7 @@ fn array_object_properties() -> Vec<ClassProperty> {
     ]
 }
 
+/// Builds the method list for SPL array iterator.
 fn spl_array_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
@@ -162,6 +167,7 @@ fn spl_array_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds the method list for SPL array object.
 fn spl_array_object_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
@@ -209,32 +215,39 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Builds the AST expression for keys.
 fn keys_expr() -> Expr {
     property_access(this_expr(), "keys")
 }
 
+/// Builds the AST expression for values.
 fn values_expr() -> Expr {
     property_access(this_expr(), "values")
 }
 
+/// Builds the AST expression for position.
 fn position_expr() -> Expr {
     property_access(this_expr(), "position")
 }
 
+/// Provides the Key at helper used by the storage module.
 fn key_at(index: Expr) -> Expr {
     array_access(keys_expr(), index)
 }
 
+/// Provides the Value at helper used by the storage module.
 fn value_at(index: Expr) -> Expr {
     array_access(values_expr(), index)
 }
 
+/// Builds the synthetic method body for array iterator construct.
 fn array_iterator_construct_body() -> Vec<Stmt> {
     let mut body = array_object_construct_body();
     body.insert(2, property_assign_stmt(this_expr(), "position", int_expr(0)));
     body
 }
 
+/// Builds the synthetic method body for array object construct.
 fn array_object_construct_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "keys", function_call("array_keys", vec![var_expr("array")])),
@@ -247,14 +260,17 @@ fn array_object_construct_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for array current.
 fn array_current_body() -> Vec<Stmt> {
     return_body(value_at(position_expr()))
 }
 
+/// Builds the synthetic method body for array key.
 fn array_key_body() -> Vec<Stmt> {
     return_body(key_at(position_expr()))
 }
 
+/// Builds the synthetic method body for array next.
 fn array_next_body() -> Vec<Stmt> {
     vec![property_assign_stmt(
         this_expr(),
@@ -263,18 +279,22 @@ fn array_next_body() -> Vec<Stmt> {
     )]
 }
 
+/// Builds the synthetic method body for array rewind.
 fn array_rewind_body() -> Vec<Stmt> {
     vec![property_assign_stmt(this_expr(), "position", int_expr(0))]
 }
 
+/// Builds the synthetic method body for array valid.
 fn array_valid_body() -> Vec<Stmt> {
     return_body(binary_expr(position_expr(), BinOp::Lt, count_expr(values_expr())))
 }
 
+/// Builds the synthetic method body for array count.
 fn array_count_body() -> Vec<Stmt> {
     return_body(count_expr(values_expr()))
 }
 
+/// Builds the synthetic method body for array append.
 fn array_append_body() -> Vec<Stmt> {
     vec![
         property_array_push_stmt(this_expr(), "keys", count_expr(keys_expr())),
@@ -282,6 +302,7 @@ fn array_append_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for array offset exists.
 fn array_offset_exists_body() -> Vec<Stmt> {
     let mut body = array_search_prelude();
     body.push(while_stmt(
@@ -299,6 +320,7 @@ fn array_offset_exists_body() -> Vec<Stmt> {
     body
 }
 
+/// Builds the synthetic method body for array offset get.
 fn array_offset_get_body() -> Vec<Stmt> {
     let mut body = array_search_prelude();
     body.push(while_stmt(
@@ -316,6 +338,7 @@ fn array_offset_get_body() -> Vec<Stmt> {
     body
 }
 
+/// Builds the synthetic method body for array offset set.
 fn array_offset_set_body() -> Vec<Stmt> {
     let mut body = vec![if_stmt(
         binary_expr(var_expr("offset"), BinOp::StrictEq, null_expr()),
@@ -345,6 +368,7 @@ fn array_offset_set_body() -> Vec<Stmt> {
     body
 }
 
+/// Builds the synthetic method body for array offset unset.
 fn array_offset_unset_body() -> Vec<Stmt> {
     vec![
         assign_stmt("newKeys", empty_array_expr()),
@@ -370,6 +394,7 @@ fn array_offset_unset_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for array copy.
 fn array_copy_body() -> Vec<Stmt> {
     vec![
         assign_stmt("out", empty_assoc_array_expr()),
@@ -386,6 +411,7 @@ fn array_copy_body() -> Vec<Stmt> {
     ]
 }
 
+/// Builds the synthetic method body for array object get iterator.
 fn array_object_get_iterator_body() -> Vec<Stmt> {
     vec![
         assign_stmt("it", new_object_expr("ArrayIterator", vec![empty_array_expr()])),
@@ -406,6 +432,7 @@ fn array_object_get_iterator_body() -> Vec<Stmt> {
     ]
 }
 
+/// Provides the Array search prelude helper used by the storage module.
 fn array_search_prelude() -> Vec<Stmt> {
     vec![
         assign_stmt("i", int_expr(0)),

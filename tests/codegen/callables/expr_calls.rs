@@ -9,6 +9,7 @@
 
 use crate::support::*;
 
+/// Verifies that expr call returns string.
 #[test]
 fn test_expr_call_returns_string() {
     // Verifies that a callable variable returning a string compiles and runs correctly.
@@ -22,6 +23,7 @@ echo $greet("World");
     assert_eq!(out, "Hello World");
 }
 
+/// Verifies that expr call returns float.
 #[test]
 fn test_expr_call_returns_float() {
     // Verifies that a callable variable returning a float compiles and runs correctly.
@@ -35,6 +37,7 @@ echo $calc(2.0);
     assert_eq!(out, "6.28");
 }
 
+/// Verifies that expr call returns integer.
 #[test]
 fn test_expr_call_returns_int() {
     // Verifies that a callable variable returning an integer compiles and runs correctly.
@@ -48,6 +51,7 @@ echo $double(21);
     assert_eq!(out, "42");
 }
 
+/// Verifies that expr call string in concat.
 #[test]
 fn test_expr_call_string_in_concat() {
     // Verifies that a callable variable returning a string can be used in concatenation.
@@ -61,6 +65,7 @@ echo "Result: " . $tag("hello");
     assert_eq!(out, "Result: <b>hello</b>");
 }
 
+/// Verifies that closure call returns string.
 #[test]
 fn test_closure_call_returns_string() {
     // Verifies that a closure stored in a variable can be called and returns a string.
@@ -75,6 +80,7 @@ echo $result;
     assert_eq!(out, "test");
 }
 
+/// Verifies that closure via array element local preserves signature.
 #[test]
 fn test_closure_via_array_element_local_preserves_signature() {
     // Verifies that a closure fetched from an array element and stored in a local
@@ -91,6 +97,7 @@ echo $f("2");
     assert_eq!(out, "v2");
 }
 
+/// Verifies that callable by ref parameter dereferences descriptor before call.
 #[test]
 fn test_callable_by_ref_parameter_dereferences_descriptor_before_call() {
     let out = compile_and_run(
@@ -105,6 +112,7 @@ run($cb);
     assert_eq!(out, "7");
 }
 
+/// Verifies that closure via function parameter preserves signature.
 #[test]
 fn test_closure_via_function_parameter_preserves_signature() {
     // Verifies that a closure passed as a function argument can be called inside
@@ -122,6 +130,7 @@ echo call_it($ok);
 
 // --- First-class callable variable short-circuit (PHP 8.5 pipe opt) ---
 
+/// Verifies that fcc variable function target direct call.
 #[test]
 fn test_fcc_variable_function_target_direct_call() {
     // Verifies that a user-defined function used as FCC target calls correctly via direct call syntax.
@@ -136,6 +145,7 @@ echo $cb(14);
     assert_eq!(out, "42");
 }
 
+/// Verifies that fcc variable builtin function target direct call.
 #[test]
 fn test_fcc_variable_builtin_function_target_direct_call() {
     // Verifies that a builtin function used as FCC target calls correctly via direct call syntax.
@@ -149,6 +159,7 @@ echo $cb("hello");
     assert_eq!(out, "HELLO");
 }
 
+/// Verifies that fcc variable reassignment clears target.
 #[test]
 fn test_fcc_variable_reassignment_clears_target() {
     // Verifies that reassigning an FCC variable to a regular closure causes subsequent
@@ -166,6 +177,7 @@ echo $cb(5);
     assert_eq!(out, "105");
 }
 
+/// Verifies that fcc variable via pipe short circuits.
 #[test]
 fn test_fcc_variable_via_pipe_short_circuits() {
     // Verifies that an FCC variable can be called via the pipe operator with correct short-circuit behavior.
@@ -180,6 +192,7 @@ echo 6 |> $cb;
     assert_eq!(out, "24");
 }
 
+/// Verifies that fcc variable instance method target direct call.
 #[test]
 fn test_fcc_variable_instance_method_target_direct_call() {
     // Verifies that an instance method FCC target calls correctly via direct call syntax.
@@ -199,6 +212,7 @@ echo $cb(5);
     assert_eq!(out, "15");
 }
 
+/// Verifies that fcc variable instance method via pipe short circuits.
 #[test]
 fn test_fcc_variable_instance_method_via_pipe_short_circuits() {
     // Verifies that an instance method FCC variable can be called via the pipe operator with correct short-circuit.
@@ -217,6 +231,7 @@ echo 6 |> $cb;
     assert_eq!(out, "42");
 }
 
+/// Verifies that fcc variable static method named target direct call.
 #[test]
 fn test_fcc_variable_static_method_named_target_direct_call() {
     // Verifies that a statically-namespaced method FCC target (Class::method(...)) calls correctly.
@@ -233,6 +248,7 @@ echo $cb(5);
     assert_eq!(out, "20");
 }
 
+/// Verifies that fcc variable static method via pipe short circuits.
 #[test]
 fn test_fcc_variable_static_method_via_pipe_short_circuits() {
     // Verifies that a statically-namespaced method FCC target can be called via the pipe operator.
@@ -249,6 +265,7 @@ echo 7 |> $cb;
     assert_eq!(out, "17");
 }
 
+/// Verifies that fcc variable self static method target short circuits.
 #[test]
 fn test_fcc_variable_self_static_method_target_short_circuits() {
     // Verifies that `self::method(...)` FCC short-circuits to the lexically enclosing class method.
@@ -268,6 +285,7 @@ echo Marker::wrap("ok");
     assert_eq!(out, "[ok]");
 }
 
+/// Verifies that fcc variable parent static method target short circuits.
 #[test]
 fn test_fcc_variable_parent_static_method_target_short_circuits() {
     // Verifies that `parent::method(...)` FCC short-circuits to the parent class method.
@@ -290,6 +308,7 @@ echo Child::viaParent();
     assert_eq!(out, "Base");
 }
 
+/// Verifies that fcc variable static receiver short circuits with late static binding.
 #[test]
 fn test_fcc_variable_static_receiver_short_circuits_with_late_static_binding() {
     // Verifies that `static::method(...)` FCC preserves late static binding via the called-class chain
@@ -313,6 +332,7 @@ echo B::describe();
     assert_eq!(out, "B");
 }
 
+/// Verifies that fcc variable static receiver in instance method resolves via this.
 #[test]
 fn test_fcc_variable_static_receiver_in_instance_method_resolves_via_this() {
     // Verifies that `static::method(...)` FCC created inside an instance method resolves via `$this`
@@ -337,6 +357,7 @@ echo $obj->describe();
     assert_eq!(out, "B");
 }
 
+/// Verifies that fcc variable static receiver chained pipe.
 #[test]
 fn test_fcc_variable_static_receiver_chained_pipe() {
     // Verifies that `static::method(...)` FCC combined with the pipe operator works correctly.
@@ -365,6 +386,7 @@ echo Caps::go("ok");
 // These tests pin the runtime behaviour so a future refinement that extends the
 // tracking to those storages cannot accidentally regress the fallback semantics.
 
+/// Verifies that fcc indirect via array element through local runs.
 #[test]
 fn test_fcc_indirect_via_array_element_through_local_runs() {
     // Verifies that an FCC stored in an array element and fetched back into a local
@@ -381,6 +403,7 @@ echo $cb(7);
     assert_eq!(out, "21");
 }
 
+/// Verifies that fcc method complex receiver via local workaround runs.
 #[test]
 fn test_fcc_method_complex_receiver_via_local_workaround_runs() {
     // Verifies the documented workaround for complex receiver FCC: copy the chained receiver to a
@@ -405,6 +428,7 @@ echo 7 |> $cb;
     assert_eq!(out, "17");
 }
 
+/// Verifies that fcc indirect via assoc array value through local runs.
 #[test]
 fn test_fcc_indirect_via_assoc_array_value_through_local_runs() {
     // Verifies that an FCC stored in an associative-array value and fetched back into a local
@@ -421,6 +445,7 @@ echo $cb(9);
     assert_eq!(out, "18");
 }
 
+/// Verifies that closure fetched from object property through method runs.
 #[test]
 fn test_closure_fetched_from_object_property_through_method_runs() {
     // Verifies that a closure stored in an object property and fetched via a method call
@@ -451,6 +476,7 @@ echo invoke($b->fetch(), 5);
     assert_eq!(out, "12");
 }
 
+/// Verifies that fcc variable static method named target preserves late static binding.
 #[test]
 fn test_fcc_variable_static_method_named_target_preserves_late_static_binding() {
     // Verifies that a Named static-method FCC target (B::describe(...)) preserves late static

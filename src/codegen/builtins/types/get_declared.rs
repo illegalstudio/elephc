@@ -81,6 +81,7 @@ pub fn emit(
     Some(PhpType::Array(Box::new(PhpType::Str)))
 }
 
+/// Returns true when internal synthetic class name.
 fn is_internal_synthetic_class_name(name: &str) -> bool {
     crate::names::php_symbol_key(name).starts_with("__elephc")
 }

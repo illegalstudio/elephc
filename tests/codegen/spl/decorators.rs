@@ -10,6 +10,7 @@
 
 use crate::support::*;
 
+/// Verifies that decorator classes are declared and implement contracts.
 #[test]
 fn test_decorator_classes_are_declared_and_implement_contracts() {
     let out = compile_and_run(
@@ -92,6 +93,7 @@ var_dump(new MultipleIterator() instanceof Iterator);
     );
 }
 
+/// Verifies that iterator iterator forwards keys values and inner.
 #[test]
 fn test_iterator_iterator_forwards_keys_values_and_inner() {
     let out = compile_and_run(
@@ -111,6 +113,7 @@ foreach ($wrap as $k => $v) {
     assert_eq!(out, "10:a=10;b=20;");
 }
 
+/// Verifies that iterator iterator normalizes iterator aggregate inputs.
 #[test]
 fn test_iterator_iterator_normalizes_iterator_aggregate_inputs() {
     let out = compile_and_run(
@@ -133,6 +136,7 @@ dump_wrapped(new ArrayIterator(["direct" => "I"]));
     assert_eq!(out, "left=L;right=R;|direct=I;|");
 }
 
+/// Verifies that iterator iterator second arg downcasts iterator aggregate.
 #[test]
 fn test_iterator_iterator_second_arg_downcasts_iterator_aggregate() {
     let out = compile_and_run(
@@ -165,6 +169,7 @@ foreach ($parent as $k => $v) {
     assert_eq!(out, "left=L;base=B;");
 }
 
+/// Verifies that iterator iterator second arg is evaluated and ignored for iterators.
 #[test]
 fn test_iterator_iterator_second_arg_is_evaluated_and_ignored_for_iterators() {
     let out = compile_and_run(
@@ -181,6 +186,7 @@ echo $wrap->current();
     assert_eq!(out, "class;9");
 }
 
+/// Verifies that iterator iterator second arg preserves positional source order.
 #[test]
 fn test_iterator_iterator_second_arg_preserves_positional_source_order() {
     let out = compile_and_run(
@@ -207,6 +213,7 @@ foreach ($wrap as $k => $v) {
     assert_eq!(out, "source;class;named=N;");
 }
 
+/// Verifies that iterator iterator second arg accepts keyword named argument.
 #[test]
 fn test_iterator_iterator_second_arg_accepts_keyword_named_argument() {
     let out = compile_and_run(
@@ -223,6 +230,7 @@ foreach ($wrap as $k => $v) {
     assert_eq!(out, "named=N;");
 }
 
+/// Verifies that iterator iterator second arg rejects invalid aggregate downcasts.
 #[test]
 fn test_iterator_iterator_second_arg_rejects_invalid_aggregate_downcasts() {
     let out = compile_and_run(
@@ -257,6 +265,7 @@ try {
     );
 }
 
+/// Verifies that no rewind iterator preserves inner position.
 #[test]
 fn test_no_rewind_iterator_preserves_inner_position() {
     let out = compile_and_run(
@@ -273,6 +282,7 @@ foreach ($wrap as $v) {
     assert_eq!(out, "20;30;");
 }
 
+/// Verifies that limit iterator slices by offset and limit.
 #[test]
 fn test_limit_iterator_slices_by_offset_and_limit() {
     let out = compile_and_run(
@@ -294,6 +304,7 @@ echo $it->current();
     assert_eq!(out, "b=20;c=30;:2=30");
 }
 
+/// Verifies that infinite iterator cycles when limited.
 #[test]
 fn test_infinite_iterator_cycles_when_limited() {
     let out = compile_and_run(
@@ -310,6 +321,7 @@ foreach ($it as $k => $v) {
     assert_eq!(out, "0=1;1=2;0=1;1=2;0=1;");
 }
 
+/// Verifies that infinite iterator over empty iterator has no values.
 #[test]
 fn test_infinite_iterator_over_empty_iterator_has_no_values() {
     let out = compile_and_run(
@@ -324,6 +336,7 @@ echo "end";
     assert_eq!(out, "start:end");
 }
 
+/// Verifies that filter iterator subclass skips rejected items.
 #[test]
 fn test_filter_iterator_subclass_skips_rejected_items() {
     let out = compile_and_run(
@@ -346,6 +359,7 @@ foreach ($it as $key => $value) {
     assert_eq!(out, "keep=1;tail=3;");
 }
 
+/// Verifies that callback filter iterator uses callback current key and inner.
 #[test]
 fn test_callback_filter_iterator_uses_callback_current_key_and_inner() {
     let out = compile_and_run(
@@ -392,6 +406,7 @@ foreach ($it2 as $key => $value) {
     );
 }
 
+/// Verifies that callback filter iterator preserves captured closure env.
 #[test]
 fn test_callback_filter_iterator_preserves_captured_closure_env() {
     let out = compile_and_run(
@@ -420,6 +435,7 @@ foreach ($it as $key => $value) {
     assert_eq!(out, "a!it;b!it;out:b=2;c!it;out:c=3;");
 }
 
+/// Verifies that callback filter iterator preserves variable closure env.
 #[test]
 fn test_callback_filter_iterator_preserves_variable_closure_env() {
     let out = compile_and_run(
@@ -440,6 +456,7 @@ foreach ($it as $key => $value) {
     assert_eq!(out, "1:2;2:3;");
 }
 
+/// Verifies that caching iterator tracks has next and string value.
 #[test]
 fn test_caching_iterator_tracks_has_next_and_string_value() {
     let out = compile_and_run(
@@ -475,6 +492,7 @@ try {
     );
 }
 
+/// Verifies that caching iterator full cache array access and flags.
 #[test]
 fn test_caching_iterator_full_cache_array_access_and_flags() {
     let out = compile_and_run(
@@ -534,6 +552,7 @@ try {
     );
 }
 
+/// Verifies that append iterator skips empty iterators and exposes storage.
 #[test]
 fn test_append_iterator_skips_empty_iterators_and_exposes_storage() {
     let out = compile_and_run(
@@ -620,6 +639,7 @@ foreach ($append as $key => $value) {
     );
 }
 
+/// Verifies that multiple iterator need any numeric outputs null for exhausted sources.
 #[test]
 fn test_multiple_iterator_need_any_numeric_outputs_null_for_exhausted_sources() {
     let out = compile_and_run(
@@ -648,6 +668,7 @@ foreach ($multi as $keys => $values) {
     assert_eq!(out, "0:2/2:a,0=1,10;2/2:b,null=2,null;");
 }
 
+/// Verifies that multiple iterator assoc flags and need all mode.
 #[test]
 fn test_multiple_iterator_assoc_flags_and_need_all_mode() {
     let out = compile_and_run(
@@ -683,6 +704,7 @@ foreach ($multi as $keys => $values) {
     assert_eq!(out, "a/x=1/10;|a/x=1/10;b/null=2/null;");
 }
 
+/// Verifies that multiple iterator updates duplicate attach info.
 #[test]
 fn test_multiple_iterator_updates_duplicate_attach_info() {
     let out = compile_and_run(
@@ -703,6 +725,7 @@ foreach ($multi as $keys => $values) {
     assert_eq!(out, "1:0=5");
 }
 
+/// Verifies that multiple iterator direct invalid current and key match PHP.
 #[test]
 fn test_multiple_iterator_direct_invalid_current_and_key_match_php() {
     let out = compile_and_run(
@@ -762,6 +785,7 @@ echo is_null($key[0]) ? "kn" : "kv";
     );
 }
 
+/// Verifies that multiple iterator contains detach and assoc null info error.
 #[test]
 fn test_multiple_iterator_contains_detach_and_assoc_null_info_error() {
     let out = compile_and_run(

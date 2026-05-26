@@ -35,6 +35,7 @@ pub(crate) fn parse_assignment_value_expr(
     pratt::parse_expr_bp(tokens, pos, 7)
 }
 
+/// Provides the Argument name from token helper used by the expr module.
 fn argument_name_from_token(token: &Token) -> Option<String> {
     match token {
         Token::Identifier(name) => Some(name.clone()),

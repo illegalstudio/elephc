@@ -110,6 +110,7 @@ impl Checker {
         }
     }
 
+    /// Collects return callable sigs for the surrounding analysis or metadata result.
     pub(crate) fn collect_return_callable_sigs(
         &mut self,
         stmt: &Stmt,

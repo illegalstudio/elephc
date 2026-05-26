@@ -37,6 +37,7 @@ pub fn emit(
     emit_loaded_keys(&arr_ty, emitter, ctx)
 }
 
+/// Emits assembly for loaded keys.
 pub(crate) fn emit_loaded_keys(
     arr_ty: &PhpType,
     emitter: &mut Emitter,

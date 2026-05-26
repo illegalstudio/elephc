@@ -39,6 +39,7 @@ pub(crate) enum RuntimeCallableSelector<'a> {
     },
 }
 
+/// Provides the Runtime callable cases helper used by the callable dispatch module.
 pub(crate) fn runtime_callable_cases(
     ctx: &mut Context,
     captures: &[(String, PhpType, bool)],
@@ -103,6 +104,7 @@ pub(crate) fn runtime_callable_cases(
     cases
 }
 
+/// Provides the Runtime static method wrappers helper used by the callable dispatch module.
 fn runtime_static_method_wrappers(ctx: &Context) -> Vec<(String, String, FunctionSig)> {
     let mut wrappers = Vec::new();
     for (class_name, class_info) in &ctx.classes {
@@ -121,10 +123,12 @@ fn runtime_static_method_wrappers(ctx: &Context) -> Vec<(String, String, Functio
     wrappers
 }
 
+/// Provides the Runtime builtin wrapper excluded helper used by the callable dispatch module.
 fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
     matches!(name, "iterator_apply" | "preg_replace_callback")
 }
 
+/// Ensures runtime builtin wrapper is available before the caller continues.
 fn ensure_runtime_builtin_wrapper(
     ctx: &mut Context,
     name: &str,
@@ -151,6 +155,7 @@ fn ensure_runtime_builtin_wrapper(
     label
 }
 
+/// Ensures runtime static method wrapper is available before the caller continues.
 fn ensure_runtime_static_method_wrapper(
     ctx: &mut Context,
     class_name: &str,
@@ -179,6 +184,7 @@ fn ensure_runtime_static_method_wrapper(
     label
 }
 
+/// Builds the synthetic method body for static method wrapper.
 fn static_method_wrapper_body(class_name: &str, method_name: &str, sig: &FunctionSig) -> Vec<Stmt> {
     let last_param_idx = sig.params.len().saturating_sub(1);
     let args: Vec<Expr> = sig
@@ -213,6 +219,7 @@ fn static_method_wrapper_body(class_name: &str, method_name: &str, sig: &Functio
     }
 }
 
+/// Builds the synthetic method body for builtin wrapper.
 fn builtin_wrapper_body(name: &str, sig: &FunctionSig) -> Vec<Stmt> {
     let last_param_idx = sig.params.len().saturating_sub(1);
     let args: Vec<Expr> = sig
@@ -246,6 +253,7 @@ fn builtin_wrapper_body(name: &str, sig: &FunctionSig) -> Vec<Stmt> {
     }
 }
 
+/// Emits assembly for branch if callable case mismatch.
 pub(crate) fn emit_branch_if_callable_case_mismatch(
     selector: &RuntimeCallableSelector<'_>,
     case: &RuntimeCallableCase,
@@ -277,6 +285,7 @@ pub(crate) fn emit_branch_if_callable_case_mismatch(
     }
 }
 
+/// Computes the callable signature metadata for specialized runtime case.
 fn specialized_runtime_case_sig(
     sig: &FunctionSig,
     source_elem_ty: Option<&PhpType>,
@@ -321,6 +330,7 @@ fn specialized_runtime_case_sig(
     sig
 }
 
+/// Emits assembly for branch if address mismatch.
 fn emit_branch_if_address_mismatch(
     call_reg: &str,
     candidate_label: &str,
@@ -341,6 +351,7 @@ fn emit_branch_if_address_mismatch(
     }
 }
 
+/// Emits assembly for branch if string name mismatch.
 #[allow(clippy::too_many_arguments)]
 fn emit_branch_if_string_name_mismatch(
     case: &RuntimeCallableCase,
@@ -379,6 +390,7 @@ fn emit_branch_if_string_name_mismatch(
     abi::emit_symbol_address(emitter, call_reg, &case.label);
 }
 
+/// Emits assembly for string name compare.
 fn emit_string_name_compare(
     ptr_offset: usize,
     len_offset: usize,

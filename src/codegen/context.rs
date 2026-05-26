@@ -274,6 +274,7 @@ pub struct FinallyContext {
 }
 
 impl Default for Context {
+    /// Builds the default value for the surrounding type.
     fn default() -> Self {
         Self::new()
     }
@@ -506,6 +507,7 @@ impl Context {
         None
     }
 
+    /// Returns true when subclass of.
     fn is_subclass_of(&self, class_name: &str, ancestor_name: &str) -> bool {
         let mut current = self
             .classes
@@ -539,6 +541,7 @@ impl Context {
         false
     }
 
+    /// Computes implements interface for the PHP class-introspection builtin.
     fn class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
         self.classes.get(class_name).is_some_and(|class_info| {
             class_info.interfaces.iter().any(|implemented| {
@@ -548,6 +551,7 @@ impl Context {
         })
     }
 
+    /// Provides the Interface extends interface helper used by the context module.
     fn interface_extends_interface(&self, child_name: &str, ancestor_name: &str) -> bool {
         if child_name == ancestor_name {
             return true;
@@ -581,6 +585,7 @@ mod tests {
     use super::HeapOwnership;
     use crate::types::PhpType;
 
+    /// Verifies that heap ownership type classification.
     #[test]
     fn test_heap_ownership_type_classification() {
         assert_eq!(HeapOwnership::for_type(&PhpType::Int), HeapOwnership::NonHeap);
@@ -598,6 +603,7 @@ mod tests {
         );
     }
 
+    /// Verifies that heap ownership merge.
     #[test]
     fn test_heap_ownership_merge() {
         assert_eq!(

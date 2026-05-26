@@ -147,6 +147,7 @@ impl Checker {
         Ok(PhpType::Object(class_name))
     }
 
+    /// Returns true when construct internal iterator from builtin get iterator.
     fn can_construct_internal_iterator_from_builtin_get_iterator(&self, class_name: &str) -> bool {
         let get_iterator_key = php_symbol_key("getIterator");
         class_name == "InternalIterator"
@@ -540,6 +541,7 @@ impl Checker {
         fibers::validate_callback_signature(&sig, visible_param_count, expr.span)
     }
 
+    /// Provides the Specialize callback filter iterator callback helper used by the constructors module.
     fn specialize_callback_filter_iterator_callback(
         &mut self,
         args: &[Expr],
@@ -565,6 +567,7 @@ impl Checker {
         Ok(())
     }
 
+    /// Provides the Specialize callback filter function helper used by the constructors module.
     fn specialize_callback_filter_function(
         &mut self,
         name: &str,

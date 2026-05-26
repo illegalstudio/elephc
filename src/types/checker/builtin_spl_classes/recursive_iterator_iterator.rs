@@ -17,6 +17,7 @@ use crate::types::traits::FlattenedClass;
 use super::common::*;
 use super::recursive_iterator_iterator_traversal::*;
 
+/// Inserts class into the supplied builtin metadata registry.
 pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
     class_map.insert(
         "RecursiveIteratorIterator".to_string(),
@@ -36,6 +37,7 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
     );
 }
 
+/// Builds the property list for recursive iterator iterator.
 fn recursive_iterator_iterator_properties() -> Vec<ClassProperty> {
     vec![
         storage_property("root", named_type("RecursiveIterator")),
@@ -50,6 +52,7 @@ fn recursive_iterator_iterator_properties() -> Vec<ClassProperty> {
     ]
 }
 
+/// Builds the method list for SPL recursive iterator iterator.
 fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
     vec![
         method_with_body(
@@ -106,6 +109,7 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
     ]
 }
 
+/// Provides the Recursive iterator iterator constants helper used by the recursive iterator iterator module.
 fn recursive_iterator_iterator_constants() -> Vec<ClassConst> {
     vec![
         class_const("LEAVES_ONLY", 0),

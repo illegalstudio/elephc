@@ -15,6 +15,7 @@ use crate::types::PhpType;
 use super::common::null_expr;
 use super::super::Checker;
 
+/// Patches builtin SPL storage signatures in the compiler metadata registry.
 pub(super) fn patch_builtin_spl_storage_signatures(checker: &mut Checker) {
     let return_type = PhpType::AssocArray {
         key: Box::new(PhpType::Mixed),

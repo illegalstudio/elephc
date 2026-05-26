@@ -486,6 +486,7 @@ fn resolve(form: IntrinsicCallForm, class_name: &str, method: &str) -> Option<In
 mod tests {
     use super::{IntrinsicCall, IntrinsicCallForm, IntrinsicCallKind};
 
+    /// Provides the Resolves generator methods case insensitively helper used by the intrinsics module.
     #[test]
     fn resolves_generator_methods_case_insensitively() {
         let call = IntrinsicCall::instance_method("Generator", "getReturn")
@@ -496,6 +497,7 @@ mod tests {
         assert_eq!(call.runtime_helper(), Some("__rt_gen_get_return"));
     }
 
+    /// Builds the method list for separates static and instance fiber.
     #[test]
     fn separates_static_and_instance_fiber_methods() {
         assert!(IntrinsicCall::instance_method("Fiber", "suspend").is_none());
@@ -504,6 +506,7 @@ mod tests {
         assert!(IntrinsicCall::static_method("Fiber", "start").is_none());
     }
 
+    /// Provides the Ignores user classes with matching method names helper used by the intrinsics module.
     #[test]
     fn ignores_user_classes_with_matching_method_names() {
         assert!(IntrinsicCall::instance_method("UserFiber", "start").is_none());

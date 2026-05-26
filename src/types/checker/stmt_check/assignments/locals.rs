@@ -290,6 +290,7 @@ pub(super) fn update_callable_assignment_metadata(
     Ok(())
 }
 
+/// Provides the Update callable array assignment metadata helper used by the locals module.
 fn update_callable_array_assignment_metadata(
     checker: &mut Checker,
     name: &str,
@@ -314,6 +315,7 @@ fn update_callable_array_assignment_metadata(
     Ok(())
 }
 
+/// Resolves callable array target using the available compile-time metadata.
 fn resolve_callable_array_target(
     checker: &Checker,
     expr: &Expr,
@@ -341,6 +343,7 @@ fn resolve_callable_array_target(
     Ok(None)
 }
 
+/// Provides the Callable array parts helper used by the locals module.
 fn callable_array_parts(expr: &Expr) -> Option<(&Expr, &str)> {
     let elems = match &expr.kind {
         ExprKind::ArrayLiteral(elems) => elems,
@@ -355,6 +358,7 @@ fn callable_array_parts(expr: &Expr) -> Option<(&Expr, &str)> {
     Some((&elems[0], method.as_str()))
 }
 
+/// Provides the Variable name helper used by the locals module.
 fn variable_name(expr: &Expr) -> Option<&str> {
     match &expr.kind {
         ExprKind::Variable(name) => Some(name),
@@ -362,6 +366,7 @@ fn variable_name(expr: &Expr) -> Option<&str> {
     }
 }
 
+/// Provides the Static callable receiver helper used by the locals module.
 fn static_callable_receiver(
     checker: &Checker,
     receiver: &Expr,
@@ -378,6 +383,7 @@ fn static_callable_receiver(
     Ok(class_name.map(|class_name| StaticReceiver::Named(Name::from(class_name))))
 }
 
+/// Resolves static receiver class using the available compile-time metadata.
 fn resolve_static_receiver_class(
     checker: &Checker,
     receiver: &StaticReceiver,
@@ -409,6 +415,7 @@ fn resolve_static_receiver_class(
     }
 }
 
+/// Resolves class name using the available compile-time metadata.
 fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a str> {
     let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
     checker

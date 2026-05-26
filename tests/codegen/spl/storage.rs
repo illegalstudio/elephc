@@ -10,6 +10,7 @@
 
 use crate::support::*;
 
+/// Verifies that storage classes are declared and implement contracts.
 #[test]
 fn test_storage_classes_are_declared_and_implement_contracts() {
     let out = compile_and_run(
@@ -37,6 +38,7 @@ var_dump(new ArrayObject([]) instanceof IteratorAggregate);
     );
 }
 
+/// Verifies that empty iterator foreach has no values.
 #[test]
 fn test_empty_iterator_foreach_has_no_values() {
     let out = compile_and_run(
@@ -51,6 +53,7 @@ echo "end";
     assert_eq!(out, "start:end");
 }
 
+/// Verifies that array iterator iterates associative keys and values.
 #[test]
 fn test_array_iterator_iterates_associative_keys_and_values() {
     let out = compile_and_run(
@@ -67,6 +70,7 @@ foreach ($it as $k => $v) {
     assert_eq!(out, "a=10;b=20;");
 }
 
+/// Verifies that array iterator count seek and current.
 #[test]
 fn test_array_iterator_count_seek_and_current() {
     let out = compile_and_run(
@@ -83,6 +87,7 @@ echo $it->current();
     assert_eq!(out, "2:y=second");
 }
 
+/// Verifies that array iterator array access and mutation.
 #[test]
 fn test_array_iterator_array_access_and_mutation() {
     let out = compile_and_run(
@@ -104,6 +109,7 @@ foreach ($it as $k => $v) {
     assert_eq!(out, "1:bool(false)\na=1;b=2;2=3;");
 }
 
+/// Verifies that array object returns array iterator.
 #[test]
 fn test_array_object_returns_array_iterator() {
     let out = compile_and_run(
@@ -122,6 +128,7 @@ foreach ($obj as $k => $v) {
     assert_eq!(out, "2:left=4;right=5;");
 }
 
+/// Verifies that array iterator get array copy preserves keys.
 #[test]
 fn test_array_iterator_get_array_copy_preserves_keys() {
     let out = compile_and_run(

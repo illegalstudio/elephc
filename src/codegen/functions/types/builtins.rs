@@ -263,6 +263,7 @@ pub(super) fn infer_function_call_type(
     }
 }
 
+/// Provides the Iterator to array static preserve keys helper used by the builtins module.
 fn iterator_to_array_static_preserve_keys(expr: &Expr) -> Option<bool> {
     match &expr.kind {
         ExprKind::BoolLiteral(value) => Some(*value),
@@ -279,6 +280,7 @@ fn iterator_to_array_static_preserve_keys(expr: &Expr) -> Option<bool> {
     }
 }
 
+/// Computes the type metadata for iterator to array static result.
 fn iterator_to_array_static_result_type(source_ty: PhpType, preserve_keys: bool) -> PhpType {
     match source_ty {
         PhpType::Array(elem_ty) => PhpType::Array(elem_ty),
