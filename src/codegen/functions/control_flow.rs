@@ -299,7 +299,7 @@ fn exhaustive_if_direct_heap_assignments(
     };
     let mut definitely_assigned = first_branch.clone();
     definitely_assigned.retain(|name, ty| {
-        (matches!(ty, PhpType::Str) || ty.is_refcounted())
+        (matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted())
             && remaining_branches
                 .iter()
                 .all(|assigns| assigns.get(name) == Some(ty))

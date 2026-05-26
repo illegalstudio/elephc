@@ -15,7 +15,12 @@ use super::{expr_result_heap_ownership, Expr, PhpType};
 
 /// Increments the refcount of a borrowed heap argument if the expression result is not already owned.
 pub(super) fn retain_borrowed_heap_arg(emitter: &mut Emitter, expr: &Expr, ty: &PhpType) {
-    if ty.is_refcounted() && expr_result_heap_ownership(expr) != HeapOwnership::Owned {
+    if expr_result_heap_ownership(expr) == HeapOwnership::Owned {
+        return;
+    }
+    if matches!(ty, PhpType::Callable) {
+        crate::codegen::callable_descriptor::emit_retain_current_descriptor(emitter);
+    } else if ty.is_refcounted() {
         crate::codegen::abi::emit_incref_if_refcounted(emitter, ty);
     }
 }

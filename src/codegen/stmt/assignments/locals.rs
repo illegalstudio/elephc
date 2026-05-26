@@ -9,6 +9,7 @@
 //! - Local writes must release replaced heap values only when the frame owns the previous value.
 
 use super::super::super::abi;
+use super::super::super::callable_descriptor;
 use super::super::super::context::{Context, HeapOwnership};
 use super::super::super::data_section::DataSection;
 use super::super::super::emit::Emitter;
@@ -130,14 +131,18 @@ pub(crate) fn emit_assign_stmt(
         }
         emitter.comment(&format!("write through ref ${}", name));
         abi::load_at_offset(emitter, pointer_reg, offset);                            // load pointer to referenced variable
-        if old_ty.is_refcounted() {
+        if old_ty.is_refcounted() || matches!(old_ty, PhpType::Callable) {
             abi::emit_push_reg(emitter, pointer_reg);                                 // preserve the referenced-slot address across decref helper calls
             let needs_save_x0 = !matches!(&ty, PhpType::Str | PhpType::Float);
             if needs_save_x0 {
                 abi::emit_push_reg(emitter, abi::int_result_reg(emitter));            // preserve the incoming boxed/scalar result across decref helper calls
             }
             abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0); // load previous heap pointer from ref target
-            abi::emit_decref_if_refcounted(emitter, &old_ty);
+            if matches!(old_ty, PhpType::Callable) {
+                callable_descriptor::emit_release_current_descriptor(emitter);
+            } else {
+                abi::emit_decref_if_refcounted(emitter, &old_ty);
+            }
             if needs_save_x0 {
                 abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));             // restore the incoming boxed/scalar result after decref helper calls
             }
@@ -224,7 +229,9 @@ pub(crate) fn emit_assign_stmt(
         );
 
         if ctx.in_main && ctx.all_global_var_names.contains(name) {
-            if ty.is_refcounted() {
+            if matches!(ty, PhpType::Callable) {
+                callable_descriptor::emit_retain_current_descriptor(emitter);
+            } else if ty.is_refcounted() {
                 abi::emit_incref_if_refcounted(emitter, &ty);                        // global storage becomes a second owner alongside the local slot
             }
             super::super::emit_global_store(emitter, ctx, name, &ty);

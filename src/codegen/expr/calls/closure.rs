@@ -8,7 +8,6 @@
 //! Key details:
 //! - Callable metadata and argument signatures must stay synchronized with type checking and runtime dispatch.
 
-use crate::codegen::abi;
 use crate::codegen::context::{Context, DeferredClosure};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -251,19 +250,19 @@ pub(super) fn emit_closure(
     });
 
     emitter.comment("closure: load callable descriptor");
-    crate::codegen::callable_descriptor::emit_load_descriptor_address_with_meta(
-        emitter,
-        data,
-        abi::int_result_reg(emitter),
+    super::descriptor_value::emit_callable_descriptor_value(
         &closure_label,
         None,
         crate::codegen::callable_descriptor::CALLABLE_DESC_KIND_CLOSURE,
-        Some(&sig),
+        &sig,
         &capture_types,
         &hidden_params,
         crate::codegen::callable_descriptor::CallableDescriptorInvocation::new(
             crate::codegen::callable_descriptor::CallableDescriptorShape::Closure,
         ),
+        emitter,
+        ctx,
+        data,
     );
     PhpType::Callable
 }
@@ -418,36 +417,6 @@ pub(super) fn emit_closure_call(
         }
     }
 
-    for (cap_name, cap_ty, by_ref) in &captures {
-        emitter.comment(&format!("push captured ${}", cap_name));
-        if *by_ref {
-            if !args::emit_ref_arg_variable_address(cap_name, "closure capture ref", emitter, ctx)
-            {
-                emitter.comment(&format!(
-                    "WARNING: captured variable ${} not found",
-                    cap_name
-                ));
-                continue;
-            }
-            super::args::push_arg_value(emitter, &PhpType::Int);
-            arg_types.push(PhpType::Int);
-        } else {
-            let cap_info = match ctx.variables.get(cap_name) {
-                Some(v) => v,
-                None => {
-                    emitter.comment(&format!(
-                        "WARNING: captured variable ${} not found",
-                        cap_name
-                    ));
-                    continue;
-                }
-            };
-            let cap_offset = cap_info.stack_offset;
-            crate::codegen::abi::emit_load(emitter, cap_ty, cap_offset);
-            super::args::push_arg_value(emitter, cap_ty);
-            arg_types.push(cap_ty.clone());
-        }
-    }
     let var_info = match ctx.variables.get(var) {
         Some(v) => v,
         None => {
@@ -466,6 +435,29 @@ pub(super) fn emit_closure_call(
         crate::codegen::abi::emit_load_from_address(emitter, call_reg, call_reg, 0);
     } else {
         crate::codegen::abi::load_at_offset(emitter, call_reg, var_offset);     // load the callable descriptor into the nested-call scratch register
+    }
+
+    for (idx, (cap_name, cap_ty, by_ref)) in captures.iter().enumerate() {
+        emitter.comment(&format!("push captured ${}", cap_name));
+        if *by_ref {
+            crate::codegen::callable_descriptor::emit_load_runtime_capture_to_result(
+                emitter,
+                call_reg,
+                idx,
+                &PhpType::Int,
+            );
+            super::args::push_arg_value(emitter, &PhpType::Int);
+            arg_types.push(PhpType::Int);
+        } else {
+            crate::codegen::callable_descriptor::emit_load_runtime_capture_to_result(
+                emitter,
+                call_reg,
+                idx,
+                cap_ty,
+            );
+            super::args::push_arg_value(emitter, cap_ty);
+            arg_types.push(cap_ty.clone());
+        }
     }
     crate::codegen::callable_descriptor::emit_load_entry_from_descriptor(
         emitter,

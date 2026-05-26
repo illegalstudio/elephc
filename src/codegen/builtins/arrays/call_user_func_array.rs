@@ -74,6 +74,11 @@ pub(crate) enum LoadedArraySource {
     ArgumentRegister(usize),
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum LoadedDescriptorSource {
+    TemporaryStackSlot(usize),
+}
+
 /// Loads a previously materialized callback argument array into `dest_reg`.
 fn emit_loaded_array_source_to_reg(
     array_source: LoadedArraySource,
@@ -92,6 +97,87 @@ fn emit_loaded_array_source_to_reg(
             if arg_reg != dest_reg {
                 emitter.instruction(&format!("mov {}, {}", dest_reg, arg_reg)); // copy the callback-argument array from the invoker ABI register
             }
+        }
+    }
+}
+
+/// Loads a previously preserved callable descriptor into `dest_reg`.
+fn emit_loaded_descriptor_source_to_reg(
+    descriptor_source: LoadedDescriptorSource,
+    dest_reg: &str,
+    emitter: &mut Emitter,
+) {
+    match descriptor_source {
+        LoadedDescriptorSource::TemporaryStackSlot(offset) => {
+            abi::emit_load_temporary_stack_slot(emitter, dest_reg, offset);
+        }
+    }
+}
+
+/// Adjusts a descriptor stack source when this frame also preserved the argument array.
+fn descriptor_source_after_array_push(
+    descriptor_source: Option<LoadedDescriptorSource>,
+    pushed_array: bool,
+) -> Option<LoadedDescriptorSource> {
+    descriptor_source.map(|source| match source {
+        LoadedDescriptorSource::TemporaryStackSlot(offset) => {
+            LoadedDescriptorSource::TemporaryStackSlot(offset + if pushed_array { 16 } else { 0 })
+        }
+    })
+}
+
+/// Adjusts an argument-array source after preserving a descriptor on the temporary stack.
+fn array_source_after_descriptor_push(array_source: LoadedArraySource) -> LoadedArraySource {
+    match array_source {
+        LoadedArraySource::TemporaryStackSlot(offset) => {
+            LoadedArraySource::TemporaryStackSlot(offset + 16)
+        }
+        LoadedArraySource::Result => LoadedArraySource::Result,
+        LoadedArraySource::ArgumentRegister(index) => LoadedArraySource::ArgumentRegister(index),
+    }
+}
+
+/// Resolves a callback to its entry address and preserves its descriptor when available.
+fn materialize_callback_address_and_preserve_descriptor(
+    callback: &Expr,
+    call_reg: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> (Vec<(String, PhpType, bool)>, Option<LoadedDescriptorSource>) {
+    match &callback.kind {
+        ExprKind::StringLiteral(name) => {
+            let resolved_name = match lookup_function(ctx, name) {
+                Some(FunctionLookup::UserFunction(name))
+                | Some(FunctionLookup::IncludeVariant(name)) => name,
+                _ => name.clone(),
+            };
+            let label = crate::names::function_symbol(&resolved_name);
+            abi::emit_symbol_address(emitter, call_reg, &label);
+            (Vec::new(), None)
+        }
+        ExprKind::Variable(name) => {
+            let var = ctx.variables.get(name).expect("undefined callback variable");
+            abi::load_at_offset(emitter, call_reg, var.stack_offset);           // load the callback descriptor from the callable variable slot
+            if ctx.ref_params.contains(name) {
+                abi::emit_load_from_address(emitter, call_reg, call_reg, 0);
+            }
+            abi::emit_push_reg(emitter, call_reg);                              // preserve the callable descriptor for descriptor-invoker dispatch
+            callable_descriptor::emit_load_entry_from_descriptor(emitter, call_reg, call_reg);
+            (
+                crate::codegen::callables::callable_captures(callback, ctx),
+                Some(LoadedDescriptorSource::TemporaryStackSlot(0)),
+            )
+        }
+        _ => {
+            emit_expr(callback, emitter, ctx, data);
+            emitter.instruction(&format!("mov {}, {}", call_reg, abi::int_result_reg(emitter))); // keep the evaluated callback descriptor in the nested-call scratch register
+            abi::emit_push_reg(emitter, call_reg);                              // preserve the evaluated callable descriptor for descriptor-invoker dispatch
+            callable_descriptor::emit_load_entry_from_descriptor(emitter, call_reg, call_reg);
+            (
+                crate::codegen::callables::callable_captures(callback, ctx),
+                Some(LoadedDescriptorSource::TemporaryStackSlot(0)),
+            )
         }
     }
 }
@@ -178,12 +264,18 @@ pub fn emit(
         .as_ref()
         .map(|(_, sig)| sig.clone())
         .or_else(|| crate::codegen::callables::callable_sig(&args[0], ctx));
-    let captures = if let Some((resolved_name, _)) = direct_fcc_function.as_ref() {
+    let (captures, descriptor_source) = if let Some((resolved_name, _)) = direct_fcc_function.as_ref() {
         let label = crate::names::function_symbol(resolved_name);
         abi::emit_symbol_address(emitter, call_reg, &label);
-        Vec::new()
+        (Vec::new(), None)
     } else {
-        callback_env::materialize_callback_address(&args[0], call_reg, emitter, ctx, data)
+        materialize_callback_address_and_preserve_descriptor(
+            &args[0],
+            call_reg,
+            emitter,
+            ctx,
+            data,
+        )
     };
     let sig =
         if direct_fcc_function.is_none()
@@ -232,6 +324,7 @@ pub fn emit(
                     &arr_ty,
                     call_reg,
                     &captures,
+                    descriptor_source,
                     save_concat_before_args,
                     emitter,
                     ctx,
@@ -274,12 +367,17 @@ pub fn emit(
             &arr_ty,
             call_reg,
             &captures,
+            descriptor_source,
             save_concat_before_args,
             emitter,
             ctx,
             data,
         )
     };
+
+    if descriptor_source.is_some() {
+        abi::emit_release_temporary_stack(emitter, 16);                         // discard the preserved callable descriptor after call_user_func_array()
+    }
 
     Some(ret_ty)
 }
@@ -1122,6 +1220,7 @@ pub(crate) fn emit_loaded_array_unknown_callback_call(
     arr_ty: &PhpType,
     call_reg: &str,
     captures: &[(String, PhpType, bool)],
+    descriptor_source: Option<LoadedDescriptorSource>,
     concat_saved_before_args: bool,
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -1133,6 +1232,7 @@ pub(crate) fn emit_loaded_array_unknown_callback_call(
             arr_ty,
             call_reg,
             captures,
+            descriptor_source,
             concat_saved_before_args,
             emitter,
             ctx,
@@ -1148,6 +1248,7 @@ pub(crate) fn emit_loaded_array_unknown_callback_call(
             call_reg,
             captures,
             &cases,
+            descriptor_source,
             concat_saved_before_args,
             emitter,
             ctx,
@@ -1250,22 +1351,50 @@ pub(crate) fn emit_call_descriptor_array_invoker(
     ctx: &mut Context,
     data: &mut DataSection,
 ) {
+    emit_call_descriptor_array_invoker_with_label(
+        array_source,
+        arr_ty,
+        descriptor_reg,
+        None,
+        concat_saved_before_args,
+        emitter,
+        ctx,
+        data,
+    );
+}
+
+/// Calls a descriptor invoker, optionally overriding the invoker slot with a case label.
+#[allow(clippy::too_many_arguments)]
+fn emit_call_descriptor_array_invoker_with_label(
+    array_source: LoadedArraySource,
+    arr_ty: &PhpType,
+    descriptor_reg: &str,
+    invoker_label: Option<&str>,
+    concat_saved_before_args: bool,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
     let descriptor_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
     let array_arg_reg = abi::int_arg_reg_name(emitter.target, 1);
     let invoker_reg = abi::symbol_scratch_reg(emitter);
     let missing_label = ctx.next_label("cufa_descriptor_invoker_missing");
     let ready_label = ctx.next_label("cufa_descriptor_invoker_ready");
 
+    abi::emit_push_reg(emitter, descriptor_reg);                                // preserve the callable descriptor while normalizing the invoker argument container
+    let array_source = array_source_after_descriptor_push(array_source);
     let normalized_arg_ty =
         emit_normalized_invoker_arg_mixed(array_source, arr_ty, array_arg_reg, emitter, ctx, data);
     abi::emit_push_reg(emitter, array_arg_reg);                                  // preserve the temporary boxed Mixed argument container for release after invocation
-    if descriptor_arg_reg != descriptor_reg {
-        emitter.instruction(&format!("mov {}, {}", descriptor_arg_reg, descriptor_reg)); // pass the matched callable descriptor to the runtime invoker
-    }
+    abi::emit_load_temporary_stack_slot(emitter, descriptor_arg_reg, 16);
     if !concat_saved_before_args {
         crate::codegen::expr::save_concat_offset_before_nested_call(emitter, ctx);
     }
-    callable_descriptor::emit_load_invoker_from_descriptor(emitter, invoker_reg, descriptor_reg);
+    if let Some(invoker_label) = invoker_label {
+        abi::emit_symbol_address(emitter, invoker_reg, invoker_label);
+    } else {
+        callable_descriptor::emit_load_invoker_from_descriptor(emitter, invoker_reg, descriptor_arg_reg);
+    }
     emit_branch_if_descriptor_invoker_missing(invoker_reg, &missing_label, &ready_label, emitter);
 
     emitter.label(&missing_label);
@@ -1275,6 +1404,7 @@ pub(crate) fn emit_call_descriptor_array_invoker(
     abi::emit_call_reg(emitter, invoker_reg);
     if concat_saved_before_args {
         emit_release_normalized_invoker_arg_mixed(&normalized_arg_ty, emitter);
+        abi::emit_release_temporary_stack(emitter, 16);                         // discard the preserved callable descriptor after invocation
         crate::codegen::expr::restore_concat_offset_after_nested_call(
             emitter,
             ctx,
@@ -1287,7 +1417,58 @@ pub(crate) fn emit_call_descriptor_array_invoker(
             &PhpType::Mixed,
         );
         emit_release_normalized_invoker_arg_mixed(&normalized_arg_ty, emitter);
+        abi::emit_release_temporary_stack(emitter, 16);                         // discard the preserved callable descriptor after invocation
     }
+}
+
+/// Loads the descriptor that should feed a matched case invoker.
+fn emit_case_descriptor_for_invoker<'a>(
+    case: &'a RuntimeCallableCase,
+    descriptor_source: Option<LoadedDescriptorSource>,
+    descriptor_reg: &str,
+    emitter: &mut Emitter,
+) -> Option<Option<&'a str>> {
+    if !case.has_invoker {
+        return None;
+    }
+    if let Some(source) = descriptor_source {
+        if descriptor_invoker_would_stack_hidden_capture(case, emitter) {
+            return None;
+        }
+        emit_loaded_descriptor_source_to_reg(source, descriptor_reg, emitter);
+        return Some(case.invoker_label.as_deref());
+    }
+    if case.captures.is_empty() {
+        abi::emit_symbol_address(emitter, descriptor_reg, &case.descriptor_label);
+        return Some(None);
+    }
+    None
+}
+
+/// Returns whether this case would pass a descriptor-loaded hidden capture on the stack.
+fn descriptor_invoker_would_stack_hidden_capture(
+    case: &RuntimeCallableCase,
+    emitter: &Emitter,
+) -> bool {
+    if case.captures.is_empty() {
+        return false;
+    }
+    let mut arg_types: Vec<PhpType> = case
+        .sig
+        .params
+        .iter()
+        .map(|(_, ty)| ty.codegen_repr())
+        .collect();
+    arg_types.extend(
+        case.captures
+            .iter()
+            .map(|(_, ty, by_ref)| if *by_ref { PhpType::Int } else { ty.codegen_repr() }),
+    );
+    let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, &arg_types, 0);
+    assignments
+        .iter()
+        .skip(case.sig.params.len())
+        .any(|assignment| !assignment.in_register())
 }
 
 /// Materializes the descriptor invoker argument as a boxed Mixed container.
@@ -1543,6 +1724,7 @@ fn emit_loaded_indexed_array_unknown_callback_call(
     call_reg: &str,
     captures: &[(String, PhpType, bool)],
     cases: &[RuntimeCallableCase],
+    descriptor_source: Option<LoadedDescriptorSource>,
     concat_saved_before_args: bool,
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -1558,6 +1740,7 @@ fn emit_loaded_indexed_array_unknown_callback_call(
         LoadedArraySource::TemporaryStackSlot(offset) => LoadedArraySource::TemporaryStackSlot(offset),
         LoadedArraySource::ArgumentRegister(index) => LoadedArraySource::ArgumentRegister(index),
     };
+    let descriptor_source = descriptor_source_after_array_push(descriptor_source, pushed_array);
 
     let selector = RuntimeCallableSelector::Address(call_reg);
     for case in cases {
@@ -1570,12 +1753,30 @@ fn emit_loaded_indexed_array_unknown_callback_call(
             ctx,
             data,
         );
-        if case.has_invoker {
-            abi::emit_symbol_address(emitter, call_reg, &case.descriptor_label);
-            emit_call_descriptor_array_invoker(
+        if descriptor_invoker_would_stack_hidden_capture(case, emitter) {
+            let case_ret_ty = emit_loaded_array_unknown_callback_call_by_arity(
                 array_source,
                 arr_ty,
                 call_reg,
+                &case.captures,
+                concat_saved_before_args,
+                emitter,
+                ctx,
+                data,
+            );
+            crate::codegen::emit_box_current_value_as_mixed(emitter, &case_ret_ty.codegen_repr());
+            abi::emit_jump(emitter, &done_label);
+            emitter.label(&next_case);
+            continue;
+        }
+        if let Some(invoker_label) =
+            emit_case_descriptor_for_invoker(case, descriptor_source, call_reg, emitter)
+        {
+            emit_call_descriptor_array_invoker_with_label(
+                array_source,
+                arr_ty,
+                call_reg,
+                invoker_label,
                 concat_saved_before_args,
                 emitter,
                 ctx,
@@ -1712,6 +1913,7 @@ fn emit_loaded_assoc_array_unknown_callback_call(
     arr_ty: &PhpType,
     call_reg: &str,
     captures: &[(String, PhpType, bool)],
+    descriptor_source: Option<LoadedDescriptorSource>,
     concat_saved_before_args: bool,
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -1728,6 +1930,7 @@ fn emit_loaded_assoc_array_unknown_callback_call(
         LoadedArraySource::TemporaryStackSlot(offset) => LoadedArraySource::TemporaryStackSlot(offset),
         LoadedArraySource::ArgumentRegister(index) => LoadedArraySource::ArgumentRegister(index),
     };
+    let descriptor_source = descriptor_source_after_array_push(descriptor_source, pushed_array);
 
     let selector = RuntimeCallableSelector::Address(call_reg);
     for case in &cases {
@@ -1740,12 +1943,14 @@ fn emit_loaded_assoc_array_unknown_callback_call(
             ctx,
             data,
         );
-        if case.has_invoker {
-            abi::emit_symbol_address(emitter, call_reg, &case.descriptor_label);
-            emit_call_descriptor_array_invoker(
+        if let Some(invoker_label) =
+            emit_case_descriptor_for_invoker(case, descriptor_source, call_reg, emitter)
+        {
+            emit_call_descriptor_array_invoker_with_label(
                 array_source,
                 arr_ty,
                 call_reg,
+                invoker_label,
                 concat_saved_before_args,
                 emitter,
                 ctx,

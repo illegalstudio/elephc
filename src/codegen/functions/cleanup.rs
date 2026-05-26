@@ -14,6 +14,7 @@ use crate::codegen::platform::Arch;
 use crate::types::PhpType;
 
 use super::super::abi;
+use super::super::callable_descriptor;
 
 /// Preserves return registers before epilogue cleanup so the return value survives.
 pub(super) fn preserve_return_registers(emitter: &mut Emitter, ctx: &Context, return_ty: &PhpType) {
@@ -41,7 +42,8 @@ pub(super) fn epilogue_has_side_effects(ctx: &Context) -> bool {
                 && !ctx.ref_params.contains(name)
                 && var.epilogue_cleanup_safe
                 && var.ownership == HeapOwnership::Owned
-                && (matches!(var.ty, PhpType::Str) || var.ty.is_refcounted())
+                && (matches!(var.ty, PhpType::Str | PhpType::Callable)
+                    || var.ty.is_refcounted())
         })
 }
 
@@ -87,6 +89,15 @@ pub(crate) fn emit_owned_local_epilogue_cleanup(
                     var.stack_offset,
                 ); // load owned string pointer from the local slot into the target integer result register
                 super::super::abi::emit_call_label(emitter, "__rt_heap_free_safe"); // release owned string storage before returning
+            }
+            PhpType::Callable => {
+                emitter.comment(&format!("epilogue cleanup ${}", name));
+                super::super::abi::load_at_offset(
+                    emitter,
+                    super::super::abi::int_result_reg(emitter),
+                    var.stack_offset,
+                ); // load owned callable descriptor from the local slot into the target integer result register
+                callable_descriptor::emit_release_current_descriptor(emitter);
             }
             ty if ty.is_refcounted() => {
                 emitter.comment(&format!("epilogue cleanup ${}", name));

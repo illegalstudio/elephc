@@ -35,6 +35,7 @@ pub(crate) struct RuntimeCallableCase {
     pub(crate) sig: FunctionSig,
     pub(crate) captures: Vec<(String, PhpType, bool)>,
     pub(crate) has_invoker: bool,
+    pub(crate) invoker_label: Option<String>,
 }
 
 pub(crate) enum RuntimeCallableSelector<'a> {
@@ -84,6 +85,7 @@ pub(crate) fn runtime_callable_cases(
                 sig: case_sig,
                 captures: Vec::new(),
                 has_invoker: invoker_label.is_some(),
+                invoker_label,
             });
         }
         for name in supported_builtin_function_names() {
@@ -114,6 +116,7 @@ pub(crate) fn runtime_callable_cases(
                 sig: case_sig,
                 captures: Vec::new(),
                 has_invoker: invoker_label.is_some(),
+                invoker_label,
             });
         }
         for (class_name, method_name, sig) in runtime_static_method_wrappers(ctx) {
@@ -144,6 +147,7 @@ pub(crate) fn runtime_callable_cases(
                 sig: case_sig,
                 captures: Vec::new(),
                 has_invoker: invoker_label.is_some(),
+                invoker_label,
             });
         }
     }
@@ -174,11 +178,12 @@ pub(crate) fn runtime_callable_cases(
             sig: case_sig,
             captures: Vec::new(),
             has_invoker: invoker_label.is_some(),
+            invoker_label,
         });
     }
     let mut deferred_closure_cases = Vec::new();
     for deferred in &mut ctx.deferred_closures {
-        if deferred.hidden_params.as_slice() != captures {
+        if !captures.is_empty() && deferred.hidden_params.as_slice() != captures {
             continue;
         }
         let sig = specialized_runtime_case_sig(&deferred.sig, source_elem_ty.as_ref());
@@ -191,7 +196,7 @@ pub(crate) fn runtime_callable_cases(
         ));
     }
     for (label, sig, closure_captures, hidden_params) in deferred_closure_cases {
-        let invoker_label = ensure_runtime_descriptor_invoker(ctx, captures, &sig);
+        let invoker_label = ensure_runtime_descriptor_invoker(ctx, &hidden_params, &sig);
         let descriptor_label = runtime_case_descriptor(
             data,
             &label,
@@ -208,8 +213,9 @@ pub(crate) fn runtime_callable_cases(
             descriptor_label,
             php_name: None,
             sig,
-            captures: captures.to_vec(),
+            captures: hidden_params,
             has_invoker: invoker_label.is_some(),
+            invoker_label,
         });
     }
     cases.sort_by(|left, right| left.label.cmp(&right.label));
@@ -252,18 +258,15 @@ fn runtime_case_source_elem_ty(source_arg_ty: &PhpType) -> PhpType {
 }
 
 /// Ensures a descriptor-compatible runtime invoker exists for the callable signature.
-fn ensure_runtime_descriptor_invoker(
+pub(crate) fn ensure_runtime_descriptor_invoker(
     ctx: &mut Context,
     captures: &[(String, PhpType, bool)],
     sig: &FunctionSig,
 ) -> Option<String> {
-    if !captures.is_empty() {
-        return None;
-    }
     if let Some(existing) = ctx
         .deferred_runtime_callable_invokers
         .iter()
-        .find(|invoker| invoker.sig == *sig)
+        .find(|invoker| invoker.sig == *sig && invoker.captures == captures)
     {
         return Some(existing.label.clone());
     }
@@ -272,6 +275,7 @@ fn ensure_runtime_descriptor_invoker(
         .push(DeferredRuntimeCallableInvoker {
             label: label.clone(),
             sig: sig.clone(),
+            captures: captures.to_vec(),
         });
     Some(label)
 }
@@ -391,6 +395,7 @@ pub(crate) fn runtime_static_method_case(
         sig: case_sig,
         captures: Vec::new(),
         has_invoker: invoker_label.is_some(),
+        invoker_label,
     })
 }
 
@@ -457,6 +462,7 @@ pub(crate) fn runtime_instance_method_case(
         sig: case_sig,
         captures: Vec::new(),
         has_invoker: invoker_label.is_some(),
+        invoker_label,
     })
 }
 

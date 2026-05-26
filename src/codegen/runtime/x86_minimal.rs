@@ -112,6 +112,7 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_ltrim_mask(emitter);
     strings::emit_trim_mask(emitter);
     callables::emit_is_callable_runtime(emitter);
+    callables::emit_callable_descriptor_release(emitter);
     system::emit_time(emitter);
     system::emit_microtime(emitter);
     system::emit_php_uname(emitter);

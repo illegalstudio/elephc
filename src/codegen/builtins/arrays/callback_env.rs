@@ -88,6 +88,11 @@ pub(crate) fn push_captures_as_hidden_args(
     ctx: &Context,
     arg_types: &mut Vec<PhpType>,
 ) {
+    if let Some(descriptor_offset) = ctx.runtime_capture_descriptor_offset {
+        push_descriptor_captures_as_hidden_args(captures, descriptor_offset, emitter, arg_types);
+        return;
+    }
+
     for (capture_name, capture_ty, by_ref) in captures {
         emitter.comment(&format!("push callback capture ${}", capture_name));
         if *by_ref {
@@ -114,6 +119,39 @@ pub(crate) fn push_captures_as_hidden_args(
                 continue;
             };
             abi::emit_load(emitter, capture_ty, capture_info.stack_offset);
+            crate::codegen::expr::calls::args::push_arg_value(emitter, capture_ty);
+            arg_types.push(capture_ty.clone());
+        }
+    }
+}
+
+/// Pushes hidden captures loaded from the runtime descriptor stored in a frame slot.
+fn push_descriptor_captures_as_hidden_args(
+    captures: &[(String, PhpType, bool)],
+    descriptor_offset: usize,
+    emitter: &mut Emitter,
+    arg_types: &mut Vec<PhpType>,
+) {
+    let descriptor_reg = abi::symbol_scratch_reg(emitter);
+    for (idx, (capture_name, capture_ty, by_ref)) in captures.iter().enumerate() {
+        emitter.comment(&format!("push descriptor capture ${}", capture_name));
+        abi::load_at_offset(emitter, descriptor_reg, descriptor_offset);
+        if *by_ref {
+            crate::codegen::callable_descriptor::emit_load_runtime_capture_to_result(
+                emitter,
+                descriptor_reg,
+                idx,
+                &PhpType::Int,
+            );
+            crate::codegen::expr::calls::args::push_arg_value(emitter, &PhpType::Int);
+            arg_types.push(PhpType::Int);
+        } else {
+            crate::codegen::callable_descriptor::emit_load_runtime_capture_to_result(
+                emitter,
+                descriptor_reg,
+                idx,
+                capture_ty,
+            );
             crate::codegen::expr::calls::args::push_arg_value(emitter, capture_ty);
             arg_types.push(capture_ty.clone());
         }

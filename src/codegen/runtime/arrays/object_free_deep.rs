@@ -92,6 +92,13 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Fiber object pointer after pending_throw cleanup
     emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen::runtime::FIBER_PENDING_THROW_OFFSET)); // clear pending_throw after releasing it
 
+    // -- release the callable descriptor retained by the Fiber object itself --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Fiber object pointer before descriptor cleanup
+    emitter.instruction(&format!("ldr x0, [x0, #{}]", crate::codegen::runtime::FIBER_CALLABLE_OFFSET)); // load the callable descriptor stored on the Fiber
+    emitter.instruction("bl __rt_callable_descriptor_release");                 // release dynamic descriptor captures held by the Fiber callable
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Fiber object pointer after descriptor cleanup
+    emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen::runtime::FIBER_CALLABLE_OFFSET)); // clear callable descriptor after release
+
     // -- release captured values that ride in start_args[user_arg_max..7].
     // Each capture was incref'd at construction by emit_fiber_capture_preload,
     // so the matching decref keeps refcount balanced. Slots [0..user_arg_max)
@@ -311,6 +318,13 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_decref_any");                                // release a pending Throwable if one is still attached
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Fiber object pointer after pending_throw cleanup
     emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen::runtime::FIBER_PENDING_THROW_OFFSET)); // clear pending_throw after releasing it
+
+    // -- release the callable descriptor retained by the Fiber object itself --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Fiber object pointer before descriptor cleanup
+    emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", crate::codegen::runtime::FIBER_CALLABLE_OFFSET)); // load the callable descriptor stored on the Fiber
+    emitter.instruction("call __rt_callable_descriptor_release");               // release dynamic descriptor captures held by the Fiber callable
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Fiber object pointer after descriptor cleanup
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen::runtime::FIBER_CALLABLE_OFFSET)); // clear callable descriptor after release
 
     let user_arg_max_off = crate::codegen::runtime::FIBER_USER_ARG_MAX_OFFSET;
     let start_args_off = crate::codegen::runtime::FIBER_START_ARGS_OFFSET;

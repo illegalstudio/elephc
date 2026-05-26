@@ -19,6 +19,7 @@ mod null_coalesce_assign;
 mod storage;
 
 use super::abi;
+use super::callable_descriptor;
 use super::context::{Context, HeapOwnership};
 use super::data_section::DataSection;
 use super::emit::Emitter;
@@ -399,6 +400,8 @@ fn release_discarded_expr_result(
             emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg));   // pass discarded owned string pointer to heap-free helper
         }
         abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    } else if matches!(ty, PhpType::Callable) {
+        callable_descriptor::emit_release_current_descriptor(emitter);
     } else if ty.is_refcounted() {
         abi::emit_decref_if_refcounted(emitter, ty);
     }

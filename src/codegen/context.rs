@@ -41,7 +41,7 @@ pub enum HeapOwnership {
 impl HeapOwnership {
     /// Returns the heap ownership for a given PHP type.
     pub fn for_type(ty: &PhpType) -> Self {
-        if ty.is_refcounted() || matches!(ty, PhpType::Str) {
+        if ty.is_refcounted() || matches!(ty, PhpType::Str | PhpType::Callable) {
             HeapOwnership::MaybeOwned
         } else {
             HeapOwnership::NonHeap
@@ -50,7 +50,7 @@ impl HeapOwnership {
 
     /// Returns the local owner heap ownership for a given PHP type.
     pub fn local_owner_for_type(ty: &PhpType) -> Self {
-        if ty.is_refcounted() || matches!(ty, PhpType::Str) {
+        if ty.is_refcounted() || matches!(ty, PhpType::Str | PhpType::Callable) {
             HeapOwnership::Owned
         } else {
             HeapOwnership::NonHeap
@@ -59,7 +59,7 @@ impl HeapOwnership {
 
     /// Returns the borrowed alias heap ownership for a given PHP type.
     pub fn borrowed_alias_for_type(ty: &PhpType) -> Self {
-        if ty.is_refcounted() || matches!(ty, PhpType::Str) {
+        if ty.is_refcounted() || matches!(ty, PhpType::Str | PhpType::Callable) {
             HeapOwnership::Borrowed
         } else {
             HeapOwnership::NonHeap
@@ -137,6 +137,7 @@ pub struct DeferredCallbackWrapper {
 pub struct DeferredRuntimeCallableInvoker {
     pub label: String,
     pub sig: FunctionSig,
+    pub captures: Vec<(String, PhpType, bool)>,
 }
 
 /// Carries mutable codegen state while lowering expressions, statements, functions, and wrappers.
@@ -212,6 +213,11 @@ pub struct Context {
     /// than a short-circuited call — at which point the dead-wrapper stub
     /// optimisation must back off and emit the full body.
     pub variable_fcc_label: HashMap<String, String>,
+    /// Frame slot holding the descriptor passed to a runtime callable invoker.
+    ///
+    /// When set, callback argument lowering appends hidden captures by reading
+    /// runtime capture slots from this descriptor instead of caller locals.
+    pub runtime_capture_descriptor_offset: Option<usize>,
     /// Class definitions for OOP support.
     pub classes: HashMap<String, ClassInfo>,
     /// Interface definitions for OOP support.
@@ -336,6 +342,7 @@ impl Context {
             callable_array_targets: HashMap::new(),
             first_class_callable_targets: HashMap::new(),
             variable_fcc_label: HashMap::new(),
+            runtime_capture_descriptor_offset: None,
             classes: HashMap::new(),
             interfaces: HashMap::new(),
             traits: HashSet::new(),

@@ -461,7 +461,7 @@ fn emit_function_with_label_and_class(
         if param_names.contains(name) {
             continue;
         }
-        if matches!(&var.ty, PhpType::Str) || var.ty.is_refcounted() {
+        if matches!(&var.ty, PhpType::Str | PhpType::Callable) || var.ty.is_refcounted() {
             super::abi::emit_store_zero_to_local_slot(emitter, var.stack_offset); // zero-init to prevent stale ptr free
         }
     }

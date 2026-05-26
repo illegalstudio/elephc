@@ -349,6 +349,7 @@ fn emit_callback_invocation(
                 arg_array_ty,
                 call_reg,
                 captures,
+                None,
                 save_concat_before_args,
                 emitter,
                 ctx,

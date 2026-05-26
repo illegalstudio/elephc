@@ -284,7 +284,7 @@ fn emit_main_prologue(
     }
 }
 
-/// Zero-initializes main-function local variables that are refcounted (string, array, object).
+/// Zero-initializes main-function local variables that are cleanup-tracked heap values.
 /// Skips `$argc` and `$argv` since those are populated from OS arguments in the prologue.
 /// Uses `abi::emit_store_zero_to_local_slot` for each refcounted local to ensure
 /// no stale pointer is freed at function exit (prevents use-after-free on uninitialized slot).
@@ -305,7 +305,7 @@ fn zero_initialize_main_locals(
         if main_skip.contains(name) {
             continue;
         }
-        if matches!(&var.ty, PhpType::Str) || var.ty.is_refcounted() {
+        if matches!(&var.ty, PhpType::Str | PhpType::Callable) || var.ty.is_refcounted() {
             abi::emit_store_zero_to_local_slot(emitter, var.stack_offset);     // zero-init to prevent stale ptr free
         }
     }

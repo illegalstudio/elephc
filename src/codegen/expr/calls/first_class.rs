@@ -440,17 +440,17 @@ pub(super) fn emit_first_class_callable(
     });
 
     emitter.comment("first-class callable: load descriptor");
-    crate::codegen::callable_descriptor::emit_load_descriptor_address_with_meta(
-        emitter,
-        data,
-        abi::int_result_reg(emitter),
+    super::descriptor_value::emit_callable_descriptor_value(
         &wrapper_label,
         None,
         crate::codegen::callable_descriptor::CALLABLE_DESC_KIND_FIRST_CLASS,
-        Some(&sig),
+        &sig,
         &captures,
         &hidden_params,
         descriptor_invocation,
+        emitter,
+        ctx,
+        data,
     );
     PhpType::Callable
 }

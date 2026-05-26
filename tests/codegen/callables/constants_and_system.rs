@@ -1193,6 +1193,66 @@ echo call_user_func_array($callbacks[0], $args);
     let _ = fs::remove_dir_all(dir);
 }
 
+/// Verifies captured closure descriptors expose invokers with runtime capture slots.
+#[test]
+fn test_call_user_func_array_captured_closure_descriptor_uses_invoker() {
+    let source = r#"<?php
+$prefix = "old";
+$callbacks = [function(string $name) use ($prefix): string {
+    return $prefix . $name;
+}];
+$prefix = "new";
+echo call_user_func_array($callbacks[0], ["name" => "Ada"]);
+echo "|";
+echo call_user_func_array($callbacks[0], ["Bob"]);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "oldAda|oldBob");
+
+    let dir = make_cli_test_dir("elephc_captured_closure_descriptor_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "captured closure dispatch should emit a descriptor invoker:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies by-reference captures survive descriptor invoker dispatch.
+#[test]
+fn test_call_user_func_array_captured_closure_descriptor_preserves_by_ref_capture() {
+    let out = compile_and_run(
+        r#"<?php
+$value = 1;
+$callbacks = [function() use (&$value): void {
+    $value = $value + 2;
+}];
+call_user_func_array($callbacks[0], []);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// Verifies captured closure descriptor cleanup frees copied by-value capture slots.
+#[test]
+fn test_captured_closure_descriptor_cleanup_releases_owned_capture_slots() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$prefix = "old";
+$cb = function() use ($prefix): void {
+};
+$prefix = "new";
+echo "done";
+"#,
+    );
+    assert_eq!(out.stdout, "done");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
 /// Verifies that call user func array first class dynamic assoc args for variadic callback.
 #[test]
 fn test_call_user_func_array_first_class_dynamic_assoc_args_for_variadic_callback() {

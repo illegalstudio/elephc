@@ -45,6 +45,8 @@ pub(crate) const CALLABLE_DESC_ENVIRONMENT_OFFSET: usize = 40;
 pub(crate) const CALLABLE_DESC_INVOCATION_OFFSET: usize = 48;
 #[allow(dead_code)]
 pub(crate) const CALLABLE_DESC_INVOKER_OFFSET: usize = 56;
+pub(crate) const CALLABLE_DESC_STATIC_SIZE: usize = 64;
+pub(crate) const CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET: usize = CALLABLE_DESC_STATIC_SIZE;
 
 const CALLABLE_DESC_VARIADIC_NONE: u64 = u64::MAX;
 
@@ -277,6 +279,82 @@ pub(crate) fn emit_load_invoker_from_descriptor(
     descriptor_reg: &str,
 ) {
     abi::emit_load_from_address(emitter, dest_reg, descriptor_reg, CALLABLE_DESC_INVOKER_OFFSET);
+}
+
+/// Retains the callable descriptor pointer currently held in the integer result register.
+pub(crate) fn emit_retain_current_descriptor(emitter: &mut Emitter) {
+    let result_reg = abi::int_result_reg(emitter);
+    abi::emit_push_reg(emitter, result_reg);
+    abi::emit_call_label(emitter, "__rt_incref");
+    abi::emit_pop_reg(emitter, result_reg);
+}
+
+/// Releases the callable descriptor pointer currently held in the integer result register.
+pub(crate) fn emit_release_current_descriptor(emitter: &mut Emitter) {
+    abi::emit_call_label(emitter, "__rt_callable_descriptor_release");
+}
+
+/// Copies the fixed static descriptor header into a runtime descriptor allocation.
+pub(crate) fn emit_copy_static_descriptor_to_runtime(
+    emitter: &mut Emitter,
+    dest_reg: &str,
+    descriptor_label: &str,
+) {
+    let source_reg = abi::symbol_scratch_reg(emitter);
+    let word_reg = abi::secondary_scratch_reg(emitter);
+    abi::emit_symbol_address(emitter, source_reg, descriptor_label);
+    for offset in (0..CALLABLE_DESC_STATIC_SIZE).step_by(8) {
+        abi::emit_load_from_address(emitter, word_reg, source_reg, offset);
+        abi::emit_store_to_address(emitter, word_reg, dest_reg, offset);
+    }
+}
+
+/// Stores the current result registers into a runtime descriptor capture slot.
+pub(crate) fn emit_store_current_result_to_runtime_capture(
+    emitter: &mut Emitter,
+    descriptor_reg: &str,
+    capture_index: usize,
+    capture_ty: &PhpType,
+) {
+    let offset = CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + capture_index * 16;
+    match capture_ty.codegen_repr() {
+        PhpType::Float => {
+            abi::emit_store_to_address(emitter, abi::float_result_reg(emitter), descriptor_reg, offset);
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            abi::emit_store_to_address(emitter, ptr_reg, descriptor_reg, offset);
+            abi::emit_store_to_address(emitter, len_reg, descriptor_reg, offset + 8);
+        }
+        PhpType::Void | PhpType::Never => {}
+        _ => {
+            abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
+        }
+    }
+}
+
+/// Loads a runtime descriptor capture slot into the ABI result registers.
+pub(crate) fn emit_load_runtime_capture_to_result(
+    emitter: &mut Emitter,
+    descriptor_reg: &str,
+    capture_index: usize,
+    capture_ty: &PhpType,
+) {
+    let offset = CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + capture_index * 16;
+    match capture_ty.codegen_repr() {
+        PhpType::Float => {
+            abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), descriptor_reg, offset);
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            abi::emit_load_from_address(emitter, ptr_reg, descriptor_reg, offset);
+            abi::emit_load_from_address(emitter, len_reg, descriptor_reg, offset + 8);
+        }
+        PhpType::Void | PhpType::Never => {}
+        _ => {
+            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
+        }
+    }
 }
 
 /// Builds the signature side record for runtime arity and argument planning.
