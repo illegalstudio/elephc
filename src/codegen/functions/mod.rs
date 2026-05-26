@@ -514,6 +514,7 @@ fn emit_function_with_label_and_class(
     while !ctx.deferred_closures.is_empty()
         || !ctx.deferred_fiber_wrappers.is_empty()
         || !ctx.deferred_callback_wrappers.is_empty()
+        || !ctx.deferred_runtime_callable_invokers.is_empty()
     {
         let closures: Vec<_> = ctx.deferred_closures.drain(..).collect();
         for closure in closures {
@@ -563,6 +564,15 @@ fn emit_function_with_label_and_class(
         let callback_wrappers: Vec<_> = ctx.deferred_callback_wrappers.drain(..).collect();
         for wrapper in callback_wrappers {
             emit_callback_wrapper(emitter, &wrapper);
+        }
+        let invokers: Vec<_> = ctx.deferred_runtime_callable_invokers.drain(..).collect();
+        for invoker in invokers {
+            crate::codegen::runtime_callable_invoker::emit_runtime_callable_invoker(
+                emitter,
+                data,
+                &ctx,
+                &invoker,
+            );
         }
     }
 }

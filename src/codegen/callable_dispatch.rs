@@ -7,13 +7,13 @@
 //!
 //! Key details:
 //! - Cases carry the ABI entry label, optional PHP-visible name, signature metadata, and hidden captures.
-//! - String-name dispatch compares against userland callable names before loading the matched entry address.
+//! - String-name dispatch compares against userland callable names before loading the matched descriptor.
 
 use crate::codegen::abi;
 use crate::codegen::callable_descriptor::{
     self, CallableDescriptorInvocation, CallableDescriptorShape,
 };
-use crate::codegen::context::{Context, DeferredClosure};
+use crate::codegen::context::{Context, DeferredClosure, DeferredRuntimeCallableInvoker};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -32,6 +32,7 @@ pub(crate) struct RuntimeCallableCase {
     pub(crate) php_name: Option<String>,
     pub(crate) sig: FunctionSig,
     pub(crate) captures: Vec<(String, PhpType, bool)>,
+    pub(crate) has_invoker: bool,
 }
 
 pub(crate) enum RuntimeCallableSelector<'a> {
@@ -48,9 +49,10 @@ pub(crate) fn runtime_callable_cases(
     ctx: &mut Context,
     data: &mut DataSection,
     captures: &[(String, PhpType, bool)],
-    source_elem_ty: Option<&PhpType>,
+    source_arg_ty: Option<&PhpType>,
 ) -> Vec<RuntimeCallableCase> {
     let mut cases = Vec::new();
+    let source_elem_ty = source_arg_ty.map(runtime_case_source_elem_ty);
     if captures.is_empty() {
         for name in supported_builtin_function_names() {
             if runtime_builtin_wrapper_excluded(name) {
@@ -59,9 +61,10 @@ pub(crate) fn runtime_callable_cases(
             let Some(sig) = first_class_callable_builtin_sig(name) else {
                 continue;
             };
-            let wrapper_sig = callable_wrapper_sig(&sig);
-            let label = ensure_runtime_builtin_wrapper(ctx, name, &wrapper_sig);
-            let case_sig = specialized_runtime_case_sig(&wrapper_sig, source_elem_ty);
+            let case_sig = callable_wrapper_sig(&sig);
+            let label = ensure_runtime_builtin_wrapper(ctx, name, &case_sig);
+            let invoker_label =
+                ensure_runtime_descriptor_invoker(ctx, source_arg_ty, captures, &case_sig);
             let descriptor_label = runtime_case_descriptor(
                 data,
                 &label,
@@ -71,6 +74,7 @@ pub(crate) fn runtime_callable_cases(
                 &[],
                 &[],
                 CallableDescriptorInvocation::named(CallableDescriptorShape::Builtin, *name),
+                invoker_label.as_deref(),
             );
             cases.push(RuntimeCallableCase {
                 label,
@@ -78,14 +82,16 @@ pub(crate) fn runtime_callable_cases(
                 php_name: Some((*name).to_string()),
                 sig: case_sig,
                 captures: Vec::new(),
+                has_invoker: invoker_label.is_some(),
             });
         }
         for (class_name, method_name, sig) in runtime_static_method_wrappers(ctx) {
-            let wrapper_sig = callable_wrapper_sig(&sig);
+            let case_sig = callable_wrapper_sig(&sig);
             let label =
-                ensure_runtime_static_method_wrapper(ctx, &class_name, &method_name, &wrapper_sig);
+                ensure_runtime_static_method_wrapper(ctx, &class_name, &method_name, &case_sig);
             let php_name = format!("{}::{}", class_name, method_name);
-            let case_sig = specialized_runtime_case_sig(&wrapper_sig, source_elem_ty);
+            let invoker_label =
+                ensure_runtime_descriptor_invoker(ctx, source_arg_ty, captures, &case_sig);
             let descriptor_label = runtime_case_descriptor(
                 data,
                 &label,
@@ -99,6 +105,7 @@ pub(crate) fn runtime_callable_cases(
                     Some(class_name.clone()),
                     method_name.as_str(),
                 ),
+                invoker_label.as_deref(),
             );
             cases.push(RuntimeCallableCase {
                 label,
@@ -106,38 +113,45 @@ pub(crate) fn runtime_callable_cases(
                 php_name: Some(php_name),
                 sig: case_sig,
                 captures: Vec::new(),
+                has_invoker: invoker_label.is_some(),
             });
         }
     }
-    for (name, sig) in &ctx.functions {
-        if ctx.extern_functions.contains_key(name) {
-            continue;
-        }
-        let wrapper_sig = callable_wrapper_sig(sig);
-        let case_sig = specialized_runtime_case_sig(&wrapper_sig, source_elem_ty);
+    let user_functions: Vec<(String, FunctionSig)> = ctx
+        .functions
+        .iter()
+        .filter(|(name, _)| !ctx.extern_functions.contains_key(*name))
+        .map(|(name, sig)| (name.clone(), sig.clone()))
+        .collect();
+    for (name, sig) in user_functions {
+        let case_sig = callable_wrapper_sig(&sig);
+        let invoker_label =
+            ensure_runtime_descriptor_invoker(ctx, source_arg_ty, captures, &case_sig);
         let descriptor_label = runtime_case_descriptor(
             data,
-            &function_symbol(name),
-            Some(name),
+            &function_symbol(&name),
+            Some(&name),
             callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
             &case_sig,
             &[],
             &[],
-            CallableDescriptorInvocation::named(CallableDescriptorShape::Function, name),
+            CallableDescriptorInvocation::named(CallableDescriptorShape::Function, &name),
+            invoker_label.as_deref(),
         );
         cases.push(RuntimeCallableCase {
-            label: function_symbol(name),
+            label: function_symbol(&name),
             descriptor_label,
-            php_name: Some(name.clone()),
+            php_name: Some(name),
             sig: case_sig,
             captures: Vec::new(),
+            has_invoker: invoker_label.is_some(),
         });
     }
     for deferred in &mut ctx.deferred_closures {
         if deferred.hidden_params.as_slice() != captures {
             continue;
         }
-        let sig = specialized_runtime_case_sig(&deferred.sig, source_elem_ty);
+        let sig = specialized_runtime_case_sig(&deferred.sig, source_elem_ty.as_ref());
         deferred.sig = sig.clone();
         let descriptor_label = runtime_case_descriptor(
             data,
@@ -148,6 +162,7 @@ pub(crate) fn runtime_callable_cases(
             &deferred.captures,
             &deferred.hidden_params,
             CallableDescriptorInvocation::new(CallableDescriptorShape::Closure),
+            None,
         );
         cases.push(RuntimeCallableCase {
             label: deferred.label.clone(),
@@ -155,6 +170,7 @@ pub(crate) fn runtime_callable_cases(
             php_name: None,
             sig,
             captures: captures.to_vec(),
+            has_invoker: false,
         });
     }
     cases.sort_by(|left, right| left.label.cmp(&right.label));
@@ -172,8 +188,9 @@ fn runtime_case_descriptor(
     captures: &[(String, PhpType, bool)],
     hidden_params: &[(String, PhpType, bool)],
     invocation: CallableDescriptorInvocation,
+    invoker_label: Option<&str>,
 ) -> String {
-    callable_descriptor::static_descriptor_with_meta(
+    callable_descriptor::static_descriptor_with_optional_invoker_meta(
         data,
         label,
         php_name,
@@ -182,7 +199,57 @@ fn runtime_case_descriptor(
         captures,
         hidden_params,
         invocation,
+        invoker_label,
     )
+}
+
+/// Returns the element/value type visible to dynamic argument specialization.
+fn runtime_case_source_elem_ty(source_arg_ty: &PhpType) -> PhpType {
+    match source_arg_ty {
+        PhpType::Array(elem_ty) => *elem_ty.clone(),
+        PhpType::AssocArray { value, .. } => *value.clone(),
+        other => other.clone(),
+    }
+}
+
+/// Ensures a descriptor-compatible runtime invoker exists for callsite array metadata.
+fn ensure_runtime_descriptor_invoker(
+    ctx: &mut Context,
+    source_arg_ty: Option<&PhpType>,
+    captures: &[(String, PhpType, bool)],
+    sig: &FunctionSig,
+) -> Option<String> {
+    if !captures.is_empty() {
+        return None;
+    }
+    let array_ty = normalized_runtime_invoker_array_ty(source_arg_ty?)?;
+    if let Some(existing) = ctx
+        .deferred_runtime_callable_invokers
+        .iter()
+        .find(|invoker| invoker.sig == *sig && invoker.array_ty == array_ty)
+    {
+        return Some(existing.label.clone());
+    }
+    let label = ctx.next_label("callable_invoker");
+    ctx.deferred_runtime_callable_invokers
+        .push(DeferredRuntimeCallableInvoker {
+            label: label.clone(),
+            sig: sig.clone(),
+            array_ty,
+        });
+    Some(label)
+}
+
+/// Returns the type-erased argument array shape passed to descriptor invokers.
+fn normalized_runtime_invoker_array_ty(source_arg_ty: &PhpType) -> Option<PhpType> {
+    match source_arg_ty {
+        PhpType::Array(_) => Some(PhpType::Array(Box::new(PhpType::Mixed))),
+        PhpType::AssocArray { .. } => Some(PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        }),
+        _ => None,
+    }
 }
 
 /// Provides the Runtime static method wrappers helper used by the callable dispatch module.
@@ -472,7 +539,6 @@ fn emit_branch_if_string_name_mismatch(
 
     emitter.label(&matched_label);
     abi::emit_symbol_address(emitter, call_reg, &case.descriptor_label);
-    callable_descriptor::emit_load_entry_from_descriptor(emitter, call_reg, call_reg);
 }
 
 /// Emits assembly for string name compare.

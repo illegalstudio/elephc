@@ -439,6 +439,24 @@ echo call_user_func($callback, "ok");
     assert_eq!(out, "[ok]");
 }
 
+/// Verifies that descriptor invokers do not rewrite the caller's indexed arg array.
+#[test]
+fn test_call_user_func_array_dynamic_string_keeps_indexed_args_usable_after_invocation() {
+    let out = compile_and_run(
+        r#"<?php
+function greet_again(string $name): string {
+    return "hi " . $name;
+}
+$callback = "greet_again";
+$args = ["Ada"];
+echo call_user_func_array($callback, $args);
+echo ":";
+echo $args[0];
+"#,
+    );
+    assert_eq!(out, "hi Ada:Ada");
+}
+
 /// Verifies that call user func array dynamic string assoc callback.
 #[test]
 fn test_call_user_func_array_dynamic_string_assoc_callback() {
@@ -453,6 +471,26 @@ echo call_user_func_array($callback, $args);
 "#,
     );
     assert_eq!(out, "id:7");
+}
+
+/// Verifies that descriptor invokers do not rewrite the caller's associative arg array.
+#[test]
+fn test_call_user_func_array_dynamic_string_keeps_assoc_args_usable_after_invocation() {
+    let out = compile_and_run(
+        r#"<?php
+function stamp_again(string $prefix, int $value): string {
+    return $prefix . ":" . $value;
+}
+$callback = "stamp_again";
+$args = ["value" => 7, "prefix" => "id"];
+echo call_user_func_array($callback, $args);
+echo ":";
+echo $args["prefix"];
+echo ":";
+echo $args["value"];
+"#,
+    );
+    assert_eq!(out, "id:7:id:7");
 }
 
 /// Verifies that call user func array dynamic string builtin assoc callback.

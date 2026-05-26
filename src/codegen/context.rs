@@ -129,6 +129,17 @@ pub struct DeferredCallbackWrapper {
     pub capture_types: Vec<PhpType>,
 }
 
+/// A generated runtime callable invoker with a descriptor-based ABI.
+///
+/// Invokers receive a callable descriptor pointer plus a normalized Mixed
+/// argument array, load the target entry from the descriptor, materialize
+/// arguments according to the stored signature, and return a boxed `Mixed` result.
+pub struct DeferredRuntimeCallableInvoker {
+    pub label: String,
+    pub sig: FunctionSig,
+    pub array_ty: PhpType,
+}
+
 /// Carries mutable codegen state while lowering expressions, statements, functions, and wrappers.
 ///
 /// Context tracks local variable stack slots, loop labels, class/interface/enum metadata,
@@ -146,6 +157,7 @@ pub struct Context {
     pub deferred_closures: Vec<DeferredClosure>,
     pub deferred_fiber_wrappers: Vec<DeferredFiberWrapper>,
     pub deferred_callback_wrappers: Vec<DeferredCallbackWrapper>,
+    pub deferred_runtime_callable_invokers: Vec<DeferredRuntimeCallableInvoker>,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
     /// Variables declared with `global $var` in the current function scope.
     pub global_vars: HashSet<String>,
@@ -298,6 +310,7 @@ impl Context {
             deferred_closures: Vec::new(),
             deferred_fiber_wrappers: Vec::new(),
             deferred_callback_wrappers: Vec::new(),
+            deferred_runtime_callable_invokers: Vec::new(),
             constants: HashMap::new(),
             global_vars: HashSet::new(),
             static_vars: HashSet::new(),

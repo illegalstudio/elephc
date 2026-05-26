@@ -12,6 +12,8 @@
 //! - Descriptor side records keep callable signature/default/by-ref/variadic and
 //!   capture/receiver metadata available to runtime dispatch without changing the
 //!   one-word callable ABI.
+//! - The optional invoker slot points at a generated uniform runtime adapter whose
+//!   ABI is `(descriptor, argument array) -> Mixed`.
 
 use crate::codegen::abi;
 use crate::codegen::data_section::{DataSection, DataWord};
@@ -36,6 +38,8 @@ pub(crate) const CALLABLE_DESC_SIGNATURE_OFFSET: usize = 32;
 pub(crate) const CALLABLE_DESC_ENVIRONMENT_OFFSET: usize = 40;
 #[allow(dead_code)]
 pub(crate) const CALLABLE_DESC_INVOCATION_OFFSET: usize = 48;
+#[allow(dead_code)]
+pub(crate) const CALLABLE_DESC_INVOKER_OFFSET: usize = 56;
 
 const CALLABLE_DESC_VARIADIC_NONE: u64 = u64::MAX;
 
@@ -88,6 +92,7 @@ pub(crate) struct CallableDescriptorSpec<'a> {
     pub(crate) captures: &'a [(String, PhpType, bool)],
     pub(crate) hidden_params: &'a [(String, PhpType, bool)],
     pub(crate) invocation: CallableDescriptorInvocation,
+    pub(crate) invoker_label: Option<&'a str>,
 }
 
 impl CallableDescriptorInvocation {
@@ -138,6 +143,32 @@ pub(crate) fn static_descriptor_with_meta(
     hidden_params: &[(String, PhpType, bool)],
     invocation: CallableDescriptorInvocation,
 ) -> String {
+    static_descriptor_with_optional_invoker_meta(
+        data,
+        entry_label,
+        php_name,
+        kind,
+        sig,
+        captures,
+        hidden_params,
+        invocation,
+        None,
+    )
+}
+
+/// Emits a descriptor with side records and an optional runtime invoker entry.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn static_descriptor_with_optional_invoker_meta(
+    data: &mut DataSection,
+    entry_label: &str,
+    php_name: Option<&str>,
+    kind: u64,
+    sig: Option<&FunctionSig>,
+    captures: &[(String, PhpType, bool)],
+    hidden_params: &[(String, PhpType, bool)],
+    invocation: CallableDescriptorInvocation,
+    invoker_label: Option<&str>,
+) -> String {
     let spec = CallableDescriptorSpec {
         entry_label,
         php_name,
@@ -146,6 +177,7 @@ pub(crate) fn static_descriptor_with_meta(
         captures,
         hidden_params,
         invocation,
+        invoker_label,
     };
     static_descriptor_from_spec(data, &spec)
 }
@@ -180,6 +212,10 @@ fn static_descriptor_from_spec(
         ))
     };
     let invocation_word = DataWord::Symbol(invocation_record(data, &spec.invocation));
+    let invoker_word = spec
+        .invoker_label
+        .map(|label| DataWord::Symbol(label.to_string()))
+        .unwrap_or(DataWord::U64(0));
 
     data.add_words(vec![
         DataWord::U64(spec.kind),
@@ -189,6 +225,7 @@ fn static_descriptor_from_spec(
         signature_word,
         environment_word,
         invocation_word,
+        invoker_word,
     ])
 }
 
@@ -226,6 +263,15 @@ pub(crate) fn emit_load_entry_from_descriptor(
     descriptor_reg: &str,
 ) {
     abi::emit_load_from_address(emitter, dest_reg, descriptor_reg, CALLABLE_DESC_ENTRY_OFFSET);
+}
+
+/// Emits assembly for loading the uniform invoker slot from a descriptor.
+pub(crate) fn emit_load_invoker_from_descriptor(
+    emitter: &mut Emitter,
+    dest_reg: &str,
+    descriptor_reg: &str,
+) {
+    abi::emit_load_from_address(emitter, dest_reg, descriptor_reg, CALLABLE_DESC_INVOKER_OFFSET);
 }
 
 /// Builds the signature side record for runtime arity and argument planning.
@@ -527,5 +573,38 @@ mod tests {
         assert!(asm.contains(".ascii \"receiver\"\n"));
         assert!(asm.contains("    .quad 0x0000000000000002\n"));
         assert!(asm.contains("    .quad 0x0000000000000006\n"));
+    }
+
+    /// Verifies that descriptors can carry a uniform runtime invoker entry.
+    #[test]
+    fn test_descriptor_serializes_optional_invoker_slot() {
+        let mut data = DataSection::new();
+        let sig = FunctionSig {
+            params: vec![("value".to_string(), PhpType::Int)],
+            defaults: vec![None],
+            return_type: PhpType::Int,
+            declared_return: false,
+            ref_params: vec![false],
+            declared_params: vec![false],
+            variadic: None,
+            deprecation: None,
+        };
+
+        let descriptor = static_descriptor_with_optional_invoker_meta(
+            &mut data,
+            "_call_entry",
+            Some("demo"),
+            CALLABLE_DESC_KIND_FUNCTION,
+            Some(&sig),
+            &[],
+            &[],
+            CallableDescriptorInvocation::named(CallableDescriptorShape::Function, "demo"),
+            Some("_call_invoker"),
+        );
+        let asm = data.emit();
+
+        assert!(asm.contains(&format!(".globl {}\n{}:\n", descriptor, descriptor)));
+        assert!(asm.contains("    .quad _call_entry\n"));
+        assert!(asm.contains("    .quad _call_invoker\n"));
     }
 }

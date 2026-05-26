@@ -12,6 +12,7 @@ mod abi;
 mod builtins;
 pub(crate) mod callable_descriptor;
 pub(crate) mod callable_dispatch;
+pub(crate) mod runtime_callable_invoker;
 mod callables;
 mod class_methods;
 /// Codegen context module.
