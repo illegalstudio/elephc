@@ -25,6 +25,8 @@ use crate::types::{
 };
 use crate::types::checker::builtins::supported_builtin_function_names;
 
+const RUNTIME_RECEIVER_PARAM: &str = "__elephc_callable_receiver";
+
 #[derive(Clone)]
 pub(crate) struct RuntimeCallableCase {
     pub(crate) label: String,
@@ -42,6 +44,12 @@ pub(crate) enum RuntimeCallableSelector<'a> {
         len_offset: usize,
         call_reg: &'a str,
     },
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum RuntimeInstanceCallableShape {
+    ObjectInvoke,
+    InstanceMethod,
 }
 
 /// Provides the Runtime callable cases helper used by the callable dispatch module.
@@ -376,6 +384,72 @@ pub(crate) fn runtime_static_method_case(
     })
 }
 
+/// Builds the runtime descriptor case for one public instance-method or `__invoke` callable.
+pub(crate) fn runtime_instance_method_case(
+    ctx: &mut Context,
+    data: &mut DataSection,
+    class_name: &str,
+    method_name: &str,
+    shape: RuntimeInstanceCallableShape,
+) -> Option<RuntimeCallableCase> {
+    let (resolved_method_name, sig) = {
+        let class_info = ctx.classes.get(class_name)?;
+        let method_key = php_symbol_key(method_name);
+        let (resolved_method_name, sig) = class_info
+            .methods
+            .iter()
+            .find(|(candidate, _)| php_symbol_key(candidate) == method_key)?;
+        if !class_info
+            .method_visibilities
+            .get(resolved_method_name)
+            .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+        {
+            return None;
+        }
+        (resolved_method_name.clone(), sig.clone())
+    };
+
+    let case_sig = instance_method_runtime_wrapper_sig(class_name, &sig);
+    let label =
+        ensure_runtime_instance_method_wrapper(ctx, class_name, &resolved_method_name, &case_sig);
+    let php_name = format!("{}::{}", class_name, resolved_method_name);
+    let invoker_label = ensure_runtime_descriptor_invoker(ctx, &[], &case_sig);
+    let (kind, invocation_shape) = match shape {
+        RuntimeInstanceCallableShape::ObjectInvoke => (
+            callable_descriptor::CALLABLE_DESC_KIND_OBJECT_INVOKE,
+            CallableDescriptorShape::ObjectInvoke,
+        ),
+        RuntimeInstanceCallableShape::InstanceMethod => (
+            callable_descriptor::CALLABLE_DESC_KIND_INSTANCE_METHOD,
+            CallableDescriptorShape::InstanceMethod,
+        ),
+    };
+    let descriptor_label = runtime_case_descriptor(
+        data,
+        &label,
+        Some(&php_name),
+        kind,
+        &case_sig,
+        &[],
+        &[],
+        CallableDescriptorInvocation::method(
+            invocation_shape,
+            Some(class_name.to_string()),
+            resolved_method_name.as_str(),
+        ),
+        invoker_label.as_deref(),
+    );
+
+    Some(RuntimeCallableCase {
+        label,
+        descriptor_label,
+        php_name: Some(php_name),
+        sig: case_sig,
+        captures: Vec::new(),
+        has_invoker: invoker_label.is_some(),
+    })
+}
+
 /// Provides the Runtime builtin wrapper excluded helper used by the callable dispatch module.
 fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
     matches!(name, "iterator_apply" | "preg_replace_callback")
@@ -464,9 +538,59 @@ fn ensure_runtime_static_method_wrapper(
     label
 }
 
+/// Ensures runtime instance-method wrapper is available before descriptor dispatch uses it.
+fn ensure_runtime_instance_method_wrapper(
+    ctx: &mut Context,
+    class_name: &str,
+    method_name: &str,
+    sig: &FunctionSig,
+) -> String {
+    let key = format!("{}::{}", class_name, method_name);
+    if let Some(label) = ctx.runtime_callable_instance_method_wrappers.get(&key) {
+        return label.clone();
+    }
+
+    let label = ctx.next_label("callable_instance_method");
+    let params: Vec<String> = sig.params.iter().map(|(name, _)| name.clone()).collect();
+    ctx.deferred_closures.push(DeferredClosure {
+        label: label.clone(),
+        params,
+        body: instance_method_wrapper_body(method_name, sig),
+        sig: sig.clone(),
+        captures: Vec::new(),
+        hidden_params: Vec::new(),
+        current_class: Some(class_name.to_string()),
+        needed: true,
+    });
+    ctx.runtime_callable_instance_method_wrappers
+        .insert(key, label.clone());
+    label
+}
+
 /// Builds a static-method runtime wrapper signature that can receive keyed variadic tails.
 fn static_method_runtime_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
     let mut wrapper_sig = callable_wrapper_sig(sig);
+    if wrapper_sig.variadic.is_some() {
+        if let Some((_, ty)) = wrapper_sig.params.last_mut() {
+            *ty = PhpType::Iterable;
+        }
+    }
+    wrapper_sig
+}
+
+/// Builds an instance-method runtime wrapper signature with receiver in slot zero.
+fn instance_method_runtime_wrapper_sig(class_name: &str, sig: &FunctionSig) -> FunctionSig {
+    let mut wrapper_sig = callable_wrapper_sig(sig);
+    wrapper_sig.params.insert(
+        0,
+        (
+            RUNTIME_RECEIVER_PARAM.to_string(),
+            PhpType::Object(class_name.to_string()),
+        ),
+    );
+    wrapper_sig.defaults.insert(0, None);
+    wrapper_sig.ref_params.insert(0, false);
+    wrapper_sig.declared_params.insert(0, true);
     if wrapper_sig.variadic.is_some() {
         if let Some((_, ty)) = wrapper_sig.params.last_mut() {
             *ty = PhpType::Iterable;
@@ -494,6 +618,46 @@ fn static_method_wrapper_body(class_name: &str, method_name: &str, sig: &Functio
     let call = Expr::new(
         ExprKind::StaticMethodCall {
             receiver: StaticReceiver::Named(Name::from(class_name.to_string())),
+            method: method_name.to_string(),
+            args,
+        },
+        Span::dummy(),
+    );
+
+    if sig.return_type == PhpType::Void {
+        vec![
+            Stmt::new(StmtKind::ExprStmt(call), Span::dummy()),
+            Stmt::new(StmtKind::Return(None), Span::dummy()),
+        ]
+    } else {
+        vec![Stmt::new(StmtKind::Return(Some(call)), Span::dummy())]
+    }
+}
+
+/// Builds the synthetic method body for an instance-method wrapper.
+fn instance_method_wrapper_body(method_name: &str, sig: &FunctionSig) -> Vec<Stmt> {
+    let last_param_idx = sig.params.len().saturating_sub(1);
+    let args: Vec<Expr> = sig
+        .params
+        .iter()
+        .enumerate()
+        .skip(1)
+        .map(|(idx, (param_name, _))| {
+            let var = Expr::new(ExprKind::Variable(param_name.clone()), Span::dummy());
+            if sig.variadic.is_some() && idx == last_param_idx {
+                Expr::new(ExprKind::Spread(Box::new(var)), Span::dummy())
+            } else {
+                var
+            }
+        })
+        .collect();
+    let receiver = Expr::new(
+        ExprKind::Variable(RUNTIME_RECEIVER_PARAM.to_string()),
+        Span::dummy(),
+    );
+    let call = Expr::new(
+        ExprKind::MethodCall {
+            object: Box::new(receiver),
             method: method_name.to_string(),
             args,
         },

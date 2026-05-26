@@ -674,6 +674,86 @@ echo call_user_func($callback, "a");
     let _ = fs::remove_dir_all(dir);
 }
 
+/// Verifies `call_user_func()` invokable objects use descriptor invokers.
+#[test]
+fn test_call_user_func_invokable_object_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Twice {
+    public function __invoke(int $value): int {
+        return $value * 2;
+    }
+}
+
+echo call_user_func(new Twice(), 9);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "18");
+
+    let dir = make_cli_test_dir("elephc_invokable_object_descriptor_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "invokable object callbacks should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies instance-method callable arrays use descriptor invokers for direct calls.
+#[test]
+fn test_call_user_func_instance_method_array_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Formatter {
+    public function join(string $left, string $right = "b"): string {
+        return $left . ":" . $right;
+    }
+}
+
+$formatter = new Formatter();
+echo call_user_func([$formatter, "join"], "a");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "a:b");
+
+    let dir = make_cli_test_dir("elephc_instance_array_callable_descriptor_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "instance method array callbacks should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies instance-method callable arrays use descriptor invokers for literal named args.
+#[test]
+fn test_call_user_func_array_instance_method_literal_assoc_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Formatter {
+    public function join(string $prefix, int $value): string {
+        return $prefix . ":" . $value;
+    }
+}
+
+$formatter = new Formatter();
+echo call_user_func_array([$formatter, "join"], ["value" => 7, "prefix" => "id"]);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "id:7");
+
+    let dir = make_cli_test_dir("elephc_instance_array_callable_assoc_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "instance method array callbacks with literal named args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Verifies that call user func array dynamic args for callable without known signature.
 #[test]
 fn test_call_user_func_array_dynamic_args_for_callable_without_known_signature() {

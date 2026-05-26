@@ -102,6 +102,15 @@ echo "\n";
 $dynamic_formatter = new DynamicFormatter();
 $method_array_callback = [$dynamic_formatter, "wrap"];
 echo "method array call_user_func: " . call_user_func($method_array_callback, "ok") . "\n";
+echo "method array literal call_user_func_array: " . call_user_func_array([$dynamic_formatter, "wrap"], ["value" => "lit"]) . "\n";
+
+class InvokeFormatter {
+    public function __invoke(string $value): string {
+        return "{" . $value . "}";
+    }
+}
+
+echo "invokable call_user_func: " . call_user_func(new InvokeFormatter(), "go") . "\n";
 
 function bump(&$value) {
     $value = $value + 1;

@@ -194,6 +194,9 @@ pub struct Context {
     /// Runtime-dispatch wrappers synthesized for `Class::method` string
     /// callbacks. The key is the PHP-visible `Class::method` name.
     pub runtime_callable_static_method_wrappers: HashMap<String, String>,
+    /// Runtime-dispatch wrappers synthesized for instance-method and
+    /// `__invoke` descriptors. The key is the receiver class plus method name.
+    pub runtime_callable_instance_method_wrappers: HashMap<String, String>,
     /// Callable array targets assigned to variables, for PHP forms such as
     /// `$cb = [$object, "method"]` and `$cb = [ClassName::class, "method"]`.
     pub callable_array_targets: HashMap<String, CallableTarget>,
@@ -329,6 +332,7 @@ impl Context {
             runtime_callable_builtin_wrappers: HashMap::new(),
             runtime_callable_extern_wrappers: HashMap::new(),
             runtime_callable_static_method_wrappers: HashMap::new(),
+            runtime_callable_instance_method_wrappers: HashMap::new(),
             callable_array_targets: HashMap::new(),
             first_class_callable_targets: HashMap::new(),
             variable_fcc_label: HashMap::new(),

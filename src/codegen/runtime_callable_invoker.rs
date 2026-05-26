@@ -77,6 +77,8 @@ fn invoker_context(parent_ctx: &Context) -> Context {
     ctx.extern_classes = parent_ctx.extern_classes.clone();
     ctx.extern_globals = parent_ctx.extern_globals.clone();
     ctx.runtime_callable_extern_wrappers = parent_ctx.runtime_callable_extern_wrappers.clone();
+    ctx.runtime_callable_instance_method_wrappers =
+        parent_ctx.runtime_callable_instance_method_wrappers.clone();
     ctx
 }
 
