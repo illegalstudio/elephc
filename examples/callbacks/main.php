@@ -67,6 +67,13 @@ $named_callback = $named_callbacks[$named_choice];
 $named_args = ["right" => 2, "left" => 1];
 echo "dynamic named call_user_func_array: " . call_user_func_array($named_callback, $named_args) . "\n";
 
+$prefix = "captured:";
+$captured_callbacks = [
+    function(string $name) use ($prefix): string { return $prefix . $name; }
+];
+$prefix = "changed:";
+echo "captured closure call_user_func_array: " . call_user_func_array($captured_callbacks[0], ["name" => "Ada"]) . "\n";
+
 function dynamic_string_sum(int $left, int $right): int {
     return $left + $right;
 }
