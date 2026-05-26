@@ -108,6 +108,15 @@ echo "method array dynamic call_user_func_array: " . call_user_func_array($metho
 $dynamic_method_named_args = ["value" => "named"];
 echo "method array dynamic assoc call_user_func_array: " . call_user_func_array($method_array_callback, $dynamic_method_named_args) . "\n";
 
+function passthrough_args(mixed $value): mixed {
+    return $value;
+}
+
+$opaque_method_args = passthrough_args(["opaque"]);
+echo "method array mixed call_user_func_array: " . call_user_func_array($method_array_callback, $opaque_method_args) . "\n";
+$opaque_method_named_args = passthrough_args(["value" => "opaque named"]);
+echo "method array mixed assoc call_user_func_array: " . call_user_func_array($method_array_callback, $opaque_method_named_args) . "\n";
+
 class InvokeFormatter {
     public function __invoke(string $value): string {
         return "{" . $value . "}";

@@ -261,8 +261,8 @@ fn emit_instance_method_descriptor_dynamic_arg_form(
 ) -> Option<PhpType> {
     let inferred_arg_ty = functions::infer_contextual_type(arg_array, ctx);
     if !matches!(
-        inferred_arg_ty,
-        PhpType::Array(_) | PhpType::AssocArray { .. }
+        inferred_arg_ty.codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
     ) {
         return None;
     }

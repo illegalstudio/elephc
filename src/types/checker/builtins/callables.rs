@@ -50,16 +50,26 @@ fn validate_call_user_func_array_dynamic_arg_array(
     env: &TypeEnv,
 ) -> Result<(), CompileError> {
     let arg_array_ty = checker.infer_type(arg_array, env)?;
-    if !matches!(
-        arg_array_ty,
-        PhpType::Array(_) | PhpType::AssocArray { .. }
-    ) {
+    if !call_user_func_array_arg_container_is_supported(&arg_array_ty) {
         return Err(CompileError::new(
             arg_array.span,
             "call_user_func_array() second argument must be an array",
         ));
     }
     Ok(())
+}
+
+/// Returns true when `call_user_func_array()` can validate the argument container statically or at runtime.
+fn call_user_func_array_arg_container_is_supported(arg_array_ty: &PhpType) -> bool {
+    matches!(
+        arg_array_ty.codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+    )
+}
+
+/// Returns true when `call_user_func_array()` must defer argument-shape checks to runtime.
+fn call_user_func_array_arg_container_is_runtime_opaque(arg_array_ty: &PhpType) -> bool {
+    matches!(arg_array_ty.codegen_repr(), PhpType::Mixed)
 }
 
 /// Provides the Specialize dynamic assoc variadic first class callback helper used by the callables module.
@@ -145,6 +155,182 @@ fn check_object_or_array_callable_call(
     checker
         .infer_method_call_on_class_type(&class_name, method, callback_args, callback, env)
         .map(Some)
+}
+
+/// Resolves a receiver-bound callable return type when argument details are runtime-only.
+fn infer_object_or_array_callable_runtime_return(
+    checker: &mut Checker,
+    callback: &Expr,
+    env: &TypeEnv,
+) -> Result<Option<PhpType>, CompileError> {
+    if let ExprKind::Variable(var_name) = &callback.kind {
+        if let Some(target) = checker.callable_array_targets.get(var_name).cloned() {
+            return infer_callable_target_runtime_return(checker, &target, callback, env)
+                .map(Some);
+        }
+    }
+
+    let callback_ty = checker.infer_type(callback, env)?;
+    if let Some(class_name) = checker.invokable_class_for_type(&callback_ty) {
+        if checker
+            .classes
+            .get(&class_name)
+            .is_some_and(|class_info| class_info.methods.contains_key("__invoke"))
+        {
+            return infer_instance_method_callable_runtime_return(
+                checker,
+                &class_name,
+                "__invoke",
+                callback,
+            )
+            .map(Some);
+        }
+    }
+
+    let Some((receiver, method)) = callable_array_parts(callback) else {
+        return Ok(None);
+    };
+    if let Some(receiver) = static_callable_receiver(checker, receiver, callback.span)? {
+        return infer_static_method_callable_runtime_return(checker, &receiver, method, callback)
+            .map(Some);
+    }
+    let receiver_ty = checker.infer_type(receiver, env)?;
+    let Some(class_name) = checker.invokable_class_for_type(&receiver_ty) else {
+        return Ok(None);
+    };
+    infer_instance_method_callable_runtime_return(checker, &class_name, method, callback).map(Some)
+}
+
+/// Resolves a stored callable target's return type without static argument materialization.
+fn infer_callable_target_runtime_return(
+    checker: &mut Checker,
+    target: &CallableTarget,
+    callback: &Expr,
+    env: &TypeEnv,
+) -> Result<PhpType, CompileError> {
+    match target {
+        CallableTarget::Method { object, method } => {
+            let receiver_ty = checker.infer_type(object, env)?;
+            let Some(class_name) = checker.invokable_class_for_type(&receiver_ty) else {
+                return Err(CompileError::new(
+                    callback.span,
+                    "callable array receiver must be an object",
+                ));
+            };
+            infer_instance_method_callable_runtime_return(checker, &class_name, method, callback)
+        }
+        CallableTarget::StaticMethod { receiver, method } => {
+            infer_static_method_callable_runtime_return(checker, receiver, method, callback)
+        }
+        CallableTarget::Function(name) => checker
+            .functions
+            .get(name.as_str())
+            .map(|sig| sig.return_type.clone())
+            .ok_or_else(|| {
+                CompileError::new(
+                    callback.span,
+                    &format!("Undefined function: {}", name.as_str()),
+                )
+            }),
+    }
+}
+
+/// Resolves an instance-method callable return type without checking runtime-only arguments.
+fn infer_instance_method_callable_runtime_return(
+    checker: &Checker,
+    class_name: &str,
+    method: &str,
+    callback: &Expr,
+) -> Result<PhpType, CompileError> {
+    let method_key = php_symbol_key(method);
+    let Some(class_info) = checker.classes.get(class_name) else {
+        return Err(CompileError::new(
+            callback.span,
+            &format!("Undefined class: {}", class_name),
+        ));
+    };
+    if let Some(sig) = class_info.methods.get(&method_key) {
+        if let Some(visibility) = class_info.method_visibilities.get(&method_key) {
+            let declaring_class = class_info
+                .method_declaring_classes
+                .get(&method_key)
+                .map(String::as_str)
+                .unwrap_or(class_name);
+            if !checker.can_access_member(declaring_class, visibility) {
+                return Err(CompileError::new(
+                    callback.span,
+                    &format!(
+                        "Cannot access {} method: {}::{}",
+                        Checker::visibility_label(visibility),
+                        class_name,
+                        method
+                    ),
+                ));
+            }
+        }
+        let declared_flags = Checker::declared_method_param_flags(class_info, &method_key, false);
+        let effective_sig = Checker::callable_sig_for_declared_params(sig, &declared_flags);
+        return Ok(effective_sig.return_type);
+    }
+    if let Some(sig) = class_info.methods.get("__call") {
+        let declared_flags = Checker::declared_method_param_flags(class_info, "__call", false);
+        let effective_sig = Checker::callable_sig_for_declared_params(sig, &declared_flags);
+        return Ok(effective_sig.return_type);
+    }
+    Err(CompileError::new(
+        callback.span,
+        &format!("Undefined method: {}::{}", class_name, method),
+    ))
+}
+
+/// Resolves a static-method callable return type without checking runtime-only arguments.
+fn infer_static_method_callable_runtime_return(
+    checker: &Checker,
+    receiver: &StaticReceiver,
+    method: &str,
+    callback: &Expr,
+) -> Result<PhpType, CompileError> {
+    let class_name = resolve_static_receiver_class(checker, receiver, callback.span)?;
+    let Some(class_info) = checker.classes.get(&class_name) else {
+        return Err(CompileError::new(
+            callback.span,
+            &format!("Undefined class: {}", class_name),
+        ));
+    };
+    let sig = class_info.static_methods.get(method).ok_or_else(|| {
+        if class_info.methods.contains_key(method) {
+            CompileError::new(
+                callback.span,
+                &format!("Cannot call instance method statically: {}::{}", class_name, method),
+            )
+        } else {
+            CompileError::new(
+                callback.span,
+                &format!("Undefined method: {}::{}", class_name, method),
+            )
+        }
+    })?;
+    if let Some(visibility) = class_info.static_method_visibilities.get(method) {
+        let declaring_class = class_info
+            .static_method_declaring_classes
+            .get(method)
+            .map(String::as_str)
+            .unwrap_or(class_name.as_str());
+        if !checker.can_access_member(declaring_class, visibility) {
+            return Err(CompileError::new(
+                callback.span,
+                &format!(
+                    "Cannot access {} method: {}::{}",
+                    Checker::visibility_label(visibility),
+                    class_name,
+                    method
+                ),
+            ));
+        }
+    }
+    let declared_flags = Checker::declared_method_param_flags(class_info, method, true);
+    let effective_sig = Checker::callable_sig_for_declared_params(sig, &declared_flags);
+    Ok(effective_sig.return_type)
 }
 
 /// Checks callable target call and reports a compile error when it is invalid.
@@ -653,6 +839,14 @@ pub(super) fn check_builtin(
                     return Ok(Some(ret_ty));
                 }
             }
+            let arg_array_ty = checker.infer_type(&args[1], env)?;
+            if call_user_func_array_arg_container_is_runtime_opaque(&arg_array_ty) {
+                if let Some(ret_ty) =
+                    infer_object_or_array_callable_runtime_return(checker, &args[0], env)?
+                {
+                    return Ok(Some(ret_ty));
+                }
+            }
             let spread_args = vec![Expr::new(
                 ExprKind::Spread(Box::new(args[1].clone())),
                 args[1].span,
@@ -660,8 +854,7 @@ pub(super) fn check_builtin(
             if let Some(ret_ty) =
                 check_object_or_array_callable_call(checker, &args[0], &spread_args, span, env)?
             {
-                let sig_arg = checker.infer_type(&args[1], env)?;
-                if !matches!(sig_arg, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                if !call_user_func_array_arg_container_is_supported(&arg_array_ty) {
                     return Err(CompileError::new(
                         args[1].span,
                         "call_user_func_array() second argument must be an array",
@@ -684,16 +877,14 @@ pub(super) fn check_builtin(
                 return Ok(Some(sig.return_type.clone()));
             }
             let callback_ty = checker.infer_type(&args[0], env)?;
-            let arg_array_ty = checker.infer_type(&args[1], env)?;
             if callback_ty == PhpType::Str
-                && matches!(arg_array_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                && call_user_func_array_arg_container_is_supported(&arg_array_ty)
             {
                 return Ok(Some(PhpType::Mixed));
             }
-            if callback_ty == PhpType::Callable && matches!(arg_array_ty, PhpType::Array(_)) {
-                return Ok(Some(PhpType::Mixed));
-            }
-            if callback_ty == PhpType::Callable && matches!(arg_array_ty, PhpType::AssocArray { .. }) {
+            if callback_ty == PhpType::Callable
+                && call_user_func_array_arg_container_is_supported(&arg_array_ty)
+            {
                 return Ok(Some(PhpType::Mixed));
             }
             Err(CompileError::new(

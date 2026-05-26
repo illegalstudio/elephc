@@ -868,6 +868,83 @@ echo call_user_func_array($callback, $args);
     let _ = fs::remove_dir_all(dir);
 }
 
+/// Verifies receiver-bound callable arrays use descriptor invokers for opaque mixed args.
+#[test]
+fn test_call_user_func_array_instance_method_runtime_opaque_args_use_descriptor_invoker() {
+    let source = r#"<?php
+function choose_args(bool $assoc): mixed {
+    if ($assoc) {
+        return ["right" => "r"];
+    }
+    return ["a", "b"];
+}
+
+class Formatter {
+    public function join(string $left = "x", string $right = "y"): string {
+        return $left . ":" . $right;
+    }
+}
+
+$formatter = new Formatter();
+echo call_user_func_array([$formatter, "join"], choose_args(false));
+echo "|";
+echo call_user_func_array([$formatter, "join"], choose_args(true));
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "a:b|x:r");
+
+    let dir = make_cli_test_dir("elephc_instance_array_callable_runtime_opaque_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("receiver_mixed_indexed_args")
+            && user_asm.contains("receiver_mixed_assoc_args")
+            && user_asm.contains("callable_invoker"),
+        "instance method array callbacks with runtime-opaque args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies invokable objects use descriptor invokers for opaque mixed argument containers.
+#[test]
+fn test_call_user_func_array_invokable_object_runtime_opaque_args_use_descriptor_invoker() {
+    let source = r#"<?php
+function opaque(mixed $value): mixed {
+    return $value;
+}
+
+class Wrap {
+    public function __invoke(string $value = "fallback", string $suffix = "!"): string {
+        return "<" . $value . $suffix . ">";
+    }
+}
+
+$callback = new Wrap();
+$items = ["value"];
+$assoc = ["suffix" => "?"];
+echo call_user_func_array($callback, opaque($items));
+echo "|" . count($items) . ":" . $items[0];
+echo "|";
+echo call_user_func_array($callback, opaque($assoc));
+echo "|" . count($assoc) . ":" . $assoc["suffix"];
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "<value!>|1:value|<fallback?>|1:?");
+
+    let dir = make_cli_test_dir("elephc_invokable_object_runtime_opaque_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("receiver_mixed_indexed_args")
+            && user_asm.contains("receiver_mixed_assoc_args")
+            && user_asm.contains("callable_invoker"),
+        "invokable object callbacks with runtime-opaque args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Verifies that call user func array dynamic args for callable without known signature.
 #[test]
 fn test_call_user_func_array_dynamic_args_for_callable_without_known_signature() {
@@ -1054,6 +1131,39 @@ echo call_user_func_array($callback, $assoc);
     assert!(
         user_asm.contains("cufa_mixed_indexed") && user_asm.contains("cufa_mixed_assoc"),
         "descriptor invoker should branch on boxed argument container tags:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies dynamic string descriptor invokers normalize runtime-opaque mixed argument containers.
+#[test]
+fn test_call_user_func_array_dynamic_string_runtime_opaque_args_uses_descriptor_invoker() {
+    let source = r#"<?php
+function passthrough(mixed $value): mixed {
+    return $value;
+}
+
+function render(string $prefix = "hi", string $name = "Ada", ...$rest): string {
+    return $prefix . " " . $name . ":" . count($rest);
+}
+
+$callback = "render";
+echo call_user_func_array($callback, passthrough(["yo", "Bob", "tail"]));
+echo "|";
+echo call_user_func_array($callback, passthrough(["name" => "Ada", "extra" => "x"]));
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "yo Bob:1|hi Ada:1");
+
+    let dir = make_cli_test_dir("elephc_dynamic_string_runtime_opaque_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("cufa_normalize_mixed_indexed")
+            && user_asm.contains("cufa_normalize_mixed_assoc")
+            && user_asm.contains("callable_invoker"),
+        "dynamic string callbacks with runtime-opaque args should normalize through descriptor invokers:\n{}",
         user_asm
     );
     let _ = fs::remove_dir_all(dir);

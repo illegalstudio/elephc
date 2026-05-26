@@ -59,6 +59,10 @@ pub(crate) fn emit_receiver_prefixed_dynamic_arg_mixed(
             emit_receiver_prefixed_assoc_arg_mixed(receiver, arg_array, emitter, ctx, data);
             true
         }
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_receiver_prefixed_opaque_arg_mixed(receiver, arg_array, emitter, ctx, data);
+            true
+        }
         _ => false,
     }
 }
@@ -86,12 +90,36 @@ fn emit_receiver_prefixed_indexed_arg_mixed(
         PhpType::Array(elem_ty) => elem_ty.as_ref(),
         _ => inferred_arg_elem_ty,
     };
+    emit_receiver_prefixed_indexed_payload_arg_mixed(source_elem_ty, emitter);
+}
+
+/// Builds `[receiver, ...$args]` from a loaded raw indexed-array payload.
+fn emit_receiver_prefixed_indexed_payload_arg_mixed(
+    source_elem_ty: &PhpType,
+    emitter: &mut Emitter,
+) {
     let result_reg = abi::int_result_reg(emitter);
     call_user_func_array::emit_clone_indexed_array_for_invoker(
         result_reg,
         source_elem_ty,
         emitter,
     );
+    emit_receiver_prefixed_indexed_clone_arg_mixed(emitter);
+}
+
+/// Builds `[receiver, ...$args]` from a loaded runtime-typed indexed-array payload.
+fn emit_receiver_prefixed_runtime_indexed_payload_arg_mixed(emitter: &mut Emitter) {
+    let result_reg = abi::int_result_reg(emitter);
+    call_user_func_array::emit_clone_indexed_array_for_invoker_with_runtime_tag(
+        result_reg,
+        emitter,
+    );
+    emit_receiver_prefixed_indexed_clone_arg_mixed(emitter);
+}
+
+/// Builds the receiver-prefixed destination from a cloned Mixed indexed-array payload.
+fn emit_receiver_prefixed_indexed_clone_arg_mixed(emitter: &mut Emitter) {
+    let result_reg = abi::int_result_reg(emitter);
     abi::emit_push_reg(emitter, result_reg);                                    // preserve the cloned Mixed source array before allocating the receiver-prefixed container
 
     let capacity_reg = abi::int_arg_reg_name(emitter.target, 0);
@@ -141,6 +169,11 @@ fn emit_receiver_prefixed_assoc_arg_mixed(
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the boxed receiver Mixed cell before evaluating the source hash
 
     let _ = emit_expr(arg_array, emitter, ctx, data);
+    emit_receiver_prefixed_assoc_payload_arg_mixed(emitter, ctx);
+}
+
+/// Builds a receiver-prefixed hash from a loaded raw associative-array payload.
+fn emit_receiver_prefixed_assoc_payload_arg_mixed(emitter: &mut Emitter, ctx: &mut Context) {
     let result_reg = abi::int_result_reg(emitter);
     call_user_func_array::emit_clone_assoc_array_for_invoker(result_reg, emitter);
     abi::emit_push_reg(emitter, result_reg);                                    // preserve the cloned Mixed source hash before allocating the receiver-prefixed hash
@@ -159,6 +192,67 @@ fn emit_receiver_prefixed_assoc_arg_mixed(
     abi::emit_load_temporary_stack_slot(emitter, result_reg, 0);
     abi::emit_release_temporary_stack(emitter, 48);                             // discard destination, source-clone, and receiver stack slots
     emit_box_receiver_prefixed_container(result_reg, &normalized_hash_ty, emitter);
+}
+
+/// Builds a receiver-prefixed argument container from a runtime Mixed array/hash.
+fn emit_receiver_prefixed_opaque_arg_mixed(
+    receiver: &Expr,
+    arg_array: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    emitter.comment("receiver-prefixed mixed call_user_func_array descriptor args");
+    let receiver_ty = emit_expr(receiver, emitter, ctx, data);
+    crate::codegen::emit_box_current_expr_value_as_mixed_for_container(
+        emitter,
+        receiver,
+        &receiver_ty,
+    );
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the boxed receiver Mixed cell before evaluating the opaque source container
+
+    let _ = emit_expr(arg_array, emitter, ctx, data);
+    let mixed_reg = abi::int_result_reg(emitter);
+    let tag_reg = abi::secondary_scratch_reg(emitter);
+    let payload_reg = abi::tertiary_scratch_reg(emitter);
+    let indexed_label = ctx.next_label("receiver_mixed_indexed_args");
+    let assoc_label = ctx.next_label("receiver_mixed_assoc_args");
+    let done_label = ctx.next_label("receiver_mixed_args_done");
+    let indexed_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+
+    abi::emit_load_from_address(emitter, tag_reg, mixed_reg, 0);
+    abi::emit_load_from_address(emitter, payload_reg, mixed_reg, 8);
+    abi::emit_push_reg(emitter, payload_reg);                                   // preserve the unboxed runtime argument container while branching by Mixed tag
+    call_user_func_array::emit_branch_if_mixed_arg_tag(
+        tag_reg,
+        crate::codegen::runtime_value_tag(&indexed_ty),
+        &indexed_label,
+        emitter,
+    );
+    call_user_func_array::emit_branch_if_mixed_arg_tag(
+        tag_reg,
+        crate::codegen::runtime_value_tag(&assoc_ty),
+        &assoc_label,
+        emitter,
+    );
+    call_user_func_array::emit_call_user_func_array_invalid_mixed_args_abort(emitter, data);
+
+    emitter.label(&indexed_label);
+    abi::emit_load_temporary_stack_slot(emitter, mixed_reg, 0);
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the borrowed unboxed indexed-array pointer before rebuilding args
+    emit_receiver_prefixed_runtime_indexed_payload_arg_mixed(emitter);
+    abi::emit_jump(emitter, &done_label);
+
+    emitter.label(&assoc_label);
+    abi::emit_load_temporary_stack_slot(emitter, mixed_reg, 0);
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the borrowed unboxed hash pointer before rebuilding args
+    emit_receiver_prefixed_assoc_payload_arg_mixed(emitter, ctx);
+
+    emitter.label(&done_label);
 }
 
 /// Allocates a Mixed-valued hash sized for receiver plus the cloned source hash.

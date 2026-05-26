@@ -914,7 +914,7 @@ fn emit_loaded_mixed_array_callback_call(
 }
 
 /// Branches to `label` when a boxed invoker argument carries `expected_tag`.
-fn emit_branch_if_mixed_arg_tag(
+pub(crate) fn emit_branch_if_mixed_arg_tag(
     tag_reg: &str,
     expected_tag: u8,
     label: &str,
@@ -1257,7 +1257,7 @@ pub(crate) fn emit_call_descriptor_array_invoker(
     let ready_label = ctx.next_label("cufa_descriptor_invoker_ready");
 
     let normalized_arg_ty =
-        emit_normalized_invoker_arg_mixed(array_source, arr_ty, array_arg_reg, emitter);
+        emit_normalized_invoker_arg_mixed(array_source, arr_ty, array_arg_reg, emitter, ctx, data);
     abi::emit_push_reg(emitter, array_arg_reg);                                  // preserve the temporary boxed Mixed argument container for release after invocation
     if descriptor_arg_reg != descriptor_reg {
         emitter.instruction(&format!("mov {}, {}", descriptor_arg_reg, descriptor_reg)); // pass the matched callable descriptor to the runtime invoker
@@ -1296,6 +1296,8 @@ fn emit_normalized_invoker_arg_mixed(
     arr_ty: &PhpType,
     dest_reg: &str,
     emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
 ) -> PhpType {
     emit_loaded_array_source_to_reg(array_source, dest_reg, emitter);
     match arr_ty {
@@ -1314,8 +1316,63 @@ fn emit_normalized_invoker_arg_mixed(
             emit_box_invoker_arg_clone_as_mixed(dest_reg, &normalized_ty, emitter);
             PhpType::Mixed
         }
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_clone_runtime_mixed_invoker_arg_as_mixed(dest_reg, emitter, ctx, data);
+            PhpType::Mixed
+        }
         _ => arr_ty.codegen_repr(),
     }
+}
+
+/// Clones a boxed runtime Mixed argument container into a normalized boxed Mixed container.
+fn emit_clone_runtime_mixed_invoker_arg_as_mixed(
+    dest_reg: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    let tag_reg = abi::secondary_scratch_reg(emitter);
+    let payload_reg = abi::tertiary_scratch_reg(emitter);
+    let indexed_label = ctx.next_label("cufa_normalize_mixed_indexed");
+    let assoc_label = ctx.next_label("cufa_normalize_mixed_assoc");
+    let done_label = ctx.next_label("cufa_normalize_mixed_done");
+    let indexed_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+
+    abi::emit_load_from_address(emitter, tag_reg, dest_reg, 0);
+    abi::emit_load_from_address(emitter, payload_reg, dest_reg, 8);
+    abi::emit_push_reg(emitter, payload_reg);                                   // preserve the unboxed runtime argument container while normalizing by Mixed tag
+    emit_branch_if_mixed_arg_tag(
+        tag_reg,
+        crate::codegen::runtime_value_tag(&indexed_ty),
+        &indexed_label,
+        emitter,
+    );
+    emit_branch_if_mixed_arg_tag(
+        tag_reg,
+        crate::codegen::runtime_value_tag(&assoc_ty),
+        &assoc_label,
+        emitter,
+    );
+    emit_call_user_func_array_invalid_mixed_args_abort(emitter, data);
+
+    emitter.label(&indexed_label);
+    abi::emit_load_temporary_stack_slot(emitter, dest_reg, 0);
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the borrowed indexed-array pointer after loading it for cloning
+    emit_clone_indexed_array_for_invoker_with_runtime_tag(dest_reg, emitter);
+    emit_box_invoker_arg_clone_as_mixed(dest_reg, &indexed_ty, emitter);
+    abi::emit_jump(emitter, &done_label);
+
+    emitter.label(&assoc_label);
+    abi::emit_load_temporary_stack_slot(emitter, dest_reg, 0);
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the borrowed hash pointer after loading it for cloning
+    emit_clone_assoc_array_for_invoker(dest_reg, emitter);
+    emit_box_invoker_arg_clone_as_mixed(dest_reg, &assoc_ty, emitter);
+
+    emitter.label(&done_label);
 }
 
 /// Clones and converts an indexed callback argument array to boxed Mixed slots.
@@ -1342,6 +1399,48 @@ pub(crate) fn emit_clone_indexed_array_for_invoker(
     abi::emit_call_label(emitter, "__rt_array_to_mixed");
     if dest_reg != result_reg {
         emitter.instruction(&format!("mov {}, {}", dest_reg, result_reg));      // keep the normalized Mixed argument array in the invoker ABI register
+    }
+}
+
+/// Clones and converts a runtime-typed indexed callback argument array to boxed Mixed slots.
+pub(crate) fn emit_clone_indexed_array_for_invoker_with_runtime_tag(
+    dest_reg: &str,
+    emitter: &mut Emitter,
+) {
+    let array_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
+    let tag_arg_reg = abi::int_arg_reg_name(emitter.target, 1);
+    let result_reg = abi::int_result_reg(emitter);
+    if array_arg_reg != dest_reg {
+        emitter.instruction(&format!("mov {}, {}", array_arg_reg, dest_reg));   // pass the runtime-typed callback array to the clone helper without mutating caller storage
+    }
+    abi::emit_call_label(emitter, "__rt_array_clone_shallow");
+    if array_arg_reg != result_reg {
+        emitter.instruction(&format!("mov {}, {}", array_arg_reg, result_reg)); // pass the cloned runtime-typed array to the Mixed-slot conversion helper
+    }
+    emit_load_indexed_array_runtime_value_type_tag(array_arg_reg, tag_arg_reg, emitter);
+    abi::emit_call_label(emitter, "__rt_array_to_mixed");
+    if dest_reg != result_reg {
+        emitter.instruction(&format!("mov {}, {}", dest_reg, result_reg));      // keep the normalized Mixed argument array in the invoker ABI register
+    }
+}
+
+/// Loads an indexed array's runtime value-type tag from its packed heap header.
+fn emit_load_indexed_array_runtime_value_type_tag(
+    array_reg: &str,
+    tag_reg: &str,
+    emitter: &mut Emitter,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr {}, [{}, #-8]", tag_reg, array_reg)); // load the packed indexed-array metadata before Mixed-slot conversion
+            emitter.instruction(&format!("lsr {}, {}, #8", tag_reg, tag_reg));  // move the indexed-array value_type tag into the low bits
+            emitter.instruction(&format!("and {}, {}, #0x7f", tag_reg, tag_reg)); // isolate the runtime indexed-array value_type tag
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {}, QWORD PTR [{} - 8]", tag_reg, array_reg)); // load the packed indexed-array metadata before Mixed-slot conversion
+            emitter.instruction(&format!("shr {}, 8", tag_reg));                // move the indexed-array value_type tag into the low bits
+            emitter.instruction(&format!("and {}, 0x7f", tag_reg));             // isolate the runtime indexed-array value_type tag
+        }
     }
 }
 
@@ -2447,7 +2546,7 @@ fn emit_call_user_func_array_unknown_assoc_abort(emitter: &mut Emitter, data: &m
 }
 
 /// Emits assembly for a descriptor invoker argument-container type mismatch.
-fn emit_call_user_func_array_invalid_mixed_args_abort(emitter: &mut Emitter, data: &mut DataSection) {
+pub(crate) fn emit_call_user_func_array_invalid_mixed_args_abort(emitter: &mut Emitter, data: &mut DataSection) {
     let (message_label, message_len) = data.add_string(
         b"Fatal error: callable descriptor invoker expected an indexed or associative argument array\n",
     );
