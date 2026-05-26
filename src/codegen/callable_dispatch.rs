@@ -317,6 +317,65 @@ fn runtime_static_method_wrappers(ctx: &Context) -> Vec<(String, String, Functio
     wrappers
 }
 
+/// Builds the runtime descriptor case for one public static method callable.
+pub(crate) fn runtime_static_method_case(
+    ctx: &mut Context,
+    data: &mut DataSection,
+    class_name: &str,
+    method_name: &str,
+) -> Option<RuntimeCallableCase> {
+    let (resolved_method_name, sig) = {
+        let class_info = ctx.classes.get(class_name)?;
+        let method_key = php_symbol_key(method_name);
+        let (resolved_method_name, sig) = class_info
+            .static_methods
+            .iter()
+            .find(|(candidate, _)| php_symbol_key(candidate) == method_key)?;
+        if !class_info
+            .static_method_visibilities
+            .get(resolved_method_name)
+            .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+        {
+            return None;
+        }
+        (resolved_method_name.clone(), sig.clone())
+    };
+
+    let case_sig = callable_wrapper_sig(&sig);
+    let label = ensure_runtime_static_method_wrapper(
+        ctx,
+        class_name,
+        &resolved_method_name,
+        &case_sig,
+    );
+    let php_name = format!("{}::{}", class_name, resolved_method_name);
+    let invoker_label = ensure_runtime_descriptor_invoker(ctx, &[], &case_sig);
+    let descriptor_label = runtime_case_descriptor(
+        data,
+        &label,
+        Some(&php_name),
+        callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD,
+        &case_sig,
+        &[],
+        &[],
+        CallableDescriptorInvocation::method(
+            CallableDescriptorShape::StaticMethod,
+            Some(class_name.to_string()),
+            resolved_method_name.as_str(),
+        ),
+        invoker_label.as_deref(),
+    );
+
+    Some(RuntimeCallableCase {
+        label,
+        descriptor_label,
+        php_name: Some(php_name),
+        sig: case_sig,
+        captures: Vec::new(),
+        has_invoker: invoker_label.is_some(),
+    })
+}
+
 /// Provides the Runtime builtin wrapper excluded helper used by the callable dispatch module.
 fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
     matches!(name, "iterator_apply" | "preg_replace_callback")

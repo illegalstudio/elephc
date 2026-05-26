@@ -616,6 +616,64 @@ echo call_user_func_array($callback, $args);
     assert_eq!(out, "[ok]");
 }
 
+/// Verifies static method callable arrays route through descriptor invokers.
+#[test]
+fn test_call_user_func_array_static_method_array_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Formatter {
+    public static function wrap(string $value = "ok", ...$rest): string {
+        return "[" . $value . ":" . count($rest) . "]";
+    }
+}
+
+$callback = [Formatter::class, "wrap"];
+$args = [];
+echo call_user_func_array($callback, $args);
+echo "|";
+$args = ["id", 9];
+echo call_user_func_array($callback, $args);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "[ok:0]|[id:1]");
+
+    let dir = make_cli_test_dir("elephc_static_array_callable_descriptor_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_static_method") && user_asm.contains("callable_invoker"),
+        "static method array callbacks should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies `call_user_func()` static method callable arrays use descriptor invokers.
+#[test]
+fn test_call_user_func_static_method_array_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Formatter {
+    public static function join(string $left, string $right = "b"): string {
+        return $left . ":" . $right;
+    }
+}
+
+$callback = [Formatter::class, "join"];
+echo call_user_func($callback, "a");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "a:b");
+
+    let dir = make_cli_test_dir("elephc_static_array_callable_call_user_func_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_static_method") && user_asm.contains("callable_invoker"),
+        "call_user_func static method array callbacks should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Verifies that call user func array dynamic args for callable without known signature.
 #[test]
 fn test_call_user_func_array_dynamic_args_for_callable_without_known_signature() {

@@ -1586,7 +1586,7 @@ pub(crate) fn emit_loaded_array_string_callback_call(
 }
 
 /// Calls the uniform invoker stored in the matched callable descriptor.
-fn emit_call_descriptor_array_invoker(
+pub(crate) fn emit_call_descriptor_array_invoker(
     array_source: LoadedArraySource,
     arr_ty: &PhpType,
     descriptor_reg: &str,

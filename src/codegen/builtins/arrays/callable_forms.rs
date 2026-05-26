@@ -12,10 +12,14 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::expr::emit_expr;
 use crate::codegen::functions;
+use crate::codegen::{abi, callable_dispatch};
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
 use crate::types::PhpType;
+
+use super::call_user_func_array::{self, LoadedArraySource};
 
 /// Emits assembly for call user func form.
 pub(crate) fn emit_call_user_func_form(
@@ -46,16 +50,26 @@ pub(crate) fn emit_call_user_func_form(
                 data,
             ),
         ),
-        Some(CallableForm::StaticMethod { receiver, method }) => Some(
-            crate::codegen::expr::objects::emit_static_method_call(
+        Some(CallableForm::StaticMethod { receiver, method }) => {
+            emit_static_method_descriptor_form(
                 &receiver,
                 &method,
-                callback_args,
                 emitter,
                 ctx,
                 data,
-            ),
-        ),
+                &Expr::new(ExprKind::ArrayLiteral(callback_args.to_vec()), callback.span),
+            )
+            .or_else(|| {
+                Some(crate::codegen::expr::objects::emit_static_method_call(
+                    &receiver,
+                    &method,
+                    callback_args,
+                    emitter,
+                    ctx,
+                    data,
+                ))
+            })
+        }
         None => None,
     }
 }
@@ -68,11 +82,73 @@ pub(crate) fn emit_call_user_func_array_form(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> Option<PhpType> {
+    if let Some(CallableForm::StaticMethod { receiver, method }) =
+        resolve_callable_form(callback, ctx)
+    {
+        if let Some(ret_ty) = emit_static_method_descriptor_form(
+            &receiver,
+            &method,
+            emitter,
+            ctx,
+            data,
+            arg_array,
+        ) {
+            return Some(ret_ty);
+        }
+    }
+
     let spread_args = vec![Expr::new(
         ExprKind::Spread(Box::new(arg_array.clone())),
         arg_array.span,
     )];
     emit_call_user_func_form(callback, &spread_args, emitter, ctx, data)
+}
+
+/// Invokes a public static-method callable array through its descriptor invoker.
+fn emit_static_method_descriptor_form(
+    receiver: &StaticReceiver,
+    method: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+    arg_array: &Expr,
+) -> Option<PhpType> {
+    let StaticReceiver::Named(class_name) = receiver else {
+        return None;
+    };
+    let case = callable_dispatch::runtime_static_method_case(
+        ctx,
+        data,
+        class_name.as_str(),
+        method,
+    )?;
+    if !case.has_invoker {
+        return None;
+    }
+    let arg_array_ty = functions::infer_contextual_type(arg_array, ctx);
+    if case.sig.variadic.is_some() && !matches!(arg_array_ty, PhpType::Array(_)) {
+        return None;
+    }
+
+    let save_concat_before_args =
+        emitter.target.arch == crate::codegen::platform::Arch::X86_64;
+    if save_concat_before_args {
+        crate::codegen::expr::save_concat_offset_before_nested_call(emitter, ctx);
+    }
+
+    let arr_ty = emit_expr(arg_array, emitter, ctx, data);
+    let call_reg = abi::nested_call_reg(emitter);
+    abi::emit_symbol_address(emitter, call_reg, &case.descriptor_label);
+    call_user_func_array::emit_call_descriptor_array_invoker(
+        LoadedArraySource::Result,
+        &arr_ty,
+        call_reg,
+        save_concat_before_args,
+        emitter,
+        ctx,
+        data,
+    );
+    Some(PhpType::Mixed)
 }
 
 enum CallableForm {
