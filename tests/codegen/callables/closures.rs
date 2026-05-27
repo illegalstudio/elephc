@@ -273,6 +273,27 @@ echo call_user_func(function($x) use ($base) { return $x * $base; }, 6);
     assert_eq!(out, "54");
 }
 
+/// Verifies inline closure `call_user_func()` dispatch goes through a descriptor invoker.
+#[test]
+fn test_inline_closure_call_user_func_uses_descriptor_invoker() {
+    let source = r#"<?php
+$base = 9;
+echo call_user_func(function(int $x) use ($base): int { return $x * $base; }, 6);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "54");
+
+    let dir = make_cli_test_dir("elephc_inline_closure_call_user_func_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "inline call_user_func closure dispatch should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
 #[test]
 fn test_arrow_function_array_filter() {
     // Verifies `array_filter` with an arrow function predicate filtering values greater than 8.

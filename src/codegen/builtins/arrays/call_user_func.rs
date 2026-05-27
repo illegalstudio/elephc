@@ -224,6 +224,11 @@ fn emit_descriptor_backed_call_user_func(
     }
 
     let _callback_ty = emit_expr(callback, emitter, ctx, data);
+    let sig = if matches!(callback.kind, ExprKind::Closure { .. }) {
+        ctx.deferred_closures.last().map(|deferred| deferred.sig.clone())
+    } else {
+        sig
+    };
     if matches!(ownership, HeapOwnership::Borrowed) {
         crate::codegen::callable_descriptor::emit_retain_current_descriptor(emitter);
     }
@@ -407,8 +412,11 @@ fn release_owned_arg_array_after_mixed_result(arr_ty: &PhpType, emitter: &mut Em
 
 /// Returns optional callable signature metadata for expressions that produce descriptor values.
 fn descriptor_invoker_sig(callback: &Expr, ctx: &Context) -> Option<Option<FunctionSig>> {
-    if matches!(callback.kind, ExprKind::StringLiteral(_) | ExprKind::Closure { .. }) {
+    if matches!(callback.kind, ExprKind::StringLiteral(_)) {
         return None;
+    }
+    if matches!(callback.kind, ExprKind::Closure { .. }) {
+        return Some(None);
     }
     if matches!(&callback.kind, ExprKind::Variable(name) if ctx.ref_params.contains(name)) {
         return None;
