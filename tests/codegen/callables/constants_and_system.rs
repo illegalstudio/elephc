@@ -429,6 +429,59 @@ echo call_user_func($callbacks[0], "Ada");
     let _ = fs::remove_dir_all(dir);
 }
 
+/// Verifies descriptor invokers preserve runtime by-reference arguments for callable params.
+#[test]
+fn test_call_user_func_callable_param_descriptor_preserves_by_ref_argument() {
+    let source = r#"<?php
+function run(callable $cb): void {
+    $value = 4;
+    call_user_func($cb, $value);
+    echo $value;
+}
+$cb = function(int &$n): void {
+    $n = $n + 3;
+};
+run($cb);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "7");
+
+    let dir = make_cli_test_dir("elephc_call_user_func_descriptor_invoker_by_ref_arg");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("cufa_invoker_ref_cell"),
+        "descriptor invoker should receive variable args as ref-cell markers:\n{}",
+        user_asm
+    );
+    assert!(
+        user_asm.contains("cufa_descriptor_invoker_ready"),
+        "call_user_func callable params should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies descriptor invokers dereference variable markers for by-value parameters.
+#[test]
+fn test_call_user_func_callable_param_descriptor_derefs_by_value_argument() {
+    let out = compile_and_run(
+        r#"<?php
+function run(callable $cb): void {
+    $value = 4;
+    echo call_user_func($cb, $value);
+    echo ":";
+    echo $value;
+}
+$cb = function(int $n): int {
+    return $n + 1;
+};
+run($cb);
+"#,
+    );
+    assert_eq!(out, "5:4");
+}
+
 /// Verifies that call user func dynamic string user callback.
 #[test]
 fn test_call_user_func_dynamic_string_user_callback() {

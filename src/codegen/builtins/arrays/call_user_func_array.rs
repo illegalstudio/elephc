@@ -25,6 +25,9 @@ use super::callback_env;
 use super::callable_forms;
 use super::super::callable_lookup::{lookup_function, FunctionLookup};
 
+/// Internal boxed-Mixed tag used only inside descriptor-invoker argument arrays.
+pub(crate) const INVOKER_ARG_REF_CELL_TAG: i64 = 10;
+
 /// Stamps the heap header of a runtime array with a runtime value-type tag derived from
 /// `elem_ty`. Used by `call_user_func_array` to mark variadic tail arrays so the runtime
 /// can distinguish element types without compile-time layout information.
@@ -643,7 +646,7 @@ pub(crate) fn emit_loaded_array_callback_call(
                 abi::emit_jump(emitter, &done_label);
                 emitter.label(&load_label);
                 args::load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + i * elem_size);
-                args::push_current_result_ref_arg_address(
+                push_loaded_indexed_array_ref_arg(
                     &elem_ty,
                     target_ty,
                     emitter,
@@ -653,7 +656,7 @@ pub(crate) fn emit_loaded_array_callback_call(
                 emitter.label(&done_label);
             } else {
                 args::load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + i * elem_size);
-                args::push_current_result_ref_arg_address(
+                push_loaded_indexed_array_ref_arg(
                     &elem_ty,
                     target_ty,
                     emitter,
@@ -693,13 +696,11 @@ pub(crate) fn emit_loaded_array_callback_call(
             abi::emit_jump(emitter, &done_label);
             emitter.label(&load_label);
             args::load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + i * elem_size);
-            let _ =
-                args::push_loaded_array_element_arg(&elem_ty, target_ty, emitter, ctx, data);
+            let _ = push_loaded_indexed_array_value_arg(&elem_ty, target_ty, emitter, ctx, data);
             emitter.label(&done_label);
         } else {
             args::load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + i * elem_size);
-            let _ =
-                args::push_loaded_array_element_arg(&elem_ty, target_ty, emitter, ctx, data);
+            let _ = push_loaded_indexed_array_value_arg(&elem_ty, target_ty, emitter, ctx, data);
         }
         arg_types.push(pushed_ty);
     }
@@ -961,6 +962,149 @@ pub(crate) fn emit_loaded_array_callback_call(
     }
 
     ret_ty
+}
+
+/// Pushes a loaded indexed-array element as a by-reference callback argument.
+fn push_loaded_indexed_array_ref_arg(
+    source_elem_ty: &PhpType,
+    target_ty: Option<&PhpType>,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    if !matches!(source_elem_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return args::push_current_result_ref_arg_address(
+            source_elem_ty,
+            target_ty,
+            emitter,
+            ctx,
+            data,
+        );
+    }
+
+    let special_label = ctx.next_label("cufa_invoker_ref_cell");
+    let temp_label = ctx.next_label("cufa_invoker_ref_temp");
+    let done_label = ctx.next_label("cufa_invoker_ref_done");
+    let result_reg = abi::int_result_reg(emitter);
+    let tag_reg = abi::secondary_scratch_reg(emitter);
+
+    abi::emit_load_from_address(emitter, tag_reg, result_reg, 0);
+    emit_branch_if_invoker_ref_cell_tag(tag_reg, &special_label, emitter);
+    abi::emit_jump(emitter, &temp_label);
+
+    emitter.label(&special_label);
+    abi::emit_load_from_address(emitter, result_reg, result_reg, 8);
+    args::push_arg_value(emitter, &PhpType::Int);
+    abi::emit_jump(emitter, &done_label);
+
+    emitter.label(&temp_label);
+    args::push_current_result_ref_arg_address(source_elem_ty, target_ty, emitter, ctx, data);
+
+    emitter.label(&done_label);
+    PhpType::Int
+}
+
+/// Pushes a loaded indexed-array element as a normal callback argument.
+fn push_loaded_indexed_array_value_arg(
+    source_elem_ty: &PhpType,
+    target_ty: Option<&PhpType>,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    if !matches!(source_elem_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return args::push_loaded_array_element_arg(source_elem_ty, target_ty, emitter, ctx, data);
+    }
+
+    let special_label = ctx.next_label("cufa_invoker_ref_value");
+    let done_label = ctx.next_label("cufa_invoker_value_done");
+    let result_reg = abi::int_result_reg(emitter);
+    let tag_reg = abi::secondary_scratch_reg(emitter);
+
+    abi::emit_load_from_address(emitter, tag_reg, result_reg, 0);
+    emit_branch_if_invoker_ref_cell_tag(tag_reg, &special_label, emitter);
+    let ordinary_ty = args::push_loaded_array_element_arg(source_elem_ty, target_ty, emitter, ctx, data);
+    abi::emit_jump(emitter, &done_label);
+
+    emitter.label(&special_label);
+    let ref_cell_ty = push_loaded_invoker_ref_cell_value_arg(target_ty, emitter, ctx, data);
+
+    emitter.label(&done_label);
+    widen_callback_arg_type(&ordinary_ty, &ref_cell_ty)
+}
+
+/// Pushes the value inside an invoker reference-cell marker for a non-ref parameter.
+fn push_loaded_invoker_ref_cell_value_arg(
+    target_ty: Option<&PhpType>,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emit_box_loaded_invoker_ref_cell_value_as_mixed(emitter, ctx);
+    let release_mixed_after_coerce = target_ty.is_some_and(|target_ty| {
+        !matches!(target_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+            && crate::codegen::expr::can_coerce_result_to_type(&PhpType::Mixed, target_ty)
+    });
+    if release_mixed_after_coerce {
+        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the boxed ref-cell value while coercing it for a by-value parameter
+    }
+    let (pushed_ty, _boxed_to_mixed) =
+        args::coerce_current_value_to_target(emitter, ctx, data, &PhpType::Mixed, target_ty);
+    if release_mixed_after_coerce {
+        args::release_preserved_mixed_after_arg_coercion(emitter, &pushed_ty);
+    }
+    args::push_arg_value(emitter, &pushed_ty);
+    pushed_ty
+}
+
+/// Boxes the value referenced by an invoker marker into an owned Mixed cell.
+fn emit_box_loaded_invoker_ref_cell_value_as_mixed(emitter: &mut Emitter, ctx: &mut Context) {
+    let result_reg = abi::int_result_reg(emitter);
+    let ref_cell_reg = abi::symbol_scratch_reg(emitter);
+    let tag_reg = abi::secondary_scratch_reg(emitter);
+    let lo_reg = abi::tertiary_scratch_reg(emitter);
+    let hi_reg = match emitter.target.arch {
+        Arch::AArch64 => "x12",
+        Arch::X86_64 => "rdx",
+    };
+    let string_hi_label = ctx.next_label("cufa_invoker_ref_string_hi");
+    let box_label = ctx.next_label("cufa_invoker_ref_box");
+
+    abi::emit_load_from_address(emitter, ref_cell_reg, result_reg, 8);
+    abi::emit_load_from_address(emitter, tag_reg, result_reg, 16);
+    abi::emit_load_from_address(emitter, lo_reg, ref_cell_reg, 0);
+    abi::emit_load_int_immediate(emitter, hi_reg, 0);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {}, #1", tag_reg));               // does the referenced value use a two-word string slot?
+            emitter.instruction(&format!("b.eq {}", string_hi_label));          // load the string length only for string reference cells
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {}, 1", tag_reg));                // does the referenced value use a two-word string slot?
+            emitter.instruction(&format!("je {}", string_hi_label));            // load the string length only for string reference cells
+        }
+    }
+    abi::emit_jump(emitter, &box_label);
+
+    emitter.label(&string_hi_label);
+    abi::emit_load_from_address(emitter, hi_reg, ref_cell_reg, 8);
+
+    emitter.label(&box_label);
+    crate::codegen::emit_box_runtime_payload_as_mixed(emitter, tag_reg, lo_reg, hi_reg);
+}
+
+/// Branches when a boxed Mixed element represents an invoker reference-cell marker.
+fn emit_branch_if_invoker_ref_cell_tag(tag_reg: &str, label: &str, emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {}, #{}", tag_reg, INVOKER_ARG_REF_CELL_TAG)); // check for an invoker-only by-reference argument marker
+            emitter.instruction(&format!("b.eq {}", label));                    // use the original caller storage when this slot is a marker
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {}, {}", tag_reg, INVOKER_ARG_REF_CELL_TAG)); // check for an invoker-only by-reference argument marker
+            emitter.instruction(&format!("je {}", label));                      // use the original caller storage when this slot is a marker
+        }
+    }
 }
 
 /// Emits assembly for a callback call whose argument container is boxed as `Mixed`.
