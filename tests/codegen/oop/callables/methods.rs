@@ -753,6 +753,54 @@ foreach ($values as $value) {
     assert_eq!(out, "123");
 }
 
+/// Verifies runtime-selected sort comparator descriptors preserve receiver environments.
+#[test]
+fn test_runtime_selected_instance_method_sort_callbacks_preserve_descriptor_env() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeSorter {
+    private bool $descending;
+
+    public function __construct(bool $descending) {
+        $this->descending = $descending;
+    }
+
+    public function compare($a, $b) {
+        if ($this->descending) {
+            return $b - $a;
+        }
+        return $a - $b;
+    }
+}
+
+$ascending = new RuntimeSorter(false);
+$descending = new RuntimeSorter(true);
+$use_descending = true;
+
+$usorted = [1, 3, 2];
+usort($usorted, $use_descending ? $descending->compare(...) : $ascending->compare(...));
+foreach ($usorted as $value) {
+    echo $value;
+}
+echo ":";
+
+$uksorted = [1, 3, 2];
+uksort($uksorted, $use_descending ? $descending->compare(...) : $ascending->compare(...));
+foreach ($uksorted as $value) {
+    echo $value;
+}
+echo ":";
+
+$uasorted = [1, 3, 2];
+uasort($uasorted, $use_descending ? $descending->compare(...) : $ascending->compare(...));
+foreach ($uasorted as $value) {
+    echo $value;
+}
+"#,
+    );
+    assert_eq!(out, "321:321:321");
+}
+
 // Tests a static method using late static binding passed to `array_reduce` inside a static
 // method, verifying each subclass's static context is preserved when the reducer is inherited.
 #[test]

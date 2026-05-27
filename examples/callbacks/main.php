@@ -214,6 +214,30 @@ echo "method callable uasort: ";
 foreach ($method_value_sorted as $v) { echo $v . " "; }
 echo "\n";
 
+class SelectedSorter {
+    private bool $descending;
+
+    public function __construct(bool $descending) {
+        $this->descending = $descending;
+    }
+
+    public function compare($a, $b) {
+        if ($this->descending) {
+            return $b - $a;
+        }
+        return $a - $b;
+    }
+}
+
+$ascending_sorter = new SelectedSorter(false);
+$descending_sorter = new SelectedSorter(true);
+$use_descending_sorter = true;
+$selected_sorted = [1, 3, 2];
+usort($selected_sorted, $use_descending_sorter ? $descending_sorter->compare(...) : $ascending_sorter->compare(...));
+echo "selected callable usort: ";
+foreach ($selected_sorted as $v) { echo $v . " "; }
+echo "\n";
+
 class Labeler {
     public static function current() {
         $label = static::name(...);

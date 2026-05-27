@@ -475,6 +475,9 @@ fn callback_builtin_allows_complex_descriptor_env(
             | "array_filter() callback"
             | "array_reduce() callback"
             | "array_walk() callback"
+            | "usort() callback"
+            | "uksort() callback"
+            | "uasort() callback"
             | "iterator_apply() callback"
     )
         && callback_supports_complex_descriptor_env(callback)
