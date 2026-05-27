@@ -35,14 +35,26 @@ pub(crate) fn emit_call_user_func_form(
     match resolve_callable_form(callback, ctx) {
         Some(CallableForm::InvokableObject { object, .. }) => {
             if callback_args_have_spread(callback_args) {
-                return Some(crate::codegen::expr::objects::emit_method_call(
+                return emit_instance_method_descriptor_spread_form(
                     &object,
                     "__invoke",
+                    RuntimeInstanceCallableShape::ObjectInvoke,
                     callback_args,
+                    callback.span,
                     emitter,
                     ctx,
                     data,
-                ));
+                )
+                .or_else(|| {
+                    Some(crate::codegen::expr::objects::emit_method_call(
+                        &object,
+                        "__invoke",
+                        callback_args,
+                        emitter,
+                        ctx,
+                        data,
+                    ))
+                });
             }
             let descriptor_args =
                 receiver_prefixed_indexed_arg_array(&object, callback_args, callback.span);
@@ -68,14 +80,26 @@ pub(crate) fn emit_call_user_func_form(
         }
         Some(CallableForm::InstanceMethod { object, method, .. }) => {
             if callback_args_have_spread(callback_args) {
-                return Some(crate::codegen::expr::objects::emit_method_call(
+                return emit_instance_method_descriptor_spread_form(
                     &object,
                     &method,
+                    RuntimeInstanceCallableShape::InstanceMethod,
                     callback_args,
+                    callback.span,
                     emitter,
                     ctx,
                     data,
-                ));
+                )
+                .or_else(|| {
+                    Some(crate::codegen::expr::objects::emit_method_call(
+                        &object,
+                        &method,
+                        callback_args,
+                        emitter,
+                        ctx,
+                        data,
+                    ))
+                });
             }
             let descriptor_args =
                 receiver_prefixed_indexed_arg_array(&object, callback_args, callback.span);
@@ -209,6 +233,34 @@ pub(crate) fn emit_call_user_func_array_form(
         arg_array.span,
     )];
     emit_call_user_func_form(callback, &spread_args, emitter, ctx, data)
+}
+
+/// Invokes receiver-bound `call_user_func()` spread args through the descriptor invoker.
+#[allow(clippy::too_many_arguments)]
+fn emit_instance_method_descriptor_spread_form(
+    object: &Expr,
+    method: &str,
+    shape: RuntimeInstanceCallableShape,
+    callback_args: &[Expr],
+    _span: crate::span::Span,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    let arg_array = single_spread_inner(callback_args)?;
+    emit_instance_method_descriptor_dynamic_arg_form(
+        object, method, shape, arg_array, emitter, ctx, data,
+    )
+}
+
+/// Returns the spread source when `call_user_func()` forwards one spread argument segment.
+fn single_spread_inner(args: &[Expr]) -> Option<&Expr> {
+    if let [arg] = args {
+        if let ExprKind::Spread(inner) = &arg.kind {
+            return Some(inner);
+        }
+    }
+    None
 }
 
 /// Invokes a public instance-method or `__invoke` callable through its descriptor invoker.

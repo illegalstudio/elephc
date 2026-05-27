@@ -114,6 +114,8 @@ $dynamic_method_args = ["dyn"];
 echo "method array dynamic call_user_func_array: " . call_user_func_array($method_array_callback, $dynamic_method_args) . "\n";
 $dynamic_method_named_args = ["value" => "named"];
 echo "method array dynamic assoc call_user_func_array: " . call_user_func_array($method_array_callback, $dynamic_method_named_args) . "\n";
+$method_spread_args = ["spread"];
+echo "method array spread call_user_func: " . call_user_func($method_array_callback, ...$method_spread_args) . "\n";
 
 function passthrough_args(mixed $value): mixed {
     return $value;
@@ -131,6 +133,8 @@ class InvokeFormatter {
 }
 
 echo "invokable call_user_func: " . call_user_func(new InvokeFormatter(), "go") . "\n";
+$invoke_spread_args = ["wide"];
+echo "invokable spread call_user_func: " . call_user_func(new InvokeFormatter(), ...$invoke_spread_args) . "\n";
 
 function bump(&$value) {
     $value = $value + 1;

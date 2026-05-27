@@ -33,6 +33,10 @@ pub(super) fn emit_descriptor_invoker_arg_array(
         return emit_named_spread_invoker_arg_hash(args_exprs, sig, span, emitter, ctx, data);
     }
 
+    if let Some(spread_inner) = single_spread_inner(args_exprs) {
+        return super::super::emit_expr(spread_inner, emitter, ctx, data);
+    }
+
     let arg_array = descriptor_invoker_arg_array_expr(args_exprs, span);
     super::super::emit_expr(&arg_array, emitter, ctx, data)
 }
@@ -46,6 +50,16 @@ fn has_explicit_named_and_spread(args_exprs: &[Expr]) -> bool {
         .iter()
         .any(|arg| matches!(arg.kind, ExprKind::Spread(_)));
     has_explicit_named && has_spread
+}
+
+/// Returns the spread source when the entire descriptor call is `(...$args)`.
+fn single_spread_inner(args_exprs: &[Expr]) -> Option<&Expr> {
+    if let [arg] = args_exprs {
+        if let ExprKind::Spread(inner) = &arg.kind {
+            return Some(inner);
+        }
+    }
+    None
 }
 
 /// Builds the synthetic argument container passed to a descriptor invoker.
