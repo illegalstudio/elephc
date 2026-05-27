@@ -379,6 +379,56 @@ run($cb);
     assert_eq!(out, "12");
 }
 
+/// Verifies `call_user_func()` reads by-value captures from the callable descriptor snapshot.
+#[test]
+fn test_call_user_func_captured_closure_descriptor_uses_invoker_snapshot() {
+    let source = r#"<?php
+$prefix = "old";
+$cb = function(string $name) use ($prefix): string {
+    return $prefix . $name;
+};
+$prefix = "new";
+echo call_user_func($cb, "Ada");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "oldAda");
+
+    let dir = make_cli_test_dir("elephc_call_user_func_capture_descriptor_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "call_user_func closure descriptors should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies `call_user_func()` can invoke callable descriptors loaded from arrays.
+#[test]
+fn test_call_user_func_array_element_descriptor_uses_invoker_snapshot() {
+    let source = r#"<?php
+$prefix = "old";
+$callbacks = [function(string $name) use ($prefix): string {
+    return $prefix . $name;
+}];
+$prefix = "new";
+echo call_user_func($callbacks[0], "Ada");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "oldAda");
+
+    let dir = make_cli_test_dir("elephc_call_user_func_array_element_descriptor_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "call_user_func array element descriptors should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Verifies that call user func dynamic string user callback.
 #[test]
 fn test_call_user_func_dynamic_string_user_callback() {

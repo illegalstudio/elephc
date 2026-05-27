@@ -8,9 +8,10 @@
 //! Key details:
 //! - Callback lowering must preserve PHP source evaluation order, captures, and callable return ownership.
 
-use crate::codegen::context::Context;
+use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::expr::{emit_expr, expr_result_heap_ownership};
 use crate::codegen::expr::calls::args;
 use crate::codegen::abi;
 use crate::parser::ast::{Expr, ExprKind};
@@ -105,6 +106,17 @@ pub fn emit(
         );
         return Some(ret_ty);
     }
+    if let Some(ret_ty) = emit_descriptor_backed_call_user_func(
+        &args[0],
+        &args[1..],
+        call_reg,
+        save_concat_before_args,
+        emitter,
+        ctx,
+        data,
+    ) {
+        return Some(ret_ty);
+    }
 
     // -- resolve callback function address --
     let is_callable_expr = matches!(
@@ -186,4 +198,98 @@ pub fn emit(
     }
 
     Some(ret_ty)
+}
+
+/// Emits descriptor-invoker dispatch for callable values already represented as descriptors.
+///
+/// This path falls back when a static signature exposes by-reference parameters
+/// because the invoker ABI receives a normalized argument array. Captures,
+/// including by-ref captures, remain descriptor-owned and are loaded by the
+/// generated invoker.
+#[allow(clippy::too_many_arguments)]
+fn emit_descriptor_backed_call_user_func(
+    callback: &Expr,
+    callback_args: &[Expr],
+    call_reg: &str,
+    concat_saved_before_args: bool,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    let sig = descriptor_invoker_sig(callback, ctx)?;
+    if sig
+        .as_ref()
+        .is_some_and(|sig| sig.ref_params.iter().any(|is_ref| *is_ref))
+    {
+        return None;
+    }
+    let ownership = expr_result_heap_ownership(callback);
+    if !matches!(ownership, HeapOwnership::Owned | HeapOwnership::Borrowed) {
+        return None;
+    }
+
+    let _callback_ty = emit_expr(callback, emitter, ctx, data);
+    if matches!(ownership, HeapOwnership::Borrowed) {
+        crate::codegen::callable_descriptor::emit_retain_current_descriptor(emitter);
+    }
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the callable descriptor while building call_user_func() arguments
+
+    let arg_array = Expr::new(
+        ExprKind::ArrayLiteral(callback_args.to_vec()),
+        callback.span,
+    );
+    let arr_ty = emit_expr(&arg_array, emitter, ctx, data);
+    abi::emit_load_temporary_stack_slot(emitter, call_reg, 0);
+    call_user_func_array::emit_call_descriptor_array_invoker(
+        call_user_func_array::LoadedArraySource::Result,
+        &arr_ty,
+        call_reg,
+        concat_saved_before_args,
+        emitter,
+        ctx,
+        data,
+    );
+    release_preserved_descriptor_after_mixed_result(emitter);
+    Some(PhpType::Mixed)
+}
+
+/// Returns optional callable signature metadata for expressions that produce descriptor values.
+fn descriptor_invoker_sig(callback: &Expr, ctx: &Context) -> Option<Option<FunctionSig>> {
+    if matches!(callback.kind, ExprKind::StringLiteral(_) | ExprKind::Closure { .. }) {
+        return None;
+    }
+    if matches!(&callback.kind, ExprKind::Variable(name) if ctx.ref_params.contains(name)) {
+        return None;
+    }
+    match &callback.kind {
+        ExprKind::Variable(_)
+        | ExprKind::ArrayAccess { .. }
+        | ExprKind::FirstClassCallable(_)
+        | ExprKind::FunctionCall { .. }
+        | ExprKind::Assignment { .. }
+        | ExprKind::Ternary { .. }
+        | ExprKind::ShortTernary { .. }
+        | ExprKind::NullCoalesce { .. } => {}
+        _ => return None,
+    }
+    let static_sig = crate::codegen::callables::callable_sig(callback, ctx);
+    if static_sig.is_some()
+        || matches!(
+            crate::codegen::functions::infer_contextual_type(callback, ctx).codegen_repr(),
+            PhpType::Callable
+        )
+    {
+        Some(static_sig)
+    } else {
+        None
+    }
+}
+
+/// Releases the preserved callback descriptor while keeping the boxed Mixed call result live.
+fn release_preserved_descriptor_after_mixed_result(emitter: &mut Emitter) {
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve call_user_func() result while releasing the callback descriptor owner
+    abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);
+    crate::codegen::callable_descriptor::emit_release_current_descriptor(emitter);
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the boxed Mixed call_user_func() result
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the preserved callable descriptor slot
 }
