@@ -30,12 +30,24 @@ pub(super) fn emit_descriptor_invoker_arg_array(
     data: &mut DataSection,
 ) -> PhpType {
     if has_explicit_named_and_spread(args_exprs) {
-        let sig = sig.expect("descriptor named+spread call reached codegen without signature");
-        return emit_named_spread_invoker_arg_hash(args_exprs, sig, span, emitter, ctx, data);
+        if let Some(sig) = sig {
+            return emit_named_spread_invoker_arg_hash(args_exprs, sig, span, emitter, ctx, data);
+        }
+        return emit_untyped_named_spread_invoker_arg_hash(args_exprs, span, emitter, ctx, data);
     }
 
     if let Some(spread_inner) = single_spread_inner(args_exprs) {
         return super::super::emit_expr(spread_inner, emitter, ctx, data);
+    }
+
+    if plain_positional_args(args_exprs) && should_encode_invoker_ref_args(sig, args_exprs) {
+        return descriptor_arg_builder::emit_indexed_invoker_arg_array(
+            args_exprs,
+            true,
+            emitter,
+            ctx,
+            data,
+        );
     }
 
     if has_spread(args_exprs) {
@@ -70,6 +82,24 @@ fn has_spread(args_exprs: &[Expr]) -> bool {
     args_exprs
         .iter()
         .any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+}
+
+/// Returns true when the descriptor call has only positional, non-spread arguments.
+fn plain_positional_args(args_exprs: &[Expr]) -> bool {
+    args_exprs
+        .iter()
+        .all(|arg| !matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
+}
+
+/// Returns whether variable arguments should be encoded for runtime by-ref decisions.
+fn should_encode_invoker_ref_args(sig: Option<&FunctionSig>, args_exprs: &[Expr]) -> bool {
+    if !args_exprs
+        .iter()
+        .any(|arg| matches!(arg.kind, ExprKind::Variable(_)))
+    {
+        return false;
+    }
+    sig.is_none_or(|sig| sig.ref_params.iter().any(|is_ref| *is_ref))
 }
 
 /// Returns the spread source when the entire descriptor call is `(...$args)`.
@@ -164,7 +194,18 @@ fn emit_descriptor_prefix_as_mixed_hash(
     ctx: &mut Context,
     data: &mut DataSection,
 ) {
-    let Some(prefix_expr) = plan.positional_prefix_expr(span) else {
+    let prefix_expr = plan.positional_prefix_expr(span);
+    emit_descriptor_prefix_expr_as_mixed_hash(prefix_expr.as_ref(), emitter, ctx, data);
+}
+
+/// Emits an optional positional prefix expression as a Mixed hash.
+fn emit_descriptor_prefix_expr_as_mixed_hash(
+    prefix_expr: Option<&Expr>,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    let Some(prefix_expr) = prefix_expr else {
         crate::codegen::expr::arrays::emit_empty_assoc_array_literal(
             PhpType::Mixed,
             PhpType::Mixed,
@@ -194,6 +235,44 @@ fn emit_descriptor_prefix_as_mixed_hash(
                 emitter,
             );
         }
+    }
+}
+
+/// Emits a Mixed hash for named+spread descriptor calls without a local signature.
+fn emit_untyped_named_spread_invoker_arg_hash(
+    args_exprs: &[Expr],
+    span: Span,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let first_named_pos = args_exprs
+        .iter()
+        .position(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
+        .expect("named+spread descriptor call must contain a named suffix");
+    let prefix_expr = if first_named_pos == 0 {
+        None
+    } else {
+        Some(Expr::new(
+            ExprKind::ArrayLiteral(args_exprs[..first_named_pos].to_vec()),
+            span,
+        ))
+    };
+
+    emitter.comment("descriptor invoker untyped named+spread argument hash");
+    emit_descriptor_prefix_expr_as_mixed_hash(prefix_expr.as_ref(), emitter, ctx, data);
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // keep the descriptor argument hash alive while untyped named suffix entries are inserted
+
+    for arg in args_exprs.iter().skip(first_named_pos) {
+        if let ExprKind::NamedArg { name, value } = &arg.kind {
+            emit_named_suffix_entry(name, value, emitter, ctx, data);
+        }
+    }
+
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // return the completed untyped named+spread argument hash
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
     }
 }
 

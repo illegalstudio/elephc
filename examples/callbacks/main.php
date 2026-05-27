@@ -223,6 +223,29 @@ $large_calc = new SelectedCalculator(100);
 $use_small_calc = false;
 $scale_args = [3];
 echo "selected callable named spread: " . ($use_small_calc ? $small_calc->scale(...) : $large_calc->scale(...))(...$scale_args, factor: 7) . "\n";
+$stored_scale = $use_small_calc ? $small_calc->scale(...) : $large_calc->scale(...);
+echo "stored selected callable named direct: " . $stored_scale(value: 2, factor: 4) . "\n";
+$stored_scale_args = [2];
+echo "stored selected callable named spread: " . $stored_scale(...$stored_scale_args, factor: 4) . "\n";
+
+class SelectedBumper {
+    public $step;
+
+    public function __construct($step) {
+        $this->step = $step;
+    }
+
+    public function bump(&$value) {
+        $value = $value + $this->step;
+    }
+}
+
+$small_bumper = new SelectedBumper(3);
+$large_bumper = new SelectedBumper(7);
+$stored_bump = $use_small_calc ? $small_bumper->bump(...) : $large_bumper->bump(...);
+$stored_value = 5;
+$stored_bump($stored_value);
+echo "stored selected callable by-ref: " . $stored_value . "\n";
 
 $method_sorted = [1, 3, 2];
 usort($method_sorted, $offsets->descending(...));

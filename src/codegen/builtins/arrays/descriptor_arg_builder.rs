@@ -17,9 +17,47 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::{emit_expr, expr_result_heap_ownership};
 use crate::codegen::expr::arrays::emit_array_value_type_stamp;
+use crate::codegen::expr::calls::args as call_args;
 use crate::codegen::functions;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
+
+/// Emits an indexed Mixed argument array, optionally storing variable args as ref-cell markers.
+pub(crate) fn emit_indexed_invoker_arg_array(
+    args: &[Expr],
+    encode_variable_refs: bool,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment("descriptor invoker indexed argument array");
+    emit_new_mixed_indexed_array(args.len().max(4), emitter);
+    emit_array_value_type_stamp(emitter, abi::int_result_reg(emitter), &PhpType::Mixed);
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // keep the descriptor argument array alive while filling Mixed slots
+
+    for (i, arg) in args.iter().enumerate() {
+        if encode_variable_refs {
+            if let ExprKind::Variable(var_name) = &arg.kind {
+                if !call_args::emit_ref_arg_variable_address(
+                    var_name,
+                    "descriptor invoker arg",
+                    emitter,
+                    ctx,
+                ) {
+                    panic!("descriptor invoker argument variable not found");
+                }
+                emit_box_current_ref_arg_address_for_invoker(var_name, emitter, ctx);
+                emit_store_current_mixed_slot(i, emitter);
+                continue;
+            }
+        }
+
+        emit_store_next_mixed_slot(arg, i, emitter, ctx, data);
+    }
+
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // return the filled descriptor argument array
+    PhpType::Array(Box::new(PhpType::Mixed))
+}
 
 /// Emits a raw indexed argument array for positional args plus indexed spreads.
 pub(crate) fn emit_positional_spread_invoker_arg_array(
@@ -134,6 +172,42 @@ fn emit_store_current_mixed_slot(index: usize, emitter: &mut Emitter) {
     abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), array_reg, 24 + index * 8);
     abi::emit_load_int_immediate(emitter, len_reg, (index + 1) as i64);
     abi::emit_store_to_address(emitter, len_reg, array_reg, 0);
+}
+
+/// Boxes the current variable storage address as an invoker-only Mixed marker.
+fn emit_box_current_ref_arg_address_for_invoker(
+    var_name: &str,
+    emitter: &mut Emitter,
+    ctx: &Context,
+) {
+    let ref_cell_reg = abi::secondary_scratch_reg(emitter);
+    let marker_tag_reg = abi::tertiary_scratch_reg(emitter);
+    let source_tag_reg = abi::symbol_scratch_reg(emitter);
+    emitter.instruction(&format!("mov {}, {}", ref_cell_reg, abi::int_result_reg(emitter))); // preserve the source variable storage address before Mixed marker boxing
+    abi::emit_load_int_immediate(
+        emitter,
+        marker_tag_reg,
+        call_user_func_array::INVOKER_ARG_REF_CELL_TAG,
+    );
+    abi::emit_load_int_immediate(
+        emitter,
+        source_tag_reg,
+        variable_runtime_value_tag(var_name, ctx) as i64,
+    );
+    crate::codegen::emit_box_runtime_payload_as_mixed(
+        emitter,
+        marker_tag_reg,
+        ref_cell_reg,
+        source_tag_reg,
+    );
+}
+
+/// Returns the runtime tag for a variable's current codegen type.
+fn variable_runtime_value_tag(var_name: &str, ctx: &Context) -> u8 {
+    ctx.variables
+        .get(var_name)
+        .map(|var| crate::codegen::runtime_value_tag(&var.ty.codegen_repr()))
+        .unwrap_or_else(|| crate::codegen::runtime_value_tag(&PhpType::Int))
 }
 
 /// Appends an indexed spread source to the destination Mixed argument array.

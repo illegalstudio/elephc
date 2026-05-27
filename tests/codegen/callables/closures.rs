@@ -527,6 +527,151 @@ echo ($use_left ? $left->add(...) : $right->add(...))(...$empty, n: 6);
     let _ = fs::remove_dir_all(dir);
 }
 
+/// Verifies stored branch-selected captured callables invoke through descriptor metadata.
+#[test]
+fn test_stored_branch_selected_captured_callable_variable_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Prefixer {
+    public string $prefix = "";
+
+    public function wrap(string $name, string $suffix = "!"): string {
+        return $this->prefix . $name . $suffix;
+    }
+}
+
+$left = new Prefixer();
+$left->prefix = "L:";
+$right = new Prefixer();
+$right->prefix = "R:";
+$use_left = false;
+$cb = $use_left ? $left->wrap(...) : $right->wrap(...);
+echo $cb(name: "Ada");
+echo ",";
+echo $cb("Eve", suffix: "?");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "R:Ada!,R:Eve?");
+
+    let dir = make_cli_test_dir("elephc_stored_branch_callable_variable_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "stored branch-selected callable variables should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies stored descriptor calls preserve by-reference args through runtime signature metadata.
+#[test]
+fn test_stored_branch_selected_captured_callable_variable_preserves_by_ref_arg() {
+    let source = r#"<?php
+class Counter {
+    public int $step = 0;
+
+    public function bump(int &$n): void {
+        $n = $n + $this->step;
+    }
+}
+
+$left = new Counter();
+$left->step = 3;
+$right = new Counter();
+$right->step = 7;
+$use_left = false;
+$cb = $use_left ? $left->bump(...) : $right->bump(...);
+$value = 5;
+$cb($value);
+echo $value;
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "12");
+
+    let dir = make_cli_test_dir("elephc_stored_branch_callable_variable_by_ref_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "stored branch-selected callable variables with by-ref args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies stored untyped branch-selected callables use descriptor metadata for named args.
+#[test]
+fn test_stored_branch_selected_untyped_callable_variable_named_args_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Calculator {
+    public $base;
+
+    public function __construct($base) {
+        $this->base = $base;
+    }
+
+    public function scale($value = 1, $factor = 1) {
+        return $this->base + ($value * $factor);
+    }
+}
+
+$left = new Calculator(10);
+$right = new Calculator(100);
+$use_left = false;
+$cb = $use_left ? $left->scale(...) : $right->scale(...);
+echo $cb(value: 2, factor: 4);
+$args = [2];
+echo ",";
+echo $cb(...$args, factor: 4);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "108,108");
+
+    let dir = make_cli_test_dir("elephc_stored_untyped_branch_callable_named_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "stored untyped branch-selected callable variables with named args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies callable descriptors loaded from array elements invoke through runtime metadata.
+#[test]
+fn test_array_loaded_branch_selected_captured_callable_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Prefixer {
+    public string $prefix = "";
+
+    public function wrap(string $name, string $suffix = "!"): string {
+        return $this->prefix . $name . $suffix;
+    }
+}
+
+$left = new Prefixer();
+$left->prefix = "L:";
+$right = new Prefixer();
+$right->prefix = "R:";
+$use_left = false;
+$callbacks = [$use_left ? $left->wrap(...) : $right->wrap(...)];
+echo $callbacks[0]("Ada");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "R:Ada!");
+
+    let dir = make_cli_test_dir("elephc_array_loaded_branch_callable_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "array-loaded branch-selected callable descriptors should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
 #[test]
 fn test_arrow_function_array_filter() {
     // Verifies `array_filter` with an arrow function predicate filtering values greater than 8.

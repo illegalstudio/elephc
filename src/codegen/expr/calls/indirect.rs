@@ -81,7 +81,7 @@ pub(super) fn emit_loaded_expr_call(
             );
         }
     }
-    if expr_call_needs_descriptor_invoker(callee, ctx) {
+    if expr_call_needs_descriptor_invoker(callee, loaded_callee_ty, ctx) {
         if let Some(ret_ty) =
             emit_descriptor_invoker_expr_call(callee, args_exprs, emitter, ctx, data)
         {
@@ -285,8 +285,16 @@ fn matching_expr_call_branch_sig(
     }
 }
 
-/// Returns true when a direct expression call needs descriptor-owned captures.
-fn expr_call_needs_descriptor_invoker(callee: &Expr, ctx: &Context) -> bool {
+/// Returns true when a direct expression call needs descriptor-owned metadata.
+fn expr_call_needs_descriptor_invoker(
+    callee: &Expr,
+    loaded_callee_ty: &PhpType,
+    ctx: &Context,
+) -> bool {
+    if unknown_callable_value_needs_descriptor_invoker(callee, loaded_callee_ty, ctx) {
+        return true;
+    }
+
     match &callee.kind {
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) | ExprKind::Variable(_) => false,
         ExprKind::Assignment { value, .. } => expr_produces_captured_callable(value, ctx),
@@ -305,6 +313,36 @@ fn expr_call_needs_descriptor_invoker(callee: &Expr, ctx: &Context) -> bool {
         }
         _ => false,
     }
+}
+
+/// Returns true for callable values whose signature/capture environment is only known at runtime.
+fn unknown_callable_value_needs_descriptor_invoker(
+    callee: &Expr,
+    loaded_callee_ty: &PhpType,
+    ctx: &Context,
+) -> bool {
+    if !matches!(loaded_callee_ty.codegen_repr(), PhpType::Callable) {
+        return false;
+    }
+    if callee_sig_for_expr(callee, ctx).is_some() {
+        return false;
+    }
+    matches!(
+        &callee.kind,
+        ExprKind::Variable(_)
+            | ExprKind::ArrayAccess { .. }
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+            | ExprKind::Assignment { .. }
+            | ExprKind::Ternary { .. }
+            | ExprKind::ShortTernary { .. }
+            | ExprKind::NullCoalesce { .. }
+            | ExprKind::FunctionCall { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::StaticMethodCall { .. }
+            | ExprKind::ExprCall { .. }
+    )
 }
 
 /// Returns true if an expression produces a callable with descriptor-owned environment.

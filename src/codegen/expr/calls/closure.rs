@@ -353,6 +353,10 @@ pub(super) fn emit_closure_call(
         }
     }
 
+    if closure_variable_needs_descriptor_invoker(var, ctx) {
+        return emit_descriptor_invoker_variable_call(var, args_exprs, emitter, ctx, data);
+    }
+
     // We reach this point only when the short-circuit above did not fire. The
     // call is going to invoke the wrapper indirectly via `blr`, so the FCC
     // wrapper (if any) must keep its body. This is also the path real closures
@@ -501,4 +505,120 @@ pub(super) fn emit_closure_call(
     }
 
     ret_ty
+}
+
+/// Returns true when a callable variable must rely on descriptor-owned metadata.
+fn closure_variable_needs_descriptor_invoker(var: &str, ctx: &Context) -> bool {
+    if ctx.closure_sigs.contains_key(var) {
+        return false;
+    }
+    ctx.variables
+        .get(var)
+        .is_some_and(|info| matches!(info.ty.codegen_repr(), PhpType::Callable))
+}
+
+/// Emits `$var(...)` through the callable descriptor's uniform runtime invoker.
+fn emit_descriptor_invoker_variable_call(
+    var: &str,
+    args_exprs: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment(&format!("call descriptor variable ${}()", var));
+    let save_concat_before_args =
+        emitter.target.arch == crate::codegen::platform::Arch::X86_64;
+    if save_concat_before_args {
+        super::super::save_concat_offset_before_nested_call(emitter, ctx);
+    }
+
+    let Some(var_info) = ctx.variables.get(var) else {
+        emitter.comment(&format!("WARNING: undefined callable descriptor variable ${}", var));
+        if save_concat_before_args {
+            super::super::restore_concat_offset_after_nested_call(emitter, ctx, &PhpType::Mixed);
+        }
+        crate::codegen::abi::emit_load_int_immediate(
+            emitter,
+            crate::codegen::abi::int_result_reg(emitter),
+            0,
+        );
+        return PhpType::Mixed;
+    };
+    let var_offset = var_info.stack_offset;
+    if ctx.ref_params.contains(var) {
+        crate::codegen::abi::load_at_offset(
+            emitter,
+            crate::codegen::abi::int_result_reg(emitter),
+            var_offset,
+        );
+        crate::codegen::abi::emit_load_from_address(
+            emitter,
+            crate::codegen::abi::int_result_reg(emitter),
+            crate::codegen::abi::int_result_reg(emitter),
+            0,
+        );
+    } else {
+        crate::codegen::abi::load_at_offset(
+            emitter,
+            crate::codegen::abi::int_result_reg(emitter),
+            var_offset,
+        );
+    }
+    crate::codegen::callable_descriptor::emit_retain_current_descriptor(emitter);
+    crate::codegen::abi::emit_push_reg(emitter, crate::codegen::abi::int_result_reg(emitter)); // preserve the callable descriptor while building variable-call arguments
+
+    let sig = ctx.closure_sigs.get(var).cloned();
+    let arr_ty = super::descriptor_invoker_args::emit_descriptor_invoker_arg_array(
+        args_exprs,
+        sig.as_ref(),
+        Span::dummy(),
+        emitter,
+        ctx,
+        data,
+    );
+    crate::codegen::abi::emit_push_reg(emitter, crate::codegen::abi::int_result_reg(emitter)); // preserve the owned descriptor-invoker argument array
+
+    let call_reg = crate::codegen::abi::nested_call_reg(emitter);
+    crate::codegen::abi::emit_load_temporary_stack_slot(emitter, call_reg, 16);
+    crate::codegen::builtins::arrays::call_user_func_array::emit_call_descriptor_array_invoker(
+        crate::codegen::builtins::arrays::call_user_func_array::LoadedArraySource::TemporaryStackSlot(0),
+        &arr_ty,
+        call_reg,
+        save_concat_before_args,
+        emitter,
+        ctx,
+        data,
+    );
+    release_preserved_variable_call_arg_array_after_mixed_result(&arr_ty, emitter);
+    release_preserved_variable_call_descriptor_after_mixed_result(emitter);
+    PhpType::Mixed
+}
+
+/// Releases the synthetic variable-call argument array while preserving the Mixed result.
+fn release_preserved_variable_call_arg_array_after_mixed_result(
+    arr_ty: &PhpType,
+    emitter: &mut Emitter,
+) {
+    crate::codegen::abi::emit_push_reg(emitter, crate::codegen::abi::int_result_reg(emitter)); // preserve the boxed call result while releasing the argument array
+    crate::codegen::abi::emit_load_temporary_stack_slot(
+        emitter,
+        crate::codegen::abi::int_result_reg(emitter),
+        16,
+    );
+    crate::codegen::abi::emit_decref_if_refcounted(emitter, arr_ty);
+    crate::codegen::abi::emit_pop_reg(emitter, crate::codegen::abi::int_result_reg(emitter)); // restore the boxed call result after argument-array cleanup
+    crate::codegen::abi::emit_release_temporary_stack(emitter, 16);             // discard the preserved argument-array slot
+}
+
+/// Releases the retained callable descriptor while preserving the Mixed result.
+fn release_preserved_variable_call_descriptor_after_mixed_result(emitter: &mut Emitter) {
+    crate::codegen::abi::emit_push_reg(emitter, crate::codegen::abi::int_result_reg(emitter)); // preserve the boxed call result while releasing the callable descriptor
+    crate::codegen::abi::emit_load_temporary_stack_slot(
+        emitter,
+        crate::codegen::abi::int_result_reg(emitter),
+        16,
+    );
+    crate::codegen::callable_descriptor::emit_release_current_descriptor(emitter);
+    crate::codegen::abi::emit_pop_reg(emitter, crate::codegen::abi::int_result_reg(emitter)); // restore the boxed call result after descriptor cleanup
+    crate::codegen::abi::emit_release_temporary_stack(emitter, 16);             // discard the preserved callable descriptor slot
 }
