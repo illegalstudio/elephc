@@ -300,6 +300,77 @@ echo ($callback)("ok");
     assert_eq!(out, "[ok]");
 }
 
+/// Verifies literal static-method callable arrays invoke through descriptor metadata.
+#[test]
+fn test_literal_callable_array_static_method_named_args_use_descriptor_invoker() {
+    let source = r#"<?php
+class Formatter {
+    public static function stamp($prefix = "id", $value = 1, $suffix = "!"): string {
+        return $prefix . ":" . $value . $suffix;
+    }
+}
+echo ([Formatter::class, "stamp"])(value: 7);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "id:7!");
+
+    let dir = make_cli_test_dir("elephc_literal_static_callable_array_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("cufa_descriptor_invoker_ready"),
+        "literal static-method callable arrays should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies literal instance-method callable arrays evaluate the receiver before call arguments.
+#[test]
+fn test_literal_callable_array_instance_method_preserves_receiver_evaluation_order() {
+    let out = compile_and_run(
+        r#"<?php
+class Prefixer {
+    public string $prefix = "";
+
+    public function wrap(string $value = "Ada", string $suffix = "!"): string {
+        return $this->prefix . $value . $suffix;
+    }
+}
+function replace_prefixer(&$target): string {
+    $target = new Prefixer();
+    $target->prefix = "new:";
+    return "?";
+}
+$first = new Prefixer();
+$first->prefix = "old:";
+echo ([$first, "wrap"])(suffix: replace_prefixer($first));
+"#,
+    );
+    assert_eq!(out, "old:Ada?");
+}
+
+/// Verifies literal instance-method callable arrays preserve by-reference arguments.
+#[test]
+fn test_literal_callable_array_instance_method_preserves_by_ref_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class Mutator {
+    public function bump(&$value): int {
+        $value = $value + 1;
+        return $value;
+    }
+}
+$mutator = new Mutator();
+$value = 4;
+echo ([$mutator, "bump"])($value);
+echo ":";
+echo $value;
+"#,
+    );
+    assert_eq!(out, "5:5");
+}
+
 /// Verifies that callable by ref parameter dereferences descriptor before call.
 #[test]
 fn test_callable_by_ref_parameter_dereferences_descriptor_before_call() {

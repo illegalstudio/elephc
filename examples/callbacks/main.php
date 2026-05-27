@@ -112,6 +112,7 @@ $dynamic_formatter = new DynamicFormatter();
 $method_array_callback = [$dynamic_formatter, "wrap"];
 echo "method array call_user_func: " . call_user_func($method_array_callback, "ok") . "\n";
 echo "method array direct call: " . $method_array_callback(value: "direct") . "\n";
+echo "literal method array direct call: " . ([$dynamic_formatter, "wrap"])(value: "literal direct") . "\n";
 echo "method array literal call_user_func_array: " . call_user_func_array([$dynamic_formatter, "wrap"], ["value" => "lit"]) . "\n";
 $dynamic_method_args = ["dyn"];
 echo "method array dynamic call_user_func_array: " . call_user_func_array($method_array_callback, $dynamic_method_args) . "\n";
@@ -123,6 +124,7 @@ $method_spread_tail = [" tail"];
 echo "method array positional spread call_user_func: " . call_user_func($method_array_callback, "lead", ...$method_spread_tail) . "\n";
 $static_array_callback = [DynamicFormatter::class, "tag"];
 echo "static method array direct call: " . $static_array_callback(value: 8, prefix: "direct") . "\n";
+echo "literal static method array direct call: " . ([DynamicFormatter::class, "tag"])(value: 9, prefix: "literal") . "\n";
 
 function passthrough_args(mixed $value): mixed {
     return $value;

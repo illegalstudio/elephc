@@ -21,6 +21,7 @@ use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use super::Expr;
+use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{CallableTarget, ExprKind, StaticReceiver, TypeExpr};
 use crate::span::Span;
 use crate::types::PhpType;
@@ -126,6 +127,28 @@ pub(super) fn emit_loaded_runtime_string_call(
     ret_ty
 }
 
+/// Emits `([$object, "method"])(...)` or `([ClassName::class, "method"])(...)`.
+pub(super) fn emit_callable_array_literal_call(
+    callee: &Expr,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    let (receiver, method) = callable_array_parts(callee)?;
+    if let Some(receiver) = static_callable_receiver(receiver, ctx) {
+        return emit_static_callable_array_descriptor_call(
+            &receiver,
+            method,
+            args,
+            emitter,
+            ctx,
+            data,
+        );
+    }
+    emit_instance_callable_array_descriptor_call(receiver, method, args, emitter, ctx, data)
+}
+
 /// Emits a direct `$callback(...)` call when `$callback` stores a PHP callable array.
 pub(super) fn emit_callable_array_variable_call(
     var: &str,
@@ -182,8 +205,54 @@ fn emit_instance_callable_array_variable_call(
     )
 }
 
+/// Emits a descriptor invocation for a literal instance-method callable array.
+fn emit_instance_callable_array_descriptor_call(
+    receiver: &Expr,
+    method: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    let receiver_ty = crate::codegen::functions::infer_contextual_type(receiver, ctx);
+    let class_name = crate::codegen::functions::singular_object_class(&receiver_ty)?;
+    let case = crate::codegen::callable_dispatch::runtime_instance_method_case(
+        ctx,
+        data,
+        class_name,
+        method,
+        crate::codegen::callable_dispatch::RuntimeInstanceCallableShape::InstanceMethod,
+    )?;
+    if !case.has_invoker {
+        return None;
+    }
+    let mut descriptor_args = Vec::with_capacity(args.len() + 1);
+    descriptor_args.push(receiver.clone());
+    descriptor_args.extend(args.iter().cloned());
+    emit_callable_array_descriptor_case_call(
+        &case.descriptor_label,
+        &case.sig,
+        &descriptor_args,
+        emitter,
+        ctx,
+        data,
+    )
+}
+
 /// Emits a descriptor invocation for a stored static-method callable array.
 fn emit_static_callable_array_variable_call(
+    receiver: &StaticReceiver,
+    method: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    emit_static_callable_array_descriptor_call(receiver, method, args, emitter, ctx, data)
+}
+
+/// Emits a descriptor invocation for a static-method callable array.
+fn emit_static_callable_array_descriptor_call(
     receiver: &StaticReceiver,
     method: &str,
     args: &[Expr],
@@ -259,6 +328,55 @@ fn callable_array_receiver_slot_expr(var: &str) -> Expr {
         },
         Span::dummy(),
     )
+}
+
+/// Returns receiver and method from a two-element PHP callable array literal.
+fn callable_array_parts(callee: &Expr) -> Option<(&Expr, &str)> {
+    let elems = match &callee.kind {
+        ExprKind::ArrayLiteral(elems) => elems,
+        _ => return None,
+    };
+    if elems.len() != 2 {
+        return None;
+    }
+    let ExprKind::StringLiteral(method) = &elems[1].kind else {
+        return None;
+    };
+    Some((&elems[0], method.as_str()))
+}
+
+/// Resolves a callable-array receiver expression to a static class receiver.
+fn static_callable_receiver(receiver: &Expr, ctx: &Context) -> Option<StaticReceiver> {
+    let class_name = match &receiver.kind {
+        ExprKind::StringLiteral(class_name) => {
+            resolve_class_name(ctx, class_name).map(str::to_string)
+        }
+        ExprKind::ClassConstant { receiver } => resolve_static_receiver_class(receiver, ctx),
+        _ => None,
+    }?;
+    Some(StaticReceiver::Named(Name::from(class_name)))
+}
+
+/// Resolves `self`, `parent`, `static`, and named static receivers to concrete class names.
+fn resolve_static_receiver_class(receiver: &StaticReceiver, ctx: &Context) -> Option<String> {
+    match receiver {
+        StaticReceiver::Named(name) => resolve_class_name(ctx, name.as_str()).map(str::to_string),
+        StaticReceiver::Self_ | StaticReceiver::Static => ctx.current_class.clone(),
+        StaticReceiver::Parent => ctx
+            .current_class
+            .as_ref()
+            .and_then(|class_name| ctx.classes.get(class_name))
+            .and_then(|class_info| class_info.parent.clone()),
+    }
+}
+
+/// Resolves a class name case-insensitively against the known codegen class table.
+fn resolve_class_name<'a>(ctx: &'a Context, class_name: &str) -> Option<&'a str> {
+    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+    ctx.classes
+        .keys()
+        .find(|existing| php_symbol_key(existing) == class_key)
+        .map(String::as_str)
 }
 
 /// Emits a first-class callable expression (e.g., `$fn(...)()`).

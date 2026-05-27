@@ -9,10 +9,11 @@
 //! - PHP compatibility matters for coercions, operator results, object access, and nullable/union handling.
 
 use crate::errors::CompileError;
-use crate::names::Name;
+use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
     BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver, Stmt, TypeExpr,
 };
+use crate::span::Span;
 use crate::types::{merge_array_key_types, FunctionSig, PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -440,6 +441,9 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        if let Some(ret_ty) = self.infer_callable_array_expr_call(callee, args, expr, env)? {
+            return Ok(ret_ty);
+        }
         let callee_ty = self.infer_type(callee, env)?;
         if matches!(callee_ty.codegen_repr(), PhpType::Str) {
             for arg in args {
@@ -586,6 +590,42 @@ impl Checker {
         Ok(self.nullable_callable_result(PhpType::Mixed, nullable_callable)) // fallback for unknown callables
     }
 
+    /// Infers a direct call through a PHP callable-array literal.
+    fn infer_callable_array_expr_call(
+        &mut self,
+        callee: &Expr,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Option<PhpType>, CompileError> {
+        let Some((receiver, method)) = callable_array_parts(callee) else {
+            return Ok(None);
+        };
+        if let Some(receiver) = self.static_callable_array_receiver(receiver, callee.span)? {
+            return self
+                .infer_static_method_call_type_allowing_by_ref_spread(
+                    &receiver,
+                    method,
+                    args,
+                    expr,
+                    env,
+                )
+                .map(Some);
+        }
+        let receiver_ty = self.infer_type(receiver, env)?;
+        let Some(class_name) = self.invokable_class_for_type(&receiver_ty) else {
+            return Ok(None);
+        };
+        self.infer_method_call_on_class_type_allowing_by_ref_spread(
+            &class_name,
+            method,
+            args,
+            expr,
+            env,
+        )
+        .map(Some)
+    }
+
     /// Infers a direct call through a stored PHP callable-array target.
     ///
     /// Callable arrays carry their static target metadata separately from their
@@ -629,6 +669,64 @@ impl Checker {
                 self.check_function_call(name.as_str(), args, expr.span, env)
             }
         }
+    }
+
+    /// Resolves a callable-array receiver expression to a static class receiver.
+    fn static_callable_array_receiver(
+        &self,
+        receiver: &Expr,
+        span: Span,
+    ) -> Result<Option<StaticReceiver>, CompileError> {
+        let class_name = match &receiver.kind {
+            ExprKind::StringLiteral(class_name) => self
+                .resolve_callable_array_class_name(class_name)
+                .map(str::to_string),
+            ExprKind::ClassConstant { receiver } => Some(
+                self.resolve_callable_array_static_receiver_class(receiver, span)?,
+            ),
+            _ => None,
+        };
+        Ok(class_name.map(|class_name| StaticReceiver::Named(Name::from(class_name))))
+    }
+
+    /// Resolves a static callable-array receiver to a concrete class name.
+    fn resolve_callable_array_static_receiver_class(
+        &self,
+        receiver: &StaticReceiver,
+        span: Span,
+    ) -> Result<String, CompileError> {
+        match receiver {
+            StaticReceiver::Named(name) => self
+                .resolve_callable_array_class_name(name.as_str())
+                .map(str::to_string)
+                .ok_or_else(|| CompileError::new(span, &format!("Undefined class: {}", name))),
+            StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.clone().ok_or_else(
+                || CompileError::new(span, "Cannot use self::class outside a class context"),
+            ),
+            StaticReceiver::Parent => {
+                let current_class = self.current_class.as_ref().ok_or_else(|| {
+                    CompileError::new(span, "Cannot use parent::class outside a class context")
+                })?;
+                self.classes
+                    .get(current_class)
+                    .and_then(|class_info| class_info.parent.clone())
+                    .ok_or_else(|| {
+                        CompileError::new(
+                            span,
+                            &format!("Class '{}' has no parent class", current_class),
+                        )
+                    })
+            }
+        }
+    }
+
+    /// Resolves a class name case-insensitively against declared classes.
+    fn resolve_callable_array_class_name<'a>(&'a self, class_name: &str) -> Option<&'a str> {
+        let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+        self.classes
+            .keys()
+            .find(|existing| php_symbol_key(existing) == class_key)
+            .map(String::as_str)
     }
 
     /// Returns the class name if `ty` is an invokable object or a single-member
@@ -927,6 +1025,21 @@ impl Checker {
             && members.iter().any(|member| *member == PhpType::Void)
             && expr_contains_nullsafe_member(callee)
     }
+}
+
+/// Returns receiver and method from a two-element PHP callable array literal.
+fn callable_array_parts(callee: &Expr) -> Option<(&Expr, &str)> {
+    let elems = match &callee.kind {
+        ExprKind::ArrayLiteral(elems) => elems,
+        _ => return None,
+    };
+    if elems.len() != 2 {
+        return None;
+    }
+    let ExprKind::StringLiteral(method) = &elems[1].kind else {
+        return None;
+    };
+    Some((&elems[0], method.as_str()))
 }
 
 /// Returns `true` if `expr` contains a nullsafe member access anywhere in
