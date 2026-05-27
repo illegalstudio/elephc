@@ -302,18 +302,47 @@ pub fn emit(
                 ExprKind::ArrayLiteral(elems) => Some(elems.as_slice()),
                 _ => None,
             };
-            emit_loaded_array_callback_call(
-                LoadedArraySource::Result,
-                &arr_ty,
-                literal_arg_elems,
-                call_reg,
-                &captures,
-                &sig,
-                save_concat_before_args,
-                emitter,
-                ctx,
-                data,
-            )
+            if literal_arg_elems.is_none() {
+                if let Some(source) = descriptor_source {
+                    emit_loaded_descriptor_source_to_reg(source, call_reg, emitter);
+                    emit_call_descriptor_array_invoker(
+                        LoadedArraySource::Result,
+                        &arr_ty,
+                        call_reg,
+                        save_concat_before_args,
+                        emitter,
+                        ctx,
+                        data,
+                    );
+                    PhpType::Mixed
+                } else {
+                    emit_loaded_array_callback_call(
+                        LoadedArraySource::Result,
+                        &arr_ty,
+                        None,
+                        call_reg,
+                        &captures,
+                        &sig,
+                        save_concat_before_args,
+                        emitter,
+                        ctx,
+                        data,
+                    )
+                }
+            } else {
+                emit_loaded_array_callback_call(
+                    LoadedArraySource::Result,
+                    &arr_ty,
+                    literal_arg_elems,
+                    call_reg,
+                    &captures,
+                    &sig,
+                    save_concat_before_args,
+                    emitter,
+                    ctx,
+                    data,
+                )
+            }
         } else {
             let inferred_arg_array_ty =
                 crate::codegen::functions::infer_contextual_type(&args[1], ctx);

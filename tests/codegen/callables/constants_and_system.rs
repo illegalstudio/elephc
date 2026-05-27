@@ -1542,6 +1542,35 @@ echo $args[0];
     assert_eq!(out, "5:5");
 }
 
+/// Verifies descriptor-backed by-ref callbacks use the invoker for dynamic argument containers.
+#[test]
+fn test_call_user_func_array_descriptor_dynamic_by_ref_args_use_invoker_temp_cells() {
+    let source = r#"<?php
+$cb = function (&$n): void {
+    $n = $n + 1;
+};
+
+$value = 5;
+$args = [$value];
+call_user_func_array($cb, $args);
+echo $value;
+echo ":";
+echo $args[0];
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "5:5");
+
+    let dir = make_cli_test_dir("elephc_cufa_descriptor_dynamic_by_ref_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("cufa_descriptor_invoker_ready"),
+        "descriptor-backed dynamic by-ref args should route through the descriptor invoker:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
 // -- v0.8 constants --
 
 // Tests `echo "a" . PHP_EOL . "b";` outputs "a\nb" (platform newline).
