@@ -20,7 +20,7 @@ use crate::codegen::expr::arrays::emit_array_value_type_stamp;
 use crate::codegen::expr::calls::args as call_args;
 use crate::codegen::functions;
 use crate::parser::ast::{Expr, ExprKind};
-use crate::types::PhpType;
+use crate::types::{FunctionSig, PhpType};
 
 /// Emits an indexed Mixed argument array, optionally storing variable args as ref-cell markers.
 pub(crate) fn emit_indexed_invoker_arg_array(
@@ -63,6 +63,8 @@ pub(crate) fn emit_indexed_invoker_arg_array(
 pub(crate) fn emit_positional_spread_invoker_arg_array(
     leading_args: &[Expr],
     args: &[Expr],
+    sig: Option<&FunctionSig>,
+    encode_variable_refs: bool,
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
@@ -75,11 +77,29 @@ pub(crate) fn emit_positional_spread_invoker_arg_array(
 
     let mut slot = 0usize;
     for arg in leading_args {
-        emit_store_next_mixed_slot(arg, slot, emitter, ctx, data);
+        emit_store_invoker_arg_slot(
+            arg,
+            slot,
+            sig,
+            encode_variable_refs,
+            "descriptor invoker leading arg",
+            emitter,
+            ctx,
+            data,
+        );
         slot += 1;
     }
     for arg in plan.prefix_args {
-        emit_store_next_mixed_slot(arg, slot, emitter, ctx, data);
+        emit_store_invoker_arg_slot(
+            arg,
+            slot,
+            sig,
+            encode_variable_refs,
+            "descriptor invoker spread-prefix arg",
+            emitter,
+            ctx,
+            data,
+        );
         slot += 1;
     }
     for (spread, elem_ty) in plan.spreads {
@@ -88,6 +108,44 @@ pub(crate) fn emit_positional_spread_invoker_arg_array(
 
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // return the completed positional-spread argument array
     Some(PhpType::Array(Box::new(PhpType::Mixed)))
+}
+
+/// Stores one positional descriptor argument, preserving variable storage when runtime by-ref metadata may need it.
+#[allow(clippy::too_many_arguments)]
+fn emit_store_invoker_arg_slot(
+    arg: &Expr,
+    index: usize,
+    sig: Option<&FunctionSig>,
+    encode_variable_refs: bool,
+    context_label: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    if should_encode_variable_ref_arg(sig, index, arg, encode_variable_refs) {
+        if let ExprKind::Variable(var_name) = &arg.kind {
+            if !call_args::emit_ref_arg_variable_address(var_name, context_label, emitter, ctx) {
+                panic!("descriptor invoker argument variable not found");
+            }
+            emit_box_current_ref_arg_address_for_invoker(var_name, emitter, ctx);
+            emit_store_current_mixed_slot(index, emitter);
+            return;
+        }
+    }
+
+    emit_store_next_mixed_slot(arg, index, emitter, ctx, data);
+}
+
+/// Returns true when this positional descriptor slot should carry an invoker ref-cell marker.
+fn should_encode_variable_ref_arg(
+    sig: Option<&FunctionSig>,
+    index: usize,
+    arg: &Expr,
+    encode_variable_refs: bool,
+) -> bool {
+    encode_variable_refs
+        && matches!(arg.kind, ExprKind::Variable(_))
+        && sig.is_none_or(|sig| sig.ref_params.get(index).copied().unwrap_or(false))
 }
 
 /// Plans a positional-only argument list with one or more indexed spread tails.

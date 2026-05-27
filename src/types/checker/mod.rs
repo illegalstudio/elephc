@@ -66,6 +66,8 @@ pub(crate) struct Checker {
     /// Tracks known callable signatures for variables holding first-class callables,
     /// keyed by variable name.
     pub callable_sigs: HashMap<String, FunctionSig>,
+    /// Tracks source-declared callable parameters in the active function body.
+    pub callable_param_names: HashSet<String>,
     /// Tracks callable signatures inferred for user-function callable parameters,
     /// keyed by (function_name, param_name).
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,

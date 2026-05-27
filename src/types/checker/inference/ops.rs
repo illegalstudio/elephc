@@ -366,6 +366,15 @@ impl Checker {
                     .insert(var.to_string(), specialized_sig.clone());
                 self.closure_return_types
                     .insert(var.to_string(), specialized_sig.return_type.clone());
+                if self.callable_param_names.contains(var) {
+                    return self.check_known_callable_call_allowing_by_ref_spread(
+                        &specialized_sig,
+                        args,
+                        expr.span,
+                        env,
+                        &format!("callable ${}", var),
+                    );
+                }
                 return self.check_known_callable_call(
                     &specialized_sig,
                     args,
@@ -382,6 +391,15 @@ impl Checker {
                 env,
                 &format!("callable ${}", var),
             )?;
+            if self.callable_param_names.contains(var) {
+                return self.check_known_callable_call_allowing_by_ref_spread(
+                    &specialized_sig,
+                    args,
+                    expr.span,
+                    env,
+                    &format!("callable ${}", var),
+                );
+            }
             return self.check_known_callable_call(
                 &specialized_sig,
                 args,
@@ -451,13 +469,23 @@ impl Checker {
                             .insert(var_name.clone(), specialized_sig.clone());
                         self.closure_return_types
                             .insert(var_name.clone(), specialized_sig.return_type.clone());
-                        let ret_ty = self.check_known_callable_call(
-                            &specialized_sig,
-                            args,
-                            expr.span,
-                            env,
-                            &format!("callable ${}", var_name),
-                        )?;
+                        let ret_ty = if self.callable_param_names.contains(var_name) {
+                            self.check_known_callable_call_allowing_by_ref_spread(
+                                &specialized_sig,
+                                args,
+                                expr.span,
+                                env,
+                                &format!("callable ${}", var_name),
+                            )?
+                        } else {
+                            self.check_known_callable_call(
+                                &specialized_sig,
+                                args,
+                                expr.span,
+                                env,
+                                &format!("callable ${}", var_name),
+                            )?
+                        };
                         return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
                     }
                     let specialized_sig = self.specialize_callable_var_sig_from_args(
@@ -468,13 +496,23 @@ impl Checker {
                         env,
                         &format!("callable ${}", var_name),
                     )?;
-                    let ret_ty = self.check_known_callable_call(
-                        &specialized_sig,
-                        args,
-                        expr.span,
-                        env,
-                        &format!("callable ${}", var_name),
-                    )?;
+                    let ret_ty = if self.callable_param_names.contains(var_name) {
+                        self.check_known_callable_call_allowing_by_ref_spread(
+                            &specialized_sig,
+                            args,
+                            expr.span,
+                            env,
+                            &format!("callable ${}", var_name),
+                        )?
+                    } else {
+                        self.check_known_callable_call(
+                            &specialized_sig,
+                            args,
+                            expr.span,
+                            env,
+                            &format!("callable ${}", var_name),
+                        )?
+                    };
                     return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
                 }
             }

@@ -150,6 +150,46 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.infer_method_call_on_class_type_with_options(
+            class_name,
+            method,
+            args,
+            expr,
+            env,
+            false,
+        )
+    }
+
+    /// Infers a class method call for descriptor-backed callback paths that can
+    /// preserve by-reference spread arguments through runtime invoker metadata.
+    pub(crate) fn infer_method_call_on_class_type_allowing_by_ref_spread(
+        &mut self,
+        class_name: &str,
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        self.infer_method_call_on_class_type_with_options(
+            class_name,
+            method,
+            args,
+            expr,
+            env,
+            true,
+        )
+    }
+
+    /// Shared implementation for class method call inference.
+    fn infer_method_call_on_class_type_with_options(
+        &mut self,
+        class_name: &str,
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+        allow_by_ref_spread: bool,
+    ) -> Result<PhpType, CompileError> {
         let method_key = php_symbol_key(method);
         let mut normalized_args = args.to_vec();
         let mut magic_return_ty = None;
@@ -200,13 +240,23 @@ impl Checker {
                     &format!("Method {}::{}", class_name, method),
                     env,
                 )?;
-                self.check_known_callable_call(
-                    &effective_sig,
-                    &normalized_args,
-                    expr.span,
-                    env,
-                    &format!("Method {}::{}", class_name, method),
-                )?;
+                if allow_by_ref_spread {
+                    self.check_known_callable_call_allowing_by_ref_spread(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Method {}::{}", class_name, method),
+                    )?;
+                } else {
+                    self.check_known_callable_call(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Method {}::{}", class_name, method),
+                    )?;
+                }
             } else if let Some(sig) = class_info.methods.get("__call") {
                 let magic_args = Self::magic_call_args(method, args, expr.span);
                 let declared_flags =
@@ -221,13 +271,23 @@ impl Checker {
                     &format!("Method {}::__call", class_name),
                     env,
                 )?;
-                self.check_known_callable_call(
-                    &effective_sig,
-                    &normalized_args,
-                    expr.span,
-                    env,
-                    &format!("Method {}::__call", class_name),
-                )?;
+                if allow_by_ref_spread {
+                    self.check_known_callable_call_allowing_by_ref_spread(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Method {}::__call", class_name),
+                    )?;
+                } else {
+                    self.check_known_callable_call(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Method {}::__call", class_name),
+                    )?;
+                }
                 magic_return_ty = Some(effective_sig.return_type.clone());
                 magic_original_args = Some(args.to_vec());
             } else {
@@ -417,6 +477,32 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.infer_static_method_call_type_with_options(receiver, method, args, expr, env, false)
+    }
+
+    /// Infers a static method call for descriptor-backed callback paths that can
+    /// preserve by-reference spread arguments through runtime invoker metadata.
+    pub(crate) fn infer_static_method_call_type_allowing_by_ref_spread(
+        &mut self,
+        receiver: &StaticReceiver,
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        self.infer_static_method_call_type_with_options(receiver, method, args, expr, env, true)
+    }
+
+    /// Shared implementation for static method call inference.
+    fn infer_static_method_call_type_with_options(
+        &mut self,
+        receiver: &StaticReceiver,
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+        allow_by_ref_spread: bool,
+    ) -> Result<PhpType, CompileError> {
         let parent_call = matches!(receiver, StaticReceiver::Parent);
         let self_call = matches!(receiver, StaticReceiver::Self_);
         let resolved_class_name = match receiver {
@@ -489,13 +575,23 @@ impl Checker {
                     &format!("Static method {}::{}", class_name, method),
                     env,
                 )?;
-                self.check_known_callable_call(
-                    &effective_sig,
-                    &normalized_args,
-                    expr.span,
-                    env,
-                    &format!("Static method {}::{}", class_name, method),
-                )?;
+                if allow_by_ref_spread {
+                    self.check_known_callable_call_allowing_by_ref_spread(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Static method {}::{}", class_name, method),
+                    )?;
+                } else {
+                    self.check_known_callable_call(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Static method {}::{}", class_name, method),
+                    )?;
+                }
             } else if parent_call || self_call {
                 if self.current_method_is_static {
                     return Err(CompileError::new(
@@ -545,18 +641,33 @@ impl Checker {
                     ),
                     env,
                 )?;
-                self.check_known_callable_call(
-                    &effective_sig,
-                    &normalized_args,
-                    expr.span,
-                    env,
-                    &format!(
-                        "{} method {}::{}",
-                        if parent_call { "Parent" } else { "Self" },
-                        class_name,
-                        method
-                    ),
-                )?;
+                if allow_by_ref_spread {
+                    self.check_known_callable_call_allowing_by_ref_spread(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!(
+                            "{} method {}::{}",
+                            if parent_call { "Parent" } else { "Self" },
+                            class_name,
+                            method
+                        ),
+                    )?;
+                } else {
+                    self.check_known_callable_call(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!(
+                            "{} method {}::{}",
+                            if parent_call { "Parent" } else { "Self" },
+                            class_name,
+                            method
+                        ),
+                    )?;
+                }
             } else if class_info.methods.contains_key(method) {
                 return Err(CompileError::new(
                     expr.span,

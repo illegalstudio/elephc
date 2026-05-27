@@ -125,6 +125,26 @@ pub(crate) fn emit_call_user_func_form(
             })
         }
         Some(CallableForm::StaticMethod { receiver, method }) => {
+            if callback_args_have_spread(callback_args) {
+                return emit_static_method_descriptor_spread_form(
+                    &receiver,
+                    &method,
+                    callback_args,
+                    emitter,
+                    ctx,
+                    data,
+                )
+                .or_else(|| {
+                    Some(crate::codegen::expr::objects::emit_static_method_call(
+                        &receiver,
+                        &method,
+                        callback_args,
+                        emitter,
+                        ctx,
+                        data,
+                    ))
+                });
+            }
             emit_static_method_descriptor_form(
                 &receiver,
                 &method,
@@ -303,6 +323,8 @@ fn emit_instance_method_descriptor_positional_spread_form(
     let arg_array_ty = descriptor_arg_builder::emit_positional_spread_invoker_arg_array(
         &leading_args,
         callback_args,
+        Some(&case.sig),
+        true,
         emitter,
         ctx,
         data,
@@ -404,6 +426,56 @@ fn emit_instance_method_descriptor_dynamic_arg_form(
     call_user_func_array::emit_call_descriptor_array_invoker(
         LoadedArraySource::Result,
         &PhpType::Mixed,
+        call_reg,
+        save_concat_before_args,
+        emitter,
+        ctx,
+        data,
+    );
+    Some(PhpType::Mixed)
+}
+
+/// Invokes static-method positional+spread `call_user_func()` args through descriptors.
+fn emit_static_method_descriptor_spread_form(
+    receiver: &StaticReceiver,
+    method: &str,
+    callback_args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    let StaticReceiver::Named(class_name) = receiver else {
+        return None;
+    };
+    let case = callable_dispatch::runtime_static_method_case(
+        ctx,
+        data,
+        class_name.as_str(),
+        method,
+    )?;
+    if !case.has_invoker {
+        return None;
+    }
+    let save_concat_before_args =
+        emitter.target.arch == crate::codegen::platform::Arch::X86_64;
+    if save_concat_before_args {
+        crate::codegen::expr::save_concat_offset_before_nested_call(emitter, ctx);
+    }
+
+    let arg_array_ty = descriptor_arg_builder::emit_positional_spread_invoker_arg_array(
+        &[],
+        callback_args,
+        Some(&case.sig),
+        true,
+        emitter,
+        ctx,
+        data,
+    )?;
+    let call_reg = abi::nested_call_reg(emitter);
+    abi::emit_symbol_address(emitter, call_reg, &case.descriptor_label);
+    call_user_func_array::emit_call_descriptor_array_invoker(
+        LoadedArraySource::Result,
+        &arg_array_ty,
         call_reg,
         save_concat_before_args,
         emitter,

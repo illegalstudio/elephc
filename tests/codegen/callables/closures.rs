@@ -720,6 +720,69 @@ run($cb);
     assert_eq!(out, "16");
 }
 
+/// Verifies unknown callable params preserve positional by-reference variables before a spread tail.
+#[test]
+fn test_callable_param_unknown_signature_positional_spread_by_ref_arg_uses_descriptor_invoker() {
+    let source = r#"<?php
+function run(callable $cb): void {
+    $value = 5;
+    $args = [];
+    $cb($value, ...$args);
+    echo $value;
+}
+
+$cb = function(int &$value): void {
+    $value = $value + 13;
+};
+
+run($cb);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "18");
+
+    let dir = make_cli_test_dir("elephc_callable_param_unknown_positional_spread_ref_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "callable params with positional+spread by-ref args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies unknown callable params preserve positional by-reference variables before named suffixes.
+#[test]
+fn test_callable_param_unknown_signature_named_spread_prefix_by_ref_arg_uses_descriptor_invoker() {
+    let source = r#"<?php
+function run(callable $cb): void {
+    $value = 5;
+    $args = [];
+    $cb($value, ...$args, label: "done");
+    echo ":" . $value;
+}
+
+$cb = function(int &$value, string $label): void {
+    echo $label;
+    $value = $value + 9;
+};
+
+run($cb);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "done:14");
+
+    let dir = make_cli_test_dir("elephc_callable_param_unknown_named_spread_prefix_ref_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "callable params with named+spread prefix by-ref args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Verifies receiver-bound callable params preserve named by-reference variables.
 #[test]
 fn test_callable_param_unknown_signature_method_named_by_ref_arg_uses_descriptor_invoker() {

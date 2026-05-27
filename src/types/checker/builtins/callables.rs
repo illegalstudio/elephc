@@ -113,10 +113,18 @@ fn check_object_or_array_callable_call(
     callback_args: &[Expr],
     _span: crate::span::Span,
     env: &TypeEnv,
+    allow_by_ref_spread: bool,
 ) -> Result<Option<PhpType>, CompileError> {
     if let ExprKind::Variable(var_name) = &callback.kind {
         if let Some(target) = checker.callable_array_targets.get(var_name).cloned() {
-            return check_callable_target_call(checker, &target, callback_args, callback, env)
+            return check_callable_target_call(
+                checker,
+                &target,
+                callback_args,
+                callback,
+                env,
+                allow_by_ref_spread,
+            )
                 .map(Some);
         }
     }
@@ -128,15 +136,24 @@ fn check_object_or_array_callable_call(
             .get(&class_name)
             .is_some_and(|class_info| class_info.methods.contains_key("__invoke"))
         {
-            return checker
-                .infer_method_call_on_class_type(
+            return if allow_by_ref_spread {
+                checker.infer_method_call_on_class_type_allowing_by_ref_spread(
                     &class_name,
                     "__invoke",
                     callback_args,
                     callback,
                     env,
                 )
-                .map(Some);
+            } else {
+                checker.infer_method_call_on_class_type(
+                    &class_name,
+                    "__invoke",
+                    callback_args,
+                    callback,
+                    env,
+                )
+            }
+            .map(Some);
         }
     }
 
@@ -144,17 +161,38 @@ fn check_object_or_array_callable_call(
         return Ok(None);
     };
     if let Some(receiver) = static_callable_receiver(checker, receiver, callback.span)? {
-        return checker
-            .infer_static_method_call_type(&receiver, method, callback_args, callback, env)
-            .map(Some);
+        return if allow_by_ref_spread {
+            checker.infer_static_method_call_type_allowing_by_ref_spread(
+                &receiver,
+                method,
+                callback_args,
+                callback,
+                env,
+            )
+        } else {
+            checker.infer_static_method_call_type(&receiver, method, callback_args, callback, env)
+        }
+        .map(Some);
     }
     let receiver_ty = checker.infer_type(receiver, env)?;
     let Some(class_name) = checker.invokable_class_for_type(&receiver_ty) else {
         return Ok(None);
     };
-    checker
-        .infer_method_call_on_class_type(&class_name, method, callback_args, callback, env)
-        .map(Some)
+    if allow_by_ref_spread {
+        checker
+            .infer_method_call_on_class_type_allowing_by_ref_spread(
+                &class_name,
+                method,
+                callback_args,
+                callback,
+                env,
+            )
+            .map(Some)
+    } else {
+        checker
+            .infer_method_call_on_class_type(&class_name, method, callback_args, callback, env)
+            .map(Some)
+    }
 }
 
 /// Resolves a receiver-bound callable return type when argument details are runtime-only.
@@ -340,6 +378,7 @@ fn check_callable_target_call(
     callback_args: &[Expr],
     callback: &Expr,
     env: &TypeEnv,
+    allow_by_ref_spread: bool,
 ) -> Result<PhpType, CompileError> {
     match target {
         CallableTarget::Method { object, method } => {
@@ -350,16 +389,37 @@ fn check_callable_target_call(
                     "callable array receiver must be an object",
                 ));
             };
-            checker.infer_method_call_on_class_type(
-                &class_name,
-                method,
-                callback_args,
-                callback,
-                env,
-            )
+            if allow_by_ref_spread {
+                checker.infer_method_call_on_class_type_allowing_by_ref_spread(
+                    &class_name,
+                    method,
+                    callback_args,
+                    callback,
+                    env,
+                )
+            } else {
+                checker.infer_method_call_on_class_type(
+                    &class_name,
+                    method,
+                    callback_args,
+                    callback,
+                    env,
+                )
+            }
         }
-        CallableTarget::StaticMethod { receiver, method } => checker
-            .infer_static_method_call_type(receiver, method, callback_args, callback, env),
+        CallableTarget::StaticMethod { receiver, method } => {
+            if allow_by_ref_spread {
+                checker.infer_static_method_call_type_allowing_by_ref_spread(
+                    receiver,
+                    method,
+                    callback_args,
+                    callback,
+                    env,
+                )
+            } else {
+                checker.infer_static_method_call_type(receiver, method, callback_args, callback, env)
+            }
+        }
         CallableTarget::Function(name) => {
             checker.check_function_call(name.as_str(), callback_args, callback.span, env)
         }
@@ -605,7 +665,7 @@ pub(crate) fn check_callback_builtin_call(
     }
 
     if let Some(ret_ty) =
-        check_object_or_array_callable_call(checker, callback, callback_args, span, env)?
+        check_object_or_array_callable_call(checker, callback, callback_args, span, env, false)?
     {
         return Ok(ret_ty);
     }
@@ -927,7 +987,14 @@ pub(super) fn check_builtin(
                 args[1].span,
             )];
             if let Some(ret_ty) =
-                check_object_or_array_callable_call(checker, &args[0], &spread_args, span, env)?
+                check_object_or_array_callable_call(
+                    checker,
+                    &args[0],
+                    &spread_args,
+                    span,
+                    env,
+                    true,
+                )?
             {
                 if !call_user_func_array_arg_container_is_supported(&arg_array_ty) {
                     return Err(CompileError::new(
@@ -1042,7 +1109,14 @@ pub(super) fn check_builtin(
                 return Ok(Some(ret_ty));
             }
             if let Some(ret_ty) =
-                check_object_or_array_callable_call(checker, &args[0], &args[1..], span, env)?
+                check_object_or_array_callable_call(
+                    checker,
+                    &args[0],
+                    &args[1..],
+                    span,
+                    env,
+                    true,
+                )?
             {
                 return Ok(Some(ret_ty));
             }

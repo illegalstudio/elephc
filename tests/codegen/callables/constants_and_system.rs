@@ -777,6 +777,36 @@ echo call_user_func($callback, "a");
     let _ = fs::remove_dir_all(dir);
 }
 
+/// Verifies static-method positional+spread descriptor calls preserve by-reference variables.
+#[test]
+fn test_call_user_func_static_method_array_positional_spread_preserves_by_ref_arg() {
+    let source = r#"<?php
+class Bumper {
+    public static function bump(int &$value, int $extra): void {
+        $value = $value + 5 + $extra;
+    }
+}
+
+$callback = [Bumper::class, "bump"];
+$value = 5;
+$args = [3];
+call_user_func($callback, $value, ...$args);
+echo $value;
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "13");
+
+    let dir = make_cli_test_dir("elephc_static_array_callable_positional_spread_ref_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_static_method") && user_asm.contains("callable_invoker"),
+        "static method array callbacks with positional+spread by-ref args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Verifies `call_user_func()` invokable objects use descriptor invokers.
 #[test]
 fn test_call_user_func_invokable_object_uses_descriptor_invoker() {
@@ -936,6 +966,42 @@ echo call_user_func([$formatter, "join"], "a", ...$args);
     assert!(
         user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
         "instance method array callbacks with positional+spread args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies receiver-bound positional+spread descriptor calls preserve by-reference variables.
+#[test]
+fn test_call_user_func_instance_method_array_positional_spread_preserves_by_ref_arg() {
+    let source = r#"<?php
+class Bumper {
+    public int $step = 0;
+
+    public function __construct(int $step) {
+        $this->step = $step;
+    }
+
+    public function bump(int &$value, int $extra): void {
+        $value = $value + $this->step + $extra;
+    }
+}
+
+$bumper = new Bumper(7);
+$value = 5;
+$args = [2];
+call_user_func([$bumper, "bump"], $value, ...$args);
+echo $value;
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "14");
+
+    let dir = make_cli_test_dir("elephc_instance_array_callable_positional_spread_ref_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "instance method array callbacks with positional+spread by-ref args should route through descriptor invokers:\n{}",
         user_asm
     );
     let _ = fs::remove_dir_all(dir);

@@ -227,6 +227,46 @@ impl Checker {
         caller_env: &TypeEnv,
         callee_desc: &str,
     ) -> Result<PhpType, CompileError> {
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            false,
+        )
+    }
+
+    /// Validates a known callable call while allowing spread arguments for by-reference
+    /// parameters that will be materialized by descriptor invokers at runtime.
+    pub(crate) fn check_known_callable_call_allowing_by_ref_spread(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+    ) -> Result<PhpType, CompileError> {
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            true,
+        )
+    }
+
+    /// Shared implementation for known callable call validation.
+    fn check_known_callable_call_with_options(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+        allow_by_ref_spread: bool,
+    ) -> Result<PhpType, CompileError> {
         let normalized_args = self.normalize_named_call_args(sig, args, span, callee_desc, caller_env)?;
         let args = normalized_args.as_slice();
         let effective_arg_count = args
@@ -236,7 +276,7 @@ impl Checker {
         let has_spread = args.iter().any(|a| matches!(a.kind, ExprKind::Spread(_)));
         let required = sig.defaults.iter().filter(|d| d.is_none()).count();
 
-        if sig.ref_params.iter().any(|is_ref| *is_ref) && has_spread {
+        if sig.ref_params.iter().any(|is_ref| *is_ref) && has_spread && !allow_by_ref_spread {
             return Err(CompileError::new(
                 span,
                 &format!(

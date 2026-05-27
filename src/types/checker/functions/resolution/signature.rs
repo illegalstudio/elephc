@@ -42,6 +42,19 @@ impl Checker {
             .filter(|(_, pty)| pty == &PhpType::Callable)
             .map(|(pname, _)| pname.clone())
             .collect();
+        let declared_callable_param_names: Vec<String> = param_types
+            .iter()
+            .enumerate()
+            .filter(|(idx, (_, pty))| {
+                pty == &PhpType::Callable
+                    && decl.param_types.get(*idx).is_some_and(|type_ann| type_ann.is_some())
+            })
+            .map(|(_, (pname, _))| pname.clone())
+            .collect();
+        let saved_callable_param_names = self.callable_param_names.clone();
+        for pname in &declared_callable_param_names {
+            self.callable_param_names.insert(pname.clone());
+        }
         let saved_callable_metadata: Vec<_> = callable_param_names
             .iter()
             .map(|pname| {
@@ -95,7 +108,7 @@ impl Checker {
             .filter(|(_, is_ref)| **is_ref)
             .map(|(name, _)| name.clone())
             .collect();
-        self.with_local_storage_context(ref_param_names, |checker| {
+        let body_check_result = self.with_local_storage_context(ref_param_names, |checker| {
             for stmt in &decl.body {
                 if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
                     errors.extend(error.flatten());
@@ -104,7 +117,9 @@ impl Checker {
                 checker.collect_return_callable_sigs(stmt, &local_env, &mut callable_return_sigs);
             }
             Ok(())
-        })?;
+        });
+        self.callable_param_names = saved_callable_param_names;
+        body_check_result?;
         for pname in &callable_param_names {
             if let Some(sig) = self.callable_sigs.get(pname).cloned() {
                 self.callable_param_sigs

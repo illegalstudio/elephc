@@ -74,6 +74,8 @@ pub(super) fn emit_descriptor_invoker_arg_array(
         if let Some(ty) = descriptor_arg_builder::emit_positional_spread_invoker_arg_array(
             &[],
             args_exprs,
+            sig,
+            encode_ref_markers,
             emitter,
             ctx,
             data,
@@ -201,7 +203,7 @@ fn emit_named_spread_invoker_arg_hash(
         .expect("named+spread descriptor plan must contain a named suffix");
 
     emitter.comment("descriptor invoker named+spread argument hash");
-    emit_descriptor_prefix_as_mixed_hash(&plan, span, emitter, ctx, data);
+    emit_descriptor_prefix_as_mixed_hash(&plan, sig, span, encode_ref_markers, emitter, ctx, data);
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // keep the descriptor argument hash alive while named suffix entries are inserted
 
     for arg in plan.source_args.iter().skip(first_named_pos) {
@@ -220,13 +222,79 @@ fn emit_named_spread_invoker_arg_hash(
 /// Emits the positional prefix of a named+spread descriptor call as a Mixed hash.
 fn emit_descriptor_prefix_as_mixed_hash(
     plan: &call_args::CallArgPlan,
+    sig: &FunctionSig,
     span: Span,
+    encode_ref_markers: bool,
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
 ) {
     let prefix_expr = plan.positional_prefix_expr(span);
-    emit_descriptor_prefix_expr_as_mixed_hash(prefix_expr.as_ref(), emitter, ctx, data);
+    let first_named_pos = plan
+        .first_named_pos
+        .expect("descriptor named+spread prefix must know the first named source position");
+    emit_descriptor_prefix_args_as_mixed_hash(
+        prefix_expr.as_ref(),
+        &plan.source_args[..first_named_pos],
+        Some(sig),
+        span,
+        encode_ref_markers,
+        emitter,
+        ctx,
+        data,
+    );
+}
+
+/// Emits positional-prefix source arguments as a Mixed hash, preserving variable ref markers when needed.
+#[allow(clippy::too_many_arguments)]
+fn emit_descriptor_prefix_args_as_mixed_hash(
+    prefix_expr: Option<&Expr>,
+    prefix_args: &[Expr],
+    sig: Option<&FunctionSig>,
+    span: Span,
+    encode_ref_markers: bool,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    if prefix_args.is_empty() {
+        emit_descriptor_prefix_expr_as_mixed_hash(None, emitter, ctx, data);
+        return;
+    }
+
+    if encode_ref_markers {
+        if let Some(prefix_ty) = descriptor_arg_builder::emit_positional_spread_invoker_arg_array(
+            &[],
+            prefix_args,
+            sig,
+            true,
+            emitter,
+            ctx,
+            data,
+        ) {
+            emit_indexed_prefix_as_mixed_hash(&prefix_ty, emitter);
+            return;
+        }
+
+        if plain_positional_args(prefix_args) {
+            let prefix_ty = descriptor_arg_builder::emit_indexed_invoker_arg_array(
+                prefix_args,
+                true,
+                emitter,
+                ctx,
+                data,
+            );
+            emit_indexed_prefix_as_mixed_hash(&prefix_ty, emitter);
+            return;
+        }
+    }
+
+    if let Some(prefix_expr) = prefix_expr {
+        emit_descriptor_prefix_expr_as_mixed_hash(Some(prefix_expr), emitter, ctx, data);
+    } else {
+        let fallback_prefix = Expr::new(ExprKind::ArrayLiteral(prefix_args.to_vec()), span);
+        emit_descriptor_prefix_expr_as_mixed_hash(Some(&fallback_prefix), emitter, ctx, data);
+    }
 }
 
 /// Emits an optional positional prefix expression as a Mixed hash.
@@ -292,7 +360,16 @@ fn emit_untyped_named_spread_invoker_arg_hash(
     };
 
     emitter.comment("descriptor invoker untyped named+spread argument hash");
-    emit_descriptor_prefix_expr_as_mixed_hash(prefix_expr.as_ref(), emitter, ctx, data);
+    emit_descriptor_prefix_args_as_mixed_hash(
+        prefix_expr.as_ref(),
+        &args_exprs[..first_named_pos],
+        None,
+        span,
+        encode_ref_markers,
+        emitter,
+        ctx,
+        data,
+    );
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // keep the descriptor argument hash alive while untyped named suffix entries are inserted
 
     for arg in args_exprs.iter().skip(first_named_pos) {

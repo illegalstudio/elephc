@@ -255,6 +255,15 @@ function run_named_bump(callable $cb) {
 
 run_named_bump($stored_bump);
 
+function run_spread_bump(callable $cb) {
+    $spread_value = 5;
+    $tail = [];
+    $cb($spread_value, ...$tail);
+    echo "callable param spread by-ref: " . $spread_value . "\n";
+}
+
+run_spread_bump($stored_bump);
+
 $method_sorted = [1, 3, 2];
 usort($method_sorted, $offsets->descending(...));
 echo "method callable usort: ";
