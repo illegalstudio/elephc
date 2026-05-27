@@ -300,6 +300,12 @@ pub(super) fn emit_closure_call(
         return super::emit_loaded_runtime_string_call(args_exprs, Span::dummy(), emitter, ctx, data);
     }
 
+    if let Some(ret_ty) =
+        super::emit_callable_array_variable_call(var, args_exprs, emitter, ctx, data)
+    {
+        return ret_ty;
+    }
+
     // First-class callable short-circuit: when the variable was last bound to a
     // first-class callable, calling it as `$cb(args)` reaches the target directly
     // instead of going through the closure wrapper.

@@ -214,6 +214,92 @@ echo $callback(value: 7);
     assert_eq!(out, "id:7");
 }
 
+/// Verifies direct static-method callable arrays invoke through descriptor metadata.
+#[test]
+fn test_direct_callable_array_static_method_named_args_use_descriptor_invoker() {
+    let source = r#"<?php
+class Formatter {
+    public static function stamp($prefix = "id", $value = 1, $suffix = "!"): string {
+        return $prefix . ":" . $value . $suffix;
+    }
+}
+$callback = [Formatter::class, "stamp"];
+echo $callback(value: 7);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "id:7!");
+
+    let dir = make_cli_test_dir("elephc_direct_static_callable_array_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("cufa_descriptor_invoker_ready"),
+        "direct static-method callable arrays should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies direct instance-method callable arrays read the receiver stored in the array.
+#[test]
+fn test_direct_callable_array_instance_method_preserves_stored_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Prefixer {
+    public string $prefix = "";
+
+    public function wrap(string $value = "Ada", string $suffix = "!"): string {
+        return $this->prefix . $value . $suffix;
+    }
+}
+$first = new Prefixer();
+$first->prefix = "old:";
+$callback = [$first, "wrap"];
+$first = new Prefixer();
+$first->prefix = "new:";
+echo $callback(suffix: "?");
+"#,
+    );
+    assert_eq!(out, "old:Ada?");
+}
+
+/// Verifies direct instance-method callable arrays preserve by-reference arguments.
+#[test]
+fn test_direct_callable_array_instance_method_preserves_by_ref_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class Mutator {
+    public function bump(&$value): void {
+        $value = $value + 1;
+    }
+}
+$mutator = new Mutator();
+$callback = [$mutator, "bump"];
+$value = 4;
+$callback($value);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies parenthesized callable-array variables use the same descriptor invoker path.
+#[test]
+fn test_parenthesized_callable_array_static_method_expr_call() {
+    let out = compile_and_run(
+        r#"<?php
+class Formatter {
+    public static function wrap(string $value): string {
+        return "[" . $value . "]";
+    }
+}
+$callback = [Formatter::class, "wrap"];
+echo ($callback)("ok");
+"#,
+    );
+    assert_eq!(out, "[ok]");
+}
+
 /// Verifies that callable by ref parameter dereferences descriptor before call.
 #[test]
 fn test_callable_by_ref_parameter_dereferences_descriptor_before_call() {

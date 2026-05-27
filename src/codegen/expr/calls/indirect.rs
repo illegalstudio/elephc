@@ -84,6 +84,13 @@ pub(super) fn emit_loaded_expr_call(
     if matches!(loaded_callee_ty.codegen_repr(), PhpType::Str) {
         return super::emit_loaded_runtime_string_call(args_exprs, callee.span, emitter, ctx, data);
     }
+    if let ExprKind::Variable(var_name) = &callee.kind {
+        if let Some(ret_ty) =
+            super::emit_callable_array_variable_call(var_name, args_exprs, emitter, ctx, data)
+        {
+            return ret_ty;
+        }
+    }
     if expr_call_needs_descriptor_invoker(callee, loaded_callee_ty, ctx) {
         if let Some(ret_ty) =
             emit_descriptor_invoker_expr_call(callee, args_exprs, emitter, ctx, data)

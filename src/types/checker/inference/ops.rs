@@ -344,6 +344,9 @@ impl Checker {
                 }
                 return Ok(PhpType::Mixed);
             }
+            if let Some(target) = self.callable_array_targets.get(var).cloned() {
+                return self.infer_callable_array_target_call(&target, args, expr, env);
+            }
             if let Some(class_name) = self.invokable_class_for_type(&var_ty) {
                 if self
                     .classes
@@ -443,6 +446,11 @@ impl Checker {
                 self.infer_type(arg, env)?;
             }
             return Ok(PhpType::Mixed);
+        }
+        if let ExprKind::Variable(var_name) = &callee.kind {
+            if let Some(target) = self.callable_array_targets.get(var_name).cloned() {
+                return self.infer_callable_array_target_call(&target, args, expr, env);
+            }
         }
         if let Some(class_name) = self.invokable_class_for_type(&callee_ty) {
             if self
@@ -576,6 +584,51 @@ impl Checker {
             _ => {}
         }
         Ok(self.nullable_callable_result(PhpType::Mixed, nullable_callable)) // fallback for unknown callables
+    }
+
+    /// Infers a direct call through a stored PHP callable-array target.
+    ///
+    /// Callable arrays carry their static target metadata separately from their
+    /// array value. Direct invocation validates the same method/static-method
+    /// signature that the descriptor invoker will apply at runtime, while
+    /// allowing spread by-reference decisions to stay behind descriptor metadata.
+    fn infer_callable_array_target_call(
+        &mut self,
+        target: &CallableTarget,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        match target {
+            CallableTarget::Method { object, method } => {
+                let receiver_ty = self.infer_type(object, env)?;
+                let Some(class_name) = self.invokable_class_for_type(&receiver_ty) else {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "callable array receiver must be an object",
+                    ));
+                };
+                self.infer_method_call_on_class_type_allowing_by_ref_spread(
+                    &class_name,
+                    method,
+                    args,
+                    expr,
+                    env,
+                )
+            }
+            CallableTarget::StaticMethod { receiver, method } => {
+                self.infer_static_method_call_type_allowing_by_ref_spread(
+                    receiver,
+                    method,
+                    args,
+                    expr,
+                    env,
+                )
+            }
+            CallableTarget::Function(name) => {
+                self.check_function_call(name.as_str(), args, expr.span, env)
+            }
+        }
     }
 
     /// Returns the class name if `ty` is an invokable object or a single-member

@@ -21,7 +21,7 @@ use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use super::Expr;
-use crate::parser::ast::TypeExpr;
+use crate::parser::ast::{CallableTarget, ExprKind, StaticReceiver, TypeExpr};
 use crate::span::Span;
 use crate::types::PhpType;
 
@@ -124,6 +124,141 @@ pub(super) fn emit_loaded_runtime_string_call(
         );
     crate::codegen::abi::emit_release_temporary_stack(emitter, 16);             // discard the preserved runtime string callback name
     ret_ty
+}
+
+/// Emits a direct `$callback(...)` call when `$callback` stores a PHP callable array.
+pub(super) fn emit_callable_array_variable_call(
+    var: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    let target = ctx.callable_array_targets.get(var).cloned()?;
+    match target {
+        CallableTarget::Method { object, method } => emit_instance_callable_array_variable_call(
+            var, &object, &method, args, emitter, ctx, data,
+        ),
+        CallableTarget::StaticMethod { receiver, method } => {
+            emit_static_callable_array_variable_call(&receiver, &method, args, emitter, ctx, data)
+        }
+        CallableTarget::Function(_) => None,
+    }
+}
+
+/// Emits a descriptor invocation for a stored instance-method callable array.
+fn emit_instance_callable_array_variable_call(
+    var: &str,
+    object: &Expr,
+    method: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    let receiver_ty = crate::codegen::functions::infer_contextual_type(object, ctx);
+    let class_name = crate::codegen::functions::singular_object_class(&receiver_ty)?;
+    let case = crate::codegen::callable_dispatch::runtime_instance_method_case(
+        ctx,
+        data,
+        class_name,
+        method,
+        crate::codegen::callable_dispatch::RuntimeInstanceCallableShape::InstanceMethod,
+    )?;
+    if !case.has_invoker {
+        return None;
+    }
+    let receiver = callable_array_receiver_slot_expr(var);
+    let mut descriptor_args = Vec::with_capacity(args.len() + 1);
+    descriptor_args.push(receiver);
+    descriptor_args.extend(args.iter().cloned());
+    emit_callable_array_descriptor_case_call(
+        &case.descriptor_label,
+        &case.sig,
+        &descriptor_args,
+        emitter,
+        ctx,
+        data,
+    )
+}
+
+/// Emits a descriptor invocation for a stored static-method callable array.
+fn emit_static_callable_array_variable_call(
+    receiver: &StaticReceiver,
+    method: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    let StaticReceiver::Named(class_name) = receiver else {
+        return None;
+    };
+    let case = crate::codegen::callable_dispatch::runtime_static_method_case(
+        ctx,
+        data,
+        class_name.as_str(),
+        method,
+    )?;
+    if !case.has_invoker {
+        return None;
+    }
+    emit_callable_array_descriptor_case_call(
+        &case.descriptor_label,
+        &case.sig,
+        args,
+        emitter,
+        ctx,
+        data,
+    )
+}
+
+/// Calls a callable-array descriptor case with direct callable-array arguments.
+fn emit_callable_array_descriptor_case_call(
+    descriptor_label: &str,
+    sig: &crate::types::FunctionSig,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    emitter.comment("call callable-array descriptor");
+    let save_concat_before_args =
+        emitter.target.arch == crate::codegen::platform::Arch::X86_64;
+    if save_concat_before_args {
+        super::save_concat_offset_before_nested_call(emitter, ctx);
+    }
+    let arr_ty = descriptor_invoker_args::emit_descriptor_invoker_arg_array(
+        args,
+        Some(sig),
+        Span::dummy(),
+        emitter,
+        ctx,
+        data,
+    );
+    let call_reg = crate::codegen::abi::nested_call_reg(emitter);
+    crate::codegen::abi::emit_symbol_address(emitter, call_reg, descriptor_label);
+    crate::codegen::builtins::arrays::call_user_func_array::emit_call_descriptor_array_invoker(
+        crate::codegen::builtins::arrays::call_user_func_array::LoadedArraySource::Result,
+        &arr_ty,
+        call_reg,
+        save_concat_before_args,
+        emitter,
+        ctx,
+        data,
+    );
+    Some(PhpType::Mixed)
+}
+
+/// Builds `$callback[0]`, the receiver slot stored inside a callable-array value.
+fn callable_array_receiver_slot_expr(var: &str) -> Expr {
+    Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(ExprKind::Variable(var.to_string()), Span::dummy())),
+            index: Box::new(Expr::new(ExprKind::IntLiteral(0), Span::dummy())),
+        },
+        Span::dummy(),
+    )
 }
 
 /// Emits a first-class callable expression (e.g., `$fn(...)()`).
