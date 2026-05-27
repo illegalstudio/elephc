@@ -13,6 +13,12 @@ elephc compiles PHP to native binaries for the supported targets — currently m
 - [Your First Program](getting-started/your-first-program.md) — write, compile, and run your first PHP binary
 - [Benchmark Suite](https://github.com/illegalstudio/elephc/blob/main/benchmarks/README.md) — compare elephc against PHP and equivalent C fixtures
 
+## How-To
+
+Task-oriented guides for building real programs with elephc.
+
+- [Build a Fiber Web Server](how-to/fiber-web-server.md) — create a native HTTP server with non-blocking sockets, `poll()`, and one `Fiber` per connection
+
 ## PHP Syntax
 
 Standard PHP features supported by elephc. Implemented PHP syntax is intended to match PHP behavior; known compatibility gaps are documented on the relevant reference pages and tracked in the roadmap.
