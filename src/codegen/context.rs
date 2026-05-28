@@ -115,6 +115,9 @@ pub struct DeferredFiberWrapper {
     pub sig: FunctionSig,
     pub visible_param_count: usize,
     pub hidden_arg_types: Vec<PhpType>,
+    /// `true` when the wrapper should call the callable descriptor's uniform
+    /// invoker instead of re-materializing a statically known ABI signature.
+    pub use_descriptor_invoker: bool,
 }
 
 /// A callback wrapper that adapts callback builtins to closures with hidden captures.

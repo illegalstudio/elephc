@@ -478,9 +478,10 @@ impl Checker {
 
     /// Validates arguments passed to the `Fiber` constructor.
     ///
-    /// The first argument must be a closure or known first-class callable.
-    /// Captures and receivers are retained by the callable descriptor, while
-    /// visible start parameters still use Fiber's fixed start-argument ABI.
+    /// The first argument must be a callable value. Statically known closures
+    /// and first-class callables are validated immediately; descriptor-backed
+    /// runtime callable values are accepted so the uniform invoker can use their
+    /// runtime signature metadata at Fiber entry time.
     fn validate_fiber_constructor_args(
         &mut self,
         args: &[Expr],
@@ -491,10 +492,11 @@ impl Checker {
             return Ok(());
         };
         let Some(sig) = self.resolve_expr_callable_sig(callback, env)? else {
-            return Err(CompileError::new(
-                callback.span,
-                "Fiber callback must be a closure or known first-class callable",
-            ));
+            let callback_ty = self.infer_type(callback, env)?;
+            if callback_ty == PhpType::Callable {
+                return Ok(());
+            }
+            return Err(CompileError::new(callback.span, "Fiber callback must be callable"));
         };
 
         let visible_param_count = match &callback.kind {
@@ -504,10 +506,12 @@ impl Checker {
             ExprKind::Variable(_) => sig.params.len(),
             ExprKind::FirstClassCallable(_) => sig.params.len(),
             _ => {
-                return Err(CompileError::new(
-                    callback.span,
-                    "Fiber callback must be a closure or known first-class callable",
-                ));
+                let callback_ty = self.infer_type(callback, env)?;
+                if callback_ty == PhpType::Callable {
+                    sig.params.len()
+                } else {
+                    return Err(CompileError::new(callback.span, "Fiber callback must be callable"));
+                }
             }
         };
 

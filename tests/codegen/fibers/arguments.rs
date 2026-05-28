@@ -173,6 +173,47 @@ echo $f->getReturn();
     assert_eq!(out, "fiber:go/null/fiber:done");
 }
 
+/// Verifies that a runtime-selected callable descriptor can start a Fiber through the uniform invoker.
+#[test]
+fn test_fiber_runtime_selected_method_callable_uses_descriptor_invoker() {
+    let source = r#"<?php
+class FiberBranchJob {
+    public function __construct(private string $prefix) {}
+
+    public function run(string $value): string {
+        echo $this->prefix . $value;
+        return $this->prefix . "done";
+    }
+}
+
+function fiber_pick_right(): bool {
+    return true;
+}
+
+$left = new FiberBranchJob("left:");
+$right = new FiberBranchJob("right:");
+$cb = fiber_pick_right() ? $right->run(...) : $left->run(...);
+$f = new Fiber($cb);
+$v = $f->start("go");
+echo "/";
+echo is_null($v) ? "null" : $v;
+echo "/";
+echo $f->getReturn();
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "right:go/null/right:done");
+
+    let dir = make_cli_test_dir("elephc_fiber_runtime_descriptor_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("fiber_descriptor_invoker") && user_asm.contains("callable_invoker"),
+        "runtime-selected Fiber callbacks should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
 // Verifies that seven `mixed` arguments can be passed through `start()` to the
 // fiber closure.  Seven is the maximum on AArch64 (integer arg-reg count
 // minus `$this`).
