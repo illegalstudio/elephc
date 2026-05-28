@@ -560,7 +560,7 @@ impl Checker {
             return Ok(sig.clone());
         };
         let actual_ty = self.infer_type(callback, env)?;
-        if !self.callback_filter_accepts_callable_array_variable(callback, &actual_ty) {
+        if !self.callback_filter_accepts_runtime_callable_array(callback, &actual_ty) {
             return Ok(sig.clone());
         }
         let mut adjusted_sig = sig.clone();
@@ -570,17 +570,22 @@ impl Checker {
         Ok(adjusted_sig)
     }
 
-    /// Returns true when CallbackFilterIterator codegen can resolve a callable-array variable.
-    fn callback_filter_accepts_callable_array_variable(
+    /// Returns true when CallbackFilterIterator codegen can resolve a runtime callable array.
+    fn callback_filter_accepts_runtime_callable_array(
         &self,
         callback: &Expr,
         actual_ty: &PhpType,
     ) -> bool {
-        let ExprKind::Variable(var_name) = &callback.kind else {
-            return false;
-        };
-        self.callable_array_targets.contains_key(var_name)
-            || crate::types::checker::builtins::runtime_callable_array_type(actual_ty)
+        match &callback.kind {
+            ExprKind::Variable(var_name) => {
+                self.callable_array_targets.contains_key(var_name)
+                    || crate::types::checker::builtins::runtime_callable_array_type(actual_ty)
+            }
+            ExprKind::ArrayLiteral(elems) if elems.len() == 2 => {
+                crate::types::checker::builtins::runtime_callable_array_type(actual_ty)
+            }
+            _ => false,
+        }
     }
 
     /// Provides the Specialize callback filter function helper used by the constructors module.

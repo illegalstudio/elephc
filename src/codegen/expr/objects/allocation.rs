@@ -566,6 +566,13 @@ fn emit_new_callback_filter_iterator(
             emitter,
             ctx,
             data,
+        ) || emit_runtime_callable_array_literal_callback_filter(
+            callback_expr,
+            callback_offset,
+            callback_env_offset,
+            emitter,
+            ctx,
+            data,
         ) || emit_static_callable_array_callback_filter(
             callback_expr,
             callback_offset,
@@ -648,6 +655,36 @@ fn emit_runtime_callable_array_callback_filter(
                 receiver_ty,
                 callback_offset,
                 callback_env_offset,
+                0,
+                emitter,
+                ctx,
+                data,
+            );
+        },
+    )
+}
+
+/// Emits persistent callback state for a runtime-selected callable-array literal callback.
+fn emit_runtime_callable_array_literal_callback_filter(
+    callback_expr: &Expr,
+    callback_offset: usize,
+    callback_env_offset: usize,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> bool {
+    runtime_callable_array_callback::emit_literal_without_saved_array(
+        callback_expr,
+        emitter,
+        ctx,
+        data,
+        |case, receiver_ty, emitter, ctx, data| {
+            emit_runtime_callable_array_callback_filter_case(
+                case,
+                receiver_ty,
+                callback_offset,
+                callback_env_offset,
+                16,
                 emitter,
                 ctx,
                 data,
@@ -662,6 +699,7 @@ fn emit_runtime_callable_array_callback_filter_case(
     receiver_ty: Option<&PhpType>,
     callback_offset: usize,
     callback_env_offset: usize,
+    object_stack_offset: usize,
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
@@ -675,13 +713,18 @@ fn emit_runtime_callable_array_callback_filter_case(
         emitter,
         ctx,
     );
-    store_pointer_property_from_result(emitter, callback_env_offset);
-    emit_store_callback_filter_adapter_descriptor(
+    store_pointer_property_from_result_at_stack_offset(
+        emitter,
+        callback_env_offset,
+        object_stack_offset,
+    );
+    emit_store_callback_filter_adapter_descriptor_at_stack_offset(
         &wrapper_label,
         callback_offset,
         &[],
         emitter,
         data,
+        object_stack_offset,
     );
 }
 
@@ -735,6 +778,25 @@ fn emit_store_callback_filter_adapter_descriptor(
     emitter: &mut Emitter,
     data: &mut DataSection,
 ) {
+    emit_store_callback_filter_adapter_descriptor_at_stack_offset(
+        wrapper_label,
+        callback_offset,
+        captures,
+        emitter,
+        data,
+        0,
+    );
+}
+
+/// Emits and stores a callback-filter adapter descriptor on an object below temporary slots.
+fn emit_store_callback_filter_adapter_descriptor_at_stack_offset(
+    wrapper_label: &str,
+    callback_offset: usize,
+    captures: &[(String, PhpType, bool)],
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    object_stack_offset: usize,
+) {
     let callback_sig = callback_filter_callable_sig();
     crate::codegen::callable_descriptor::emit_load_descriptor_address_with_meta(
         emitter,
@@ -750,7 +812,11 @@ fn emit_store_callback_filter_adapter_descriptor(
             crate::codegen::callable_descriptor::CallableDescriptorShape::CallbackAdapter,
         ),
     );
-    store_callable_property_from_result(emitter, callback_offset);
+    store_callable_property_from_result_at_stack_offset(
+        emitter,
+        callback_offset,
+        object_stack_offset,
+    );
 }
 
 /// Normalizes iterator iterator constructor args into the representation expected by later lowering.
@@ -1202,6 +1268,22 @@ fn store_iterator_inner_property_from_result(emitter: &mut Emitter, inner_offset
 
 /// Stores callable property from result into runtime storage or stack state.
 fn store_callable_property_from_result(emitter: &mut Emitter, property_offset: usize) {
+    store_callable_property_from_result_at_stack_offset(emitter, property_offset, 0);
+}
+
+/// Stores callable property from result on an object below temporary stack slots.
+fn store_callable_property_from_result_at_stack_offset(
+    emitter: &mut Emitter,
+    property_offset: usize,
+    object_stack_offset: usize,
+) {
+    if object_stack_offset != 0 {
+        let object_reg = abi::symbol_scratch_reg(emitter);
+        abi::emit_load_temporary_stack_slot(emitter, object_reg, object_stack_offset);
+        abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), object_reg, property_offset);
+        abi::emit_store_zero_to_address(emitter, object_reg, property_offset + 8);
+        return;
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("ldr x9, [sp]");                                // reload the object pointer that owns the callable property
@@ -1218,6 +1300,22 @@ fn store_callable_property_from_result(emitter: &mut Emitter, property_offset: u
 
 /// Stores pointer property from result into runtime storage or stack state.
 fn store_pointer_property_from_result(emitter: &mut Emitter, property_offset: usize) {
+    store_pointer_property_from_result_at_stack_offset(emitter, property_offset, 0);
+}
+
+/// Stores pointer property from result on an object below temporary stack slots.
+fn store_pointer_property_from_result_at_stack_offset(
+    emitter: &mut Emitter,
+    property_offset: usize,
+    object_stack_offset: usize,
+) {
+    if object_stack_offset != 0 {
+        let object_reg = abi::symbol_scratch_reg(emitter);
+        abi::emit_load_temporary_stack_slot(emitter, object_reg, object_stack_offset);
+        abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), object_reg, property_offset);
+        abi::emit_store_zero_to_address(emitter, object_reg, property_offset + 8);
+        return;
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("ldr x9, [sp]");                                // reload the object pointer that owns the raw pointer property

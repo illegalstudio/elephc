@@ -338,9 +338,9 @@ closure and first-class-callable capture environments are preserved with the
 iterator object. Branch-shaped expressions that select captured callable
 descriptors at runtime use the same descriptor invoker path and keep the
 selected receiver/capture environment with the iterator. Callable-array
-variables such as `[$object, $method]` and `[$class, $method]` can also be
-resolved at construction time and stored as persistent descriptor callback
-environments.
+variables and literals such as `[$object, $method]` and `[$class, $method]` can
+also be resolved at construction time and stored as persistent descriptor
+callback environments.
 `CachingIterator` implements one-element lookahead through `hasNext()`, supports
 the string mode flags `CALL_TOSTRING`, `TOSTRING_USE_KEY`,
 `TOSTRING_USE_CURRENT`, and `TOSTRING_USE_INNER`, and supports `FULL_CACHE` for
@@ -362,8 +362,8 @@ objects through `hasChildren()`. `RecursiveIteratorIterator` supports
 sub-iterators so `getDepth()`, `getInnerIterator()`, and `getSubIterator()`
 track the active cursors. `RecursiveCallbackFilterIterator` preserves closure
 and first-class-callable capture environments, including branch-selected
-descriptor environments and runtime-selected callable-array variables, when it
-wraps child iterators.
+descriptor environments and runtime-selected callable-array variables or
+literals, when it wraps child iterators.
 `ParentIterator` recursively keeps only entries that have children.
 
 ## Autoload and Introspection
