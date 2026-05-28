@@ -24,7 +24,9 @@ mod common;
 mod containers;
 mod filters;
 mod forwarding;
+mod heaps;
 mod multiple;
+mod object_storage;
 mod patch;
 mod recursive;
 mod recursive_array;
@@ -50,6 +52,8 @@ pub(crate) fn inject_builtin_spl_classes(
     recursive_iterator_iterator::insert_class(class_map);
     append::insert_classes(class_map);
     multiple::insert_class(class_map);
+    heaps::insert_classes(class_map);
+    object_storage::insert_class(class_map);
 
     Ok(())
 }

@@ -118,10 +118,15 @@ pub(super) fn emit_array_push_stmt(
     if converted_to_mixed {
         emitter.instruction("str x0, [sp, #-16]!");                             // preserve the boxed appended value across mixed-array conversion
         emitter.instruction("mov x0, x9");                                      // pass the current indexed-array pointer to the mixed conversion helper
+        let conversion_source_ty = if matches!(elem_ty, PhpType::Never) {
+            &effective_elem_ty
+        } else {
+            &elem_ty
+        };
         abi::emit_load_int_immediate(
             emitter,
             "x1",
-            super::super::helpers::indexed_array_runtime_value_tag(&elem_ty),
+            super::super::helpers::indexed_array_runtime_value_tag(conversion_source_ty),
         );
         abi::emit_call_label(emitter, "__rt_array_to_mixed");                   // box existing typed slots before appending a heterogeneous value
         emitter.instruction("mov x9, x0");                                      // keep the converted indexed-array pointer as the append receiver
@@ -238,10 +243,15 @@ fn emit_array_push_stmt_linux_x86_64(
     if converted_to_mixed {
         abi::emit_push_reg(emitter, "rax");                                      // preserve the boxed appended value across mixed-array conversion
         emitter.instruction("mov rdi, r11");                                    // pass the current indexed-array pointer to the mixed conversion helper
+        let conversion_source_ty = if matches!(elem_ty, PhpType::Never) {
+            &effective_elem_ty
+        } else {
+            &elem_ty
+        };
         abi::emit_load_int_immediate(
             emitter,
             "rsi",
-            super::super::helpers::indexed_array_runtime_value_tag(&elem_ty),
+            super::super::helpers::indexed_array_runtime_value_tag(conversion_source_ty),
         );
         abi::emit_call_label(emitter, "__rt_array_to_mixed");                   // box existing typed slots before appending a heterogeneous value
         emitter.instruction("mov r11, rax");                                    // keep the converted indexed-array pointer as the append receiver

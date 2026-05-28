@@ -20,6 +20,8 @@ mod interfaces;
 mod introspection;
 #[path = "spl/iterator_helpers.rs"]
 mod iterator_helpers;
+#[path = "spl/heaps.rs"]
+mod heaps;
 #[path = "spl/intrinsics.rs"]
 mod intrinsics;
 #[path = "spl/redirects.rs"]

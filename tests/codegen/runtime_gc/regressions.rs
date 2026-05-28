@@ -549,6 +549,40 @@ echo count($x->a);
     );
 }
 
+// Regression test: passing an owned array literal through a `mixed` parameter
+// before storing it in a property array must release the argument expression's
+// original owner after the Mixed cell retains the payload.
+#[test]
+fn test_regression_mixed_arg_array_payload_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C {
+    public array $a;
+
+    public function __construct() {
+        $this->a = [];
+    }
+
+    public function add(mixed $value): void {
+        $this->a[] = $value;
+    }
+}
+
+$x = new C();
+$x->add([1, 2, 3]);
+unset($x);
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 // Regression test: a loop pushing scalars into a property array repeatedly
 // exercises the boxing + push path; each iteration must balance its refcount or
 // the leak compounds. Asserts heap is clean after 20 iterations.
