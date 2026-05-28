@@ -9,40 +9,40 @@
 
 use super::*;
 
-// Verifies simple double-quoted string interpolation with one variable.
-// Fixture: assign a string to `$name`, then echo `"Hello $name"`.
+/// Verifies simple double-quoted string interpolation with one variable.
+/// Fixture: assign a string to `$name`, then echo `"Hello $name"`.
 #[test]
 fn test_string_interpolation_simple() {
     let out = compile_and_run(r#"<?php $name = "World"; echo "Hello $name";"#);
     assert_eq!(out, "Hello World");
 }
 
-// Verifies double-quoted string interpolation with two variables adjacent in the string.
-// Fixture: `$a = "foo"`, `$b = "bar"`, then echo `"$a and $b"`.
+/// Verifies double-quoted string interpolation with two variables adjacent in the string.
+/// Fixture: `$a = "foo"`, `$b = "bar"`, then echo `"$a and $b"`.
 #[test]
 fn test_string_interpolation_multiple() {
     let out = compile_and_run(r#"<?php $a = "foo"; $b = "bar"; echo "$a and $b";"#);
     assert_eq!(out, "foo and bar");
 }
 
-// Verifies double-quoted string interpolation when the variable appears at the start of the string.
-// Fixture: `$x = "hi"`, then echo `"$x there"`.
+/// Verifies double-quoted string interpolation when the variable appears at the start of the string.
+/// Fixture: `$x = "hi"`, then echo `"$x there"`.
 #[test]
 fn test_string_interpolation_at_start() {
     let out = compile_and_run(r#"<?php $x = "hi"; echo "$x there";"#);
     assert_eq!(out, "hi there");
 }
 
-// Verifies double-quoted string interpolation when the variable appears at the end of the string.
-// Fixture: `$x = "world"`, then echo `"hello $x"`.
+/// Verifies double-quoted string interpolation when the variable appears at the end of the string.
+/// Fixture: `$x = "world"`, then echo `"hello $x"`.
 #[test]
 fn test_string_interpolation_at_end() {
     let out = compile_and_run(r#"<?php $x = "world"; echo "hello $x";"#);
     assert_eq!(out, "hello world");
 }
 
-// Verifies that single-quoted strings do NOT perform variable interpolation.
-// Fixture: `$x = 42`, then echo `'$x'`; expects literal "$x" in output.
+/// Verifies that single-quoted strings do NOT perform variable interpolation.
+/// Fixture: `$x = 42`, then echo `'$x'`; expects literal "$x" in output.
 #[test]
 fn test_string_no_interpolation() {
     // Single-quoted strings should NOT interpolate
@@ -50,28 +50,28 @@ fn test_string_no_interpolation() {
     assert_eq!(out, "$x");
 }
 
-// Verifies `md5()` produces the correct hash for an empty string input.
+/// Verifies `md5()` produces the correct hash for an empty string input.
 #[test]
 fn test_md5_empty() {
     let out = compile_and_run(r#"<?php echo md5("");"#);
     assert_eq!(out, "d41d8cd98f00b204e9800998ecf8427e");
 }
 
-// Verifies `md5()` produces the correct hash for "Hello".
+/// Verifies `md5()` produces the correct hash for "Hello".
 #[test]
 fn test_md5_hello() {
     let out = compile_and_run(r#"<?php echo md5("Hello");"#);
     assert_eq!(out, "8b1a9953c4611296a827abf8c47804d7");
 }
 
-// Verifies `sha1()` produces the correct hash for an empty string input.
+/// Verifies `sha1()` produces the correct hash for an empty string input.
 #[test]
 fn test_sha1_empty() {
     let out = compile_and_run(r#"<?php echo sha1("");"#);
     assert_eq!(out, "da39a3ee5e6b4b0d3255bfef95601890afd80709");
 }
 
-// Verifies `sha1()` produces the correct hash for "Hello".
+/// Verifies `sha1()` produces the correct hash for "Hello".
 #[test]
 fn test_sha1_hello() {
     let out = compile_and_run(r#"<?php echo sha1("Hello");"#);
@@ -80,21 +80,21 @@ fn test_sha1_hello() {
 
 // --- hash() ---
 
-// Verifies `hash("md5", ...)` produces the correct hash for "Hello".
+/// Verifies `hash("md5", ...)` produces the correct hash for "Hello".
 #[test]
 fn test_hash_md5() {
     let out = compile_and_run(r#"<?php echo hash("md5", "Hello");"#);
     assert_eq!(out, "8b1a9953c4611296a827abf8c47804d7");
 }
 
-// Verifies `hash("sha1", ...)` produces the correct hash for "Hello".
+/// Verifies `hash("sha1", ...)` produces the correct hash for "Hello".
 #[test]
 fn test_hash_sha1() {
     let out = compile_and_run(r#"<?php echo hash("sha1", "Hello");"#);
     assert_eq!(out, "f7ff9e8b7bb2e09b70935a5d785e0cc5d9d0abf0");
 }
 
-// Verifies `hash("sha256", ...)` produces the correct hash for "Hello".
+/// Verifies `hash("sha256", ...)` produces the correct hash for "Hello".
 #[test]
 fn test_hash_sha256() {
     let out = compile_and_run(r#"<?php echo hash("sha256", "Hello");"#);

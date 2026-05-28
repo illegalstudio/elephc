@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Compiles a closure that returns another closure and invokes the chain via `$f()()`,
-// verifying stdout is "99".
+/// Compiles a closure that returns another closure and invokes the chain via `$f()()`,
+/// verifying stdout is "99".
 #[test]
 fn test_chained_closure_call() {
     let out = compile_and_run(
