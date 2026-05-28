@@ -17,10 +17,6 @@ use super::{FunctionSig, PhpType};
 
 /// Maximum number of start arguments a Fiber callback can accept.
 pub(crate) const FIBER_START_ARG_LIMIT: usize = 7;
-/// Maximum number of integer slots available for Fiber capture of non-float types.
-pub(crate) const FIBER_INT_SLOT_LIMIT: usize = 7;
-/// Maximum number of float slots available for Fiber capture of float types.
-pub(crate) const FIBER_FLOAT_SLOT_LIMIT: usize = 7;
 
 /// Returns the number of visible parameters for a Fiber callback signature.
 /// For non-variadic functions this equals `param_count`; for variadic functions
@@ -96,78 +92,6 @@ pub(crate) fn validate_callback_signature(
     }
 
     Ok(())
-}
-
-/// Validates that a Fiber capture list does not exceed available integer or float slots
-/// for the Fiber ABI. Returns an error if the combined capture types would exceed
-/// `FIBER_INT_SLOT_LIMIT` integer slots or `FIBER_FLOAT_SLOT_LIMIT` float slots.
-/// By-reference captures count as integer slots regardless of their actual type.
-pub(crate) fn validate_capture_slots(
-    sig: &FunctionSig,
-    visible_param_count: usize,
-    capture_types: &[(String, PhpType, bool)],
-    span: Span,
-) -> Result<(), CompileError> {
-    let mut int_slot = sig
-        .params
-        .iter()
-        .take(visible_param_count)
-        .map(|(_, ty)| int_slot_count(ty))
-        .sum::<usize>();
-    let mut float_slot = sig
-        .params
-        .iter()
-        .take(visible_param_count)
-        .filter(|(_, ty)| matches!(ty.codegen_repr(), PhpType::Float))
-        .count();
-
-    for (name, ty, by_ref) in capture_types {
-        let slot_ty = if *by_ref {
-            PhpType::Int
-        } else {
-            ty.codegen_repr()
-        };
-        match slot_ty {
-            PhpType::Float => {
-                if float_slot >= FIBER_FLOAT_SLOT_LIMIT {
-                    return Err(CompileError::new(
-                        span,
-                        &format!(
-                            "Fiber capture ${} exceeds the {} float-slot Fiber capture limit",
-                            name, FIBER_FLOAT_SLOT_LIMIT
-                        ),
-                    ));
-                }
-                float_slot += 1;
-            }
-            PhpType::Void | PhpType::Never => {}
-            other => {
-                let needed = int_slot_count(&other);
-                if int_slot + needed > FIBER_INT_SLOT_LIMIT {
-                    return Err(CompileError::new(
-                        span,
-                        &format!(
-                            "Fiber capture ${} exceeds the {} integer-slot Fiber capture limit",
-                            name, FIBER_INT_SLOT_LIMIT
-                        ),
-                    ));
-                }
-                int_slot += needed;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Returns how many integer slots the given `PhpType` consumes in the Fiber ABI.
-/// `Float`/`Void`/`Never` consume 0 slots; `Str` consumes 2; all other types consume 1.
-fn int_slot_count(ty: &PhpType) -> usize {
-    match ty.codegen_repr() {
-        PhpType::Float | PhpType::Void | PhpType::Never => 0,
-        PhpType::Str => 2,
-        _ => 1,
-    }
 }
 
 /// Returns `true` if the given statement contains a reachable `return` based on its variant.

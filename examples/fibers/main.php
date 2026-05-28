@@ -74,18 +74,16 @@ $err = new Fiber(function(): void {
         Fiber::suspend(0);
         echo "not reached\n";
     } catch (FiberError $e) {
-        echo "fiber caught the throw\n";
+        echo "fiber caught the throw: " . $e->getMessage() . "\n";
     }
 });
 $err->start();
 $err->throw(new FiberError("delivered"));
 
 // 5) Closures with use(...) captures bind values from the surrounding scope at
-//    construction time. Each captured value rides in the fiber's slot files
-//    so $f->start() never overwrites them. Captures are incref'd at
-//    construction and decref'd when the Fiber is freed, so heap-backed
-//    captures (objects, arrays, persisted strings) survive the original
-//    variable being reassigned.
+//    construction time. Captures ride in the callable descriptor, so
+//    $f->start() never overwrites them and they survive the original variable
+//    being reassigned.
 $base = 100;
 $step = 7;
 $adder = new Fiber(function() use ($base, $step): void {
@@ -93,8 +91,8 @@ $adder = new Fiber(function() use ($base, $step): void {
 });
 $adder->start();
 
-// 6) Mixed-type captures: int, string, and float ride in their respective
-//    register files (start_args for ints/strings, float_args for floats).
+// 6) Mixed-type captures: int, string, and float keep their descriptor values
+//    separate from the visible start() arguments.
 $tag = "rate";
 $count = 4;
 $rate = 0.5;
@@ -114,7 +112,20 @@ $f_inc->start();        // 5 + 1 = 6
 $f_dbl->start();        // 6 * 2 = 12
 echo "shared counter ended at " . $shared->value . "\n";
 
-// 8) FiberError is an Error subclass — catch it directly or through Error.
+// 8) First-class method callables keep their receiver in the descriptor too.
+class FiberLabeler {
+    public function __construct(private string $prefix) {}
+    public function label(string $value): string {
+        echo $this->prefix . $value . "\n";
+        return $this->prefix . "done";
+    }
+}
+$labeler = new FiberLabeler("method:");
+$method_fiber = new Fiber($labeler->label(...));
+$method_fiber->start("run");
+echo $method_fiber->getReturn() . "\n";
+
+// 9) FiberError is an Error subclass — catch it directly or through Error.
 try {
     throw new FiberError("manual");
 } catch (Error $e) {

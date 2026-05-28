@@ -27,8 +27,8 @@
 //! | 96     | 8    | own_exc_head      | saved _exc_handler_top for this fiber |
 //! | 104    | 8    | own_call_frame    | saved _exc_call_frame_top for this fiber |
 //! | 112    | 56   | start_args[0..7]  | up to 7 Mixed pointers passed to start() (one per AArch64 int arg-reg minus $this) |
-//! | 168    | 8    | user_arg_max      | how many start_args slots `start()` may write — leaves trailing slots untouched so `new Fiber(use(...))` captures survive |
-//! | 176    | 56   | float_args[0..7]  | parallel slot file for float captures (loaded into d0..d6 by the trampoline) |
+//! | 168    | 8    | user_arg_max      | how many start_args slots `start()` may write |
+//! | 176    | 56   | float_args[0..7]  | reserved legacy slot file; descriptor captures now carry hidden Fiber callback args |
 //!
 //! Total payload = 232 bytes.
 
@@ -75,11 +75,11 @@ pub(crate) const FIBER_OWN_CALL_FRAME_OFFSET: i32 = 104;
 pub(crate) const FIBER_START_ARGS_OFFSET: i32 = 112;
 /// Maximum number of `start_args` slots (one per AArch64 integer argument register minus `$this`).
 pub(crate) const FIBER_START_ARGS_MAX: i32 = 7;
-/// Byte offset of `user_arg_max` (controls how many start_args slots start() may write; trailing slots survive for `new Fiber(use(...))` captures).
+/// Byte offset of `user_arg_max` (controls how many start_args slots start() may write).
 pub(crate) const FIBER_USER_ARG_MAX_OFFSET: i32 = 168;
-/// Byte offset of the first `float_args` slot (parallel slot file for float captures; loaded into d0..d6 by the trampoline).
+/// Byte offset of the first reserved legacy float slot.
 pub(crate) const FIBER_FLOAT_ARGS_OFFSET: i32 = 176;
-/// Maximum number of `float_args` slots.
+/// Maximum number of reserved legacy float slots.
 pub(crate) const FIBER_FLOAT_ARGS_MAX: i32 = 7;
 /// Total size of the Fiber object payload in bytes (heap-allocated; class_id at offset 0, followed by all runtime-managed fields).
 pub(crate) const FIBER_OBJECT_SIZE: i32 = 232;

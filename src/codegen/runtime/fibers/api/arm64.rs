@@ -105,12 +105,10 @@ pub(super) fn emit_construct(emitter: &mut Emitter) {
         emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_START_ARGS_OFFSET + i * 8)); // start_args[i] cleared
     }
     for i in 0..FIBER_FLOAT_ARGS_MAX {
-        emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_FLOAT_ARGS_OFFSET + i * 8)); // float_args[i] cleared (raw bits, loaded back into d-regs by the trampoline)
+        emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_FLOAT_ARGS_OFFSET + i * 8)); // clear reserved legacy float slot storage
     }
-    // user_arg_max defaults to FIBER_START_ARGS_MAX so start() fills every
-    // start_args slot when no captures are pre-loaded into the trailing ones.
-    // Codegen of `new Fiber(function() use(...) {})` lowers it to the
-    // closure's user-param count to keep the captures intact.
+    // user_arg_max defaults to FIBER_START_ARGS_MAX so start() may fill every
+    // visible start_args slot. Captures now live in callable descriptors.
     emitter.instruction(&format!("mov x9, #{}", FIBER_START_ARGS_MAX));         // default user_arg_max = full slot count
     emitter.instruction(&format!("str x9, [x21, #{}]", FIBER_USER_ARG_MAX_OFFSET)); // user_arg_max stored on the freshly built fiber
 

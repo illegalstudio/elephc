@@ -11,7 +11,7 @@
 use crate::codegen::context::DeferredFiberWrapper;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
-use crate::codegen::{abi, runtime};
+use crate::codegen::{abi, callable_descriptor, runtime};
 use crate::types::PhpType;
 
 /// Emits a fiber wrapper that adapts a closure to run inside a runtime Fiber.
@@ -23,8 +23,8 @@ pub(crate) fn emit_fiber_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberW
 
     let arg_types = wrapper_arg_types(wrapper);
     let slot_count = arg_types.len().max(1);
-    let frame_size = align16(slot_count * 16 + 32);
-    let saved_callee_offset = frame_size - 32;
+    let frame_size = align16(slot_count * 16 + 48);
+    let saved_callee_offset = frame_size - 48;
 
     emitter.blank();
     emitter.comment(&format!("fiber wrapper: {}", wrapper.label));
@@ -32,15 +32,13 @@ pub(crate) fn emit_fiber_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberW
     emitter.label_global(&wrapper.label);
     abi::emit_frame_prologue(emitter, frame_size);
     emitter.instruction(&format!("stp x19, x20, [sp, #{}]", saved_callee_offset)); // preserve the fiber pointer and callable entry across helper calls
+    emitter.instruction(&format!("str x21, [sp, #{}]", saved_callee_offset + 16)); // preserve the callable descriptor across helper calls
     emitter.instruction("mov x19, x0");                                         // x19 = Fiber object passed by __rt_fiber_entry
     emitter.instruction(&format!("ldr x20, [x19, #{}]", runtime::FIBER_CALLABLE_OFFSET)); // x20 = callable descriptor stored on the Fiber
-    crate::codegen::callable_descriptor::emit_load_entry_from_descriptor(
-        emitter,
-        "x20",
-        "x20",
-    );
+    emitter.instruction("mov x21, x20");                                        // x21 = descriptor pointer kept for hidden capture reloads
+    callable_descriptor::emit_load_entry_from_descriptor(emitter, "x20", "x20");
 
-    spill_wrapper_args(emitter, wrapper, &arg_types);
+    spill_wrapper_args(emitter, wrapper, &arg_types, "x21");
     let overflow_bytes = materialize_spilled_args_for_closure_call(emitter, &arg_types, frame_size);
     let call_stack_padding = if overflow_bytes > 0 { 16 } else { 0 };
     abi::emit_reserve_temporary_stack(emitter, call_stack_padding);             // leave the first spilled callback argument where the callee expects it
@@ -50,6 +48,7 @@ pub(crate) fn emit_fiber_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberW
     abi::emit_release_temporary_stack(emitter, overflow_bytes);                 // drop stack-passed closure arguments after the Fiber callback returns
     box_wrapper_return(emitter, wrapper.sig.return_type.codegen_repr());
 
+    emitter.instruction(&format!("ldr x21, [sp, #{}]", saved_callee_offset + 16)); // restore the caller's descriptor scratch register
     emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_callee_offset)); // restore callee-saved wrapper registers
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
@@ -60,73 +59,74 @@ pub(crate) fn emit_fiber_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberW
 /// argument consumes so the caller's ABI expectations are met at the final call site.
 /// Visible params are read directly from the Fiber's start arguments; hidden args come
 /// after and use the same offset scheme.
-fn spill_wrapper_args(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper, arg_types: &[PhpType]) {
+fn spill_wrapper_args(
+    emitter: &mut Emitter,
+    wrapper: &DeferredFiberWrapper,
+    arg_types: &[PhpType],
+    descriptor_reg: &str,
+) {
     let visible = wrapper.visible_param_count.min(arg_types.len());
-    let user_int_regs = arg_types
-        .iter()
-        .take(visible)
-        .filter(|ty| !ty.is_float_reg())
-        .map(PhpType::register_count)
-        .sum::<usize>();
-    let user_float_regs = arg_types
-        .iter()
-        .take(visible)
-        .filter(|ty| ty.is_float_reg())
-        .count();
 
     for (idx, ty) in arg_types.iter().take(visible).enumerate() {
         spill_user_arg(emitter, idx, ty, idx * 16);
     }
 
-    let mut int_capture_slot = user_int_regs;
-    let mut float_capture_slot = user_float_regs;
     for (idx, ty) in arg_types.iter().enumerate().skip(visible) {
         let slot_offset = idx * 16;
-        match ty {
-            PhpType::Float => {
-                let src_offset = runtime::FIBER_FLOAT_ARGS_OFFSET + (float_capture_slot as i32) * 8;
-                emitter.instruction(&format!("ldr d0, [x19, #{}]", src_offset)); // load the captured float payload from the Fiber float slot file
-                emitter.instruction(&format!("str d0, [sp, #{}]", slot_offset)); // spill the captured float until all helper calls are done
-                float_capture_slot += 1;
-            }
-            PhpType::Str => {
-                let src_lo = runtime::FIBER_START_ARGS_OFFSET + (int_capture_slot as i32) * 8;
-                let src_hi = runtime::FIBER_START_ARGS_OFFSET + ((int_capture_slot + 1) as i32) * 8;
-                emitter.instruction(&format!("ldr x9, [x19, #{}]", src_lo));    // load the captured string pointer from the Fiber int slot file
-                emitter.instruction(&format!("ldr x10, [x19, #{}]", src_hi));   // load the captured string length from the Fiber int slot file
-                emitter.instruction(&format!("stp x9, x10, [sp, #{}]", slot_offset)); // spill the captured string register pair for the final call
-                int_capture_slot += 2;
-            }
-            PhpType::Void | PhpType::Never => {}
-            _ => {
-                let src_offset = runtime::FIBER_START_ARGS_OFFSET + (int_capture_slot as i32) * 8;
-                emitter.instruction(&format!("ldr x9, [x19, #{}]", src_offset)); // load the captured scalar/pointer payload from the Fiber int slot file
-                emitter.instruction(&format!("str x9, [sp, #{}]", slot_offset)); // spill the captured payload for the final closure call
-                retain_refcounted_capture_for_closure_frame(emitter, ty, "x9");
-                int_capture_slot += 1;
-            }
+        spill_descriptor_hidden_arg(emitter, descriptor_reg, idx - visible, ty, slot_offset);
+    }
+}
+
+/// Spills one hidden Fiber callback argument from the callable descriptor's runtime capture slots.
+fn spill_descriptor_hidden_arg(
+    emitter: &mut Emitter,
+    descriptor_reg: &str,
+    capture_index: usize,
+    ty: &PhpType,
+    slot_offset: usize,
+) {
+    callable_descriptor::emit_load_runtime_capture_to_result(
+        emitter,
+        descriptor_reg,
+        capture_index,
+        ty,
+    );
+    match ty {
+        PhpType::Float => {
+            emitter.instruction(&format!("str d0, [sp, #{}]", slot_offset));    // spill the descriptor-captured float for the final call
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            emitter.instruction(&format!("stp {}, {}, [sp, #{}]", ptr_reg, len_reg, slot_offset)); // spill the descriptor-captured string pair for the final call
+        }
+        PhpType::Void | PhpType::Never => {}
+        _ => {
+            emitter.instruction(&format!("str {}, [sp, #{}]", abi::int_result_reg(emitter), slot_offset)); // spill the descriptor-captured payload for the final call
+            retain_refcounted_capture_for_closure_frame(emitter, ty, abi::int_result_reg(emitter));
         }
     }
 }
 
-/// Retains a refcounted value that was captured from the Fiber's argument storage and
-/// will live in the closure's parameter slot after the call returns. Prevents the
-/// Fiber's argument slot from being freed prematurely while the closure executes.
+/// Retains a refcounted hidden capture for the closure parameter frame.
+///
+/// The callable descriptor remains the persistent owner of its capture slots. The
+/// invoked closure cleans up hidden parameters like ordinary arguments, so the wrapper
+/// must hand it a separate retained owner for refcounted values.
 fn retain_refcounted_capture_for_closure_frame(
     emitter: &mut Emitter,
     ty: &PhpType,
     value_reg: &str,
 ) {
-    if !ty.is_refcounted() {
+    if !ty.is_refcounted() && !matches!(ty.codegen_repr(), PhpType::Callable) {
         return;
     }
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("mov x0, {}", value_reg));             // pass the captured heap value to the retain helper
+            emitter.instruction(&format!("mov x0, {}", value_reg));             // pass the descriptor capture to the retain helper
             emitter.instruction("bl __rt_incref");                              // retain it for the closure frame's normal parameter cleanup
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov rax, {}", value_reg));            // pass the captured heap value to the retain helper
+            emitter.instruction(&format!("mov rax, {}", value_reg));            // pass the descriptor capture to the retain helper
             emitter.instruction("call __rt_incref");                            // retain it for the closure frame's normal parameter cleanup
         }
     }
@@ -254,9 +254,10 @@ fn box_wrapper_return(emitter: &mut Emitter, return_ty: PhpType) {
 fn emit_x86_64_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper) {
     let arg_types = wrapper_arg_types(wrapper);
     let slot_count = arg_types.len().max(1);
-    let frame_size = align16(slot_count * 16 + 48);
+    let frame_size = align16(slot_count * 16 + 64);
     let saved_fiber_offset = slot_count * 16 + 16;
     let saved_callable_offset = slot_count * 16 + 24;
+    let saved_descriptor_offset = slot_count * 16 + 32;
 
     emitter.blank();
     emitter.comment(&format!("fiber wrapper: {}", wrapper.label));
@@ -265,20 +266,19 @@ fn emit_x86_64_wrapper(emitter: &mut Emitter, wrapper: &DeferredFiberWrapper) {
     abi::emit_frame_prologue(emitter, frame_size);
     abi::store_at_offset(emitter, "r12", saved_fiber_offset);                  // preserve the caller's r12 before caching the Fiber pointer
     abi::store_at_offset(emitter, "r13", saved_callable_offset);               // preserve the caller's r13 before caching the callable entry
+    abi::store_at_offset(emitter, "r14", saved_descriptor_offset);             // preserve the caller's r14 before caching the descriptor
     emitter.instruction("mov r12, rdi");                                        // r12 = Fiber object passed by __rt_fiber_entry
     emitter.instruction(&format!("mov r13, QWORD PTR [r12 + {}]", runtime::FIBER_CALLABLE_OFFSET)); // r13 = callable descriptor stored on the Fiber
-    crate::codegen::callable_descriptor::emit_load_entry_from_descriptor(
-        emitter,
-        "r13",
-        "r13",
-    );
+    emitter.instruction("mov r14, r13");                                        // r14 = descriptor pointer kept for hidden capture reloads
+    callable_descriptor::emit_load_entry_from_descriptor(emitter, "r13", "r13");
 
-    spill_wrapper_args_x86_64(emitter, wrapper, &arg_types);
+    spill_wrapper_args_x86_64(emitter, wrapper, &arg_types, "r14");
     let overflow_bytes = materialize_spilled_args_for_closure_call_x86_64(emitter, &arg_types);
     abi::emit_call_reg(emitter, "r13");
     abi::emit_release_temporary_stack(emitter, overflow_bytes);                 // drop stack-passed closure arguments after the Fiber callback returns
     box_wrapper_return(emitter, wrapper.sig.return_type.codegen_repr());
 
+    abi::load_at_offset(emitter, "r14", saved_descriptor_offset);
     abi::load_at_offset(emitter, "r13", saved_callable_offset);
     abi::load_at_offset(emitter, "r12", saved_fiber_offset);
     abi::emit_frame_restore(emitter, frame_size);
@@ -293,52 +293,47 @@ fn spill_wrapper_args_x86_64(
     emitter: &mut Emitter,
     wrapper: &DeferredFiberWrapper,
     arg_types: &[PhpType],
+    descriptor_reg: &str,
 ) {
     let visible = wrapper.visible_param_count.min(arg_types.len());
-    let user_int_regs = arg_types
-        .iter()
-        .take(visible)
-        .filter(|ty| !ty.is_float_reg())
-        .map(PhpType::register_count)
-        .sum::<usize>();
-    let user_float_regs = arg_types
-        .iter()
-        .take(visible)
-        .filter(|ty| ty.is_float_reg())
-        .count();
 
     for (idx, ty) in arg_types.iter().take(visible).enumerate() {
         spill_user_arg_x86_64(emitter, idx, ty, frame_arg_slot_offset(idx));
     }
 
-    let mut int_capture_slot = user_int_regs;
-    let mut float_capture_slot = user_float_regs;
     for (idx, ty) in arg_types.iter().enumerate().skip(visible) {
         let slot_offset = frame_arg_slot_offset(idx);
-        match ty {
-            PhpType::Float => {
-                let src_offset = runtime::FIBER_FLOAT_ARGS_OFFSET + (float_capture_slot as i32) * 8;
-                emitter.instruction(&format!("movsd xmm0, QWORD PTR [r12 + {}]", src_offset)); // load the captured float payload from the Fiber float slot file
-                abi::store_at_offset(emitter, "xmm0", slot_offset);
-                float_capture_slot += 1;
-            }
-            PhpType::Str => {
-                let src_lo = runtime::FIBER_START_ARGS_OFFSET + (int_capture_slot as i32) * 8;
-                let src_hi = runtime::FIBER_START_ARGS_OFFSET + ((int_capture_slot + 1) as i32) * 8;
-                emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", src_lo)); // load the captured string pointer from the Fiber int slot file
-                emitter.instruction(&format!("mov r11, QWORD PTR [r12 + {}]", src_hi)); // load the captured string length from the Fiber int slot file
-                abi::store_at_offset(emitter, "r10", slot_offset);
-                abi::store_at_offset(emitter, "r11", slot_offset - 8);
-                int_capture_slot += 2;
-            }
-            PhpType::Void | PhpType::Never => {}
-            _ => {
-                let src_offset = runtime::FIBER_START_ARGS_OFFSET + (int_capture_slot as i32) * 8;
-                emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", src_offset)); // load the captured scalar/pointer payload from the Fiber int slot file
-                abi::store_at_offset(emitter, "r10", slot_offset);
-                retain_refcounted_capture_for_closure_frame(emitter, ty, "r10");
-                int_capture_slot += 1;
-            }
+        spill_descriptor_hidden_arg_x86_64(emitter, descriptor_reg, idx - visible, ty, slot_offset);
+    }
+}
+
+/// x86_64-specific spill of one hidden argument from descriptor runtime capture storage.
+fn spill_descriptor_hidden_arg_x86_64(
+    emitter: &mut Emitter,
+    descriptor_reg: &str,
+    capture_index: usize,
+    ty: &PhpType,
+    slot_offset: usize,
+) {
+    callable_descriptor::emit_load_runtime_capture_to_result(
+        emitter,
+        descriptor_reg,
+        capture_index,
+        ty,
+    );
+    match ty {
+        PhpType::Float => {
+            abi::store_at_offset(emitter, "xmm0", slot_offset);
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            abi::store_at_offset(emitter, ptr_reg, slot_offset);
+            abi::store_at_offset(emitter, len_reg, slot_offset - 8);
+        }
+        PhpType::Void | PhpType::Never => {}
+        _ => {
+            abi::store_at_offset(emitter, abi::int_result_reg(emitter), slot_offset);
+            retain_refcounted_capture_for_closure_frame(emitter, ty, abi::int_result_reg(emitter));
         }
     }
 }

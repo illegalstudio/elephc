@@ -146,6 +146,33 @@ echo $f->getReturn();
     assert_eq!(out, "41/null/42");
 }
 
+/// Verifies that a Fiber first-class method callable reloads its receiver from
+/// the runtime callable descriptor instead of from Fiber start-argument slots.
+#[test]
+fn test_fiber_first_class_method_callable_uses_descriptor_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class FiberJob {
+    public function __construct(private string $prefix) {}
+
+    public function run(string $value): string {
+        echo $this->prefix . $value;
+        return $this->prefix . "done";
+    }
+}
+
+$job = new FiberJob("fiber:");
+$f = new Fiber($job->run(...));
+$v = $f->start("go");
+echo "/";
+echo is_null($v) ? "null" : $v;
+echo "/";
+echo $f->getReturn();
+"#,
+    );
+    assert_eq!(out, "fiber:go/null/fiber:done");
+}
+
 // Verifies that seven `mixed` arguments can be passed through `start()` to the
 // fiber closure.  Seven is the maximum on AArch64 (integer arg-reg count
 // minus `$this`).
@@ -211,4 +238,3 @@ echo "should-not-reach";
         out.stdout
     );
 }
-

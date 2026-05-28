@@ -467,9 +467,8 @@ impl Checker {
     /// Validates arguments passed to the `Fiber` constructor.
     ///
     /// The first argument must be a closure or known first-class callable.
-    /// Validates capture slots for closures (by-ref captures, variadic params)
-    /// and checks the callback signature compatibility. Emits an error if
-    /// the callback is invalid.
+    /// Captures and receivers are retained by the callable descriptor, while
+    /// visible start parameters still use Fiber's fixed start-argument ABI.
     fn validate_fiber_constructor_args(
         &mut self,
         args: &[Expr],
@@ -488,47 +487,9 @@ impl Checker {
 
         let visible_param_count = match &callback.kind {
             ExprKind::Closure {
-                params,
-                variadic,
-                captures,
-                capture_refs,
-                ..
-            } => {
-                let visible_param_count =
-                    fibers::visible_param_count(params.len(), variadic.is_some());
-                let capture_types = captures
-                    .iter()
-                    .map(|name| {
-                        (
-                            name.clone(),
-                            env.get(name).cloned().unwrap_or(PhpType::Mixed),
-                            capture_refs.iter().any(|ref_capture| ref_capture == name),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                fibers::validate_capture_slots(
-                    &sig,
-                    visible_param_count,
-                    &capture_types,
-                    callback.span,
-                )?;
-                visible_param_count
-            }
-            ExprKind::Variable(name) => {
-                let capture_types = self
-                    .callable_captures
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_default();
-                let visible_param_count = sig.params.len();
-                fibers::validate_capture_slots(
-                    &sig,
-                    visible_param_count,
-                    &capture_types,
-                    callback.span,
-                )?;
-                visible_param_count
-            }
+                params, variadic, ..
+            } => fibers::visible_param_count(params.len(), variadic.is_some()),
+            ExprKind::Variable(_) => sig.params.len(),
             ExprKind::FirstClassCallable(_) => sig.params.len(),
             _ => {
                 return Err(CompileError::new(

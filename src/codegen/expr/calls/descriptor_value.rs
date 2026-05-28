@@ -143,6 +143,9 @@ fn emit_runtime_descriptor_with_captures(
 fn retain_runtime_capture_result(emitter: &mut Emitter, capture_ty: &PhpType) {
     match capture_ty.codegen_repr() {
         PhpType::Str => {}
+        PhpType::Callable => {
+            callable_descriptor::emit_retain_current_descriptor(emitter);
+        }
         other if other.is_refcounted() => {
             abi::emit_incref_if_refcounted(emitter, &other);
         }

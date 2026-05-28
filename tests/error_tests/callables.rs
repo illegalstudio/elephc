@@ -374,39 +374,6 @@ $fiber = new Fiber($fn);
     );
 }
 
-/// Verifies that error fiber direct callback rejects capture slot overflow.
-#[test]
-fn test_error_fiber_direct_callback_rejects_capture_slot_overflow() {
-    // Verifies a `Fiber` with a callback that captures 4 variables via `use()`
-    // (more than the 7-slot limit, though this tests the slot-count boundary)
-    // produces a diagnostic about exceeding the 7 integer-slot capture limit.
-    // Note: the limit is 7 slots; this test verifies the error is triggered
-    // for the 4th captured variable.
-    expect_error(
-        r#"<?php
-$a = "a"; $b = "b"; $c = "c"; $d = "d";
-$fiber = new Fiber(function() use ($a, $b, $c, $d): void {});
-"#,
-        "Fiber capture $d exceeds the 7 integer-slot Fiber capture limit",
-    );
-}
-
-/// Verifies that error fiber variable callback rejects capture slot overflow.
-#[test]
-fn test_error_fiber_variable_callback_rejects_capture_slot_overflow() {
-    // Verifies a `Fiber` constructed from a pre-existing variable holding a
-    // closure that captures 4 variables via `use()` produces a diagnostic about
-    // exceeding the 7 integer-slot Fiber capture limit.
-    expect_error(
-        r#"<?php
-$a = "a"; $b = "b"; $c = "c"; $d = "d";
-$fn = function() use ($a, $b, $c, $d): void {};
-$fiber = new Fiber($fn);
-"#,
-        "Fiber capture $d exceeds the 7 integer-slot Fiber capture limit",
-    );
-}
-
 // --- PHP 8.5 pipe operator ---
 
 /// Verifies that error pipe rhs integer not callable.

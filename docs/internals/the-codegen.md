@@ -563,11 +563,11 @@ The generated `Generator` object has a custom payload layout rather than ordinar
 
 `Fiber` is a built-in class, but codegen does not lower it through the ordinary object constructor and method-dispatch path. `new Fiber($callable)` is intercepted and delegated to `__rt_fiber_construct`, which allocates the larger runtime-managed Fiber object, creates its guarded native stack, stores the original callable descriptor pointer, and records the generated wrapper label that adapts Fiber start values to the callback ABI.
 
-Each accepted Fiber callback gets a deferred entry wrapper emitted next to deferred closure bodies. The wrapper runs on the Fiber stack, reloads boxed `start()` values from `start_args[0..6]`, unboxes them to the callback's declared parameter types, appends any preloaded closure captures from reserved Fiber-owned slots, loads the original entry from the stored callable descriptor, calls it with normal ABI materialization, and boxes the terminal return value back to `mixed`.
+Each accepted Fiber callback gets a deferred entry wrapper emitted next to deferred closure bodies. The wrapper runs on the Fiber stack, reloads boxed `start()` values from `start_args[0..6]`, unboxes them to the callback's declared parameter types, reloads hidden captures or method receivers from the stored callable descriptor's runtime capture slots, loads the original entry from that descriptor, calls it with normal ABI materialization, and boxes the terminal return value back to `mixed`.
 
 Instance and static Fiber methods are also intercepted:
 
-- `$fiber->start(...)` spills up to seven boxed `mixed` start arguments into the Fiber object before calling `__rt_fiber_start`; it respects `user_arg_max` so closure captures stored in trailing slots are not overwritten.
+- `$fiber->start(...)` spills up to seven boxed `mixed` start arguments into the Fiber object before calling `__rt_fiber_start`; callable captures and receivers are already stored in the descriptor and are not overwritten by start arguments.
 - `$fiber->resume($value)`, `$fiber->throw($exception)`, `$fiber->getReturn()`, and the state predicates branch directly to their `__rt_fiber_*` runtime helpers.
 - `Fiber::suspend($value)` and `Fiber::getCurrent()` lower to runtime helper calls instead of ordinary static method dispatch.
 

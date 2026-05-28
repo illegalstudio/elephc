@@ -64,15 +64,13 @@ one|resumed with alpha two|resumed with beta three
 
 ## Argument and capture transport
 
-Fiber calls cross a stack boundary. Before switching stacks, elephc copies the values needed by the callback into fixed fields on the `Fiber` object:
+Fiber calls cross a stack boundary. Before switching stacks, elephc copies the visible values passed to the callback into fixed fields on the `Fiber` object:
 
 - `start_args[0..6]` stores up to seven boxed `mixed` values passed to `$fiber->start(...)`
-- `float_args[0..6]` stores raw float captures
-- `user_arg_max` records how many leading `start_args` slots may be overwritten by `start()`
 
 This copy is sometimes called "spilling": the caller's argument registers or stack-passed overflow arguments are saved into stable Fiber-owned storage before `__rt_fiber_switch` adopts the Fiber's separate stack.
 
-Closures with `use (...)` captures are evaluated when the Fiber is constructed, not when it starts. Captured int-like values, objects, arrays, callables, and `mixed` values use one integer slot; captured strings use two integer slots (`ptr + len`); captured floats use one float slot. Heap-backed captures are retained when the Fiber is constructed and released when the Fiber object is freed.
+Closures with `use (...)` captures and first-class method receivers are evaluated when the Fiber is constructed, not when it starts. They are stored in the callable descriptor's runtime capture slots, so `$fiber->start(...)` cannot overwrite them and captures are not limited by the seven visible start-argument slots.
 
 ## Runtime model
 
@@ -94,7 +92,6 @@ These are current implementation limits, not PHP design rules:
 |---|---|
 | `start()` is fixed-arity | `Fiber::start()` has seven optional `mixed` parameters. Calls with more than seven values are rejected, and a callback with more than seven visible start parameters is rejected. This is not true PHP variadic forwarding. |
 | Variadic callback parameters are not supported | Fiber callbacks such as `function (...$args): void {}` are rejected because the runtime currently forwards fixed `start_args` slots instead of building a PHP variadic array. |
-| Capture storage is fixed-size | Captures share a fixed slot budget with the callback ABI: seven integer slots and seven float slots. Strings consume two integer slots. Capture overflow is a compile-time error. |
 | Callback arguments cannot be by-reference | Fiber callbacks such as `function (&$value): void {}` are rejected because start arguments are boxed and stored before the stack switch. |
 | Callback targets must be statically known | `new Fiber(...)` accepts closures, variables holding known closures/callables, and known first-class callables. Arbitrary runtime callable values, such as unknown strings or dynamically computed callbacks, are rejected. |
 | Mixed arithmetic still needs explicit casts | Values transferred by `start()`, `resume()`, `Fiber::suspend()`, and `getReturn()` are boxed `mixed` cells. Echo, comparison, `gettype()`, `instanceof`, and typed callback parameters handle them, but arithmetic on an untyped value received from `Fiber::suspend()` may not auto-unbox. Cast explicitly before computing, for example `(int)$value + 10`. |
