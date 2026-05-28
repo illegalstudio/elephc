@@ -261,6 +261,63 @@ run($items);
     assert_eq!(out, "oldAda");
 }
 
+/// Verifies instance-method-returned callables keep descriptor env metadata.
+#[test]
+fn test_method_returned_runtime_callable_array_map_uses_descriptor_env() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeCallableMethodFactory {
+    public function make(string $prefix): callable {
+        return function(string $name) use ($prefix): string {
+            return $prefix . $name;
+        };
+    }
+}
+
+$factory = new RuntimeCallableMethodFactory();
+$cb = $factory->make("old");
+$out = array_map($cb, ["Ada"]);
+echo $out[0];
+"#,
+    );
+    assert_eq!(out, "oldAda");
+}
+
+/// Verifies static-method-returned callable arrays keep descriptor env metadata.
+#[test]
+fn test_static_method_returned_runtime_callable_array_map_uses_descriptor_env() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeCallableStaticArrayBase {
+    public static function prefix(): string {
+        return "base";
+    }
+
+    public static function wrap(string $name): string {
+        return static::prefix() . $name;
+    }
+
+    public static function callbacks(): array {
+        $cb = static::wrap(...);
+        return [$cb];
+    }
+}
+
+class RuntimeCallableStaticArrayChild extends RuntimeCallableStaticArrayBase {
+    public static function prefix(): string {
+        return "child";
+    }
+}
+
+$items = RuntimeCallableStaticArrayChild::callbacks();
+$from_array = $items[0];
+$out = array_map($from_array, ["Ada"]);
+echo $out[0];
+"#,
+    );
+    assert_eq!(out, "childAda");
+}
+
 /// Verifies that an array-stored closure call reads by-value captures from the descriptor.
 #[test]
 fn test_expr_call_array_element_uses_descriptor_capture_snapshot() {

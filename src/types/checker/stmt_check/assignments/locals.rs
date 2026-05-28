@@ -103,6 +103,15 @@ pub(super) fn check_assign(
     } else {
         None
     };
+    let callable_source = if let Some(default) = null_coalesce_default {
+        if matches!(env.get(name), Some(existing) if *existing == PhpType::Void) {
+            default
+        } else {
+            value
+        }
+    } else {
+        value
+    };
     let ty_result: Result<PhpType, CompileError> = (|| {
         if let Some(default) = null_coalesce_default {
             if let Some(existing) = env.get(name).cloned() {
@@ -119,16 +128,8 @@ pub(super) fn check_assign(
         } else {
             checker.infer_type_with_assignment_effects(value, env)
         }
-    })();
-    let callable_source = if let Some(default) = null_coalesce_default {
-        if matches!(env.get(name), Some(existing) if *existing == PhpType::Void) {
-            default
-        } else {
-            value
-        }
-    } else {
-        value
-    };
+    })()
+    .and_then(|ty| specialize_callable_array_assignment_type(checker, callable_source, ty, env));
     let metadata_result = match &ty_result {
         Ok(ty) => update_callable_assignment_metadata(checker, name, callable_source, ty, env),
         Err(_) => Ok(()),
@@ -331,6 +332,34 @@ fn is_callable_array_type(ty: &PhpType) -> bool {
         PhpType::AssocArray { value, .. } => value.as_ref() == &PhpType::Callable,
         _ => false,
     }
+}
+
+/// Specializes generic array assignment types when callable-array metadata is known.
+fn specialize_callable_array_assignment_type(
+    checker: &mut Checker,
+    callable_source: &Expr,
+    ty: PhpType,
+    env: &TypeEnv,
+) -> Result<PhpType, CompileError> {
+    if is_callable_array_type(&ty) {
+        return Ok(ty);
+    }
+    if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        return Ok(ty);
+    }
+    if checker
+        .resolve_expr_callable_array_sig(callable_source, env)?
+        .is_none()
+    {
+        return Ok(ty);
+    }
+    Ok(match ty {
+        PhpType::AssocArray { key, .. } => PhpType::AssocArray {
+            key,
+            value: Box::new(PhpType::Callable),
+        },
+        _ => PhpType::Array(Box::new(PhpType::Callable)),
+    })
 }
 
 /// Provides the Update callable array assignment metadata helper used by the locals module.

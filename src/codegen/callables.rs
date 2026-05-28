@@ -11,7 +11,8 @@
 //! - Branch-shaped callable signatures are reused only when every branch has the same call contract.
 
 use crate::codegen::context::Context;
-use crate::parser::ast::{CallableTarget, Expr, ExprKind};
+use crate::names::php_symbol_key;
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
 use crate::types::FunctionSig;
 
 use super::builtins::callable_lookup::{lookup_function, FunctionLookup};
@@ -69,6 +70,12 @@ pub(crate) fn callable_sig(callback: &Expr, ctx: &Context) -> Option<FunctionSig
             };
             ctx.callable_return_sigs.get(&resolved_name).cloned()
         }
+        ExprKind::MethodCall { object, method, .. } => {
+            method_return_callable_sig(object, method, ctx, false)
+        }
+        ExprKind::StaticMethodCall {
+            receiver, method, ..
+        } => static_method_return_callable_sig(receiver, method, ctx, false),
         ExprKind::ArrayAccess { array, .. } => {
             if let ExprKind::Variable(name) = &array.kind {
                 ctx.closure_sigs.get(name).cloned()
@@ -107,6 +114,12 @@ pub(crate) fn callable_array_sig(callback_array: &Expr, ctx: &Context) -> Option
             };
             ctx.callable_array_return_sigs.get(&resolved_name).cloned()
         }
+        ExprKind::MethodCall { object, method, .. } => {
+            method_return_callable_sig(object, method, ctx, true)
+        }
+        ExprKind::StaticMethodCall {
+            receiver, method, ..
+        } => static_method_return_callable_sig(receiver, method, ctx, true),
         ExprKind::Variable(name) => ctx.closure_sigs.get(name).cloned(),
         ExprKind::Assignment { value, .. } => callable_array_sig(value, ctx),
         ExprKind::Ternary {
@@ -154,6 +167,87 @@ fn matching_array_branch_sig(left: &Expr, right: &Expr, ctx: &Context) -> Option
     } else {
         None
     }
+}
+
+/// Resolves callable-return metadata for an instance method call expression.
+fn method_return_callable_sig(
+    object: &Expr,
+    method: &str,
+    ctx: &Context,
+    array_return: bool,
+) -> Option<FunctionSig> {
+    let object_ty = crate::codegen::functions::infer_contextual_type(object, ctx);
+    let class_name = crate::codegen::functions::singular_object_class(&object_ty)?.to_string();
+    let method_key = php_symbol_key(method);
+    let impl_class = ctx
+        .classes
+        .get(&class_name)
+        .and_then(|class_info| class_info.method_impl_classes.get(&method_key))
+        .cloned()
+        .unwrap_or(class_name);
+    stored_method_return_callable_sig(&impl_class, &method_key, ctx, array_return)
+}
+
+/// Resolves callable-return metadata for a static method call expression.
+fn static_method_return_callable_sig(
+    receiver: &StaticReceiver,
+    method: &str,
+    ctx: &Context,
+    array_return: bool,
+) -> Option<FunctionSig> {
+    let class_name = resolve_static_method_metadata_class(receiver, ctx)?;
+    let method_key = php_symbol_key(method);
+    let class_info = ctx.classes.get(&class_name)?;
+    let impl_class = class_info
+        .static_method_impl_classes
+        .get(&method_key)
+        .or_else(|| class_info.method_impl_classes.get(&method_key))
+        .cloned()
+        .unwrap_or(class_name);
+    stored_method_return_callable_sig(&impl_class, &method_key, ctx, array_return)
+}
+
+/// Looks up stored callable-return metadata for a class method.
+fn stored_method_return_callable_sig(
+    class_name: &str,
+    method_key: &str,
+    ctx: &Context,
+    array_return: bool,
+) -> Option<FunctionSig> {
+    let class_info = ctx.classes.get(class_name)?;
+    if array_return {
+        class_info
+            .callable_array_method_return_sigs
+            .get(method_key)
+            .cloned()
+    } else {
+        class_info.callable_method_return_sigs.get(method_key).cloned()
+    }
+}
+
+/// Resolves the concrete class whose static method metadata should be inspected.
+fn resolve_static_method_metadata_class(
+    receiver: &StaticReceiver,
+    ctx: &Context,
+) -> Option<String> {
+    match receiver {
+        StaticReceiver::Named(name) => resolve_class_name(ctx, name.as_str()).map(str::to_string),
+        StaticReceiver::Self_ | StaticReceiver::Static => ctx.current_class.clone(),
+        StaticReceiver::Parent => ctx
+            .current_class
+            .as_ref()
+            .and_then(|current_class| ctx.classes.get(current_class))
+            .and_then(|class_info| class_info.parent.clone()),
+    }
+}
+
+/// Resolves a class name case-insensitively for metadata lookups.
+fn resolve_class_name<'a>(ctx: &'a Context, class_name: &str) -> Option<&'a str> {
+    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+    ctx.classes
+        .keys()
+        .find(|existing| php_symbol_key(existing) == class_key)
+        .map(String::as_str)
 }
 
 /// Computes the callable signature metadata for direct first class function.

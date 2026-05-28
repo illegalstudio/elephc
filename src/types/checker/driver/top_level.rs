@@ -43,19 +43,50 @@ impl Checker {
 
     /// Determines whether top-level errors for a statement can be suppressed.
     ///
-    /// Suppression is allowed when errors exist and the statement contains at least one method
-    /// call or property access, and all error messages are in the suppressible set. This relaxes
-    /// type-checking strictness for code that may define classes later in the file.
+    /// Suppression is allowed for stale diagnostics from the initial pass when the final pass has
+    /// no error for the same statement. This covers method/property forward-reference diagnostics
+    /// plus callable metadata and undefined-variable cascades that disappear after method schemas
+    /// have been updated.
     pub(super) fn can_suppress_initial_top_level_errors(
         stmt: &Stmt,
         errors: &[CompileError],
     ) -> bool {
+        if Self::can_suppress_stale_undefined_variable_errors(errors) {
+            return true;
+        }
+        if Self::can_suppress_late_callable_metadata_errors(errors) {
+            return true;
+        }
         !errors.is_empty()
             && (Self::stmt_contains_method_call(stmt)
                 || Self::stmt_contains_property_access(stmt))
             && errors
                 .iter()
                 .all(|error| Self::is_suppressible_initial_top_level_error(&error.message))
+    }
+
+    /// Returns true for initial-pass callable metadata errors that disappeared in the final pass.
+    fn can_suppress_late_callable_metadata_errors(errors: &[CompileError]) -> bool {
+        errors
+            .iter()
+            .any(|error| Self::is_late_callable_metadata_error(&error.message))
+            && errors.iter().all(|error| {
+                Self::is_late_callable_metadata_error(&error.message)
+                    || error.message.starts_with("Undefined variable: $")
+            })
+    }
+
+    /// Returns true for undefined-variable cascades that disappeared in the final pass.
+    fn can_suppress_stale_undefined_variable_errors(errors: &[CompileError]) -> bool {
+        !errors.is_empty()
+            && errors
+                .iter()
+                .all(|error| error.message.starts_with("Undefined variable: $"))
+    }
+
+    /// Returns true for stale diagnostics caused by method-return callable metadata.
+    fn is_late_callable_metadata_error(message: &str) -> bool {
+        message.contains("must have a statically known callable signature")
     }
 
     /// Returns `true` if the given error message is in the suppressible set for initial top-level errors.

@@ -326,6 +326,8 @@ pub(crate) fn build_enum_info(
             method_decls: Vec::new(),
             methods: HashMap::new(),
             static_methods,
+            callable_method_return_sigs: HashMap::new(),
+            callable_array_method_return_sigs: HashMap::new(),
             method_visibilities: HashMap::new(),
             final_methods: HashSet::new(),
             method_declaring_classes: HashMap::new(),

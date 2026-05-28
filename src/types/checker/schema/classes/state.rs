@@ -144,6 +144,8 @@ impl ClassBuildState {
             method_decls: class.methods.clone(),
             methods: self.method_sigs,
             static_methods: self.static_sigs,
+            callable_method_return_sigs: HashMap::new(),
+            callable_array_method_return_sigs: HashMap::new(),
             method_visibilities: self.method_visibilities,
             final_methods: self.final_methods,
             method_declaring_classes: self.method_declaring_classes,

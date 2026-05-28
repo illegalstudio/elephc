@@ -127,6 +127,12 @@ pub struct ClassInfo {
     pub method_decls: Vec<ClassMethod>,
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,
+    /// Callable signatures returned by instance/static methods, keyed by PHP's
+    /// case-insensitive method key. The method body pass fills this after schemas exist.
+    pub callable_method_return_sigs: HashMap<String, FunctionSig>,
+    /// Callable element signatures returned by methods whose effective return
+    /// type is `array<callable>` or an assoc array of callable values.
+    pub callable_array_method_return_sigs: HashMap<String, FunctionSig>,
     pub method_visibilities: HashMap<String, Visibility>,
     pub final_methods: HashSet<String>,
     pub method_declaring_classes: HashMap<String, String>,

@@ -58,7 +58,7 @@ pub(crate) fn emit_assign_stmt(
     let saved_self_ref_var = prepare_self_ref_closure_capture(name, value, ctx);
     let target_static_ty = ctx.variables.get(name).map(|var| var.static_ty.clone());
     let assoc_array_target = assoc_array_literal_target_type(value, target_static_ty.as_ref());
-    let static_ty = assoc_array_target.clone().unwrap_or_else(|| {
+    let mut static_ty = assoc_array_target.clone().unwrap_or_else(|| {
         target_static_ty
             .clone()
             .filter(|ty| matches!(ty, PhpType::Union(_)))
@@ -69,6 +69,10 @@ pub(crate) fn emit_assign_stmt(
     } else {
         emit_expr(value, emitter, ctx, data)
     };
+    if let Some(specialized_ty) = specialize_callable_array_assignment_type(&ty, value, ctx) {
+        ty = specialized_ty.clone();
+        static_ty = specialized_ty;
+    }
     restore_self_ref_closure_capture(name, saved_self_ref_var, ctx);
     let dest_needs_mixed_box = ctx.variables.get(name).is_some_and(|var| {
         !ctx.ref_params.contains(name)
@@ -393,6 +397,27 @@ fn is_callable_array_type(ty: &PhpType) -> bool {
         PhpType::AssocArray { value, .. } => value.as_ref() == &PhpType::Callable,
         _ => false,
     }
+}
+
+/// Specializes generic array assignment types when callable-array metadata is known.
+fn specialize_callable_array_assignment_type(
+    ty: &PhpType,
+    value: &Expr,
+    ctx: &Context,
+) -> Option<PhpType> {
+    if is_callable_array_type(ty)
+        || !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        || crate::codegen::callables::callable_array_sig(value, ctx).is_none()
+    {
+        return None;
+    }
+    Some(match ty {
+        PhpType::AssocArray { key, .. } => PhpType::AssocArray {
+            key: key.clone(),
+            value: Box::new(PhpType::Callable),
+        },
+        _ => PhpType::Array(Box::new(PhpType::Callable)),
+    })
 }
 
 /// Saves the current type, static type, ownership, and cleanup safety of a local
