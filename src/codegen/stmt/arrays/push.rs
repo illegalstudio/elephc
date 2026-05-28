@@ -315,12 +315,14 @@ fn effective_indexed_push_type(existing: &PhpType, value: &PhpType, ctx: &Contex
     }
 }
 
-/// Updates callables array metadata when appending a callable value to a named array.
+/// Updates callable array metadata when writing a value into a named array.
 ///
 /// Propagates closure signatures, captures, first-class targets, wrapper labels,
 /// and runtime descriptor markers from closures, first-class callables, variables,
-/// array-access sources, and callable-returning expressions.
-fn update_callable_array_metadata(
+/// array-access sources, and callable-returning expressions. Non-callable writes
+/// clear the array-level metadata because later element loads are no longer
+/// guaranteed to share one callable contract.
+pub(super) fn update_callable_array_metadata(
     array: &str,
     value: &Expr,
     val_ty: &PhpType,

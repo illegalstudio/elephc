@@ -118,6 +118,53 @@ echo $from_array("Ada");
     assert_eq!(out, "oldAda");
 }
 
+/// Verifies indexed runtime callable assignments keep their descriptor invocation marker.
+#[test]
+fn test_index_assigned_runtime_callable_array_element_uses_descriptor_invoker() {
+    let out = compile_and_run(
+        r#"<?php
+function make(string $prefix): callable {
+    return function(string $name) use ($prefix): string {
+        return $prefix . $name;
+    };
+}
+
+$cb = make("old");
+$items = [];
+$items[] = function(string $name): string {
+    return "new" . $name;
+};
+$items[0] = $cb;
+$from_array = $items[0];
+echo $from_array("Ada");
+"#,
+    );
+    assert_eq!(out, "oldAda");
+}
+
+/// Verifies associative runtime callable assignments keep their descriptor invocation marker.
+#[test]
+fn test_assoc_assigned_runtime_callable_array_element_uses_descriptor_invoker() {
+    let out = compile_and_run(
+        r#"<?php
+function make(string $prefix): callable {
+    return function(string $name) use ($prefix): string {
+        return $prefix . $name;
+    };
+}
+
+$cb = make("old");
+$items = ["name" => function(string $name): string {
+    return "new" . $name;
+}];
+$items["name"] = $cb;
+$from_array = $items["name"];
+echo $from_array("Ada");
+"#,
+    );
+    assert_eq!(out, "oldAda");
+}
+
 /// Verifies that an array-stored closure call reads by-value captures from the descriptor.
 #[test]
 fn test_expr_call_array_element_uses_descriptor_capture_snapshot() {
