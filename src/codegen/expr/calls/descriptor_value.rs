@@ -85,6 +85,9 @@ fn emit_runtime_descriptor_with_captures(
 
     for (idx, (capture_name, capture_ty, by_ref)) in captures.iter().enumerate() {
         emitter.comment(&format!("callable descriptor: store capture ${}", capture_name));
+        if matches!(capture_ty.codegen_repr(), PhpType::Callable) {
+            ctx.mark_fcc_used(capture_name);
+        }
         if *by_ref {
             if !args::emit_ref_arg_variable_address(
                 capture_name,

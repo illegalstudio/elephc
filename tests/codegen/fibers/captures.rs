@@ -249,10 +249,10 @@ $f->start();
     assert_eq!(out, "v=100");
 }
 
-/// Verifies that a Fiber closure descriptor retains a captured callable descriptor
+/// Verifies that a Fiber closure descriptor can invoke a captured callable descriptor
 /// separately from the caller's local callable variable.
 #[test]
-fn test_fiber_closure_capture_callable_survives_source_unset() {
+fn test_fiber_closure_capture_callable_invokes_after_source_unset() {
     let out = compile_and_run(
         r#"<?php
 class Formatter {
@@ -262,13 +262,13 @@ class Formatter {
 
 $fmt = new Formatter("call:");
 $cb = $fmt->wrap(...);
-$f = new Fiber(function() use ($cb): void { echo is_callable($cb) ? "callable" : "missing"; });
+$f = new Fiber(function() use ($cb): void { echo $cb("x"); });
 $fmt = null;
 $cb = null;
 $f->start();
 "#,
     );
-    assert_eq!(out, "callable");
+    assert_eq!(out, "call:x");
 }
 
 #[test]
