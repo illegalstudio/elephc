@@ -348,32 +348,6 @@ fn test_error_fiber_callback_rejects_by_ref_start_arg() {
     );
 }
 
-/// Verifies that error fiber callback rejects variadic arg.
-#[test]
-fn test_error_fiber_callback_rejects_variadic_arg() {
-    // Verifies a `Fiber` with a callback that is variadic produces a diagnostic
-    // because variadic Fiber callbacks are not supported.
-    expect_error(
-        "<?php $fiber = new Fiber(function(...$args): void {});",
-        "Fiber callbacks cannot be variadic",
-    );
-}
-
-/// Verifies that error fiber variable callback rejects variadic arg.
-#[test]
-fn test_error_fiber_variable_callback_rejects_variadic_arg() {
-    // Verifies a `Fiber` constructed from a pre-existing variable holding a
-    // variadic closure produces a diagnostic because variadic Fiber callbacks
-    // are not supported.
-    expect_error(
-        r#"<?php
-$fn = function(...$args): void {};
-$fiber = new Fiber($fn);
-"#,
-        "Fiber callbacks cannot be variadic",
-    );
-}
-
 // --- PHP 8.5 pipe operator ---
 
 /// Verifies that error pipe rhs integer not callable.

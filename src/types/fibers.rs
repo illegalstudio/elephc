@@ -26,9 +26,11 @@ pub(crate) fn visible_param_count(param_count: usize, variadic: bool) -> usize {
 }
 
 /// Adapts a Fiber callback's `FunctionSig` in-place for the Fiber calling convention.
-/// Undeclared, non-reference parameters (up to `visible_param_count`) are set to `PhpType::Mixed`
-/// so the caller can pass any type. If `no_terminal_return` is true and the signature has no
-/// declared return, the return type is set to `PhpType::Void`.
+/// Undeclared, non-reference fixed parameters are set to `PhpType::Mixed` so the
+/// caller can pass any type. An undeclared variadic tail is represented as
+/// `array<mixed>` because the Fiber wrapper builds it from boxed start values.
+/// If `no_terminal_return` is true and the signature has no declared return,
+/// the return type is set to `PhpType::Void`.
 pub(crate) fn adapt_entry_sig(
     sig: &mut FunctionSig,
     visible_param_count: usize,
@@ -38,7 +40,15 @@ pub(crate) fn adapt_entry_sig(
         let declared = sig.declared_params.get(i).copied().unwrap_or(false);
         let by_ref = sig.ref_params.get(i).copied().unwrap_or(false);
         if !declared && !by_ref {
-            sig.params[i].1 = PhpType::Mixed;
+            if sig
+                .variadic
+                .as_ref()
+                .is_some_and(|variadic| sig.params[i].0 == *variadic)
+            {
+                sig.params[i].1 = PhpType::Array(Box::new(PhpType::Mixed));
+            } else {
+                sig.params[i].1 = PhpType::Mixed;
+            }
         }
     }
     if no_terminal_return && !sig.declared_return {
@@ -55,26 +65,27 @@ pub(crate) fn closure_body_has_return(body: &[Stmt]) -> bool {
 }
 
 /// Validates that a `FunctionSig` is a valid Fiber callback signature.
-/// Returns an error if the callback is variadic, has more than `FIBER_START_ARG_LIMIT`
-/// visible parameters, or has any by-reference parameters.
+/// Returns an error if the callback has more than `FIBER_START_ARG_LIMIT` fixed
+/// start parameters, or has any fixed by-reference start parameters. Variadic
+/// callbacks are allowed because wrappers build the variadic tail from the
+/// supplied boxed start arguments.
 pub(crate) fn validate_callback_signature(
     sig: &FunctionSig,
     visible_param_count: usize,
     span: Span,
 ) -> Result<(), CompileError> {
-    if sig.variadic.is_some() {
-        return Err(CompileError::new(
-            span,
-            "Fiber callbacks cannot be variadic",
-        ));
-    }
+    let fixed_param_count = if sig.variadic.is_some() {
+        visible_param_count.saturating_sub(1)
+    } else {
+        visible_param_count
+    };
 
-    if visible_param_count > FIBER_START_ARG_LIMIT {
+    if fixed_param_count > FIBER_START_ARG_LIMIT {
         return Err(CompileError::new(
             span,
             &format!(
                 "Fiber callbacks support at most {} start arguments, got {}",
-                FIBER_START_ARG_LIMIT, visible_param_count
+                FIBER_START_ARG_LIMIT, fixed_param_count
             ),
         ));
     }
@@ -82,7 +93,7 @@ pub(crate) fn validate_callback_signature(
     if sig
         .ref_params
         .iter()
-        .take(visible_param_count)
+        .take(fixed_param_count)
         .any(|by_ref| *by_ref)
     {
         return Err(CompileError::new(

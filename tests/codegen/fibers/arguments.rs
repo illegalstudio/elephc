@@ -214,6 +214,66 @@ echo $f->getReturn();
     let _ = fs::remove_dir_all(dir);
 }
 
+/// Verifies that an inline variadic Fiber closure receives all start args in `...$args`.
+#[test]
+fn test_fiber_variadic_inline_closure_receives_start_args() {
+    let out = compile_and_run(
+        r#"<?php
+$f = new Fiber(function(...$args): int {
+    echo count($args) . ":" . $args[0] . "/" . $args[2];
+    return count($args);
+});
+$v = $f->start("a", "b", "c");
+echo "/";
+echo is_null($v) ? "null" : $v;
+echo "/";
+echo $f->getReturn();
+"#,
+    );
+    assert_eq!(out, "3:a/c/null/3");
+}
+
+/// Verifies that a variadic closure variable receives fixed and tail Fiber start args.
+#[test]
+fn test_fiber_variadic_closure_variable_builds_tail_array() {
+    let out = compile_and_run(
+        r#"<?php
+$fn = function($head, ...$tail): int {
+    echo $head . ":" . count($tail) . ":" . $tail[1];
+    return count($tail);
+};
+$f = new Fiber($fn);
+$v = $f->start("h", "a", "b");
+echo "/";
+echo is_null($v) ? "null" : $v;
+echo "/";
+echo $f->getReturn();
+"#,
+    );
+    assert_eq!(out, "h:2:b/null/2");
+}
+
+/// Verifies that a variadic first-class callable receives Fiber start args through its wrapper.
+#[test]
+fn test_fiber_variadic_first_class_callable_builds_tail_array() {
+    let out = compile_and_run(
+        r#"<?php
+function fiber_variadic_job(string $prefix, ...$items): int {
+    echo $prefix . count($items);
+    return count($items);
+}
+
+$f = new Fiber(fiber_variadic_job(...));
+$v = $f->start("p", 4, 5);
+echo "/";
+echo is_null($v) ? "null" : $v;
+echo "/";
+echo $f->getReturn();
+"#,
+    );
+    assert_eq!(out, "p2/null/2");
+}
+
 // Verifies that seven `mixed` arguments can be passed through `start()` to the
 // fiber closure.  Seven is the maximum on AArch64 (integer arg-reg count
 // minus `$this`).

@@ -125,7 +125,15 @@ $method_fiber = new Fiber($labeler->label(...));
 $method_fiber->start("run");
 echo $method_fiber->getReturn() . "\n";
 
-// 9) FiberError is an Error subclass — catch it directly or through Error.
+// 9) Variadic callbacks collect extra start() values in the usual ...$items array.
+$batch = new Fiber(function(string $label, ...$items): int {
+    echo $label . " count=" . count($items) . "\n";
+    return count($items);
+});
+$batch->start("batch", 10, 20, 30);
+echo "variadic return=" . $batch->getReturn() . "\n";
+
+// 10) FiberError is an Error subclass — catch it directly or through Error.
 try {
     throw new FiberError("manual");
 } catch (Error $e) {

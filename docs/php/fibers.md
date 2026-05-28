@@ -90,8 +90,7 @@ These are current implementation limits, not PHP design rules:
 
 | Limitation | Notes |
 |---|---|
-| `start()` is fixed-arity | `Fiber::start()` has seven optional `mixed` parameters. Calls with more than seven values are rejected, and a callback with more than seven visible start parameters is rejected. This is not true PHP variadic forwarding. |
-| Variadic callback parameters are not supported | Fiber callbacks such as `function (...$args): void {}` are rejected because the runtime currently forwards fixed `start_args` slots instead of building a PHP variadic array. |
+| `start()` is fixed-arity | `Fiber::start()` has seven optional `mixed` parameters. Calls with more than seven values are rejected, and a callback with more than seven fixed start parameters is rejected. Variadic callback tails collect the supplied values that remain after fixed parameters. |
 | Callback arguments cannot be by-reference | Fiber callbacks such as `function (&$value): void {}` are rejected because start arguments are boxed and stored before the stack switch. |
 | Callback descriptors are required | `new Fiber(...)` accepts closures, first-class callables, and variables or expressions that already hold callable descriptors selected at runtime. Raw dynamic strings and arbitrary callable arrays are still not materialized directly by the Fiber constructor. |
 | Mixed arithmetic still needs explicit casts | Values transferred by `start()`, `resume()`, `Fiber::suspend()`, and `getReturn()` are boxed `mixed` cells. Echo, comparison, `gettype()`, `instanceof`, and typed callback parameters handle them, but arithmetic on an untyped value received from `Fiber::suspend()` may not auto-unbox. Cast explicitly before computing, for example `(int)$value + 10`. |
