@@ -595,6 +595,7 @@ and runtime foundation.
 - [ ] Symbol visibility control
 - [ ] Auto-generated C header file
 - [ ] Null-terminated string convention for C interop
+- [ ] Stateful FFI callback trampolines — generate C-ABI-compatible trampoline symbols for descriptor-backed callables passed to extern `callable` parameters, retaining descriptor/capture/receiver environments for supported scalar/ptr signatures and documenting constraints for C APIs without userdata/context slots
 - [ ] `pkg-config` generation
 - [ ] FFI documentation for C, Rust, Python, Go
 
