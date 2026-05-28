@@ -1,5 +1,21 @@
 <?php
 
+class RegexTagger {
+    public function __construct(private string $prefix) {}
+
+    public function tag(array $matches): string {
+        if (count($matches) > 0) {
+            return $this->prefix;
+        }
+        return "";
+    }
+}
+
+function print_regex_tag(callable $callback): void {
+    $descriptorTagged = preg_replace_callback("/[A-Z]/", $callback, "AB");
+    echo "Descriptor callback replace: " . $descriptorTagged . "\n";
+}
+
 // Date/time formatting
 $ts = mktime(14, 30, 0, 12, 25, 2024);
 echo "Christmas 2024: " . date("l, F j, Y", $ts) . "\n";
@@ -65,6 +81,8 @@ $tagged = preg_replace_callback("/(\d+)/", function($matches) {
     return "[" . $matches[0] . "]";
 }, "order 42, item 7");
 echo "Callback replace: " . $tagged . "\n";
+
+print_regex_tag((new RegexTagger("descriptor:"))->tag(...));
 
 // Split
 $parts = preg_split("/[,;]+/", "one,two;;three,four");

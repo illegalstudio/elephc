@@ -412,7 +412,9 @@ fn check_iterator_apply_dynamic_callback(
     span: crate::span::Span,
     env: &TypeEnv,
 ) -> Result<(), CompileError> {
-    if checker.expr_call_complex_callee_needs_runtime_capture(callback) {
+    if checker.expr_call_complex_callee_needs_runtime_capture(callback)
+        && !super::callables::callback_supports_complex_descriptor_env(callback)
+    {
         return Err(CompileError::new(
             callback.span,
             "iterator_apply() callback does not support complex expressions that select captured callables at runtime",
@@ -438,6 +440,17 @@ fn check_iterator_apply_dynamic_callback(
             checker
                 .closure_return_types
                 .insert(var_name.clone(), sig.return_type.clone());
+            reject_dynamic_ref_args(&sig, span)?;
+            specialize_iterator_apply_dynamic_assoc_variadic_target(
+                checker,
+                &target,
+                &sig,
+                associative_args,
+            )?;
+            return Ok(());
+        }
+        if let Some(target) = checker.callable_array_targets.get(var_name).cloned() {
+            let sig = checker.resolve_first_class_callable_sig(&target, span, env)?;
             reject_dynamic_ref_args(&sig, span)?;
             specialize_iterator_apply_dynamic_assoc_variadic_target(
                 checker,
@@ -491,6 +504,9 @@ fn check_iterator_apply_dynamic_callback(
         return Ok(());
     }
     if callback_ty == PhpType::Callable {
+        return Ok(());
+    }
+    if super::callables::runtime_callable_array_type(&callback_ty) {
         return Ok(());
     }
 

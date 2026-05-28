@@ -9,6 +9,7 @@
 //! - Local writes must release replaced heap values only when the frame owns the previous value.
 
 use super::super::super::abi;
+use super::super::super::callable_descriptor;
 use super::super::super::context::{Context, HeapOwnership};
 use super::super::super::data_section::DataSection;
 use super::super::super::emit::Emitter;
@@ -32,6 +33,8 @@ use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
 /// - For `Closure` / `FirstClassCallable` assignments, updates `ctx.closure_sigs`,
 ///   `ctx.closure_captures`, `ctx.first_class_callable_targets`, and `ctx.variable_fcc_label`.
 /// - For `Callable` variable-to-variable copies, propagates the above metadata.
+/// - For runtime-produced callable descriptors, keeps signature metadata while marking
+///   the variable so calls still read receiver/capture state from the descriptor.
 pub(crate) fn emit_assign_stmt(
     name: &str,
     value: &Expr,
@@ -55,7 +58,7 @@ pub(crate) fn emit_assign_stmt(
     let saved_self_ref_var = prepare_self_ref_closure_capture(name, value, ctx);
     let target_static_ty = ctx.variables.get(name).map(|var| var.static_ty.clone());
     let assoc_array_target = assoc_array_literal_target_type(value, target_static_ty.as_ref());
-    let static_ty = assoc_array_target.clone().unwrap_or_else(|| {
+    let mut static_ty = assoc_array_target.clone().unwrap_or_else(|| {
         target_static_ty
             .clone()
             .filter(|ty| matches!(ty, PhpType::Union(_)))
@@ -66,6 +69,10 @@ pub(crate) fn emit_assign_stmt(
     } else {
         emit_expr(value, emitter, ctx, data)
     };
+    if let Some(specialized_ty) = specialize_callable_array_assignment_type(&ty, value, ctx) {
+        ty = specialized_ty.clone();
+        static_ty = specialized_ty;
+    }
     restore_self_ref_closure_capture(name, saved_self_ref_var, ctx);
     let dest_needs_mixed_box = ctx.variables.get(name).is_some_and(|var| {
         !ctx.ref_params.contains(name)
@@ -130,14 +137,18 @@ pub(crate) fn emit_assign_stmt(
         }
         emitter.comment(&format!("write through ref ${}", name));
         abi::load_at_offset(emitter, pointer_reg, offset);                            // load pointer to referenced variable
-        if old_ty.is_refcounted() {
+        if old_ty.is_refcounted() || matches!(old_ty, PhpType::Callable) {
             abi::emit_push_reg(emitter, pointer_reg);                                 // preserve the referenced-slot address across decref helper calls
             let needs_save_x0 = !matches!(&ty, PhpType::Str | PhpType::Float);
             if needs_save_x0 {
                 abi::emit_push_reg(emitter, abi::int_result_reg(emitter));            // preserve the incoming boxed/scalar result across decref helper calls
             }
             abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0); // load previous heap pointer from ref target
-            abi::emit_decref_if_refcounted(emitter, &old_ty);
+            if matches!(old_ty, PhpType::Callable) {
+                callable_descriptor::emit_release_current_descriptor(emitter);
+            } else {
+                abi::emit_decref_if_refcounted(emitter, &old_ty);
+            }
             if needs_save_x0 {
                 abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));             // restore the incoming boxed/scalar result after decref helper calls
             }
@@ -224,7 +235,9 @@ pub(crate) fn emit_assign_stmt(
         );
 
         if ctx.in_main && ctx.all_global_var_names.contains(name) {
-            if ty.is_refcounted() {
+            if matches!(ty, PhpType::Callable) {
+                callable_descriptor::emit_retain_current_descriptor(emitter);
+            } else if ty.is_refcounted() {
                 abi::emit_incref_if_refcounted(emitter, &ty);                        // global storage becomes a second owner alongside the local slot
             }
             super::super::emit_global_store(emitter, ctx, name, &ty);
@@ -235,6 +248,7 @@ pub(crate) fn emit_assign_stmt(
 
     match &value.kind {
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => {
+            ctx.runtime_callable_vars.remove(name);
             let last_wrapper_label = ctx.deferred_closures.last().map(|d| d.label.clone());
             if let Some(deferred) = ctx.deferred_closures.last() {
                 ctx.closure_sigs.insert(name.to_string(), deferred.sig.clone());
@@ -295,6 +309,11 @@ pub(crate) fn emit_assign_stmt(
             } else {
                 ctx.variable_fcc_label.remove(name);
             }
+            if ctx.runtime_callable_vars.contains(src_name) {
+                ctx.runtime_callable_vars.insert(name.to_string());
+            } else {
+                ctx.runtime_callable_vars.remove(name);
+            }
         }
         ExprKind::ArrayAccess { array, .. } if ty == PhpType::Callable => {
             if let ExprKind::Variable(src_name) = &array.kind {
@@ -319,15 +338,40 @@ pub(crate) fn emit_assign_stmt(
                 } else {
                     ctx.variable_fcc_label.remove(name);
                 }
+                if ctx.runtime_callable_vars.contains(src_name) {
+                    ctx.runtime_callable_vars.insert(name.to_string());
+                } else {
+                    ctx.runtime_callable_vars.remove(name);
+                }
             } else {
                 ctx.closure_sigs.remove(name);
                 ctx.closure_captures.remove(name);
                 ctx.first_class_callable_targets.remove(name);
                 ctx.variable_fcc_label.remove(name);
+                ctx.runtime_callable_vars.remove(name);
             }
         }
         _ => {
-            ctx.closure_sigs.remove(name);
+            if ty == PhpType::Callable {
+                if let Some(sig) = crate::codegen::callables::callable_sig(value, ctx) {
+                    ctx.closure_sigs.insert(name.to_string(), sig);
+                    ctx.runtime_callable_vars.insert(name.to_string());
+                } else {
+                    ctx.closure_sigs.remove(name);
+                    ctx.runtime_callable_vars.remove(name);
+                }
+            } else if is_callable_array_type(&ty) {
+                if let Some(sig) = crate::codegen::callables::callable_array_sig(value, ctx) {
+                    ctx.closure_sigs.insert(name.to_string(), sig);
+                    ctx.runtime_callable_vars.insert(name.to_string());
+                } else {
+                    ctx.closure_sigs.remove(name);
+                    ctx.runtime_callable_vars.remove(name);
+                }
+            } else {
+                ctx.closure_sigs.remove(name);
+                ctx.runtime_callable_vars.remove(name);
+            }
             ctx.closure_captures.remove(name);
             ctx.first_class_callable_targets.remove(name);
             ctx.variable_fcc_label.remove(name);
@@ -344,6 +388,36 @@ pub(crate) fn emit_assign_stmt(
             );
         }
     }
+}
+
+/// Returns true when an assigned value is an array whose elements are callable descriptors.
+fn is_callable_array_type(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Array(elem_ty) => elem_ty.as_ref() == &PhpType::Callable,
+        PhpType::AssocArray { value, .. } => value.as_ref() == &PhpType::Callable,
+        _ => false,
+    }
+}
+
+/// Specializes generic array assignment types when callable-array metadata is known.
+fn specialize_callable_array_assignment_type(
+    ty: &PhpType,
+    value: &Expr,
+    ctx: &Context,
+) -> Option<PhpType> {
+    if is_callable_array_type(ty)
+        || !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        || crate::codegen::callables::callable_array_sig(value, ctx).is_none()
+    {
+        return None;
+    }
+    Some(match ty {
+        PhpType::AssocArray { key, .. } => PhpType::AssocArray {
+            key: key.clone(),
+            value: Box::new(PhpType::Callable),
+        },
+        _ => PhpType::Array(Box::new(PhpType::Callable)),
+    })
 }
 
 /// Saves the current type, static type, ownership, and cleanup safety of a local

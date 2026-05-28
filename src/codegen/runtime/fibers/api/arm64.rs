@@ -19,9 +19,9 @@ use super::super::{
     FIBER_OBJECT_SIZE, FIBER_OWN_CALL_FRAME_OFFSET, FIBER_OWN_EXC_HEAD_OFFSET,
     FIBER_PENDING_THROW_OFFSET, FIBER_SAVED_SP_OFFSET, FIBER_STACK_BASE_OFFSET,
     FIBER_STACK_SIZE_OFFSET, FIBER_STACK_TOP_OFFSET, FIBER_START_ARGS_MAX,
-    FIBER_START_ARGS_OFFSET, FIBER_STATE_NOT_STARTED, FIBER_STATE_OFFSET,
-    FIBER_STATE_RUNNING, FIBER_STATE_SUSPENDED, FIBER_STATE_TERMINATED,
-    FIBER_TRANSFER_VALUE_OFFSET, FIBER_USER_ARG_MAX_OFFSET,
+    FIBER_START_ARGS_OFFSET, FIBER_START_ARG_COUNT_OFFSET, FIBER_STATE_NOT_STARTED,
+    FIBER_STATE_OFFSET, FIBER_STATE_RUNNING, FIBER_STATE_SUSPENDED,
+    FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET, FIBER_USER_ARG_MAX_OFFSET,
 };
 
 /// __rt_fiber_throw_state_error: allocate a `FiberError`, set its message, and
@@ -104,13 +104,12 @@ pub(super) fn emit_construct(emitter: &mut Emitter) {
     for i in 0..FIBER_START_ARGS_MAX {
         emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_START_ARGS_OFFSET + i * 8)); // start_args[i] cleared
     }
+    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_START_ARG_COUNT_OFFSET)); // start_arg_count cleared until Fiber::start() copies values
     for i in 0..FIBER_FLOAT_ARGS_MAX {
-        emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_FLOAT_ARGS_OFFSET + i * 8)); // float_args[i] cleared (raw bits, loaded back into d-regs by the trampoline)
+        emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_FLOAT_ARGS_OFFSET + i * 8)); // clear reserved legacy float slot storage
     }
-    // user_arg_max defaults to FIBER_START_ARGS_MAX so start() fills every
-    // start_args slot when no captures are pre-loaded into the trailing ones.
-    // Codegen of `new Fiber(function() use(...) {})` lowers it to the
-    // closure's user-param count to keep the captures intact.
+    // user_arg_max defaults to FIBER_START_ARGS_MAX so start() may fill every
+    // visible start_args slot. Captures now live in callable descriptors.
     emitter.instruction(&format!("mov x9, #{}", FIBER_START_ARGS_MAX));         // default user_arg_max = full slot count
     emitter.instruction(&format!("str x9, [x21, #{}]", FIBER_USER_ARG_MAX_OFFSET)); // user_arg_max stored on the freshly built fiber
 

@@ -10,7 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::parser::ast::CType;
-use crate::types::PhpType;
+use crate::types::{FunctionSig, PhpType};
 
 use super::Checker;
 
@@ -189,6 +189,59 @@ impl Checker {
         )
     }
 
+    /// Validates a callable descriptor signature against C callback constraints.
+    ///
+    /// Extern callback slots are raw function pointers, so the callable must use a fixed
+    /// arity, no defaults, no by-reference parameters, and only scalar/pointer/void
+    /// ABI-visible types.
+    pub(crate) fn validate_callback_signature(
+        sig: &FunctionSig,
+        label: &str,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        if sig.variadic.is_some() {
+            return Err(CompileError::new(
+                span,
+                &format!("{} cannot be variadic", label),
+            ));
+        }
+        if sig.defaults.iter().any(|d| d.is_some()) {
+            return Err(CompileError::new(
+                span,
+                &format!("{} cannot use default parameters", label),
+            ));
+        }
+        if sig.ref_params.iter().any(|is_ref| *is_ref) {
+            return Err(CompileError::new(
+                span,
+                &format!("{} cannot use pass-by-reference parameters", label),
+            ));
+        }
+        if !Self::callback_type_is_c_compatible(&sig.return_type) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "{} uses an unsupported return type; only int, float, bool, ptr, and void are supported",
+                    label
+                ),
+            ));
+        }
+        if sig
+            .params
+            .iter()
+            .any(|(_, ty)| !Self::callback_type_is_c_compatible(ty))
+        {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "{} uses unsupported C callback types; only int, float, bool, ptr, and void are supported",
+                    label
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     /// Registers a PHP function as a C callback after validating C ABI compatibility.
     ///
     /// Validates that the function:
@@ -210,12 +263,19 @@ impl Checker {
         callback_name: &str,
         span: crate::span::Span,
     ) -> Result<(), CompileError> {
-        let decl = self.fn_decls.get(callback_name).cloned().ok_or_else(|| {
-            CompileError::new(
-                span,
-                &format!("Undefined callback function: {}", callback_name),
-            )
-        })?;
+        let canonical_callback_name = self
+            .canonical_function_name_folded(callback_name)
+            .unwrap_or_else(|| callback_name.to_string());
+        let decl = self
+            .fn_decls
+            .get(&canonical_callback_name)
+            .cloned()
+            .ok_or_else(|| {
+                CompileError::new(
+                    span,
+                    &format!("Undefined callback function: {}", callback_name),
+                )
+            })?;
 
         if decl.variadic.is_some() {
             return Err(CompileError::new(
@@ -241,7 +301,7 @@ impl Checker {
                 ),
             ));
         }
-        if let Some(sig) = self.functions.get(callback_name) {
+        if let Some(sig) = self.functions.get(&canonical_callback_name) {
             if !Self::callback_type_is_c_compatible(&sig.return_type) {
                 return Err(CompileError::new(
                     span,
@@ -265,9 +325,9 @@ impl Checker {
                 ));
             }
         } else {
-            let param_types = self.initial_function_param_types(callback_name, &decl)?;
-            self.resolve_function_signature(callback_name, &decl, param_types)?;
-            let sig = self.functions.get(callback_name).cloned().ok_or_else(|| {
+            let param_types = self.initial_function_param_types(&canonical_callback_name, &decl)?;
+            self.resolve_function_signature(&canonical_callback_name, &decl, param_types)?;
+            let sig = self.functions.get(&canonical_callback_name).cloned().ok_or_else(|| {
                 CompileError::new(
                     span,
                     &format!("Undefined callback function: {}", callback_name),

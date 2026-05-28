@@ -97,6 +97,848 @@ echo $f("2");
     assert_eq!(out, "v2");
 }
 
+/// Verifies pushed runtime callable descriptors keep their descriptor invocation marker.
+#[test]
+fn test_pushed_runtime_callable_array_element_uses_descriptor_invoker() {
+    let out = compile_and_run(
+        r#"<?php
+function make(string $prefix): callable {
+    return function(string $name) use ($prefix): string {
+        return $prefix . $name;
+    };
+}
+
+$cb = make("old");
+$items = [];
+$items[] = $cb;
+$from_array = $items[0];
+echo $from_array("Ada");
+"#,
+    );
+    assert_eq!(out, "oldAda");
+}
+
+/// Verifies indexed runtime callable assignments keep their descriptor invocation marker.
+#[test]
+fn test_index_assigned_runtime_callable_array_element_uses_descriptor_invoker() {
+    let out = compile_and_run(
+        r#"<?php
+function make(string $prefix): callable {
+    return function(string $name) use ($prefix): string {
+        return $prefix . $name;
+    };
+}
+
+$cb = make("old");
+$items = [];
+$items[] = function(string $name): string {
+    return "new" . $name;
+};
+$items[0] = $cb;
+$from_array = $items[0];
+echo $from_array("Ada");
+"#,
+    );
+    assert_eq!(out, "oldAda");
+}
+
+/// Verifies associative runtime callable assignments keep their descriptor invocation marker.
+#[test]
+fn test_assoc_assigned_runtime_callable_array_element_uses_descriptor_invoker() {
+    let out = compile_and_run(
+        r#"<?php
+function make(string $prefix): callable {
+    return function(string $name) use ($prefix): string {
+        return $prefix . $name;
+    };
+}
+
+$cb = make("old");
+$items = ["name" => function(string $name): string {
+    return "new" . $name;
+}];
+$items["name"] = $cb;
+$from_array = $items["name"];
+echo $from_array("Ada");
+"#,
+    );
+    assert_eq!(out, "oldAda");
+}
+
+/// Verifies list-unpacked runtime callables keep descriptor env for callback builtins.
+#[test]
+fn test_list_unpacked_runtime_callable_array_map_uses_descriptor_env() {
+    let out = compile_and_run(
+        r#"<?php
+function make(string $prefix): callable {
+    return function(string $name) use ($prefix): string {
+        return $prefix . $name;
+    };
+}
+
+$cb = make("old");
+$items = [];
+$items[] = $cb;
+list($from_array) = $items;
+$out = array_map($from_array, ["Ada"]);
+echo $out[0];
+"#,
+    );
+    assert_eq!(out, "oldAda");
+}
+
+/// Verifies foreach-bound runtime callables keep descriptor env for callback builtins.
+#[test]
+fn test_foreach_bound_runtime_callable_array_map_uses_descriptor_env() {
+    let out = compile_and_run(
+        r#"<?php
+function make(string $prefix): callable {
+    return function(string $name) use ($prefix): string {
+        return $prefix . $name;
+    };
+}
+
+$cb = make("old");
+$items = [];
+$items[] = $cb;
+foreach ($items as $from_array) {
+    $out = array_map($from_array, ["Ada"]);
+    echo $out[0];
+}
+"#,
+    );
+    assert_eq!(out, "oldAda");
+}
+
+/// Verifies function-returned runtime callable arrays keep descriptor env metadata.
+#[test]
+fn test_returned_runtime_callable_array_map_uses_descriptor_env() {
+    let out = compile_and_run(
+        r#"<?php
+function make(string $prefix): callable {
+    return function(string $name) use ($prefix): string {
+        return $prefix . $name;
+    };
+}
+
+function callbacks(): array {
+    $cb = make("old");
+    return [$cb];
+}
+
+$items = callbacks();
+$from_array = $items[0];
+$out = array_map($from_array, ["Ada"]);
+echo $out[0];
+"#,
+    );
+    assert_eq!(out, "oldAda");
+}
+
+/// Verifies callable arrays passed to functions keep descriptor env metadata.
+#[test]
+fn test_array_param_runtime_callable_array_map_uses_descriptor_env() {
+    let out = compile_and_run(
+        r#"<?php
+function make(string $prefix): callable {
+    return function(string $name) use ($prefix): string {
+        return $prefix . $name;
+    };
+}
+
+function run($items): void {
+    $from_array = $items[0];
+    $out = array_map($from_array, ["Ada"]);
+    echo $out[0];
+}
+
+$cb = make("old");
+$items = [];
+$items[] = $cb;
+run($items);
+"#,
+    );
+    assert_eq!(out, "oldAda");
+}
+
+/// Verifies instance-method-returned callables keep descriptor env metadata.
+#[test]
+fn test_method_returned_runtime_callable_array_map_uses_descriptor_env() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeCallableMethodFactory {
+    public function make(string $prefix): callable {
+        return function(string $name) use ($prefix): string {
+            return $prefix . $name;
+        };
+    }
+}
+
+$factory = new RuntimeCallableMethodFactory();
+$cb = $factory->make("old");
+$out = array_map($cb, ["Ada"]);
+echo $out[0];
+"#,
+    );
+    assert_eq!(out, "oldAda");
+}
+
+/// Verifies static-method-returned callable arrays keep descriptor env metadata.
+#[test]
+fn test_static_method_returned_runtime_callable_array_map_uses_descriptor_env() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeCallableStaticArrayBase {
+    public static function prefix(): string {
+        return "base";
+    }
+
+    public static function wrap(string $name): string {
+        return static::prefix() . $name;
+    }
+
+    public static function callbacks(): array {
+        $cb = static::wrap(...);
+        return [$cb];
+    }
+}
+
+class RuntimeCallableStaticArrayChild extends RuntimeCallableStaticArrayBase {
+    public static function prefix(): string {
+        return "child";
+    }
+}
+
+$items = RuntimeCallableStaticArrayChild::callbacks();
+$from_array = $items[0];
+$out = array_map($from_array, ["Ada"]);
+echo $out[0];
+"#,
+    );
+    assert_eq!(out, "childAda");
+}
+
+/// Verifies that an array-stored closure call reads by-value captures from the descriptor.
+#[test]
+fn test_expr_call_array_element_uses_descriptor_capture_snapshot() {
+    let out = compile_and_run(
+        r#"<?php
+$factor = 2;
+$arr = [];
+$arr[] = function($n) use ($factor) { return $n * $factor; };
+$factor = 10;
+echo $arr[0](5);
+"#,
+    );
+    assert_eq!(out, "10");
+}
+
+/// Verifies that parenthesized callable expression calls read captures from the descriptor.
+#[test]
+fn test_expr_call_parenthesized_variable_uses_descriptor_capture_snapshot() {
+    let out = compile_and_run(
+        r#"<?php
+$suffix = "old";
+$fn = function($value) use ($suffix) { return $value . ":" . $suffix; };
+$suffix = "new";
+echo ($fn)("id");
+"#,
+    );
+    assert_eq!(out, "id:old");
+}
+
+/// Verifies a string variable can be invoked directly as a PHP runtime function callback.
+#[test]
+fn test_direct_dynamic_string_user_callback() {
+    let out = compile_and_run(
+        r#"<?php
+function add_pair($left, $right): int {
+    return $left + $right;
+}
+$callback = "ADD_PAIR";
+echo $callback(2, 5);
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies direct string-variable calls can dispatch to builtin descriptors.
+#[test]
+fn test_direct_dynamic_string_builtin_callback() {
+    let out = compile_and_run(
+        r#"<?php
+$callback = "STRLEN";
+echo $callback("hello");
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies parenthesized string call expressions use runtime string descriptor dispatch.
+#[test]
+fn test_parenthesized_dynamic_string_callback_expr_call() {
+    let out = compile_and_run(
+        r#"<?php
+$callback = "strtoupper";
+echo ($callback)("ready");
+"#,
+    );
+    assert_eq!(out, "READY");
+}
+
+/// Verifies direct string-variable calls can resolve public static method callback names.
+#[test]
+fn test_direct_dynamic_string_static_method_callback() {
+    let out = compile_and_run(
+        r#"<?php
+class Formatter {
+    public static function wrap(string $value): string {
+        return "[" . $value . "]";
+    }
+}
+$callback = "Formatter::wrap";
+echo $callback("ok");
+"#,
+    );
+    assert_eq!(out, "[ok]");
+}
+
+/// Verifies runtime string direct calls preserve source variables for by-reference parameters.
+#[test]
+fn test_direct_dynamic_string_callback_preserves_by_ref_argument() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$value) {
+    $value = $value + 1;
+}
+$callback = "BUMP";
+$value = 10;
+$callback($value);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "11");
+}
+
+/// Verifies direct runtime string calls apply descriptor names and defaults at invocation time.
+#[test]
+fn test_direct_dynamic_string_callback_named_args_use_descriptor_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+function stamp($prefix = "id", $value = 1): string {
+    return $prefix . ":" . $value;
+}
+$callback = "STAMP";
+echo $callback(value: 7);
+"#,
+    );
+    assert_eq!(out, "id:7");
+}
+
+/// Verifies call_user_func() keeps unknown callable-parameter results boxed as Mixed.
+#[test]
+fn test_call_user_func_callable_param_string_result_remains_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+function run(callable $cb): void {
+    $value = call_user_func($cb, "Ada");
+    echo $value;
+}
+run(function(string $name): string {
+    return "Hi " . $name;
+});
+"#,
+    );
+    assert_eq!(out, "Hi Ada");
+}
+
+/// Verifies direct static-method callable arrays invoke through descriptor metadata.
+#[test]
+fn test_direct_callable_array_static_method_named_args_use_descriptor_invoker() {
+    let source = r#"<?php
+class Formatter {
+    public static function stamp($prefix = "id", $value = 1, $suffix = "!"): string {
+        return $prefix . ":" . $value . $suffix;
+    }
+}
+$callback = [Formatter::class, "stamp"];
+echo $callback(value: 7);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "id:7!");
+
+    let dir = make_cli_test_dir("elephc_direct_static_callable_array_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("cufa_descriptor_invoker_ready"),
+        "direct static-method callable arrays should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies direct instance-method callable arrays read the receiver stored in the array.
+#[test]
+fn test_direct_callable_array_instance_method_preserves_stored_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Prefixer {
+    public string $prefix = "";
+
+    public function wrap(string $value = "Ada", string $suffix = "!"): string {
+        return $this->prefix . $value . $suffix;
+    }
+}
+$first = new Prefixer();
+$first->prefix = "old:";
+$callback = [$first, "wrap"];
+$first = new Prefixer();
+$first->prefix = "new:";
+echo $callback(suffix: "?");
+"#,
+    );
+    assert_eq!(out, "old:Ada?");
+}
+
+/// Verifies direct instance-method callable arrays preserve by-reference arguments.
+#[test]
+fn test_direct_callable_array_instance_method_preserves_by_ref_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class Mutator {
+    public function bump(&$value): void {
+        $value = $value + 1;
+    }
+}
+$mutator = new Mutator();
+$callback = [$mutator, "bump"];
+$value = 4;
+$callback($value);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies runtime-selected instance callable arrays use descriptor metadata.
+#[test]
+fn test_runtime_callable_array_instance_method_named_args_use_descriptor_invoker() {
+    let source = r#"<?php
+class RuntimeFormatter {
+    public function wrap(string $value = "fallback", string $suffix = "!"): string {
+        return "<" . $value . $suffix . ">";
+    }
+}
+function choose_runtime_method(string $name): string {
+    return $name;
+}
+$formatter = new RuntimeFormatter();
+$method = choose_runtime_method("WRAP");
+$callback = [$formatter, $method];
+echo $callback(suffix: "?");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "<fallback?>");
+
+    let dir = make_cli_test_dir("elephc_runtime_instance_callable_array_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_array_runtime_done") && user_asm.contains("callable_invoker"),
+        "runtime-selected instance callable arrays should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies runtime-selected static callable arrays accept class and method strings.
+#[test]
+fn test_runtime_callable_array_static_method_parenthesized_call() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeLabeler {
+    public static function stamp(string $prefix = "id", int $value = 1): string {
+        return $prefix . ":" . $value;
+    }
+}
+function choose_runtime_string(string $value): string {
+    return $value;
+}
+$class = choose_runtime_string(RuntimeLabeler::class);
+$method = choose_runtime_string("STAMP");
+$callback = [$class, $method];
+echo ($callback)(value: 9);
+"#,
+    );
+    assert_eq!(out, "id:9");
+}
+
+/// Verifies runtime-selected instance callable arrays preserve by-reference arguments.
+#[test]
+fn test_runtime_callable_array_instance_method_preserves_by_ref_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeMutator {
+    public function bump(&$value): void {
+        $value = $value + 1;
+    }
+}
+function choose_runtime_method(string $name): string {
+    return $name;
+}
+$mutator = new RuntimeMutator();
+$method = choose_runtime_method("bump");
+$callback = [$mutator, $method];
+$value = 4;
+$callback($value);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies runtime-selected literal instance callable arrays use descriptor metadata.
+#[test]
+fn test_runtime_literal_callable_array_instance_method_named_args_use_descriptor_invoker() {
+    let source = r#"<?php
+class RuntimeLiteralFormatter {
+    public function wrap(string $value = "fallback", string $suffix = "!"): string {
+        return "<" . $value . $suffix . ">";
+    }
+}
+function choose_runtime_literal_method(string $name): string {
+    return $name;
+}
+$formatter = new RuntimeLiteralFormatter();
+echo ([$formatter, choose_runtime_literal_method("WRAP")])(suffix: "?");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "<fallback?>");
+
+    let dir = make_cli_test_dir("elephc_runtime_literal_instance_callable_array_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("runtime callable-array literal mixed selector")
+            && user_asm.contains("callable_invoker"),
+        "runtime-selected literal instance callable arrays should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies runtime-selected literal static callable arrays accept class and method strings.
+#[test]
+fn test_runtime_literal_callable_array_static_method_parenthesized_call() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeLiteralLabeler {
+    public static function stamp(string $prefix = "id", int $value = 1): string {
+        return $prefix . ":" . $value;
+    }
+}
+function choose_runtime_literal_string(string $value): string {
+    return $value;
+}
+echo ([choose_runtime_literal_string(RuntimeLiteralLabeler::class), choose_runtime_literal_string("STAMP")])(value: 9);
+"#,
+    );
+    assert_eq!(out, "id:9");
+}
+
+/// Verifies runtime-selected literal instance callable arrays preserve by-reference arguments.
+#[test]
+fn test_runtime_literal_callable_array_instance_method_preserves_by_ref_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeLiteralMutator {
+    public function bump(&$value): int {
+        $value = $value + 1;
+        return $value;
+    }
+}
+function choose_runtime_literal_method(string $name): string {
+    return $name;
+}
+$mutator = new RuntimeLiteralMutator();
+$value = 4;
+echo ([$mutator, choose_runtime_literal_method("bump")])($value);
+echo ":";
+echo $value;
+"#,
+    );
+    assert_eq!(out, "5:5");
+}
+
+/// Verifies runtime-selected literal callable arrays evaluate receiver slots once before call args.
+#[test]
+fn test_runtime_literal_callable_array_instance_method_preserves_receiver_evaluation_order() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeLiteralPrefixer {
+    public string $prefix = "";
+
+    public function wrap(string $value = "Ada", string $suffix = "!"): string {
+        return $this->prefix . $value . $suffix;
+    }
+}
+function make_runtime_literal_prefixer(): RuntimeLiteralPrefixer {
+    echo "make|";
+    $prefixer = new RuntimeLiteralPrefixer();
+    $prefixer->prefix = "old:";
+    return $prefixer;
+}
+function choose_runtime_literal_method_order(string $name): string {
+    echo "method|";
+    return $name;
+}
+function runtime_literal_suffix(): string {
+    echo "arg|";
+    return "?";
+}
+echo ([make_runtime_literal_prefixer(), choose_runtime_literal_method_order("wrap")])(suffix: runtime_literal_suffix());
+"#,
+    );
+    assert_eq!(out, "make|method|arg|old:Ada?");
+}
+
+/// Verifies parenthesized callable-array variables use the same descriptor invoker path.
+#[test]
+fn test_parenthesized_callable_array_static_method_expr_call() {
+    let out = compile_and_run(
+        r#"<?php
+class Formatter {
+    public static function wrap(string $value): string {
+        return "[" . $value . "]";
+    }
+}
+$callback = [Formatter::class, "wrap"];
+echo ($callback)("ok");
+"#,
+    );
+    assert_eq!(out, "[ok]");
+}
+
+/// Verifies literal static-method callable arrays invoke through descriptor metadata.
+#[test]
+fn test_literal_callable_array_static_method_named_args_use_descriptor_invoker() {
+    let source = r#"<?php
+class Formatter {
+    public static function stamp($prefix = "id", $value = 1, $suffix = "!"): string {
+        return $prefix . ":" . $value . $suffix;
+    }
+}
+echo ([Formatter::class, "stamp"])(value: 7);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "id:7!");
+
+    let dir = make_cli_test_dir("elephc_literal_static_callable_array_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("cufa_descriptor_invoker_ready"),
+        "literal static-method callable arrays should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies literal instance-method callable arrays evaluate the receiver before call arguments.
+#[test]
+fn test_literal_callable_array_instance_method_preserves_receiver_evaluation_order() {
+    let out = compile_and_run(
+        r#"<?php
+class Prefixer {
+    public string $prefix = "";
+
+    public function wrap(string $value = "Ada", string $suffix = "!"): string {
+        return $this->prefix . $value . $suffix;
+    }
+}
+function replace_prefixer(&$target): string {
+    $target = new Prefixer();
+    $target->prefix = "new:";
+    return "?";
+}
+$first = new Prefixer();
+$first->prefix = "old:";
+echo ([$first, "wrap"])(suffix: replace_prefixer($first));
+"#,
+    );
+    assert_eq!(out, "old:Ada?");
+}
+
+/// Verifies literal instance-method callable arrays preserve by-reference arguments.
+#[test]
+fn test_literal_callable_array_instance_method_preserves_by_ref_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class Mutator {
+    public function bump(&$value): int {
+        $value = $value + 1;
+        return $value;
+    }
+}
+$mutator = new Mutator();
+$value = 4;
+echo ([$mutator, "bump"])($value);
+echo ":";
+echo $value;
+"#,
+    );
+    assert_eq!(out, "5:5");
+}
+
+/// Verifies direct invokable object variables invoke through descriptor metadata.
+#[test]
+fn test_direct_invokable_object_variable_named_args_use_descriptor_invoker() {
+    let source = r#"<?php
+class Runner {
+    public function __invoke(string $value = "fallback", string $suffix = "!"): string {
+        return $value . $suffix;
+    }
+}
+$runner = new Runner();
+echo $runner(suffix: "?");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "fallback?");
+
+    let dir = make_cli_test_dir("elephc_direct_invokable_object_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "direct invokable object variables should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies parenthesized invokable object variables use the descriptor path.
+#[test]
+fn test_parenthesized_invokable_object_variable_named_args_use_descriptor_invoker() {
+    let source = r#"<?php
+class Runner {
+    public function __invoke(string $value = "fallback", string $suffix = "!"): string {
+        return $value . $suffix;
+    }
+}
+$runner = new Runner();
+echo ($runner)(suffix: "?");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "fallback?");
+
+    let dir = make_cli_test_dir("elephc_parenthesized_invokable_object_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "parenthesized invokable object variables should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies loaded invokable object expressions invoke through descriptor metadata.
+#[test]
+fn test_loaded_invokable_object_expr_named_args_use_descriptor_invoker() {
+    let source = r#"<?php
+class LoadedRunner {
+    public function __invoke(string $value = "fallback", string $suffix = "!"): string {
+        return $value . $suffix;
+    }
+}
+echo (new LoadedRunner())(suffix: "?");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "fallback?");
+
+    let dir = make_cli_test_dir("elephc_loaded_invokable_object_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("call loaded invokable object descriptor")
+            && user_asm.contains("callable_instance_method")
+            && user_asm.contains("callable_invoker"),
+        "loaded invokable object expressions should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies loaded invokable object descriptor calls preserve by-reference arguments.
+#[test]
+fn test_loaded_invokable_object_expr_preserves_by_ref_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class LoadedMutator {
+    public function __invoke(int &$value): int {
+        $value = $value + 2;
+        return $value;
+    }
+}
+$value = 3;
+echo (new LoadedMutator())($value);
+echo ":";
+echo $value;
+"#,
+    );
+    assert_eq!(out, "5:5");
+}
+
+/// Verifies loaded invokable object descriptor calls evaluate receiver before arguments.
+#[test]
+fn test_loaded_invokable_object_expr_preserves_receiver_evaluation_order() {
+    let out = compile_and_run(
+        r#"<?php
+class LoadedOrderRunner {
+    public string $prefix = "";
+
+    public function __invoke(string $value = "Ada", string $suffix = "!"): string {
+        return $this->prefix . $value . $suffix;
+    }
+}
+function make_loaded_order_runner(): LoadedOrderRunner {
+    echo "make|";
+    $runner = new LoadedOrderRunner();
+    $runner->prefix = "old:";
+    return $runner;
+}
+function loaded_order_suffix(): string {
+    echo "arg|";
+    return "?";
+}
+echo (make_loaded_order_runner())(suffix: loaded_order_suffix());
+"#,
+    );
+    assert_eq!(out, "make|arg|old:Ada?");
+}
+
+/// Verifies direct invokable object variables preserve by-reference arguments.
+#[test]
+fn test_direct_invokable_object_variable_preserves_by_ref_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class Mutator {
+    public function __invoke(int &$value): int {
+        $value = $value + 2;
+        return $value;
+    }
+}
+$mutator = new Mutator();
+$value = 3;
+echo $mutator($value);
+echo ":";
+echo $value;
+"#,
+    );
+    assert_eq!(out, "5:5");
+}
+
 /// Verifies that callable by ref parameter dereferences descriptor before call.
 #[test]
 fn test_callable_by_ref_parameter_dereferences_descriptor_before_call() {
@@ -401,6 +1243,96 @@ echo $cb(7);
 "#,
     );
     assert_eq!(out, "21");
+}
+
+/// Verifies method FCC descriptors invoked directly from array elements preserve captured receivers.
+#[test]
+fn test_fcc_method_direct_array_element_preserves_captured_receiver() {
+    let source = r#"<?php
+class FccArrayPrefixer {
+    public string $prefix = "";
+
+    public function wrap(string $name): string {
+        return $this->prefix . $name;
+    }
+}
+
+$first = new FccArrayPrefixer();
+$first->prefix = "first:";
+$second = new FccArrayPrefixer();
+$second->prefix = "second:";
+$callbacks = [$first->wrap(...)];
+$first = $second;
+echo $callbacks[0]("Ada");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "first:Ada");
+}
+
+/// Verifies static FCC descriptors invoked directly from array elements preserve late-static binding.
+#[test]
+fn test_fcc_static_direct_array_element_preserves_late_static_binding() {
+    let source = r#"<?php
+class FccArrayBase {
+    public static function name(): string {
+        return "base";
+    }
+
+    public static function make(): callable {
+        $callbacks = [static::name(...)];
+        return $callbacks[0];
+    }
+}
+
+class FccArrayChild extends FccArrayBase {
+    public static function name(): string {
+        return "child";
+    }
+}
+
+$callback = FccArrayChild::make();
+echo $callback();
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "child");
+}
+
+/// Verifies returned method FCC descriptors preserve captured receivers on immediate calls.
+#[test]
+fn test_returned_method_fcc_immediate_call_preserves_captured_receiver() {
+    let source = r#"<?php
+class ReturnedFccPrefixer {
+    public string $prefix = "";
+
+    public function wrap(string $name): string {
+        return $this->prefix . $name;
+    }
+}
+
+function make_returned_fcc(): callable {
+    $first = new ReturnedFccPrefixer();
+    $first->prefix = "first:";
+    $second = new ReturnedFccPrefixer();
+    $second->prefix = "second:";
+    $callback = $first->wrap(...);
+    $first = $second;
+    return $callback;
+}
+
+echo make_returned_fcc()("Ada");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "first:Ada");
+
+    let dir = make_cli_test_dir("elephc_returned_method_fcc_immediate_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "returned callable descriptors should route immediate calls through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
 }
 
 /// Verifies that fcc method complex receiver via local workaround runs.

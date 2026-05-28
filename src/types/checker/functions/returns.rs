@@ -186,6 +186,86 @@ impl Checker {
         }
     }
 
+    /// Collects callable element signatures from array-returning statements.
+    ///
+    /// This records homogeneous `array<callable>` return metadata separately from
+    /// direct callable returns so callers can propagate element signatures without
+    /// treating the function call expression itself as a callable.
+    pub(crate) fn collect_return_callable_array_sigs(
+        &mut self,
+        stmt: &Stmt,
+        env: &TypeEnv,
+        returns: &mut Vec<FunctionSig>,
+    ) {
+        match &stmt.kind {
+            StmtKind::Return(Some(expr)) => {
+                if let Ok(Some(sig)) = self.resolve_expr_callable_array_sig(expr, env) {
+                    returns.push(sig);
+                }
+            }
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                for s in then_body {
+                    self.collect_return_callable_array_sigs(s, env, returns);
+                }
+                for (_, body) in elseif_clauses {
+                    for s in body {
+                        self.collect_return_callable_array_sigs(s, env, returns);
+                    }
+                }
+                if let Some(body) = else_body {
+                    for s in body {
+                        self.collect_return_callable_array_sigs(s, env, returns);
+                    }
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. } => {
+                for s in body {
+                    self.collect_return_callable_array_sigs(s, env, returns);
+                }
+            }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                for s in try_body {
+                    self.collect_return_callable_array_sigs(s, env, returns);
+                }
+                for catch_clause in catches {
+                    for s in &catch_clause.body {
+                        self.collect_return_callable_array_sigs(s, env, returns);
+                    }
+                }
+                if let Some(body) = finally_body {
+                    for s in body {
+                        self.collect_return_callable_array_sigs(s, env, returns);
+                    }
+                }
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    for s in body {
+                        self.collect_return_callable_array_sigs(s, env, returns);
+                    }
+                }
+                if let Some(body) = default {
+                    for s in body {
+                        self.collect_return_callable_array_sigs(s, env, returns);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Returns true if `body` contains at least one Return statement at any nesting depth,
     /// including inside conditionals, loops, try/catch, switch, or synthetic blocks.
     pub(crate) fn body_contains_return(body: &[Stmt]) -> bool {

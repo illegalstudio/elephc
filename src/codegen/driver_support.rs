@@ -222,6 +222,8 @@ pub(super) fn emit_deferred_closures(
     while !ctx.deferred_closures.is_empty()
         || !ctx.deferred_fiber_wrappers.is_empty()
         || !ctx.deferred_callback_wrappers.is_empty()
+        || !ctx.deferred_extern_callback_trampolines.is_empty()
+        || !ctx.deferred_runtime_callable_invokers.is_empty()
     {
         let closures: Vec<_> = ctx.deferred_closures.drain(..).collect();
         for closure in closures {
@@ -236,6 +238,7 @@ pub(super) fn emit_deferred_closures(
                     closure.current_class.as_deref(),
                     &ctx.functions,
                     &ctx.callable_return_sigs,
+                    &ctx.callable_array_return_sigs,
                     &ctx.function_variant_groups,
                     &ctx.constants,
                     &ctx.interfaces,
@@ -266,6 +269,20 @@ pub(super) fn emit_deferred_closures(
         let callback_wrappers: Vec<_> = ctx.deferred_callback_wrappers.drain(..).collect();
         for wrapper in callback_wrappers {
             functions::emit_callback_wrapper(emitter, &wrapper);
+        }
+        let extern_trampolines: Vec<_> =
+            ctx.deferred_extern_callback_trampolines.drain(..).collect();
+        for trampoline in extern_trampolines {
+            functions::emit_extern_callback_trampoline(emitter, &trampoline);
+        }
+        let invokers: Vec<_> = ctx.deferred_runtime_callable_invokers.drain(..).collect();
+        for invoker in invokers {
+            crate::codegen::runtime_callable_invoker::emit_runtime_callable_invoker(
+                emitter,
+                data,
+                ctx,
+                &invoker,
+            );
         }
     }
 }

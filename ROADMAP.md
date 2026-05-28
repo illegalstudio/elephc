@@ -507,7 +507,7 @@ gaps that must be fixed first.
 - [x] Phase 5 — iterator decorators (`ArrayIterator`, `ArrayObject`, `IteratorIterator`, `LimitIterator`, `NoRewindIterator`, `InfiniteIterator`, `EmptyIterator`, `AppendIterator`, `MultipleIterator`, `CallbackFilterIterator`, `FilterIterator`, `CachingIterator`, `RecursiveArrayIterator`, `RecursiveCallbackFilterIterator`, `RecursiveFilterIterator`, `RecursiveIteratorIterator`, `ParentIterator`); functions `iterator_to_array`, `iterator_count`, `iterator_apply`, `class_implements`, `class_parents`, `class_uses`
 - [x] Runtime callable dispatch expansion — generated descriptor cases for dynamic string builtin callbacks and public `Class::method` strings, plus `call_user_func()` / `call_user_func_array()` support for invokable objects and callable arrays stored directly or in local variables
 - [x] Runtime callable descriptor ABI/storage foundation — closure, first-class callable, SPL callback-adapter, object-property, array, local, and Fiber storage now carries descriptor pointers; indirect call sites and callback runtimes load the entry ABI slot before invocation
-- [ ] Universal runtime callable descriptors — complete runtime descriptor metadata for signature/default/by-ref/variadic handling, receiver/capture environments, and invocation support for string, array, closure, first-class callable, object `__invoke`, static/instance method, builtin, and extern callable shapes
+- [x] Universal runtime callable descriptors — complete runtime descriptor metadata for signature/default/by-ref/variadic handling, receiver/capture environments, and invocation support for string, array, closure, first-class callable, object `__invoke`, static/instance method, builtin, and extern callable shapes
 - [x] Phase 5 follow-up — iterator-dependent Phase 4 parity: `SplFixedArray::getIterator()` plus `IteratorAggregate`/`InternalIterator` runtime wiring once iterator classes are available
 - [ ] Phase 6 — `SplHeap`, `SplMaxHeap`, `SplMinHeap`, `SplPriorityQueue`, `SplObjectStorage`, and per-instance handle finalization
 - [ ] Phase 7 — `RegexIterator`, `RecursiveRegexIterator`
@@ -595,6 +595,7 @@ and runtime foundation.
 - [ ] Symbol visibility control
 - [ ] Auto-generated C header file
 - [ ] Null-terminated string convention for C interop
+- [x] Stateful FFI callback trampolines — generate C-ABI-compatible trampoline symbols for descriptor-backed callables passed to extern `callable` parameters, retaining descriptor/capture/receiver environments for supported scalar/ptr signatures and documenting constraints for C APIs without userdata/context slots
 - [ ] `pkg-config` generation
 - [ ] FFI documentation for C, Rust, Python, Go
 

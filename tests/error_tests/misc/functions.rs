@@ -59,26 +59,6 @@ fn test_error_first_class_callable_ref_param_requires_variable() {
 }
 
 #[test]
-fn test_error_direct_complex_captured_callable_expr_call_rejected() {
-    // Verifies that a ternary expression producing two different first-class callable
-    // closures cannot be directly invoked as a callable expression.
-    expect_error(
-        r#"<?php
-class Counter {
-    public function inc($n) {
-        return $n + 1;
-    }
-}
-
-$counter = new Counter();
-$ok = true;
-echo ($ok ? $counter->inc(...) : $counter->inc(...))(1);
-"#,
-        "Direct calls of complex captured callable expressions are not supported yet",
-    );
-}
-
-#[test]
 fn test_error_closure_ref_param_requires_variable() {
     // Verifies that a by-reference parameter on a closure must be passed a variable at
     // the call site; passing a literal produces an error.

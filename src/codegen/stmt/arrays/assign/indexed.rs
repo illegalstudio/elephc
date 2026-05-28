@@ -40,6 +40,12 @@ pub(super) fn emit_indexed_array_assign(
     data: &mut DataSection,
 ) {
     let state = prepare::prepare_indexed_array_assign(target, index, value, emitter, ctx, data);
+    super::super::push::update_callable_array_metadata(
+        target.array,
+        value,
+        &state.val_ty,
+        ctx,
+    );
     normalize::normalize_indexed_array_layout(&state, emitter, ctx);
     store::store_indexed_array_value(target, &state, emitter, ctx);
     extend::extend_indexed_array_if_needed(&state, emitter, ctx);

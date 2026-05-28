@@ -37,6 +37,7 @@ mod array_intersect_refcounted;
 mod array_intersect_key;
 mod array_key_exists;
 mod array_map;
+mod array_map_mixed;
 mod array_map_str;
 mod array_merge;
 mod array_merge_into;
@@ -179,19 +180,20 @@ pub use array_hash_union::emit_array_hash_union;
 pub use array_intersect::emit_array_intersect;
 /// Emit array intersection helper.
 pub use array_intersect_refcounted::emit_array_intersect_refcounted;
-/// Emit refcounted array intersection helper.
-pub use array_intersect_key::emit_array_intersect_key;
 /// Emit array intersection by key helper.
-pub use array_key_exists::emit_array_key_exists;
+pub use array_intersect_key::emit_array_intersect_key;
 /// Emit array key existence check helper.
-pub use array_map::emit_array_map;
+pub use array_key_exists::emit_array_key_exists;
 /// Emit array map helper.
-pub use array_map_str::emit_array_map_str;
-/// Emit string-returning array map helper.
-pub use array_merge::emit_array_merge;
+pub use array_map::emit_array_map;
+/// Emit mixed-result array map helper.
+pub use array_map_mixed::emit_array_map_mixed;
+/// Emit string-returning array map helpers.
+pub use array_map_str::{emit_array_map_str, emit_array_map_str_owned};
 /// Emit array merge helper.
-pub use array_merge_into::emit_array_merge_into;
+pub use array_merge::emit_array_merge;
 /// Emit array merge-into helper.
+pub use array_merge_into::emit_array_merge_into;
 pub use array_merge_into_refcounted::emit_array_merge_into_refcounted;
 /// Emit refcounted merge-into helper.
 pub use array_merge_refcounted::emit_array_merge_refcounted;

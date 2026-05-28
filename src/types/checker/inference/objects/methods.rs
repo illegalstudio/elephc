@@ -11,7 +11,7 @@
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
-use crate::types::{PhpType, TypeEnv};
+use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::super::Checker;
 use super::super::syntactic::wider_type_syntactic;
@@ -150,6 +150,46 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.infer_method_call_on_class_type_with_options(
+            class_name,
+            method,
+            args,
+            expr,
+            env,
+            false,
+        )
+    }
+
+    /// Infers a class method call for descriptor-backed callback paths that can
+    /// preserve by-reference spread arguments through runtime invoker metadata.
+    pub(crate) fn infer_method_call_on_class_type_allowing_by_ref_spread(
+        &mut self,
+        class_name: &str,
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        self.infer_method_call_on_class_type_with_options(
+            class_name,
+            method,
+            args,
+            expr,
+            env,
+            true,
+        )
+    }
+
+    /// Shared implementation for class method call inference.
+    fn infer_method_call_on_class_type_with_options(
+        &mut self,
+        class_name: &str,
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+        allow_by_ref_spread: bool,
+    ) -> Result<PhpType, CompileError> {
         let method_key = php_symbol_key(method);
         let mut normalized_args = args.to_vec();
         let mut magic_return_ty = None;
@@ -200,13 +240,23 @@ impl Checker {
                     &format!("Method {}::{}", class_name, method),
                     env,
                 )?;
-                self.check_known_callable_call(
-                    &effective_sig,
-                    &normalized_args,
-                    expr.span,
-                    env,
-                    &format!("Method {}::{}", class_name, method),
-                )?;
+                if allow_by_ref_spread {
+                    self.check_known_callable_call_allowing_by_ref_spread(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Method {}::{}", class_name, method),
+                    )?;
+                } else {
+                    self.check_known_callable_call(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Method {}::{}", class_name, method),
+                    )?;
+                }
             } else if let Some(sig) = class_info.methods.get("__call") {
                 let magic_args = Self::magic_call_args(method, args, expr.span);
                 let declared_flags =
@@ -221,13 +271,23 @@ impl Checker {
                     &format!("Method {}::__call", class_name),
                     env,
                 )?;
-                self.check_known_callable_call(
-                    &effective_sig,
-                    &normalized_args,
-                    expr.span,
-                    env,
-                    &format!("Method {}::__call", class_name),
-                )?;
+                if allow_by_ref_spread {
+                    self.check_known_callable_call_allowing_by_ref_spread(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Method {}::__call", class_name),
+                    )?;
+                } else {
+                    self.check_known_callable_call(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Method {}::__call", class_name),
+                    )?;
+                }
                 magic_return_ty = Some(effective_sig.return_type.clone());
                 magic_original_args = Some(args.to_vec());
             } else {
@@ -275,7 +335,16 @@ impl Checker {
                         sig.params[i].1 = arg_ty.clone();
                     }
                 }
-                if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                if method_variadic_tail_needs_iterable(
+                    &normalized_args,
+                    sig,
+                    regular_param_count,
+                    env,
+                ) {
+                    if let Some((_, variadic_ty)) = sig.params.last_mut() {
+                        *variadic_ty = PhpType::Iterable;
+                    }
+                } else if sig.variadic.is_some() && arg_types.len() > regular_param_count {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
                         elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
@@ -408,6 +477,32 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.infer_static_method_call_type_with_options(receiver, method, args, expr, env, false)
+    }
+
+    /// Infers a static method call for descriptor-backed callback paths that can
+    /// preserve by-reference spread arguments through runtime invoker metadata.
+    pub(crate) fn infer_static_method_call_type_allowing_by_ref_spread(
+        &mut self,
+        receiver: &StaticReceiver,
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        self.infer_static_method_call_type_with_options(receiver, method, args, expr, env, true)
+    }
+
+    /// Shared implementation for static method call inference.
+    fn infer_static_method_call_type_with_options(
+        &mut self,
+        receiver: &StaticReceiver,
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+        allow_by_ref_spread: bool,
+    ) -> Result<PhpType, CompileError> {
         let parent_call = matches!(receiver, StaticReceiver::Parent);
         let self_call = matches!(receiver, StaticReceiver::Self_);
         let resolved_class_name = match receiver {
@@ -480,13 +575,23 @@ impl Checker {
                     &format!("Static method {}::{}", class_name, method),
                     env,
                 )?;
-                self.check_known_callable_call(
-                    &effective_sig,
-                    &normalized_args,
-                    expr.span,
-                    env,
-                    &format!("Static method {}::{}", class_name, method),
-                )?;
+                if allow_by_ref_spread {
+                    self.check_known_callable_call_allowing_by_ref_spread(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Static method {}::{}", class_name, method),
+                    )?;
+                } else {
+                    self.check_known_callable_call(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!("Static method {}::{}", class_name, method),
+                    )?;
+                }
             } else if parent_call || self_call {
                 if self.current_method_is_static {
                     return Err(CompileError::new(
@@ -536,18 +641,33 @@ impl Checker {
                     ),
                     env,
                 )?;
-                self.check_known_callable_call(
-                    &effective_sig,
-                    &normalized_args,
-                    expr.span,
-                    env,
-                    &format!(
-                        "{} method {}::{}",
-                        if parent_call { "Parent" } else { "Self" },
-                        class_name,
-                        method
-                    ),
-                )?;
+                if allow_by_ref_spread {
+                    self.check_known_callable_call_allowing_by_ref_spread(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!(
+                            "{} method {}::{}",
+                            if parent_call { "Parent" } else { "Self" },
+                            class_name,
+                            method
+                        ),
+                    )?;
+                } else {
+                    self.check_known_callable_call(
+                        &effective_sig,
+                        &normalized_args,
+                        expr.span,
+                        env,
+                        &format!(
+                            "{} method {}::{}",
+                            if parent_call { "Parent" } else { "Self" },
+                            class_name,
+                            method
+                        ),
+                    )?;
+                }
             } else if class_info.methods.contains_key(method) {
                 return Err(CompileError::new(
                     expr.span,
@@ -603,7 +723,16 @@ impl Checker {
                         sig.params[i].1 = arg_ty.clone();
                     }
                 }
-                if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                if method_variadic_tail_needs_iterable(
+                    &normalized_args,
+                    sig,
+                    regular_param_count,
+                    env,
+                ) {
+                    if let Some((_, variadic_ty)) = sig.params.last_mut() {
+                        *variadic_ty = PhpType::Iterable;
+                    }
+                } else if sig.variadic.is_some() && arg_types.len() > regular_param_count {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
                         elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
@@ -655,5 +784,53 @@ impl Checker {
             }
         }
         Ok(PhpType::Int)
+    }
+}
+
+/// Returns true when a method variadic parameter must keep runtime key information.
+fn method_variadic_tail_needs_iterable(
+    args: &[Expr],
+    sig: &FunctionSig,
+    regular_param_count: usize,
+    env: &TypeEnv,
+) -> bool {
+    if sig.variadic.is_none() {
+        return false;
+    }
+
+    if args.iter().any(|arg| {
+        matches!(
+            &arg.kind,
+            ExprKind::Spread(inner) if spread_source_keeps_runtime_keys(inner, env)
+        )
+    }) {
+        return true;
+    }
+
+    args.iter().any(|arg| {
+        matches!(
+            &arg.kind,
+            ExprKind::NamedArg { name, .. }
+                if !sig
+                    .params
+                    .iter()
+                    .take(regular_param_count)
+                    .any(|(param_name, _)| param_name == name)
+        )
+    })
+}
+
+/// Returns true when a spread source can carry string keys into a variadic method tail.
+fn spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(name) => matches!(
+            env.get(name),
+            Some(PhpType::AssocArray { .. } | PhpType::Iterable)
+        ),
+        ExprKind::ArrayLiteralAssoc(_) => true,
+        _ => matches!(
+            crate::types::checker::infer_expr_type_syntactic(expr),
+            PhpType::AssocArray { .. } | PhpType::Iterable
+        ),
     }
 }

@@ -11,7 +11,7 @@
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::ClassMethod;
-use crate::types::{traits::FlattenedClass, PhpType, TypeEnv};
+use crate::types::{traits::FlattenedClass, FunctionSig, PhpType, TypeEnv};
 
 use super::Checker;
 
@@ -191,8 +191,16 @@ impl Checker {
         pass_errors: &mut Vec<CompileError>,
     ) {
         let mut return_infos = Vec::new();
+        let mut callable_return_sigs = Vec::new();
+        let mut callable_array_return_sigs = Vec::new();
         for stmt in &method.body {
             self.collect_return_infos(stmt, method_env, &mut return_infos);
+            self.collect_return_callable_sigs(stmt, method_env, &mut callable_return_sigs);
+            self.collect_return_callable_array_sigs(
+                stmt,
+                method_env,
+                &mut callable_array_return_sigs,
+            );
         }
         let raw_inferred = if return_infos.is_empty() {
             None
@@ -279,13 +287,91 @@ impl Checker {
         if !method.is_static {
             if let Some(ci) = self.classes.get_mut(&class.name) {
                 if let Some(sig) = ci.methods.get_mut(&php_symbol_key(&method.name)) {
-                    sig.return_type = effective_return;
+                    sig.return_type = effective_return.clone();
                 }
             }
         } else if let Some(ci) = self.classes.get_mut(&class.name) {
             if let Some(sig) = ci.static_methods.get_mut(&php_symbol_key(&method.name)) {
-                sig.return_type = effective_return;
+                sig.return_type = effective_return.clone();
             }
         }
+        self.update_method_callable_return_metadata(
+            &class.name,
+            &php_symbol_key(&method.name),
+            &effective_return,
+            &callable_return_sigs,
+            &callable_array_return_sigs,
+        );
     }
+
+    /// Updates callable-return metadata for one checked method body.
+    fn update_method_callable_return_metadata(
+        &mut self,
+        class_name: &str,
+        method_key: &str,
+        return_type: &PhpType,
+        callable_return_sigs: &[FunctionSig],
+        callable_array_return_sigs: &[FunctionSig],
+    ) {
+        let Some(class_info) = self.classes.get_mut(class_name) else {
+            return;
+        };
+        if return_type == &PhpType::Callable {
+            if let Some(callable_sig) = matching_callable_sig(callable_return_sigs) {
+                class_info
+                    .callable_method_return_sigs
+                    .insert(method_key.to_string(), callable_sig);
+            } else {
+                class_info.callable_method_return_sigs.remove(method_key);
+            }
+        } else {
+            class_info.callable_method_return_sigs.remove(method_key);
+        }
+        if is_callable_array_return_type(return_type) {
+            if let Some(callable_sig) = matching_callable_sig(callable_array_return_sigs) {
+                class_info
+                    .callable_array_method_return_sigs
+                    .insert(method_key.to_string(), callable_sig);
+            } else {
+                class_info
+                    .callable_array_method_return_sigs
+                    .remove(method_key);
+            }
+        } else {
+            class_info
+                .callable_array_method_return_sigs
+                .remove(method_key);
+        }
+    }
+}
+
+/// Returns true when a method return type is a homogeneous array of callables.
+fn is_callable_array_return_type(return_type: &PhpType) -> bool {
+    match return_type {
+        PhpType::Array(elem_ty) => elem_ty.as_ref() == &PhpType::Callable,
+        PhpType::AssocArray { value, .. } => value.as_ref() == &PhpType::Callable,
+        _ => false,
+    }
+}
+
+/// Returns one callable signature only when every return path has the same contract.
+fn matching_callable_sig(return_sigs: &[FunctionSig]) -> Option<FunctionSig> {
+    let first = return_sigs.first()?.clone();
+    if return_sigs.iter().all(|sig| sig == &first) {
+        Some(callable_return_codegen_sig(first))
+    } else {
+        None
+    }
+}
+
+/// Normalizes untyped mixed parameters in callable-return metadata for codegen.
+fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig {
+    for (idx, (_, ty)) in sig.params.iter_mut().enumerate() {
+        if !sig.declared_params.get(idx).copied().unwrap_or(false)
+            && matches!(ty, PhpType::Mixed)
+        {
+            *ty = PhpType::Int;
+        }
+    }
+    sig
 }

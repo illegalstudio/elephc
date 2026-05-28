@@ -13,13 +13,19 @@ use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::types::PhpType;
 
 use super::super::abi;
+use super::super::callable_descriptor;
 use super::super::context::HeapOwnership;
 use super::super::emit::Emitter;
 use super::super::expr::expr_result_heap_ownership;
 
 /// Retains a borrowed heap result if the type is refcounted and not already owned.
 pub(super) fn retain_borrowed_heap_result(emitter: &mut Emitter, expr: &Expr, ty: &PhpType) {
-    if ty.is_refcounted() && expr_result_heap_ownership(expr) != HeapOwnership::Owned {
+    if expr_result_heap_ownership(expr) == HeapOwnership::Owned {
+        return;
+    }
+    if matches!(ty, PhpType::Callable) {
+        callable_descriptor::emit_retain_current_descriptor(emitter);
+    } else if ty.is_refcounted() {
         abi::emit_incref_if_refcounted(emitter, ty);
     }
 }
@@ -153,6 +159,9 @@ pub(super) fn release_owned_slot(
     if matches!(ty, PhpType::Str) {
         abi::load_at_offset(emitter, result_reg, offset);                                // load the previous string pointer from the local slot before releasing it
         abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    } else if matches!(ty, PhpType::Callable) {
+        abi::load_at_offset(emitter, result_reg, offset);                                // load the previous callable descriptor from the local slot before releasing it
+        callable_descriptor::emit_release_current_descriptor(emitter);
     } else if ty.is_refcounted() {
         abi::load_at_offset(emitter, result_reg, offset);                                // load the previous heap pointer from the local slot before decreffing it
         abi::emit_decref_if_refcounted(emitter, ty);

@@ -10,7 +10,8 @@
 //! - Closure captures, first-class callable syntax, and extern calls must agree with shared call argument planning.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, ExprKind, Stmt, TypeExpr};
+use crate::names::php_symbol_key;
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
 use crate::span::Span;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
@@ -229,6 +230,12 @@ impl Checker {
                     .unwrap_or_else(|| name.as_str().to_string());
                 Ok(self.callable_return_sigs.get(&resolved_name).cloned())
             }
+            ExprKind::MethodCall { object, method, .. } => {
+                self.resolve_method_return_callable_sig(object, method, env, false)
+            }
+            ExprKind::StaticMethodCall {
+                receiver, method, ..
+            } => self.resolve_static_method_return_callable_sig(receiver, method, false),
             ExprKind::Variable(var_name) => Ok(self.callable_sigs.get(var_name).cloned()),
             ExprKind::ArrayAccess { array, .. } => {
                 if let ExprKind::Variable(array_name) = &array.kind {
@@ -249,6 +256,192 @@ impl Checker {
             }
             _ => Ok(None),
         }
+    }
+
+    /// Extracts the element callable signature from an expression that yields an array of callables.
+    ///
+    /// The checker stores homogeneous callable-array metadata under the array variable name.
+    /// Function calls use `callable_array_return_sigs` so callers can recover the element
+    /// signature without treating the function return itself as a callable.
+    pub(crate) fn resolve_expr_callable_array_sig(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Option<FunctionSig>, CompileError> {
+        match &expr.kind {
+            ExprKind::ArrayLiteral(elems) => {
+                self.resolve_matching_callable_array_element_sig(elems.iter(), env)
+            }
+            ExprKind::ArrayLiteralAssoc(entries) => {
+                self.resolve_matching_callable_array_element_sig(
+                    entries.iter().map(|(_, value)| value),
+                    env,
+                )
+            }
+            ExprKind::FunctionCall { name, .. } => {
+                let resolved_name = self
+                    .canonical_function_name_folded(name.as_str())
+                    .unwrap_or_else(|| name.as_str().to_string());
+                Ok(self.callable_array_return_sigs.get(&resolved_name).cloned())
+            }
+            ExprKind::MethodCall { object, method, .. } => {
+                self.resolve_method_return_callable_sig(object, method, env, true)
+            }
+            ExprKind::StaticMethodCall {
+                receiver, method, ..
+            } => self.resolve_static_method_return_callable_sig(receiver, method, true),
+            ExprKind::Variable(var_name) => Ok(self.callable_sigs.get(var_name).cloned()),
+            ExprKind::Assignment { value, .. } => self.resolve_expr_callable_array_sig(value, env),
+            ExprKind::Ternary {
+                then_expr,
+                else_expr,
+                ..
+            } => self.resolve_matching_branch_callable_array_sig(then_expr, else_expr, env),
+            ExprKind::ShortTernary { value, default }
+            | ExprKind::NullCoalesce { value, default } => {
+                self.resolve_matching_branch_callable_array_sig(value, default, env)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Resolves one shared callable signature for all values in a callable array expression.
+    fn resolve_matching_callable_array_element_sig<'a>(
+        &mut self,
+        values: impl Iterator<Item = &'a Expr>,
+        env: &TypeEnv,
+    ) -> Result<Option<FunctionSig>, CompileError> {
+        let mut shared_sig: Option<FunctionSig> = None;
+        let mut saw_value = false;
+        for value in values {
+            saw_value = true;
+            let Some(sig) = self.resolve_expr_callable_sig(value, env)? else {
+                return Ok(None);
+            };
+            match &shared_sig {
+                Some(existing) if existing != &sig => return Ok(None),
+                Some(_) => {}
+                None => shared_sig = Some(sig),
+            }
+        }
+        if saw_value {
+            Ok(shared_sig)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Resolves a callable-array signature only when both branches share one element contract.
+    fn resolve_matching_branch_callable_array_sig(
+        &mut self,
+        left: &Expr,
+        right: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Option<FunctionSig>, CompileError> {
+        let Some(left_sig) = self.resolve_expr_callable_array_sig(left, env)? else {
+            return Ok(None);
+        };
+        let Some(right_sig) = self.resolve_expr_callable_array_sig(right, env)? else {
+            return Ok(None);
+        };
+        if left_sig == right_sig {
+            Ok(Some(left_sig))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Resolves callable-return metadata for an instance method call expression.
+    fn resolve_method_return_callable_sig(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        env: &TypeEnv,
+        array_return: bool,
+    ) -> Result<Option<FunctionSig>, CompileError> {
+        let object_ty = self.infer_type(object, env)?;
+        let Some(class_name) = self.invokable_class_for_type(&object_ty) else {
+            return Ok(None);
+        };
+        let method_key = php_symbol_key(method);
+        let impl_class = self
+            .classes
+            .get(&class_name)
+            .and_then(|class_info| class_info.method_impl_classes.get(&method_key))
+            .cloned()
+            .unwrap_or(class_name);
+        Ok(self.method_return_callable_sig(&impl_class, &method_key, array_return))
+    }
+
+    /// Resolves callable-return metadata for a static method call expression.
+    fn resolve_static_method_return_callable_sig(
+        &self,
+        receiver: &StaticReceiver,
+        method: &str,
+        array_return: bool,
+    ) -> Result<Option<FunctionSig>, CompileError> {
+        let Some(class_name) = self.resolve_static_method_metadata_class(receiver)? else {
+            return Ok(None);
+        };
+        let method_key = php_symbol_key(method);
+        let Some(class_info) = self.classes.get(&class_name) else {
+            return Ok(None);
+        };
+        let impl_class = class_info
+            .static_method_impl_classes
+            .get(&method_key)
+            .or_else(|| class_info.method_impl_classes.get(&method_key))
+            .cloned()
+            .unwrap_or(class_name);
+        Ok(self.method_return_callable_sig(&impl_class, &method_key, array_return))
+    }
+
+    /// Looks up a stored callable-return signature in class method metadata.
+    fn method_return_callable_sig(
+        &self,
+        class_name: &str,
+        method_key: &str,
+        array_return: bool,
+    ) -> Option<FunctionSig> {
+        let class_info = self.classes.get(class_name)?;
+        if array_return {
+            class_info
+                .callable_array_method_return_sigs
+                .get(method_key)
+                .cloned()
+        } else {
+            class_info.callable_method_return_sigs.get(method_key).cloned()
+        }
+    }
+
+    /// Resolves the concrete class whose method metadata should be inspected.
+    fn resolve_static_method_metadata_class(
+        &self,
+        receiver: &StaticReceiver,
+    ) -> Result<Option<String>, CompileError> {
+        match receiver {
+            StaticReceiver::Named(name) => Ok(self.resolve_class_name_for_metadata(name.as_str())),
+            StaticReceiver::Self_ | StaticReceiver::Static => Ok(self.current_class.clone()),
+            StaticReceiver::Parent => {
+                let Some(current_class) = self.current_class.as_ref() else {
+                    return Ok(None);
+                };
+                Ok(self
+                    .classes
+                    .get(current_class)
+                    .and_then(|class_info| class_info.parent.clone())
+                )
+            }
+        }
+    }
+
+    /// Resolves a class name case-insensitively for metadata lookups.
+    fn resolve_class_name_for_metadata(&self, class_name: &str) -> Option<String> {
+        let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+        self.classes
+            .keys()
+            .find(|existing| php_symbol_key(existing) == class_key)
+            .cloned()
     }
 
     /// Resolves the callable signature for a ternary or merge branch pair by recursively

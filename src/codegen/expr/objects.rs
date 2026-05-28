@@ -12,6 +12,7 @@ mod access;
 mod allocation;
 /// dispatch
 pub(crate) mod dispatch;
+mod fiber_callable;
 mod fiber_wrapper;
 mod instanceof;
 mod nullsafe;

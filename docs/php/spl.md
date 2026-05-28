@@ -335,7 +335,12 @@ follow PHP's constructors and require an `Iterator` directly.
 false during `rewind()` and `next()`. `CallbackFilterIterator` stores a callable
 and invokes it with current value, current key, and the inner iterator object;
 closure and first-class-callable capture environments are preserved with the
-iterator object.
+iterator object. Branch-shaped expressions that select captured callable
+descriptors at runtime use the same descriptor invoker path and keep the
+selected receiver/capture environment with the iterator. Callable-array
+variables and literals such as `[$object, $method]` and `[$class, $method]` can
+also be resolved at construction time and stored as persistent descriptor
+callback environments.
 `CachingIterator` implements one-element lookahead through `hasNext()`, supports
 the string mode flags `CALL_TOSTRING`, `TOSTRING_USE_KEY`,
 `TOSTRING_USE_CURRENT`, and `TOSTRING_USE_INNER`, and supports `FULL_CACHE` for
@@ -356,7 +361,9 @@ objects through `hasChildren()`. `RecursiveIteratorIterator` supports
 `LEAVES_ONLY`, `SELF_FIRST`, and `CHILD_FIRST`; it keeps a live stack of source
 sub-iterators so `getDepth()`, `getInnerIterator()`, and `getSubIterator()`
 track the active cursors. `RecursiveCallbackFilterIterator` preserves closure
-and first-class-callable capture environments when it wraps child iterators.
+and first-class-callable capture environments, including branch-selected
+descriptor environments and runtime-selected callable-array variables or
+literals, when it wraps child iterators.
 `ParentIterator` recursively keeps only entries that have children.
 
 ## Autoload and Introspection
@@ -413,9 +420,15 @@ callbacks. If the call site has no single static callback signature, elephc can
 dispatch dynamic indexed or associative args by matching the runtime callable
 pointer against user functions and closure/FCC wrappers available in that
 codegen context, then applying the matched target's parameter and return
-metadata. Runtime string callback names dispatch over user functions by
-case-insensitive name matching and then use the same metadata path. For variadic
-callbacks, named keys consumed by fixed parameters are not copied into
+metadata. Runtime string callback names dispatch over user functions and
+supported builtin wrappers by case-insensitive name matching and then use the
+same metadata path. Branch-shaped callbacks that select captured closure or
+first-class-callable descriptors at runtime are invoked through the descriptor's
+uniform invoker, so receiver/capture environments and associative callback args
+are preserved. Runtime-selected callable-array variables such as
+`[$object, $method]` and `[$class, $method]` are matched to public method
+descriptors before the loop and reused for each callback invocation. For
+variadic callbacks, named keys consumed by fixed parameters are not copied into
 `...$rest`; remaining string keys keep their names, and remaining numeric keys
 are reindexed from zero. Literal arrays with expressions are evaluated once
 before iteration starts. Dynamic arrays passed to by-reference callback

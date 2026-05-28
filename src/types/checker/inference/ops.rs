@@ -9,10 +9,11 @@
 //! - PHP compatibility matters for coercions, operator results, object access, and nullable/union handling.
 
 use crate::errors::CompileError;
-use crate::names::Name;
+use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
     BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver, Stmt, TypeExpr,
 };
+use crate::span::Span;
 use crate::types::{merge_array_key_types, FunctionSig, PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -326,7 +327,7 @@ impl Checker {
     /// Looks up the variable's type in `env`, validates it is `PhpType::Callable`
     /// or an invokable object, then dispatches to signature specialization and
     /// `check_known_callable_call`. Falls back to the closure return type or
-    /// `PhpType::Int` if the callable signature is unknown.
+    /// `PhpType::Mixed` if the callable signature is unknown.
     pub(crate) fn infer_closure_call_type(
         &mut self,
         var: &str,
@@ -338,6 +339,18 @@ impl Checker {
             CompileError::new(expr.span, &format!("Undefined variable: ${}", var))
         })?;
         if var_ty != PhpType::Callable {
+            if matches!(var_ty.codegen_repr(), PhpType::Str) {
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                return Ok(PhpType::Mixed);
+            }
+            if let Some(target) = self.callable_array_targets.get(var).cloned() {
+                return self.infer_callable_array_target_call(&target, args, expr, env);
+            }
+            if Self::is_runtime_callable_array_type(&var_ty) {
+                return self.infer_runtime_callable_array_call(args, env);
+            }
             if let Some(class_name) = self.invokable_class_for_type(&var_ty) {
                 if self
                     .classes
@@ -366,6 +379,15 @@ impl Checker {
                     .insert(var.to_string(), specialized_sig.clone());
                 self.closure_return_types
                     .insert(var.to_string(), specialized_sig.return_type.clone());
+                if self.callable_param_names.contains(var) {
+                    return self.check_known_callable_call_allowing_by_ref_spread(
+                        &specialized_sig,
+                        args,
+                        expr.span,
+                        env,
+                        &format!("callable ${}", var),
+                    );
+                }
                 return self.check_known_callable_call(
                     &specialized_sig,
                     args,
@@ -382,6 +404,15 @@ impl Checker {
                 env,
                 &format!("callable ${}", var),
             )?;
+            if self.callable_param_names.contains(var) {
+                return self.check_known_callable_call_allowing_by_ref_spread(
+                    &specialized_sig,
+                    args,
+                    expr.span,
+                    env,
+                    &format!("callable ${}", var),
+                );
+            }
             return self.check_known_callable_call(
                 &specialized_sig,
                 args,
@@ -390,15 +421,6 @@ impl Checker {
                 &format!("callable ${}", var),
             );
         }
-        if Self::has_named_args(args) {
-            return Err(CompileError::new(
-                expr.span,
-                &format!(
-                    "callable ${} does not support named arguments without a known signature",
-                    var
-                ),
-            ));
-        }
         for arg in args {
             self.infer_type(arg, env)?;
         }
@@ -406,7 +428,7 @@ impl Checker {
             .closure_return_types
             .get(var)
             .cloned()
-            .unwrap_or(PhpType::Int))
+            .unwrap_or(PhpType::Mixed))
     }
 
     /// Infers the return type of an arbitrary expression callable call: `expr(...)`.
@@ -422,7 +444,29 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        if let Some(ret_ty) = self.infer_callable_array_expr_call(callee, args, expr, env)? {
+            return Ok(ret_ty);
+        }
         let callee_ty = self.infer_type(callee, env)?;
+        if matches!(callee_ty.codegen_repr(), PhpType::Str) {
+            for arg in args {
+                self.infer_type(arg, env)?;
+            }
+            return Ok(PhpType::Mixed);
+        }
+        if is_two_slot_runtime_callable_array_literal(callee)
+            && Self::is_runtime_callable_array_type(&callee_ty)
+        {
+            return self.infer_runtime_callable_array_call(args, env);
+        }
+        if let ExprKind::Variable(var_name) = &callee.kind {
+            if let Some(target) = self.callable_array_targets.get(var_name).cloned() {
+                return self.infer_callable_array_target_call(&target, args, expr, env);
+            }
+            if Self::is_runtime_callable_array_type(&callee_ty) {
+                return self.infer_runtime_callable_array_call(args, env);
+            }
+        }
         if let Some(class_name) = self.invokable_class_for_type(&callee_ty) {
             if self
                 .classes
@@ -449,12 +493,6 @@ impl Checker {
                 ),
             ));
         }
-        if self.expr_call_complex_callee_needs_runtime_capture(callee) {
-            return Err(CompileError::new(
-                expr.span,
-                "Direct calls of complex captured callable expressions are not supported yet",
-            ));
-        }
         match &callee.kind {
             ExprKind::Variable(var_name) => {
                 if let Some(sig) = self.callable_sigs.get(var_name).cloned() {
@@ -466,13 +504,23 @@ impl Checker {
                             .insert(var_name.clone(), specialized_sig.clone());
                         self.closure_return_types
                             .insert(var_name.clone(), specialized_sig.return_type.clone());
-                        let ret_ty = self.check_known_callable_call(
-                            &specialized_sig,
-                            args,
-                            expr.span,
-                            env,
-                            &format!("callable ${}", var_name),
-                        )?;
+                        let ret_ty = if self.callable_param_names.contains(var_name) {
+                            self.check_known_callable_call_allowing_by_ref_spread(
+                                &specialized_sig,
+                                args,
+                                expr.span,
+                                env,
+                                &format!("callable ${}", var_name),
+                            )?
+                        } else {
+                            self.check_known_callable_call(
+                                &specialized_sig,
+                                args,
+                                expr.span,
+                                env,
+                                &format!("callable ${}", var_name),
+                            )?
+                        };
                         return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
                     }
                     let specialized_sig = self.specialize_callable_var_sig_from_args(
@@ -483,13 +531,23 @@ impl Checker {
                         env,
                         &format!("callable ${}", var_name),
                     )?;
-                    let ret_ty = self.check_known_callable_call(
-                        &specialized_sig,
-                        args,
-                        expr.span,
-                        env,
-                        &format!("callable ${}", var_name),
-                    )?;
+                    let ret_ty = if self.callable_param_names.contains(var_name) {
+                        self.check_known_callable_call_allowing_by_ref_spread(
+                            &specialized_sig,
+                            args,
+                            expr.span,
+                            env,
+                            &format!("callable ${}", var_name),
+                        )?
+                    } else {
+                        self.check_known_callable_call(
+                            &specialized_sig,
+                            args,
+                            expr.span,
+                            env,
+                            &format!("callable ${}", var_name),
+                        )?
+                    };
                     return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
                 }
             }
@@ -507,11 +565,15 @@ impl Checker {
             }
             _ => {}
         }
-        if Self::has_named_args(args) {
-            return Err(CompileError::new(
+        if let Some(sig) = self.resolve_expr_callable_sig(callee, env)? {
+            let ret_ty = self.check_known_callable_call(
+                &sig,
+                args,
                 expr.span,
-                "Callable expression does not support named arguments without a known signature",
-            ));
+                env,
+                "callable expression",
+            )?;
+            return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
         }
         for arg in args {
             self.infer_type(arg, env)?;
@@ -536,7 +598,166 @@ impl Checker {
             }
             _ => {}
         }
-        Ok(self.nullable_callable_result(PhpType::Int, nullable_callable)) // fallback for unknown callables
+        Ok(self.nullable_callable_result(PhpType::Mixed, nullable_callable)) // fallback for unknown callables
+    }
+
+    /// Infers a runtime-selected callable-array call by checking argument expressions only.
+    fn infer_runtime_callable_array_call(
+        &mut self,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        for arg in args {
+            self.infer_type(arg, env)?;
+        }
+        Ok(PhpType::Mixed)
+    }
+
+    /// Returns true when an array type can represent a callable array selected at runtime.
+    fn is_runtime_callable_array_type(ty: &PhpType) -> bool {
+        match ty.codegen_repr() {
+            PhpType::Array(elem_ty) => matches!(elem_ty.codegen_repr(), PhpType::Mixed | PhpType::Str),
+            _ => false,
+        }
+    }
+
+    /// Infers a direct call through a PHP callable-array literal.
+    fn infer_callable_array_expr_call(
+        &mut self,
+        callee: &Expr,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Option<PhpType>, CompileError> {
+        let Some((receiver, method)) = callable_array_parts(callee) else {
+            return Ok(None);
+        };
+        if let Some(receiver) = self.static_callable_array_receiver(receiver, callee.span)? {
+            return self
+                .infer_static_method_call_type_allowing_by_ref_spread(
+                    &receiver,
+                    method,
+                    args,
+                    expr,
+                    env,
+                )
+                .map(Some);
+        }
+        let receiver_ty = self.infer_type(receiver, env)?;
+        let Some(class_name) = self.invokable_class_for_type(&receiver_ty) else {
+            return Ok(None);
+        };
+        self.infer_method_call_on_class_type_allowing_by_ref_spread(
+            &class_name,
+            method,
+            args,
+            expr,
+            env,
+        )
+        .map(Some)
+    }
+
+    /// Infers a direct call through a stored PHP callable-array target.
+    ///
+    /// Callable arrays carry their static target metadata separately from their
+    /// array value. Direct invocation validates the same method/static-method
+    /// signature that the descriptor invoker will apply at runtime, while
+    /// allowing spread by-reference decisions to stay behind descriptor metadata.
+    fn infer_callable_array_target_call(
+        &mut self,
+        target: &CallableTarget,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        match target {
+            CallableTarget::Method { object, method } => {
+                let receiver_ty = self.infer_type(object, env)?;
+                let Some(class_name) = self.invokable_class_for_type(&receiver_ty) else {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "callable array receiver must be an object",
+                    ));
+                };
+                self.infer_method_call_on_class_type_allowing_by_ref_spread(
+                    &class_name,
+                    method,
+                    args,
+                    expr,
+                    env,
+                )
+            }
+            CallableTarget::StaticMethod { receiver, method } => {
+                self.infer_static_method_call_type_allowing_by_ref_spread(
+                    receiver,
+                    method,
+                    args,
+                    expr,
+                    env,
+                )
+            }
+            CallableTarget::Function(name) => {
+                self.check_function_call(name.as_str(), args, expr.span, env)
+            }
+        }
+    }
+
+    /// Resolves a callable-array receiver expression to a static class receiver.
+    fn static_callable_array_receiver(
+        &self,
+        receiver: &Expr,
+        span: Span,
+    ) -> Result<Option<StaticReceiver>, CompileError> {
+        let class_name = match &receiver.kind {
+            ExprKind::StringLiteral(class_name) => self
+                .resolve_callable_array_class_name(class_name)
+                .map(str::to_string),
+            ExprKind::ClassConstant { receiver } => Some(
+                self.resolve_callable_array_static_receiver_class(receiver, span)?,
+            ),
+            _ => None,
+        };
+        Ok(class_name.map(|class_name| StaticReceiver::Named(Name::from(class_name))))
+    }
+
+    /// Resolves a static callable-array receiver to a concrete class name.
+    fn resolve_callable_array_static_receiver_class(
+        &self,
+        receiver: &StaticReceiver,
+        span: Span,
+    ) -> Result<String, CompileError> {
+        match receiver {
+            StaticReceiver::Named(name) => self
+                .resolve_callable_array_class_name(name.as_str())
+                .map(str::to_string)
+                .ok_or_else(|| CompileError::new(span, &format!("Undefined class: {}", name))),
+            StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.clone().ok_or_else(
+                || CompileError::new(span, "Cannot use self::class outside a class context"),
+            ),
+            StaticReceiver::Parent => {
+                let current_class = self.current_class.as_ref().ok_or_else(|| {
+                    CompileError::new(span, "Cannot use parent::class outside a class context")
+                })?;
+                self.classes
+                    .get(current_class)
+                    .and_then(|class_info| class_info.parent.clone())
+                    .ok_or_else(|| {
+                        CompileError::new(
+                            span,
+                            &format!("Class '{}' has no parent class", current_class),
+                        )
+                    })
+            }
+        }
+    }
+
+    /// Resolves a class name case-insensitively against declared classes.
+    fn resolve_callable_array_class_name<'a>(&'a self, class_name: &str) -> Option<&'a str> {
+        let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+        self.classes
+            .keys()
+            .find(|existing| php_symbol_key(existing) == class_key)
+            .map(String::as_str)
     }
 
     /// Returns the class name if `ty` is an invokable object or a single-member
@@ -835,6 +1056,26 @@ impl Checker {
             && members.iter().any(|member| *member == PhpType::Void)
             && expr_contains_nullsafe_member(callee)
     }
+}
+
+/// Returns receiver and method from a two-element PHP callable array literal.
+fn callable_array_parts(callee: &Expr) -> Option<(&Expr, &str)> {
+    let elems = match &callee.kind {
+        ExprKind::ArrayLiteral(elems) => elems,
+        _ => return None,
+    };
+    if elems.len() != 2 {
+        return None;
+    }
+    let ExprKind::StringLiteral(method) = &elems[1].kind else {
+        return None;
+    };
+    Some((&elems[0], method.as_str()))
+}
+
+/// Returns true when an expression is a two-element indexed-array literal.
+fn is_two_slot_runtime_callable_array_literal(callee: &Expr) -> bool {
+    matches!(&callee.kind, ExprKind::ArrayLiteral(elems) if elems.len() == 2)
 }
 
 /// Returns `true` if `expr` contains a nullsafe member access anywhere in

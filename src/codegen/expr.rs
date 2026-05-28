@@ -199,6 +199,11 @@ pub fn emit_expr(
             calls::emit_closure_call(var, args, emitter, ctx, data)
         }
         ExprKind::ExprCall { callee, args } => {
+            if let Some(ret_ty) =
+                calls::emit_callable_array_literal_call(callee, args, emitter, ctx, data)
+            {
+                return ret_ty;
+            }
             let loaded_callee_ty = emit_expr(callee, emitter, ctx, data);
             calls::emit_loaded_expr_call(callee, args, &loaded_callee_ty, emitter, ctx, data)
         }

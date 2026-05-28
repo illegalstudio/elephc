@@ -203,6 +203,17 @@ impl Checker {
                     }
                 }
             }
+            if seen_idx < regular_param_count && is_callable_array_type(&actual_ty) {
+                if let Some((param_name, _)) = param_types.get(seen_idx) {
+                    if let Some(sig) = self.resolve_expr_callable_array_sig(arg, caller_env)? {
+                        let key = (name.to_string(), param_name.clone());
+                        if self.callable_param_sigs.get(&key) != Some(&sig) {
+                            self.callable_param_sigs.insert(key, sig);
+                            changed = true;
+                        }
+                    }
+                }
+            }
             if seen_idx < regular_param_count
                 && !stored_sig
                     .declared_params
@@ -229,6 +240,15 @@ impl Checker {
 /// All other types trigger replacement of the `Int` fallback.
 fn should_replace_int_fallback_param(actual_ty: &PhpType) -> bool {
     !matches!(actual_ty, PhpType::Int | PhpType::Bool | PhpType::Void)
+}
+
+/// Returns true when a call argument is an array whose elements are callable descriptors.
+fn is_callable_array_type(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Array(elem_ty) => elem_ty.as_ref() == &PhpType::Callable,
+        PhpType::AssocArray { value, .. } => value.as_ref() == &PhpType::Callable,
+        _ => false,
+    }
 }
 
 /// Extracts parameter types from a generic `param_types` list, mapping them to the

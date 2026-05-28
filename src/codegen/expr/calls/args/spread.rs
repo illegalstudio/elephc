@@ -280,7 +280,9 @@ fn emit_branch_if_spread_element_missing(
 /// Emits a variadic array from the tail of a spread expression starting at a given offset.
 pub(crate) fn emit_spread_tail_variadic_array_arg(
     spread_expr: &Expr,
+    sig: Option<&FunctionSig>,
     tail_start: usize,
+    regular_param_count: usize,
     context_label: &str,
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -288,7 +290,37 @@ pub(crate) fn emit_spread_tail_variadic_array_arg(
 ) -> PhpType {
     emitter.comment(context_label);
     let spread_ty = super::super::super::emit_expr(spread_expr, emitter, ctx, data);
-    let source_elem_ty = spread_source_elem_ty(&spread_ty);
+    if matches!(spread_ty.codegen_repr(), PhpType::Iterable) {
+        return emit_iterable_spread_tail_variadic_array_arg(
+            sig,
+            tail_start,
+            regular_param_count,
+            emitter,
+            ctx,
+            data,
+        );
+    }
+    if matches!(spread_ty, PhpType::AssocArray { .. }) {
+        return emit_assoc_spread_tail_variadic_array_arg(
+            &spread_ty,
+            sig,
+            tail_start,
+            regular_param_count,
+            emitter,
+            ctx,
+            data,
+        );
+    }
+    emit_indexed_spread_tail_variadic_array_arg(&spread_ty, tail_start, emitter)
+}
+
+/// Emits an indexed-array slice for a spread tail that is known to use indexed storage.
+fn emit_indexed_spread_tail_variadic_array_arg(
+    spread_ty: &PhpType,
+    tail_start: usize,
+    emitter: &mut Emitter,
+) -> PhpType {
+    let source_elem_ty = spread_source_elem_ty(spread_ty);
     let container_elem_ty = variadic_container_elem_ty(&source_elem_ty);
     if emitter.target.arch == crate::codegen::platform::Arch::X86_64 {
         emitter.instruction("mov rdi, rax");                                    // pass the spread source array pointer to the x86_64 slice helper
@@ -310,4 +342,141 @@ pub(crate) fn emit_spread_tail_variadic_array_arg(
     );
     abi::emit_push_result_value(emitter, &PhpType::Array(Box::new(container_elem_ty.clone())));
     PhpType::Array(Box::new(container_elem_ty))
+}
+
+/// Emits a keyed variadic hash for a spread tail that is known to use associative storage.
+fn emit_assoc_spread_tail_variadic_array_arg(
+    spread_ty: &PhpType,
+    sig: Option<&FunctionSig>,
+    tail_start: usize,
+    regular_param_count: usize,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let source_elem_ty = spread_source_elem_ty(spread_ty);
+    let source_hash_reg = match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => "x20",
+        crate::codegen::platform::Arch::X86_64 => "r13",
+    };
+    emitter.instruction(&format!("mov {}, {}", source_hash_reg, abi::int_result_reg(emitter))); // preserve the spread source hash while building the variadic tail
+
+    let fallback_sig;
+    let effective_sig = if let Some(sig) = sig {
+        sig
+    } else {
+        fallback_sig = fallback_variadic_sig();
+        &fallback_sig
+    };
+    super::emit_loaded_assoc_variadic_array_arg(
+        source_hash_reg,
+        &source_elem_ty,
+        effective_sig,
+        tail_start,
+        regular_param_count,
+        "build associative spread variadic tail",
+        emitter,
+        ctx,
+        data,
+    )
+}
+
+/// Emits runtime dispatch for an `Iterable` spread tail, preserving indexed and hash layouts.
+fn emit_iterable_spread_tail_variadic_array_arg(
+    sig: Option<&FunctionSig>,
+    tail_start: usize,
+    regular_param_count: usize,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let indexed_case = ctx.next_label("spread_iterable_indexed");
+    let hash_case = ctx.next_label("spread_iterable_hash");
+    let done_label = ctx.next_label("spread_iterable_done");
+    let source_hash_reg = match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => "x20",
+        crate::codegen::platform::Arch::X86_64 => "r13",
+    };
+
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve iterable spread pointer across heap-kind dispatch
+    abi::emit_call_label(emitter, "__rt_heap_kind");                            // classify the iterable spread payload by runtime heap kind
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            emitter.instruction("cmp x0, #2");                                  // is the iterable spread backed by an indexed array?
+            emitter.instruction(&format!("b.eq {}", indexed_case));             // slice indexed iterables using the array-tail path
+            emitter.instruction("cmp x0, #3");                                  // is the iterable spread backed by an associative hash?
+            emitter.instruction(&format!("b.eq {}", hash_case));                // rebuild associative iterables as a keyed variadic hash
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            emitter.instruction("cmp rax, 2");                                  // is the iterable spread backed by an indexed array?
+            emitter.instruction(&format!("je {}", indexed_case));               // slice indexed iterables using the array-tail path
+            emitter.instruction("cmp rax, 3");                                  // is the iterable spread backed by an associative hash?
+            emitter.instruction(&format!("je {}", hash_case));                  // rebuild associative iterables as a keyed variadic hash
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_iterable_unsupported_kind");            // reject non-array iterable spread tails for call forwarding
+
+    emitter.label(&indexed_case);
+    let array_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
+    abi::emit_pop_reg(emitter, array_arg_reg);                                  // restore indexed iterable pointer for slicing
+    emit_indexed_mixed_spread_tail_slice(tail_start, emitter);
+    let indexed_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    abi::emit_push_result_value(emitter, &indexed_ty);
+    abi::emit_jump(emitter, &done_label);
+
+    emitter.label(&hash_case);
+    abi::emit_pop_reg(emitter, source_hash_reg);                                // restore associative iterable pointer for keyed tail construction
+    let fallback_sig;
+    let effective_sig = if let Some(sig) = sig {
+        sig
+    } else {
+        fallback_sig = fallback_variadic_sig();
+        &fallback_sig
+    };
+    super::emit_loaded_assoc_variadic_array_arg(
+        source_hash_reg,
+        &PhpType::Mixed,
+        effective_sig,
+        tail_start,
+        regular_param_count,
+        "build associative iterable variadic tail",
+        emitter,
+        ctx,
+        data,
+    );
+    abi::emit_jump(emitter, &done_label);
+
+    emitter.label(&done_label);
+    PhpType::Iterable
+}
+
+/// Emits an indexed Mixed slice from an already-restored iterable array pointer.
+fn emit_indexed_mixed_spread_tail_slice(tail_start: usize, emitter: &mut Emitter) {
+    let offset_reg = abi::int_arg_reg_name(emitter.target, 1);
+    let length_reg = abi::int_arg_reg_name(emitter.target, 2);
+    abi::emit_load_int_immediate(emitter, offset_reg, tail_start as i64);
+    abi::emit_load_int_immediate(emitter, length_reg, -1);
+    abi::emit_call_label(emitter, "__rt_array_slice_refcounted");
+    super::super::super::arrays::emit_array_value_type_stamp(
+        emitter,
+        abi::int_result_reg(emitter),
+        &PhpType::Mixed,
+    );
+}
+
+/// Builds a permissive variadic signature for unreachable no-signature spread fallback paths.
+fn fallback_variadic_sig() -> FunctionSig {
+    FunctionSig {
+        params: vec![(
+            "rest".to_string(),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        )],
+        defaults: vec![None],
+        return_type: PhpType::Mixed,
+        declared_return: false,
+        ref_params: vec![false],
+        declared_params: vec![false],
+        variadic: Some("rest".to_string()),
+        deprecation: None,
+    }
 }

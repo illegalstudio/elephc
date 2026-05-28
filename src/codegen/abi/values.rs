@@ -8,6 +8,7 @@
 //! Key details:
 //! - Refcounted values require balanced retain/release behavior around borrowed and owned temporaries.
 
+use crate::codegen::callable_descriptor;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::types::PhpType;
@@ -56,11 +57,15 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 
 /// Retains a refcounted result value before it is reused or overwritten.
 ///
-/// If `ty.is_refcounted()` is true, emits a call to `__rt_incref` after preserving the heap
-/// pointer in a temporary slot. The target architecture dictates register preservation
-/// conventions: AArch64 uses a pre-decrement stack store, while x86_64 uses a 16-byte
-/// aligned push/pop pair to maintain SysV ABI alignment.
+/// If `ty` is a refcounted heap value or callable descriptor, emits a retain call after
+/// preserving the heap pointer in a temporary slot. The target architecture dictates
+/// register preservation conventions: AArch64 uses a pre-decrement stack store, while
+/// x86_64 uses a 16-byte aligned push/pop pair to maintain SysV ABI alignment.
 pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
+    if matches!(ty, PhpType::Callable) {
+        callable_descriptor::emit_retain_current_descriptor(emitter);
+        return;
+    }
     if ty.is_refcounted() {
         match emitter.target.arch {
             Arch::AArch64 => {
@@ -85,6 +90,7 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
 /// - `AssocArray` → `__rt_decref_hash`
 /// - `Object` → `__rt_decref_object`
 /// - `Iterable` → `__rt_decref_any` (inspects heap kind)
+/// - `Callable` → `__rt_callable_descriptor_release`
 /// - Non-refcounted types → no-op
 pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
@@ -102,6 +108,9 @@ pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
         }
         PhpType::Iterable => {
             emit_call_label(emitter, "__rt_decref_any");                                // release the erased iterable payload by inspecting its heap kind
+        }
+        PhpType::Callable => {
+            callable_descriptor::emit_release_current_descriptor(emitter);
         }
         _ => {}
     }
@@ -124,6 +133,10 @@ pub fn emit_release_local_ref_cell(emitter: &mut Emitter, cell_reg: &str, value_
         ty if ty.is_refcounted() => {
             emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
             emit_decref_if_refcounted(emitter, &ty);
+        }
+        PhpType::Callable => {
+            emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
+            callable_descriptor::emit_release_current_descriptor(emitter);
         }
         _ => {}
     }

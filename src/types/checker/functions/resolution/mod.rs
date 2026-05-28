@@ -253,6 +253,14 @@ impl Checker {
                         );
                     }
                 }
+                if is_callable_array_type(&ty) {
+                    if let Some(sig) = self.resolve_expr_callable_array_sig(arg, caller_env)? {
+                        self.callable_param_sigs.insert(
+                            (name.to_string(), decl.params[arg_idx].clone()),
+                            sig,
+                        );
+                    }
+                }
                 if decl.ref_params.get(arg_idx).copied().unwrap_or(false)
                     && !matches!(arg.kind, ExprKind::Variable(_))
                 {
@@ -509,5 +517,14 @@ impl Checker {
             param_idx += 1;
         }
         Ok(sig.return_type.clone())
+    }
+}
+
+/// Returns true when a call argument is an array whose elements are callable descriptors.
+fn is_callable_array_type(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Array(elem_ty) => elem_ty.as_ref() == &PhpType::Callable,
+        PhpType::AssocArray { value, .. } => value.as_ref() == &PhpType::Callable,
+        _ => false,
     }
 }

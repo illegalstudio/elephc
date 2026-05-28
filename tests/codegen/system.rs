@@ -1170,6 +1170,175 @@ echo $result . "|" . $count;
     assert_eq!(out, "a[1:1] b[2:22]|2");
 }
 
+/// Verifies a captured closure variable used by `preg_replace_callback()` reads captures
+/// from the stored descriptor rather than from the reassigned source local.
+#[test]
+fn test_preg_replace_callback_closure_variable_uses_descriptor_capture_after_reassign() {
+    let out = compile_and_run(
+        r#"<?php
+$prefix = "old:";
+$cb = function(array $matches) use ($prefix): string {
+    return $prefix;
+};
+$prefix = "new:";
+echo preg_replace_callback("/[0-9]+/", $cb, "a1 b22");
+"#,
+    );
+    assert_eq!(out, "aold: bold:");
+}
+
+/// Verifies a method first-class callable passed as a `callable` parameter to
+/// `preg_replace_callback()` keeps the receiver captured in the descriptor.
+#[test]
+fn test_preg_replace_callback_method_parameter_uses_descriptor_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class RegexFormatter {
+    public function __construct(private string $prefix) {}
+
+    public function replace(array $matches): string {
+        return $this->prefix;
+    }
+}
+
+function run_regex(callable $cb): void {
+    echo preg_replace_callback("/[A-Z]/", $cb, "AB");
+}
+
+run_regex((new RegexFormatter("descriptor:"))->replace(...));
+"#,
+    );
+    assert_eq!(out, "descriptor:descriptor:");
+}
+
+/// Verifies callable-array regex callbacks route through descriptor environments.
+#[test]
+fn test_preg_replace_callback_callable_array_variable_preserves_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class RegexArrayFormatter {
+    public string $prefix = "";
+
+    public function replace(array $matches): string {
+        return $this->prefix;
+    }
+}
+
+$first = new RegexArrayFormatter();
+$first->prefix = "first:";
+$second = new RegexArrayFormatter();
+$second->prefix = "second:";
+$callback = [$first, "replace"];
+$first = $second;
+echo preg_replace_callback("/[A-Z]/", $callback, "AB");
+"#,
+    );
+    assert_eq!(out, "first:first:");
+}
+
+/// Verifies runtime-selected instance callable arrays route regex callbacks through descriptors.
+#[test]
+fn test_preg_replace_callback_runtime_selected_instance_callable_array() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeRegexArrayFormatter {
+    public string $prefix = "";
+
+    public function replace(array $matches): string {
+        return $this->prefix . count($matches);
+    }
+}
+
+$first = new RuntimeRegexArrayFormatter();
+$first->prefix = "I:";
+$second = new RuntimeRegexArrayFormatter();
+$second->prefix = "bad:";
+$method = "replace";
+$callback = [$first, $method];
+$first = $second;
+echo preg_replace_callback("/[A-Z]/", $callback, "AB");
+"#,
+    );
+    assert_eq!(out, "I:1I:1");
+}
+
+/// Verifies runtime-selected static callable arrays route regex callbacks through descriptors.
+#[test]
+fn test_preg_replace_callback_runtime_selected_static_callable_array() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeRegexStaticFormatter {
+    public static function replace(array $matches): string {
+        return "S:" . count($matches);
+    }
+}
+
+$class = "RuntimeRegexStaticFormatter";
+$method = "replace";
+$callback = [$class, $method];
+echo preg_replace_callback("/[A-Z]/", $callback, "AB");
+"#,
+    );
+    assert_eq!(out, "S:1S:1");
+}
+
+/// Verifies runtime string user callbacks route `preg_replace_callback()` through descriptors.
+#[test]
+fn test_preg_replace_callback_runtime_string_user_callback() {
+    let out = compile_and_run(
+        r#"<?php
+function runtime_regex_replace(array $matches): string {
+    return "U" . count($matches);
+}
+
+$callback = "runtime_regex_replace";
+echo preg_replace_callback("/[A-Z]/", $callback, "AB");
+"#,
+    );
+    assert_eq!(out, "U1U1");
+}
+
+/// Verifies runtime string static-method callbacks route regex replacements through descriptors.
+#[test]
+fn test_preg_replace_callback_runtime_string_static_method_callback() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeStringRegexFormatter {
+    public static function replace(array $matches): string {
+        return "S" . count($matches);
+    }
+}
+
+$callback = "RuntimeStringRegexFormatter::replace";
+echo preg_replace_callback("/[A-Z]/", $callback, "AB");
+"#,
+    );
+    assert_eq!(out, "S1S1");
+}
+
+/// Verifies a branch-selected first-class callable keeps the selected descriptor
+/// environment when passed directly to `preg_replace_callback()`.
+#[test]
+fn test_preg_replace_callback_branch_selected_method_descriptor() {
+    let out = compile_and_run(
+        r#"<?php
+class RegexFormatter {
+    public function __construct(private string $prefix) {}
+
+    public function replace(array $matches): string {
+        return $this->prefix;
+    }
+}
+
+$left = new RegexFormatter("left:");
+$right = new RegexFormatter("right:");
+$useRight = true;
+echo preg_replace_callback("/[A-Z]/", $useRight ? $right->replace(...) : $left->replace(...), "AB");
+"#,
+    );
+    assert_eq!(out, "right:right:");
+}
+
 // Verifies `preg_split` splits a string on a comma delimiter and returns an indexed array
 // with all 3 parts.
 #[test]

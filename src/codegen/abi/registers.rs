@@ -38,8 +38,10 @@ pub(crate) fn float_arg_reg_limit(target: Target) -> usize {
     }
 }
 
-/// Returns the offset from the stack pointer where the caller’s outgoing arguments begin.
-/// AArch64: 32 (caller reserves 32 bytes for kernel/UserPointer). x86_64: 16 (red zone).
+/// Returns the frame-pointer offset where the caller's outgoing stack arguments begin.
+/// AArch64 call sites keep a 16-byte nested-call save slot above outgoing stack args;
+/// after the callee saves x29/x30, the first stack arg is therefore at x29+32.
+/// x86_64 reaches the first stack arg at rbp+16 after call pushes the return address.
 pub(crate) fn caller_stack_start_offset(target: Target) -> usize {
     match target.arch {
         Arch::AArch64 => CALLER_STACK_START_OFFSET,

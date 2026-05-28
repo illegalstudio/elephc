@@ -152,6 +152,52 @@ echo $fn("Ada");
     assert_eq!(out, "Hello Ada");
 }
 
+/// Verifies method first-class callable variables invoke the receiver captured in
+/// the descriptor, even after the source receiver variable is reassigned.
+#[test]
+fn test_first_class_callable_instance_method_variable_uses_captured_receiver_after_reassign() {
+    let out = compile_and_run(
+        r#"<?php
+class Label {
+    public function __construct(private string $name) {}
+
+    public function read(): string {
+        return $this->name;
+    }
+}
+
+$box = new Label("old");
+$fn = $box->read(...);
+$box = new Label("new");
+echo $fn();
+"#,
+    );
+    assert_eq!(out, "old");
+}
+
+/// Verifies descriptor invocation for method first-class callable variables applies
+/// named arguments and defaults while keeping the captured receiver environment.
+#[test]
+fn test_first_class_callable_instance_method_variable_named_args_use_descriptor_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+class Formatter {
+    public function __construct(private string $prefix) {}
+
+    public function format(string $value, string $suffix = "!"): string {
+        return $this->prefix . $value . $suffix;
+    }
+}
+
+$formatter = new Formatter("old:");
+$fn = $formatter->format(...);
+$formatter = new Formatter("new:");
+echo $fn(value: "Ada");
+"#,
+    );
+    assert_eq!(out, "old:Ada!");
+}
+
 // Tests an instance method captured as a first-class callable and passed to `array_map`,
 // verifying integer return values are correctly captured and accessed in the result array.
 #[test]
@@ -173,6 +219,36 @@ echo $values[2];
 "#,
     );
     assert_eq!(out, "3:9");
+}
+
+/// Verifies callback runtimes preserve a method first-class callable receiver when
+/// the descriptor is passed through a callable parameter before `array_map()`.
+#[test]
+fn test_first_class_callable_method_parameter_array_map_uses_descriptor_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Bumper {
+    public function __construct(private int $base) {}
+
+    public function add(int $n): int {
+        return $this->base + $n;
+    }
+}
+
+function run(callable $cb): void {
+    $values = array_map($cb, [1, 2]);
+    echo $values[0];
+    echo ":";
+    echo $values[1];
+}
+
+$box = new Bumper(10);
+$fn = $box->add(...);
+$box = new Bumper(100);
+run($fn);
+"#,
+    );
+    assert_eq!(out, "11:12");
 }
 
 // Tests an inline instance method callable passed directly to `array_map` with the receiver
@@ -218,6 +294,64 @@ echo $values[1];
 "#,
     );
     assert_eq!(out, "[a]:[b]");
+}
+
+/// Verifies that descriptor-backed `array_map` can invoke a runtime-selected receiver method.
+#[test]
+fn test_array_map_accepts_complex_captured_callable_expression() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeMapper {
+    public $offset;
+
+    public function __construct($offset) {
+        $this->offset = $offset;
+    }
+
+    public function add($value) {
+        return $value + $this->offset;
+    }
+}
+
+$left = new RuntimeMapper(10);
+$right = new RuntimeMapper(20);
+$use_left = false;
+$values = array_map($use_left ? $left->add(...) : $right->add(...), [1, 2]);
+echo $values[0];
+echo ",";
+echo $values[1];
+"#,
+    );
+    assert_eq!(out, "21,22");
+}
+
+/// Verifies that descriptor-backed `array_map` transfers string results without dangling Mixed storage.
+#[test]
+fn test_array_map_accepts_complex_captured_callable_expression_string_return() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeFormatter {
+    public $prefix;
+
+    public function __construct($prefix) {
+        $this->prefix = $prefix;
+    }
+
+    public function tag(string $value): string {
+        return $this->prefix . $value;
+    }
+}
+
+$left = new RuntimeFormatter("L:");
+$right = new RuntimeFormatter("R:");
+$use_left = false;
+$values = array_map($use_left ? $left->tag(...) : $right->tag(...), ["a", "b"]);
+echo $values[0];
+echo ",";
+echo $values[1];
+"#,
+    );
+    assert_eq!(out, "R:a,R:b");
 }
 
 // Tests `array_filter` with an instance method first-class callable, verifying the filtered
@@ -491,6 +625,121 @@ foreach ($values as $value) {
     assert_eq!(out, "2:2:4");
 }
 
+/// Verifies that `array_filter` can invoke a runtime-selected captured method descriptor.
+#[test]
+fn test_array_filter_accepts_complex_captured_callable_expression() {
+    let out = compile_and_run(
+        r#"<?php
+class FilterBox {
+    public $limit;
+
+    public function __construct($limit) {
+        $this->limit = $limit;
+    }
+
+    public function keep($n) {
+        return $n > $this->limit;
+    }
+}
+
+$left = new FilterBox(2);
+$right = new FilterBox(3);
+$use_left = false;
+$values = array_filter([1, 3, 4, 5], $use_left ? $left->keep(...) : $right->keep(...));
+echo count($values);
+foreach ($values as $value) {
+    echo ":";
+    echo $value;
+}
+"#,
+    );
+    assert_eq!(out, "2:4:5");
+}
+
+/// Verifies that descriptor-backed `array_filter` preserves string callback ABI arguments.
+#[test]
+fn test_array_filter_complex_captured_callable_expression_with_strings() {
+    let out = compile_and_run(
+        r#"<?php
+class PrefixBox {
+    public $prefix;
+
+    public function __construct($prefix) {
+        $this->prefix = $prefix;
+    }
+
+    public function keep(string $value): bool {
+        return str_starts_with($value, $this->prefix);
+    }
+}
+
+$left = new PrefixBox("a");
+$right = new PrefixBox("b");
+$use_left = false;
+$values = array_filter(["aa", "ba", "bb"], $use_left ? $left->keep(...) : $right->keep(...));
+echo count($values);
+foreach ($values as $value) {
+    echo ":";
+    echo $value;
+}
+"#,
+    );
+    assert_eq!(out, "2:ba:bb");
+}
+
+/// Verifies that descriptor-backed `array_reduce` can invoke a runtime-selected receiver method.
+#[test]
+fn test_array_reduce_accepts_complex_captured_callable_expression() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeReducer {
+    public $bonus;
+
+    public function __construct($bonus) {
+        $this->bonus = $bonus;
+    }
+
+    public function add($carry, $item) {
+        return $carry + $item + $this->bonus;
+    }
+}
+
+$left = new RuntimeReducer(1);
+$right = new RuntimeReducer(10);
+$use_left = false;
+echo array_reduce([1, 2], $use_left ? $left->add(...) : $right->add(...), 0);
+"#,
+    );
+    assert_eq!(out, "23");
+}
+
+/// Verifies that descriptor-backed `array_walk` consumes ignored callback results safely.
+#[test]
+fn test_array_walk_accepts_complex_captured_callable_expression() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeWalker {
+    public $offset;
+
+    public function __construct($offset) {
+        $this->offset = $offset;
+    }
+
+    public function show($value) {
+        echo $value + $this->offset;
+        echo ",";
+    }
+}
+
+$left = new RuntimeWalker(10);
+$right = new RuntimeWalker(20);
+$use_left = false;
+array_walk([1, 2], $use_left ? $left->show(...) : $right->show(...));
+"#,
+    );
+    assert_eq!(out, "21,22,");
+}
+
 // Tests an instance method captured as a first-class callable and passed to `array_walk`,
 // verifying the callable receives each item and writes output for each element.
 #[test]
@@ -578,6 +827,54 @@ foreach ($values as $value) {
 "#,
     );
     assert_eq!(out, "123");
+}
+
+/// Verifies runtime-selected sort comparator descriptors preserve receiver environments.
+#[test]
+fn test_runtime_selected_instance_method_sort_callbacks_preserve_descriptor_env() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeSorter {
+    private bool $descending;
+
+    public function __construct(bool $descending) {
+        $this->descending = $descending;
+    }
+
+    public function compare($a, $b) {
+        if ($this->descending) {
+            return $b - $a;
+        }
+        return $a - $b;
+    }
+}
+
+$ascending = new RuntimeSorter(false);
+$descending = new RuntimeSorter(true);
+$use_descending = true;
+
+$usorted = [1, 3, 2];
+usort($usorted, $use_descending ? $descending->compare(...) : $ascending->compare(...));
+foreach ($usorted as $value) {
+    echo $value;
+}
+echo ":";
+
+$uksorted = [1, 3, 2];
+uksort($uksorted, $use_descending ? $descending->compare(...) : $ascending->compare(...));
+foreach ($uksorted as $value) {
+    echo $value;
+}
+echo ":";
+
+$uasorted = [1, 3, 2];
+uasort($uasorted, $use_descending ? $descending->compare(...) : $ascending->compare(...));
+foreach ($uasorted as $value) {
+    echo $value;
+}
+"#,
+    );
+    assert_eq!(out, "321:321:321");
 }
 
 // Tests a static method using late static binding passed to `array_reduce` inside a static
@@ -770,4 +1067,84 @@ echo $fn("Ada");
 "#,
     );
     assert_eq!(out, "Hi Ada");
+}
+
+/// Verifies callable-array variables use descriptor callback environments in array runtimes.
+#[test]
+fn test_callable_array_variable_callback_runtimes_preserve_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class CallableArrayRuntimeBox {
+    public int $limit = 0;
+    public int $offset = 0;
+    public bool $descending = false;
+
+    public function keep($value): bool {
+        return $value > $this->limit;
+    }
+
+    public function add($carry, $item): int {
+        return $carry + $item + $this->offset;
+    }
+
+    public function show($item): void {
+        echo $item + $this->offset;
+        echo ",";
+    }
+
+    public function compare($a, $b): int {
+        if ($this->descending) {
+            return $b - $a;
+        }
+        return $a - $b;
+    }
+}
+
+$box = new CallableArrayRuntimeBox();
+$box->limit = 2;
+$box->offset = 10;
+$box->descending = true;
+
+$filter = [$box, "keep"];
+$reduce = [$box, "add"];
+$walk = [$box, "show"];
+$sort = [$box, "compare"];
+
+$box = new CallableArrayRuntimeBox();
+$box->limit = 100;
+$box->offset = 100;
+$box->descending = false;
+
+$filtered = array_filter([1, 3, 4], $filter);
+foreach ($filtered as $value) {
+    echo $value;
+}
+echo ":";
+echo array_reduce([1, 2], $reduce, 0);
+echo ":";
+array_walk([1, 2], $walk);
+echo ":";
+
+$usorted = [1, 3, 2];
+usort($usorted, $sort);
+foreach ($usorted as $value) {
+    echo $value;
+}
+echo ":";
+
+$uksorted = [1, 3, 2];
+uksort($uksorted, $sort);
+foreach ($uksorted as $value) {
+    echo $value;
+}
+echo ":";
+
+$uasorted = [1, 3, 2];
+uasort($uasorted, $sort);
+foreach ($uasorted as $value) {
+    echo $value;
+}
+"#,
+    );
+    assert_eq!(out, "34:23:11,12,:321:321:321");
 }

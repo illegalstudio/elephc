@@ -8,7 +8,8 @@
 //! Key details:
 //! - Object handles, property storage, and class ids must stay consistent with emitted class tables.
 
-use crate::codegen::builtins::arrays::callback_env;
+use crate::codegen::builtins::arrays::{callback_env, runtime_callable_array_callback};
+use crate::codegen::callable_dispatch::RuntimeCallableCase;
 use crate::codegen::{abi, runtime_value_tag};
 use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::data_section::DataSection;
@@ -17,7 +18,7 @@ use crate::codegen::expr::calls::args as call_args;
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::names::method_symbol;
-use crate::parser::ast::{CallableTarget, Expr, ExprKind, TypeExpr};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 
 use super::super::{
@@ -558,29 +559,69 @@ fn emit_new_callback_filter_iterator(
     store_iterator_inner_property_from_result(emitter, inner_offset);
 
     if let Some(callback_expr) = normalized_args.get(1) {
-        let (_callback_ty, captures, target_visible_arg_types) =
-            emit_callback_filter_callable_arg(callback_expr, emitter, ctx, data);
-        if captures.is_empty() {
-            store_callable_property_from_result(emitter, callback_offset);
-            store_pointer_property_zero(emitter, callback_env_offset);
-        } else {
-            let wrapper_label = callback_env::emit_persistent_callback_env_from_result(
-                &captures,
-                callback_filter_visible_arg_types(),
-                target_visible_arg_types,
-                emitter,
-                ctx,
-            );
-            store_pointer_property_from_result(emitter, callback_env_offset);
-            crate::codegen::callable_descriptor::emit_load_descriptor_address(
-                emitter,
-                data,
-                abi::int_result_reg(emitter),
-                &wrapper_label,
-                None,
-                crate::codegen::callable_descriptor::CALLABLE_DESC_KIND_CALLBACK_ADAPTER,
-            );
-            store_callable_property_from_result(emitter, callback_offset);
+        let handled_callable_array = emit_runtime_callable_array_callback_filter(
+            callback_expr,
+            callback_offset,
+            callback_env_offset,
+            emitter,
+            ctx,
+            data,
+        ) || emit_runtime_callable_array_literal_callback_filter(
+            callback_expr,
+            callback_offset,
+            callback_env_offset,
+            emitter,
+            ctx,
+            data,
+        ) || emit_static_callable_array_callback_filter(
+            callback_expr,
+            callback_offset,
+            callback_env_offset,
+            emitter,
+            ctx,
+            data,
+        );
+        if !handled_callable_array {
+            let (_callback_ty, captures, target_visible_arg_types) =
+                emit_callback_filter_callable_arg(callback_expr, emitter, ctx, data);
+            if callback_env::expr_call_needs_descriptor_callback_env(callback_expr, ctx) {
+                let wrapper_label =
+                    callback_env::emit_persistent_descriptor_callback_env_from_result(
+                        callback_expr,
+                        callback_filter_visible_arg_types(),
+                        PhpType::Bool,
+                        emitter,
+                        ctx,
+                    )
+                    .expect("type checker must reject unsupported callback-filter descriptor env ownership");
+                store_pointer_property_from_result(emitter, callback_env_offset);
+                emit_store_callback_filter_adapter_descriptor(
+                    &wrapper_label,
+                    callback_offset,
+                    &[],
+                    emitter,
+                    data,
+                );
+            } else if captures.is_empty() {
+                store_callable_property_from_result(emitter, callback_offset);
+                store_pointer_property_zero(emitter, callback_env_offset);
+            } else {
+                let wrapper_label = callback_env::emit_persistent_callback_env_from_result(
+                    &captures,
+                    callback_filter_visible_arg_types(),
+                    target_visible_arg_types,
+                    emitter,
+                    ctx,
+                );
+                store_pointer_property_from_result(emitter, callback_env_offset);
+                emit_store_callback_filter_adapter_descriptor(
+                    &wrapper_label,
+                    callback_offset,
+                    &captures,
+                    emitter,
+                    data,
+                );
+            }
         }
     } else {
         emitter.comment(&format!("WARNING: {} constructor missing callback", class_name));
@@ -592,6 +633,190 @@ fn emit_new_callback_filter_iterator(
 
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the initialized callback-filter object as the expression result
     PhpType::Object(class_name.to_string())
+}
+
+/// Emits persistent callback state for a runtime-selected callable-array callback.
+fn emit_runtime_callable_array_callback_filter(
+    callback_expr: &Expr,
+    callback_offset: usize,
+    callback_env_offset: usize,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> bool {
+    runtime_callable_array_callback::emit_without_saved_array(
+        callback_expr,
+        emitter,
+        ctx,
+        data,
+        |case, receiver_ty, emitter, ctx, data| {
+            emit_runtime_callable_array_callback_filter_case(
+                case,
+                receiver_ty,
+                callback_offset,
+                callback_env_offset,
+                0,
+                emitter,
+                ctx,
+                data,
+            );
+        },
+    )
+}
+
+/// Emits persistent callback state for a runtime-selected callable-array literal callback.
+fn emit_runtime_callable_array_literal_callback_filter(
+    callback_expr: &Expr,
+    callback_offset: usize,
+    callback_env_offset: usize,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> bool {
+    runtime_callable_array_callback::emit_literal_without_saved_array(
+        callback_expr,
+        emitter,
+        ctx,
+        data,
+        |case, receiver_ty, emitter, ctx, data| {
+            emit_runtime_callable_array_callback_filter_case(
+                case,
+                receiver_ty,
+                callback_offset,
+                callback_env_offset,
+                16,
+                emitter,
+                ctx,
+                data,
+            );
+        },
+    )
+}
+
+/// Stores one selected runtime callable-array descriptor on the callback-filter object.
+fn emit_runtime_callable_array_callback_filter_case(
+    case: &RuntimeCallableCase,
+    receiver_ty: Option<&PhpType>,
+    callback_offset: usize,
+    callback_env_offset: usize,
+    object_stack_offset: usize,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    let descriptor_prefix_types = receiver_ty.iter().map(|ty| (*ty).clone()).collect();
+    let wrapper_label = callback_env::emit_persistent_descriptor_callback_env_from_static_descriptor(
+        &case.descriptor_label,
+        callback_filter_visible_arg_types(),
+        descriptor_prefix_types,
+        PhpType::Bool,
+        emitter,
+        ctx,
+    );
+    store_pointer_property_from_result_at_stack_offset(
+        emitter,
+        callback_env_offset,
+        object_stack_offset,
+    );
+    emit_store_callback_filter_adapter_descriptor_at_stack_offset(
+        &wrapper_label,
+        callback_offset,
+        &[],
+        emitter,
+        data,
+        object_stack_offset,
+    );
+}
+
+/// Emits persistent callback state for a statically known callable-array callback.
+fn emit_static_callable_array_callback_filter(
+    callback_expr: &Expr,
+    callback_offset: usize,
+    callback_env_offset: usize,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> bool {
+    let Some(array_callback) =
+        callback_env::resolve_callable_array_descriptor_callback(callback_expr, ctx, data)
+    else {
+        return false;
+    };
+    let descriptor_prefix_types: Vec<PhpType> = array_callback
+        .receiver_prefix
+        .iter()
+        .map(|(_, ty)| ty.clone())
+        .collect();
+    if let Some((receiver, receiver_ty)) = &array_callback.receiver_prefix {
+        emit_expr(receiver, emitter, ctx, data);
+        abi::emit_push_result_value(emitter, receiver_ty);
+    }
+    let wrapper_label = callback_env::emit_persistent_descriptor_callback_env_from_static_descriptor(
+        &array_callback.descriptor_label,
+        callback_filter_visible_arg_types(),
+        descriptor_prefix_types,
+        PhpType::Bool,
+        emitter,
+        ctx,
+    );
+    store_pointer_property_from_result(emitter, callback_env_offset);
+    emit_store_callback_filter_adapter_descriptor(
+        &wrapper_label,
+        callback_offset,
+        &[],
+        emitter,
+        data,
+    );
+    true
+}
+
+/// Emits and stores the descriptor for a callback-filter adapter wrapper.
+fn emit_store_callback_filter_adapter_descriptor(
+    wrapper_label: &str,
+    callback_offset: usize,
+    captures: &[(String, PhpType, bool)],
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    emit_store_callback_filter_adapter_descriptor_at_stack_offset(
+        wrapper_label,
+        callback_offset,
+        captures,
+        emitter,
+        data,
+        0,
+    );
+}
+
+/// Emits and stores a callback-filter adapter descriptor on an object below temporary slots.
+fn emit_store_callback_filter_adapter_descriptor_at_stack_offset(
+    wrapper_label: &str,
+    callback_offset: usize,
+    captures: &[(String, PhpType, bool)],
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    object_stack_offset: usize,
+) {
+    let callback_sig = callback_filter_callable_sig();
+    crate::codegen::callable_descriptor::emit_load_descriptor_address_with_meta(
+        emitter,
+        data,
+        abi::int_result_reg(emitter),
+        wrapper_label,
+        None,
+        crate::codegen::callable_descriptor::CALLABLE_DESC_KIND_CALLBACK_ADAPTER,
+        Some(&callback_sig),
+        captures,
+        &[],
+        crate::codegen::callable_descriptor::CallableDescriptorInvocation::new(
+            crate::codegen::callable_descriptor::CallableDescriptorShape::CallbackAdapter,
+        ),
+    );
+    store_callable_property_from_result_at_stack_offset(
+        emitter,
+        callback_offset,
+        object_stack_offset,
+    );
 }
 
 /// Normalizes iterator iterator constructor args into the representation expected by later lowering.
@@ -1043,6 +1268,22 @@ fn store_iterator_inner_property_from_result(emitter: &mut Emitter, inner_offset
 
 /// Stores callable property from result into runtime storage or stack state.
 fn store_callable_property_from_result(emitter: &mut Emitter, property_offset: usize) {
+    store_callable_property_from_result_at_stack_offset(emitter, property_offset, 0);
+}
+
+/// Stores callable property from result on an object below temporary stack slots.
+fn store_callable_property_from_result_at_stack_offset(
+    emitter: &mut Emitter,
+    property_offset: usize,
+    object_stack_offset: usize,
+) {
+    if object_stack_offset != 0 {
+        let object_reg = abi::symbol_scratch_reg(emitter);
+        abi::emit_load_temporary_stack_slot(emitter, object_reg, object_stack_offset);
+        abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), object_reg, property_offset);
+        abi::emit_store_zero_to_address(emitter, object_reg, property_offset + 8);
+        return;
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("ldr x9, [sp]");                                // reload the object pointer that owns the callable property
@@ -1059,6 +1300,22 @@ fn store_callable_property_from_result(emitter: &mut Emitter, property_offset: u
 
 /// Stores pointer property from result into runtime storage or stack state.
 fn store_pointer_property_from_result(emitter: &mut Emitter, property_offset: usize) {
+    store_pointer_property_from_result_at_stack_offset(emitter, property_offset, 0);
+}
+
+/// Stores pointer property from result on an object below temporary stack slots.
+fn store_pointer_property_from_result_at_stack_offset(
+    emitter: &mut Emitter,
+    property_offset: usize,
+    object_stack_offset: usize,
+) {
+    if object_stack_offset != 0 {
+        let object_reg = abi::symbol_scratch_reg(emitter);
+        abi::emit_load_temporary_stack_slot(emitter, object_reg, object_stack_offset);
+        abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), object_reg, property_offset);
+        abi::emit_store_zero_to_address(emitter, object_reg, property_offset + 8);
+        return;
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("ldr x9, [sp]");                                // reload the object pointer that owns the raw pointer property
@@ -1223,15 +1480,14 @@ fn emit_new_fiber(
     emitter.comment("new Fiber() — runtime construction");
 
     let wrapper_label = if let Some(callable_expr) = args.first() {
-        emit_expr(callable_expr, emitter, ctx, data);
-        super::fiber_wrapper::prepare_fiber_wrapper(callable_expr, ctx)
+        super::fiber_callable::emit_fiber_callable_descriptor(callable_expr, emitter, ctx, data)
     } else {
         emitter.comment("WARNING: Fiber constructor missing $callback argument");
         abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
         None
     };
 
-    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the closure pointer across constructor-argument setup
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the callable descriptor across constructor-argument setup
     abi::emit_load_int_immediate(
         emitter,
         abi::int_arg_reg_name(emitter.target, 1),
@@ -1245,220 +1501,5 @@ fn emit_new_fiber(
     abi::emit_pop_reg(emitter, abi::int_arg_reg_name(emitter.target, 0));       // pop the closure pointer into the first integer argument register for the active target ABI
     abi::emit_call_label(emitter, "__rt_fiber_construct");                      // delegate allocation, stack setup, and field initialisation to the runtime helper
 
-    // -- closure capture pre-load: when `new Fiber(function(...) use(...))` is
-    //    used, evaluate each captured variable in the surrounding scope NOW
-    //    (it is no longer reachable from inside the fiber's stack) and stash
-    //    the boxed Mixed value in the trailing start_args slots. The
-    //    user_arg_max field is lowered to the closure's user-param count so a
-    //    later $f->start(...) only writes to the leading slots and leaves the
-    //    captured values intact.
-    let capture_info = args.first().and_then(|callable_expr| match &callable_expr.kind {
-        ExprKind::Closure {
-            params,
-            captures,
-            capture_refs,
-            ..
-        } if !captures.is_empty() => {
-            // Compute the closure's user-param register footprint so capture
-            // cursors start past whatever the closure's own parameters consume.
-            // Floats land in d-regs, strings consume two int regs, everything
-            // else consumes one int reg.
-            let mut user_int_regs = 0usize;
-            let mut user_float_regs = 0usize;
-            for (_, type_expr, _, _) in params {
-                let mut ty = type_expr.as_ref();
-                while let Some(TypeExpr::Nullable(inner)) = ty {
-                    ty = Some(inner.as_ref());
-                }
-                match ty {
-                    Some(TypeExpr::Float) => user_float_regs += 1,
-                    Some(TypeExpr::Str) => user_int_regs += 2,
-                    _ => user_int_regs += 1,
-                }
-            }
-            // user_arg_max for the start() spill path is the *count of user
-            // params* (not their reg footprint). String params take 2 int
-            // regs but are still one user param from the user's perspective,
-            // and start() is type-erased Mixed-only so the spill cap mirrors
-            // the param count, not the reg footprint.
-            let user_param_count = params.len();
-            Some((
-                callable_expr.span,
-                user_param_count,
-                user_int_regs,
-                user_float_regs,
-                captures.clone(),
-                capture_refs.clone(),
-            ))
-        }
-        _ => None,
-    });
-
-    if let Some((
-        span,
-        user_param_count,
-        user_int_regs,
-        user_float_regs,
-        captures,
-        capture_refs,
-    )) = capture_info
-    {
-        emit_fiber_capture_preload(
-            emitter,
-            ctx,
-            data,
-            user_param_count,
-            user_int_regs,
-            user_float_regs,
-            &captures,
-            &capture_refs,
-            span,
-        );
-    }
-
     PhpType::Object("Fiber".to_string())
-}
-
-/// Push the freshly-built fiber pointer, evaluate each capture in the
-/// surrounding scope, box it into a Mixed cell, and store it into the trailing
-/// `start_args` slot the closure expects to find its capture in. Finally,
-/// lower `user_arg_max` to the closure's user-param count so a future
-/// `$f->start(...)` does not overwrite the pre-loaded captures.
-fn emit_fiber_capture_preload(
-    emitter: &mut Emitter,
-    ctx: &mut Context,
-    data: &mut DataSection,
-    user_param_count: usize,
-    user_int_regs: usize,
-    user_float_regs: usize,
-    captures: &[String],
-    capture_refs: &[String],
-    span: crate::span::Span,
-) {
-    let max_int_slots = crate::codegen::runtime::FIBER_START_ARGS_MAX as usize;
-    let max_float_slots = crate::codegen::runtime::FIBER_FLOAT_ARGS_MAX as usize;
-    let start_args_offset = crate::codegen::runtime::FIBER_START_ARGS_OFFSET;
-    let float_args_offset = crate::codegen::runtime::FIBER_FLOAT_ARGS_OFFSET;
-    let umax_off = crate::codegen::runtime::FIBER_USER_ARG_MAX_OFFSET;
-
-    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // park the freshly built Fiber pointer on the stack while we evaluate captures
-    let mut int_slot = user_int_regs;
-    let mut float_slot = user_float_regs;
-    for capture_name in captures {
-        let by_ref = capture_refs.iter().any(|name| name == capture_name);
-        // The closure's body reads each capture through a local variable slot
-        // whose declared type matches whatever PhpType the variable held in the
-        // surrounding scope. Passing the raw register footprint (no Mixed
-        // boxing) lines up with what the closure expects:
-        //   * floats land in float_args[float_slot] and are loaded into d-regs
-        //   * single-register int-like types (int, bool, object, callable,
-        //     mixed) ride in start_args[int_slot]
-        //   * strings ride as ptr+len across start_args[int_slot..int_slot+2]
-        let actual_ty = if by_ref {
-            if !crate::codegen::expr::calls::args::emit_ref_arg_variable_address(
-                capture_name,
-                "fiber capture ref",
-                emitter,
-                ctx,
-            ) {
-                emitter.comment(&format!(
-                    "WARNING: Fiber capture {} dropped — variable not found",
-                    capture_name
-                ));
-                continue;
-            }
-            PhpType::Int
-        } else {
-            let var_expr = Expr::new(ExprKind::Variable(capture_name.clone()), span);
-            emit_expr(&var_expr, emitter, ctx, data)
-        };
-        if matches!(actual_ty, PhpType::Float) {
-            if float_slot >= max_float_slots {
-                emitter.comment(&format!(
-                    "WARNING: Fiber float capture {} dropped — float_args slot budget exhausted",
-                    capture_name
-                ));
-                continue;
-            }
-            let off = float_args_offset + (float_slot as i32) * 8;
-            match emitter.target.arch {
-                Arch::AArch64 => {
-                    emitter.instruction("ldr x9, [sp]");                        // peek the saved Fiber pointer from the parking slot
-                    emitter.instruction(&format!("str d0, [x9, #{}]", off));    // float_args[float_slot] = float bits (loaded back into d-reg by the trampoline)
-                }
-                Arch::X86_64 => {
-                    emitter.instruction("mov rcx, QWORD PTR [rsp]");            // peek the saved Fiber pointer from the parking slot
-                    emitter.instruction(&format!("movsd QWORD PTR [rcx + {}], xmm0", off)); // float_args[float_slot] = float bits
-                }
-            }
-            float_slot += 1;
-            continue;                                                            // floats are scalar — no incref needed
-        }
-        let consumes_two = matches!(actual_ty, PhpType::Str);
-        if int_slot >= max_int_slots {
-            emitter.comment(&format!(
-                "WARNING: Fiber capture {} dropped — start_args slot budget exhausted",
-                capture_name
-            ));
-            break;
-        }
-        if consumes_two && int_slot + 1 >= max_int_slots {
-            emitter.comment(&format!(
-                "WARNING: Fiber string capture {} dropped — needs 2 register slots but only 1 remains",
-                capture_name
-            ));
-            break;
-        }
-        let off_lo = start_args_offset + (int_slot as i32) * 8;
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction("ldr x9, [sp]");                            // peek the saved Fiber pointer from the parking slot
-                if consumes_two {
-                    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-                    let off_hi = start_args_offset + ((int_slot + 1) as i32) * 8;
-                    emitter.instruction(&format!("str {}, [x9, #{}]", ptr_reg, off_lo)); // start_args[int_slot] = string ptr
-                    emitter.instruction(&format!("str {}, [x9, #{}]", len_reg, off_hi)); // start_args[int_slot + 1] = string length
-                    emitter.instruction(&format!("mov x0, {}", ptr_reg));       // x0 = string ptr for the incref helper (only the ptr half is heap-backed)
-                    emitter.instruction("bl __rt_incref");                      // retain the captured string so it survives until the Fiber is freed
-                } else {
-                    emitter.instruction(&format!("str x0, [x9, #{}]", off_lo)); // start_args[int_slot] = single-register capture value
-                    emitter.instruction("bl __rt_incref");                      // retain the captured heap pointer if any (no-op when x0 is not in the heap range)
-                }
-            }
-            Arch::X86_64 => {
-                emitter.instruction("mov rcx, QWORD PTR [rsp]");                // peek the saved Fiber pointer from the parking slot
-                if consumes_two {
-                    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-                    let off_hi = start_args_offset + ((int_slot + 1) as i32) * 8;
-                    emitter.instruction(&format!("mov QWORD PTR [rcx + {}], {}", off_lo, ptr_reg)); // start_args[int_slot] = string ptr
-                    emitter.instruction(&format!("mov QWORD PTR [rcx + {}], {}", off_hi, len_reg)); // start_args[int_slot + 1] = string length
-                    // x86_64 incref takes the pointer in rax; ptr_reg is already rax for the string case.
-                    emitter.instruction("call __rt_incref");                    // retain the captured string so it survives until the Fiber is freed
-                } else {
-                    emitter.instruction(&format!("mov QWORD PTR [rcx + {}], rax", off_lo)); // start_args[int_slot] = single-register capture value
-                    emitter.instruction("call __rt_incref");                    // retain the captured heap pointer if any (no-op when rax is not in the heap range)
-                }
-            }
-        }
-        int_slot += if consumes_two { 2 } else { 1 };
-        // Silence dead-code warnings about user_param_count when there are no
-        // remaining users below — kept around for future asserts.
-        let _ = user_param_count;
-    }
-    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the Fiber pointer as the expression result for the active target ABI
-
-    // user_arg_max = user_param_count so the next $f->start() leaves the
-    // pre-loaded captures alone. (We use user_param_count rather than `slot`
-    // because user args always go into the first user_param_count slots, and
-    // captures occupy the trailing range we just populated.)
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("mov x9, #{}", user_param_count));     // load the closure's user-parameter count
-            emitter.instruction(&format!("str x9, [x0, #{}]", umax_off));       // user_arg_max = user_param_count
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("mov rcx, {}", user_param_count));     // load the closure's user-parameter count
-            emitter.instruction(&format!("mov QWORD PTR [rax + {}], rcx", umax_off)); // user_arg_max = user_param_count
-        }
-    }
 }

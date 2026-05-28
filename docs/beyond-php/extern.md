@@ -41,11 +41,23 @@ Argument registers follow the selected target's C ABI: AArch64 uses
 x86_64 uses the System V registers (`rdi`, `rsi`, `rdx`, `rcx`, `r8`, `r9`
 for integers/pointers and `xmm0`-`xmm7` for doubles).
 
-`callable` in an `extern function` signature is a special FFI-only path: the
-call site must provide a string-literal elephc function name, and codegen passes
-that function's native symbol address to C. General PHP callable values use
-runtime descriptor pointers internally and are not passed directly to C as
-closures or first-class callable descriptors.
+`callable` in an `extern function` signature is a special FFI-only path. The
+call site can provide either a string-literal elephc function name (resolved
+case-insensitively like PHP function names) or a callable descriptor. Descriptor
+callbacks are bound into generated C-ABI trampoline symbols, including values
+with closure captures, object receivers, late-static-binding context, or
+branch-selected descriptor state. The trampoline receives the C callback arguments, reloads the retained
+descriptor from global storage, invokes the descriptor's runtime invoker, and
+casts the boxed result back to the C-compatible callback return type.
+
+FFI callback descriptors are limited to fixed scalar/pointer signatures:
+`int`, `float`, `bool`, `ptr`, and `void` return values, with parameters drawn
+from `int`, `float`, `bool`, and `ptr`. `string`, arrays, objects, variadics,
+defaults, and by-reference callback parameters are rejected because ownership
+and temporary lifetime across a C callback boundary are not modeled safely yet.
+For C APIs without a userdata/context parameter, each generated trampoline owns
+one mutable descriptor slot for that callsite; registering a new descriptor at
+the same callsite replaces the previous slot owner.
 
 ## String conversion
 - **Calling C**: elephc creates temporary null-terminated copy, frees after call
@@ -65,6 +77,11 @@ Argument expressions are evaluated in PHP source order, then elephc loads the
 resulting values into the target C ABI registers. This matters when positional,
 named, or spread arguments have side effects.
 
+Declared extern functions can also be selected by dynamic PHP string callbacks
+such as `call_user_func($cb, ...)` and `call_user_func_array($cb, $args)`.
+The runtime descriptor uses an extern invocation shape and a generated PHP-ABI
+wrapper; the wrapper performs the C ABI call after PHP argument normalization.
+
 ## Callbacks
 ```php
 <?php
@@ -76,7 +93,35 @@ function on_signal($sig) {
 
 signal(15, "on_signal");
 ```
+
+Descriptor-backed callbacks can carry state:
+
+```php
+<?php
+extern function signal(int $sig, callable $handler): ptr;
+
+$delta = 3;
+$handler = function (int $sig) use ($delta): void {
+    echo $sig + $delta;
+};
+
+signal(15, $handler);
+```
 Callbacks must use C-compatible types only. No strings, arrays, variadic, defaults, or pass-by-reference.
+
+Descriptor-backed callbacks are accepted when no environment is needed:
+
+```php
+<?php
+extern function signal(int $sig, callable $handler): ptr;
+
+function on_signal(int $sig): void {
+    echo $sig;
+}
+
+$handler = on_signal(...);
+signal(15, $handler);
+```
 
 ## Extern globals
 ```php

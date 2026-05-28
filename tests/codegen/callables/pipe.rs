@@ -400,15 +400,10 @@ echo Marker::wrap("ok");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies instance method FCC variable short-circuit stubs the wrapper (vtable dispatch prevents direct symbol guard).
-// Regression guard for instance method short-circuit firing and dead-wrapper elimination.
+/// Verifies instance method FCC variables use descriptor invokers so captured
+/// receiver environments are read from descriptor storage rather than source locals.
 #[test]
-fn test_pipe_with_fcc_variable_method_target_stubs_wrapper() {
-    // Instance methods dispatch via the class vtable rather than a stable
-    // direct symbol, so the asm guard reduces to: the FCC wrapper is stubbed
-    // (the short-circuit fired, the wrapper's body is replaced by the stub
-    // marker). If the short-circuit ever regressed the wrapper would be
-    // re-needed and the stub marker would disappear.
+fn test_pipe_with_fcc_variable_method_target_uses_descriptor_invoker() {
     let (user_asm, libs, dir) = compile_pipe_fixture(
         r#"<?php
 class Bumper {
@@ -419,12 +414,13 @@ $b = new Bumper(10);
 $cb = $b->apply(...);
 echo 7 |> $cb;
 "#,
-        "elephc_pipe_method_stubs_wrapper",
+        "elephc_pipe_method_descriptor_invoker",
     );
 
     assert!(
-        user_asm.contains("uninvoked FCC wrapper"),
-        "expected the FCC wrapper to be stubbed for instance method short-circuit:\n{}",
+        user_asm.contains("call descriptor variable $cb()")
+            && user_asm.contains("callable_invoker"),
+        "expected instance method FCC variables to route through descriptor invokers:\n{}",
         user_asm
     );
 

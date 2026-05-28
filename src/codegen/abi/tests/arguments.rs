@@ -10,11 +10,8 @@
 
 use super::*;
 
+/// Verifies that incoming AArch64 integer parameters use x0-x7, then caller stack slots.
 #[test]
-// Tests that `emit_store_incoming_param` stores the first 8 integer parameters
-// in registers (x0-x7) and spills subsequent parameters to the caller stack.
-// Verifies the cursor advances correctly and stack loads use the correct
-// frame-pointer offset for the 9th parameter.
 fn test_emit_store_incoming_param_uses_registers_then_caller_stack() {
     let mut emitter = test_emitter();
     let mut cursor = IncomingArgCursor::default();
@@ -92,11 +89,8 @@ fn test_build_outgoing_arg_assignments_respects_register_limits() {
     assert_eq!(assignments[17].start_reg, crate::codegen::abi::registers::STACK_ARG_SENTINEL);
 }
 
+/// Verifies that outgoing stack arguments are staged without overlapping temp slots.
 #[test]
-// Tests that `materialize_outgoing_args` emits stack allocation for overflow
-// args (beyond 8 integer registers) and generates correct ldr/str instructions
-// to move args between stack slots and registers. Verifies the total overflow
-// bytes returned matches the expected stack reservation.
 fn test_materialize_outgoing_args_keeps_overflow_on_stack() {
     let mut emitter = test_emitter();
     let assignments = build_outgoing_arg_assignments_for_target(
@@ -119,11 +113,14 @@ fn test_materialize_outgoing_args_keeps_overflow_on_stack() {
     let out = emitter.output();
 
     assert_eq!(overflow_bytes, 16);
-    assert!(out.contains("    sub sp, sp, #16\n"));
-    assert!(out.contains("    ldr x0, [sp, #144]\n"));
-    assert!(out.contains("    ldr x7, [sp, #32]\n"));
-    assert!(out.contains("    str x10, [sp, #144]\n"));
-    assert!(out.contains("    add sp, sp, #144\n"));
+    assert!(out.contains("    sub sp, sp, #32\n"));
+    assert!(out.contains("    ldr x0, [sp, #160]\n"));
+    assert!(out.contains("    ldr x7, [sp, #48]\n"));
+    assert!(out.contains("    ldr x10, [sp, #32]\n"));
+    assert!(out.contains("    str x10, [sp]\n"));
+    assert!(out.contains("    ldr x10, [sp]\n"));
+    assert!(out.contains("    str x10, [sp, #160]\n"));
+    assert!(out.contains("    add sp, sp, #160\n"));
 }
 
 #[test]

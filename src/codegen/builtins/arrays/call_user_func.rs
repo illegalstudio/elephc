@@ -8,9 +8,10 @@
 //! Key details:
 //! - Callback lowering must preserve PHP source evaluation order, captures, and callable return ownership.
 
-use crate::codegen::context::Context;
+use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::expr::{emit_expr, expr_result_heap_ownership};
 use crate::codegen::expr::calls::args;
 use crate::codegen::abi;
 use crate::parser::ast::{Expr, ExprKind};
@@ -18,6 +19,7 @@ use crate::types::{FunctionSig, PhpType};
 use super::callback_env;
 use super::callable_forms;
 use super::call_user_func_array;
+use super::descriptor_arg_builder;
 use super::super::callable_lookup::{lookup_function, FunctionLookup};
 
 /// Emits `call_user_func($callback, ...$args)` builtin calls.
@@ -105,6 +107,17 @@ pub fn emit(
         );
         return Some(ret_ty);
     }
+    if let Some(ret_ty) = emit_descriptor_backed_call_user_func(
+        &args[0],
+        &args[1..],
+        call_reg,
+        save_concat_before_args,
+        emitter,
+        ctx,
+        data,
+    ) {
+        return Some(ret_ty);
+    }
 
     // -- resolve callback function address --
     let is_callable_expr = matches!(
@@ -186,4 +199,154 @@ pub fn emit(
     }
 
     Some(ret_ty)
+}
+
+/// Emits descriptor-invoker dispatch for callable values already represented as descriptors.
+///
+/// Variable arguments are encoded as invoker-only reference-cell markers when
+/// the signature has by-reference slots, or when the static signature is not
+/// known and the generated descriptor invoker must decide from runtime metadata.
+/// Captures, including by-ref captures, remain descriptor-owned and are loaded
+/// by the generated invoker.
+#[allow(clippy::too_many_arguments)]
+fn emit_descriptor_backed_call_user_func(
+    callback: &Expr,
+    callback_args: &[Expr],
+    call_reg: &str,
+    concat_saved_before_args: bool,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    let sig = descriptor_invoker_sig(callback, ctx)?;
+    let ownership = expr_result_heap_ownership(callback);
+    if !matches!(ownership, HeapOwnership::Owned | HeapOwnership::Borrowed) {
+        return None;
+    }
+
+    let _callback_ty = emit_expr(callback, emitter, ctx, data);
+    let sig = if matches!(callback.kind, ExprKind::Closure { .. }) {
+        ctx.deferred_closures.last().map(|deferred| deferred.sig.clone())
+    } else {
+        sig
+    };
+    if matches!(ownership, HeapOwnership::Borrowed) {
+        crate::codegen::callable_descriptor::emit_retain_current_descriptor(emitter);
+    }
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the callable descriptor while building call_user_func() arguments
+
+    let encode_variable_refs = should_encode_invoker_ref_args(sig.as_ref(), callback_args);
+    if let Some(sig) = sig.as_ref() {
+        validate_descriptor_call_user_func_ref_args(sig, callback_args);
+    }
+    let arr_ty = if encode_variable_refs {
+        descriptor_arg_builder::emit_indexed_invoker_arg_array(
+            callback_args,
+            encode_variable_refs,
+            emitter,
+            ctx,
+            data,
+        )
+    } else {
+        let arg_array = Expr::new(
+            ExprKind::ArrayLiteral(callback_args.to_vec()),
+            callback.span,
+        );
+        emit_expr(&arg_array, emitter, ctx, data)
+    };
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the owned call_user_func() argument array for invocation and cleanup
+    abi::emit_load_temporary_stack_slot(emitter, call_reg, 16);
+    call_user_func_array::emit_call_descriptor_array_invoker(
+        call_user_func_array::LoadedArraySource::TemporaryStackSlot(0),
+        &arr_ty,
+        call_reg,
+        concat_saved_before_args,
+        emitter,
+        ctx,
+        data,
+    );
+    release_owned_arg_array_after_mixed_result(&arr_ty, emitter);
+    release_preserved_descriptor_after_mixed_result(emitter);
+    Some(PhpType::Mixed)
+}
+
+/// Returns whether call_user_func() should encode variable args as ref-cell markers.
+fn should_encode_invoker_ref_args(sig: Option<&FunctionSig>, callback_args: &[Expr]) -> bool {
+    if !callback_args
+        .iter()
+        .any(|arg| matches!(arg.kind, ExprKind::Variable(_)))
+    {
+        return false;
+    }
+    sig.is_none_or(|sig| sig.ref_params.iter().any(|is_ref| *is_ref))
+}
+
+/// Preserves PHP's explicit by-reference argument rule for statically known callbacks.
+fn validate_descriptor_call_user_func_ref_args(sig: &FunctionSig, callback_args: &[Expr]) {
+    for (i, arg) in callback_args.iter().enumerate() {
+        if sig.ref_params.get(i).copied().unwrap_or(false)
+            && !matches!(arg.kind, ExprKind::Variable(_))
+        {
+            panic!("call_user_func() by-reference callback argument must be a variable");
+        }
+    }
+}
+
+/// Releases the synthetic call_user_func() argument array while preserving the call result.
+fn release_owned_arg_array_after_mixed_result(arr_ty: &PhpType, emitter: &mut Emitter) {
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the boxed call result while releasing the synthetic argument array
+    abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);
+    abi::emit_decref_if_refcounted(emitter, arr_ty);
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the boxed call result after argument-array cleanup
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the preserved synthetic argument-array slot
+}
+
+/// Returns optional callable signature metadata for expressions that produce descriptor values.
+fn descriptor_invoker_sig(callback: &Expr, ctx: &Context) -> Option<Option<FunctionSig>> {
+    if matches!(callback.kind, ExprKind::StringLiteral(_)) {
+        return None;
+    }
+    if matches!(callback.kind, ExprKind::Closure { .. }) {
+        return Some(None);
+    }
+    if matches!(&callback.kind, ExprKind::Variable(name) if ctx.ref_params.contains(name)) {
+        return None;
+    }
+    match &callback.kind {
+        ExprKind::Variable(_)
+        | ExprKind::ArrayAccess { .. }
+        | ExprKind::PropertyAccess { .. }
+        | ExprKind::DynamicPropertyAccess { .. }
+        | ExprKind::StaticPropertyAccess { .. }
+        | ExprKind::FirstClassCallable(_)
+        | ExprKind::FunctionCall { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. }
+        | ExprKind::ExprCall { .. }
+        | ExprKind::Assignment { .. }
+        | ExprKind::Ternary { .. }
+        | ExprKind::ShortTernary { .. }
+        | ExprKind::NullCoalesce { .. } => {}
+        _ => return None,
+    }
+    let static_sig = crate::codegen::callables::callable_sig(callback, ctx);
+    if static_sig.is_some()
+        || matches!(
+            crate::codegen::functions::infer_contextual_type(callback, ctx).codegen_repr(),
+            PhpType::Callable
+        )
+    {
+        Some(static_sig)
+    } else {
+        None
+    }
+}
+
+/// Releases the preserved callback descriptor while keeping the boxed Mixed call result live.
+fn release_preserved_descriptor_after_mixed_result(emitter: &mut Emitter) {
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve call_user_func() result while releasing the callback descriptor owner
+    abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);
+    crate::codegen::callable_descriptor::emit_release_current_descriptor(emitter);
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the boxed Mixed call_user_func() result
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the preserved callable descriptor slot
 }

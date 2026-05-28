@@ -102,6 +102,25 @@ $f->start();
     assert_eq!(out, "foo/bar");
 }
 
+/// Verifies that Fiber closure captures are loaded from the callable descriptor,
+/// not from the old seven integer-slot Fiber capture area.
+#[test]
+fn test_fiber_closure_capture_strings_exceed_legacy_slot_budget() {
+    let out = compile_and_run(
+        r#"<?php
+$a = "a";
+$b = "b";
+$c = "c";
+$d = "d";
+$f = new Fiber(function() use ($a, $b, $c, $d): void {
+    echo $a . $b . $c . $d;
+});
+$f->start();
+"#,
+    );
+    assert_eq!(out, "abcd");
+}
+
 #[test]
 // Verifies that an integer and a string captured together (`use ($n, $s)`) are
 // correctly passed to the fiber body and concatenated in the expected order.
@@ -228,6 +247,28 @@ $f->start();
 "#,
     );
     assert_eq!(out, "v=100");
+}
+
+/// Verifies that a Fiber closure descriptor can invoke a captured callable descriptor
+/// separately from the caller's local callable variable.
+#[test]
+fn test_fiber_closure_capture_callable_invokes_after_source_unset() {
+    let out = compile_and_run(
+        r#"<?php
+class Formatter {
+    public function __construct(private string $prefix) {}
+    public function wrap(string $value): string { return $this->prefix . $value; }
+}
+
+$fmt = new Formatter("call:");
+$cb = $fmt->wrap(...);
+$f = new Fiber(function() use ($cb): void { echo $cb("x"); });
+$fmt = null;
+$cb = null;
+$f->start();
+"#,
+    );
+    assert_eq!(out, "call:x");
 }
 
 #[test]

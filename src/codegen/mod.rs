@@ -12,6 +12,7 @@ mod abi;
 mod builtins;
 pub(crate) mod callable_descriptor;
 pub(crate) mod callable_dispatch;
+pub(crate) mod runtime_callable_invoker;
 mod callables;
 mod class_methods;
 /// Codegen context module.
@@ -133,6 +134,7 @@ pub fn generate_user_asm(
     functions: &HashMap<String, FunctionSig>,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
     callable_return_sigs: &HashMap<String, FunctionSig>,
+    callable_array_return_sigs: &HashMap<String, FunctionSig>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
@@ -192,6 +194,7 @@ pub fn generate_user_asm(
             &mut emitter, &mut data, name, sig, body, functions,
             callable_param_sigs,
             callable_return_sigs,
+            callable_array_return_sigs,
             &function_variant_group_names,
             &global_constants, &all_global_var_names, &all_static_vars,
             interfaces,
@@ -243,6 +246,7 @@ pub fn generate_user_asm(
             functions,
             callable_param_sigs,
             callable_return_sigs,
+            callable_array_return_sigs,
             &function_variant_group_names,
             &global_constants,
             interfaces,
@@ -271,6 +275,7 @@ pub fn generate_user_asm(
         functions,
         callable_param_sigs,
         callable_return_sigs,
+        callable_array_return_sigs,
         &function_variant_group_names,
         interfaces,
         &declared_traits,
@@ -532,6 +537,7 @@ pub fn generate(
     functions: &HashMap<String, FunctionSig>,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
     callable_return_sigs: &HashMap<String, FunctionSig>,
+    callable_array_return_sigs: &HashMap<String, FunctionSig>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
@@ -550,6 +556,7 @@ pub fn generate(
         functions,
         callable_param_sigs,
         callable_return_sigs,
+        callable_array_return_sigs,
         interfaces,
         classes,
         enums,

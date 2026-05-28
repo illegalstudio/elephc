@@ -9,5 +9,7 @@
 //! - Helpers must match callable metadata tables for builtin functions, user functions, and class methods.
 
 mod is_callable;
+mod descriptor_release;
 
+pub(crate) use descriptor_release::emit_callable_descriptor_release;
 pub(crate) use is_callable::emit_is_callable_runtime;

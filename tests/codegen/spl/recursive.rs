@@ -230,6 +230,142 @@ foreach ($it as $key => $value) {
     assert_eq!(out, "y=2;b=3;");
 }
 
+/// Verifies that recursive callback filter children preserve branch-selected descriptor env.
+#[test]
+fn test_recursive_callback_filter_iterator_preserves_branch_selected_descriptor_env() {
+    let out = compile_and_run(
+        r#"<?php
+class RecursiveGate {
+    private int $min;
+    private string $tag;
+
+    public function __construct(int $min, string $tag) {
+        $this->min = $min;
+        $this->tag = $tag;
+    }
+
+    public function keep(mixed $current, mixed $key, Iterator $iterator): bool {
+        echo $this->tag;
+        echo $key;
+        echo ";";
+        if (gettype($current) === "array") {
+            return true;
+        }
+        return $current > $this->min;
+    }
+}
+
+$left = new RecursiveGate(1, "L");
+$right = new RecursiveGate(2, "R");
+$useRight = true;
+$filter = new RecursiveCallbackFilterIterator(
+    new RecursiveArrayIterator(["a" => ["x" => 1, "y" => 2, "z" => 3], "b" => 4]),
+    $useRight ? $right->keep(...) : $left->keep(...)
+);
+$it = new RecursiveIteratorIterator($filter);
+foreach ($it as $key => $value) {
+    echo "out:";
+    echo $key;
+    echo "=";
+    echo $value;
+    echo ";";
+}
+"#,
+    );
+    assert_eq!(out, "Ra;Rx;Ry;Rz;out:z=3;Rb;out:b=4;");
+}
+
+/// Verifies that recursive callback filter children keep a runtime-selected callable array.
+#[test]
+fn test_recursive_callback_filter_iterator_runtime_selected_callable_array() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeRecursiveGate {
+    private int $min;
+    private string $tag;
+
+    public function __construct(int $min, string $tag) {
+        $this->min = $min;
+        $this->tag = $tag;
+    }
+
+    public function keep(mixed $current, mixed $key, Iterator $iterator): bool {
+        echo $this->tag;
+        echo $key;
+        echo ";";
+        if (gettype($current) === "array") {
+            return true;
+        }
+        return $current > $this->min;
+    }
+}
+
+$gate = new RuntimeRecursiveGate(1, "D");
+$method = "keep";
+$callback = [$gate, $method];
+$filter = new RecursiveCallbackFilterIterator(
+    new RecursiveArrayIterator(["a" => ["x" => 1, "y" => 2, "z" => 3], "b" => 4]),
+    $callback
+);
+$callback = [new RuntimeRecursiveGate(3, "E"), $method];
+$it = new RecursiveIteratorIterator($filter);
+foreach ($it as $key => $value) {
+    echo "out:";
+    echo $key;
+    echo "=";
+    echo $value;
+    echo ";";
+}
+"#,
+    );
+    assert_eq!(out, "Da;Dx;Dy;out:y=2;Dz;out:z=3;Db;out:b=4;");
+}
+
+/// Verifies that recursive callback filter children keep a runtime-selected callable-array literal.
+#[test]
+fn test_recursive_callback_filter_iterator_runtime_selected_callable_array_literal() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeRecursiveLiteralGate {
+    private int $min;
+    private string $tag;
+
+    public function __construct(int $min, string $tag) {
+        $this->min = $min;
+        $this->tag = $tag;
+    }
+
+    public function keep(mixed $current, mixed $key, Iterator $iterator): bool {
+        echo $this->tag;
+        echo $key;
+        echo ";";
+        if (gettype($current) === "array") {
+            return true;
+        }
+        return $current > $this->min;
+    }
+}
+
+$gate = new RuntimeRecursiveLiteralGate(1, "Q");
+$method = "keep";
+$filter = new RecursiveCallbackFilterIterator(
+    new RecursiveArrayIterator(["a" => ["x" => 1, "y" => 2, "z" => 3], "b" => 4]),
+    [$gate, $method]
+);
+$gate = null;
+$it = new RecursiveIteratorIterator($filter);
+foreach ($it as $key => $value) {
+    echo "out:";
+    echo $key;
+    echo "=";
+    echo $value;
+    echo ";";
+}
+"#,
+    );
+    assert_eq!(out, "Qa;Qx;Qy;out:y=2;Qz;out:z=3;Qb;out:b=4;");
+}
+
 /// Verifies that parent iterator filters parents recursively.
 #[test]
 fn test_parent_iterator_filters_parents_recursively() {

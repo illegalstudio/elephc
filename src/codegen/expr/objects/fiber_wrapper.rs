@@ -10,7 +10,7 @@
 
 use crate::codegen::context::{Context, DeferredFiberWrapper};
 use crate::parser::ast::{Expr, ExprKind};
-use crate::types::{fibers, PhpType};
+use crate::types::{fibers, FunctionSig, PhpType};
 
 /// Registers a fiber wrapper entry point for a callable used as a Fiber start routine.
 ///
@@ -65,6 +65,9 @@ pub(super) fn prepare_fiber_wrapper(callable_expr: &Expr, ctx: &mut Context) -> 
                     .collect(),
             )
         }
+        ExprKind::Variable(name) if variable_needs_descriptor_invoker(name, callable_expr, ctx) => {
+            return Some(prepare_descriptor_invoker_wrapper(ctx));
+        }
         ExprKind::Variable(name) => {
             ctx.mark_fcc_used(name);
             let captures = ctx.closure_captures.get(name).cloned().unwrap_or_default();
@@ -99,6 +102,9 @@ pub(super) fn prepare_fiber_wrapper(callable_expr: &Expr, ctx: &mut Context) -> 
             ctx.closure_sigs.insert(name.clone(), sig.clone());
             (sig, visible_param_count, hidden_arg_types)
         }
+        _ if expr_is_descriptor_backed_callable(callable_expr, ctx) => {
+            return Some(prepare_descriptor_invoker_wrapper(ctx));
+        }
         _ => return None,
     };
 
@@ -109,8 +115,59 @@ pub(super) fn prepare_fiber_wrapper(callable_expr: &Expr, ctx: &mut Context) -> 
         sig,
         visible_param_count,
         hidden_arg_types,
+        use_descriptor_invoker: false,
     });
     Some(label)
+}
+
+/// Returns true when a variable's callable value must be invoked through its runtime descriptor.
+fn variable_needs_descriptor_invoker(name: &str, callable_expr: &Expr, ctx: &Context) -> bool {
+    ctx.runtime_callable_vars.contains(name)
+        || ctx.callable_param_names.contains(name)
+        || (!ctx.closure_sigs.contains_key(name) && expr_is_descriptor_backed_callable(callable_expr, ctx))
+}
+
+/// Returns true when `expr` is already represented by a runtime callable descriptor.
+fn expr_is_descriptor_backed_callable(expr: &Expr, ctx: &Context) -> bool {
+    matches!(
+        crate::codegen::functions::infer_contextual_type(expr, ctx).codegen_repr(),
+        PhpType::Callable
+    )
+}
+
+/// Registers or reuses the generic Fiber wrapper that calls a descriptor invoker.
+pub(super) fn prepare_descriptor_invoker_wrapper(ctx: &mut Context) -> String {
+    if let Some(existing) = ctx
+        .deferred_fiber_wrappers
+        .iter()
+        .find(|wrapper| wrapper.use_descriptor_invoker)
+    {
+        return existing.label.clone();
+    }
+
+    let label = ctx.next_label("fiber_descriptor_invoker");
+    ctx.deferred_fiber_wrappers.push(DeferredFiberWrapper {
+        label: label.clone(),
+        sig: descriptor_invoker_placeholder_sig(),
+        visible_param_count: 0,
+        hidden_arg_types: Vec::new(),
+        use_descriptor_invoker: true,
+    });
+    label
+}
+
+/// Builds a placeholder signature for a descriptor-backed Fiber wrapper.
+fn descriptor_invoker_placeholder_sig() -> FunctionSig {
+    FunctionSig {
+        params: Vec::new(),
+        defaults: Vec::new(),
+        return_type: PhpType::Mixed,
+        declared_return: false,
+        ref_params: Vec::new(),
+        declared_params: Vec::new(),
+        variadic: None,
+        deprecation: None,
+    }
 }
 
 /// Maps a closure capture tuple to the `PhpType` used for the hidden argument passing slot.

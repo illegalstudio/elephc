@@ -456,6 +456,163 @@ foreach ($it as $key => $value) {
     assert_eq!(out, "1:2;2:3;");
 }
 
+/// Verifies that callback filter iterator preserves branch-selected descriptor env.
+#[test]
+fn test_callback_filter_iterator_preserves_branch_selected_descriptor_env() {
+    let out = compile_and_run(
+        r#"<?php
+class CallbackGate {
+    private int $min;
+    private string $tag;
+
+    public function __construct(int $min, string $tag) {
+        $this->min = $min;
+        $this->tag = $tag;
+    }
+
+    public function keep(int $current, string $key, Iterator $iterator): bool {
+        echo $this->tag;
+        echo $key;
+        echo ":";
+        echo $iterator instanceof ArrayIterator ? "it" : "bad";
+        echo ";";
+        return $current >= $this->min;
+    }
+}
+
+$left = new CallbackGate(2, "L");
+$right = new CallbackGate(3, "R");
+$useRight = true;
+$it = new CallbackFilterIterator(
+    new ArrayIterator(["a" => 1, "b" => 2, "c" => 3]),
+    $useRight ? $right->keep(...) : $left->keep(...)
+);
+foreach ($it as $key => $value) {
+    echo "out:";
+    echo $key;
+    echo "=";
+    echo $value;
+    echo ";";
+}
+"#,
+    );
+    assert_eq!(out, "Ra:it;Rb:it;Rc:it;out:c=3;");
+}
+
+/// Verifies that callback filter iterator stores a runtime-selected instance callable array.
+#[test]
+fn test_callback_filter_iterator_runtime_selected_instance_callable_array() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeCallbackGate {
+    private int $min;
+    private string $tag;
+
+    public function __construct(int $min, string $tag) {
+        $this->min = $min;
+        $this->tag = $tag;
+    }
+
+    public function keep(int $current, string $key, Iterator $iterator): bool {
+        echo $this->tag;
+        echo $key;
+        echo ":";
+        echo $iterator instanceof ArrayIterator ? "it" : "bad";
+        echo ";";
+        return $current >= $this->min;
+    }
+}
+
+$first = new RuntimeCallbackGate(2, "A");
+$second = new RuntimeCallbackGate(3, "B");
+$method = "keep";
+$callback = [$first, $method];
+$it = new CallbackFilterIterator(new ArrayIterator(["a" => 1, "b" => 2, "c" => 3]), $callback);
+$callback = [$second, $method];
+foreach ($it as $key => $value) {
+    echo "out:";
+    echo $key;
+    echo "=";
+    echo $value;
+    echo ";";
+}
+"#,
+    );
+    assert_eq!(out, "Aa:it;Ab:it;out:b=2;Ac:it;out:c=3;");
+}
+
+/// Verifies that callback filter iterator stores a runtime-selected static callable array.
+#[test]
+fn test_callback_filter_iterator_runtime_selected_static_callable_array() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeCallbackStaticGate {
+    public static function keep(int $current, string $key, Iterator $iterator): bool {
+        echo "S";
+        echo $key;
+        echo ":";
+        echo $iterator instanceof ArrayIterator ? "it" : "bad";
+        echo ";";
+        return $current >= 2;
+    }
+}
+
+$class = "RuntimeCallbackStaticGate";
+$method = "keep";
+$callback = [$class, $method];
+$it = new CallbackFilterIterator(new ArrayIterator(["a" => 1, "b" => 2, "c" => 3]), $callback);
+foreach ($it as $key => $value) {
+    echo "out:";
+    echo $key;
+    echo "=";
+    echo $value;
+    echo ";";
+}
+"#,
+    );
+    assert_eq!(out, "Sa:it;Sb:it;out:b=2;Sc:it;out:c=3;");
+}
+
+/// Verifies that callback filter iterator stores a runtime-selected callable-array literal.
+#[test]
+fn test_callback_filter_iterator_runtime_selected_callable_array_literal() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeCallbackLiteralGate {
+    private int $min;
+    private string $tag;
+
+    public function __construct(int $min, string $tag) {
+        $this->min = $min;
+        $this->tag = $tag;
+    }
+
+    public function keep(int $current, string $key, Iterator $iterator): bool {
+        echo $this->tag;
+        echo $key;
+        echo ":";
+        echo $iterator instanceof ArrayIterator ? "it" : "bad";
+        echo ";";
+        return $current >= $this->min;
+    }
+}
+
+$gate = new RuntimeCallbackLiteralGate(2, "L");
+$method = "keep";
+$it = new CallbackFilterIterator(new ArrayIterator(["a" => 1, "b" => 2, "c" => 3]), [$gate, $method]);
+$gate = null;
+foreach ($it as $key => $value) {
+    echo "out:";
+    echo $key;
+    echo "=";
+    echo $value;
+    echo ";";
+}
+"#,
+    );
+    assert_eq!(out, "La:it;Lb:it;out:b=2;Lc:it;out:c=3;");
+}
+
 /// Verifies that caching iterator tracks has next and string value.
 #[test]
 fn test_caching_iterator_tracks_has_next_and_string_value() {

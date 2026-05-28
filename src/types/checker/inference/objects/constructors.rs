@@ -9,9 +9,9 @@
 //! - Object inference depends on flattened class metadata, visibility, inheritance, and declared property types.
 
 use crate::errors::CompileError;
-use crate::names::php_symbol_key;
-use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
-use crate::types::{fibers, PhpType, TypeEnv};
+use crate::names::{php_symbol_key, Name};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
+use crate::types::{fibers, FunctionSig, PhpType, TypeEnv};
 
 use super::super::super::Checker;
 
@@ -101,6 +101,18 @@ impl Checker {
                     &format!("Constructor '{}::__construct'", class_name),
                     env,
                 )?;
+                let effective_sig = if matches!(
+                    class_name.as_str(),
+                    "CallbackFilterIterator" | "RecursiveCallbackFilterIterator"
+                ) {
+                    self.callback_filter_constructor_sig_for_args(
+                        &effective_sig,
+                        &normalized_args,
+                        env,
+                    )?
+                } else {
+                    effective_sig
+                };
                 self.check_known_callable_call(
                     &effective_sig,
                     &normalized_args,
@@ -466,10 +478,10 @@ impl Checker {
 
     /// Validates arguments passed to the `Fiber` constructor.
     ///
-    /// The first argument must be a closure or known first-class callable.
-    /// Validates capture slots for closures (by-ref captures, variadic params)
-    /// and checks the callback signature compatibility. Emits an error if
-    /// the callback is invalid.
+    /// The first argument must be a callable value. Statically known closures
+    /// and first-class callables are validated immediately; descriptor-backed
+    /// runtime callable values are accepted so the uniform invoker can use their
+    /// runtime signature metadata at Fiber entry time.
     fn validate_fiber_constructor_args(
         &mut self,
         args: &[Expr],
@@ -479,66 +491,220 @@ impl Checker {
         let Some(callback) = args.first() else {
             return Ok(());
         };
-        let Some(sig) = self.resolve_expr_callable_sig(callback, env)? else {
-            return Err(CompileError::new(
-                callback.span,
-                "Fiber callback must be a closure or known first-class callable",
-            ));
+        let Some(sig) = self.resolve_fiber_callable_sig(callback, env)? else {
+            let callback_ty = self.infer_type(callback, env)?;
+            if callback_ty == PhpType::Callable
+                || callback_ty == PhpType::Str
+                || crate::types::checker::builtins::runtime_callable_array_type(&callback_ty)
+            {
+                return Ok(());
+            }
+            return Err(CompileError::new(callback.span, "Fiber callback must be callable"));
         };
 
         let visible_param_count = match &callback.kind {
             ExprKind::Closure {
-                params,
-                variadic,
-                captures,
-                capture_refs,
-                ..
-            } => {
-                let visible_param_count =
-                    fibers::visible_param_count(params.len(), variadic.is_some());
-                let capture_types = captures
-                    .iter()
-                    .map(|name| {
-                        (
-                            name.clone(),
-                            env.get(name).cloned().unwrap_or(PhpType::Mixed),
-                            capture_refs.iter().any(|ref_capture| ref_capture == name),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                fibers::validate_capture_slots(
-                    &sig,
-                    visible_param_count,
-                    &capture_types,
-                    callback.span,
-                )?;
-                visible_param_count
-            }
-            ExprKind::Variable(name) => {
-                let capture_types = self
-                    .callable_captures
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_default();
-                let visible_param_count = sig.params.len();
-                fibers::validate_capture_slots(
-                    &sig,
-                    visible_param_count,
-                    &capture_types,
-                    callback.span,
-                )?;
-                visible_param_count
-            }
+                params, variadic, ..
+            } => fibers::visible_param_count(params.len(), variadic.is_some()),
+            ExprKind::Variable(_) => sig.params.len(),
             ExprKind::FirstClassCallable(_) => sig.params.len(),
-            _ => {
-                return Err(CompileError::new(
-                    callback.span,
-                    "Fiber callback must be a closure or known first-class callable",
-                ));
-            }
+            _ => sig.params.len(),
         };
 
         fibers::validate_callback_signature(&sig, visible_param_count, expr.span)
+    }
+
+    /// Resolves the callable signature for Fiber callback forms supported by codegen.
+    fn resolve_fiber_callable_sig(
+        &mut self,
+        callback: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Option<FunctionSig>, CompileError> {
+        if let Some(sig) = self.resolve_expr_callable_sig(callback, env)? {
+            return Ok(Some(sig));
+        }
+
+        match &callback.kind {
+            ExprKind::StringLiteral(name) => self.resolve_fiber_string_callable_sig(name, callback.span, env),
+            ExprKind::ArrayLiteral(_) => self.resolve_fiber_callable_array_literal_sig(callback, env),
+            ExprKind::Variable(name) => {
+                if let Some(target) = self.callable_array_targets.get(name).cloned() {
+                    return self.resolve_fiber_callable_array_variable_sig(&target, callback.span, env);
+                }
+                self.resolve_fiber_invokable_object_sig(callback, env)
+            }
+            ExprKind::This => self.resolve_fiber_invokable_object_sig(callback, env),
+            _ => self.resolve_fiber_invokable_object_sig(callback, env),
+        }
+    }
+
+    /// Resolves a string callback literal to a function or static-method signature.
+    fn resolve_fiber_string_callable_sig(
+        &mut self,
+        name: &str,
+        span: crate::span::Span,
+        env: &TypeEnv,
+    ) -> Result<Option<FunctionSig>, CompileError> {
+        if let Some((class_name, method_name)) = name.split_once("::") {
+            let Some(class_name) = self.resolve_fiber_callable_class_name(class_name) else {
+                return Ok(None);
+            };
+            let target = CallableTarget::StaticMethod {
+                receiver: StaticReceiver::Named(Name::from(class_name.to_string())),
+                method: method_name.to_string(),
+            };
+            return self.resolve_first_class_callable_sig(&target, span, env).map(Some);
+        }
+
+        let function_name = self
+            .canonical_function_name_folded(name)
+            .or_else(|| crate::name_resolver::canonical_builtin_function_name(name))
+            .unwrap_or_else(|| name.trim_start_matches('\\').to_string());
+        let target = CallableTarget::Function(Name::from(function_name));
+        self.resolve_first_class_callable_sig(&target, span, env).map(Some)
+    }
+
+    /// Resolves a literal callable array to a static-method or receiver-bound method signature.
+    fn resolve_fiber_callable_array_literal_sig(
+        &mut self,
+        callback: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Option<FunctionSig>, CompileError> {
+        let Some(target) = self.fiber_callable_array_literal_target(callback, env)? else {
+            return Ok(None);
+        };
+        self.resolve_first_class_callable_sig(&target, callback.span, env)
+            .map(Some)
+    }
+
+    /// Resolves a tracked callable-array variable when codegen can materialize it without hidden temps.
+    fn resolve_fiber_callable_array_variable_sig(
+        &mut self,
+        target: &CallableTarget,
+        span: crate::span::Span,
+        env: &TypeEnv,
+    ) -> Result<Option<FunctionSig>, CompileError> {
+        self.resolve_first_class_callable_sig(target, span, env).map(Some)
+    }
+
+    /// Resolves an invokable object callback signature for `$object` or `$this`.
+    fn resolve_fiber_invokable_object_sig(
+        &mut self,
+        callback: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Option<FunctionSig>, CompileError> {
+        let callback_ty = self.infer_type(callback, env)?;
+        let Some(class_name) = self.fiber_object_class_name(&callback_ty) else {
+            return Ok(None);
+        };
+        if !self
+            .classes
+            .get(&class_name)
+            .is_some_and(|class_info| class_info.methods.contains_key("__invoke"))
+        {
+            return Ok(None);
+        }
+        let target = CallableTarget::Method {
+            object: Box::new(callback.clone()),
+            method: "__invoke".to_string(),
+        };
+        self.resolve_first_class_callable_sig(&target, callback.span, env)
+            .map(Some)
+    }
+
+    /// Builds a first-class-callable target for a supported literal callable array.
+    fn fiber_callable_array_literal_target(
+        &mut self,
+        callback: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Option<CallableTarget>, CompileError> {
+        let Some((receiver, method)) = fiber_callable_array_parts(callback) else {
+            return Ok(None);
+        };
+        if let Some(receiver) = self.fiber_static_callable_receiver(receiver, callback.span)? {
+            return Ok(Some(CallableTarget::StaticMethod {
+                receiver,
+                method: method.to_string(),
+            }));
+        }
+        let receiver_ty = self.infer_type(receiver, env)?;
+        if self.fiber_object_class_name(&receiver_ty).is_none() {
+            return Ok(None);
+        }
+        Ok(Some(CallableTarget::Method {
+            object: Box::new(receiver.clone()),
+            method: method.to_string(),
+        }))
+    }
+
+    /// Resolves a literal callable-array receiver to a static class receiver.
+    fn fiber_static_callable_receiver(
+        &self,
+        receiver: &Expr,
+        span: crate::span::Span,
+    ) -> Result<Option<StaticReceiver>, CompileError> {
+        let class_name = match &receiver.kind {
+            ExprKind::StringLiteral(class_name) => self
+                .resolve_fiber_callable_class_name(class_name)
+                .map(str::to_string),
+            ExprKind::ClassConstant { receiver } => Some(
+                self.resolve_fiber_callable_static_receiver_class(receiver, span)?,
+            ),
+            _ => None,
+        };
+        Ok(class_name.map(|class_name| StaticReceiver::Named(Name::from(class_name))))
+    }
+
+    /// Resolves `self`, `parent`, `static`, or named class receivers for Fiber callable arrays.
+    fn resolve_fiber_callable_static_receiver_class(
+        &self,
+        receiver: &StaticReceiver,
+        span: crate::span::Span,
+    ) -> Result<String, CompileError> {
+        match receiver {
+            StaticReceiver::Named(class_name) => self
+                .resolve_fiber_callable_class_name(class_name.as_str())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    CompileError::new(span, &format!("Undefined class: {}", class_name.as_str()))
+                }),
+            StaticReceiver::Self_ | StaticReceiver::Static => {
+                self.current_class.clone().ok_or_else(|| {
+                    CompileError::new(span, "Cannot use self::class outside class scope")
+                })
+            }
+            StaticReceiver::Parent => {
+                let current = self.current_class.as_ref().ok_or_else(|| {
+                    CompileError::new(span, "Cannot use parent::class outside class scope")
+                })?;
+                self.classes
+                    .get(current)
+                    .and_then(|class_info| class_info.parent.clone())
+                    .ok_or_else(|| {
+                        CompileError::new(
+                            span,
+                            &format!("Class '{}' has no parent class", current),
+                        )
+                    })
+            }
+        }
+    }
+
+    /// Resolves a class name case-insensitively for Fiber callable strings and arrays.
+    fn resolve_fiber_callable_class_name<'a>(&'a self, class_name: &str) -> Option<&'a str> {
+        let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+        self.classes
+            .keys()
+            .find(|existing| php_symbol_key(existing) == class_key)
+            .map(String::as_str)
+    }
+
+    /// Extracts an object class name from a Fiber callback type.
+    fn fiber_object_class_name(&self, ty: &PhpType) -> Option<String> {
+        match ty {
+            PhpType::Object(class_name) => Some(class_name.clone()),
+            _ => None,
+        }
     }
 
     /// Provides the Specialize callback filter iterator callback helper used by the constructors module.
@@ -549,6 +715,15 @@ impl Checker {
         let Some(callback) = args.get(1) else {
             return Ok(());
         };
+
+        if self.expr_call_complex_callee_needs_runtime_capture(callback)
+            && !crate::types::checker::builtins::callback_supports_complex_descriptor_env(callback)
+        {
+            return Err(CompileError::new(
+                callback.span,
+                "CallbackFilterIterator callback does not support complex expressions that select captured callables at runtime",
+            ));
+        }
 
         match &callback.kind {
             ExprKind::FirstClassCallable(crate::parser::ast::CallableTarget::Function(name)) => {
@@ -565,6 +740,45 @@ impl Checker {
         }
 
         Ok(())
+    }
+
+    /// Adjusts callback-filter constructor typing for callable-array callback variables.
+    fn callback_filter_constructor_sig_for_args(
+        &mut self,
+        sig: &crate::types::FunctionSig,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<crate::types::FunctionSig, CompileError> {
+        let Some(callback) = args.get(1) else {
+            return Ok(sig.clone());
+        };
+        let actual_ty = self.infer_type(callback, env)?;
+        if !self.callback_filter_accepts_runtime_callable_array(callback, &actual_ty) {
+            return Ok(sig.clone());
+        }
+        let mut adjusted_sig = sig.clone();
+        if let Some((_, callback_ty)) = adjusted_sig.params.get_mut(1) {
+            *callback_ty = actual_ty;
+        }
+        Ok(adjusted_sig)
+    }
+
+    /// Returns true when CallbackFilterIterator codegen can resolve a runtime callable array.
+    fn callback_filter_accepts_runtime_callable_array(
+        &self,
+        callback: &Expr,
+        actual_ty: &PhpType,
+    ) -> bool {
+        match &callback.kind {
+            ExprKind::Variable(var_name) => {
+                self.callable_array_targets.contains_key(var_name)
+                    || crate::types::checker::builtins::runtime_callable_array_type(actual_ty)
+            }
+            ExprKind::ArrayLiteral(elems) if elems.len() == 2 => {
+                crate::types::checker::builtins::runtime_callable_array_type(actual_ty)
+            }
+            _ => false,
+        }
     }
 
     /// Provides the Specialize callback filter function helper used by the constructors module.
@@ -633,6 +847,20 @@ impl Checker {
         }
         Ok(PhpType::Object(enum_name))
     }
+}
+
+/// Returns receiver and method from `[receiver, "method"]` Fiber callbacks.
+fn fiber_callable_array_parts(expr: &Expr) -> Option<(&Expr, &str)> {
+    let ExprKind::ArrayLiteral(elems) = &expr.kind else {
+        return None;
+    };
+    if elems.len() != 2 {
+        return None;
+    }
+    let ExprKind::StringLiteral(method) = &elems[1].kind else {
+        return None;
+    };
+    Some((&elems[0], method.as_str()))
 }
 
 /// Returns `true` if `class_name` is a reflection owner class

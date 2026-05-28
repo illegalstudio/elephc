@@ -65,12 +65,9 @@ fn test_incoming_arg_cursor_for_linux_x86_64_uses_sysv_defaults() {
     assert!(stack_only_cursor.int_stack_only);
 }
 
+/// Verifies that Linux x86_64 outgoing integer args use SysV registers and staged stack overflow.
 #[test]
 fn test_materialize_outgoing_args_for_linux_x86_64_uses_sysv_registers() {
-    // Verifies that materialize_outgoing_args emits correct x86_64 instructions for
-    // the SysV AMD64 calling convention: registers rdi, rsi, rdx, rcx, r8, r9 hold
-    // integer arguments, overflow is passed on the stack at [rsp + 16+n*8], and the
-    // caller cleans up the stack. This test uses 7 integer arguments (6 regs + stack).
     let mut emitter = test_emitter_x86();
     let assignments = build_outgoing_arg_assignments_for_target(
         Target::new(Platform::Linux, Arch::X86_64),
@@ -90,22 +87,19 @@ fn test_materialize_outgoing_args_for_linux_x86_64_uses_sysv_registers() {
     let out = emitter.output();
 
     assert_eq!(overflow_bytes, 16);
-    assert!(out.contains("    sub rsp, 16\n"));
-    assert!(out.contains("    mov rdi, QWORD PTR [rsp + 112]\n"));
-    assert!(out.contains("    mov r9, QWORD PTR [rsp + 32]\n"));
-    assert!(out.contains("    mov r10, QWORD PTR [rsp + 16]\n"));
-    assert!(out.contains("    mov QWORD PTR [rsp + 112], r10\n"));
-    assert!(out.contains("    add rsp, 112\n"));
+    assert!(out.contains("    sub rsp, 32\n"));
+    assert!(out.contains("    mov rdi, QWORD PTR [rsp + 128]\n"));
+    assert!(out.contains("    mov r9, QWORD PTR [rsp + 48]\n"));
+    assert!(out.contains("    mov r10, QWORD PTR [rsp + 32]\n"));
+    assert!(out.contains("    mov QWORD PTR [rsp], r10\n"));
+    assert!(out.contains("    mov r10, QWORD PTR [rsp]\n"));
+    assert!(out.contains("    mov QWORD PTR [rsp + 128], r10\n"));
+    assert!(out.contains("    add rsp, 128\n"));
 }
 
+/// Verifies that Linux x86_64 outgoing string args preserve register temps while staging overflow.
 #[test]
 fn test_materialize_outgoing_string_args_for_linux_x86_64_preserves_live_rcx() {
-    // Verifies that materialize_outgoing_args correctly handles the SysV AMD64
-    // requirement that the callee-preserved register rcx is not clobbered during
-    // argument materialization. When 3 string arguments require 6 registers (rsi,
-    // rdx, rcx, r8, r9, and one overflow), rcx must be sourced from the original
-    // stack slot [rsp + 32] rather than the scratch [rsp + 24] slot which would
-    // corrupt a live value.
     let mut emitter = test_emitter_x86();
     let assignments = build_outgoing_arg_assignments_for_target(
         Target::new(Platform::Linux, Arch::X86_64),
@@ -117,15 +111,17 @@ fn test_materialize_outgoing_string_args_for_linux_x86_64_preserves_live_rcx() {
     let out = emitter.output();
 
     assert_eq!(overflow_bytes, 16);
-    assert!(out.contains("    mov rsi, QWORD PTR [rsp + 48]\n"));
-    assert!(out.contains("    mov rdx, QWORD PTR [rsp + 56]\n"));
-    assert!(out.contains("    mov rcx, QWORD PTR [rsp + 32]\n"));
-    assert!(out.contains("    mov r8, QWORD PTR [rsp + 40]\n"));
-    assert!(out.contains("    mov r10, QWORD PTR [rsp + 16]\n"));
-    assert!(out.contains("    mov r11, QWORD PTR [rsp + 24]\n"));
-    assert!(out.contains("    mov QWORD PTR [rsp + 48], r10\n"));
-    assert!(out.contains("    mov QWORD PTR [rsp + 56], r11\n"));
-    assert!(!out.contains("    mov rcx, QWORD PTR [rsp + 24]\n"));
+    assert!(out.contains("    mov rsi, QWORD PTR [rsp + 64]\n"));
+    assert!(out.contains("    mov rdx, QWORD PTR [rsp + 72]\n"));
+    assert!(out.contains("    mov rcx, QWORD PTR [rsp + 48]\n"));
+    assert!(out.contains("    mov r8, QWORD PTR [rsp + 56]\n"));
+    assert!(out.contains("    mov r10, QWORD PTR [rsp + 32]\n"));
+    assert!(out.contains("    mov r11, QWORD PTR [rsp + 40]\n"));
+    assert!(out.contains("    mov QWORD PTR [rsp], r10\n"));
+    assert!(out.contains("    mov QWORD PTR [rsp + 8], r11\n"));
+    assert!(out.contains("    mov QWORD PTR [rsp + 64], r10\n"));
+    assert!(out.contains("    mov QWORD PTR [rsp + 72], r11\n"));
+    assert!(!out.contains("    mov rcx, QWORD PTR [rsp + 40]\n"));
 }
 
 #[test]

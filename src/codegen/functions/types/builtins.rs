@@ -8,12 +8,13 @@
 //! Key details:
 //! - Results must agree with `crate::types` so local slots and runtime value shapes are selected correctly.
 
+use crate::codegen::builtins::callable_lookup::{lookup_function, FunctionLookup};
 use crate::codegen::context::Context;
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::types::{array_key_type_from_value_type, FunctionSig, PhpType};
 
 use super::arrays::{array_like_key_type, array_like_value_type, indexed_array_value_type};
-use super::infer_local_type;
+use super::{codegen_static_type, infer_local_type};
 use super::union::merge_union_members;
 
 /// Infers the PHP return type for a builtin function call based on the function name,
@@ -43,6 +44,9 @@ pub(super) fn infer_function_call_type(
         | "tempnam" | "getcwd" | "shell_exec" | "preg_replace_callback"
         | "ptr_read_string" => PhpType::Str,
         "json_decode" => PhpType::Mixed,
+        "call_user_func" | "call_user_func_array" => {
+            infer_dynamic_callback_builtin_type(args, ctx).unwrap_or(PhpType::Mixed)
+        }
         "array_keys" => {
             let arr_ty = args
                 .first()
@@ -260,6 +264,72 @@ pub(super) fn infer_function_call_type(
             }
             PhpType::Int
         }
+    }
+}
+
+/// Infers the result type for dynamic callback builtins when the callback has static metadata.
+fn infer_dynamic_callback_builtin_type(args: &[Expr], ctx: Option<&Context>) -> Option<PhpType> {
+    let callback = args.first()?;
+    let ctx = ctx?;
+    infer_callback_expr_return_type(callback, ctx)
+}
+
+/// Infers the return type of a callable expression used by `call_user_func*`.
+fn infer_callback_expr_return_type(callback: &Expr, ctx: &Context) -> Option<PhpType> {
+    if let Some(sig) = crate::codegen::callables::callable_sig(callback, ctx) {
+        return Some(sig.return_type);
+    }
+
+    match &callback.kind {
+        ExprKind::StringLiteral(name) => infer_string_callback_return_type(name, ctx),
+        ExprKind::Closure {
+            return_type: Some(type_ann),
+            ..
+        } => Some(codegen_static_type(type_ann, ctx)),
+        ExprKind::Closure { body, .. } => {
+            Some(crate::types::checker::infer_return_type_syntactic(body))
+        }
+        ExprKind::Assignment { value, .. } => infer_callback_expr_return_type(value, ctx),
+        ExprKind::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        } => matching_callback_branch_return_type(then_expr, else_expr, ctx),
+        ExprKind::ShortTernary { value, default }
+        | ExprKind::NullCoalesce { value, default } => {
+            matching_callback_branch_return_type(value, default, ctx)
+        }
+        _ => None,
+    }
+}
+
+/// Infers the return type of a string-named callback when it resolves at compile time.
+fn infer_string_callback_return_type(name: &str, ctx: &Context) -> Option<PhpType> {
+    match lookup_function(ctx, name)? {
+        FunctionLookup::UserFunction(name)
+        | FunctionLookup::IncludeVariant(name)
+        | FunctionLookup::Extern(name) => ctx
+            .functions
+            .get(&name)
+            .map(|sig| sig.return_type.clone()),
+        FunctionLookup::Builtin(name) => {
+            crate::types::first_class_callable_builtin_sig(&name).map(|sig| sig.return_type)
+        }
+    }
+}
+
+/// Infers a branch result only when both possible callbacks return the same type.
+fn matching_callback_branch_return_type(
+    left: &Expr,
+    right: &Expr,
+    ctx: &Context,
+) -> Option<PhpType> {
+    let left_ty = infer_callback_expr_return_type(left, ctx)?;
+    let right_ty = infer_callback_expr_return_type(right, ctx)?;
+    if left_ty == right_ty {
+        Some(left_ty)
+    } else {
+        None
     }
 }
 

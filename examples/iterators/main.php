@@ -161,3 +161,56 @@ echo "iterator_apply returned callable:\n";
 $dynamic_labels = ["?"];
 echo iterator_apply(new Range(0, 2, 1), make_iterator_labeler(), $dynamic_labels);
 echo "\n";
+
+class IteratorLabeler {
+    private string $prefix;
+
+    public function __construct(string $prefix) {
+        $this->prefix = $prefix;
+    }
+
+    public function tick(string $label): bool {
+        echo $this->prefix . $label;
+        return true;
+    }
+}
+
+echo "iterator_apply selected callable:\n";
+$leftLabeler = new IteratorLabeler("L");
+$rightLabeler = new IteratorLabeler("R");
+$useLeftLabeler = false;
+$selectedLabels = ["label" => "!"];
+echo iterator_apply(
+    new Range(0, 2, 1),
+    $useLeftLabeler ? $leftLabeler->tick(...) : $rightLabeler->tick(...),
+    $selectedLabels
+);
+echo "\n";
+
+class IteratorFilterGate {
+    private int $min;
+
+    public function __construct(int $min) {
+        $this->min = $min;
+    }
+
+    public function keep(int $value, string $key, Iterator $inner): bool {
+        return $inner instanceof ArrayIterator && $key !== "a" && $value >= $this->min;
+    }
+}
+
+echo "callback filter selected callable:\n";
+$wideFilter = new IteratorFilterGate(2);
+$strictFilter = new IteratorFilterGate(3);
+$useStrictFilter = true;
+$filtered = new CallbackFilterIterator(
+    new ArrayIterator(["a" => 1, "b" => 2, "c" => 3]),
+    $useStrictFilter ? $strictFilter->keep(...) : $wideFilter->keep(...)
+);
+foreach ($filtered as $key => $value) {
+    echo $key;
+    echo "=";
+    echo $value;
+    echo " ";
+}
+echo "\n";

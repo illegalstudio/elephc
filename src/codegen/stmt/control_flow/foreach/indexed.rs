@@ -152,7 +152,7 @@ pub(crate) fn emit_indexed_foreach(
                     ctx,
                 );
             }
-            PhpType::Mixed | PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            PhpType::Mixed | PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Callable => {
                 emitter.instruction("add x9, x9, #24");                         // skip 24-byte array header to reach data
                 emitter.instruction("ldr x0, [x9, x0, lsl #3]");                // load nested array/object pointer at index
                 super::store_foreach_value_from_regs(
@@ -504,7 +504,7 @@ fn emit_indexed_foreach_linux_x86_64(
                     ctx,
                 );
             }
-            PhpType::Mixed | PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            PhpType::Mixed | PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Callable => {
                 emitter.instruction("add r11, 24");                             // skip the indexed-array header to reach the pointer payload base address
                 emitter.instruction("mov rax, QWORD PTR [r11 + rax * 8]");      // load the current pointer-like foreach payload from the indexed-array data region
                 super::store_foreach_value_from_regs(

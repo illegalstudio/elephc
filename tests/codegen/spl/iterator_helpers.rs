@@ -356,6 +356,122 @@ echo iterator_apply(new Range(), "label", ["A"]);
     assert_eq!(out, "AA2");
 }
 
+/// Verifies callable-array iterator callbacks preserve receivers with literal and dynamic args.
+#[test]
+fn test_iterator_apply_callable_array_variable_preserves_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+
+class IteratorArrayTicker {
+    public string $prefix = "";
+
+    public function tick(string $suffix): bool {
+        echo $this->prefix . $suffix;
+        return true;
+    }
+}
+
+$first = new IteratorArrayTicker();
+$first->prefix = "first";
+$second = new IteratorArrayTicker();
+$second->prefix = "second";
+$callback = [$first, "tick"];
+$first = $second;
+
+echo iterator_apply(new Range(), $callback, ["!"]);
+echo ":";
+$args = ["?"];
+echo iterator_apply(new Range(), $callback, $args);
+"#,
+    );
+    assert_eq!(out, "first!first!2:first?first?2");
+}
+
+/// Verifies runtime-selected instance callable arrays work with iterator_apply().
+#[test]
+fn test_iterator_apply_runtime_selected_instance_callable_array() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+
+class RuntimeIteratorTicker {
+    public string $prefix = "";
+
+    public function tick(string $suffix): bool {
+        echo $this->prefix . $suffix;
+        return true;
+    }
+}
+
+$first = new RuntimeIteratorTicker();
+$first->prefix = "I";
+$second = new RuntimeIteratorTicker();
+$second->prefix = "ignored";
+$method = "tick";
+$callback = [$first, $method];
+$first = $second;
+
+echo iterator_apply(new Range(), $callback, ["!"]);
+echo ":";
+$args = ["?"];
+echo iterator_apply(new Range(), $callback, $args);
+"#,
+    );
+    assert_eq!(out, "I!I!2:I?I?2");
+}
+
+/// Verifies runtime-selected static callable arrays work with iterator_apply().
+#[test]
+fn test_iterator_apply_runtime_selected_static_callable_array() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+
+class RuntimeIteratorStaticTicker {
+    public static function tick(string $suffix): bool {
+        echo "S" . $suffix;
+        return true;
+    }
+}
+
+$class = "RuntimeIteratorStaticTicker";
+$method = "tick";
+$callback = [$class, $method];
+
+echo iterator_apply(new Range(), $callback, ["!"]);
+echo ":";
+$args = ["?"];
+echo iterator_apply(new Range(), $callback, $args);
+"#,
+    );
+    assert_eq!(out, "S!S!2:S?S?2");
+}
+
 /// Verifies that iterator apply evaluates literal arg array once before loop.
 #[test]
 fn test_iterator_apply_evaluates_literal_arg_array_once_before_loop() {
@@ -446,10 +562,72 @@ echo iterator_apply(new Range(), make_label(), $args);
     assert_eq!(out, "BB2");
 }
 
+/// Verifies iterator_apply accepts a runtime-selected captured callable with literal args.
+#[test]
+fn test_iterator_apply_accepts_complex_captured_callable_expression_static_args() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+class Ticker {
+    public function __construct(private string $prefix) {}
+    public function tick(string $label): bool {
+        echo $this->prefix . $label;
+        return true;
+    }
+}
+$left = new Ticker("L");
+$right = new Ticker("R");
+$use_left = false;
+echo iterator_apply(new Range(), $use_left ? $left->tick(...) : $right->tick(...), ["!"]);
+"#,
+    );
+    assert_eq!(out, "R!R!2");
+}
+
+/// Verifies iterator_apply accepts a runtime-selected captured callable with named dynamic args.
+#[test]
+fn test_iterator_apply_accepts_complex_captured_callable_expression_dynamic_assoc_args() {
+    let out = compile_and_run(
+        r#"<?php
+class Range implements Iterator {
+    private int $i;
+    public function __construct() { $this->i = 0; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+class Ticker {
+    public function __construct(private string $prefix) {}
+    public function tick(string $label): bool {
+        echo $this->prefix . $label;
+        return true;
+    }
+}
+$left = new Ticker("L");
+$right = new Ticker("R");
+$use_left = true;
+$args = ["label" => "?"];
+echo iterator_apply(new Range(), $use_left ? $left->tick(...) : $right->tick(...), $args);
+"#,
+    );
+    assert_eq!(out, "L?L?2");
+}
+
 /// Verifies that iterator apply unknown signature captured callback dynamic args overflow stack.
 #[test]
 fn test_iterator_apply_unknown_signature_captured_callback_dynamic_args_overflow_stack() {
-    let out = compile_and_run(
+    let dir = make_cli_test_dir("elephc_iterator_apply_stacked_capture_descriptor_invoker");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
         r#"<?php
 class Range implements Iterator {
     private int $i;
@@ -481,8 +659,27 @@ $args = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
 echo ":";
 echo iterator_apply(new Range(), $cb, $args);
 "#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    assert!(
+        user_asm.contains("cufa_descriptor_invoker_ready"),
+        "iterator_apply should route stacked closure captures through the descriptor invoker:\n{}",
+        user_asm
+    );
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
     );
     assert_eq!(out, ":2201");
+
+    let _ = fs::remove_dir_all(&dir);
 }
 
 /// Verifies that iterator apply dynamic assoc args for returned callable signature.

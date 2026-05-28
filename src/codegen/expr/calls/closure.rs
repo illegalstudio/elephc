@@ -8,7 +8,6 @@
 //! Key details:
 //! - Callable metadata and argument signatures must stay synchronized with type checking and runtime dispatch.
 
-use crate::codegen::abi;
 use crate::codegen::context::{Context, DeferredClosure};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -234,15 +233,16 @@ pub(super) fn emit_closure(
         variadic: variadic.clone(),
         deprecation: None,
     };
+    let hidden_params = capture_types.clone();
 
     let param_names: Vec<String> = params.iter().map(|(n, _, _, _)| n.clone()).collect();
     ctx.deferred_closures.push(DeferredClosure {
         label: closure_label.clone(),
         params: param_names,
         body: body.to_vec(),
-        sig,
+        sig: sig.clone(),
         captures: capture_types.clone(),
-        hidden_params: capture_types,
+        hidden_params: hidden_params.clone(),
         current_class: ctx.current_class.clone(),
         // Real closure literals are only reachable through their wrapper, so the
         // dead-wrapper stub optimisation never applies here.
@@ -250,13 +250,19 @@ pub(super) fn emit_closure(
     });
 
     emitter.comment("closure: load callable descriptor");
-    crate::codegen::callable_descriptor::emit_load_descriptor_address(
-        emitter,
-        data,
-        abi::int_result_reg(emitter),
+    super::descriptor_value::emit_callable_descriptor_value(
         &closure_label,
         None,
         crate::codegen::callable_descriptor::CALLABLE_DESC_KIND_CLOSURE,
+        &sig,
+        &capture_types,
+        &hidden_params,
+        crate::codegen::callable_descriptor::CallableDescriptorInvocation::new(
+            crate::codegen::callable_descriptor::CallableDescriptorShape::Closure,
+        ),
+        emitter,
+        ctx,
+        data,
     );
     PhpType::Callable
 }
@@ -280,11 +286,34 @@ pub(super) fn emit_closure_call(
             .get(&class_name)
             .is_some_and(|class_info| class_info.methods.contains_key("__invoke"))
         {
+            if let Some(ret_ty) = super::emit_invokable_object_variable_call(
+                var,
+                &class_name,
+                args_exprs,
+                emitter,
+                ctx,
+                data,
+            ) {
+                return ret_ty;
+            }
             let object = Expr::new(ExprKind::Variable(var.to_string()), Span::dummy());
             return crate::codegen::expr::objects::emit_method_call(
                 &object, "__invoke", args_exprs, emitter, ctx, data,
             );
         }
+    }
+
+    if closure_variable_is_runtime_string(var, ctx) {
+        let callback = Expr::new(ExprKind::Variable(var.to_string()), Span::dummy());
+        let callback_ty = super::super::emit_expr(&callback, emitter, ctx, data);
+        debug_assert!(matches!(callback_ty.codegen_repr(), PhpType::Str));
+        return super::emit_loaded_runtime_string_call(args_exprs, Span::dummy(), emitter, ctx, data);
+    }
+
+    if let Some(ret_ty) =
+        super::emit_callable_array_variable_call(var, args_exprs, emitter, ctx, data)
+    {
+        return ret_ty;
     }
 
     // First-class callable short-circuit: when the variable was last bound to a
@@ -303,6 +332,10 @@ pub(super) fn emit_closure_call(
     //   path; reconstituting their captured runtime context is left for a
     //   future refinement.
     if let Some(target) = ctx.first_class_callable_targets.get(var).cloned() {
+        if first_class_callable_variable_needs_descriptor_env(&target) {
+            ctx.mark_fcc_used(var);
+            return emit_descriptor_invoker_variable_call(var, args_exprs, emitter, ctx, data);
+        }
         match &target {
             CallableTarget::Function(name) => {
                 let name_str = name.as_str();
@@ -345,6 +378,10 @@ pub(super) fn emit_closure_call(
                 }
             }
         }
+    }
+
+    if closure_variable_needs_descriptor_invoker(var, ctx) {
+        return emit_descriptor_invoker_variable_call(var, args_exprs, emitter, ctx, data);
     }
 
     // We reach this point only when the short-circuit above did not fire. The
@@ -411,36 +448,6 @@ pub(super) fn emit_closure_call(
         }
     }
 
-    for (cap_name, cap_ty, by_ref) in &captures {
-        emitter.comment(&format!("push captured ${}", cap_name));
-        if *by_ref {
-            if !args::emit_ref_arg_variable_address(cap_name, "closure capture ref", emitter, ctx)
-            {
-                emitter.comment(&format!(
-                    "WARNING: captured variable ${} not found",
-                    cap_name
-                ));
-                continue;
-            }
-            super::args::push_arg_value(emitter, &PhpType::Int);
-            arg_types.push(PhpType::Int);
-        } else {
-            let cap_info = match ctx.variables.get(cap_name) {
-                Some(v) => v,
-                None => {
-                    emitter.comment(&format!(
-                        "WARNING: captured variable ${} not found",
-                        cap_name
-                    ));
-                    continue;
-                }
-            };
-            let cap_offset = cap_info.stack_offset;
-            crate::codegen::abi::emit_load(emitter, cap_ty, cap_offset);
-            super::args::push_arg_value(emitter, cap_ty);
-            arg_types.push(cap_ty.clone());
-        }
-    }
     let var_info = match ctx.variables.get(var) {
         Some(v) => v,
         None => {
@@ -459,6 +466,29 @@ pub(super) fn emit_closure_call(
         crate::codegen::abi::emit_load_from_address(emitter, call_reg, call_reg, 0);
     } else {
         crate::codegen::abi::load_at_offset(emitter, call_reg, var_offset);     // load the callable descriptor into the nested-call scratch register
+    }
+
+    for (idx, (cap_name, cap_ty, by_ref)) in captures.iter().enumerate() {
+        emitter.comment(&format!("push captured ${}", cap_name));
+        if *by_ref {
+            crate::codegen::callable_descriptor::emit_load_runtime_capture_to_result(
+                emitter,
+                call_reg,
+                idx,
+                &PhpType::Int,
+            );
+            super::args::push_arg_value(emitter, &PhpType::Int);
+            arg_types.push(PhpType::Int);
+        } else {
+            crate::codegen::callable_descriptor::emit_load_runtime_capture_to_result(
+                emitter,
+                call_reg,
+                idx,
+                cap_ty,
+            );
+            super::args::push_arg_value(emitter, cap_ty);
+            arg_types.push(cap_ty.clone());
+        }
     }
     crate::codegen::callable_descriptor::emit_load_entry_from_descriptor(
         emitter,
@@ -502,4 +532,146 @@ pub(super) fn emit_closure_call(
     }
 
     ret_ty
+}
+
+/// Returns true when a callable variable must rely on descriptor-owned metadata.
+fn closure_variable_needs_descriptor_invoker(var: &str, ctx: &Context) -> bool {
+    if ctx.callable_param_names.contains(var) {
+        return true;
+    }
+    if ctx.runtime_callable_vars.contains(var) {
+        return true;
+    }
+    if ctx.closure_sigs.contains_key(var) {
+        return false;
+    }
+    ctx.variables
+        .get(var)
+        .is_some_and(|info| matches!(info.ty.codegen_repr(), PhpType::Callable))
+}
+
+/// Returns true when `$var(...)` should resolve the variable value as a PHP string callback.
+fn closure_variable_is_runtime_string(var: &str, ctx: &Context) -> bool {
+    ctx.variables
+        .get(var)
+        .is_some_and(|info| matches!(info.ty.codegen_repr(), PhpType::Str))
+}
+
+/// Emits `$var(...)` through the callable descriptor's uniform runtime invoker.
+fn emit_descriptor_invoker_variable_call(
+    var: &str,
+    args_exprs: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment(&format!("call descriptor variable ${}()", var));
+    let save_concat_before_args =
+        emitter.target.arch == crate::codegen::platform::Arch::X86_64;
+    if save_concat_before_args {
+        super::super::save_concat_offset_before_nested_call(emitter, ctx);
+    }
+
+    let Some(var_info) = ctx.variables.get(var) else {
+        emitter.comment(&format!("WARNING: undefined callable descriptor variable ${}", var));
+        if save_concat_before_args {
+            super::super::restore_concat_offset_after_nested_call(emitter, ctx, &PhpType::Mixed);
+        }
+        crate::codegen::abi::emit_load_int_immediate(
+            emitter,
+            crate::codegen::abi::int_result_reg(emitter),
+            0,
+        );
+        return PhpType::Mixed;
+    };
+    let var_offset = var_info.stack_offset;
+    if ctx.ref_params.contains(var) {
+        crate::codegen::abi::load_at_offset(
+            emitter,
+            crate::codegen::abi::int_result_reg(emitter),
+            var_offset,
+        );
+        crate::codegen::abi::emit_load_from_address(
+            emitter,
+            crate::codegen::abi::int_result_reg(emitter),
+            crate::codegen::abi::int_result_reg(emitter),
+            0,
+        );
+    } else {
+        crate::codegen::abi::load_at_offset(
+            emitter,
+            crate::codegen::abi::int_result_reg(emitter),
+            var_offset,
+        );
+    }
+    crate::codegen::callable_descriptor::emit_retain_current_descriptor(emitter);
+    crate::codegen::abi::emit_push_reg(emitter, crate::codegen::abi::int_result_reg(emitter)); // preserve the callable descriptor while building variable-call arguments
+
+    let sig = ctx.closure_sigs.get(var).cloned();
+    let arr_ty = super::descriptor_invoker_args::emit_descriptor_invoker_arg_array(
+        args_exprs,
+        sig.as_ref(),
+        Span::dummy(),
+        emitter,
+        ctx,
+        data,
+    );
+    crate::codegen::abi::emit_push_reg(emitter, crate::codegen::abi::int_result_reg(emitter)); // preserve the owned descriptor-invoker argument array
+
+    let call_reg = crate::codegen::abi::nested_call_reg(emitter);
+    crate::codegen::abi::emit_load_temporary_stack_slot(emitter, call_reg, 16);
+    crate::codegen::builtins::arrays::call_user_func_array::emit_call_descriptor_array_invoker(
+        crate::codegen::builtins::arrays::call_user_func_array::LoadedArraySource::TemporaryStackSlot(0),
+        &arr_ty,
+        call_reg,
+        save_concat_before_args,
+        emitter,
+        ctx,
+        data,
+    );
+    release_preserved_variable_call_arg_array_after_mixed_result(&arr_ty, emitter);
+    release_preserved_variable_call_descriptor_after_mixed_result(emitter);
+    PhpType::Mixed
+}
+
+/// Returns true when a tracked first-class callable variable must use its descriptor
+/// environment instead of re-reading source variables at the call site.
+fn first_class_callable_variable_needs_descriptor_env(target: &CallableTarget) -> bool {
+    matches!(
+        target,
+        CallableTarget::Method { .. }
+            | CallableTarget::StaticMethod {
+                receiver: StaticReceiver::Static,
+                ..
+            }
+    )
+}
+
+/// Releases the synthetic variable-call argument array while preserving the Mixed result.
+fn release_preserved_variable_call_arg_array_after_mixed_result(
+    arr_ty: &PhpType,
+    emitter: &mut Emitter,
+) {
+    crate::codegen::abi::emit_push_reg(emitter, crate::codegen::abi::int_result_reg(emitter)); // preserve the boxed call result while releasing the argument array
+    crate::codegen::abi::emit_load_temporary_stack_slot(
+        emitter,
+        crate::codegen::abi::int_result_reg(emitter),
+        16,
+    );
+    crate::codegen::abi::emit_decref_if_refcounted(emitter, arr_ty);
+    crate::codegen::abi::emit_pop_reg(emitter, crate::codegen::abi::int_result_reg(emitter)); // restore the boxed call result after argument-array cleanup
+    crate::codegen::abi::emit_release_temporary_stack(emitter, 16);             // discard the preserved argument-array slot
+}
+
+/// Releases the retained callable descriptor while preserving the Mixed result.
+fn release_preserved_variable_call_descriptor_after_mixed_result(emitter: &mut Emitter) {
+    crate::codegen::abi::emit_push_reg(emitter, crate::codegen::abi::int_result_reg(emitter)); // preserve the boxed call result while releasing the callable descriptor
+    crate::codegen::abi::emit_load_temporary_stack_slot(
+        emitter,
+        crate::codegen::abi::int_result_reg(emitter),
+        16,
+    );
+    crate::codegen::callable_descriptor::emit_release_current_descriptor(emitter);
+    crate::codegen::abi::emit_pop_reg(emitter, crate::codegen::abi::int_result_reg(emitter)); // restore the boxed call result after descriptor cleanup
+    crate::codegen::abi::emit_release_temporary_stack(emitter, 16);             // discard the preserved callable descriptor slot
 }

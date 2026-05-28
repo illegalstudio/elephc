@@ -14,7 +14,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
 use crate::codegen::platform::Arch;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 /// Emits a `list($a, $b, ...) = $array` unpack from a source indexed-array expression.
@@ -111,7 +111,70 @@ pub(super) fn emit_list_unpack_stmt(
             elem_ty.clone(),
             super::super::HeapOwnership::borrowed_alias_for_type(&elem_ty),
         );
+        update_callable_metadata_for_unpacked_var(var_name, value, &elem_ty, ctx);
     }
 
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // discard the preserved indexed-array pointer after every list-unpack target local has been assigned
+}
+
+/// Updates callable metadata for a variable populated by list unpacking.
+///
+/// Callable array writes store the element callable's descriptor metadata under
+/// the source array variable name. List unpacking turns one of those elements
+/// back into a local variable, so it must mirror the same metadata onto the
+/// destination local for direct calls and callback builtins.
+fn update_callable_metadata_for_unpacked_var(
+    dest: &str,
+    source_array: &Expr,
+    elem_ty: &PhpType,
+    ctx: &mut Context,
+) {
+    if elem_ty != &PhpType::Callable {
+        clear_callable_metadata(dest, ctx);
+        return;
+    }
+    if let ExprKind::Variable(src_name) = &source_array.kind {
+        copy_callable_metadata(dest, src_name, ctx);
+    } else {
+        clear_callable_metadata(dest, ctx);
+    }
+}
+
+/// Copies callable signature, capture, first-class target, and descriptor markers.
+fn copy_callable_metadata(dest: &str, src: &str, ctx: &mut Context) {
+    if let Some(sig) = ctx.closure_sigs.get(src).cloned() {
+        ctx.closure_sigs.insert(dest.to_string(), sig);
+    } else {
+        ctx.closure_sigs.remove(dest);
+    }
+    if let Some(captures) = ctx.closure_captures.get(src).cloned() {
+        ctx.closure_captures.insert(dest.to_string(), captures);
+    } else {
+        ctx.closure_captures.remove(dest);
+    }
+    if let Some(target) = ctx.first_class_callable_targets.get(src).cloned() {
+        ctx.first_class_callable_targets
+            .insert(dest.to_string(), target);
+    } else {
+        ctx.first_class_callable_targets.remove(dest);
+    }
+    if let Some(label) = ctx.variable_fcc_label.get(src).cloned() {
+        ctx.variable_fcc_label.insert(dest.to_string(), label);
+    } else {
+        ctx.variable_fcc_label.remove(dest);
+    }
+    if ctx.runtime_callable_vars.contains(src) {
+        ctx.runtime_callable_vars.insert(dest.to_string());
+    } else {
+        ctx.runtime_callable_vars.remove(dest);
+    }
+}
+
+/// Clears callable metadata for a list-unpack destination that is not callable.
+fn clear_callable_metadata(dest: &str, ctx: &mut Context) {
+    ctx.closure_sigs.remove(dest);
+    ctx.closure_captures.remove(dest);
+    ctx.first_class_callable_targets.remove(dest);
+    ctx.variable_fcc_label.remove(dest);
+    ctx.runtime_callable_vars.remove(dest);
 }

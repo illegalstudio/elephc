@@ -9,7 +9,7 @@
 //! - Branch and loop handling must preserve PHP execution order and conservative type environments.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -38,13 +38,19 @@ impl Checker {
                 if let PhpType::Array(elem_ty) = &arr_ty {
                     if let Some(k) = key_var {
                         env.insert(k.clone(), PhpType::Int);
+                        self.clear_foreach_callable_metadata(k);
                     }
-                    env.insert(value_var.clone(), *elem_ty.clone());
+                    let value_ty = *elem_ty.clone();
+                    env.insert(value_var.clone(), value_ty.clone());
+                    self.update_foreach_callable_metadata(value_var, array, &value_ty);
                 } else if let PhpType::AssocArray { key, value } = &arr_ty {
                     if let Some(k) = key_var {
                         env.insert(k.clone(), *key.clone());
+                        self.clear_foreach_callable_metadata(k);
                     }
-                    env.insert(value_var.clone(), *value.clone());
+                    let value_ty = *value.clone();
+                    env.insert(value_var.clone(), value_ty.clone());
+                    self.update_foreach_callable_metadata(value_var, array, &value_ty);
                 } else if let PhpType::Object(class_name) = &arr_ty {
                     let is_iter = self.class_implements_interface(class_name, "Iterator")
                         || self.interface_extends_interface(class_name, "Iterator");
@@ -62,16 +68,20 @@ impl Checker {
                     }
                     if let Some(k) = key_var {
                         env.insert(k.clone(), PhpType::Mixed);
+                        self.clear_foreach_callable_metadata(k);
                     }
                     env.insert(value_var.clone(), PhpType::Mixed);
+                    self.clear_foreach_callable_metadata(value_var);
                 } else if matches!(
                     arr_ty,
                     PhpType::Iterable | PhpType::Mixed | PhpType::Union(_)
                 ) {
                     if let Some(k) = key_var {
                         env.insert(k.clone(), PhpType::Mixed);
+                        self.clear_foreach_callable_metadata(k);
                     }
                     env.insert(value_var.clone(), PhpType::Mixed);
+                    self.clear_foreach_callable_metadata(value_var);
                 } else {
                     return Err(CompileError::new(
                         stmt.span,
@@ -286,6 +296,69 @@ impl Checker {
         let errors = self.check_body(body, env);
         self.break_continue_depth -= 1;
         errors
+    }
+
+    /// Updates callable metadata for a foreach value variable.
+    ///
+    /// Homogeneous arrays that store callable descriptors keep their signature
+    /// and capture metadata under the source array variable name. A foreach value
+    /// binding from that array must expose the same metadata to calls emitted in
+    /// the loop body.
+    fn update_foreach_callable_metadata(
+        &mut self,
+        dest: &str,
+        source_array: &Expr,
+        value_ty: &PhpType,
+    ) {
+        if value_ty != &PhpType::Callable {
+            self.clear_foreach_callable_metadata(dest);
+            return;
+        }
+        if let ExprKind::Variable(src_name) = &source_array.kind {
+            self.copy_foreach_callable_metadata(dest, src_name);
+        } else {
+            self.clear_foreach_callable_metadata(dest);
+        }
+    }
+
+    /// Copies callable signature, capture, first-class target, and callable-array metadata.
+    fn copy_foreach_callable_metadata(&mut self, dest: &str, src: &str) {
+        if let Some(return_ty) = self.closure_return_types.get(src).cloned() {
+            self.closure_return_types.insert(dest.to_string(), return_ty);
+        } else {
+            self.closure_return_types.remove(dest);
+        }
+        if let Some(sig) = self.callable_sigs.get(src).cloned() {
+            self.callable_sigs.insert(dest.to_string(), sig);
+        } else {
+            self.callable_sigs.remove(dest);
+        }
+        if let Some(captures) = self.callable_captures.get(src).cloned() {
+            self.callable_captures.insert(dest.to_string(), captures);
+        } else {
+            self.callable_captures.remove(dest);
+        }
+        if let Some(target) = self.callable_array_targets.get(src).cloned() {
+            self.callable_array_targets
+                .insert(dest.to_string(), target);
+        } else {
+            self.callable_array_targets.remove(dest);
+        }
+        if let Some(target) = self.first_class_callable_targets.get(src).cloned() {
+            self.first_class_callable_targets
+                .insert(dest.to_string(), target);
+        } else {
+            self.first_class_callable_targets.remove(dest);
+        }
+    }
+
+    /// Clears callable metadata for a foreach key or value binding.
+    fn clear_foreach_callable_metadata(&mut self, dest: &str) {
+        self.closure_return_types.remove(dest);
+        self.callable_sigs.remove(dest);
+        self.callable_captures.remove(dest);
+        self.callable_array_targets.remove(dest);
+        self.first_class_callable_targets.remove(dest);
     }
 
     /// Checks each statement in a body sequentially, collecting all errors.

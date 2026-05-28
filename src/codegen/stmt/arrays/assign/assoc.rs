@@ -77,6 +77,7 @@ pub(super) fn emit_assoc_array_assign(
     if !boxed_iterable {
         super::super::super::helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
     }
+    super::super::push::update_callable_array_metadata(target.array, value, &val_ty, ctx);
 
     match emitter.target.arch {
         Arch::AArch64 => {

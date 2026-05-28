@@ -60,6 +60,8 @@ pub(crate) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {
         ExprKind::StringLiteral(_)
         | ExprKind::ArrayLiteral(_)
         | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::Closure { .. }
+        | ExprKind::FirstClassCallable(_)
         | ExprKind::FunctionCall { .. }
         | ExprKind::ClosureCall { .. }
         | ExprKind::ExprCall { .. }

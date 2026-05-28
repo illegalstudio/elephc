@@ -17,6 +17,8 @@ use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 use super::callback_env;
+use super::runtime_callable_array_callback;
+use super::runtime_string_callback;
 
 /// Emits the `array_filter($array, $callback, $flag)` builtin call.
 ///
@@ -58,9 +60,105 @@ pub fn emit(
     // -- evaluate the array argument (first arg) --
     let arr_ty = emit_expr(&args[0], emitter, ctx, data);
     let uses_refcounted_runtime = filter_uses_payload_runtime(&arr_ty);
+    let runtime_label = if uses_refcounted_runtime {
+        "__rt_array_filter_refcounted"
+    } else {
+        "__rt_array_filter"
+    };
 
     // -- save array pointer, then evaluate the callback argument --
     abi::emit_push_reg(emitter, result_reg);                                    // push the source array pointer onto the temporary stack
+
+    if runtime_string_callback::emit_after_saved_array(
+        &args[1],
+        Some(&arr_ty),
+        vec![filter_elem_type(&arr_ty)],
+        PhpType::Bool,
+        array_arg_reg,
+        emitter,
+        ctx,
+        data,
+        |wrapper, emitter, _ctx, _data| {
+            callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
+            abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
+            callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
+            abi::emit_call_label(emitter, runtime_label);
+        },
+    ) {
+        return match arr_ty {
+            PhpType::Array(elem_ty) => Some(PhpType::Array(elem_ty)),
+            _ => Some(PhpType::Array(Box::new(PhpType::Int))),
+        };
+    }
+
+    if let Some(wrapper) = callback_env::emit_callable_array_descriptor_env_after_saved_array(
+        &args[1],
+        array_arg_reg,
+        call_reg,
+        vec![filter_elem_type(&arr_ty)],
+        PhpType::Bool,
+        emitter,
+        ctx,
+        data,
+    ) {
+        callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
+        abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
+        callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
+        abi::emit_call_label(emitter, runtime_label);
+        callback_env::release_descriptor_callback_env(&wrapper, emitter);
+        return match arr_ty {
+            PhpType::Array(elem_ty) => Some(PhpType::Array(elem_ty)),
+            _ => Some(PhpType::Array(Box::new(PhpType::Int))),
+        };
+    }
+
+    if runtime_callable_array_callback::emit_after_saved_array(
+        &args[1],
+        array_arg_reg,
+        vec![filter_elem_type(&arr_ty)],
+        PhpType::Bool,
+        emitter,
+        ctx,
+        data,
+        |wrapper, emitter, _ctx, _data| {
+            callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
+            abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
+            callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
+            abi::emit_call_label(emitter, runtime_label);
+        },
+    ) {
+        return match arr_ty {
+            PhpType::Array(elem_ty) => Some(PhpType::Array(elem_ty)),
+            _ => Some(PhpType::Array(Box::new(PhpType::Int))),
+        };
+    }
+
+    if callback_env::expr_call_needs_descriptor_callback_env(&args[1], ctx)
+        && callback_env::descriptor_callback_env_supported(&args[1])
+    {
+        emit_expr(&args[1], emitter, ctx, data);
+        emitter.instruction(&format!("mov {}, {}", call_reg, result_reg));      // preserve the selected callable descriptor while recovering the source array
+        abi::emit_pop_reg(emitter, array_arg_reg);                               // recover the source array pointer before building the descriptor environment
+        emitter.instruction(&format!("mov {}, {}", result_reg, call_reg));      // restore the selected callable descriptor as the current result
+        let wrapper = callback_env::emit_descriptor_callback_env_from_result(
+            &args[1],
+            array_arg_reg,
+            vec![filter_elem_type(&arr_ty)],
+            PhpType::Bool,
+            emitter,
+            ctx,
+        )
+        .expect("descriptor callback env support checked before emitting callback");
+        callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
+        abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
+        callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
+        abi::emit_call_label(emitter, runtime_label);
+        callback_env::release_descriptor_callback_env(&wrapper, emitter);
+        return match arr_ty {
+            PhpType::Array(elem_ty) => Some(PhpType::Array(elem_ty)),
+            _ => Some(PhpType::Array(Box::new(PhpType::Int))),
+        };
+    }
 
     let captures =
         callback_env::materialize_callback_address(&args[1], call_reg, emitter, ctx, data);
@@ -83,11 +181,6 @@ pub fn emit(
         callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
         abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
         callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
-        let runtime_label = if uses_refcounted_runtime {
-            "__rt_array_filter_refcounted"
-        } else {
-            "__rt_array_filter"
-        };
         abi::emit_call_label(emitter, runtime_label);
         abi::emit_release_temporary_stack(emitter, wrapper.env_bytes);
         return match arr_ty {
@@ -96,11 +189,6 @@ pub fn emit(
         };
     }
 
-    let runtime_label = if uses_refcounted_runtime {
-        "__rt_array_filter_refcounted"
-    } else {
-        "__rt_array_filter"
-    };
     if emitter.target.arch == Arch::X86_64 {
         abi::emit_call_label(emitter, runtime_label);                            // call the x86_64 callback-driven filter runtime helper
     } else {

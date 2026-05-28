@@ -8,6 +8,7 @@
 //! Key details:
 //! - Source-order side effects and ABI-order materialization are deliberately separated across this module tree.
 
+mod assoc_variadic;
 mod array_elements;
 mod common;
 mod emit;
@@ -21,6 +22,7 @@ use crate::parser::ast::Expr;
 use crate::types::call_args::SpreadBoundsCheck;
 use crate::types::PhpType;
 
+pub(crate) use assoc_variadic::emit_loaded_assoc_variadic_array_arg;
 pub(crate) use array_elements::{
     array_element_stride, emit_hash_lookup_for_param_or_index, load_array_element_to_result,
     push_loaded_array_element_arg, push_loaded_hash_value_arg, push_loaded_hash_value_ref_arg,

@@ -39,9 +39,24 @@ impl Checker {
         let function_key = name.to_string();
         let callable_param_names: Vec<String> = param_types
             .iter()
-            .filter(|(_, pty)| pty == &PhpType::Callable)
+            .filter(|(_, pty)| {
+                pty == &PhpType::Callable || is_callable_array_return_type(pty)
+            })
             .map(|(pname, _)| pname.clone())
             .collect();
+        let declared_callable_param_names: Vec<String> = param_types
+            .iter()
+            .enumerate()
+            .filter(|(idx, (_, pty))| {
+                pty == &PhpType::Callable
+                    && decl.param_types.get(*idx).is_some_and(|type_ann| type_ann.is_some())
+            })
+            .map(|(_, (pname, _))| pname.clone())
+            .collect();
+        let saved_callable_param_names = self.callable_param_names.clone();
+        for pname in &declared_callable_param_names {
+            self.callable_param_names.insert(pname.clone());
+        }
         let saved_callable_metadata: Vec<_> = callable_param_names
             .iter()
             .map(|pname| {
@@ -87,6 +102,7 @@ impl Checker {
         let mut return_type = PhpType::Void;
         let mut all_return_infos = Vec::new();
         let mut callable_return_sigs = Vec::new();
+        let mut callable_array_return_sigs = Vec::new();
         let mut errors = Vec::new();
         let ref_param_names: Vec<String> = decl
             .params
@@ -95,16 +111,23 @@ impl Checker {
             .filter(|(_, is_ref)| **is_ref)
             .map(|(name, _)| name.clone())
             .collect();
-        self.with_local_storage_context(ref_param_names, |checker| {
+        let body_check_result = self.with_local_storage_context(ref_param_names, |checker| {
             for stmt in &decl.body {
                 if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
                     errors.extend(error.flatten());
                 }
                 checker.collect_return_infos(stmt, &local_env, &mut all_return_infos);
                 checker.collect_return_callable_sigs(stmt, &local_env, &mut callable_return_sigs);
+                checker.collect_return_callable_array_sigs(
+                    stmt,
+                    &local_env,
+                    &mut callable_array_return_sigs,
+                );
             }
             Ok(())
-        })?;
+        });
+        self.callable_param_names = saved_callable_param_names;
+        body_check_result?;
         for pname in &callable_param_names {
             if let Some(sig) = self.callable_sigs.get(pname).cloned() {
                 self.callable_param_sigs
@@ -207,6 +230,16 @@ impl Checker {
         } else {
             self.callable_return_sigs.remove(name);
         }
+        if is_callable_array_return_type(&return_type) {
+            if let Some(callable_sig) = matching_callable_sig(&callable_array_return_sigs) {
+                self.callable_array_return_sigs
+                    .insert(name.to_string(), callable_sig);
+            } else {
+                self.callable_array_return_sigs.remove(name);
+            }
+        } else {
+            self.callable_array_return_sigs.remove(name);
+        }
 
         Ok(return_type)
     }
@@ -236,6 +269,15 @@ fn inferred_specific_array_type_from_infos(
         }
     }
     specific
+}
+
+/// Returns true when a function return type is a homogeneous array of callables.
+fn is_callable_array_return_type(return_type: &PhpType) -> bool {
+    match return_type {
+        PhpType::Array(elem_ty) => elem_ty.as_ref() == &PhpType::Callable,
+        PhpType::AssocArray { value, .. } => value.as_ref() == &PhpType::Callable,
+        _ => false,
+    }
 }
 
 /// Computes the callable signature metadata for matching callable.

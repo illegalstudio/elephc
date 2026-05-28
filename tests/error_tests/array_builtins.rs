@@ -449,25 +449,6 @@ fn test_error_call_user_func_array_wrong_args() {
     );
 }
 
-/// Verifies that error array filter rejects complex captured callable expression.
-#[test]
-fn test_error_array_filter_rejects_complex_captured_callable_expression() {
-    expect_error(
-        r#"<?php
-class FilterBox {
-    public function keep($n) {
-        return true;
-    }
-}
-
-$box = new FilterBox();
-$use_first = true;
-array_filter([1], $use_first ? $box->keep(...) : $box->keep(...));
-"#,
-        "array_filter() callback does not support complex expressions",
-    );
-}
-
 // --- v0.8 system function errors ---
 
 /// Verifies that error spread non array.

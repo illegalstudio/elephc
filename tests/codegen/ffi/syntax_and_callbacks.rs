@@ -129,6 +129,7 @@ echo ptr_is_null($environ) ? "fail" : "ok";
 }
 
 // Verifies FFI extern `signal` and `raise` are callable and a PHP function can be used as a signal handler.
+/// Verifies extern callback string literals resolve function names case-insensitively.
 #[test]
 fn test_ffi_callback_signal_handler() {
     let out = compile_and_run(
@@ -140,11 +141,118 @@ function on_signal($sig) {
     echo $sig;
 }
 
-signal(15, "on_signal");
+signal(15, "ON_SIGNAL");
 raise(15);
 "#,
     );
     assert_eq!(out, "15");
+}
+
+/// Verifies FFI `callable` parameters accept environment-free first-class callable descriptors.
+#[test]
+fn test_ffi_callback_signal_handler_first_class_callable() {
+    let out = compile_and_run(
+        r#"<?php
+extern function signal(int $sig, callable $handler): ptr;
+extern function raise(int $sig): int;
+
+function on_signal(int $sig): void {
+    echo $sig + 1;
+}
+
+$handler = on_signal(...);
+signal(15, $handler);
+raise(15);
+"#,
+    );
+    assert_eq!(out, "16");
+}
+
+/// Verifies FFI `callable` parameters accept closure descriptors without captures.
+#[test]
+fn test_ffi_callback_signal_handler_closure_descriptor() {
+    let out = compile_and_run(
+        r#"<?php
+extern function signal(int $sig, callable $handler): ptr;
+extern function raise(int $sig): int;
+
+$handler = function(int $sig): void {
+    echo $sig + 2;
+};
+
+signal(15, $handler);
+raise(15);
+"#,
+    );
+    assert_eq!(out, "17");
+}
+
+/// Verifies FFI `callable` parameters preserve closure capture environments through trampolines.
+#[test]
+fn test_ffi_callback_signal_handler_closure_capture_descriptor() {
+    let out = compile_and_run(
+        r#"<?php
+extern function signal(int $sig, callable $handler): ptr;
+extern function raise(int $sig): int;
+
+$delta = 3;
+$handler = function(int $sig) use ($delta): void {
+    echo $sig + $delta;
+};
+
+signal(15, $handler);
+raise(15);
+"#,
+    );
+    assert_eq!(out, "18");
+}
+
+/// Verifies FFI callback trampolines preserve first-class method receiver environments.
+#[test]
+fn test_ffi_callback_signal_handler_first_class_method_receiver_descriptor() {
+    let out = compile_and_run(
+        r#"<?php
+extern function signal(int $sig, callable $handler): ptr;
+extern function raise(int $sig): int;
+
+class Handler {
+    public int $delta;
+
+    public function __construct(int $delta) {
+        $this->delta = $delta;
+    }
+
+    public function onSignal(int $sig): void {
+        echo $sig + $this->delta;
+    }
+}
+
+$handler = (new Handler(4))->onSignal(...);
+signal(15, $handler);
+raise(15);
+"#,
+    );
+    assert_eq!(out, "19");
+}
+
+/// Verifies FFI callback trampolines preserve branch-selected descriptor environments.
+#[test]
+fn test_ffi_callback_signal_handler_branch_selected_descriptor() {
+    let out = compile_and_run(
+        r#"<?php
+extern function signal(int $sig, callable $handler): ptr;
+extern function raise(int $sig): int;
+
+$delta = 5;
+$handler = true
+    ? function(int $sig) use ($delta): void { echo $sig + $delta; }
+    : function(int $sig): void { echo $sig; };
+
+signal(15, $handler);
+raise(15);
+"#,
+    );
+    assert_eq!(out, "20");
 }
 
 // Smoke test: verifies non-string FFI extern function returning `int` is callable and returns a positive pid.

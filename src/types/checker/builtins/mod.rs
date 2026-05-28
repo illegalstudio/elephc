@@ -27,6 +27,9 @@ use super::Checker;
 pub(crate) use catalog::{
     canonical_builtin_function_name, is_supported_builtin_function, supported_builtin_function_names,
 };
+pub(crate) use callables::{
+    callback_supports_complex_descriptor_env, runtime_callable_array_type,
+};
 
 impl Checker {
     /// Records that a Linux target requires the given shared library for this compilation.

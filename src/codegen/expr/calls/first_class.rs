@@ -9,6 +9,9 @@
 //! - Callable metadata and argument signatures must stay synchronized with type checking and runtime dispatch.
 
 use crate::codegen::abi;
+use crate::codegen::callable_descriptor::{
+    CallableDescriptorInvocation, CallableDescriptorShape,
+};
 use crate::codegen::context::{Context, DeferredClosure, HeapOwnership};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -336,6 +339,61 @@ fn wrapper_body(target: &CallableTarget, sig: &FunctionSig) -> Vec<Stmt> {
     }
 }
 
+/// Builds descriptor invocation metadata for a first-class callable target.
+fn descriptor_invocation_for_target(
+    target: &CallableTarget,
+    source_target: &CallableTarget,
+    ctx: &Context,
+) -> CallableDescriptorInvocation {
+    match target {
+        CallableTarget::Function(name) => {
+            let function_name = name.as_str();
+            let shape = if ctx.extern_functions.contains_key(function_name) {
+                CallableDescriptorShape::Extern
+            } else if !ctx.functions.contains_key(function_name)
+                && first_class_callable_builtin_sig(function_name).is_some()
+            {
+                CallableDescriptorShape::Builtin
+            } else {
+                CallableDescriptorShape::Function
+            };
+            CallableDescriptorInvocation::named(shape, function_name)
+        }
+        CallableTarget::StaticMethod { receiver, method } => {
+            CallableDescriptorInvocation::method(
+                CallableDescriptorShape::StaticMethod,
+                static_receiver_descriptor_name(receiver),
+                method.as_str(),
+            )
+        }
+        CallableTarget::Method { object, method } => {
+            let receiver_object = match source_target {
+                CallableTarget::Method { object, .. } => object,
+                _ => object,
+            };
+            let receiver_name = crate::codegen::functions::singular_object_class(
+                &crate::codegen::functions::infer_contextual_type(receiver_object, ctx),
+            )
+            .map(str::to_string);
+            CallableDescriptorInvocation::method(
+                CallableDescriptorShape::InstanceMethod,
+                receiver_name,
+                method.as_str(),
+            )
+        }
+    }
+}
+
+/// Returns the descriptor-visible receiver name for static callable metadata.
+fn static_receiver_descriptor_name(receiver: &StaticReceiver) -> Option<String> {
+    match receiver {
+        StaticReceiver::Named(name) => Some(name.as_str().to_string()),
+        StaticReceiver::Self_ => Some("self".to_string()),
+        StaticReceiver::Parent => Some("parent".to_string()),
+        StaticReceiver::Static => Some("static".to_string()),
+    }
+}
+
 /// Emits first-class callable creation for functions, methods, and builtins.
 pub(super) fn emit_first_class_callable(
     target: &CallableTarget,
@@ -364,14 +422,15 @@ pub(super) fn emit_first_class_callable(
     let wrapper_label = ctx.next_label("fcc");
     let param_names: Vec<String> = sig.params.iter().map(|(name, _)| name.clone()).collect();
     let body = wrapper_body(&normalized_target, &sig);
+    let descriptor_invocation = descriptor_invocation_for_target(&normalized_target, target, ctx);
 
     ctx.deferred_closures.push(DeferredClosure {
         label: wrapper_label.clone(),
         params: param_names,
         body,
-        sig,
-        captures,
-        hidden_params,
+        sig: sig.clone(),
+        captures: captures.clone(),
+        hidden_params: hidden_params.clone(),
         current_class: ctx.current_class.clone(),
         // Safe default: assume the wrapper is reached at runtime. The local
         // assignment site downgrades this to `false` when it can prove the
@@ -381,13 +440,17 @@ pub(super) fn emit_first_class_callable(
     });
 
     emitter.comment("first-class callable: load descriptor");
-    crate::codegen::callable_descriptor::emit_load_descriptor_address(
-        emitter,
-        data,
-        abi::int_result_reg(emitter),
+    super::descriptor_value::emit_callable_descriptor_value(
         &wrapper_label,
         None,
         crate::codegen::callable_descriptor::CALLABLE_DESC_KIND_FIRST_CLASS,
+        &sig,
+        &captures,
+        &hidden_params,
+        descriptor_invocation,
+        emitter,
+        ctx,
+        data,
     );
     PhpType::Callable
 }

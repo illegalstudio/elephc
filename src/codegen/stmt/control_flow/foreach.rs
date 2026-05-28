@@ -85,6 +85,8 @@ pub(super) fn emit_foreach_stmt(
 
     match &arr_ty {
         PhpType::AssocArray { key, value } => {
+            clear_foreach_callable_metadata_for_var(key_var.as_deref(), ctx);
+            update_foreach_callable_metadata(value_var, receiver_var, value, ctx);
             assoc::emit_assoc_foreach(
                 key_var,
                 value_var,
@@ -103,6 +105,8 @@ pub(super) fn emit_foreach_stmt(
             );
         }
         PhpType::Object(class_name) => {
+            clear_foreach_callable_metadata_for_var(key_var.as_deref(), ctx);
+            clear_foreach_callable_metadata(value_var, ctx);
             debug_assert!(
                 !value_by_ref,
                 "type checker must reject by-reference foreach over Iterator/IteratorAggregate objects"
@@ -122,6 +126,8 @@ pub(super) fn emit_foreach_stmt(
             );
         }
         PhpType::Iterable => {
+            clear_foreach_callable_metadata_for_var(key_var.as_deref(), ctx);
+            clear_foreach_callable_metadata(value_var, ctx);
             // Iterable values are type-erased raw heap pointers. Dispatch on the
             // runtime heap kind: indexed arrays and hashes each use their native
             // layout, but both expose Mixed-typed values at the PHP `iterable`
@@ -212,6 +218,8 @@ pub(super) fn emit_foreach_stmt(
             emitter.label(&done);
         }
         PhpType::Mixed | PhpType::Union(_) => {
+            clear_foreach_callable_metadata_for_var(key_var.as_deref(), ctx);
+            clear_foreach_callable_metadata(value_var, ctx);
             // The foreach source expression may be compiled with the final
             // loop-variable type when the value/key variable reuses the source
             // name. In that case the slot contains a boxed mixed value, so
@@ -313,6 +321,8 @@ pub(super) fn emit_foreach_stmt(
                 PhpType::Array(t) => *t.clone(),
                 _ => PhpType::Int,
             };
+            clear_foreach_callable_metadata_for_var(key_var.as_deref(), ctx);
+            update_foreach_callable_metadata(value_var, receiver_var, &elem_ty, ctx);
             indexed::emit_indexed_foreach(
                 key_var,
                 value_var,
@@ -334,6 +344,81 @@ pub(super) fn emit_foreach_stmt(
     if value_by_ref {
         ctx.ref_params.insert(value_var.to_string());
     }
+}
+
+/// Updates callable metadata for a foreach value variable before emitting the loop body.
+///
+/// Array write paths store homogeneous callable metadata under the source array
+/// variable. A foreach value variable loaded from that array must see the same
+/// descriptor signature, captures, first-class target, and runtime-invoker marker.
+fn update_foreach_callable_metadata(
+    dest: &str,
+    source_var: Option<&str>,
+    value_ty: &PhpType,
+    ctx: &mut Context,
+) {
+    if value_ty != &PhpType::Callable {
+        clear_foreach_callable_metadata(dest, ctx);
+        return;
+    }
+    if let Some(src) = source_var {
+        copy_foreach_callable_metadata(dest, src, ctx);
+    } else {
+        clear_foreach_callable_metadata(dest, ctx);
+    }
+}
+
+/// Copies callable metadata from a foreach source array to the value variable.
+fn copy_foreach_callable_metadata(dest: &str, src: &str, ctx: &mut Context) {
+    if let Some(sig) = ctx.closure_sigs.get(src).cloned() {
+        ctx.closure_sigs.insert(dest.to_string(), sig);
+    } else {
+        ctx.closure_sigs.remove(dest);
+    }
+    if let Some(captures) = ctx.closure_captures.get(src).cloned() {
+        ctx.closure_captures.insert(dest.to_string(), captures);
+    } else {
+        ctx.closure_captures.remove(dest);
+    }
+    if let Some(target) = ctx.first_class_callable_targets.get(src).cloned() {
+        ctx.first_class_callable_targets
+            .insert(dest.to_string(), target);
+    } else {
+        ctx.first_class_callable_targets.remove(dest);
+    }
+    if let Some(target) = ctx.callable_array_targets.get(src).cloned() {
+        ctx.callable_array_targets
+            .insert(dest.to_string(), target);
+    } else {
+        ctx.callable_array_targets.remove(dest);
+    }
+    if let Some(label) = ctx.variable_fcc_label.get(src).cloned() {
+        ctx.variable_fcc_label.insert(dest.to_string(), label);
+    } else {
+        ctx.variable_fcc_label.remove(dest);
+    }
+    if ctx.runtime_callable_vars.contains(src) {
+        ctx.runtime_callable_vars.insert(dest.to_string());
+    } else {
+        ctx.runtime_callable_vars.remove(dest);
+    }
+}
+
+/// Clears callable metadata for an optional foreach key variable.
+fn clear_foreach_callable_metadata_for_var(name: Option<&str>, ctx: &mut Context) {
+    if let Some(name) = name {
+        clear_foreach_callable_metadata(name, ctx);
+    }
+}
+
+/// Clears callable metadata for a foreach binding.
+fn clear_foreach_callable_metadata(name: &str, ctx: &mut Context) {
+    ctx.closure_sigs.remove(name);
+    ctx.closure_captures.remove(name);
+    ctx.first_class_callable_targets.remove(name);
+    ctx.callable_array_targets.remove(name);
+    ctx.variable_fcc_label.remove(name);
+    ctx.runtime_callable_vars.remove(name);
 }
 
 /// Pushes the low word of an unboxed Mixed payload onto the stack to preserve it

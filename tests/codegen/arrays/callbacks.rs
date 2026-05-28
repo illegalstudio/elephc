@@ -59,6 +59,51 @@ echo $b[1];
     assert_eq!(out, "2,4");
 }
 
+/// Verifies runtime string builtin callback variables dispatch through descriptor-backed array_map.
+#[test]
+fn test_array_map_dynamic_string_builtin_callback_uses_descriptor_invoker() {
+    let source = r#"<?php
+$name = "STRTOUPPER";
+$callback = $name;
+$out = array_map($callback, ["ada", "lin"]);
+echo $out[0] . ":" . $out[1];
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "ADA:LIN");
+
+    let dir = make_cli_test_dir("elephc_array_map_dynamic_string_builtin_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("__rt_array_map_mixed") && user_asm.contains("callable_invoker"),
+        "array_map dynamic string callbacks should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies runtime string user callbacks can produce mixed array_map result shapes.
+#[test]
+fn test_array_map_dynamic_string_user_callback_mixed_results() {
+    let out = compile_and_run(
+        r#"<?php
+function upper_runtime_map(string $value): string {
+    return strtoupper($value);
+}
+
+$callback = "upper_runtime_map";
+$out = array_map($callback, ["ada"]);
+echo $out[0];
+echo ":";
+
+$callback = "strlen";
+$lengths = array_map($callback, ["abcd"]);
+echo $lengths[0];
+"#,
+    );
+    assert_eq!(out, "ADA:4");
+}
+
 // Tests `array_filter` with a predicate that keeps even integers, verifying correct
 // iteration, element removal, and count/foreach output.
 /// Verifies that array filter.
@@ -91,6 +136,108 @@ foreach ($b as $value) { echo $value; }
 "#,
     );
     assert_eq!(out, "2aaab");
+}
+
+/// Verifies array callback runtimes accept callback names selected through string variables.
+#[test]
+fn test_array_callback_runtimes_dynamic_string_callbacks_use_descriptor_invokers() {
+    let source = r#"<?php
+function even_runtime($value): bool {
+    return $value % 2 == 0;
+}
+
+function show_runtime($value): void {
+    echo $value;
+}
+
+function add_runtime($carry, $item): int {
+    return $carry + $item;
+}
+
+$name = "even_runtime";
+$filter = $name;
+$filtered = array_filter([1, 2, 3, 4], $filter);
+foreach ($filtered as $value) {
+    echo $value;
+}
+echo ":";
+
+$name = "show_runtime";
+$walk = $name;
+array_walk([5, 6], $walk);
+echo ":";
+
+$name = "add_runtime";
+$reduce = $name;
+echo array_reduce([1, 2, 3], $reduce, 0);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "24:56:6");
+
+    let dir = make_cli_test_dir("elephc_array_callback_runtime_string_descriptors");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("__rt_array_filter")
+            && user_asm.contains("__rt_array_walk")
+            && user_asm.contains("__rt_array_reduce")
+            && user_asm.contains("callable_invoker"),
+        "array callback runtime string paths should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies sort callback runtimes accept comparator names selected through string variables.
+#[test]
+fn test_sort_callback_runtimes_dynamic_string_callbacks_use_descriptor_invokers() {
+    let source = r#"<?php
+function choose_sort_name(bool $descending): string {
+    return $descending ? "runtime_desc_compare" : "runtime_asc_compare";
+}
+
+function runtime_desc_compare($left, $right): int {
+    return $right - $left;
+}
+
+function runtime_asc_compare($left, $right): int {
+    return $left - $right;
+}
+
+$sort = choose_sort_name(true);
+
+$usorted = [1, 3, 2];
+usort($usorted, $sort);
+foreach ($usorted as $value) {
+    echo $value;
+}
+echo ":";
+
+$uksorted = [1, 3, 2];
+uksort($uksorted, $sort);
+foreach ($uksorted as $value) {
+    echo $value;
+}
+echo ":";
+
+$uasorted = [1, 3, 2];
+uasort($uasorted, $sort);
+foreach ($uasorted as $value) {
+    echo $value;
+}
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "321:321:321");
+
+    let dir = make_cli_test_dir("elephc_sort_callback_runtime_string_descriptors");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("__rt_usort") && user_asm.contains("callable_invoker"),
+        "sort callback runtime string paths should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
 }
 
 // Tests `array_filter` when the callback returns falsy for every element, producing
@@ -376,4 +523,295 @@ echo $sum;
 "#,
     );
     assert_eq!(out, "142");
+}
+
+/// Verifies static-method callable-array variables route through descriptor callback wrappers.
+#[test]
+fn test_static_callable_array_variable_callback_runtimes() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticCallableArrayRuntime {
+    public static function keep($value): bool {
+        return $value > 2;
+    }
+
+    public static function add($carry, $item): int {
+        return $carry + $item + 10;
+    }
+
+    public static function show($item): void {
+        echo $item + 10;
+        echo ",";
+    }
+
+    public static function compare($a, $b): int {
+        return $b - $a;
+    }
+}
+
+$filter = ["StaticCallableArrayRuntime", "keep"];
+$reduce = ["StaticCallableArrayRuntime", "add"];
+$walk = ["StaticCallableArrayRuntime", "show"];
+$sort = ["StaticCallableArrayRuntime", "compare"];
+
+$filtered = array_filter([1, 3, 4], $filter);
+foreach ($filtered as $value) {
+    echo $value;
+}
+echo ":";
+echo array_reduce([1, 2], $reduce, 0);
+echo ":";
+array_walk([1, 2], $walk);
+echo ":";
+
+$usorted = [1, 3, 2];
+usort($usorted, $sort);
+foreach ($usorted as $value) {
+    echo $value;
+}
+echo ":";
+
+$uksorted = [1, 3, 2];
+uksort($uksorted, $sort);
+foreach ($uksorted as $value) {
+    echo $value;
+}
+echo ":";
+
+$uasorted = [1, 3, 2];
+uasort($uasorted, $sort);
+foreach ($uasorted as $value) {
+    echo $value;
+}
+"#,
+    );
+    assert_eq!(out, "34:23:11,12,:321:321:321");
+}
+
+/// Verifies runtime-selected instance callable arrays route array_map through Mixed descriptors.
+#[test]
+fn test_dynamic_instance_callable_array_variable_array_map_mixed_result() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicInstanceMapRuntime {
+    public string $prefix = "";
+
+    public function wrap(string $name): string {
+        return $this->prefix . $name;
+    }
+
+    public function length(string $name): int {
+        return strlen($name);
+    }
+}
+
+$box = new DynamicInstanceMapRuntime();
+$box->prefix = "first:";
+$method = "wrap";
+$wrap = [$box, $method];
+$method = "length";
+$length = [$box, $method];
+
+$box = new DynamicInstanceMapRuntime();
+$box->prefix = "second:";
+
+$names = array_map($wrap, ["Ada", "Lin"]);
+echo $names[0];
+echo "|";
+echo $names[1];
+echo ":";
+$lengths = array_map($length, ["Ada", "Linus"]);
+echo $lengths[0];
+echo "|";
+echo $lengths[1];
+"#,
+    );
+    assert_eq!(out, "first:Ada|first:Lin:3|5");
+}
+
+/// Verifies runtime-selected static callable arrays route array_map through Mixed descriptors.
+#[test]
+fn test_dynamic_static_callable_array_variable_array_map_mixed_result() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicStaticMapRuntime {
+    public static function wrap(string $name): string {
+        return "static:" . $name;
+    }
+
+    public static function length(string $name): int {
+        return strlen($name);
+    }
+}
+
+$class = "DynamicStaticMapRuntime";
+$method = "wrap";
+$wrap = [$class, $method];
+$method = "length";
+$length = [$class, $method];
+
+$names = array_map($wrap, ["Ada", "Lin"]);
+echo $names[0];
+echo "|";
+echo $names[1];
+echo ":";
+$lengths = array_map($length, ["Ada", "Linus"]);
+echo $lengths[0];
+echo "|";
+echo $lengths[1];
+"#,
+    );
+    assert_eq!(out, "static:Ada|static:Lin:3|5");
+}
+
+/// Verifies runtime-selected instance callable arrays route fixed-return callbacks through descriptors.
+#[test]
+fn test_dynamic_instance_callable_array_variable_fixed_callback_runtimes() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicInstanceCallbackRuntime {
+    public int $limit = 0;
+    public int $offset = 0;
+    public bool $descending = false;
+
+    public function keep($value): bool {
+        return $value > $this->limit;
+    }
+
+    public function add($carry, $item): int {
+        return $carry + $item + $this->offset;
+    }
+
+    public function show($item): void {
+        echo $item + $this->offset;
+        echo ",";
+    }
+
+    public function compare($a, $b): int {
+        if ($this->descending) {
+            return $b - $a;
+        }
+        return $a - $b;
+    }
+}
+
+$box = new DynamicInstanceCallbackRuntime();
+$box->limit = 2;
+$box->offset = 10;
+$box->descending = true;
+
+$method = "keep";
+$filter = [$box, $method];
+$method = "add";
+$reduce = [$box, $method];
+$method = "show";
+$walk = [$box, $method];
+$method = "compare";
+$sort = [$box, $method];
+
+$box = new DynamicInstanceCallbackRuntime();
+$box->limit = 100;
+$box->offset = 100;
+$box->descending = false;
+
+$filtered = array_filter([1, 3, 4], $filter);
+foreach ($filtered as $value) {
+    echo $value;
+}
+echo ":";
+echo array_reduce([1, 2], $reduce, 0);
+echo ":";
+array_walk([1, 2], $walk);
+echo ":";
+
+$usorted = [1, 3, 2];
+usort($usorted, $sort);
+foreach ($usorted as $value) {
+    echo $value;
+}
+echo ":";
+
+$uksorted = [1, 3, 2];
+uksort($uksorted, $sort);
+foreach ($uksorted as $value) {
+    echo $value;
+}
+echo ":";
+
+$uasorted = [1, 3, 2];
+uasort($uasorted, $sort);
+foreach ($uasorted as $value) {
+    echo $value;
+}
+"#,
+    );
+    assert_eq!(out, "34:23:11,12,:321:321:321");
+}
+
+/// Verifies runtime-selected static callable arrays route fixed-return callbacks through descriptors.
+#[test]
+fn test_dynamic_static_callable_array_variable_fixed_callback_runtimes() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicStaticCallbackRuntime {
+    public static function keep($value): bool {
+        return $value > 2;
+    }
+
+    public static function add($carry, $item): int {
+        return $carry + $item + 10;
+    }
+
+    public static function show($item): void {
+        echo $item + 10;
+        echo ",";
+    }
+
+    public static function compare($a, $b): int {
+        return $b - $a;
+    }
+}
+
+$class = "DynamicStaticCallbackRuntime";
+$method = "keep";
+$filter = [$class, $method];
+$method = "add";
+$reduce = [$class, $method];
+$method = "show";
+$walk = [$class, $method];
+$method = "compare";
+$sort = [$class, $method];
+
+$filtered = array_filter([1, 3, 4], $filter);
+foreach ($filtered as $value) {
+    echo $value;
+}
+echo ":";
+echo array_reduce([1, 2], $reduce, 0);
+echo ":";
+array_walk([1, 2], $walk);
+echo ":";
+
+$usorted = [1, 3, 2];
+usort($usorted, $sort);
+foreach ($usorted as $value) {
+    echo $value;
+}
+echo ":";
+
+$uksorted = [1, 3, 2];
+uksort($uksorted, $sort);
+foreach ($uksorted as $value) {
+    echo $value;
+}
+echo ":";
+
+$uasorted = [1, 3, 2];
+uasort($uasorted, $sort);
+foreach ($uasorted as $value) {
+    echo $value;
+}
+"#,
+    );
+    assert_eq!(out, "34:23:11,12,:321:321:321");
 }

@@ -108,7 +108,9 @@ pub(crate) fn emit_pushed_call_args(
                 .saturating_sub(prepared.spread_at_index);
             let variadic_ty = emit_spread_tail_variadic_array_arg(
                 spread_expr,
+                sig,
                 tail_start,
+                prepared.regular_param_count,
                 "spread tail as variadic param",
                 emitter,
                 ctx,

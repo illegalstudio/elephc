@@ -310,6 +310,15 @@ fn emit_fiber_start_intrinsic(
         }
     }
     emitter.label(&skip_label);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov x9, #{}", supplied_arg_count));   // materialize how many boxed start() values were supplied
+            emitter.instruction(&format!("str x9, [x0, #{}]", crate::codegen::runtime::FIBER_START_ARG_COUNT_OFFSET)); // record start() arity for descriptor-backed Fiber invokers
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov QWORD PTR [rdi + {}], {}", crate::codegen::runtime::FIBER_START_ARG_COUNT_OFFSET, supplied_arg_count)); // record start() arity for descriptor-backed Fiber invokers
+        }
+    }
     abi::emit_call_label(
         emitter,
         intrinsic

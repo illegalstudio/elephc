@@ -102,6 +102,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
 
     // Callable introspection runtime functions
     callables::emit_is_callable_runtime(emitter);
+    callables::emit_callable_descriptor_release(emitter);
 
     // System runtime functions
     system::emit_build_argv(emitter);
@@ -237,7 +238,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_ksort(emitter);
     arrays::emit_natsort(emitter);
     arrays::emit_array_map(emitter);
+    arrays::emit_array_map_mixed(emitter);
     arrays::emit_array_map_str(emitter);
+    arrays::emit_array_map_str_owned(emitter);
     arrays::emit_array_filter(emitter);
     arrays::emit_array_filter_refcounted(emitter);
     arrays::emit_array_reduce(emitter);

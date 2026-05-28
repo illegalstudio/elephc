@@ -140,11 +140,14 @@ fn emit_copy_stack_arg_slot(
 ///
 /// - Registers: loads directly from temp slots into the appropriate register.
 /// - Stack overflow: adjusts SP downward, then copies each stack argument using scratch
-///   registers. A sentinel adjustment reserves the overflow area before register materialization,
-///   then a second adjustment removes only the total-temp region after all copies complete.
+///   registers. A sentinel adjustment reserves the outgoing overflow area plus a staging
+///   area, avoiding overlap while stack arguments are copied out of the temporary stack.
+///   A second adjustment removes the total-temp region and staging area after all copies
+///   complete.
 ///
-/// Returns the total bytes of stack overflow arguments (for the caller to track). The
-/// caller must also track the count of temp bytes (`sum(arg_slot_size)`) for cleanup.
+/// Returns the total bytes of stack overflow arguments left under SP for the caller to
+/// release after the call. Temporary argument slots and staging storage are consumed before
+/// this function returns.
 pub fn materialize_outgoing_args(
     emitter: &mut Emitter,
     assignments: &[OutgoingArgAssignment],
@@ -168,11 +171,13 @@ pub fn materialize_outgoing_args(
         .collect();
     let overflow_bytes: usize = overflow_indices.iter().map(|idx| slot_sizes[*idx]).sum();
 
-    if overflow_bytes > 0 {
-        emit_adjust_sp(emitter, overflow_bytes, true);
+    let staging_bytes = overflow_bytes;
+    let reserved_overflow_bytes = overflow_bytes + staging_bytes;
+    if reserved_overflow_bytes > 0 {
+        emit_adjust_sp(emitter, reserved_overflow_bytes, true);
     }
 
-    let base_shift = overflow_bytes;
+    let base_shift = reserved_overflow_bytes;
     for (i, assignment) in assignments.iter().enumerate() {
         if !assignment.in_register() {
             continue;
@@ -222,16 +227,34 @@ pub fn materialize_outgoing_args(
     }
 
     if overflow_bytes > 0 {
-        let mut dst_offset = total_temp_bytes;
+        let mut staging_offset = 0usize;
         for idx in &overflow_indices {
-            let src_offset = overflow_bytes + temp_offsets[*idx];
-            emit_copy_stack_arg_slot(emitter, &assignments[*idx].ty, src_offset, dst_offset);
-            dst_offset += slot_sizes[*idx];
+            let src_offset = reserved_overflow_bytes + temp_offsets[*idx];
+            emit_copy_stack_arg_slot(
+                emitter,
+                &assignments[*idx].ty,
+                src_offset,
+                staging_offset,
+            );
+            staging_offset += slot_sizes[*idx];
+        }
+
+        let final_stack_base = total_temp_bytes + staging_bytes;
+        staging_offset = 0;
+        for idx in &overflow_indices {
+            emit_copy_stack_arg_slot(
+                emitter,
+                &assignments[*idx].ty,
+                staging_offset,
+                final_stack_base + staging_offset,
+            );
+            staging_offset += slot_sizes[*idx];
         }
     }
 
-    if total_temp_bytes > 0 {
-        emit_adjust_sp(emitter, total_temp_bytes, false);
+    let release_before_call_bytes = total_temp_bytes + staging_bytes;
+    if release_before_call_bytes > 0 {
+        emit_adjust_sp(emitter, release_before_call_bytes, false);
     }
 
     overflow_bytes

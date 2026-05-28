@@ -37,7 +37,9 @@ use self::cleanup::{
 use self::control_flow::{collect_try_slots, mark_control_flow_epilogue_unsafe};
 pub use self::locals::collect_local_vars;
 pub(crate) use self::types::{codegen_declared_type, codegen_static_type};
-pub(crate) use self::callback_wrapper::emit_callback_wrapper;
+pub(crate) use self::callback_wrapper::{
+    emit_callback_wrapper, emit_extern_callback_trampoline,
+};
 pub(crate) use self::fiber_wrapper::emit_fiber_wrapper;
 pub use self::types::{infer_contextual_type, infer_local_type_with_ctx};
 pub(crate) use self::types::singular_object_class;
@@ -54,6 +56,7 @@ pub fn emit_function(
     all_functions: &HashMap<String, FunctionSig>,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
     callable_return_sigs: &HashMap<String, FunctionSig>,
+    callable_array_return_sigs: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
@@ -89,6 +92,7 @@ pub fn emit_function(
         all_functions,
         callable_param_sigs,
         callable_return_sigs,
+        callable_array_return_sigs,
         function_variant_groups,
         constants,
         all_global_var_names,
@@ -116,6 +120,7 @@ pub fn emit_closure(
     current_class: Option<&str>,
     all_functions: &HashMap<String, FunctionSig>,
     callable_return_sigs: &HashMap<String, FunctionSig>,
+    callable_array_return_sigs: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     interfaces: &HashMap<String, InterfaceInfo>,
@@ -157,6 +162,7 @@ pub fn emit_closure(
         all_functions,
         &empty_callable_param_sigs,
         callable_return_sigs,
+        callable_array_return_sigs,
         function_variant_groups,
         constants,
         &empty_globals,
@@ -185,6 +191,7 @@ pub fn emit_method(
     all_functions: &HashMap<String, FunctionSig>,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
     callable_return_sigs: &HashMap<String, FunctionSig>,
+    callable_array_return_sigs: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     interfaces: &HashMap<String, InterfaceInfo>,
@@ -211,6 +218,7 @@ pub fn emit_method(
         all_functions,
         callable_param_sigs,
         callable_return_sigs,
+        callable_array_return_sigs,
         function_variant_groups,
         constants,
         &empty_globals,
@@ -240,6 +248,7 @@ fn emit_function_with_label(
     all_functions: &HashMap<String, FunctionSig>,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
     callable_return_sigs: &HashMap<String, FunctionSig>,
+    callable_array_return_sigs: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
@@ -266,6 +275,7 @@ fn emit_function_with_label(
         all_functions,
         callable_param_sigs,
         callable_return_sigs,
+        callable_array_return_sigs,
         function_variant_groups,
         constants,
         all_global_var_names,
@@ -312,24 +322,40 @@ fn allocate_incoming_param(ctx: &mut Context, pname: &str, pty: &PhpType, is_ref
     }
 }
 
+/// Records declared callable parameters and seeds known callable parameter signatures.
+///
 /// Looks up callable-typed parameters in `ctx.callable_param_sigs` by scope and
-/// populates `ctx.closure_sigs` so that closure captures can resolve their signatures.
-/// No-ops if `scope` is `None`.
+/// populates `ctx.closure_sigs` so captures can resolve signatures while callsites
+/// route through descriptor metadata only for source-declared `callable` params.
 fn seed_callable_param_sigs(ctx: &mut Context, scope: Option<&str>, sig: &FunctionSig) {
-    let Some(scope) = scope else {
-        return;
-    };
-    for (pname, pty) in &sig.params {
-        if pty != &PhpType::Callable {
+    for (idx, (pname, pty)) in sig.params.iter().enumerate() {
+        if pty != &PhpType::Callable && !is_callable_array_type(pty) {
             continue;
         }
-        if let Some(callable_sig) = ctx
-            .callable_param_sigs
-            .get(&(scope.to_string(), pname.clone()))
-            .cloned()
-        {
-            ctx.closure_sigs.insert(pname.clone(), callable_sig);
+        if pty == &PhpType::Callable && sig.declared_params.get(idx).copied().unwrap_or(false) {
+            ctx.callable_param_names.insert(pname.clone());
         }
+        if let Some(scope) = scope {
+            if let Some(callable_sig) = ctx
+                .callable_param_sigs
+                .get(&(scope.to_string(), pname.clone()))
+                .cloned()
+            {
+                ctx.closure_sigs.insert(pname.clone(), callable_sig);
+                if is_callable_array_type(pty) {
+                    ctx.runtime_callable_vars.insert(pname.clone());
+                }
+            }
+        }
+    }
+}
+
+/// Returns true when a parameter is an array whose elements are callable descriptors.
+fn is_callable_array_type(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Array(elem_ty) => elem_ty.as_ref() == &PhpType::Callable,
+        PhpType::AssocArray { value, .. } => value.as_ref() == &PhpType::Callable,
+        _ => false,
     }
 }
 
@@ -350,6 +376,7 @@ fn emit_function_with_label_and_class(
     all_functions: &HashMap<String, FunctionSig>,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
     callable_return_sigs: &HashMap<String, FunctionSig>,
+    callable_array_return_sigs: &HashMap<String, FunctionSig>,
     function_variant_groups: &HashSet<String>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
@@ -369,6 +396,7 @@ fn emit_function_with_label_and_class(
     ctx.functions = all_functions.clone();
     ctx.callable_param_sigs = callable_param_sigs.clone();
     ctx.callable_return_sigs = callable_return_sigs.clone();
+    ctx.callable_array_return_sigs = callable_array_return_sigs.clone();
     ctx.function_variant_groups = function_variant_groups.clone();
     ctx.constants = constants.clone();
     ctx.all_global_var_names = all_global_var_names.clone();
@@ -461,7 +489,7 @@ fn emit_function_with_label_and_class(
         if param_names.contains(name) {
             continue;
         }
-        if matches!(&var.ty, PhpType::Str) || var.ty.is_refcounted() {
+        if matches!(&var.ty, PhpType::Str | PhpType::Callable) || var.ty.is_refcounted() {
             super::abi::emit_store_zero_to_local_slot(emitter, var.stack_offset); // zero-init to prevent stale ptr free
         }
     }
@@ -514,6 +542,8 @@ fn emit_function_with_label_and_class(
     while !ctx.deferred_closures.is_empty()
         || !ctx.deferred_fiber_wrappers.is_empty()
         || !ctx.deferred_callback_wrappers.is_empty()
+        || !ctx.deferred_extern_callback_trampolines.is_empty()
+        || !ctx.deferred_runtime_callable_invokers.is_empty()
     {
         let closures: Vec<_> = ctx.deferred_closures.drain(..).collect();
         for closure in closures {
@@ -528,6 +558,7 @@ fn emit_function_with_label_and_class(
                     closure.current_class.as_deref(),
                     all_functions,
                     &ctx.callable_return_sigs,
+                    &ctx.callable_array_return_sigs,
                     &ctx.function_variant_groups,
                     constants,
                     interfaces,
@@ -563,6 +594,20 @@ fn emit_function_with_label_and_class(
         let callback_wrappers: Vec<_> = ctx.deferred_callback_wrappers.drain(..).collect();
         for wrapper in callback_wrappers {
             emit_callback_wrapper(emitter, &wrapper);
+        }
+        let extern_trampolines: Vec<_> =
+            ctx.deferred_extern_callback_trampolines.drain(..).collect();
+        for trampoline in extern_trampolines {
+            emit_extern_callback_trampoline(emitter, &trampoline);
+        }
+        let invokers: Vec<_> = ctx.deferred_runtime_callable_invokers.drain(..).collect();
+        for invoker in invokers {
+            crate::codegen::runtime_callable_invoker::emit_runtime_callable_invoker(
+                emitter,
+                data,
+                &ctx,
+                &invoker,
+            );
         }
     }
 }

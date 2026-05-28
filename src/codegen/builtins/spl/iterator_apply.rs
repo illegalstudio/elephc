@@ -8,12 +8,18 @@
 //! Key details:
 //! - The callback is evaluated once before rewind(), and callback falsehood stops iteration before next().
 //! - The returned count includes the callback invocation that requested the stop.
+//! - Runtime callable-array variables are resolved once before the loop and then invoked through
+//!   the selected descriptor for each valid iterator position.
 
 use crate::codegen::abi;
 use crate::codegen::builtins::arrays::callback_env;
 use crate::codegen::builtins::arrays::call_user_func_array::{
     self, LoadedArraySource,
 };
+use crate::codegen::builtins::arrays::receiver_call_args;
+use crate::codegen::builtins::arrays::runtime_callable_array_callback;
+use crate::codegen::callable_dispatch::RuntimeCallableCase;
+use crate::codegen::callable_descriptor;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -51,14 +57,35 @@ pub fn emit(
     let call_reg = abi::nested_call_reg(emitter);
     let runtime_string_callback =
         call_user_func_array::callback_is_runtime_string(&args[1], ctx);
-    let (captures, sig) = if runtime_string_callback {
+    if !runtime_string_callback
+        && runtime_callable_array_callback::emit_without_saved_array(
+            &args[1],
+            emitter,
+            ctx,
+            data,
+            |case, receiver_ty, emitter, ctx, data| {
+                emit_runtime_callable_array_iterator_apply_case(
+                    case,
+                    receiver_ty,
+                    &source_kind,
+                    args,
+                    emitter,
+                    ctx,
+                    data,
+                );
+            },
+        )
+    {
+        return Some(PhpType::Int);
+    }
+    let (captures, sig, callback_slot_kind, descriptor_arg_prefix) = if runtime_string_callback {
         abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));              // save iterator_apply()'s callback-invocation counter before preserving the string callback
         let callback_ty = emit_expr(&args[1], emitter, ctx, data);
         debug_assert!(matches!(callback_ty.codegen_repr(), PhpType::Str));
         let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
         abi::emit_push_reg_pair(emitter, ptr_reg, len_reg);                     // save the runtime string callback name beneath the loop receiver
-        (Vec::new(), None)
+        (Vec::new(), None, CallbackSlotKind::EntryAddress, None)
     } else {
         let is_callable_expr = matches!(
             &args[1].kind,
@@ -70,24 +97,54 @@ pub fn emit(
             .as_ref()
             .map(|(_, sig)| sig.clone())
             .or_else(|| crate::codegen::callables::callable_sig(&args[1], ctx));
-        let captures = if let Some((resolved_name, _)) = direct_fcc_function.as_ref() {
-            let label = crate::names::function_symbol(resolved_name);
-            abi::emit_symbol_address(emitter, call_reg, &label);
-            Vec::new()
+        if let Some(array_callback) =
+            callback_env::resolve_callable_array_descriptor_callback(&args[1], ctx, data)
+        {
+            let descriptor_arg_prefix = array_callback
+                .receiver_prefix
+                .as_ref()
+                .map(|(receiver, _)| receiver.clone());
+            abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // save iterator_apply()'s callback-invocation counter
+            abi::emit_symbol_address(emitter, call_reg, &array_callback.descriptor_label);
+            abi::emit_push_reg(emitter, call_reg);                              // save the callable-array descriptor beneath the loop receiver
+            (
+                Vec::new(),
+                Some(array_callback.sig),
+                CallbackSlotKind::Descriptor,
+                descriptor_arg_prefix,
+            )
+        } else if callback_env::expr_call_needs_descriptor_callback_env(&args[1], ctx)
+            && callback_env::descriptor_callback_env_supported(&args[1])
+        {
+            let callback_ty = emit_expr(&args[1], emitter, ctx, data);
+            debug_assert!(matches!(callback_ty.codegen_repr(), PhpType::Callable));
+            callback_env::retain_borrowed_descriptor_callback_result(&args[1], emitter);
+            emitter.instruction(&format!("mov {}, {}", call_reg, abi::int_result_reg(emitter))); // keep the selected callable descriptor while initializing the counter
+            abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // save iterator_apply()'s callback-invocation counter
+            abi::emit_push_reg(emitter, call_reg);                              // save the selected callable descriptor beneath the loop receiver
+            (Vec::new(), precomputed_sig, CallbackSlotKind::Descriptor, None)
         } else {
-            callback_env::materialize_callback_address(&args[1], call_reg, emitter, ctx, data)
-        };
-        let sig: Option<FunctionSig> = if direct_fcc_function.is_none() && is_callable_expr {
-            ctx.deferred_closures
-                .last()
-                .map(|deferred| deferred.sig.clone())
-        } else {
-            precomputed_sig
-        };
-        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
-        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));              // save iterator_apply()'s callback-invocation counter
-        abi::emit_push_reg(emitter, call_reg);                                  // save the resolved callback address beneath the loop receiver
-        (captures, sig)
+            let captures = if let Some((resolved_name, _)) = direct_fcc_function.as_ref() {
+                let label = crate::names::function_symbol(resolved_name);
+                abi::emit_symbol_address(emitter, call_reg, &label);
+                Vec::new()
+            } else {
+                callback_env::materialize_callback_address(&args[1], call_reg, emitter, ctx, data)
+            };
+            let sig: Option<FunctionSig> = if direct_fcc_function.is_none() && is_callable_expr {
+                ctx.deferred_closures
+                    .last()
+                    .map(|deferred| deferred.sig.clone())
+            } else {
+                precomputed_sig
+            };
+            abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // save iterator_apply()'s callback-invocation counter
+            abi::emit_push_reg(emitter, call_reg);                              // save the resolved callback address beneath the loop receiver
+            (captures, sig, CallbackSlotKind::EntryAddress, None)
+        }
     };
     let ret_ty = sig
         .as_ref()
@@ -95,9 +152,12 @@ pub fn emit(
         .unwrap_or_else(|| if runtime_string_callback { PhpType::Mixed } else { PhpType::Int });
 
     let callback_arg_source = match callback_args_expr(args) {
-        CallbackArgsExpr::Literal(callback_args) if runtime_string_callback => {
-            let arg_array = Expr::new(
-                ExprKind::ArrayLiteral(callback_args.to_vec()),
+        CallbackArgsExpr::Literal(callback_args)
+            if runtime_string_callback || callback_slot_kind == CallbackSlotKind::Descriptor =>
+        {
+            let arg_array = iterator_apply_descriptor_arg_array(
+                descriptor_arg_prefix.as_ref(),
+                callback_args,
                 args.get(2).map(|arg| arg.span).unwrap_or(args[1].span),
             );
             let arg_array_ty = emit_expr(&arg_array, emitter, ctx, data);
@@ -108,6 +168,33 @@ pub fn emit(
                 count_offset: 48,
                 arg_array_ty,
                 literal_elems: Some(callback_args),
+            }
+        }
+        CallbackArgsExpr::Evaluated {
+            expr,
+            literal_elems: _,
+        } if callback_slot_kind == CallbackSlotKind::Descriptor
+            && descriptor_arg_prefix.is_some() =>
+        {
+            let arg_array_ty = crate::codegen::functions::infer_contextual_type(expr, ctx);
+            let prefixed = receiver_call_args::emit_receiver_prefixed_dynamic_arg_mixed(
+                descriptor_arg_prefix
+                    .as_ref()
+                    .expect("descriptor prefix checked before dynamic arg rewriting"),
+                expr,
+                &arg_array_ty,
+                emitter,
+                ctx,
+                data,
+            );
+            debug_assert!(prefixed);
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // save iterator_apply()'s receiver-prefixed callback-argument array for every invocation
+            CallbackArgSource::Dynamic {
+                args_offset: 16,
+                callback_offset: 32,
+                count_offset: 48,
+                arg_array_ty: PhpType::Mixed,
+                literal_elems: None,
             }
         }
         CallbackArgsExpr::Evaluated {
@@ -134,6 +221,140 @@ pub fn emit(
         CallbackArgSource::Dynamic { .. } => 48,
         CallbackArgSource::Literal { .. } => 32,
     };
+    emit_iterator_apply_loops(
+        &source_kind,
+        &callback_arg_source,
+        &captures,
+        sig.as_ref(),
+        &ret_ty,
+        runtime_string_callback,
+        callback_slot_kind,
+        receiver_offset,
+        emitter,
+        ctx,
+        data,
+    );
+    if matches!(callback_arg_source, CallbackArgSource::Dynamic { .. }) {
+        abi::emit_release_temporary_stack(emitter, 16);                         // discard the evaluated iterator_apply() args array
+    }
+    if callback_slot_kind == CallbackSlotKind::Descriptor {
+        release_saved_descriptor_callback_slot(emitter);
+    } else {
+        abi::emit_release_temporary_stack(emitter, 16);                         // discard the saved callback slot after iteration
+    }
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // return the final iterator_apply() invocation count
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the receiver preserved while resolving the callback
+    Some(PhpType::Int)
+}
+
+/// Emits one iterator_apply() branch for a runtime-selected callable-array descriptor.
+fn emit_runtime_callable_array_iterator_apply_case(
+    case: &RuntimeCallableCase,
+    receiver_ty: Option<&PhpType>,
+    source_kind: &ApplySourceKind,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    let call_reg = abi::nested_call_reg(emitter);
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // save iterator_apply()'s callback-invocation counter for the selected descriptor
+    abi::emit_symbol_address(emitter, call_reg, &case.descriptor_label);
+    abi::emit_push_reg(emitter, call_reg);                                      // save the selected callable-array descriptor beneath callback args
+
+    let arg_array_ty =
+        emit_runtime_callable_array_iterator_args(receiver_ty, args, emitter, ctx, data);
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // save iterator_apply()'s descriptor argument container for every invocation
+
+    let selected_receiver_bytes = usize::from(receiver_ty.is_some()) * 16;
+    let callback_arg_source = CallbackArgSource::Dynamic {
+        args_offset: 16,
+        callback_offset: 32,
+        count_offset: 48,
+        arg_array_ty,
+        literal_elems: None,
+    };
+    emit_iterator_apply_loops(
+        source_kind,
+        &callback_arg_source,
+        &[],
+        Some(&case.sig),
+        &PhpType::Mixed,
+        false,
+        CallbackSlotKind::Descriptor,
+        48 + selected_receiver_bytes,
+        emitter,
+        ctx,
+        data,
+    );
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the selected descriptor argument container
+    release_saved_descriptor_callback_slot(emitter);
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // return the final iterator_apply() invocation count
+    if selected_receiver_bytes != 0 {
+        abi::emit_release_temporary_stack(emitter, selected_receiver_bytes);     // discard the saved runtime callable-array receiver
+    }
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the receiver preserved while resolving the callback
+}
+
+/// Evaluates iterator_apply() callback args for a runtime-selected callable-array descriptor.
+fn emit_runtime_callable_array_iterator_args(
+    receiver_ty: Option<&PhpType>,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let args_span = args.get(2).map(|arg| arg.span).unwrap_or(args[1].span);
+    let callback_args = callback_args_expr(args);
+    match receiver_ty {
+        Some(_) => {
+            let (arg_expr, arg_ty) = match callback_args {
+                CallbackArgsExpr::Literal(callback_args) => (
+                    iterator_apply_descriptor_arg_array(None, callback_args, args_span),
+                    PhpType::Array(Box::new(PhpType::Mixed)),
+                ),
+                CallbackArgsExpr::Evaluated { expr, .. } => {
+                    (expr.clone(), crate::codegen::functions::infer_contextual_type(expr, ctx))
+                }
+            };
+            let prefixed = receiver_call_args::emit_saved_receiver_prefixed_dynamic_arg_mixed(
+                32,
+                &arg_expr,
+                &arg_ty,
+                emitter,
+                ctx,
+                data,
+            );
+            debug_assert!(prefixed);
+            PhpType::Mixed
+        }
+        None => match callback_args {
+            CallbackArgsExpr::Literal(callback_args) => {
+                let arg_array =
+                    iterator_apply_descriptor_arg_array(None, callback_args, args_span);
+                emit_expr(&arg_array, emitter, ctx, data)
+            }
+            CallbackArgsExpr::Evaluated { expr, .. } => emit_expr(expr, emitter, ctx, data),
+        },
+    }
+}
+
+/// Emits the shared iterator loop body for iterator_apply() once callback state is staged.
+#[allow(clippy::too_many_arguments)]
+fn emit_iterator_apply_loops(
+    source_kind: &ApplySourceKind,
+    callback_arg_source: &CallbackArgSource<'_>,
+    captures: &[(String, PhpType, bool)],
+    sig: Option<&FunctionSig>,
+    ret_ty: &PhpType,
+    runtime_string_callback: bool,
+    callback_slot_kind: CallbackSlotKind,
+    receiver_offset: usize,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
     abi::emit_load_temporary_stack_slot(
         emitter,
         abi::int_result_reg(emitter),
@@ -146,7 +367,7 @@ pub fn emit(
     match source_kind {
         ApplySourceKind::StaticObject(class_name) => {
             emit_iterator_loop(
-                &class_name,
+                class_name,
                 &loop_start,
                 &loop_end,
                 &loop_cont,
@@ -156,11 +377,12 @@ pub fn emit(
                 |_, _, _, _| (),
                 |_, emitter, ctx, data| {
                     emit_callback_invocation(
-                        &callback_arg_source,
-                        &captures,
-                        sig.as_ref(),
-                        &ret_ty,
+                        callback_arg_source,
+                        captures,
+                        sig,
+                        ret_ty,
                         runtime_string_callback,
+                        callback_slot_kind,
                         &loop_end,
                         emitter,
                         ctx,
@@ -179,11 +401,12 @@ pub fn emit(
                 |_, _, _, _| (),
                 |_, active_loop_end, emitter, ctx, data| {
                     emit_callback_invocation(
-                        &callback_arg_source,
-                        &captures,
-                        sig.as_ref(),
-                        &ret_ty,
+                        callback_arg_source,
+                        captures,
+                        sig,
+                        ret_ty,
                         runtime_string_callback,
+                        callback_slot_kind,
                         active_loop_end,
                         emitter,
                         ctx,
@@ -195,30 +418,30 @@ pub fn emit(
         }
         ApplySourceKind::RuntimeIterable => {
             emit_apply_loaded_iterable(
-                &callback_arg_source,
-                &captures,
-                sig.as_ref(),
-                &ret_ty,
+                callback_arg_source,
+                captures,
+                sig,
+                ret_ty,
                 runtime_string_callback,
+                callback_slot_kind,
                 emitter,
                 ctx,
                 data,
             );
         }
     }
-    if matches!(callback_arg_source, CallbackArgSource::Dynamic { .. }) {
-        abi::emit_release_temporary_stack(emitter, 16);                         // discard the evaluated iterator_apply() args array
-    }
-    abi::emit_release_temporary_stack(emitter, 16);                             // discard the saved callback slot after iteration
-    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // return the final iterator_apply() invocation count
-    abi::emit_release_temporary_stack(emitter, 16);                             // discard the receiver preserved while resolving the callback
-    Some(PhpType::Int)
 }
 
 enum ApplySourceKind {
     StaticObject(String),
     TraversableObject,
     RuntimeIterable,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CallbackSlotKind {
+    EntryAddress,
+    Descriptor,
 }
 
 enum CallbackArgSource<'a> {
@@ -265,6 +488,21 @@ fn callback_args_expr(args: &[Expr]) -> CallbackArgsExpr<'_> {
     }
 }
 
+/// Builds the callback argument array, optionally prefixing a callable-array receiver.
+fn iterator_apply_descriptor_arg_array(
+    descriptor_arg_prefix: Option<&Expr>,
+    callback_args: &[Expr],
+    span: crate::span::Span,
+) -> Expr {
+    let mut elems =
+        Vec::with_capacity(callback_args.len() + usize::from(descriptor_arg_prefix.is_some()));
+    if let Some(prefix) = descriptor_arg_prefix {
+        elems.push(prefix.clone());
+    }
+    elems.extend(callback_args.iter().cloned());
+    Expr::new(ExprKind::ArrayLiteral(elems), span)
+}
+
 /// Returns true when static callback arg literal.
 fn is_static_callback_arg_literal(expr: &Expr) -> bool {
     match &expr.kind {
@@ -288,6 +526,7 @@ fn emit_callback_invocation(
     sig: Option<&FunctionSig>,
     ret_ty: &PhpType,
     runtime_string_callback: bool,
+    callback_slot_kind: CallbackSlotKind,
     loop_end: &str,
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -318,7 +557,18 @@ fn emit_callback_invocation(
         if save_concat_before_args {
             crate::codegen::expr::save_concat_offset_before_nested_call(emitter, ctx);
         }
-        let dynamic_ret_ty = if runtime_string_callback {
+        let dynamic_ret_ty = if callback_slot_kind == CallbackSlotKind::Descriptor {
+            call_user_func_array::emit_call_descriptor_array_invoker(
+                LoadedArraySource::TemporaryStackSlot(*args_offset),
+                arg_array_ty,
+                call_reg,
+                save_concat_before_args,
+                emitter,
+                ctx,
+                data,
+            );
+            PhpType::Mixed
+        } else if runtime_string_callback {
             call_user_func_array::emit_loaded_array_string_callback_call(
                 LoadedArraySource::TemporaryStackSlot(*args_offset),
                 arg_array_ty,
@@ -349,6 +599,7 @@ fn emit_callback_invocation(
                 arg_array_ty,
                 call_reg,
                 captures,
+                None,
                 save_concat_before_args,
                 emitter,
                 ctx,
@@ -369,6 +620,7 @@ fn emit_callback_invocation(
         } => (*args, *count_offset),
         CallbackArgSource::Dynamic { .. } => unreachable!(),
     };
+    debug_assert!(callback_slot_kind == CallbackSlotKind::EntryAddress);
 
     let save_concat_before_args = emitter.target.arch == Arch::X86_64;
     if save_concat_before_args {
@@ -426,6 +678,7 @@ fn emit_apply_loaded_iterable(
     sig: Option<&FunctionSig>,
     ret_ty: &PhpType,
     runtime_string_callback: bool,
+    callback_slot_kind: CallbackSlotKind,
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
@@ -462,6 +715,7 @@ fn emit_apply_loaded_iterable(
                 sig,
                 ret_ty,
                 runtime_string_callback,
+                callback_slot_kind,
                 active_loop_end,
                 emitter,
                 ctx,
@@ -470,6 +724,13 @@ fn emit_apply_loaded_iterable(
         },
         |_, _, _, _| {},
     );
+}
+
+/// Releases the retained descriptor stored in iterator_apply()'s saved callback slot.
+fn release_saved_descriptor_callback_slot(emitter: &mut Emitter) {
+    abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 0);
+    callable_descriptor::emit_release_current_descriptor(emitter);
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the saved callable descriptor after releasing it
 }
 
 /// Emits assembly for branch if callback false.

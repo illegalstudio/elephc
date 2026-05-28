@@ -379,6 +379,109 @@ run($cb);
     assert_eq!(out, "12");
 }
 
+/// Verifies `call_user_func()` reads by-value captures from the callable descriptor snapshot.
+#[test]
+fn test_call_user_func_captured_closure_descriptor_uses_invoker_snapshot() {
+    let source = r#"<?php
+$prefix = "old";
+$cb = function(string $name) use ($prefix): string {
+    return $prefix . $name;
+};
+$prefix = "new";
+echo call_user_func($cb, "Ada");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "oldAda");
+
+    let dir = make_cli_test_dir("elephc_call_user_func_capture_descriptor_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "call_user_func closure descriptors should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies `call_user_func()` can invoke callable descriptors loaded from arrays.
+#[test]
+fn test_call_user_func_array_element_descriptor_uses_invoker_snapshot() {
+    let source = r#"<?php
+$prefix = "old";
+$callbacks = [function(string $name) use ($prefix): string {
+    return $prefix . $name;
+}];
+$prefix = "new";
+echo call_user_func($callbacks[0], "Ada");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "oldAda");
+
+    let dir = make_cli_test_dir("elephc_call_user_func_array_element_descriptor_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "call_user_func array element descriptors should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies descriptor invokers preserve runtime by-reference arguments for callable params.
+#[test]
+fn test_call_user_func_callable_param_descriptor_preserves_by_ref_argument() {
+    let source = r#"<?php
+function run(callable $cb): void {
+    $value = 4;
+    call_user_func($cb, $value);
+    echo $value;
+}
+$cb = function(int &$n): void {
+    $n = $n + 3;
+};
+run($cb);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "7");
+
+    let dir = make_cli_test_dir("elephc_call_user_func_descriptor_invoker_by_ref_arg");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("cufa_invoker_ref_cell"),
+        "descriptor invoker should receive variable args as ref-cell markers:\n{}",
+        user_asm
+    );
+    assert!(
+        user_asm.contains("cufa_descriptor_invoker_ready"),
+        "call_user_func callable params should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies descriptor invokers dereference variable markers for by-value parameters.
+#[test]
+fn test_call_user_func_callable_param_descriptor_derefs_by_value_argument() {
+    let out = compile_and_run(
+        r#"<?php
+function run(callable $cb): void {
+    $value = 4;
+    echo call_user_func($cb, $value);
+    echo ":";
+    echo $value;
+}
+$cb = function(int $n): int {
+    return $n + 1;
+};
+run($cb);
+"#,
+    );
+    assert_eq!(out, "5:4");
+}
+
 /// Verifies that call user func dynamic string user callback.
 #[test]
 fn test_call_user_func_dynamic_string_user_callback() {
@@ -439,6 +542,24 @@ echo call_user_func($callback, "ok");
     assert_eq!(out, "[ok]");
 }
 
+/// Verifies that descriptor invokers do not rewrite the caller's indexed arg array.
+#[test]
+fn test_call_user_func_array_dynamic_string_keeps_indexed_args_usable_after_invocation() {
+    let out = compile_and_run(
+        r#"<?php
+function greet_again(string $name): string {
+    return "hi " . $name;
+}
+$callback = "greet_again";
+$args = ["Ada"];
+echo call_user_func_array($callback, $args);
+echo ":";
+echo $args[0];
+"#,
+    );
+    assert_eq!(out, "hi Ada:Ada");
+}
+
 /// Verifies that call user func array dynamic string assoc callback.
 #[test]
 fn test_call_user_func_array_dynamic_string_assoc_callback() {
@@ -453,6 +574,26 @@ echo call_user_func_array($callback, $args);
 "#,
     );
     assert_eq!(out, "id:7");
+}
+
+/// Verifies that descriptor invokers do not rewrite the caller's associative arg array.
+#[test]
+fn test_call_user_func_array_dynamic_string_keeps_assoc_args_usable_after_invocation() {
+    let out = compile_and_run(
+        r#"<?php
+function stamp_again(string $prefix, int $value): string {
+    return $prefix . ":" . $value;
+}
+$callback = "stamp_again";
+$args = ["value" => 7, "prefix" => "id"];
+echo call_user_func_array($callback, $args);
+echo ":";
+echo $args["prefix"];
+echo ":";
+echo $args["value"];
+"#,
+    );
+    assert_eq!(out, "id:7:id:7");
 }
 
 /// Verifies that call user func array dynamic string builtin assoc callback.
@@ -578,6 +719,644 @@ echo call_user_func_array($callback, $args);
     assert_eq!(out, "[ok]");
 }
 
+/// Verifies static method callable arrays route through descriptor invokers.
+#[test]
+fn test_call_user_func_array_static_method_array_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Formatter {
+    public static function wrap(string $value = "ok", ...$rest): string {
+        return "[" . $value . ":" . count($rest) . "]";
+    }
+}
+
+$callback = [Formatter::class, "wrap"];
+$args = [];
+echo call_user_func_array($callback, $args);
+echo "|";
+$args = ["id", 9];
+echo call_user_func_array($callback, $args);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "[ok:0]|[id:1]");
+
+    let dir = make_cli_test_dir("elephc_static_array_callable_descriptor_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_static_method") && user_asm.contains("callable_invoker"),
+        "static method array callbacks should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies `call_user_func()` static method callable arrays use descriptor invokers.
+#[test]
+fn test_call_user_func_static_method_array_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Formatter {
+    public static function join(string $left, string $right = "b"): string {
+        return $left . ":" . $right;
+    }
+}
+
+$callback = [Formatter::class, "join"];
+echo call_user_func($callback, "a");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "a:b");
+
+    let dir = make_cli_test_dir("elephc_static_array_callable_call_user_func_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_static_method") && user_asm.contains("callable_invoker"),
+        "call_user_func static method array callbacks should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies runtime-selected static method callable arrays use descriptor invokers.
+#[test]
+fn test_call_user_func_array_runtime_static_method_array_uses_descriptor_invoker() {
+    let source = r#"<?php
+class RuntimeStaticFormatter {
+    public static function join(string $left, string $right = "b"): string {
+        return $left . ":" . $right;
+    }
+}
+
+function choose_runtime_string(string $value): string {
+    return $value;
+}
+
+$class = choose_runtime_string(RuntimeStaticFormatter::class);
+$method = choose_runtime_string("JOIN");
+$callback = [$class, $method];
+$args = [0 => "a", "right" => "r"];
+echo call_user_func_array($callback, $args);
+echo "|" . count($args) . ":" . $args[0] . ":" . $args["right"];
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "a:r|2:a:r");
+
+    let dir = make_cli_test_dir("elephc_runtime_static_array_callable_cufa_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_array_runtime_done") && user_asm.contains("callable_invoker"),
+        "runtime-selected static method array callbacks should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies inline runtime-selected static method callable arrays use descriptor invokers.
+#[test]
+fn test_call_user_func_literal_runtime_static_method_array_uses_descriptor_invoker() {
+    let source = r#"<?php
+class RuntimeLiteralStaticFormatter {
+    public static function join(string $left, string $right = "b"): string {
+        return $left . ":" . $right;
+    }
+}
+
+function choose_runtime_literal_string(string $value): string {
+    return $value;
+}
+
+$class = choose_runtime_literal_string(RuntimeLiteralStaticFormatter::class);
+$method = choose_runtime_literal_string("JOIN");
+echo call_user_func([$class, $method], "a");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "a:b");
+
+    let dir = make_cli_test_dir("elephc_literal_runtime_static_array_callable_cuf_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_array_runtime_done") && user_asm.contains("callable_invoker"),
+        "inline runtime-selected static method array callbacks should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies static-method positional+spread descriptor calls preserve by-reference variables.
+#[test]
+fn test_call_user_func_static_method_array_positional_spread_preserves_by_ref_arg() {
+    let source = r#"<?php
+class Bumper {
+    public static function bump(int &$value, int $extra): void {
+        $value = $value + 5 + $extra;
+    }
+}
+
+$callback = [Bumper::class, "bump"];
+$value = 5;
+$args = [3];
+call_user_func($callback, $value, ...$args);
+echo $value;
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "13");
+
+    let dir = make_cli_test_dir("elephc_static_array_callable_positional_spread_ref_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_static_method") && user_asm.contains("callable_invoker"),
+        "static method array callbacks with positional+spread by-ref args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies `call_user_func()` invokable objects use descriptor invokers.
+#[test]
+fn test_call_user_func_invokable_object_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Twice {
+    public function __invoke(int $value): int {
+        return $value * 2;
+    }
+}
+
+echo call_user_func(new Twice(), 9);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "18");
+
+    let dir = make_cli_test_dir("elephc_invokable_object_descriptor_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "invokable object callbacks should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies `call_user_func()` invokable object spread args still use descriptor invokers.
+#[test]
+fn test_call_user_func_invokable_object_spread_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Wrap {
+    public function __invoke(string $value, string $suffix = "!"): string {
+        return "<" . $value . $suffix . ">";
+    }
+}
+
+$args = ["Ada"];
+echo call_user_func(new Wrap(), ...$args);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "<Ada!>");
+
+    let dir = make_cli_test_dir("elephc_invokable_object_spread_descriptor_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "invokable object callbacks with spread args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies invokable object positional+spread args stay on descriptor invokers.
+#[test]
+fn test_call_user_func_invokable_object_positional_spread_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Wrap {
+    public function __invoke(string $left, string $middle, string $right): string {
+        return "<" . $left . ":" . $middle . ":" . $right . ">";
+    }
+}
+
+$first = ["Ada"];
+$second = ["!"];
+echo call_user_func(new Wrap(), "hi", ...$first, ...$second);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "<hi:Ada:!>");
+
+    let dir = make_cli_test_dir("elephc_invokable_object_positional_spread_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "invokable object callbacks with positional+spread args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies instance-method callable arrays use descriptor invokers for direct calls.
+#[test]
+fn test_call_user_func_instance_method_array_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Formatter {
+    public function join(string $left, string $right = "b"): string {
+        return $left . ":" . $right;
+    }
+}
+
+$formatter = new Formatter();
+echo call_user_func([$formatter, "join"], "a");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "a:b");
+
+    let dir = make_cli_test_dir("elephc_instance_array_callable_descriptor_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "instance method array callbacks should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies runtime-selected instance method callable arrays use descriptor invokers.
+#[test]
+fn test_call_user_func_runtime_instance_method_array_uses_descriptor_invoker() {
+    let source = r#"<?php
+class RuntimeInstanceFormatter {
+    public function join(string $left, string $right = "b"): string {
+        return $left . ":" . $right;
+    }
+}
+
+function choose_runtime_method(string $name): string {
+    return $name;
+}
+
+$formatter = new RuntimeInstanceFormatter();
+$method = choose_runtime_method("JOIN");
+$callback = [$formatter, $method];
+echo call_user_func($callback, "a");
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "a:b");
+
+    let dir = make_cli_test_dir("elephc_runtime_instance_array_callable_cuf_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_array_runtime_done") && user_asm.contains("callable_invoker"),
+        "runtime-selected instance method array callbacks should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies inline runtime-selected instance method callable arrays use descriptor invokers.
+#[test]
+fn test_call_user_func_array_literal_runtime_instance_method_array_uses_descriptor_invoker() {
+    let source = r#"<?php
+class RuntimeLiteralInstanceFormatter {
+    public function join(string $left, string $right = "b"): string {
+        return $left . ":" . $right;
+    }
+}
+
+function choose_runtime_literal_method(string $name): string {
+    return $name;
+}
+
+$formatter = new RuntimeLiteralInstanceFormatter();
+$method = choose_runtime_literal_method("JOIN");
+echo call_user_func_array([$formatter, $method], ["left" => "a", "right" => "r"]);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "a:r");
+
+    let dir = make_cli_test_dir("elephc_literal_runtime_instance_array_callable_cufa_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_array_runtime_done") && user_asm.contains("callable_invoker"),
+        "inline runtime-selected instance method array callbacks should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies instance-method callable arrays keep spread args on the descriptor invoker path.
+#[test]
+fn test_call_user_func_instance_method_array_spread_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Formatter {
+    public function join(string $left, string $right = "b"): string {
+        return $left . ":" . $right;
+    }
+}
+
+$formatter = new Formatter();
+$args = ["a"];
+echo call_user_func([$formatter, "join"], ...$args);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "a:b");
+
+    let dir = make_cli_test_dir("elephc_instance_array_callable_spread_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "instance method array callbacks with spread args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies instance-method callable arrays keep positional+spread args on descriptor invokers.
+#[test]
+fn test_call_user_func_instance_method_array_positional_spread_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Formatter {
+    public function join(string $left, string $middle, string $right = "c"): string {
+        return $left . ":" . $middle . ":" . $right;
+    }
+}
+
+$formatter = new Formatter();
+$args = ["b"];
+echo call_user_func([$formatter, "join"], "a", ...$args);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "a:b:c");
+
+    let dir = make_cli_test_dir("elephc_instance_array_callable_positional_spread_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "instance method array callbacks with positional+spread args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies receiver-bound positional+spread descriptor calls preserve by-reference variables.
+#[test]
+fn test_call_user_func_instance_method_array_positional_spread_preserves_by_ref_arg() {
+    let source = r#"<?php
+class Bumper {
+    public int $step = 0;
+
+    public function __construct(int $step) {
+        $this->step = $step;
+    }
+
+    public function bump(int &$value, int $extra): void {
+        $value = $value + $this->step + $extra;
+    }
+}
+
+$bumper = new Bumper(7);
+$value = 5;
+$args = [2];
+call_user_func([$bumper, "bump"], $value, ...$args);
+echo $value;
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "14");
+
+    let dir = make_cli_test_dir("elephc_instance_array_callable_positional_spread_ref_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "instance method array callbacks with positional+spread by-ref args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies instance-method callable arrays use descriptor invokers for literal named args.
+#[test]
+fn test_call_user_func_array_instance_method_literal_assoc_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Formatter {
+    public function join(string $prefix, int $value): string {
+        return $prefix . ":" . $value;
+    }
+}
+
+$formatter = new Formatter();
+echo call_user_func_array([$formatter, "join"], ["value" => 7, "prefix" => "id"]);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "id:7");
+
+    let dir = make_cli_test_dir("elephc_instance_array_callable_assoc_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "instance method array callbacks with literal named args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies instance-method callable arrays use descriptor invokers for dynamic indexed args.
+#[test]
+fn test_call_user_func_array_instance_method_dynamic_indexed_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Formatter {
+    public function join(string $left, string $right = "b"): string {
+        return $left . ":" . $right;
+    }
+}
+
+$formatter = new Formatter();
+$args = ["a"];
+echo call_user_func_array([$formatter, "join"], $args);
+echo "|" . count($args) . ":" . $args[0];
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "a:b|1:a");
+
+    let dir = make_cli_test_dir("elephc_instance_array_callable_dynamic_indexed_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "instance method array callbacks with dynamic indexed args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies invokable objects use descriptor invokers for dynamic indexed argument arrays.
+#[test]
+fn test_call_user_func_array_invokable_object_dynamic_indexed_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Wrap {
+    public function __invoke(string $value): string {
+        return "<" . $value . ">";
+    }
+}
+
+$callback = new Wrap();
+$args = ["dyn"];
+echo call_user_func_array($callback, $args);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "<dyn>");
+
+    let dir = make_cli_test_dir("elephc_invokable_object_dynamic_indexed_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "invokable object callbacks with dynamic indexed args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies receiver-bound callable arrays use descriptor invokers for dynamic associative args.
+#[test]
+fn test_call_user_func_array_instance_method_dynamic_assoc_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Formatter {
+    public function join(string $left, string $right = "b"): string {
+        return $left . ":" . $right;
+    }
+}
+
+$formatter = new Formatter();
+$args = [0 => "a", "right" => "r"];
+echo call_user_func_array([$formatter, "join"], $args);
+echo "|" . count($args) . ":" . $args[0] . ":" . $args["right"];
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "a:r|2:a:r");
+
+    let dir = make_cli_test_dir("elephc_instance_array_callable_dynamic_assoc_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "instance method array callbacks with dynamic assoc args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies invokable objects use descriptor invokers for dynamic associative argument hashes.
+#[test]
+fn test_call_user_func_array_invokable_object_dynamic_assoc_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Wrap {
+    public function __invoke(string $value = "fallback", string $suffix = "!"): string {
+        return "<" . $value . $suffix . ">";
+    }
+}
+
+$callback = new Wrap();
+$args = ["suffix" => "?"];
+echo call_user_func_array($callback, $args);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "<fallback?>");
+
+    let dir = make_cli_test_dir("elephc_invokable_object_dynamic_assoc_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"),
+        "invokable object callbacks with dynamic assoc args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies receiver-bound callable arrays use descriptor invokers for opaque mixed args.
+#[test]
+fn test_call_user_func_array_instance_method_runtime_opaque_args_use_descriptor_invoker() {
+    let source = r#"<?php
+function choose_args(bool $assoc): mixed {
+    if ($assoc) {
+        return ["right" => "r"];
+    }
+    return ["a", "b"];
+}
+
+class Formatter {
+    public function join(string $left = "x", string $right = "y"): string {
+        return $left . ":" . $right;
+    }
+}
+
+$formatter = new Formatter();
+echo call_user_func_array([$formatter, "join"], choose_args(false));
+echo "|";
+echo call_user_func_array([$formatter, "join"], choose_args(true));
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "a:b|x:r");
+
+    let dir = make_cli_test_dir("elephc_instance_array_callable_runtime_opaque_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("receiver_mixed_indexed_args")
+            && user_asm.contains("receiver_mixed_assoc_args")
+            && user_asm.contains("callable_invoker"),
+        "instance method array callbacks with runtime-opaque args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies invokable objects use descriptor invokers for opaque mixed argument containers.
+#[test]
+fn test_call_user_func_array_invokable_object_runtime_opaque_args_use_descriptor_invoker() {
+    let source = r#"<?php
+function opaque(mixed $value): mixed {
+    return $value;
+}
+
+class Wrap {
+    public function __invoke(string $value = "fallback", string $suffix = "!"): string {
+        return "<" . $value . $suffix . ">";
+    }
+}
+
+$callback = new Wrap();
+$items = ["value"];
+$assoc = ["suffix" => "?"];
+echo call_user_func_array($callback, opaque($items));
+echo "|" . count($items) . ":" . $items[0];
+echo "|";
+echo call_user_func_array($callback, opaque($assoc));
+echo "|" . count($assoc) . ":" . $assoc["suffix"];
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "<value!>|1:value|<fallback?>|1:?");
+
+    let dir = make_cli_test_dir("elephc_invokable_object_runtime_opaque_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("receiver_mixed_indexed_args")
+            && user_asm.contains("receiver_mixed_assoc_args")
+            && user_asm.contains("callable_invoker"),
+        "invokable object callbacks with runtime-opaque args should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Verifies that call user func array dynamic args for callable without known signature.
 #[test]
 fn test_call_user_func_array_dynamic_args_for_callable_without_known_signature() {
@@ -626,7 +1405,8 @@ echo call_user_func_array(make_callback(), $args);
 /// Verifies that call user func array unknown signature captured callback dynamic args overflow stack.
 #[test]
 fn test_call_user_func_array_unknown_signature_captured_callback_dynamic_args_overflow_stack() {
-    let out = compile_and_run(
+    let dir = make_cli_test_dir("elephc_cufa_unknown_stacked_capture_descriptor_invoker");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
         r#"<?php
 $base = 10;
 $callbacks = [
@@ -647,8 +1427,27 @@ $args = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
          11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
 echo call_user_func_array($cb, $args);
 "#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    assert!(
+        user_asm.contains("cufa_descriptor_invoker_ready"),
+        "stacked closure captures should route through the descriptor invoker:\n{}",
+        user_asm
+    );
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
     );
     assert_eq!(out, "220");
+
+    let _ = fs::remove_dir_all(&dir);
 }
 
 /// Verifies that call user func array unknown signature dynamic string args overflow stack.
@@ -723,6 +1522,379 @@ call_user_func_array("summarize", $args);
 "#,
     );
     assert_eq!(out, "1:x=2;y=3;");
+}
+
+/// Verifies that runtime string callback dispatch preserves descriptor default and variadic metadata.
+#[test]
+fn test_call_user_func_array_dynamic_string_uses_descriptor_default_and_variadic_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+function collect($head = 5, ...$rest) {
+    echo $head . ":" . count($rest);
+}
+$callback = "COLLECT";
+$args = [];
+call_user_func_array($callback, $args);
+"#,
+    );
+    assert_eq!(out, "5:0");
+}
+
+/// Verifies that one descriptor invoker accepts both indexed and associative argument containers.
+#[test]
+fn test_call_user_func_array_dynamic_string_descriptor_invoker_branches_on_mixed_arg_shape() {
+    let source = r#"<?php
+function render(string $prefix = "hi", string $name = "Ada", ...$rest): string {
+    return $prefix . " " . $name . ":" . count($rest);
+}
+$callback = "render";
+$indexed = ["yo", "Bob", "tail"];
+$assoc = ["name" => "Ada", "extra" => "x"];
+echo call_user_func_array($callback, $indexed);
+echo "|";
+echo call_user_func_array($callback, $assoc);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "yo Bob:1|hi Ada:1");
+
+    let dir = make_cli_test_dir("elephc_descriptor_invoker_mixed_arg_shapes");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("cufa_mixed_indexed") && user_asm.contains("cufa_mixed_assoc"),
+        "descriptor invoker should branch on boxed argument container tags:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies dynamic string descriptor invokers normalize runtime-opaque mixed argument containers.
+#[test]
+fn test_call_user_func_array_dynamic_string_runtime_opaque_args_uses_descriptor_invoker() {
+    let source = r#"<?php
+function passthrough(mixed $value): mixed {
+    return $value;
+}
+
+function render(string $prefix = "hi", string $name = "Ada", ...$rest): string {
+    return $prefix . " " . $name . ":" . count($rest);
+}
+
+$callback = "render";
+echo call_user_func_array($callback, passthrough(["yo", "Bob", "tail"]));
+echo "|";
+echo call_user_func_array($callback, passthrough(["name" => "Ada", "extra" => "x"]));
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "yo Bob:1|hi Ada:1");
+
+    let dir = make_cli_test_dir("elephc_dynamic_string_runtime_opaque_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("cufa_normalize_mixed_indexed")
+            && user_asm.contains("cufa_normalize_mixed_assoc")
+            && user_asm.contains("callable_invoker"),
+        "dynamic string callbacks with runtime-opaque args should normalize through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies branch-selected captured callables route through `call_user_func_array()` descriptor invokers.
+#[test]
+fn test_call_user_func_array_complex_captured_callable_expr_uses_descriptor_invoker() {
+    let source = r#"<?php
+class Counter {
+    public int $base = 0;
+
+    public function add(int $n = 4): int {
+        return $n + $this->base;
+    }
+}
+
+$left = new Counter();
+$left->base = 3;
+$right = new Counter();
+$right->base = 7;
+$use_left = false;
+echo call_user_func_array($use_left ? $left->add(...) : $right->add(...), [5]);
+echo ",";
+echo call_user_func_array($use_left ? $left->add(...) : $right->add(...), []);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "12,11");
+
+    let dir = make_cli_test_dir("elephc_call_user_func_array_complex_callable_expr_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "call_user_func_array branch-selected captured callable calls should route through descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies descriptor invokers preserve by-reference literal args for branch-selected callbacks.
+#[test]
+fn test_call_user_func_array_complex_captured_callable_expr_preserves_by_ref_literal_arg() {
+    let source = r#"<?php
+class Counter {
+    public int $step = 0;
+
+    public function bump(int &$n): void {
+        $n = $n + $this->step;
+    }
+}
+
+$left = new Counter();
+$left->step = 3;
+$right = new Counter();
+$right->step = 7;
+$use_left = false;
+$value = 5;
+call_user_func_array($use_left ? $left->bump(...) : $right->bump(...), [$value]);
+echo $value;
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "12");
+}
+
+/// Verifies returned method FCC descriptors use their runtime receiver in `call_user_func_array()`.
+#[test]
+fn test_call_user_func_array_returned_method_fcc_uses_descriptor_receiver() {
+    let source = r#"<?php
+class ReturnedFccArrayPrefixer {
+    public string $prefix = "";
+
+    public function wrap(string $name): string {
+        return $this->prefix . $name;
+    }
+}
+
+function make_returned_fcc_array_callback(): callable {
+    $first = new ReturnedFccArrayPrefixer();
+    $first->prefix = "first:";
+    $second = new ReturnedFccArrayPrefixer();
+    $second->prefix = "second:";
+    $callback = $first->wrap(...);
+    $first = $second;
+    return $callback;
+}
+
+echo call_user_func_array(make_returned_fcc_array_callback(), ["Ada"]);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "first:Ada");
+
+    let dir = make_cli_test_dir("elephc_call_user_func_array_returned_fcc_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "returned callable descriptors should route through call_user_func_array() invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies callback runtimes preserve descriptor receivers from returned method FCC expressions.
+#[test]
+fn test_array_map_returned_method_fcc_expr_uses_descriptor_receiver() {
+    let source = r#"<?php
+class ReturnedMapExprPrefixer {
+    public string $prefix = "";
+
+    public function wrap(string $name): string {
+        return $this->prefix . $name;
+    }
+}
+
+function make_returned_map_expr_callback(): callable {
+    $first = new ReturnedMapExprPrefixer();
+    $first->prefix = "first:";
+    $second = new ReturnedMapExprPrefixer();
+    $second->prefix = "second:";
+    $callback = $first->wrap(...);
+    $first = $second;
+    return $callback;
+}
+
+$out = array_map(make_returned_map_expr_callback(), ["Ada"]);
+echo $out[0];
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "first:Ada");
+
+    let dir = make_cli_test_dir("elephc_array_map_returned_fcc_expr_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("descriptor_callback_wrapper") && user_asm.contains("callable_invoker"),
+        "array_map returned callable expressions should route through descriptor callback envs:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies callback runtimes preserve descriptor receivers from runtime callable variables.
+#[test]
+fn test_array_map_returned_method_fcc_variable_uses_descriptor_receiver() {
+    let source = r#"<?php
+class ReturnedMapVarPrefixer {
+    public string $prefix = "";
+
+    public function wrap(string $name): string {
+        return $this->prefix . $name;
+    }
+}
+
+function make_returned_map_var_callback(): callable {
+    $first = new ReturnedMapVarPrefixer();
+    $first->prefix = "first:";
+    $second = new ReturnedMapVarPrefixer();
+    $second->prefix = "second:";
+    $callback = $first->wrap(...);
+    $first = $second;
+    return $callback;
+}
+
+$callback = make_returned_map_var_callback();
+$out = array_map($callback, ["Ada"]);
+echo $out[0];
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "first:Ada");
+
+    let dir = make_cli_test_dir("elephc_array_map_returned_fcc_variable_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("descriptor_callback_wrapper") && user_asm.contains("callable_invoker"),
+        "array_map runtime callable variables should route through descriptor callback envs:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies callable-array variables use descriptor callback environments in array_map.
+#[test]
+fn test_array_map_callable_array_variable_uses_descriptor_receiver() {
+    let source = r#"<?php
+class CallableArrayMapPrefixer {
+    public string $prefix = "";
+
+    public function wrap(string $name): string {
+        return $this->prefix . $name;
+    }
+}
+
+$first = new CallableArrayMapPrefixer();
+$first->prefix = "first:";
+$second = new CallableArrayMapPrefixer();
+$second->prefix = "second:";
+$callback = [$first, "wrap"];
+$first = $second;
+$out = array_map($callback, ["Ada"]);
+echo $out[0];
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "first:Ada");
+
+    let dir = make_cli_test_dir("elephc_array_map_callable_array_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("descriptor_callback_wrapper") && user_asm.contains("callable_invoker"),
+        "array_map callable-array variables should route through descriptor callback envs:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies that capture-free closure descriptors expose the uniform array invoker.
+#[test]
+fn test_call_user_func_array_closure_descriptor_uses_invoker() {
+    let source = r#"<?php
+$callbacks = [function(string $name, string $prefix = "hi"): string {
+    return $prefix . " " . $name;
+}];
+$args = ["name" => "Ada", "prefix" => "yo"];
+echo call_user_func_array($callbacks[0], $args);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "yo Ada");
+
+    let dir = make_cli_test_dir("elephc_closure_descriptor_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "capture-free closure dispatch should emit a descriptor invoker:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies captured closure descriptors expose invokers with runtime capture slots.
+#[test]
+fn test_call_user_func_array_captured_closure_descriptor_uses_invoker() {
+    let source = r#"<?php
+$prefix = "old";
+$callbacks = [function(string $name) use ($prefix): string {
+    return $prefix . $name;
+}];
+$prefix = "new";
+echo call_user_func_array($callbacks[0], ["name" => "Ada"]);
+echo "|";
+echo call_user_func_array($callbacks[0], ["Bob"]);
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "oldAda|oldBob");
+
+    let dir = make_cli_test_dir("elephc_captured_closure_descriptor_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_invoker"),
+        "captured closure dispatch should emit a descriptor invoker:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies by-reference captures survive descriptor invoker dispatch.
+#[test]
+fn test_call_user_func_array_captured_closure_descriptor_preserves_by_ref_capture() {
+    let out = compile_and_run(
+        r#"<?php
+$value = 1;
+$callbacks = [function() use (&$value): void {
+    $value = $value + 2;
+}];
+call_user_func_array($callbacks[0], []);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// Verifies captured closure descriptor cleanup frees copied by-value capture slots.
+#[test]
+fn test_captured_closure_descriptor_cleanup_releases_owned_capture_slots() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$prefix = "old";
+$cb = function() use ($prefix): void {
+};
+$prefix = "new";
+echo "done";
+"#,
+    );
+    assert_eq!(out.stdout, "done");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }
 
 /// Verifies that call user func array first class dynamic assoc args for variadic callback.
@@ -942,6 +2114,35 @@ echo $args[0];
 "#,
     );
     assert_eq!(out, "5:5");
+}
+
+/// Verifies descriptor-backed by-ref callbacks use the invoker for dynamic argument containers.
+#[test]
+fn test_call_user_func_array_descriptor_dynamic_by_ref_args_use_invoker_temp_cells() {
+    let source = r#"<?php
+$cb = function (&$n): void {
+    $n = $n + 1;
+};
+
+$value = 5;
+$args = [$value];
+call_user_func_array($cb, $args);
+echo $value;
+echo ":";
+echo $args[0];
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "5:5");
+
+    let dir = make_cli_test_dir("elephc_cufa_descriptor_dynamic_by_ref_invoker");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("cufa_descriptor_invoker_ready"),
+        "descriptor-backed dynamic by-ref args should route through the descriptor invoker:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
 }
 
 // -- v0.8 constants --

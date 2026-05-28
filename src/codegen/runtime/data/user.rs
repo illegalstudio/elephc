@@ -862,6 +862,8 @@ mod tests {
             method_decls: Vec::new(),
             methods: HashMap::new(),
             static_methods: HashMap::new(),
+            callable_method_return_sigs: HashMap::new(),
+            callable_array_method_return_sigs: HashMap::new(),
             method_visibilities: HashMap::<String, Visibility>::new(),
             final_methods: HashSet::new(),
             method_declaring_classes: HashMap::new(),

@@ -198,6 +198,21 @@ fn test_typed_call_user_func_array_default_parameter() {
     assert_eq!(out, "20|15");
 }
 
+/// Verifies descriptor invokers unbox boxed array arguments before calling
+/// callbacks with declared `array` parameters.
+#[test]
+fn test_call_user_func_array_array_typed_callback_unboxes_mixed_arg() {
+    let out = compile_and_run(
+        "<?php
+        function item_count(array $items): int {
+            return count($items);
+        }
+        echo call_user_func_array(item_count(...), [[1, 2, 3]]);
+        ",
+    );
+    assert_eq!(out, "3");
+}
+
 // Verifies a closure with a typed `int $x` parameter compiles, runs, and produces the expected output.
 #[test]
 fn test_typed_closure_parameter() {

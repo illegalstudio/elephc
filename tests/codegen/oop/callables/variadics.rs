@@ -92,3 +92,25 @@ echo $f($xs);
     );
     assert_eq!(out, "2");
 }
+
+/// Verifies static-method callable arrays route associative variadic tails through the descriptor invoker.
+#[test]
+fn test_static_method_callable_array_call_user_func_array_assoc_variadic_tail() {
+    let out = compile_and_run(
+        r#"<?php
+class Formatter {
+    public static function wrap($value = 7, ...$rest) {
+        echo $value . ":";
+        foreach ($rest as $key => $item) {
+            echo $key . "=" . $item . ";";
+        }
+    }
+}
+
+$callback = [Formatter::class, "wrap"];
+$args = ["value" => 3, "extra" => 9, "more" => 10];
+call_user_func_array($callback, $args);
+"#,
+    );
+    assert_eq!(out, "3:extra=9;more=10;");
+}

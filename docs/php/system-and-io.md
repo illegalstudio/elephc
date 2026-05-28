@@ -136,7 +136,7 @@ Encoding rules for objects:
 | `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): string` | Replace all regex matches with the callback return value; callback receives `array<string>` matches |
 | `preg_split()` | `preg_split($pattern, $subject): array` | Split string by regex |
 
-Uses POSIX extended regex with common PCRE shorthand translation (`\s`, `\d`, `\w`) and common Unicode property shims (`\p{L}`, `\p{N}`, `\p{Lu}`, `\p{Ll}` and negated `\P{...}` forms). Replacement backreferences `$0`..`$9` and `\0`..`\9` are expanded by `preg_replace()`. `preg_replace_callback()` passes `$matches[0]` as the full match and `$matches[1]`..`$matches[9]` as supported capture groups. Lookahead, lookbehind, non-greedy quantifiers, and the `$matches` output parameter for `preg_match()` are not supported.
+Uses POSIX extended regex with common PCRE shorthand translation (`\s`, `\d`, `\w`) and common Unicode property shims (`\p{L}`, `\p{N}`, `\p{Lu}`, `\p{Ll}` and negated `\P{...}` forms). Replacement backreferences `$0`..`$9` and `\0`..`\9` are expanded by `preg_replace()`. `preg_replace_callback()` passes `$matches[0]` as the full match and `$matches[1]`..`$matches[9]` as supported capture groups, descriptor-backed callback variables or `callable` parameters preserve closure captures and first-class-callable receivers, runtime string callback variables can target user functions and public static methods, and runtime-selected callable-array variables such as `[$object, $method]` or `[$class, $method]` can target public methods. Lookahead, lookbehind, non-greedy quantifiers, and the `$matches` output parameter for `preg_match()` are not supported.
 
 ## File I/O
 

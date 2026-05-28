@@ -73,6 +73,42 @@ echo call_user_func_array("STRLEN", ["hello"]);
     assert_eq!(out, "5");
 }
 
+/// Verifies dynamic extern string callbacks use runtime descriptor invokers.
+#[test]
+fn test_ffi_extern_dynamic_call_user_func_array_uses_descriptor_invoker() {
+    let source = r#"<?php
+extern function atoi(string $s): int;
+$callback = "ATOI";
+$args = ["1234"];
+echo call_user_func_array($callback, $args) + 8;
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "1242");
+
+    let dir = make_cli_test_dir("elephc_extern_runtime_callable_descriptor");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("callable_extern") && user_asm.contains("callable_invoker"),
+        "dynamic extern callbacks should route through generated descriptor invokers:\n{}",
+        user_asm
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies dynamic `call_user_func()` can dispatch extern callables by runtime string name.
+#[test]
+fn test_ffi_extern_dynamic_call_user_func_string_callback() {
+    let out = compile_and_run(
+        r#"<?php
+extern function atoi(string $s): int;
+$callback = "atoi";
+echo call_user_func($callback, "37") + 5;
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
 // Verifies named arguments (`left:`, `right:`) are correctly reordered to match FFI extern parameter order.
 #[test]
 fn test_ffi_extern_named_arguments_reorder_call() {

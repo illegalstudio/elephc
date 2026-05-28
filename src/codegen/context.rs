@@ -41,7 +41,7 @@ pub enum HeapOwnership {
 impl HeapOwnership {
     /// Returns the heap ownership for a given PHP type.
     pub fn for_type(ty: &PhpType) -> Self {
-        if ty.is_refcounted() || matches!(ty, PhpType::Str) {
+        if ty.is_refcounted() || matches!(ty, PhpType::Str | PhpType::Callable) {
             HeapOwnership::MaybeOwned
         } else {
             HeapOwnership::NonHeap
@@ -50,7 +50,7 @@ impl HeapOwnership {
 
     /// Returns the local owner heap ownership for a given PHP type.
     pub fn local_owner_for_type(ty: &PhpType) -> Self {
-        if ty.is_refcounted() || matches!(ty, PhpType::Str) {
+        if ty.is_refcounted() || matches!(ty, PhpType::Str | PhpType::Callable) {
             HeapOwnership::Owned
         } else {
             HeapOwnership::NonHeap
@@ -59,7 +59,7 @@ impl HeapOwnership {
 
     /// Returns the borrowed alias heap ownership for a given PHP type.
     pub fn borrowed_alias_for_type(ty: &PhpType) -> Self {
-        if ty.is_refcounted() || matches!(ty, PhpType::Str) {
+        if ty.is_refcounted() || matches!(ty, PhpType::Str | PhpType::Callable) {
             HeapOwnership::Borrowed
         } else {
             HeapOwnership::NonHeap
@@ -115,6 +115,9 @@ pub struct DeferredFiberWrapper {
     pub sig: FunctionSig,
     pub visible_param_count: usize,
     pub hidden_arg_types: Vec<PhpType>,
+    /// `true` when the wrapper should call the callable descriptor's uniform
+    /// invoker instead of re-materializing a statically known ABI signature.
+    pub use_descriptor_invoker: bool,
 }
 
 /// A callback wrapper that adapts callback builtins to closures with hidden captures.
@@ -127,6 +130,31 @@ pub struct DeferredCallbackWrapper {
     pub visible_arg_types: Vec<PhpType>,
     pub target_visible_arg_types: Option<Vec<PhpType>>,
     pub capture_types: Vec<PhpType>,
+    pub descriptor_prefix_types: Vec<PhpType>,
+    pub descriptor_return_type: Option<PhpType>,
+}
+
+/// A C-ABI callback trampoline backed by a callable descriptor slot.
+///
+/// Extern `callable` parameters receive a plain function pointer, so stateful
+/// descriptors need a stable generated symbol that reloads the descriptor from
+/// global storage before invoking the uniform runtime callable invoker.
+pub struct DeferredExternCallbackTrampoline {
+    pub label: String,
+    pub descriptor_slot_label: String,
+    pub visible_arg_types: Vec<PhpType>,
+    pub return_type: PhpType,
+}
+
+/// A generated runtime callable invoker with a descriptor-based ABI.
+///
+/// Invokers receive a callable descriptor pointer plus a normalized Mixed
+/// argument array, load the target entry from the descriptor, materialize
+/// arguments according to the stored signature, and return a boxed `Mixed` result.
+pub struct DeferredRuntimeCallableInvoker {
+    pub label: String,
+    pub sig: FunctionSig,
+    pub captures: Vec<(String, PhpType, bool)>,
 }
 
 /// Carries mutable codegen state while lowering expressions, statements, functions, and wrappers.
@@ -146,6 +174,8 @@ pub struct Context {
     pub deferred_closures: Vec<DeferredClosure>,
     pub deferred_fiber_wrappers: Vec<DeferredFiberWrapper>,
     pub deferred_callback_wrappers: Vec<DeferredCallbackWrapper>,
+    pub deferred_extern_callback_trampolines: Vec<DeferredExternCallbackTrampoline>,
+    pub deferred_runtime_callable_invokers: Vec<DeferredRuntimeCallableInvoker>,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
     /// Variables declared with `global $var` in the current function scope.
     pub global_vars: HashSet<String>,
@@ -165,21 +195,34 @@ pub struct Context {
     pub all_static_vars: HashMap<(String, String), PhpType>,
     /// Closure signatures keyed by variable name, for resolving defaults at call sites.
     pub closure_sigs: HashMap<String, FunctionSig>,
+    /// Callable locals whose signature is known but whose receiver/capture environment
+    /// must be loaded from the runtime descriptor rather than reconstructed locally.
+    pub runtime_callable_vars: HashSet<String>,
     /// Temporary expected wrapper signature for first-class callables evaluated
     /// as arguments to APIs that store and invoke the callable later.
     pub expected_first_class_callable_sig: Option<FunctionSig>,
     /// Callable signatures inferred for user-function callable parameters.
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
+    /// Callable-typed parameters in the current emitted function or method.
+    pub callable_param_names: HashSet<String>,
     /// Callable signatures inferred for user-function callable returns.
     pub callable_return_sigs: HashMap<String, FunctionSig>,
+    /// Callable element signatures inferred for user-function array returns.
+    pub callable_array_return_sigs: HashMap<String, FunctionSig>,
     /// Captured variables per closure variable name: maps $fn -> [(capture_name, type, by_ref)].
     pub closure_captures: HashMap<String, Vec<(String, PhpType, bool)>>,
     /// Runtime-dispatch wrappers synthesized for PHP builtin callbacks selected
     /// by a dynamic string name. The key is the canonical builtin name.
     pub runtime_callable_builtin_wrappers: HashMap<String, String>,
+    /// Runtime-dispatch wrappers synthesized for extern callbacks selected by
+    /// a dynamic string name. The key is the declared extern function name.
+    pub runtime_callable_extern_wrappers: HashMap<String, String>,
     /// Runtime-dispatch wrappers synthesized for `Class::method` string
     /// callbacks. The key is the PHP-visible `Class::method` name.
     pub runtime_callable_static_method_wrappers: HashMap<String, String>,
+    /// Runtime-dispatch wrappers synthesized for instance-method and
+    /// `__invoke` descriptors. The key is the receiver class plus method name.
+    pub runtime_callable_instance_method_wrappers: HashMap<String, String>,
     /// Callable array targets assigned to variables, for PHP forms such as
     /// `$cb = [$object, "method"]` and `$cb = [ClassName::class, "method"]`.
     pub callable_array_targets: HashMap<String, CallableTarget>,
@@ -195,6 +238,11 @@ pub struct Context {
     /// than a short-circuited call — at which point the dead-wrapper stub
     /// optimisation must back off and emit the full body.
     pub variable_fcc_label: HashMap<String, String>,
+    /// Frame slot holding the descriptor passed to a runtime callable invoker.
+    ///
+    /// When set, callback argument lowering appends hidden captures by reading
+    /// runtime capture slots from this descriptor instead of caller locals.
+    pub runtime_capture_descriptor_offset: Option<usize>,
     /// Class definitions for OOP support.
     pub classes: HashMap<String, ClassInfo>,
     /// Interface definitions for OOP support.
@@ -298,6 +346,8 @@ impl Context {
             deferred_closures: Vec::new(),
             deferred_fiber_wrappers: Vec::new(),
             deferred_callback_wrappers: Vec::new(),
+            deferred_extern_callback_trampolines: Vec::new(),
+            deferred_runtime_callable_invokers: Vec::new(),
             constants: HashMap::new(),
             global_vars: HashSet::new(),
             static_vars: HashSet::new(),
@@ -307,15 +357,21 @@ impl Context {
             all_global_var_names: HashSet::new(),
             all_static_vars: HashMap::new(),
             closure_sigs: HashMap::new(),
+            runtime_callable_vars: HashSet::new(),
             expected_first_class_callable_sig: None,
             callable_param_sigs: HashMap::new(),
+            callable_param_names: HashSet::new(),
             callable_return_sigs: HashMap::new(),
+            callable_array_return_sigs: HashMap::new(),
             closure_captures: HashMap::new(),
             runtime_callable_builtin_wrappers: HashMap::new(),
+            runtime_callable_extern_wrappers: HashMap::new(),
             runtime_callable_static_method_wrappers: HashMap::new(),
+            runtime_callable_instance_method_wrappers: HashMap::new(),
             callable_array_targets: HashMap::new(),
             first_class_callable_targets: HashMap::new(),
             variable_fcc_label: HashMap::new(),
+            runtime_capture_descriptor_offset: None,
             classes: HashMap::new(),
             interfaces: HashMap::new(),
             traits: HashSet::new(),

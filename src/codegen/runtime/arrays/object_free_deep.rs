@@ -92,26 +92,29 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Fiber object pointer after pending_throw cleanup
     emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen::runtime::FIBER_PENDING_THROW_OFFSET)); // clear pending_throw after releasing it
 
-    // -- release captured values that ride in start_args[user_arg_max..7].
-    // Each capture was incref'd at construction by emit_fiber_capture_preload,
-    // so the matching decref keeps refcount balanced. Slots [0..user_arg_max)
-    // hold $f->start() arguments which the closure body is responsible for
-    // releasing during its own scope cleanup, so we leave them alone. We
-    // unconditionally walk every potential capture slot and gate each
-    // dereference on user_arg_max — __rt_decref_any range-checks before doing
-    // anything, so spurious calls on already-zeroed slots are a no-op.
+    // -- release the callable descriptor retained by the Fiber object itself --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Fiber object pointer before descriptor cleanup
+    emitter.instruction(&format!("ldr x0, [x0, #{}]", crate::codegen::runtime::FIBER_CALLABLE_OFFSET)); // load the callable descriptor stored on the Fiber
+    emitter.instruction("bl __rt_callable_descriptor_release");                 // release dynamic descriptor captures held by the Fiber callable
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Fiber object pointer after descriptor cleanup
+    emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen::runtime::FIBER_CALLABLE_OFFSET)); // clear callable descriptor after release
+
+    // -- release legacy trailing Fiber capture slots, if any exist.
+    // Current Fiber lowering stores captures in the callable descriptor released
+    // above, so user_arg_max normally equals FIBER_START_ARGS_MAX and this loop
+    // is a no-op. Keeping the guard here makes stale lowered objects harmless.
     let user_arg_max_off = crate::codegen::runtime::FIBER_USER_ARG_MAX_OFFSET;
     let start_args_off = crate::codegen::runtime::FIBER_START_ARGS_OFFSET;
-    emitter.instruction(&format!("ldr x9, [x0, #{}]", user_arg_max_off));       // x9 = user_arg_max — slots at indices >= user_arg_max are captures owned by the Fiber
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", user_arg_max_off));       // x9 = legacy user_arg_max capture boundary
     emitter.instruction("str x9, [sp, #24]");                                   // park user_arg_max in the spare loop-index slot of the cleanup frame
     for i in 0..crate::codegen::runtime::FIBER_START_ARGS_MAX {
         let skip_label = format!("__rt_object_free_deep_fiber_capture_skip_{}", i);
         emitter.instruction("ldr x9, [sp, #24]");                               // reload user_arg_max — earlier __rt_decref_any clobbers x9 internally
-        emitter.instruction(&format!("cmp x9, #{}", i));                        // is slot i still inside the user-arg region (slot < user_arg_max)?
-        emitter.instruction(&format!("b.gt {}", skip_label));                   // skip user-arg slots; only decref capture slots
+        emitter.instruction(&format!("cmp x9, #{}", i));                        // is slot i still inside the visible start-arg region?
+        emitter.instruction(&format!("b.gt {}", skip_label));                   // skip visible start-arg slots; only legacy captures need release
         emitter.instruction("ldr x0, [sp, #0]");                                // reload the saved Fiber object pointer
-        emitter.instruction(&format!("ldr x0, [x0, #{}]", start_args_off + i * 8)); // x0 = start_args[i] (capture value or string-length high half)
-        emitter.instruction("bl __rt_decref_any");                              // release the captured heap payload if x0 points into the heap
+        emitter.instruction(&format!("ldr x0, [x0, #{}]", start_args_off + i * 8)); // x0 = legacy trailing capture payload
+        emitter.instruction("bl __rt_decref_any");                              // release the legacy capture heap payload if present
         emitter.label(&skip_label);
     }
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the Fiber pointer one last time before the struct free
@@ -312,18 +315,25 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Fiber object pointer after pending_throw cleanup
     emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen::runtime::FIBER_PENDING_THROW_OFFSET)); // clear pending_throw after releasing it
 
+    // -- release the callable descriptor retained by the Fiber object itself --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Fiber object pointer before descriptor cleanup
+    emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", crate::codegen::runtime::FIBER_CALLABLE_OFFSET)); // load the callable descriptor stored on the Fiber
+    emitter.instruction("call __rt_callable_descriptor_release");               // release dynamic descriptor captures held by the Fiber callable
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Fiber object pointer after descriptor cleanup
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen::runtime::FIBER_CALLABLE_OFFSET)); // clear callable descriptor after release
+
     let user_arg_max_off = crate::codegen::runtime::FIBER_USER_ARG_MAX_OFFSET;
     let start_args_off = crate::codegen::runtime::FIBER_START_ARGS_OFFSET;
-    emitter.instruction(&format!("mov r10, QWORD PTR [rax + {}]", user_arg_max_off)); // r10 = user_arg_max
+    emitter.instruction(&format!("mov r10, QWORD PTR [rax + {}]", user_arg_max_off)); // r10 = legacy user_arg_max capture boundary
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // park user_arg_max in the existing loop-index slot
     for i in 0..crate::codegen::runtime::FIBER_START_ARGS_MAX {
         let skip_label = format!("__rt_object_free_deep_fiber_capture_skip_{}", i);
         emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                   // reload user_arg_max after any nested release helper
-        emitter.instruction(&format!("cmp r10, {}", i));                        // is slot i still inside the user-arg region?
-        emitter.instruction(&format!("jg {}", skip_label));                     // skip user-arg slots; only decref capture slots
+        emitter.instruction(&format!("cmp r10, {}", i));                        // is slot i still inside the visible start-arg region?
+        emitter.instruction(&format!("jg {}", skip_label));                     // skip visible start-arg slots; only legacy captures need release
         emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                    // reload the saved Fiber object pointer
-        emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", start_args_off + i * 8)); // rax = start_args[i] capture payload
-        emitter.instruction("call __rt_decref_any");                            // release the captured heap payload if it points into the heap
+        emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", start_args_off + i * 8)); // rax = legacy trailing capture payload
+        emitter.instruction("call __rt_decref_any");                            // release the legacy capture heap payload if present
         emitter.label(&skip_label);
     }
     emitter.instruction("jmp __rt_object_free_deep_struct");                    // skip property-tag walking for runtime-managed Fiber payloads
