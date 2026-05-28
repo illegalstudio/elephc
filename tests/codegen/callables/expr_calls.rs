@@ -97,6 +97,27 @@ echo $f("2");
     assert_eq!(out, "v2");
 }
 
+/// Verifies pushed runtime callable descriptors keep their descriptor invocation marker.
+#[test]
+fn test_pushed_runtime_callable_array_element_uses_descriptor_invoker() {
+    let out = compile_and_run(
+        r#"<?php
+function make(string $prefix): callable {
+    return function(string $name) use ($prefix): string {
+        return $prefix . $name;
+    };
+}
+
+$cb = make("old");
+$items = [];
+$items[] = $cb;
+$from_array = $items[0];
+echo $from_array("Ada");
+"#,
+    );
+    assert_eq!(out, "oldAda");
+}
+
 /// Verifies that an array-stored closure call reads by-value captures from the descriptor.
 #[test]
 fn test_expr_call_array_element_uses_descriptor_capture_snapshot() {

@@ -334,7 +334,11 @@ pub(crate) fn emit_assign_stmt(
                 } else {
                     ctx.variable_fcc_label.remove(name);
                 }
-                ctx.runtime_callable_vars.remove(name);
+                if ctx.runtime_callable_vars.contains(src_name) {
+                    ctx.runtime_callable_vars.insert(name.to_string());
+                } else {
+                    ctx.runtime_callable_vars.remove(name);
+                }
             } else {
                 ctx.closure_sigs.remove(name);
                 ctx.closure_captures.remove(name);

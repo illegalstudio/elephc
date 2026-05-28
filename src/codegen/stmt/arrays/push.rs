@@ -315,10 +315,11 @@ fn effective_indexed_push_type(existing: &PhpType, value: &PhpType, ctx: &Contex
     }
 }
 
-/// Updates callables array metadata (`closure_sigs`, `closure_captures`,
-/// `first_class_callable_targets`, `variable_fcc_label`) when appending a callable
-/// value to a named array. Propagates metadata from closures, first-class callables,
-/// variables, and array-access sources; clears metadata for incompatible sources.
+/// Updates callables array metadata when appending a callable value to a named array.
+///
+/// Propagates closure signatures, captures, first-class targets, wrapper labels,
+/// and runtime descriptor markers from closures, first-class callables, variables,
+/// array-access sources, and callable-returning expressions.
 fn update_callable_array_metadata(
     array: &str,
     value: &Expr,
@@ -352,12 +353,25 @@ fn update_callable_array_metadata(
                 clear_callable_array_metadata(array, ctx);
             }
         }
-        _ => clear_callable_array_metadata(array, ctx),
+        _ => {
+            if let Some(sig) = crate::codegen::callables::callable_sig(value, ctx) {
+                ctx.closure_sigs.insert(array.to_string(), sig);
+                ctx.closure_captures.remove(array);
+                ctx.first_class_callable_targets.remove(array);
+                ctx.variable_fcc_label.remove(array);
+                ctx.runtime_callable_vars.insert(array.to_string());
+            } else {
+                clear_callable_array_metadata(array, ctx);
+            }
+        }
     }
 }
 
-/// Copies callable array metadata (closure signatures, captures, FCC targets, FCC labels)
-/// from `src` to `dest` in the context. If `src` has no entry, removes the `dest` entry.
+/// Copies callable array metadata from `src` to `dest` in the context.
+///
+/// Appending is cumulative for runtime descriptor markers: once an array can contain
+/// a descriptor-owned callable, later element loads must keep invoking through that
+/// descriptor even if a subsequent appended callable has a direct static wrapper.
 fn copy_callable_metadata(dest: &str, src: &str, ctx: &mut Context) {
     if let Some(sig) = ctx.closure_sigs.get(src).cloned() {
         ctx.closure_sigs.insert(dest.to_string(), sig);
@@ -380,13 +394,16 @@ fn copy_callable_metadata(dest: &str, src: &str, ctx: &mut Context) {
     } else {
         ctx.variable_fcc_label.remove(dest);
     }
+    if ctx.runtime_callable_vars.contains(src) {
+        ctx.runtime_callable_vars.insert(dest.to_string());
+    }
 }
 
-/// Clears all callable array metadata entries (`closure_sigs`, `closure_captures`,
-/// `first_class_callable_targets`, `variable_fcc_label`) for a named array variable.
+/// Clears all callable array metadata entries for a named array variable.
 fn clear_callable_array_metadata(array: &str, ctx: &mut Context) {
     ctx.closure_sigs.remove(array);
     ctx.closure_captures.remove(array);
     ctx.first_class_callable_targets.remove(array);
     ctx.variable_fcc_label.remove(array);
+    ctx.runtime_callable_vars.remove(array);
 }
