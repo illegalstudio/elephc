@@ -15,7 +15,9 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
+
 use super::callback_env;
+use super::runtime_callable_array_callback;
 
 /// Emits the `array_reduce($input, $callback, $initial)` builtin call.
 ///
@@ -77,6 +79,28 @@ pub fn emit(
         callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
         abi::emit_call_label(emitter, "__rt_array_reduce");                     // call the callback-driven reduce runtime helper with a callable-array descriptor environment
         callback_env::release_descriptor_callback_env(&wrapper, emitter);
+        return Some(PhpType::Int);
+    }
+
+    if runtime_callable_array_callback::emit_after_saved_array(
+        &args[1],
+        array_arg_reg,
+        vec![PhpType::Int, source_elem_ty.clone()],
+        PhpType::Int,
+        emitter,
+        ctx,
+        data,
+        |wrapper, emitter, ctx, data| {
+            // -- evaluate initial value (third arg) --
+            emit_expr(&args[2], emitter, ctx, data);
+            emitter.instruction(&format!("mov {}, {}", initial_arg_reg, result_reg)); // place the initial accumulator in the third runtime argument register
+
+            callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
+            abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
+            callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
+            abi::emit_call_label(emitter, "__rt_array_reduce");                 // call the callback-driven reduce runtime helper with a runtime callable-array descriptor
+        },
+    ) {
         return Some(PhpType::Int);
     }
 

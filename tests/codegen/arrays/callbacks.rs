@@ -531,6 +531,10 @@ class DynamicInstanceCallbackRuntime {
         return $value > $this->limit;
     }
 
+    public function add($carry, $item): int {
+        return $carry + $item + $this->offset;
+    }
+
     public function show($item): void {
         echo $item + $this->offset;
         echo ",";
@@ -551,6 +555,8 @@ $box->descending = true;
 
 $method = "keep";
 $filter = [$box, $method];
+$method = "add";
+$reduce = [$box, $method];
 $method = "show";
 $walk = [$box, $method];
 $method = "compare";
@@ -566,6 +572,8 @@ foreach ($filtered as $value) {
     echo $value;
 }
 echo ":";
+echo array_reduce([1, 2], $reduce, 0);
+echo ":";
 array_walk([1, 2], $walk);
 echo ":";
 
@@ -590,7 +598,7 @@ foreach ($uasorted as $value) {
 }
 "#,
     );
-    assert_eq!(out, "34:11,12,:321:321:321");
+    assert_eq!(out, "34:23:11,12,:321:321:321");
 }
 
 /// Verifies runtime-selected static callable arrays route fixed-return callbacks through descriptors.
@@ -601,6 +609,10 @@ fn test_dynamic_static_callable_array_variable_fixed_callback_runtimes() {
 class DynamicStaticCallbackRuntime {
     public static function keep($value): bool {
         return $value > 2;
+    }
+
+    public static function add($carry, $item): int {
+        return $carry + $item + 10;
     }
 
     public static function show($item): void {
@@ -616,6 +628,8 @@ class DynamicStaticCallbackRuntime {
 $class = "DynamicStaticCallbackRuntime";
 $method = "keep";
 $filter = [$class, $method];
+$method = "add";
+$reduce = [$class, $method];
 $method = "show";
 $walk = [$class, $method];
 $method = "compare";
@@ -625,6 +639,8 @@ $filtered = array_filter([1, 3, 4], $filter);
 foreach ($filtered as $value) {
     echo $value;
 }
+echo ":";
+echo array_reduce([1, 2], $reduce, 0);
 echo ":";
 array_walk([1, 2], $walk);
 echo ":";
@@ -650,5 +666,5 @@ foreach ($uasorted as $value) {
 }
 "#,
     );
-    assert_eq!(out, "34:11,12,:321:321:321");
+    assert_eq!(out, "34:23:11,12,:321:321:321");
 }

@@ -712,6 +712,7 @@ fn callback_builtin_allows_runtime_callable_array(label: &str) -> bool {
         label,
         "array_map() callback"
             | "array_filter() callback"
+            | "array_reduce() callback"
             | "array_walk() callback"
             | "usort() callback"
             | "uksort() callback"
