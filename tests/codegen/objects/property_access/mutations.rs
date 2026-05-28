@@ -9,9 +9,9 @@
 
 use super::*;
 
+/// Compiles a loop over an array of class instances, reading the `price` field
+/// of each `Item` object via `$items[$i]->price` and accumulating the sum.
 #[test]
-// Compiles a loop over an array of class instances, reading the `price` field
-// of each `Item` object via `$items[$i]->price` and accumulating the sum.
 fn test_class_array_of_objects_property_access() {
     let out = compile_and_run(
         r#"<?php
@@ -33,10 +33,10 @@ echo $total;
     assert_eq!(out, "3");
 }
 
+/// Exercises `$this->items[] = $value` (push operator) on a class property
+/// that holds an array, verifying the pushed element is retrievable at the
+/// correct index.
 #[test]
-// Exercises `$this->items[] = $value` (push operator) on a class property
-// that holds an array, verifying the pushed element is retrievable at the
-// correct index.
 fn test_class_property_array_push() {
     let out = compile_and_run(
         r#"<?php
@@ -64,9 +64,9 @@ echo $bucket->last();
     assert_eq!(out, "7");
 }
 
+/// Exercises indexed write `$this->items[0] = $value` on a class property
+/// that holds an array, verifying the replaced element is retrieved correctly.
 #[test]
-// Exercises indexed write `$this->items[0] = $value` on a class property
-// that holds an array, verifying the replaced element is retrieved correctly.
 fn test_class_property_array_assign() {
     let out = compile_and_run(
         r#"<?php
@@ -94,10 +94,10 @@ echo $bucket->first();
     assert_eq!(out, "9");
 }
 
+/// Verifies that a typed `public array $headers` property (initialized to `[]`)
+/// accepts a string-keyed assignment (`$this->headers["Host"] = ...`) and the
+/// value is retrievable via the same key.
 #[test]
-// Verifies that a typed `public array $headers` property (initialized to `[]`)
-// accepts a string-keyed assignment (`$this->headers["Host"] = ...`) and the
-// value is retrievable via the same key.
 fn test_typed_array_property_accepts_string_key_assignment() {
     let out = compile_and_run(
         r#"<?php
@@ -117,10 +117,10 @@ echo $r->headers["Host"];
     assert_eq!(out, "example.com");
 }
 
+/// Verifies that an untyped `public $headers = []` property (array default)
+/// accepts a string-keyed assignment (`$r->headers["Host"] = ...`) and the
+/// value is retrievable via the same key.
 #[test]
-// Verifies that an untyped `public $headers = []` property (array default)
-// accepts a string-keyed assignment (`$r->headers["Host"] = ...`) and the
-// value is retrievable via the same key.
 fn test_empty_array_property_default_accepts_string_key_assignment() {
     let out = compile_and_run(
         r#"<?php
@@ -136,9 +136,9 @@ echo $r->headers["Host"];
     assert_eq!(out, "example.com");
 }
 
+/// Exercises `+=` and `*=` compound assignment on a `public $value` property,
+/// verifying the result is `10 + 5 = 15`, then `15 * 3 = 45`.
 #[test]
-// Exercises `+=` and `*=` compound assignment on a `public $value` property,
-// verifying the result is `10 + 5 = 15`, then `15 * 3 = 45`.
 fn test_class_property_compound_assign() {
     let out = compile_and_run(
         r#"<?php
@@ -155,10 +155,10 @@ echo $counter->value;
     assert_eq!(out, "45");
 }
 
+/// Regression test: when the receiver of a compound property assignment is a
+/// function call (`passthrough($counter)->value += 5`), the function must be
+/// evaluated exactly once, not twice. Verifies output is `"r:15"` (not `"rr:15"`).
 #[test]
-// Regression test: when the receiver of a compound property assignment is a
-// function call (`passthrough($counter)->value += 5`), the function must be
-// evaluated exactly once, not twice. Verifies output is `"r:15"` (not `"rr:15"`).
 fn test_class_property_compound_assign_evaluates_receiver_once() {
     let out = compile_and_run(
         r#"<?php
@@ -179,10 +179,10 @@ echo ":" . $counter->value;
     assert_eq!(out, "r:15");
 }
 
+/// Exercises `+=` and `>>=` compound assignment on an indexed class property
+/// (`$bucket->items[1] += 6` and `$bucket->items[2] >>= 1`), verifying the
+/// results are `4 + 6 = 10` and `8 >> 1 = 4`.
 #[test]
-// Exercises `+=` and `>>=` compound assignment on an indexed class property
-// (`$bucket->items[1] += 6` and `$bucket->items[2] >>= 1`), verifying the
-// results are `4 + 6 = 10` and `8 >> 1 = 4`.
 fn test_class_property_array_compound_assign() {
     let out = compile_and_run(
         r#"<?php
@@ -199,11 +199,11 @@ echo $bucket->items[1] . "|" . $bucket->items[2];
     assert_eq!(out, "10|4");
 }
 
+/// Regression test: when the receiver of an indexed compound property assignment
+/// is a function call (`passthrough($bucket)->items[idx()] -= 3`), both the
+/// receiver and the index expression must be evaluated exactly once each.
+/// Verifies output is `"ri:5"` (not `"riri:5"` or similar).
 #[test]
-// Regression test: when the receiver of an indexed compound property assignment
-// is a function call (`passthrough($bucket)->items[idx()] -= 3`), both the
-// receiver and the index expression must be evaluated exactly once each.
-// Verifies output is `"ri:5"` (not `"riri:5"` or similar).
 fn test_class_property_array_compound_assign_evaluates_receiver_and_index_once() {
     let out = compile_and_run(
         r#"<?php
@@ -229,9 +229,9 @@ echo ":" . $bucket->items[2];
     assert_eq!(out, "ri:5");
 }
 
+/// Verifies that `??=` on a `readonly` property that has already been initialized
+/// does not invoke the fallback expression and preserves the existing value (`7`).
 #[test]
-// Verifies that `??=` on a `readonly` property that has already been initialized
-// does not invoke the fallback expression and preserves the existing value (`7`).
 fn test_readonly_property_null_coalesce_assignment_keeps_initialized_value() {
     let out = compile_and_run(
         r#"<?php

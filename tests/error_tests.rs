@@ -19,13 +19,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static TEST_PROJECT_ID: AtomicUsize = AtomicUsize::new(0);
 
-// Runs the full frontend pipeline (tokenize → parse → conditional → autoload → name-resolve → optimize → type-check)
-// on `src` and returns `Ok` if no errors were reported.
+/// Runs the full frontend pipeline (tokenize → parse → conditional → autoload → name-resolve → optimize → type-check)
+/// on `src` and returns `Ok` if no errors were reported.
 fn check_source(src: &str) -> Result<(), String> {
     check_source_with_defines(src, &[])
 }
 
-// Like [`check_source`] but also applies conditional defines from `defines` before type-checking.
+/// Like [`check_source`] but also applies conditional defines from `defines` before type-checking.
 fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> {
     let tokens = tokenize(src).map_err(|e| e.message.clone())?;
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
@@ -38,6 +38,7 @@ fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> 
     Ok(())
 }
 
+/// Checks source full for this module.
 fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::errors::CompileError> {
     let tokens = tokenize(src).map_err(|e| elephc::errors::CompileError::new(e.span, &e.message))?;
     let ast = parse(&tokens)?;
@@ -47,6 +48,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     types::check(&ast)
 }
 
+/// Resolves files error for this module.
 fn resolve_files_error(
     files: &[(&str, &str)],
     main_file: &str,
@@ -78,6 +80,7 @@ fn resolve_files_error(
     result.expect_err("expected resolve to fail")
 }
 
+/// Verifies expect error.
 fn expect_error(src: &str, expected_substr: &str) {
     match check_source(src) {
         Ok(_) => panic!(
@@ -95,6 +98,7 @@ fn expect_error(src: &str, expected_substr: &str) {
     }
 }
 
+/// Verifies expect warning.
 fn expect_warning(src: &str, expected_substr: &str) {
     let result = check_source_full(src).expect("expected source to type-check");
     assert!(
@@ -112,6 +116,7 @@ fn expect_warning(src: &str, expected_substr: &str) {
     );
 }
 
+/// Verifies expect no warning.
 fn expect_no_warning(src: &str, unexpected_substr: &str) {
     let result = check_source_full(src).expect("expected source to type-check");
     assert!(
@@ -138,6 +143,7 @@ macro_rules! expect_builtin_arity_error {
     };
 }
 
+/// Verifies resolver error.
 fn resolver_error(src: &str) -> elephc::errors::CompileError {
     let id = TEST_PROJECT_ID.fetch_add(1, Ordering::SeqCst);
     let dir = std::env::temp_dir().join(format!(
@@ -194,6 +200,7 @@ mod misc;
 
 // --- Iterator-related errors ---
 
+/// Verifies the error diagnostic for foreach over object not implementing iterator.
 #[test]
 fn test_error_foreach_over_object_not_implementing_iterator() {
     expect_error(
@@ -202,6 +209,7 @@ fn test_error_foreach_over_object_not_implementing_iterator() {
     );
 }
 
+/// Verifies the error diagnostic for iterator cannot be redeclared.
 #[test]
 fn test_error_iterator_cannot_be_redeclared() {
     expect_error(
@@ -210,6 +218,7 @@ fn test_error_iterator_cannot_be_redeclared() {
     );
 }
 
+/// Verifies the error diagnostic for iterator aggregate cannot be redeclared.
 #[test]
 fn test_error_iterator_aggregate_cannot_be_redeclared() {
     expect_error(
@@ -218,6 +227,7 @@ fn test_error_iterator_aggregate_cannot_be_redeclared() {
     );
 }
 
+/// Verifies the error diagnostic for iterator method requires declared return type.
 #[test]
 fn test_error_iterator_method_requires_declared_return_type() {
     expect_error(
@@ -233,6 +243,7 @@ class Bad implements Iterator {
     );
 }
 
+/// Verifies the error diagnostic for iterator method rejects incompatible return type.
 #[test]
 fn test_error_iterator_method_rejects_incompatible_return_type() {
     expect_error(
@@ -250,6 +261,7 @@ class Bad implements Iterator {
 
 // --- Generator-related errors ---
 
+/// Verifies the error diagnostic for generator cannot be redeclared.
 #[test]
 fn test_error_generator_cannot_be_redeclared() {
     expect_error(
@@ -258,6 +270,7 @@ fn test_error_generator_cannot_be_redeclared() {
     );
 }
 
+/// Verifies the error diagnostic for yield outside function.
 #[test]
 fn test_error_yield_outside_function() {
     expect_error(
@@ -266,6 +279,7 @@ fn test_error_yield_outside_function() {
     );
 }
 
+/// Verifies the error diagnostic for yield outside function in pipe value.
 #[test]
 fn test_error_yield_outside_function_in_pipe_value() {
     expect_error(
@@ -274,6 +288,7 @@ fn test_error_yield_outside_function_in_pipe_value() {
     );
 }
 
+/// Verifies the error diagnostic for yield outside function in pipe callable.
 #[test]
 fn test_error_yield_outside_function_in_pipe_callable() {
     expect_error(
@@ -282,6 +297,7 @@ fn test_error_yield_outside_function_in_pipe_callable() {
     );
 }
 
+/// Verifies the error diagnostic for yield in try block.
 #[test]
 fn test_error_yield_in_try_block() {
     expect_error(
@@ -290,6 +306,7 @@ fn test_error_yield_in_try_block() {
     );
 }
 
+/// Verifies the error diagnostic for yield in catch block.
 #[test]
 fn test_error_yield_in_catch_block() {
     expect_error(
@@ -298,6 +315,7 @@ fn test_error_yield_in_catch_block() {
     );
 }
 
+/// Verifies the error diagnostic for yield from outside function.
 #[test]
 fn test_error_yield_from_outside_function() {
     expect_error(
@@ -306,6 +324,7 @@ fn test_error_yield_from_outside_function() {
     );
 }
 
+/// Verifies the error diagnostic for yield from rejects non generator call.
 #[test]
 fn test_error_yield_from_rejects_non_generator_call() {
     expect_error(

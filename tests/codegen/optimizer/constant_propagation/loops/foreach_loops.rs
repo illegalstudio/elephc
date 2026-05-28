@@ -9,13 +9,13 @@
 
 use super::*;
 
-// Verifies constant propagation preserves a scalar (`$base = 2`) across a `foreach` loop
-// with key extraction (`$k => $value`), side effects inside the loop (`echo $value`), and
-// subsequent use in `$base ** 3` which must constant-fold to `8` without emitting `pow`.
-//
-// Fixture: scalar assigned before loop → array literal iterated with key extraction → loop
-// body echoes loop variable → exponent expression uses preserved scalar after loop.
-// Expected output "1238": loop echoes "1","2","3" and `2**3` = "8".
+/// Verifies constant propagation preserves a scalar (`$base = 2`) across a `foreach` loop
+/// with key extraction (`$k => $value`), side effects inside the loop (`echo $value`), and
+/// subsequent use in `$base ** 3` which must constant-fold to `8` without emitting `pow`.
+///
+/// Fixture: scalar assigned before loop → array literal iterated with key extraction → loop
+/// body echoes loop variable → exponent expression uses preserved scalar after loop.
+/// Expected output "1238": loop echoes "1","2","3" and `2**3` = "8".
 #[test]
 fn test_constant_propagation_preserves_scalar_across_foreach_loop() {
     let dir = make_cli_test_dir("elephc_constant_propagation_foreach");

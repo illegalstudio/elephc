@@ -9,9 +9,9 @@
 
 use super::*;
 
-// Verifies `source` produces a `FloatLiteral` token equal to `expected` within
-// floating-point epsilon tolerance. Used for overflow cases where the lexer
-// promotes integer literals to float (e.g., i64::MAX + 1).
+/// Verifies `source` produces a `FloatLiteral` token equal to `expected` within
+/// floating-point epsilon tolerance. Used for overflow cases where the lexer
+/// promotes integer literals to float (e.g., i64::MAX + 1).
 fn assert_float_literal(source: &str, expected: f64) {
     let t = tokens(source);
     match &t[1] {
@@ -26,8 +26,8 @@ fn assert_float_literal(source: &str, expected: f64) {
     }
 }
 
-// Verifies `echo "hello";` produces `OpenTag`, `Echo`, `StringLiteral("hello")`,
-// `Semicolon`, `Eof` — confirming echo statement parsing and string literal value extraction.
+/// Verifies `echo "hello";` produces `OpenTag`, `Echo`, `StringLiteral("hello")`,
+/// `Semicolon`, `Eof` — confirming echo statement parsing and string literal value extraction.
 #[test]
 fn test_echo_string() {
     let t = tokens("<?php echo \"hello\";");
@@ -43,19 +43,19 @@ fn test_echo_string() {
     );
 }
 
-// Verifies double-quoted string `"hello\nworld\t!"` produces `StringLiteral`
-// with actual newline (`\n`) and tab (`\t`) characters — confirming escape sequence
-// interpretation, not raw literal text.
+/// Verifies double-quoted string `"hello\nworld\t!"` produces `StringLiteral`
+/// with actual newline (`\n`) and tab (`\t`) characters — confirming escape sequence
+/// interpretation, not raw literal text.
 #[test]
 fn test_string_escape_sequences() {
     let t = tokens("<?php \"hello\\nworld\\t!\"");
     assert_eq!(t[1], Token::StringLiteral("hello\nworld\t!".into()));
 }
 
-// Verifies all PHP double-quoted escape sequences: `\r`, `\v`, `\e`, `\f`,
-// `\xHH`, `\x{...}`, `\u{...}`, and null byte `\0` — confirms unicode codepoint
-// conversion (`\u{1F600}` = 😀), lowercase hex decoding (`\x41` = `A`), and
-// C-style escape mapping (`\e` = U+001B, `\v` = U+000B).
+/// Verifies all PHP double-quoted escape sequences: `\r`, `\v`, `\e`, `\f`,
+/// `\xHH`, `\x{...}`, `\u{...}`, and null byte `\0` — confirms unicode codepoint
+/// conversion (`\u{1F600}` = 😀), lowercase hex decoding (`\x41` = `A`), and
+/// C-style escape mapping (`\e` = U+001B, `\v` = U+000B).
 #[test]
 fn test_double_quoted_php_escape_sequences() {
     let t = tokens(r#"<?php "a\r\v\e\f\x41\101\u{1F600}\0""#);
@@ -65,8 +65,8 @@ fn test_double_quoted_php_escape_sequences() {
     );
 }
 
-// Verifies out-of-bounds hex, invalid hex, and unrecognized escapes fall back to
-// literal text (matching PHP behavior).
+/// Verifies out-of-bounds hex, invalid hex, and unrecognized escapes fall back to
+/// literal text (matching PHP behavior).
 #[test]
 fn test_double_quoted_escape_digit_bounds_and_fallbacks() {
     let t = tokens(r#"<?php "\x414\1234\09\xG\u0041\'""#);
@@ -76,21 +76,21 @@ fn test_double_quoted_escape_digit_bounds_and_fallbacks() {
     );
 }
 
-// Verifies bare decimal integer `42` tokenizes as `IntLiteral(42)`, not float.
+/// Verifies bare decimal integer `42` tokenizes as `IntLiteral(42)`, not float.
 #[test]
 fn test_integer_literal() {
     let t = tokens("<?php 42");
     assert_eq!(t[1], Token::IntLiteral(42));
 }
 
-// Verifies `i64::MAX` stays as integer (no overflow lex error).
+/// Verifies `i64::MAX` stays as integer (no overflow lex error).
 #[test]
 fn test_max_decimal_integer_literal_stays_int() {
     let t = tokens("<?php 9223372036854775807;");
     assert_eq!(t[1], Token::IntLiteral(i64::MAX));
 }
 
-// Verifies `i64::MAX + 1` lexes as `FloatLiteral` (overflow promotes to float).
+/// Verifies `i64::MAX + 1` lexes as `FloatLiteral` (overflow promotes to float).
 #[test]
 fn test_decimal_integer_overflow_promotes_to_float() {
     assert_float_literal(
@@ -99,8 +99,8 @@ fn test_decimal_integer_overflow_promotes_to_float() {
     );
 }
 
-// Verifies PHP math constant tokens (`PHP_INT_MIN`, `M_PI`, `M_SQRT2`, etc.)
-// tokenize correctly.
+/// Verifies PHP math constant tokens (`PHP_INT_MIN`, `M_PI`, `M_SQRT2`, etc.)
+/// tokenize correctly.
 #[test]
 fn test_additional_numeric_constant_tokens() {
     let t = tokens(
@@ -125,45 +125,45 @@ fn test_additional_numeric_constant_tokens() {
 
 // --- INF / NAN ---
 
-// Verifies `3.14` tokenizes as `FloatLiteral(3.14)`.
+/// Verifies `3.14` tokenizes as `FloatLiteral(3.14)`.
 #[test]
 fn test_float_literal() {
     let t = tokens("<?php 3.14");
     assert_eq!(t[1], Token::FloatLiteral(3.14));
 }
 
-// Verifies `.5` (dot-prefix float without leading zero) tokenizes as
-// `FloatLiteral(0.5)`.
+/// Verifies `.5` (dot-prefix float without leading zero) tokenizes as
+/// `FloatLiteral(0.5)`.
 #[test]
 fn test_dot_prefix_float() {
     let t = tokens("<?php .5");
     assert_eq!(t[1], Token::FloatLiteral(0.5));
 }
 
-// Verifies `1.5e3` (lowercase `e` exponent) tokenizes as `FloatLiteral(1500.0)`.
+/// Verifies `1.5e3` (lowercase `e` exponent) tokenizes as `FloatLiteral(1500.0)`.
 #[test]
 fn test_scientific_notation() {
     let t = tokens("<?php 1.5e3");
     assert_eq!(t[1], Token::FloatLiteral(1500.0));
 }
 
-// Verifies `1.0e-5` tokenizes as `FloatLiteral(1.0e-5)`.
+/// Verifies `1.0e-5` tokenizes as `FloatLiteral(1.0e-5)`.
 #[test]
 fn test_scientific_notation_negative_exponent() {
     let t = tokens("<?php 1.0e-5");
     assert_eq!(t[1], Token::FloatLiteral(1.0e-5));
 }
 
-// Verifies `42` does not tokenize as float (plain integer).
+/// Verifies `42` does not tokenize as float (plain integer).
 #[test]
 fn test_integer_not_mistaken_for_float() {
     let t = tokens("<?php 42");
     assert_eq!(t[1], Token::IntLiteral(42));
 }
 
-// Verifies `const NAME = "test";` produces `OpenTag`, `Const`, `Identifier`,
-// `Assign`, `StringLiteral("test")`, `Semicolon`, `Eof` — confirming const
-// declaration parsing and string literal extraction.
+/// Verifies `const NAME = "test";` produces `OpenTag`, `Const`, `Identifier`,
+/// `Assign`, `StringLiteral("test")`, `Semicolon`, `Eof` — confirming const
+/// declaration parsing and string literal extraction.
 #[test]
 fn test_const_string_value() {
     let t = tokens("<?php const NAME = \"test\";");
@@ -183,36 +183,36 @@ fn test_const_string_value() {
 
 // --- Hex integer literals ---
 
-// Verifies `0xff` (lowercase `x`) hex literal tokenizes as `IntLiteral(255)`.
+/// Verifies `0xff` (lowercase `x`) hex literal tokenizes as `IntLiteral(255)`.
 #[test]
 fn test_hex_literal_lowercase() {
     let t = tokens("<?php 0xff;");
     assert_eq!(t[1], Token::IntLiteral(255));
 }
 
-// Verifies `0XFF` (uppercase `X` prefix) hex literal tokenizes as `IntLiteral(255)`
-// — confirming uppercase variant is accepted.
+/// Verifies `0XFF` (uppercase `X` prefix) hex literal tokenizes as `IntLiteral(255)`
+/// — confirming uppercase variant is accepted.
 #[test]
 fn test_hex_literal_uppercase_x() {
     let t = tokens("<?php 0XFF;");
     assert_eq!(t[1], Token::IntLiteral(255));
 }
 
-// Verifies hex digits are case-insensitive (`0x1aB` = 427).
+/// Verifies hex digits are case-insensitive (`0x1aB` = 427).
 #[test]
 fn test_hex_literal_mixed_case_digits() {
     let t = tokens("<?php 0x1aB;");
     assert_eq!(t[1], Token::IntLiteral(427));
 }
 
-// Verifies `0x0` (zero) tokenizes correctly.
+/// Verifies `0x0` (zero) tokenizes correctly.
 #[test]
 fn test_hex_literal_zero() {
     let t = tokens("<?php 0x0;");
     assert_eq!(t[1], Token::IntLiteral(0));
 }
 
-// Verifies `0xFFFFFFFFFFFFFFFF` overflows to `FloatLiteral`.
+/// Verifies `0xFFFFFFFFFFFFFFFF` overflows to `FloatLiteral`.
 #[test]
 fn test_hex_integer_overflow_promotes_to_float() {
     assert_float_literal(
@@ -223,44 +223,44 @@ fn test_hex_integer_overflow_promotes_to_float() {
 
 // --- Octal integer literals ---
 
-// Verifies `0o777` (lowercase `o`) explicit octal tokenizes as `IntLiteral(511)`.
+/// Verifies `0o777` (lowercase `o`) explicit octal tokenizes as `IntLiteral(511)`.
 #[test]
 fn test_explicit_octal_literal_lowercase() {
     let t = tokens("<?php 0o777;");
     assert_eq!(t[1], Token::IntLiteral(511));
 }
 
-// Verifies `0O777` (uppercase `O` prefix) explicit octal tokenizes as `IntLiteral(511)`
-// — confirming uppercase variant is accepted.
+/// Verifies `0O777` (uppercase `O` prefix) explicit octal tokenizes as `IntLiteral(511)`
+/// — confirming uppercase variant is accepted.
 #[test]
 fn test_explicit_octal_literal_uppercase_o() {
     let t = tokens("<?php 0O777;");
     assert_eq!(t[1], Token::IntLiteral(511));
 }
 
-// Verifies `0o0` (zero) explicit octal tokenizes correctly.
+/// Verifies `0o0` (zero) explicit octal tokenizes correctly.
 #[test]
 fn test_explicit_octal_literal_zero() {
     let t = tokens("<?php 0o0;");
     assert_eq!(t[1], Token::IntLiteral(0));
 }
 
-// Verifies legacy octal `0777` (no prefix) tokenizes as `IntLiteral(511)`.
+/// Verifies legacy octal `0777` (no prefix) tokenizes as `IntLiteral(511)`.
 #[test]
 fn test_legacy_octal_literal() {
     let t = tokens("<?php 0777;");
     assert_eq!(t[1], Token::IntLiteral(511));
 }
 
-// Verifies `0_777` (leading-zero octal with separator) tokenizes as `IntLiteral(511)`
-// — confirming underscore separator is accepted inside a legacy octal literal.
+/// Verifies `0_777` (leading-zero octal with separator) tokenizes as `IntLiteral(511)`
+/// — confirming underscore separator is accepted inside a legacy octal literal.
 #[test]
 fn test_legacy_octal_literal_with_separator() {
     let t = tokens("<?php 0_777;");
     assert_eq!(t[1], Token::IntLiteral(511));
 }
 
-// Verifies `0o` prefix + overflow promotes to `FloatLiteral`.
+/// Verifies `0o` prefix + overflow promotes to `FloatLiteral`.
 #[test]
 fn test_explicit_octal_integer_overflow_promotes_to_float() {
     assert_float_literal(
@@ -269,7 +269,7 @@ fn test_explicit_octal_integer_overflow_promotes_to_float() {
     );
 }
 
-// Verifies legacy octal + overflow promotes to `FloatLiteral`.
+/// Verifies legacy octal + overflow promotes to `FloatLiteral`.
 #[test]
 fn test_legacy_octal_integer_overflow_promotes_to_float() {
     assert_float_literal(
@@ -278,14 +278,14 @@ fn test_legacy_octal_integer_overflow_promotes_to_float() {
     );
 }
 
-// Verifies `012.3` (leading zero float) stays decimal 12.3, not octal.
+/// Verifies `012.3` (leading zero float) stays decimal 12.3, not octal.
 #[test]
 fn test_leading_zero_float_stays_decimal() {
     let t = tokens("<?php 012.3;");
     assert_eq!(t[1], Token::FloatLiteral(12.3));
 }
 
-// Verifies `08e1` stays decimal 80.0 (not octal), matching PHP behavior.
+/// Verifies `08e1` stays decimal 80.0 (not octal), matching PHP behavior.
 #[test]
 fn test_leading_zero_scientific_float_stays_decimal() {
     let t = tokens("<?php 08e1;");
@@ -294,43 +294,43 @@ fn test_leading_zero_scientific_float_stays_decimal() {
 
 // --- Binary integer literals ---
 
-// Verifies `0b1010` (lowercase `b`) binary literal tokenizes as `IntLiteral(10)`.
+/// Verifies `0b1010` (lowercase `b`) binary literal tokenizes as `IntLiteral(10)`.
 #[test]
 fn test_binary_literal_lowercase() {
     let t = tokens("<?php 0b1010;");
     assert_eq!(t[1], Token::IntLiteral(10));
 }
 
-// Verifies `0B1010` (uppercase `B` prefix) binary literal tokenizes as `IntLiteral(10)`
-// — confirming uppercase variant is accepted.
+/// Verifies `0B1010` (uppercase `B` prefix) binary literal tokenizes as `IntLiteral(10)`
+/// — confirming uppercase variant is accepted.
 #[test]
 fn test_binary_literal_uppercase_b() {
     let t = tokens("<?php 0B1010;");
     assert_eq!(t[1], Token::IntLiteral(10));
 }
 
-// Verifies `0b0` binary zero tokenizes correctly.
+/// Verifies `0b0` binary zero tokenizes correctly.
 #[test]
 fn test_binary_literal_zero() {
     let t = tokens("<?php 0b0;");
     assert_eq!(t[1], Token::IntLiteral(0));
 }
 
-// Verifies `0b1` binary one tokenizes correctly.
+/// Verifies `0b1` binary one tokenizes correctly.
 #[test]
 fn test_binary_literal_one() {
     let t = tokens("<?php 0b1;");
     assert_eq!(t[1], Token::IntLiteral(1));
 }
 
-// Verifies `0b11111111` (8 bits) tokenizes as `IntLiteral(255)`.
+/// Verifies `0b11111111` (8 bits) tokenizes as `IntLiteral(255)`.
 #[test]
 fn test_binary_literal_eight_bits() {
     let t = tokens("<?php 0b11111111;");
     assert_eq!(t[1], Token::IntLiteral(255));
 }
 
-// Verifies 64-bit binary overflow promotes to `FloatLiteral`.
+/// Verifies 64-bit binary overflow promotes to `FloatLiteral`.
 #[test]
 fn test_binary_integer_overflow_promotes_to_float() {
     assert_float_literal(
@@ -341,56 +341,56 @@ fn test_binary_integer_overflow_promotes_to_float() {
 
 // --- Numeric separators ---
 
-// Verifies `1_000_000` decimal with separators tokenizes as `IntLiteral(1_000_000)`.
+/// Verifies `1_000_000` decimal with separators tokenizes as `IntLiteral(1_000_000)`.
 #[test]
 fn test_decimal_separator() {
     let t = tokens("<?php 1_000_000;");
     assert_eq!(t[1], Token::IntLiteral(1_000_000));
 }
 
-// Verifies `0xFF_FF` hex with separators tokenizes as `IntLiteral(0xFFFF)`.
+/// Verifies `0xFF_FF` hex with separators tokenizes as `IntLiteral(0xFFFF)`.
 #[test]
 fn test_hex_separator() {
     let t = tokens("<?php 0xFF_FF;");
     assert_eq!(t[1], Token::IntLiteral(0xFFFF));
 }
 
-// Verifies `0o7_7_7` explicit octal with separators tokenizes as `IntLiteral(0o777)`.
+/// Verifies `0o7_7_7` explicit octal with separators tokenizes as `IntLiteral(0o777)`.
 #[test]
 fn test_explicit_octal_separator() {
     let t = tokens("<?php 0o7_7_7;");
     assert_eq!(t[1], Token::IntLiteral(0o777));
 }
 
-// Verifies `0b1010_1010` binary with separators tokenizes correctly.
+/// Verifies `0b1010_1010` binary with separators tokenizes correctly.
 #[test]
 fn test_binary_separator() {
     let t = tokens("<?php 0b1010_1010;");
     assert_eq!(t[1], Token::IntLiteral(0b10101010));
 }
 
-// Verifies `1_000.5` (separator in integer part) tokenizes as `FloatLiteral(1000.5)`.
+/// Verifies `1_000.5` (separator in integer part) tokenizes as `FloatLiteral(1000.5)`.
 #[test]
 fn test_float_separator_int_part() {
     let t = tokens("<?php 1_000.5;");
     assert_eq!(t[1], Token::FloatLiteral(1000.5));
 }
 
-// Verifies `1.5_5` (separator in fractional part) tokenizes as `FloatLiteral(1.55)`.
+/// Verifies `1.5_5` (separator in fractional part) tokenizes as `FloatLiteral(1.55)`.
 #[test]
 fn test_float_separator_frac_part() {
     let t = tokens("<?php 1.5_5;");
     assert_eq!(t[1], Token::FloatLiteral(1.55));
 }
 
-// Verifies `1e1_0` (separator in exponent) tokenizes as `FloatLiteral(1e10)`.
+/// Verifies `1e1_0` (separator in exponent) tokenizes as `FloatLiteral(1e10)`.
 #[test]
 fn test_float_separator_exponent() {
     let t = tokens("<?php 1e1_0;");
     assert_eq!(t[1], Token::FloatLiteral(1e10));
 }
 
-// Verifies `1e+1_0` (signed exponent with separator) tokenizes as `FloatLiteral(1e10)`.
+/// Verifies `1e+1_0` (signed exponent with separator) tokenizes as `FloatLiteral(1e10)`.
 #[test]
 fn test_float_separator_signed_exp() {
     let t = tokens("<?php 1e+1_0;");

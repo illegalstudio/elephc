@@ -10,8 +10,8 @@
 
 use super::*;
 
+/// Verifies DCE eliminates the second case when it has the same pattern as the first, preserving only the first case body.
 #[test]
-// Verifies DCE eliminates the second case when it has the same pattern as the first, preserving only the first case body.
 fn test_eliminate_dead_code_drops_switch_case_shadowed_by_terminating_duplicate_pattern() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -66,8 +66,8 @@ fn test_eliminate_dead_code_drops_switch_case_shadowed_by_terminating_duplicate_
     assert_eq!(default, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
 }
 
+/// Verifies DCE merges the first case body with the second when the second is unreachable due to pattern shadowing.
 #[test]
-// Verifies DCE merges the first case body with the second when the second is unreachable due to pattern shadowing.
 fn test_eliminate_dead_code_merges_fallthrough_body_from_fully_shadowed_switch_case() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -117,8 +117,8 @@ fn test_eliminate_dead_code_merges_fallthrough_body_from_fully_shadowed_switch_c
     assert_eq!(default, &None);
 }
 
+/// Verifies DCE removes dead case labels (0 and 1) from a switch with mixed live patterns (2 and true), keeping only live patterns.
 #[test]
-// Verifies DCE removes dead case labels (0 and 1) from a switch with mixed live patterns (2 and true), keeping only live patterns.
 fn test_eliminate_dead_code_prunes_dead_label_inside_live_mixed_switch_case() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {

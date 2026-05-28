@@ -9,9 +9,9 @@
 
 use super::*;
 
-// Parses `Counter::$count` inside an Echo statement and verifies the AST
-// produces a `StaticPropertyAccess` node with `StaticReceiver::Named("Counter")`
-// and property name `"count"`.
+/// Parses `Counter::$count` inside an Echo statement and verifies the AST
+/// produces a `StaticPropertyAccess` node with `StaticReceiver::Named("Counter")`
+/// and property name `"count"`.
 #[test]
 fn test_parse_static_property_access() {
     let stmts = parse_source("<?php echo Counter::$count;");
@@ -27,9 +27,9 @@ fn test_parse_static_property_access() {
     }
 }
 
-// Parses `self::$count = 2` and verifies the AST produces a
-// `StaticPropertyAssign` node with `StaticReceiver::Self_`, property `"count"`,
-// and an `IntLiteral(2)` value.
+/// Parses `self::$count = 2` and verifies the AST produces a
+/// `StaticPropertyAssign` node with `StaticReceiver::Self_`, property `"count"`,
+/// and an `IntLiteral(2)` value.
 #[test]
 fn test_parse_static_property_assignment() {
     let stmts = parse_source("<?php self::$count = 2;");
@@ -47,11 +47,11 @@ fn test_parse_static_property_assignment() {
     }
 }
 
-// Parses `Counter::$count += 2` and verifies the AST produces a
-// `StaticPropertyAssign` node with `StaticReceiver::Named("Counter")`,
-// property `"count"`, and a `BinaryOp(Add)` value whose left-hand side is a
-// `StaticPropertyAccess` for the same receiver and property, protecting against
-// regressions where the compound assignment LHS was incorrectly lowered.
+/// Parses `Counter::$count += 2` and verifies the AST produces a
+/// `StaticPropertyAssign` node with `StaticReceiver::Named("Counter")`,
+/// property `"count"`, and a `BinaryOp(Add)` value whose left-hand side is a
+/// `StaticPropertyAccess` for the same receiver and property, protecting against
+/// regressions where the compound assignment LHS was incorrectly lowered.
 #[test]
 fn test_parse_static_property_compound_assignment() {
     let stmts = parse_source("<?php Counter::$count += 2;");
@@ -82,9 +82,9 @@ fn test_parse_static_property_compound_assignment() {
     }
 }
 
-// Parses `Counter::$items[] = 2` and verifies the AST produces a
-// `StaticPropertyArrayPush` node with `StaticReceiver::Named("Counter")`,
-// property `"items"`, and an `IntLiteral(2)` value.
+/// Parses `Counter::$items[] = 2` and verifies the AST produces a
+/// `StaticPropertyArrayPush` node with `StaticReceiver::Named("Counter")`,
+/// property `"items"`, and an `IntLiteral(2)` value.
 #[test]
 fn test_parse_static_property_array_push() {
     let stmts = parse_source("<?php Counter::$items[] = 2;");
@@ -102,9 +102,9 @@ fn test_parse_static_property_array_push() {
     }
 }
 
-// Parses `Counter::$items[1] = 3` and verifies the AST produces a
-// `StaticPropertyArrayAssign` node with `StaticReceiver::Named("Counter")`,
-// property `"items"`, index `IntLiteral(1)`, and value `IntLiteral(3)`.
+/// Parses `Counter::$items[1] = 3` and verifies the AST produces a
+/// `StaticPropertyArrayAssign` node with `StaticReceiver::Named("Counter")`,
+/// property `"items"`, index `IntLiteral(1)`, and value `IntLiteral(3)`.
 #[test]
 fn test_parse_static_property_array_assign() {
     let stmts = parse_source("<?php Counter::$items[1] = 3;");
@@ -124,12 +124,12 @@ fn test_parse_static_property_array_assign() {
     }
 }
 
-// Parses `Counter::$items[1] ??= 3` and verifies the AST produces a
-// `StaticPropertyArrayAssign` node with `StaticReceiver::Named("Counter")`,
-// property `"items"`, index `IntLiteral(1)`, and a `NullCoalesce` value. The
-// `NullCoalesce` node's `default` is `IntLiteral(3)` and its `value` is an
-// `ArrayAccess` with index `IntLiteral(1)` on a `StaticPropertyAccess`, ensuring
-// null-coalescing array-assign compound form parses correctly.
+/// Parses `Counter::$items[1] ??= 3` and verifies the AST produces a
+/// `StaticPropertyArrayAssign` node with `StaticReceiver::Named("Counter")`,
+/// property `"items"`, index `IntLiteral(1)`, and a `NullCoalesce` value. The
+/// `NullCoalesce` node's `default` is `IntLiteral(3)` and its `value` is an
+/// `ArrayAccess` with index `IntLiteral(1)` on a `StaticPropertyAccess`, ensuring
+/// null-coalescing array-assign compound form parses correctly.
 #[test]
 fn test_parse_static_property_array_compound_assignment() {
     let stmts = parse_source("<?php Counter::$items[1] ??= 3;");
@@ -161,9 +161,9 @@ fn test_parse_static_property_array_compound_assignment() {
     }
 }
 
-// Parses `class Counter { public static int $count = 1; }` and verifies the
-// class declaration's first property has name `"count"`, `Visibility::Public`,
-// `is_static` set to true, a present `type_expr`, and a present `default` value.
+/// Parses `class Counter { public static int $count = 1; }` and verifies the
+/// class declaration's first property has name `"count"`, `Visibility::Public`,
+/// `is_static` set to true, a present `type_expr`, and a present `default` value.
 #[test]
 fn test_parse_static_property_declaration() {
     let stmts = parse_source("<?php class Counter { public static int $count = 1; }");

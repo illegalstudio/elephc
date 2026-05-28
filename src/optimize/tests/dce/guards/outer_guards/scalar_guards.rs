@@ -10,11 +10,11 @@
 
 use super::*;
 
+/// Verifies DCE prunes a nested if region when the outer guard is a boolean variable
+/// and the inner guard is the negation of that variable. The inner if's then-body (8)
+/// is unreachable because the outer guard ensures the inner guard evaluates to false.
+/// DCE replaces the inner if with its else-body (7), preserving the outer if's else-body (9).
 #[test]
-// Verifies DCE prunes a nested if region when the outer guard is a boolean variable
-// and the inner guard is the negation of that variable. The inner if's then-body (8)
-// is unreachable because the outer guard ensures the inner guard evaluates to false.
-// DCE replaces the inner if with its else-body (7), preserving the outer if's else-body (9).
 fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_guard() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -58,10 +58,10 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_guard() {
     assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
 }
 
+/// Verifies DCE does NOT prune the inner if after a local write invalidates the outer guard.
+/// When `flag = false` executes in the outer then-branch, the outer guard no longer
+/// guarantees the inner if's guard state. The inner if must remain to preserve semantics.
 #[test]
-// Verifies DCE does NOT prune the inner if after a local write invalidates the outer guard.
-// When `flag = false` executes in the outer then-branch, the outer guard no longer
-// guarantees the inner if's guard state. The inner if must remain to preserve semantics.
 fn test_eliminate_dead_code_invalidates_outer_guard_after_local_write() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -106,11 +106,11 @@ fn test_eliminate_dead_code_invalidates_outer_guard_after_local_write() {
     };
 }
 
+/// Verifies DCE prunes a nested if region when the outer guard is `value === null` (strict
+/// null check) and the inner guard is `value !== null`. The inner if's then-body (8) is
+/// unreachable because the outer guard being false guarantees the inner guard is true,
+/// which means the inner if's then-body is unreachable. DCE replaces the inner if with 7.
 #[test]
-// Verifies DCE prunes a nested if region when the outer guard is `value === null` (strict
-// null check) and the inner guard is `value !== null`. The inner if's then-body (8) is
-// unreachable because the outer guard being false guarantees the inner guard is true,
-// which means the inner if's then-body is unreachable. DCE replaces the inner if with 7.
 fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_null_guard() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -159,11 +159,11 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_null_guard() {
     assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
 }
 
+/// Verifies DCE prunes a nested if region when the outer guard is `value === 0` (strict
+/// integer zero check) and the inner guard is `value` (truthy check). Since 0 is falsy,
+/// the inner guard evaluates to false in the outer then-branch, making the inner if's
+/// then-body (8) unreachable. DCE replaces the inner if with its else-body (7).
 #[test]
-// Verifies DCE prunes a nested if region when the outer guard is `value === 0` (strict
-// integer zero check) and the inner guard is `value` (truthy check). Since 0 is falsy,
-// the inner guard evaluates to false in the outer then-branch, making the inner if's
-// then-body (8) unreachable. DCE replaces the inner if with its else-body (7).
 fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_zero_guard() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -204,11 +204,11 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_zero_guard() {
     assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
 }
 
+/// Verifies DCE prunes a nested if region when the outer guard is `value === ""` (strict
+/// empty string check) and the inner guard is `value` (truthy check). Since "" is falsy,
+/// the inner guard evaluates to false in the outer then-branch, making the inner if's
+/// then-body (8) unreachable. DCE replaces the inner if with its else-body (7).
 #[test]
-// Verifies DCE prunes a nested if region when the outer guard is `value === ""` (strict
-// empty string check) and the inner guard is `value` (truthy check). Since "" is falsy,
-// the inner guard evaluates to false in the outer then-branch, making the inner if's
-// then-body (8) unreachable. DCE replaces the inner if with its else-body (7).
 fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_empty_string_guard() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -253,11 +253,11 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_empty_string_guar
     assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
 }
 
+/// Verifies DCE prunes a nested if region when the outer guard is `value === "0"` (strict
+/// string "0" check) and the inner guard is `value` (truthy check). Since "0" is falsy in PHP,
+/// the inner guard evaluates to false in the outer then-branch, making the inner if's
+/// then-body (8) unreachable. DCE replaces the inner if with its else-body (7).
 #[test]
-// Verifies DCE prunes a nested if region when the outer guard is `value === "0"` (strict
-// string "0" check) and the inner guard is `value` (truthy check). Since "0" is falsy in PHP,
-// the inner guard evaluates to false in the outer then-branch, making the inner if's
-// then-body (8) unreachable. DCE replaces the inner if with its else-body (7).
 fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_string_zero_guard() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -302,11 +302,11 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_string_zero_guard
     assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
 }
 
+/// Verifies DCE prunes a nested if region when the outer guard is `value === 0.0` (strict
+/// float zero check) and the inner guard is `value` (truthy check). Since 0.0 is falsy,
+/// the inner guard evaluates to false in the outer then-branch, making the inner if's
+/// then-body (8) unreachable. DCE replaces the inner if with its else-body (7).
 #[test]
-// Verifies DCE prunes a nested if region when the outer guard is `value === 0.0` (strict
-// float zero check) and the inner guard is `value` (truthy check). Since 0.0 is falsy,
-// the inner guard evaluates to false in the outer then-branch, making the inner if's
-// then-body (8) unreachable. DCE replaces the inner if with its else-body (7).
 fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_zero_float_guard() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {

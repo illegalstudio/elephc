@@ -10,9 +10,9 @@
 
 use super::*;
 
-// Tests frame setup and teardown for a small frame (64 bytes).
-// Verifies that the prologue allocates 64 bytes, saves FP/LR at sp+#48,
-// sets up x29 as the frame pointer, and that restore/return undo this correctly.
+/// Tests frame setup and teardown for a small frame (64 bytes).
+/// Verifies that the prologue allocates 64 bytes, saves FP/LR at sp+#48,
+/// sets up x29 as the frame pointer, and that restore/return undo this correctly.
 #[test]
 fn test_emit_frame_helpers_small_frame() {
     let mut emitter = test_emitter();
@@ -34,9 +34,9 @@ fn test_emit_frame_helpers_small_frame() {
     );
 }
 
-// Tests that string return values (pointer in x1, length in x2) are preserved
-// across function boundaries by storing them to the caller's stack frame at negative
-// offsets and restoring them after the call. Uses offset 32 for both stores.
+/// Tests that string return values (pointer in x1, length in x2) are preserved
+/// across function boundaries by storing them to the caller's stack frame at negative
+/// offsets and restoring them after the call. Uses offset 32 for both stores.
 #[test]
 fn test_emit_preserve_and_restore_return_value_for_strings() {
     let mut emitter = test_emitter();

@@ -9,9 +9,9 @@
 
 use super::*;
 
+/// Verifies protected member `$value` and protected method `next()` are callable
+/// from public method `reveal()` inside the same class, returning 42.
 #[test]
-// Verifies protected member `$value` and protected method `next()` are callable
-// from public method `reveal()` inside the same class, returning 42.
 fn test_class_protected_members_are_accessible_inside_class_methods() {
     let out = compile_and_run(
         r#"<?php
@@ -34,9 +34,9 @@ echo $box->reveal();
     assert_eq!(out, "42");
 }
 
+/// Verifies protected static method `base()` is callable via fully-qualified name
+/// `SecretMath::base()` from within public static method `answer()`, returning 42.
 #[test]
-// Verifies protected static method `base()` is callable via fully-qualified name
-// `SecretMath::base()` from within public static method `answer()`, returning 42.
 fn test_class_protected_static_method_is_callable_inside_class() {
     let out = compile_and_run(
         r#"<?php
@@ -56,9 +56,9 @@ echo SecretMath::answer();
     assert_eq!(out, "42");
 }
 
+/// Verifies dynamic dispatch selects the `Dog::speak()` override when `$dog->run()`
+/// calls `$this->speak()`, returning "dog".
 #[test]
-// Verifies dynamic dispatch selects the `Dog::speak()` override when `$dog->run()`
-// calls `$this->speak()`, returning "dog".
 fn test_inheritance_dynamic_dispatch_uses_child_override() {
     let out = compile_and_run(
         r#"<?php
@@ -85,10 +85,10 @@ echo $dog->run();
     assert_eq!(out, "dog");
 }
 
+/// Verifies private methods use lexical binding: `Base::reveal()` calls `Base::secret()`
+/// even when the object is a `Child` instance, returning "base". Private methods are
+/// not polymorphic and are resolved at the defining class at compile time.
 #[test]
-// Verifies private methods use lexical binding: `Base::reveal()` calls `Base::secret()`
-// even when the object is a `Child` instance, returning "base". Private methods are
-// not polymorphic and are resolved at the defining class at compile time.
 fn test_inheritance_parent_private_method_stays_lexically_bound() {
     let out = compile_and_run(
         r#"<?php
@@ -115,9 +115,9 @@ echo $child->reveal();
     assert_eq!(out, "base");
 }
 
+/// Verifies `self::label()` is lexically bound to `Base::label()` even when called on
+/// a `Child` instance, returning "base". Self resolves at the compile-time class.
 #[test]
-// Verifies `self::label()` is lexically bound to `Base::label()` even when called on
-// a `Child` instance, returning "base". Self resolves at the compile-time class.
 fn test_self_static_call_uses_lexical_class() {
     let out = compile_and_run(
         r#"<?php
@@ -144,9 +144,9 @@ echo $child->reveal();
     assert_eq!(out, "base");
 }
 
+/// Verifies `self::label()` resolves to `Base::label()` (lexical binding) even when
+/// called on a `Child` instance via `Base::reveal()`, returning "base".
 #[test]
-// Verifies `self::label()` resolves to `Base::label()` (lexical binding) even when
-// called on a `Child` instance via `Base::reveal()`, returning "base".
 fn test_self_instance_call_stays_lexically_bound() {
     let out = compile_and_run(
         r#"<?php
@@ -173,9 +173,9 @@ echo $child->reveal();
     assert_eq!(out, "base");
 }
 
+/// Verifies `static::who()` (late static binding) resolves to the actual runtime class
+/// `Child` when called from an instance method `reveal()` on a `Child` object, returning "child".
 #[test]
-// Verifies `static::who()` (late static binding) resolves to the actual runtime class
-// `Child` when called from an instance method `reveal()` on a `Child` object, returning "child".
 fn test_static_late_binding_uses_child_override_from_instance_method() {
     let out = compile_and_run(
         r#"<?php
@@ -202,9 +202,9 @@ echo $child->reveal();
     assert_eq!(out, "child");
 }
 
+/// Verifies `static::who()` (late static binding) resolves to `Child` when called from
+/// `Child::relay()`, returning "child". Late static binding works from static methods.
 #[test]
-// Verifies `static::who()` (late static binding) resolves to `Child` when called from
-// `Child::relay()`, returning "child". Late static binding works from static methods.
 fn test_static_late_binding_uses_child_override_from_static_method() {
     let out = compile_and_run(
         r#"<?php
@@ -230,9 +230,9 @@ echo Child::relay();
     assert_eq!(out, "child");
 }
 
+/// Verifies named static call `A::who()` is non-forwarding (uses `A`'s vtable) while
+/// `self::who()` is forwarding (resolved lexically to `A::who()`). Output is "A B".
 #[test]
-// Verifies named static call `A::who()` is non-forwarding (uses `A`'s vtable) while
-// `self::who()` is forwarding (resolved lexically to `A::who()`). Output is "A B".
 fn test_named_static_call_is_non_forwarding_but_self_is_forwarding() {
     let out = compile_and_run(
         r#"<?php
@@ -266,9 +266,9 @@ echo B::relayNamed() . " " . B::relaySelf();
     assert_eq!(out, "A B");
 }
 
+/// Verifies `parent::who()` forwards the static call while still using runtime late binding
+/// for `static::tag()`, returning "B". Parent:: forwards but does not reset the runtime class.
 #[test]
-// Verifies `parent::who()` forwards the static call while still using runtime late binding
-// for `static::tag()`, returning "B". Parent:: forwards but does not reset the runtime class.
 fn test_parent_static_call_is_forwarding() {
     let out = compile_and_run(
         r#"<?php
@@ -298,9 +298,9 @@ echo B::relay();
     assert_eq!(out, "B");
 }
 
+/// Verifies inherited properties (`$a`) and methods are accessible from child, and
+/// `parent::greet()` calls the parent's version, returning "42 hi!".
 #[test]
-// Verifies inherited properties (`$a`) and methods are accessible from child, and
-// `parent::greet()` calls the parent's version, returning "42 hi!".
 fn test_inheritance_parent_method_call_and_inherited_properties() {
     let out = compile_and_run(
         r#"<?php
@@ -331,9 +331,9 @@ echo $child->total() . " " . $child->greet();
     assert_eq!(out, "42 hi!");
 }
 
+/// Verifies protected method `readValue()` and protected property `$value` are accessible
+/// from a subclass via `$this`, returning 42.
 #[test]
-// Verifies protected method `readValue()` and protected property `$value` are accessible
-// from a subclass via `$this`, returning 42.
 fn test_inheritance_protected_members_are_accessible_from_subclass() {
     let out = compile_and_run(
         r#"<?php
@@ -358,9 +358,9 @@ echo $child->reveal();
     assert_eq!(out, "42");
 }
 
+/// Verifies first-class callable syntax `MathBox::double(...)` compiles and calls the
+/// static method correctly, returning 18.
 #[test]
-// Verifies first-class callable syntax `MathBox::double(...)` compiles and calls the
-// static method correctly, returning 18.
 fn test_first_class_callable_static_method_indirect_call() {
     let out = compile_and_run(
         r#"<?php
@@ -377,9 +377,9 @@ echo $fn(9);
     assert_eq!(out, "18");
 }
 
+/// Verifies first-class callable on an untyped static method accepts string arguments
+/// and returns "Hello World".
 #[test]
-// Verifies first-class callable on an untyped static method accepts string arguments
-// and returns "Hello World".
 fn test_first_class_callable_untyped_static_method_accepts_string_args() {
     let out = compile_and_run(
         r#"<?php
@@ -396,9 +396,9 @@ echo $f("World");
     assert_eq!(out, "Hello World");
 }
 
+/// Verifies typed property redeclaration with an initializer overrides the parent's
+/// default value: `Child::$x = 5` shadows `Base::$x = 1`, returning "5".
 #[test]
-// Verifies typed property redeclaration with an initializer overrides the parent's
-// default value: `Child::$x = 5` shadows `Base::$x = 1`, returning "5".
 fn test_property_redeclaration_concrete_overrides_default() {
     let out = compile_and_run(
         r#"<?php
@@ -417,9 +417,9 @@ echo $c->x;
     assert_eq!(out, "5");
 }
 
+/// Verifies untyped property redeclaration with an initializer overrides the parent's
+/// default value: `Child::$value = 2` shadows `Base::$value = 1`, returning "2".
 #[test]
-// Verifies untyped property redeclaration with an initializer overrides the parent's
-// default value: `Child::$value = 2` shadows `Base::$value = 1`, returning "2".
 fn test_property_redeclaration_untyped() {
     let out = compile_and_run(
         r#"<?php
@@ -438,9 +438,9 @@ echo $c->value;
     assert_eq!(out, "2");
 }
 
+/// Verifies property redeclaration can widen visibility from `protected` to `public`
+/// while preserving the value, returning "20:20".
 #[test]
-// Verifies property redeclaration can widen visibility from `protected` to `public`
-// while preserving the value, returning "20:20".
 fn test_property_redeclaration_widens_visibility() {
     let out = compile_and_run(
         r#"<?php
@@ -465,10 +465,10 @@ echo $c->get();
     assert_eq!(out, "20:20");
 }
 
+/// Verifies property redeclaration preserves the parent slot offset for non-redeclared
+/// properties: `Child::$a = 10` redeclares `$a` but `$b` stays at Base's offset,
+/// so `pair()` returns 12 (10+2), and direct access returns "12:10:2".
 #[test]
-// Verifies property redeclaration preserves the parent slot offset for non-redeclared
-// properties: `Child::$a = 10` redeclares `$a` but `$b` stays at Base's offset,
-// so `pair()` returns 12 (10+2), and direct access returns "12:10:2".
 fn test_property_redeclaration_preserves_slot_offset() {
     let out = compile_and_run(
         r#"<?php
@@ -496,8 +496,8 @@ echo $c->b;
     assert_eq!(out, "12:10:2");
 }
 
+/// Verifies property redeclaration can add `readonly` to a typed property, returning "7".
 #[test]
-// Verifies property redeclaration can add `readonly` to a typed property, returning "7".
 fn test_property_redeclaration_adds_readonly() {
     let out = compile_and_run(
         r#"<?php
@@ -520,9 +520,9 @@ echo $c->value;
     assert_eq!(out, "7");
 }
 
+/// Verifies multi-level property redeclaration: `Child::$value = 3` shadows both
+/// `Parent_::$value = 2` and `GrandParent::$value = 1`, returning "3:3".
 #[test]
-// Verifies multi-level property redeclaration: `Child::$value = 3` shadows both
-// `Parent_::$value = 2` and `GrandParent::$value = 1`, returning "3:3".
 fn test_property_redeclaration_multi_level_inheritance() {
     let out = compile_and_run(
         r#"<?php
@@ -551,9 +551,9 @@ echo $c->show();
     assert_eq!(out, "3:3");
 }
 
+/// Verifies property redeclaration can both widen visibility (`protected` to `public`)
+/// and add `readonly` simultaneously, returning "9:9".
 #[test]
-// Verifies property redeclaration can both widen visibility (`protected` to `public`)
-// and add `readonly` simultaneously, returning "9:9".
 fn test_property_redeclaration_widens_visibility_and_adds_readonly() {
     let out = compile_and_run(
         r#"<?php
@@ -582,9 +582,9 @@ echo $c->get();
     assert_eq!(out, "9:9");
 }
 
+/// Verifies property redeclaration works across trait application: `Child::$value = 5`
+/// redeclares `HasValue::$value = 1` brought in via `Base`, returning "5".
 #[test]
-// Verifies property redeclaration works across trait application: `Child::$value = 5`
-// redeclares `HasValue::$value = 1` brought in via `Base`, returning "5".
 fn test_property_redeclaration_from_trait() {
     let out = compile_and_run(
         r#"<?php
@@ -607,11 +607,11 @@ echo $c->value;
     assert_eq!(out, "5");
 }
 
+/// Verifies a child class can redeclare a promoted property from a parent's constructor.
+/// The parent's promoted property `$value` is initialized by the call (`new Child(42)`),
+/// while the child's redeclared `$value = 7` is not used. The child also inherits the
+/// parent's `show()` method which reads the parent's slot. Output is "42:42".
 #[test]
-// Verifies a child class can redeclare a promoted property from a parent's constructor.
-// The parent's promoted property `$value` is initialized by the call (`new Child(42)`),
-// while the child's redeclared `$value = 7` is not used. The child also inherits the
-// parent's `show()` method which reads the parent's slot. Output is "42:42".
 fn test_property_redeclaration_redeclares_parent_promoted_property() {
     let out = compile_and_run(
         r#"<?php

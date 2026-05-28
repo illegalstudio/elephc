@@ -11,7 +11,7 @@ use crate::support::*;
 
 // --- Global variables ---
 
-// Verifies that a `global $var` declaration inside a function reads the correct global value.
+/// Verifies that a `global $var` declaration inside a function reads the correct global value.
 #[test]
 fn test_global_read() {
     let out = compile_and_run(
@@ -27,7 +27,7 @@ test();
     assert_eq!(out, "10");
 }
 
-// Verifies that a `global $var` declaration inside a function can write to a global variable.
+/// Verifies that a `global $var` declaration inside a function can write to a global variable.
 #[test]
 fn test_global_write() {
     let out = compile_and_run(
@@ -44,7 +44,7 @@ echo $y;
     assert_eq!(out, "99");
 }
 
-// Verifies that a `global $var` declaration allows both reading and writing the global variable.
+/// Verifies that a `global $var` declaration allows both reading and writing the global variable.
 #[test]
 fn test_global_read_write() {
     let out = compile_and_run(
@@ -62,7 +62,7 @@ echo $x;
     assert_eq!(out, "1020");
 }
 
-// Verifies that multiple comma-separated global variables can be declared in one statement.
+/// Verifies that multiple comma-separated global variables can be declared in one statement.
 #[test]
 fn test_global_multiple_vars() {
     let out = compile_and_run(
@@ -79,7 +79,7 @@ sum();
     assert_eq!(out, "3");
 }
 
-// Verifies that global variables persist and are correctly mutated across multiple function calls.
+/// Verifies that global variables persist and are correctly mutated across multiple function calls.
 #[test]
 fn test_global_increment() {
     let out = compile_and_run(
@@ -100,7 +100,7 @@ echo $counter;
 
 // --- Static variables ---
 
-// Verifies that a static variable inside a function increments across multiple invocations.
+/// Verifies that a static variable inside a function increments across multiple invocations.
 #[test]
 fn test_static_counter() {
     let out = compile_and_run(
@@ -118,7 +118,7 @@ counter();
     assert_eq!(out, "123");
 }
 
-// Verifies that a static variable's value is preserved and updated correctly across calls.
+/// Verifies that a static variable's value is preserved and updated correctly across calls.
 #[test]
 fn test_static_preserves_value() {
     let out = compile_and_run(
@@ -136,7 +136,7 @@ echo acc();
     assert_eq!(out, "102030");
 }
 
-// Verifies that two functions can each declare a static variable with the same name without interference.
+/// Verifies that two functions can each declare a static variable with the same name without interference.
 #[test]
 fn test_static_separate_functions() {
     let out = compile_and_run(
@@ -162,7 +162,7 @@ b();
 
 // --- Pass by reference ---
 
-// Verifies that a `&$var` parameter increments the caller's variable in place.
+/// Verifies that a `&$var` parameter increments the caller's variable in place.
 #[test]
 fn test_ref_increment() {
     let out = compile_and_run(
@@ -178,7 +178,7 @@ echo $x;
     assert_eq!(out, "6");
 }
 
-// Verifies that a `&$var` parameter can be assigned a new value and the caller sees the change.
+/// Verifies that a `&$var` parameter can be assigned a new value and the caller sees the change.
 #[test]
 fn test_ref_assign() {
     let out = compile_and_run(
@@ -194,7 +194,7 @@ echo $x;
     assert_eq!(out, "42");
 }
 
-// Verifies that a two-argument `&$a, &$b` swap function correctly swaps the caller's values.
+/// Verifies that a two-argument `&$a, &$b` swap function correctly swaps the caller's values.
 #[test]
 fn test_ref_swap() {
     let out = compile_and_run(
@@ -213,7 +213,7 @@ echo $p . $q;
     assert_eq!(out, "21");
 }
 
-// Verifies that a `&$target` parameter with a regular by-value parameter works correctly.
+/// Verifies that a `&$target` parameter with a regular by-value parameter works correctly.
 #[test]
 fn test_ref_mixed_params() {
     let out = compile_and_run(
@@ -231,7 +231,7 @@ echo $x;
 
 // --- Variadic functions ---
 
-// Verifies a variadic function collects exactly three positional arguments into the rest array.
+/// Verifies a variadic function collects exactly three positional arguments into the rest array.
 #[test]
 fn test_variadic_sum() {
     let out = compile_and_run(
@@ -249,7 +249,7 @@ echo sum(1, 2, 3);
     assert_eq!(out, "6");
 }
 
-// Verifies a variadic function collects exactly five positional arguments into the rest array.
+/// Verifies a variadic function collects exactly five positional arguments into the rest array.
 #[test]
 fn test_variadic_five_args() {
     let out = compile_and_run(
@@ -267,7 +267,7 @@ echo sum(1, 2, 3, 4, 5);
     assert_eq!(out, "15");
 }
 
-// Verifies that a variadic function can be called multiple times with different argument counts without interference.
+/// Verifies that a variadic function can be called multiple times with different argument counts without interference.
 #[test]
 fn test_variadic_multiple_calls_same_function() {
     let out = compile_and_run(
@@ -287,7 +287,7 @@ echo sum(10, 20, 30, 40, 50);
     assert_eq!(out, "6:150");
 }
 
-// Verifies that a variadic function called with no arguments receives an empty rest array.
+/// Verifies that a variadic function called with no arguments receives an empty rest array.
 #[test]
 fn test_variadic_empty() {
     let out = compile_and_run(
@@ -305,7 +305,7 @@ echo sum();
     assert_eq!(out, "0");
 }
 
-// Verifies that a variadic parameter follows regular positional parameters and collects remaining arguments.
+/// Verifies that a variadic parameter follows regular positional parameters and collects remaining arguments.
 #[test]
 fn test_variadic_with_regular_params() {
     let out = compile_and_run(
@@ -321,7 +321,7 @@ greet("Hello", "Alice", "Bob");
     assert_eq!(out, "Hello Alice\nHello Bob\n");
 }
 
-// Verifies that `count()` works correctly on a variadic rest array with four elements.
+/// Verifies that `count()` works correctly on a variadic rest array with four elements.
 #[test]
 fn test_variadic_count() {
     let out = compile_and_run(
@@ -335,7 +335,7 @@ echo num_args(10, 20, 30, 40);
     assert_eq!(out, "4");
 }
 
-// Verifies that a variadic function returning the rest array allows accessing the single wrapped element.
+/// Verifies that a variadic function returning the rest array allows accessing the single wrapped element.
 #[test]
 fn test_variadic_single_arg() {
     let out = compile_and_run(
@@ -350,7 +350,7 @@ echo $arr[0];
     assert_eq!(out, "42");
 }
 
-// Verifies that a nested array passed to a variadic function preserves its element tag through json_encode.
+/// Verifies that a nested array passed to a variadic function preserves its element tag through json_encode.
 #[test]
 fn test_variadic_array_arg_preserves_runtime_element_tag() {
     let out = compile_and_run(
@@ -366,7 +366,7 @@ wrap([1, 2]);
 
 // --- Spread operator ---
 
-// Verifies that an array spread `...$args` in a function call unpacks correctly into a variadic callee.
+/// Verifies that an array spread `...$args` in a function call unpacks correctly into a variadic callee.
 #[test]
 fn test_spread_in_function_call() {
     let out = compile_and_run(
@@ -385,7 +385,7 @@ echo sum(...$args);
     assert_eq!(out, "60");
 }
 
-// Verifies that an array spread into a function with regular and variadic params fills regular params first and collects the remainder into the rest array.
+/// Verifies that an array spread into a function with regular and variadic params fills regular params first and collects the remainder into the rest array.
 #[test]
 fn test_spread_in_variadic_function_fills_regular_params_first() {
     let out = compile_and_run(
@@ -402,7 +402,7 @@ show(...[1, 2, 3]);
     assert_eq!(out, "head=1;2;3;");
 }
 
-// Verifies that two spread arrays in an array literal `[...$a, ...$b]` produce a flattened array of four elements.
+/// Verifies that two spread arrays in an array literal `[...$a, ...$b]` produce a flattened array of four elements.
 #[test]
 fn test_spread_in_array_literal() {
     let out = compile_and_run(
@@ -416,7 +416,7 @@ echo count($c);
     assert_eq!(out, "4");
 }
 
-// Verifies that two spread arrays in an array literal produce a flattened array whose elements iterate in correct order.
+/// Verifies that two spread arrays in an array literal produce a flattened array whose elements iterate in correct order.
 #[test]
 fn test_spread_array_values() {
     let out = compile_and_run(
@@ -432,7 +432,7 @@ foreach ($c as $v) {
     assert_eq!(out, "1234");
 }
 
-// Verifies that array spreads can be interleaved with literal elements in an array literal.
+/// Verifies that array spreads can be interleaved with literal elements in an array literal.
 #[test]
 fn test_spread_mixed_with_elements() {
     let out = compile_and_run(
@@ -450,7 +450,7 @@ foreach ($c as $v) {
     assert_eq!(out, "6 123456");
 }
 
-// Verifies that a single-array spread `[...$a]` produces an array equal in length to the source.
+/// Verifies that a single-array spread `[...$a]` produces an array equal in length to the source.
 #[test]
 fn test_spread_single_source() {
     let out = compile_and_run(
@@ -463,7 +463,7 @@ echo count($c);
     assert_eq!(out, "3");
 }
 
-// Verifies that a variadic function with a preceding regular parameter receives zero rest elements when called with exactly one argument.
+/// Verifies that a variadic function with a preceding regular parameter receives zero rest elements when called with exactly one argument.
 #[test]
 fn test_variadic_with_regular_and_no_extra() {
     let out = compile_and_run(

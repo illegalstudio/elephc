@@ -9,6 +9,7 @@
 
 use super::*;
 
+/// Verifies the error diagnostic for instanceof self outside class scope.
 #[test]
 fn test_error_instanceof_self_outside_class_scope() {
     // instanceof with `self` is illegal when not inside a class method body.
@@ -18,12 +19,14 @@ fn test_error_instanceof_self_outside_class_scope() {
     );
 }
 
+/// Verifies the error diagnostic for undefined class.
 #[test]
 fn test_error_undefined_class() {
     // new on an undefined class name reports an undefined class error.
     expect_error("<?php $x = new Missing();", "Undefined class: Missing");
 }
 
+/// Verifies the error diagnostic for undefined property.
 #[test]
 fn test_error_undefined_property() {
     // accessing an absent property on an object reports undefined property with the class name.
@@ -33,6 +36,7 @@ fn test_error_undefined_property() {
     );
 }
 
+/// Verifies the error diagnostic for undefined method.
 #[test]
 fn test_error_undefined_method() {
     // calling an absent method on an object reports undefined method with the class name.
@@ -42,6 +46,7 @@ fn test_error_undefined_method() {
     );
 }
 
+/// Verifies the error diagnostic for object subscript requires array access.
 #[test]
 fn test_error_object_subscript_requires_array_access() {
     // object subscript access only works on arrays or objects implementing ArrayAccess.
@@ -51,6 +56,7 @@ fn test_error_object_subscript_requires_array_access() {
     );
 }
 
+/// Verifies the error diagnostic for nullsafe property rejects scalar receiver.
 #[test]
 fn test_error_nullsafe_property_rejects_scalar_receiver() {
     // `?->` on a scalar (e.g. `?int`) is rejected; nullsafe requires object or null.
@@ -60,6 +66,7 @@ fn test_error_nullsafe_property_rejects_scalar_receiver() {
     );
 }
 
+/// Verifies the error diagnostic for nullsafe method rejects scalar receiver.
 #[test]
 fn test_error_nullsafe_method_rejects_scalar_receiver() {
     // `?->` method call on a scalar is rejected; nullsafe requires object or null.
@@ -69,6 +76,7 @@ fn test_error_nullsafe_method_rejects_scalar_receiver() {
     );
 }
 
+/// Verifies the error diagnostic for nullsafe first class callable is rejected.
 #[test]
 fn test_error_nullsafe_first_class_callable_is_rejected() {
     // nullsafe cannot be combined with the `...` closure-creation syntax.
@@ -78,6 +86,7 @@ fn test_error_nullsafe_first_class_callable_is_rejected() {
     );
 }
 
+/// Verifies the error diagnostic for nullsafe assignment target is rejected.
 #[test]
 fn test_error_nullsafe_assignment_target_is_rejected() {
     // nullsafe cannot appear on the left-hand side of an assignment.
@@ -87,6 +96,7 @@ fn test_error_nullsafe_assignment_target_is_rejected() {
     );
 }
 
+/// Verifies the error diagnostic for private access.
 #[test]
 fn test_error_private_access() {
     // private property cannot be read from outside the class.
@@ -96,6 +106,7 @@ fn test_error_private_access() {
     );
 }
 
+/// Verifies the error diagnostic for readonly assign.
 #[test]
 fn test_error_readonly_assign() {
     // readonly property may only be assigned during construction.
@@ -105,6 +116,7 @@ fn test_error_readonly_assign() {
     );
 }
 
+/// Verifies the error diagnostic for typed property rejects invalid default.
 #[test]
 fn test_error_typed_property_rejects_invalid_default() {
     // typed property with a mismatched default value is rejected at declaration time.
@@ -114,6 +126,7 @@ fn test_error_typed_property_rejects_invalid_default() {
     );
 }
 
+/// Verifies the error diagnostic for typed property rejects invalid assignment.
 #[test]
 fn test_error_typed_property_rejects_invalid_assignment() {
     // assigning a string to an int-typed property is rejected at the assignment site.
@@ -123,6 +136,8 @@ fn test_error_typed_property_rejects_invalid_assignment() {
     );
 }
 
+/// Verifies the error diagnostic for typed property rejects constructor assignment from untyped
+/// param.
 #[test]
 fn test_error_typed_property_rejects_constructor_assignment_from_untyped_param() {
     // an untyped constructor parameter passed to a typed property must still satisfy the property type.
@@ -140,6 +155,7 @@ $box = new Box("bad");
     );
 }
 
+/// Verifies the error diagnostic for constructor promotion outside constructor.
 #[test]
 fn test_error_constructor_promotion_outside_constructor() {
     // promoted property syntax is only valid inside a constructor.
@@ -149,6 +165,7 @@ fn test_error_constructor_promotion_outside_constructor() {
     );
 }
 
+/// Verifies the error diagnostic for constructor promotion redeclares property.
 #[test]
 fn test_error_constructor_promotion_redeclares_property() {
     // declaring a promoted parameter whose name duplicates an explicit property is rejected.
@@ -162,6 +179,7 @@ fn test_error_constructor_promotion_redeclares_property() {
     );
 }
 
+/// Verifies the error diagnostic for constructor promotion rejects variadic.
 #[test]
 fn test_error_constructor_promotion_rejects_variadic() {
     // variadic parameters cannot be promoted.
@@ -171,6 +189,7 @@ fn test_error_constructor_promotion_rejects_variadic() {
     );
 }
 
+/// Verifies the error diagnostic for constructor promotion by reference requires variable arg.
 #[test]
 fn test_error_constructor_promotion_by_reference_requires_variable_arg() {
     // by-reference promoted parameter must receive a variable argument at the call site.
@@ -180,6 +199,7 @@ fn test_error_constructor_promotion_by_reference_requires_variable_arg() {
     );
 }
 
+/// Verifies the error diagnostic for constructor promotion readonly by reference.
 #[test]
 fn test_error_constructor_promotion_readonly_by_reference() {
     // readonly promoted property cannot be by-reference.
@@ -189,6 +209,7 @@ fn test_error_constructor_promotion_readonly_by_reference() {
     );
 }
 
+/// Verifies the error diagnostic for readonly class constructor promotion by reference.
 #[test]
 fn test_error_readonly_class_constructor_promotion_by_reference() {
     // inside a readonly class, promoted properties cannot be by-reference.
@@ -198,6 +219,7 @@ fn test_error_readonly_class_constructor_promotion_by_reference() {
     );
 }
 
+/// Verifies the error diagnostic for constructor promotion rejects abstract constructor.
 #[test]
 fn test_error_constructor_promotion_rejects_abstract_constructor() {
     // promoted properties cannot appear in an abstract constructor declaration.
@@ -207,6 +229,7 @@ fn test_error_constructor_promotion_rejects_abstract_constructor() {
     );
 }
 
+/// Verifies the error diagnostic for typed property rejects void type.
 #[test]
 fn test_error_typed_property_rejects_void_type() {
     // void is not a valid property type.
@@ -216,6 +239,7 @@ fn test_error_typed_property_rejects_void_type() {
     );
 }
 
+/// Verifies the error diagnostic for typed property rejects callable type.
 #[test]
 fn test_error_typed_property_rejects_callable_type() {
     // callable is not a valid property type.
@@ -225,6 +249,7 @@ fn test_error_typed_property_rejects_callable_type() {
     );
 }
 
+/// Verifies the error diagnostic for static property rejects readonly.
 #[test]
 fn test_error_static_property_rejects_readonly() {
     // static properties cannot be marked readonly.
@@ -234,6 +259,7 @@ fn test_error_static_property_rejects_readonly() {
     );
 }
 
+/// Verifies the error diagnostic for readonly class static property with readonly modifier.
 #[test]
 fn test_error_readonly_class_static_property_with_readonly_modifier() {
     // even inside a readonly class, static properties cannot be readonly.
@@ -243,6 +269,7 @@ fn test_error_readonly_class_static_property_with_readonly_modifier() {
     );
 }
 
+/// Verifies the error diagnostic for static property undefined.
 #[test]
 fn test_error_static_property_undefined() {
     // accessing an absent static property reports undefined with the class name.
@@ -252,6 +279,8 @@ fn test_error_static_property_undefined() {
     );
 }
 
+/// Verifies the error diagnostic for static property redeclaration cannot add type to untyped
+/// parent.
 #[test]
 fn test_error_static_property_redeclaration_cannot_add_type_to_untyped_parent() {
     // a child static property cannot acquire a type when the parent has no type.
@@ -261,6 +290,7 @@ fn test_error_static_property_redeclaration_cannot_add_type_to_untyped_parent() 
     );
 }
 
+/// Verifies the error diagnostic for static property redeclaration cannot reduce visibility.
 #[test]
 fn test_error_static_property_redeclaration_cannot_reduce_visibility() {
     // child static property cannot reduce visibility compared to the parent.
@@ -270,6 +300,7 @@ fn test_error_static_property_redeclaration_cannot_reduce_visibility() {
     );
 }
 
+/// Verifies the error diagnostic for private static property outside class.
 #[test]
 fn test_error_private_static_property_outside_class() {
     // private static property cannot be accessed from outside the declaring class.
@@ -279,6 +310,7 @@ fn test_error_private_static_property_outside_class() {
     );
 }
 
+/// Verifies the error diagnostic for wrong constructor args.
 #[test]
 fn test_error_wrong_constructor_args() {
     // missing arguments to a constructor produce the expected argument-count error.
@@ -288,6 +320,7 @@ fn test_error_wrong_constructor_args() {
     );
 }
 
+/// Verifies the error diagnostic for parent outside class scope.
 #[test]
 fn test_error_parent_outside_class_scope() {
     // `parent::` is illegal outside a class method body.
@@ -297,6 +330,7 @@ fn test_error_parent_outside_class_scope() {
     );
 }
 
+/// Verifies the error diagnostic for self outside class scope.
 #[test]
 fn test_error_self_outside_class_scope() {
     // `self::` is illegal outside a class method body.
@@ -306,6 +340,7 @@ fn test_error_self_outside_class_scope() {
     );
 }
 
+/// Verifies the error diagnostic for static outside class scope.
 #[test]
 fn test_error_static_outside_class_scope() {
     // `static::` is illegal outside a class method body.
@@ -315,6 +350,7 @@ fn test_error_static_outside_class_scope() {
     );
 }
 
+/// Verifies the error diagnostic for self instance method from static method.
 #[test]
 fn test_error_self_instance_method_from_static_method() {
     // `self::` in a static method cannot call an instance method.
@@ -324,6 +360,7 @@ fn test_error_self_instance_method_from_static_method() {
     );
 }
 
+/// Verifies the error diagnostic for circular inheritance.
 #[test]
 fn test_error_circular_inheritance() {
     // a class that extends itself is rejected as circular inheritance.
@@ -333,6 +370,7 @@ fn test_error_circular_inheritance() {
     );
 }
 
+/// Verifies the error diagnostic for cannot reduce visibility when overriding method.
 #[test]
 fn test_error_cannot_reduce_visibility_when_overriding_method() {
     // child method cannot reduce visibility when overriding a parent method.
@@ -342,6 +380,7 @@ fn test_error_cannot_reduce_visibility_when_overriding_method() {
     );
 }
 
+/// Verifies the error diagnostic for subclass cannot access parent private property.
 #[test]
 fn test_error_subclass_cannot_access_parent_private_property() {
     // private properties are invisible to child classes; accessing them via `$this` is an error.
@@ -351,6 +390,7 @@ fn test_error_subclass_cannot_access_parent_private_property() {
     );
 }
 
+/// Verifies the error diagnostic for missing interface method.
 #[test]
 fn test_error_missing_interface_method() {
     // a class that implements an interface must provide all interface methods.
@@ -360,6 +400,7 @@ fn test_error_missing_interface_method() {
     );
 }
 
+/// Verifies the error diagnostic for wrong signature vs interface.
 #[test]
 fn test_error_wrong_signature_vs_interface() {
     // implementing an interface method with a different parameter count is an error.
@@ -369,6 +410,7 @@ fn test_error_wrong_signature_vs_interface() {
     );
 }
 
+/// Verifies the error diagnostic for user class cannot implement throwable directly.
 #[test]
 fn test_error_user_class_cannot_implement_throwable_directly() {
     // user classes may not directly implement Throwable; they must extend Exception or Error.
@@ -389,6 +431,8 @@ class MyThrowable implements Throwable {
     );
 }
 
+/// Verifies the error diagnostic for user class cannot implement throwable child interface
+/// directly.
 #[test]
 fn test_error_user_class_cannot_implement_throwable_child_interface_directly() {
     // a user class may not directly implement any interface that extends Throwable.
@@ -411,6 +455,7 @@ class MyThrowable implements MyThrowableInterface {
     );
 }
 
+/// Verifies the error diagnostic for instantiate abstract class.
 #[test]
 fn test_error_instantiate_abstract_class() {
     // abstract classes cannot be instantiated directly.
@@ -420,6 +465,7 @@ fn test_error_instantiate_abstract_class() {
     );
 }
 
+/// Verifies the error diagnostic for abstract method with body.
 #[test]
 fn test_error_abstract_method_with_body() {
     // abstract methods must not have a body.
@@ -429,6 +475,7 @@ fn test_error_abstract_method_with_body() {
     );
 }
 
+/// Verifies the error diagnostic for final class cannot be extended.
 #[test]
 fn test_error_final_class_cannot_be_extended() {
     // a final class cannot be extended.
@@ -438,6 +485,7 @@ fn test_error_final_class_cannot_be_extended() {
     );
 }
 
+/// Verifies the error diagnostic for final method cannot be overridden.
 #[test]
 fn test_error_final_method_cannot_be_overridden() {
     // a final instance method cannot be overridden in a child class.
@@ -447,6 +495,7 @@ fn test_error_final_method_cannot_be_overridden() {
     );
 }
 
+/// Verifies the error diagnostic for final static method cannot be overridden.
 #[test]
 fn test_error_final_static_method_cannot_be_overridden() {
     // a final static method cannot be overridden in a child class.
@@ -456,6 +505,7 @@ fn test_error_final_static_method_cannot_be_overridden() {
     );
 }
 
+/// Verifies the error diagnostic for final property cannot be overridden.
 #[test]
 fn test_error_final_property_cannot_be_overridden() {
     // a final property cannot be overridden in a child class.
@@ -465,6 +515,7 @@ fn test_error_final_property_cannot_be_overridden() {
     );
 }
 
+/// Verifies the error diagnostic for final abstract class.
 #[test]
 fn test_error_final_abstract_class() {
     // a class cannot be both final and abstract.
@@ -474,6 +525,7 @@ fn test_error_final_abstract_class() {
     );
 }
 
+/// Verifies the error diagnostic for abstract final class.
 #[test]
 fn test_error_abstract_final_class() {
     // a class cannot be both abstract and final (reverse order also rejected).
@@ -483,6 +535,7 @@ fn test_error_abstract_final_class() {
     );
 }
 
+/// Verifies the error diagnostic for final abstract method.
 #[test]
 fn test_error_final_abstract_method() {
     // an abstract method cannot also be final.
@@ -492,6 +545,7 @@ fn test_error_final_abstract_method() {
     );
 }
 
+/// Verifies the error diagnostic for interface method cannot be final.
 #[test]
 fn test_error_interface_method_cannot_be_final() {
     // methods declared in an interface cannot be final.
@@ -501,6 +555,7 @@ fn test_error_interface_method_cannot_be_final() {
     );
 }
 
+/// Verifies the error diagnostic for final property cannot be private.
 #[test]
 fn test_error_final_property_cannot_be_private() {
     // a property cannot be marked both final and private.
@@ -510,6 +565,7 @@ fn test_error_final_property_cannot_be_private() {
     );
 }
 
+/// Verifies the error diagnostic for interface inheritance cycle.
 #[test]
 fn test_error_interface_inheritance_cycle() {
     // two interfaces cannot extend each other (circular interface inheritance).
@@ -519,6 +575,7 @@ fn test_error_interface_inheritance_cycle() {
     );
 }
 
+/// Verifies the error diagnostic for class cannot extend interface.
 #[test]
 fn test_error_class_cannot_extend_interface() {
     // a class uses `extends` for classes and `implements` for interfaces; using `extends` for an interface is an error.
@@ -530,6 +587,7 @@ fn test_error_class_cannot_extend_interface() {
 
 // --- Date/time error tests ---
 
+/// Verifies the error diagnostic for readonly class property is implicitly readonly.
 #[test]
 fn test_error_readonly_class_property_is_implicitly_readonly() {
     // inside a readonly class, instance properties are implicitly readonly.
@@ -539,6 +597,7 @@ fn test_error_readonly_class_property_is_implicitly_readonly() {
     );
 }
 
+/// Verifies the error diagnostic for readonly class cannot extend non readonly parent.
 #[test]
 fn test_error_readonly_class_cannot_extend_non_readonly_parent() {
     // a readonly class cannot extend a non-readonly parent class.
@@ -548,6 +607,7 @@ fn test_error_readonly_class_cannot_extend_non_readonly_parent() {
     );
 }
 
+/// Verifies the error diagnostic for property redeclaration changes type.
 #[test]
 fn test_error_property_redeclaration_changes_type() {
     // child property cannot change the declared type from the parent.
@@ -557,6 +617,7 @@ fn test_error_property_redeclaration_changes_type() {
     );
 }
 
+/// Verifies the error diagnostic for property redeclaration reduces visibility.
 #[test]
 fn test_error_property_redeclaration_reduces_visibility() {
     // child property cannot reduce visibility compared to the parent.
@@ -566,6 +627,7 @@ fn test_error_property_redeclaration_reduces_visibility() {
     );
 }
 
+/// Verifies the error diagnostic for property redeclaration removes readonly.
 #[test]
 fn test_error_property_redeclaration_removes_readonly() {
     // child property cannot remove the readonly modifier from the parent.
@@ -575,6 +637,7 @@ fn test_error_property_redeclaration_removes_readonly() {
     );
 }
 
+/// Verifies the error diagnostic for property redeclaration drops parent type declaration.
 #[test]
 fn test_error_property_redeclaration_drops_parent_type_declaration() {
     // child property cannot drop a type declaration that the parent declared.
@@ -584,6 +647,7 @@ fn test_error_property_redeclaration_drops_parent_type_declaration() {
     );
 }
 
+/// Verifies the error diagnostic for property redeclaration adds type to untyped parent.
 #[test]
 fn test_error_property_redeclaration_adds_type_to_untyped_parent() {
     // child property cannot add a type when the parent has no type on the property.
@@ -593,6 +657,7 @@ fn test_error_property_redeclaration_adds_type_to_untyped_parent() {
     );
 }
 
+/// Verifies the error diagnostic for property redeclaration shadows private parent property.
 #[test]
 fn test_error_property_redeclaration_shadows_private_parent_property() {
     // private parent properties cannot be shadowed by a child; the feature is not yet supported.
@@ -602,6 +667,7 @@ fn test_error_property_redeclaration_shadows_private_parent_property() {
     );
 }
 
+/// Verifies the error diagnostic for property redeclaration changes by ref qualifier.
 #[test]
 fn test_error_property_redeclaration_changes_by_ref_qualifier() {
     // child property cannot change the by-reference qualifier from the parent.
@@ -611,6 +677,7 @@ fn test_error_property_redeclaration_changes_by_ref_qualifier() {
     );
 }
 
+/// Verifies the error diagnostic for abstract property in non abstract class.
 #[test]
 fn test_error_abstract_property_in_non_abstract_class() {
     // abstract properties are only allowed in abstract classes.
@@ -620,6 +687,7 @@ fn test_error_abstract_property_in_non_abstract_class() {
     );
 }
 
+/// Verifies the error diagnostic for unhooked abstract property is rejected.
 #[test]
 fn test_error_unhooked_abstract_property_is_rejected() {
     // a property marked abstract without hooks is rejected; only hooked properties may be abstract.
@@ -629,6 +697,7 @@ fn test_error_unhooked_abstract_property_is_rejected() {
     );
 }
 
+/// Verifies the error diagnostic for concrete class missing abstract trait property.
 #[test]
 fn test_error_concrete_class_missing_abstract_trait_property() {
     // a concrete class using a trait that declares an abstract hooked property must implement it.
@@ -638,6 +707,7 @@ fn test_error_concrete_class_missing_abstract_trait_property() {
     );
 }
 
+/// Verifies the error diagnostic for interface property without hooks is rejected.
 #[test]
 fn test_error_interface_property_without_hooks_is_rejected() {
     // interfaces may only declare hooked properties; plain properties are rejected.
@@ -647,6 +717,7 @@ fn test_error_interface_property_without_hooks_is_rejected() {
     );
 }
 
+/// Verifies the error diagnostic for interface set property rejects readonly implementation.
 #[test]
 fn test_error_interface_set_property_rejects_readonly_implementation() {
     // a readonly property cannot satisfy a set-only contract from an interface.
@@ -656,6 +727,7 @@ fn test_error_interface_set_property_rejects_readonly_implementation() {
     );
 }
 
+/// Verifies the error diagnostic for interface property missing uses contract span.
 #[test]
 fn test_error_interface_property_missing_uses_contract_span() {
     // when an implementing class misses a hooked property, the span points to the class declaration line.
@@ -676,6 +748,7 @@ class Box implements HasValue {}
     assert!(err.span.col > 0);
 }
 
+/// Verifies the error diagnostic for interface property type mismatch uses implementation span.
 #[test]
 fn test_error_interface_property_type_mismatch_uses_implementation_span() {
     // when a hooked property type is incompatible, the span points to the implementing property.
@@ -699,6 +772,7 @@ class Box implements HasValue {
     assert!(err.span.col > 0);
 }
 
+/// Verifies the error diagnostic for deferred interface property uses contract span.
 #[test]
 fn test_error_deferred_interface_property_uses_contract_span() {
     // when an intermediate abstract class defers implementation, the final concrete class still gets the error with the contract span.
@@ -720,6 +794,7 @@ class Box extends Base {}
     assert!(err.span.col > 0);
 }
 
+/// Verifies the error diagnostic for abstract property with default.
 #[test]
 fn test_error_abstract_property_with_default() {
     // abstract hooked properties cannot have a default value.
@@ -729,6 +804,7 @@ fn test_error_abstract_property_with_default() {
     );
 }
 
+/// Verifies the error diagnostic for abstract property with static.
 #[test]
 fn test_error_abstract_property_with_static() {
     // hooked properties cannot be static.
@@ -738,6 +814,7 @@ fn test_error_abstract_property_with_static() {
     );
 }
 
+/// Verifies the error diagnostic for abstract property with final.
 #[test]
 fn test_error_abstract_property_with_final() {
     // hooked properties cannot also be final.
@@ -747,6 +824,7 @@ fn test_error_abstract_property_with_final() {
     );
 }
 
+/// Verifies the error diagnostic for abstract property with private.
 #[test]
 fn test_error_abstract_property_with_private() {
     // private hooked properties are not supported.
@@ -756,6 +834,7 @@ fn test_error_abstract_property_with_private() {
     );
 }
 
+/// Verifies the error diagnostic for concrete class missing abstract property.
 #[test]
 fn test_error_concrete_class_missing_abstract_property() {
     // a concrete subclass of an abstract class must implement all abstract hooked properties.
@@ -765,6 +844,7 @@ fn test_error_concrete_class_missing_abstract_property() {
     );
 }
 
+/// Verifies the error diagnostic for concrete property redeclared as abstract.
 #[test]
 fn test_error_concrete_property_redeclared_as_abstract() {
     // a property with a concrete implementation in the parent cannot become abstract in the child.

@@ -10,9 +10,9 @@
 
 use super::*;
 
+/// Verifies that DCE drops the `echo 9` statement after a `try { if { throw } else { return 7 } } catch { return 8 }` block.
+/// The try-catch is considered exhaustive (all paths return or throw), so subsequent statements are unreachable.
 #[test]
-// Verifies that DCE drops the `echo 9` statement after a `try { if { throw } else { return 7 } } catch { return 8 }` block.
-// The try-catch is considered exhaustive (all paths return or throw), so subsequent statements are unreachable.
 fn test_eliminate_dead_code_drops_statements_after_exhaustive_try_catch() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -65,9 +65,9 @@ fn test_eliminate_dead_code_drops_statements_after_exhaustive_try_catch() {
     assert!(matches!(body[0].kind, StmtKind::Try { .. }));
 }
 
+/// Verifies that DCE removes an empty try-catch shell when both bodies contain only pure (side-effect-free) statements.
+/// After eliminating the dead pure bodies, the try-catch itself becomes a no-op and is removed, leaving an empty function.
 #[test]
-// Verifies that DCE removes an empty try-catch shell when both bodies contain only pure (side-effect-free) statements.
-// After eliminating the dead pure bodies, the try-catch itself becomes a no-op and is removed, leaving an empty function.
 fn test_eliminate_dead_code_drops_empty_try_shell_created_by_branch_dce() {
     let pure_builtin = Expr::new(
         ExprKind::FunctionCall {
@@ -106,10 +106,10 @@ fn test_eliminate_dead_code_drops_empty_try_shell_created_by_branch_dce() {
     assert!(body.is_empty());
 }
 
+/// Verifies that an unknown truthy switch entry is preserved before a matching case.
+/// When the switch subject (`flag`) is unknown at compile time, a truthy guard in a case pattern must not be pruned,
+/// because the case list contains an unknown variable (`other`) that may be truthy at runtime.
 #[test]
-// Verifies that an unknown truthy switch entry is preserved before a matching case.
-// When the switch subject (`flag`) is unknown at compile time, a truthy guard in a case pattern must not be pruned,
-// because the case list contains an unknown variable (`other`) that may be truthy at runtime.
 fn test_eliminate_dead_code_keeps_unknown_truthy_switch_entry_before_matching_case() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -171,9 +171,9 @@ fn test_eliminate_dead_code_keeps_unknown_truthy_switch_entry_before_matching_ca
     assert!(default.is_none());
 }
 
+/// Verifies that a write to `flag` inside a try body invalidates an outer guard before the catch body is analyzed.
+/// The catch clause reads `flag` in a conditional; the write in the try body is reachable, so the guard is kept.
 #[test]
-// Verifies that a write to `flag` inside a try body invalidates an outer guard before the catch body is analyzed.
-// The catch clause reads `flag` in a conditional; the write in the try body is reachable, so the guard is kept.
 fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -241,9 +241,9 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body() {
     };
 }
 
+/// Verifies that a write to `flag` from a switch throw path invalidates an outer guard before the catch body is analyzed.
+/// Unlike the previous test, the write occurs inside a switch case that throws; DCE must still invalidate the guard.
 #[test]
-// Verifies that a write to `flag` from a switch throw path invalidates an outer guard before the catch body is analyzed.
-// Unlike the previous test, the write occurs inside a switch case that throws; DCE must still invalidate the guard.
 fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body_from_switch_throw_path() {
     let throw_exception = Stmt::new(
         StmtKind::Throw(Expr::new(
@@ -325,10 +325,10 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body_from_switc
     };
 }
 
+/// Verifies that DCE ignores writes to `flag` that occur on an unreachable switch throw path before the catch body.
+/// The switch case that writes to `flag` (`case 2`) is dominated by a guard that makes it unreachable,
+/// so the write does not invalidate the outer guard and the catch body can simplify to the else branch.
 #[test]
-// Verifies that DCE ignores writes to `flag` that occur on an unreachable switch throw path before the catch body.
-// The switch case that writes to `flag` (`case 2`) is dominated by a guard that makes it unreachable,
-// so the write does not invalidate the outer guard and the catch body can simplify to the else branch.
 fn test_eliminate_dead_code_ignores_unreachable_switch_throw_path_writes_before_catch_body() {
     let throw_exception = Stmt::new(
         StmtKind::Throw(Expr::new(
@@ -424,10 +424,10 @@ fn test_eliminate_dead_code_ignores_unreachable_switch_throw_path_writes_before_
     assert_eq!(catches[0].body, vec![Stmt::echo(Expr::int_lit(7))]);
 }
 
+/// Verifies that an outer guard is preserved when only a non-throw path writes to the guard variable.
+/// The write to `flag` occurs on the else branch of an inner if (non-throw), while the then branch throws.
+/// The catch clause reads `flag`; since the non-throw path is reachable, the guard is kept and the catch body simplifies to the then branch.
 #[test]
-// Verifies that an outer guard is preserved when only a non-throw path writes to the guard variable.
-// The write to `flag` occurs on the else branch of an inner if (non-throw), while the then branch throws.
-// The catch clause reads `flag`; since the non-throw path is reachable, the guard is kept and the catch body simplifies to the then branch.
 fn test_eliminate_dead_code_preserves_outer_guard_for_catch_when_only_non_throw_path_writes() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {

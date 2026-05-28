@@ -9,8 +9,8 @@
 
 use super::*;
 
+/// Tests that compound assignment operators (`**=`, `&=`, `|=`, `^=`, `<<=`, `>>=`) produce an error when the RHS is missing.
 #[test]
-// Tests that compound assignment operators (`**=`, `&=`, `|=`, `^=`, `<<=`, `>>=`) produce an error when the RHS is missing.
 fn test_error_compound_assignment_missing_rhs() {
     for src in [
         "<?php $x **=;",
@@ -24,14 +24,14 @@ fn test_error_compound_assignment_missing_rhs() {
     }
 }
 
+/// Tests that array-append target (`$items[]`) is rejected as an invalid compound assignment target.
 #[test]
-// Tests that array-append target (`$items[]`) is rejected as an invalid compound assignment target.
 fn test_error_compound_assignment_rejects_append_target() {
     expect_error("<?php $items = [1]; $items[] += 2;", "Invalid assignment target");
 }
 
+/// Tests that `instanceof` with a non-class RHS (integer literal) produces the expected error.
 #[test]
-// Tests that `instanceof` with a non-class RHS (integer literal) produces the expected error.
 fn test_error_instanceof_missing_class_name() {
     expect_error(
         "<?php class A {} $a = new A(); echo $a instanceof 1;",
@@ -130,82 +130,82 @@ expect_builtin_arity_error!(
     "rad2deg() takes exactly 1 argument"
 );
 
+/// Tests that a bare `const` without a name produces an error.
 #[test]
-// Tests that a bare `const` without a name produces an error.
 fn test_error_const_missing_name() {
     expect_error("<?php const = 5;", "Expected constant name");
 }
 
+/// Tests that `const MAX;` (without value) produces an error.
 #[test]
-// Tests that `const MAX;` (without value) produces an error.
 fn test_error_const_missing_value() {
     expect_error("<?php const MAX;", "Expected '='");
 }
 
+/// Tests that `static ;` without a variable name produces an error.
 #[test]
-// Tests that `static ;` without a variable name produces an error.
 fn test_error_static_missing_var() {
     expect_error("<?php static ;", "Expected variable after 'static'");
 }
 
+/// Tests that `static $x;` without an initializer produces an error.
 #[test]
-// Tests that `static $x;` without an initializer produces an error.
 fn test_error_static_missing_init() {
     expect_error("<?php static $x;", "Expected '=' after static variable");
 }
 
 // --- Variadic / Spread errors ---
 
+/// Tests `sin()` arity error when called with no arguments.
 #[test]
-// Tests `sin()` arity error when called with no arguments.
 fn test_error_sin_no_args() {
     expect_error("<?php sin();", "sin() takes exactly 1 argument");
 }
 
+/// Tests `cos()` arity error when called with no arguments.
 #[test]
-// Tests `cos()` arity error when called with no arguments.
 fn test_error_cos_no_args() {
     expect_error("<?php cos();", "cos() takes exactly 1 argument");
 }
 
+/// Tests `atan2()` arity error when called with 1 argument (requires exactly 2).
 #[test]
-// Tests `atan2()` arity error when called with 1 argument (requires exactly 2).
 fn test_error_atan2_one_arg() {
     expect_error("<?php atan2(1);", "atan2() takes exactly 2 arguments");
 }
 
+/// Tests `atan2()` arity error when called with 3 arguments (requires exactly 2).
 #[test]
-// Tests `atan2()` arity error when called with 3 arguments (requires exactly 2).
 fn test_error_atan2_three_args() {
     expect_error("<?php atan2(1, 2, 3);", "atan2() takes exactly 2 arguments");
 }
 
+/// Tests `log()` arity error when called with no arguments (requires 1 or 2).
 #[test]
-// Tests `log()` arity error when called with no arguments (requires 1 or 2).
 fn test_error_log_no_args() {
     expect_error("<?php log();", "log() takes 1 or 2 arguments");
 }
 
+/// Tests `hypot()` arity error when called with 1 argument (requires exactly 2).
 #[test]
-// Tests `hypot()` arity error when called with 1 argument (requires exactly 2).
 fn test_error_hypot_one_arg() {
     expect_error("<?php hypot(1);", "hypot() takes exactly 2 arguments");
 }
 
+/// Tests `exp()` arity error when called with no arguments.
 #[test]
-// Tests `exp()` arity error when called with no arguments.
 fn test_error_exp_no_args() {
     expect_error("<?php exp();", "exp() takes exactly 1 argument");
 }
 
+/// Tests `pi()` arity error when called with an argument (takes no arguments).
 #[test]
-// Tests `pi()` arity error when called with an argument (takes no arguments).
 fn test_error_pi_with_arg() {
     expect_error("<?php pi(1);", "pi() takes no arguments");
 }
 
+/// Tests `deg2rad()` arity error when called with no arguments.
 #[test]
-// Tests `deg2rad()` arity error when called with no arguments.
 fn test_error_deg2rad_no_args() {
     expect_error("<?php deg2rad();", "deg2rad() takes exactly 1 argument");
 }

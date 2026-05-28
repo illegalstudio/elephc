@@ -15,8 +15,8 @@ use super::*;
 // abstract `jsonSerialize(): mixed` contract. The encoder dispatches through
 // jsonSerialize() when classes implement the interface.
 
-// Verifies a class can declare `implements JsonSerializable` and the type checker accepts it.
-// Tests that the injected interface provides the abstract `jsonSerialize(): mixed` contract.
+/// Verifies a class can declare `implements JsonSerializable` and the type checker accepts it.
+/// Tests that the injected interface provides the abstract `jsonSerialize(): mixed` contract.
 #[test]
 fn test_jsonserializable_class_declaration_compiles() {
     let out = compile_and_run(
@@ -33,7 +33,7 @@ echo $it->name;
     assert_eq!(out, "widget");
 }
 
-// Verifies a class implementing JsonSerializable passes `instanceof JsonSerializable`.
+/// Verifies a class implementing JsonSerializable passes `instanceof JsonSerializable`.
 #[test]
 fn test_jsonserializable_instanceof_check() {
     let out = compile_and_run(
@@ -48,7 +48,7 @@ echo ($t instanceof JsonSerializable ? "yes" : "no");
     assert_eq!(out, "yes");
 }
 
-// Verifies a class without `implements JsonSerializable` is not an instanceof JsonSerializable.
+/// Verifies a class without `implements JsonSerializable` is not an instanceof JsonSerializable.
 #[test]
 fn test_class_without_jsonserializable_is_not_instance() {
     let out = compile_and_run(
@@ -61,7 +61,7 @@ echo ($p instanceof JsonSerializable ? "yes" : "no");
     assert_eq!(out, "no");
 }
 
-// Verifies an implementing class's jsonSerialize() returning mixed is accepted by the type checker.
+/// Verifies an implementing class's jsonSerialize() returning mixed is accepted by the type checker.
 #[test]
 fn test_jsonserialize_method_returns_mixed_type() {
     // The interface's abstract method declares `mixed`; an implementing

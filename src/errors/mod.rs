@@ -77,6 +77,7 @@ impl CompileWarning {
 impl std::error::Error for CompileError {}
 
 impl std::fmt::Display for CompileError {
+    /// Formats this value for display or debug output.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match (&self.file, self.span.line > 0) {
             (Some(file), true) => {

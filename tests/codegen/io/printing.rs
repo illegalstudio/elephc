@@ -9,100 +9,100 @@
 
 use super::*;
 
+/// Verifies that `print` outputs a plain string literal unchanged.
 #[test]
 fn test_print_basic() {
-    // Verifies that `print` outputs a plain string literal unchanged.
     let out = compile_and_run("<?php print \"hello\";");
     assert_eq!(out, "hello");
 }
 
+/// Verifies that `print` outputs a bare integer literal as its decimal string representation.
 #[test]
 fn test_print_int() {
-    // Verifies that `print` outputs a bare integer literal as its decimal string representation.
     let out = compile_and_run("<?php print 42;");
     assert_eq!(out, "42");
 }
 
+/// Verifies that `print` returns `1` when used in an expression context, matching PHP's value-for-side-effect semantics.
 #[test]
 fn test_print_expression_returns_one() {
-    // Verifies that `print` returns `1` when used in an expression context, matching PHP's value-for-side-effect semantics.
     let out = compile_and_run("<?php $ok = print \"hello\"; echo \"\\n\"; echo $ok;");
     assert_eq!(out, "hello\n1");
 }
 
+/// Verifies that `print` returning `1` is correctly absorbed by `echo`, producing `"x1"` not `"x"` or a parse error.
 #[test]
 fn test_print_expression_can_be_nested_in_echo() {
-    // Verifies that `print` returning `1` is correctly absorbed by `echo`, producing `"x1"` not `"x"` or a parse error.
     let out = compile_and_run("<?php echo print \"x\";");
     assert_eq!(out, "x1");
 }
 
+/// Verifies that `print` can accept a short-ternary expression as its operand; `print` binds tighter than `?:`, so `false ?: "fallback"` is evaluated first, then printed, and the resulting `1` return is echoed.
 #[test]
 fn test_print_expression_operand_accepts_short_ternary() {
-    // Verifies that `print` can accept a short-ternary expression as its operand; `print` binds tighter than `?:`, so `false ?: "fallback"` is evaluated first, then printed, and the resulting `1` return is echoed.
     let out = compile_and_run("<?php echo print false ?: \"fallback\";");
     assert_eq!(out, "fallback1");
 }
 
+/// Verifies precedence: `print "x" and false` parses as `(print "x") and false` — `print` outputs and returns `1`, which is truthy, so `and false` does not suppress output.
 #[test]
 fn test_print_expression_binds_tighter_than_word_and() {
-    // Verifies precedence: `print "x" and false` parses as `(print "x") and false` — `print` outputs and returns `1`, which is truthy, so `and false` does not suppress output.
     let out = compile_and_run("<?php echo print \"x\" and false;");
     assert_eq!(out, "x");
 }
 
+/// Verifies that `print __FILE__` emits the source file path at compile time (magic constant lowering).
 #[test]
 fn test_print_expression_lowers_magic_constants() {
-    // Verifies that `print __FILE__` emits the source file path at compile time (magic constant lowering).
     let out = compile_and_run("<?php print __FILE__;");
     assert!(out.ends_with("test.php"), "unexpected __FILE__ output: {out}");
 }
 
+/// Verifies `var_dump` formats a bare integer as `int(N)` with a trailing newline.
 #[test]
 fn test_var_dump_int() {
-    // Verifies `var_dump` formats a bare integer as `int(N)` with a trailing newline.
     let out = compile_and_run("<?php var_dump(42);");
     assert_eq!(out, "int(42)\n");
 }
 
+/// Verifies `var_dump` formats a string as `string(N) "..."` including length, quotes, and a trailing newline.
 #[test]
 fn test_var_dump_string() {
-    // Verifies `var_dump` formats a string as `string(N) "..."` including length, quotes, and a trailing newline.
     let out = compile_and_run(r#"<?php var_dump("hello");"#);
     assert_eq!(out, "string(5) \"hello\"\n");
 }
 
+/// Verifies `var_dump` formats boolean `true` as `bool(true)` with a trailing newline.
 #[test]
 fn test_var_dump_bool_true() {
-    // Verifies `var_dump` formats boolean `true` as `bool(true)` with a trailing newline.
     let out = compile_and_run("<?php var_dump(true);");
     assert_eq!(out, "bool(true)\n");
 }
 
+/// Verifies `var_dump` formats boolean `false` as `bool(false)` with a trailing newline.
 #[test]
 fn test_var_dump_bool_false() {
-    // Verifies `var_dump` formats boolean `false` as `bool(false)` with a trailing newline.
     let out = compile_and_run("<?php var_dump(false);");
     assert_eq!(out, "bool(false)\n");
 }
 
+/// Verifies `var_dump` formats `null` as `NULL` (uppercase, no parentheses) with a trailing newline.
 #[test]
 fn test_var_dump_null() {
-    // Verifies `var_dump` formats `null` as `NULL` (uppercase, no parentheses) with a trailing newline.
     let out = compile_and_run("<?php var_dump(null);");
     assert_eq!(out, "NULL\n");
 }
 
+/// Verifies `var_dump` formats a float as `float(VALUE)` with full precision and a trailing newline.
 #[test]
 fn test_var_dump_float() {
-    // Verifies `var_dump` formats a float as `float(VALUE)` with full precision and a trailing newline.
     let out = compile_and_run("<?php var_dump(3.14);");
     assert_eq!(out, "float(3.14)\n");
 }
 
+/// Verifies `var_dump` emits the correct concrete type tag and value for each heterogeneous assoc-array slot: int, string, bool, null, array, and object.
 #[test]
 fn test_var_dump_mixed_prints_concrete_payload() {
-    // Verifies `var_dump` emits the correct concrete type tag and value for each heterogeneous assoc-array slot: int, string, bool, null, array, and object.
     let out = compile_and_run(
         r#"<?php
 class Box {}
@@ -130,44 +130,44 @@ var_dump($map["o"]);
     );
 }
 
+/// Verifies `print_r` outputs a bare integer as its decimal string representation (no type label), no trailing newline.
 #[test]
 fn test_print_r_int() {
-    // Verifies `print_r` outputs a bare integer as its decimal string representation (no type label), no trailing newline.
     let out = compile_and_run("<?php print_r(42);");
     assert_eq!(out, "42");
 }
 
+/// Verifies `print_r` outputs a string unchanged, no type label, no trailing newline.
 #[test]
 fn test_print_r_string() {
-    // Verifies `print_r` outputs a string unchanged, no type label, no trailing newline.
     let out = compile_and_run(r#"<?php print_r("hello");"#);
     assert_eq!(out, "hello");
 }
 
+/// Verifies `print_r` outputs `1` for boolean `true`, no type label, no trailing newline.
 #[test]
 fn test_print_r_bool_true() {
-    // Verifies `print_r` outputs `1` for boolean `true`, no type label, no trailing newline.
     let out = compile_and_run("<?php print_r(true);");
     assert_eq!(out, "1");
 }
 
+/// Verifies `print_r` outputs an empty string for boolean `false`.
 #[test]
 fn test_print_r_bool_false() {
-    // Verifies `print_r` outputs an empty string for boolean `false`.
     let out = compile_and_run("<?php print_r(false);");
     assert_eq!(out, "");
 }
 
+/// Verifies `print_r` outputs `Array\n` for a non-empty indexed array, showing only the array header (struct dump not yet implemented).
 #[test]
 fn test_print_r_array() {
-    // Verifies `print_r` outputs `Array\n` for a non-empty indexed array, showing only the array header (struct dump not yet implemented).
     let out = compile_and_run("<?php print_r([1, 2, 3]);");
     assert_eq!(out, "Array\n");
 }
 
+/// Verifies `var_dump` formats each argument independently with correct type tags and a trailing newline per call, in source order.
 #[test]
 fn test_var_dump_multiple() {
-    // Verifies `var_dump` formats each argument independently with correct type tags and a trailing newline per call, in source order.
     let out = compile_and_run(
         r#"<?php
 var_dump(1);

@@ -10,11 +10,11 @@
 
 use crate::support::*;
 
-// Compiles PHP source to assembly and returns only the user-code assembly string.
-//
-// The fixture is compiled with a large stack size (8 MiB) and with intrinsics
-// extraction enabled so the user assembly shows direct runtime helper calls.
-// The temporary directory is cleaned up after extraction.
+/// Compiles PHP source to assembly and returns only the user-code assembly string.
+///
+/// The fixture is compiled with a large stack size (8 MiB) and with intrinsics
+/// extraction enabled so the user assembly shows direct runtime helper calls.
+/// The temporary directory is cleaned up after extraction.
 fn compile_intrinsic_fixture(source: &str) -> String {
     let dir = make_cli_test_dir("elephc_intrinsic_asm");
     let (user_asm, _runtime_asm, _required_libraries) =
@@ -23,10 +23,10 @@ fn compile_intrinsic_fixture(source: &str) -> String {
     user_asm
 }
 
-// Returns the target-specific CALL instruction for a runtime helper label.
-//
-// AArch64 uses `bl` (branch-with-link) while x86_64 uses `call`. This helper
-// abstracts the architecture difference so assertions remain target-agnostic.
+/// Returns the target-specific CALL instruction for a runtime helper label.
+///
+/// AArch64 uses `bl` (branch-with-link) while x86_64 uses `call`. This helper
+/// abstracts the architecture difference so assertions remain target-agnostic.
 fn direct_runtime_call(label: &str) -> String {
     match target().arch {
         Arch::AArch64 => format!("bl {}", label),
@@ -34,10 +34,10 @@ fn direct_runtime_call(label: &str) -> String {
     }
 }
 
-// Verifies that `Generator::current()` routes through `__rt_gen_current`.
-//
-// Regression test: ensures the codegen path for generator methods remains a
-// direct call to the runtime helper rather than an indirect/fallback route.
+/// Verifies that `Generator::current()` routes through `__rt_gen_current`.
+///
+/// Regression test: ensures the codegen path for generator methods remains a
+/// direct call to the runtime helper rather than an indirect/fallback route.
 #[test]
 fn test_generator_method_routes_through_intrinsic_runtime_helper() {
     let user_asm = compile_intrinsic_fixture(
@@ -59,12 +59,12 @@ echo $g->current();
     );
 }
 
-// Verifies that `Fiber::suspend()` and `Fiber::start()` both route through
-// their respective runtime helpers.
-//
-// Regression test: ensures the codegen path for fiber static and instance
-// methods remains direct and is not broken by future refactoring of the
-// shared intrinsic registry.
+/// Verifies that `Fiber::suspend()` and `Fiber::start()` both route through
+/// their respective runtime helpers.
+///
+/// Regression test: ensures the codegen path for fiber static and instance
+/// methods remains direct and is not broken by future refactoring of the
+/// shared intrinsic registry.
 #[test]
 fn test_fiber_static_and_instance_methods_route_through_intrinsics() {
     let user_asm = compile_intrinsic_fixture(

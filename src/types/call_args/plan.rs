@@ -350,6 +350,7 @@ mod tests {
     use super::*;
     use crate::types::{FunctionSig, PhpType};
 
+    /// Implements the `sig_with_defaults` operation for this module.
     fn sig_with_defaults(defaults: Vec<Option<Expr>>) -> FunctionSig {
         let params = ["a", "b", "c"]
             .iter()
@@ -367,6 +368,7 @@ mod tests {
         }
     }
 
+    /// Implements the `spread_then_named_c` operation for this module.
     fn spread_then_named_c() -> Vec<Expr> {
         vec![
             Expr::new(ExprKind::Spread(Box::new(Expr::var("args"))), Span::dummy()),
@@ -380,6 +382,8 @@ mod tests {
         ]
     }
 
+    /// Implements the `normalized_args_skip_default_guard_when_spread_check_guarantees_slot`
+    /// operation for this module.
     #[test]
     fn normalized_args_skip_default_guard_when_spread_check_guarantees_slot() {
         let sig = sig_with_defaults(vec![Some(Expr::int_lit(1)), None, None]);
@@ -400,6 +404,8 @@ mod tests {
         ));
     }
 
+    /// Implements the `normalized_args_keep_default_guard_when_spread_may_skip_optional_slot`
+    /// operation for this module.
     #[test]
     fn normalized_args_keep_default_guard_when_spread_may_skip_optional_slot() {
         let sig = sig_with_defaults(vec![None, Some(Expr::int_lit(2)), None]);

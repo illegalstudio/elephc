@@ -7,15 +7,17 @@ sidebar:
 
 elephc ships the SPL pieces that are needed by supported PHP code today:
 iterator/counting/access interfaces, the SPL exception hierarchy, autoload and
-introspection helpers, the Phase 4 container classes, and the Phase 5 storage
-iterator/decorator foundations: `EmptyIterator`, `InternalIterator`, `ArrayIterator`,
-`ArrayObject`, `IteratorIterator`, `LimitIterator`, `NoRewindIterator`, and
+introspection helpers, the Phase 4 container classes, the Phase 5 storage
+iterator/decorator foundations, and the Phase 6 heap/object-storage classes.
+This includes `EmptyIterator`, `InternalIterator`, `ArrayIterator`,
+`ArrayObject`, `IteratorIterator`, `LimitIterator`, `NoRewindIterator`,
 `InfiniteIterator`, filter/cache decorators `FilterIterator`,
-`CallbackFilterIterator`, and `CachingIterator`, plus the multi-source
-decorators `AppendIterator` and `MultipleIterator`, and the recursive family
+`CallbackFilterIterator`, and `CachingIterator`, the multi-source decorators
+`AppendIterator` and `MultipleIterator`, the recursive family
 `RecursiveArrayIterator`, `RecursiveFilterIterator`,
 `RecursiveCallbackFilterIterator`, `RecursiveIteratorIterator`, and
-`ParentIterator`.
+`ParentIterator`, plus `SplHeap`, `SplMaxHeap`, `SplMinHeap`,
+`SplPriorityQueue`, and `SplObjectStorage`.
 
 SPL names live in the global namespace, matching PHP. They are available
 without imports or runtime extensions.
@@ -65,6 +67,11 @@ one or more `Iterator` objects:
 | `SplStack` | `SplDoublyLinkedList` | inherited from parent |
 | `SplQueue` | `SplDoublyLinkedList` | inherited from parent |
 | `SplFixedArray` | - | `IteratorAggregate`, `ArrayAccess`, `Countable`, `JsonSerializable` |
+| `SplHeap` | - | `Iterator`, `Countable` |
+| `SplMaxHeap` | `SplHeap` | inherited from parent |
+| `SplMinHeap` | `SplHeap` | inherited from parent |
+| `SplPriorityQueue` | - | `Iterator`, `Countable` |
+| `SplObjectStorage` | - | `Iterator`, `Countable`, `ArrayAccess` |
 | `EmptyIterator` | - | `Iterator` |
 | `InternalIterator` | - | `Iterator` |
 | `ArrayIterator` | - | `Iterator`, `ArrayAccess`, `SeekableIterator`, `Countable` |
@@ -207,6 +214,94 @@ echo $fixed[0];
 $fixed->setSize(3);
 $fixed[2] = "tail";
 ```
+
+### Heaps, priority queues, and object storage
+
+Supported heap methods:
+
+| Class | Methods |
+|---|---|
+| `SplHeap` | abstract `compare(mixed $value1, mixed $value2): int`, `insert(mixed $value): bool`, `extract(): mixed`, `top(): mixed`, `count(): int`, `isEmpty(): bool`, `rewind()`, `current()`, `key()`, `next()`, `valid()`, `recoverFromCorruption(): bool`, `isCorrupted(): bool`, `__debugInfo(): array` |
+| `SplMaxHeap` | Inherits `SplHeap`; compares larger values first |
+| `SplMinHeap` | Inherits `SplHeap`; compares smaller values first |
+| `SplPriorityQueue` | `compare(mixed $priority1, mixed $priority2): int`, `insert(mixed $value, mixed $priority): bool`, `setExtractFlags(int $flags): void`, `getExtractFlags(): int`, `extract(): mixed`, `top(): mixed`, `count(): int`, `isEmpty(): bool`, `rewind()`, `current()`, `key()`, `next()`, `valid()`, `recoverFromCorruption(): bool`, `isCorrupted(): bool`, `__debugInfo(): array` |
+
+`SplPriorityQueue` supports these extraction constants:
+
+| Constant | Value |
+|---|---:|
+| `EXTR_DATA` | `1` |
+| `EXTR_PRIORITY` | `2` |
+| `EXTR_BOTH` | `3` |
+
+```php
+<?php
+$heap = new SplMaxHeap();
+$heap->insert(3);
+$heap->insert(1);
+$heap->insert(5);
+
+while (!$heap->isEmpty()) {
+    echo $heap->extract();
+}
+
+$queue = new SplPriorityQueue();
+$queue->insert("low", 1);
+$queue->insert("high", 10);
+$queue->setExtractFlags(SplPriorityQueue::EXTR_BOTH);
+
+$item = $queue->extract();
+echo $item["data"];
+echo $item["priority"];
+```
+
+`SplHeap` and `SplPriorityQueue` iterators are destructive, matching PHP SPL:
+`next()` removes the current top value. User subclasses of `SplHeap` can
+override protected `compare()` to define their own ordering.
+
+Supported `SplObjectStorage` methods:
+
+| Method | Notes |
+|---|---|
+| `attach(mixed $object, mixed $info): void` | Attach or update an object/info pair |
+| `detach(mixed $object): void` | Remove an attached object |
+| `contains(mixed $object): bool` | Strict identity lookup |
+| `addAll(SplObjectStorage $storage): void` | Attach all pairs from another storage |
+| `removeAll(SplObjectStorage $storage): void` | Detach all objects found in another storage |
+| `removeAllExcept(SplObjectStorage $storage): void` | Keep only objects found in another storage |
+| `getInfo(): mixed`, `setInfo(mixed $info): void` | Read or write info at the iterator position |
+| `count(): int` | Number of attached objects |
+| `rewind()`, `valid()`, `key()`, `current()`, `next()`, `seek(int $offset): void` | Iterator operations |
+| `offsetExists()`, `offsetGet()`, `offsetSet()`, `offsetUnset()` | `ArrayAccess` over object info |
+| `getHash(mixed $object): string` | Stable decimal hash for objects attached to this storage |
+| `serialize()`, `unserialize(string $data): void`, `__serialize()`, `__unserialize(array $data): void`, `__debugInfo(): array` | Lightweight state/debug hooks |
+
+```php
+<?php
+class Node {
+    public int $id;
+
+    public function __construct(int $id) {
+        $this->id = $id;
+    }
+}
+
+$left = new Node(1);
+$right = new Node(2);
+
+$storage = new SplObjectStorage();
+$storage->attach($left, "left");
+$storage[$right] = "right";
+
+foreach ($storage as $index => $node) {
+    echo $index;
+    echo ":";
+    echo $storage[$node];
+}
+```
+
+`SplObjectStorage` stores object handles and info payloads in per-instance
+storage. Releasing the storage object releases the arrays and handles it owns.
 
 ### Storage iterators
 

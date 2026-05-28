@@ -74,6 +74,7 @@ pub fn prune_constant_control_flow(program: Program) -> Program {
 
 /// Eliminates code with no observable side effects.
 type ConstantEnv = HashMap<String, ScalarValue>;
+/// Eliminates dead code for this module.
 pub fn eliminate_dead_code(program: Program) -> Program {
     let (function_effects, static_method_effects, private_instance_method_effects) =
         compute_program_callable_effects(&program);

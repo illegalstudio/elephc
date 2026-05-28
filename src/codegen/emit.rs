@@ -192,6 +192,7 @@ impl Emitter {
 mod tests {
     use super::*;
 
+    /// Verifies comment prefix is platform aware.
     #[test]
     fn test_comment_prefix_is_platform_aware() {
         let mut mac = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
@@ -207,6 +208,7 @@ mod tests {
         assert_eq!(linux_x86.output(), "    # -- block --\n");
     }
 
+    /// Verifies text prelude switches x86 to intel syntax.
     #[test]
     fn test_text_prelude_switches_x86_to_intel_syntax() {
         let mut mac = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));

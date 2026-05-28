@@ -10,8 +10,8 @@
 
 use super::*;
 
-// Tests that a static method whose body contains only a call to a pure builtin
-// (strlen) is classified as PURE in static_method_effects.
+/// Tests that a static method whose body contains only a call to a pure builtin
+/// (strlen) is classified as PURE in static_method_effects.
 #[test]
 fn test_program_static_method_effects_recognize_pure_static_methods() {
     let program = vec![Stmt::new(
@@ -60,8 +60,8 @@ fn test_program_static_method_effects_recognize_pure_static_methods() {
     );
 }
 
-// Tests that a static method calling another static method via `self::` receiver
-// is correctly resolved and classified as PURE, provided the called method is pure.
+/// Tests that a static method calling another static method via `self::` receiver
+/// is correctly resolved and classified as PURE, provided the called method is pure.
 #[test]
 fn test_program_static_method_effects_resolve_self_receiver() {
     let program = vec![Stmt::new(
@@ -136,9 +136,9 @@ fn test_program_static_method_effects_resolve_self_receiver() {
     );
 }
 
-// Tests that a static method in a child class calling a parent static method via
-// `parent::` receiver is correctly resolved and classified as PURE, provided the
-// called method is pure.
+/// Tests that a static method in a child class calling a parent static method via
+/// `parent::` receiver is correctly resolved and classified as PURE, provided the
+/// called method is pure.
 #[test]
 fn test_program_static_method_effects_resolve_parent_receiver() {
     let program = vec![
@@ -227,8 +227,8 @@ fn test_program_static_method_effects_resolve_parent_receiver() {
     );
 }
 
-// Tests that a private instance (non-static) method whose body contains only a call
-// to a pure builtin (strlen) is classified as PURE in private_instance_method_effects.
+/// Tests that a private instance (non-static) method whose body contains only a call
+/// to a pure builtin (strlen) is classified as PURE in private_instance_method_effects.
 #[test]
 fn test_program_private_instance_method_effects_recognize_private_methods() {
     let program = vec![Stmt::new(

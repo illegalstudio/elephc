@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that a negated strict comparison case (`!($value === 1)`) combined with an outer
-// guard (`$value !== 1`) makes the first case exhaustive and prunes it. Confirms "A".
+/// Verifies that a negated strict comparison case (`!($value === 1)`) combined with an outer
+/// guard (`$value !== 1`) makes the first case exhaustive and prunes it. Confirms "A".
 #[test]
 fn test_dead_code_elimination_prunes_negated_strict_switch_true_case() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_true_negated_strict");
@@ -53,8 +53,8 @@ run(2);
     assert!(!user_asm.contains("dead-default"));
 }
 
-// Verifies that `case $a && $b` and `case !($a && $b)` make the default exhaustive, pruning it.
-// Confirms "B".
+/// Verifies that `case $a && $b` and `case !($a && $b)` make the default exhaustive, pruning it.
+/// Confirms "B".
 #[test]
 fn test_dead_code_elimination_prunes_exhaustive_negated_and_switch_true_default() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_true_negated_and");
@@ -92,8 +92,8 @@ switch (true) {
     assert!(!user_asm.contains("dead-default"));
 }
 
-// Verifies that `case $a || $b` and `case !($a || $b)` make the default exhaustive, pruning it.
-// Confirms "B".
+/// Verifies that `case $a || $b` and `case !($a || $b)` make the default exhaustive, pruning it.
+/// Confirms "B".
 #[test]
 fn test_dead_code_elimination_prunes_exhaustive_negated_or_switch_true_default() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_true_negated_or");
@@ -131,8 +131,8 @@ switch (true) {
     assert!(!user_asm.contains("dead-default"));
 }
 
-// Verifies that a multi-pattern case (`$flag` and `!$flag`) followed by `$other` (false) and
-// default prunes both suffixes. Confirms "A".
+/// Verifies that a multi-pattern case (`$flag` and `!$flag`) followed by `$other` (false) and
+/// default prunes both suffixes. Confirms "A".
 #[test]
 fn test_dead_code_elimination_drops_switch_true_suffix_after_exhaustive_multi_pattern_case() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_true_multi_pattern");
@@ -172,8 +172,8 @@ switch (true) {
     assert!(!user_asm.contains("dead-default"));
 }
 
-// Verifies that a scalar multi-pattern (case 1, 2) followed by case 3 and default prunes both
-// suffixes when an outer guard fixes `$x === 2`. Confirms "A".
+/// Verifies that a scalar multi-pattern (case 1, 2) followed by case 3 and default prunes both
+/// suffixes when an outer guard fixes `$x === 2`. Confirms "A".
 #[test]
 fn test_dead_code_elimination_drops_scalar_switch_suffix_after_exhaustive_multi_pattern_case() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_scalar_multi_pattern");

@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Parses a `packed class` declaration followed by a `buffer<T>` typed assignment using `buffer_new<T>(len)`.
-// Verifies the AST shape of `PackedClassDecl` (name, two float fields) and `TypedAssign` with `BufferNew` expr.
+/// Parses a `packed class` declaration followed by a `buffer<T>` typed assignment using `buffer_new<T>(len)`.
+/// Verifies the AST shape of `PackedClassDecl` (name, two float fields) and `TypedAssign` with `BufferNew` expr.
 #[test]
 fn test_parse_packed_class_and_typed_buffer_decl() {
     let stmts = parse_source(
@@ -53,8 +53,8 @@ fn test_parse_packed_class_and_typed_buffer_decl() {
     }
 }
 
-// Parses `$points[0]->x` (array access into buffer variable, then property access).
-// Verifies the AST shape: `Echo` → `PropertyAccess` with `ArrayAccess` on variable `points`.
+/// Parses `$points[0]->x` (array access into buffer variable, then property access).
+/// Verifies the AST shape: `Echo` → `PropertyAccess` with `ArrayAccess` on variable `points`.
 #[test]
 fn test_parse_buffer_packed_element_field_access() {
     let stmts = parse_source("<?php echo $points[0]->x;");
@@ -79,8 +79,8 @@ fn test_parse_buffer_packed_element_field_access() {
 
 // --- Assignment ---
 
-// Parses `$q = ptr_cast<Point>($p)` as an assignment with `PtrCast` expr.
-// Verifies `PtrCast` captures the target type name and the inner variable expression.
+/// Parses `$q = ptr_cast<Point>($p)` as an assignment with `PtrCast` expr.
+/// Verifies `PtrCast` captures the target type name and the inner variable expression.
 #[test]
 fn test_parse_ptr_cast() {
     let stmts = parse_source("<?php $q = ptr_cast<Point>($p);");
@@ -96,9 +96,9 @@ fn test_parse_ptr_cast() {
     }
 }
 
-// Parses a sequence of ptr-family builtin calls: `ptr_null`, `ptr`, `ptr_is_null`, `ptr_get`,
-// `ptr_set`, `ptr_offset`, `ptr_sizeof`, `ptr_read16`, `ptr_write16`, `ptr_read_string`, `ptr_write_string`.
-// Verifies each is parsed as a `FunctionCall` expr (not a specialized ptr variant).
+/// Parses a sequence of ptr-family builtin calls: `ptr_null`, `ptr`, `ptr_is_null`, `ptr_get`,
+/// `ptr_set`, `ptr_offset`, `ptr_sizeof`, `ptr_read16`, `ptr_write16`, `ptr_read_string`, `ptr_write_string`.
+/// Verifies each is parsed as a `FunctionCall` expr (not a specialized ptr variant).
 #[test]
 fn test_parse_ptr_builtins_as_function_calls() {
     let stmts = parse_source("<?php ptr_null(); ptr($x); ptr_is_null($p); ptr_get($p); ptr_set($p, 1); ptr_offset($p, 8); ptr_sizeof(\"int\"); ptr_read16($p); ptr_write16($p, 1); ptr_read_string($p, 4); ptr_write_string($p, \"hi\");");
@@ -114,8 +114,8 @@ fn test_parse_ptr_builtins_as_function_calls() {
     }
 }
 
-// Parses `<?php extern function abs(int $n): int;` as an `ExternFunctionDecl`.
-// Verifies one int parameter, int return type, and no associated library.
+/// Parses `<?php extern function abs(int $n): int;` as an `ExternFunctionDecl`.
+/// Verifies one int parameter, int return type, and no associated library.
 #[test]
 fn test_parse_extern_function() {
     let stmts = parse_source("<?php extern function abs(int $n): int;");
@@ -136,8 +136,8 @@ fn test_parse_extern_function() {
     }
 }
 
-// Parses an `extern` block containing two function declarations (`init` and `cleanup`)
-// with library `"curl"`. Verifies each becomes an `ExternFunctionDecl` with the correct library.
+/// Parses an `extern` block containing two function declarations (`init` and `cleanup`)
+/// with library `"curl"`. Verifies each becomes an `ExternFunctionDecl` with the correct library.
 #[test]
 fn test_parse_extern_block() {
     let stmts = parse_source(
@@ -160,8 +160,8 @@ fn test_parse_extern_block() {
     }
 }
 
-// Parses `extern class Point { public int $x; public float $y; }` as an `ExternClassDecl`.
-// Verifies name and field list (name, type-kind) are captured correctly.
+/// Parses `extern class Point { public int $x; public float $y; }` as an `ExternClassDecl`.
+/// Verifies name and field list (name, type-kind) are captured correctly.
 #[test]
 fn test_parse_extern_class() {
     let stmts = parse_source("<?php extern class Point { public int $x; public float $y; }");
@@ -176,8 +176,8 @@ fn test_parse_extern_class() {
     }
 }
 
-// Parses `extern global int $errno;` as an `ExternGlobalDecl`.
-// Verifies the name and C type are captured correctly.
+/// Parses `extern global int $errno;` as an `ExternGlobalDecl`.
+/// Verifies the name and C type are captured correctly.
 #[test]
 fn test_parse_extern_global() {
     let stmts = parse_source("<?php extern global int $errno;");
@@ -190,8 +190,8 @@ fn test_parse_extern_global() {
     }
 }
 
-// Parses `extern "m" function sin(float $x): float;` as an `ExternFunctionDecl` with library `"m"`.
-// Verifies name, library, param types, and return type are all captured correctly.
+/// Parses `extern "m" function sin(float $x): float;` as an `ExternFunctionDecl` with library `"m"`.
+/// Verifies name, library, param types, and return type are all captured correctly.
 #[test]
 fn test_parse_extern_lib_function() {
     let stmts = parse_source(r#"<?php extern "m" function sin(float $x): float;"#);
@@ -204,8 +204,8 @@ fn test_parse_extern_lib_function() {
     }
 }
 
-// Parses `extern function signal(int $sig, callable $handler): ptr;`.
-// Verifies the second parameter has `CType::Callable`.
+/// Parses `extern function signal(int $sig, callable $handler): ptr;`.
+/// Verifies the second parameter has `CType::Callable`.
 #[test]
 fn test_parse_extern_callable_param() {
     let stmts = parse_source(r#"<?php extern function signal(int $sig, callable $handler): ptr;"#);

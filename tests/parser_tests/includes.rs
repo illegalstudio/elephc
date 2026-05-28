@@ -9,17 +9,17 @@
 
 use super::*;
 
+/// Verifies that `<?php int $x = true or false;` fails to parse because the RHS of a
+/// typed assignment requires parentheses — the `or` keyword has lower precedence than
+/// the `=` sign, which would incorrectly parse as `(int $x = true) or false`.
 #[test]
-// Verifies that `<?php int $x = true or false;` fails to parse because the RHS of a
-// typed assignment requires parentheses — the `or` keyword has lower precedence than
-// the `=` sign, which would incorrectly parse as `(int $x = true) or false`.
 fn test_word_logical_typed_assignment_rhs_requires_parentheses() {
     assert!(parse_fails("<?php int $x = true or false;"));
 }
 
+/// Verifies that `<?php include 'file.php';` parses to an `Include` with path StringLiteral
+/// "file.php", once=false, required=false.
 #[test]
-// Verifies that `<?php include 'file.php';` parses to an `Include` with path StringLiteral
-// "file.php", once=false, required=false.
 fn test_include_parses() {
     let stmts = parse_source("<?php include 'file.php';");
     assert_eq!(stmts.len(), 1);
@@ -37,8 +37,8 @@ fn test_include_parses() {
     }
 }
 
+/// Verifies that `<?php @include 'file.php';` parses with error suppression applied to the include.
 #[test]
-// Verifies that `<?php @include 'file.php';` parses with error suppression applied to the include.
 fn test_error_suppressed_include_parses() {
     let stmts = parse_source("<?php @include 'file.php';");
     assert_eq!(stmts.len(), 1);
@@ -56,8 +56,8 @@ fn test_error_suppressed_include_parses() {
     }
 }
 
+/// Verifies that `<?php require 'file.php';` parses with required=true, once=false.
 #[test]
-// Verifies that `<?php require 'file.php';` parses with required=true, once=false.
 fn test_require_parses() {
     let stmts = parse_source("<?php require 'file.php';");
     if let StmtKind::Include {
@@ -74,8 +74,8 @@ fn test_require_parses() {
     }
 }
 
+/// Verifies that `<?php include_once 'file.php';` parses with once=true, required=false.
 #[test]
-// Verifies that `<?php include_once 'file.php';` parses with once=true, required=false.
 fn test_include_once_parses() {
     let stmts = parse_source("<?php include_once 'file.php';");
     if let StmtKind::Include { once, required, .. } = &stmts[0].kind {
@@ -86,8 +86,8 @@ fn test_include_once_parses() {
     }
 }
 
+/// Verifies that `<?php require_once 'file.php';` parses with once=true, required=true.
 #[test]
-// Verifies that `<?php require_once 'file.php';` parses with once=true, required=true.
 fn test_require_once_parses() {
     let stmts = parse_source("<?php require_once 'file.php';");
     if let StmtKind::Include { once, required, .. } = &stmts[0].kind {
@@ -98,9 +98,9 @@ fn test_require_once_parses() {
     }
 }
 
+/// Verifies that `<?php include('file.php');` (parenthesized path) parses to an `Include`
+/// with a string literal path. Parenthesized include paths are valid PHP.
 #[test]
-// Verifies that `<?php include('file.php');` (parenthesized path) parses to an `Include`
-// with a string literal path. Parenthesized include paths are valid PHP.
 fn test_include_with_parens_parses() {
     let stmts = parse_source("<?php include('file.php');");
     if let StmtKind::Include { path, .. } = &stmts[0].kind {
@@ -110,9 +110,9 @@ fn test_include_with_parens_parses() {
     }
 }
 
+/// Verifies that `<?php require __DIR__ . '/lib/x.php';` parses with a binary concatenation
+/// of `__DIR__` magic constant and a string literal as the include path.
 #[test]
-// Verifies that `<?php require __DIR__ . '/lib/x.php';` parses with a binary concatenation
-// of `__DIR__` magic constant and a string literal as the include path.
 fn test_require_with_dunder_dir_concat_parses() {
     let stmts = parse_source("<?php require __DIR__ . '/lib/x.php';");
     if let StmtKind::Include { path, .. } = &stmts[0].kind {
@@ -128,9 +128,9 @@ fn test_require_with_dunder_dir_concat_parses() {
     }
 }
 
+/// Verifies that `<?php require BASE . '/x.php';` parses with a binary concatenation of
+/// a constant reference and a string literal as the include path.
 #[test]
-// Verifies that `<?php require BASE . '/x.php';` parses with a binary concatenation of
-// a constant reference and a string literal as the include path.
 fn test_require_with_const_ref_parses() {
     let stmts = parse_source("<?php require BASE . '/x.php';");
     if let StmtKind::Include { path, .. } = &stmts[0].kind {

@@ -9,17 +9,17 @@
 
 use super::*;
 
-// Verifies `...` standalone tokenizes as `Token::Ellipsis` — the three-dot spread
-// operator distinct from the binary concat `Token::Dot`.
+/// Verifies `...` standalone tokenizes as `Token::Ellipsis` — the three-dot spread
+/// operator distinct from the binary concat `Token::Dot`.
 #[test]
 fn test_ellipsis_token() {
     let t = tokens("<?php ...");
     assert_eq!(t, vec![Token::OpenTag, Token::Ellipsis, Token::Eof]);
 }
 
-// Verifies `...` before a variadic parameter in a function declaration produces
-// `Token::Ellipsis` before `Token::Variable`. Regression guard for parameter
-// position ordering.
+/// Verifies `...` before a variadic parameter in a function declaration produces
+/// `Token::Ellipsis` before `Token::Variable`. Regression guard for parameter
+/// position ordering.
 #[test]
 fn test_ellipsis_in_function_params() {
     let t = tokens("<?php function foo(...$args) {}");
@@ -40,8 +40,8 @@ fn test_ellipsis_in_function_params() {
     );
 }
 
-// Verifies `...` before an argument in a function call produces `Token::Ellipsis`
-// before `Token::Variable`. Tests the call-argument spread position (not params).
+/// Verifies `...` before an argument in a function call produces `Token::Ellipsis`
+/// before `Token::Variable`. Tests the call-argument spread position (not params).
 #[test]
 fn test_ellipsis_in_function_call() {
     let t = tokens("<?php foo(...$arr);");
@@ -60,8 +60,8 @@ fn test_ellipsis_in_function_call() {
     );
 }
 
-// Verifies named arguments `name: "Alice"` tokenize as identifier, colon, then value.
-// Each part of a named argument is a separate token — the name is NOT a string literal.
+/// Verifies named arguments `name: "Alice"` tokenize as identifier, colon, then value.
+/// Each part of a named argument is a separate token — the name is NOT a string literal.
 #[test]
 fn test_named_arguments_tokens() {
     let t = tokens("<?php foo(name: \"Alice\", age: 30);");
@@ -85,9 +85,9 @@ fn test_named_arguments_tokens() {
     );
 }
 
-// Verifies `.` (concat) and `...` (ellipsis) do not get confused. Single dot is
-// `Token::Dot`; three dots in a row are `Token::Ellipsis`. Regression guard for
-// lexer precedence when both operators appear in the same expression.
+/// Verifies `.` (concat) and `...` (ellipsis) do not get confused. Single dot is
+/// `Token::Dot`; three dots in a row are `Token::Ellipsis`. Regression guard for
+/// lexer precedence when both operators appear in the same expression.
 #[test]
 fn test_dot_vs_ellipsis() {
     // Single dot is concat, three dots is ellipsis

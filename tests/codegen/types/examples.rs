@@ -9,9 +9,9 @@
 
 use super::*;
 
-// Compiles and runs the checked-in `examples/functions/main.php` fixture and asserts stdout contains
-// the expected function outputs including `my_abs`, `my_max`, `clamp`, `gcd`, power, `describe`,
-// `add_ten`, `profile` (named args), `str_repeat` (named args), etc.
+/// Compiles and runs the checked-in `examples/functions/main.php` fixture and asserts stdout contains
+/// the expected function outputs including `my_abs`, `my_max`, `clamp`, `gcd`, power, `describe`,
+/// `add_ten`, `profile` (named args), `str_repeat` (named args), etc.
 #[test]
 fn test_example_functions_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/functions/main.php"));

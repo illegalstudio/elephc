@@ -9,8 +9,8 @@
 
 use crate::support::*;
 
-// Verifies `count()` calls `Countable::count()` on a class implementing Countable,
-// returning the method's result rather than a fixed value.
+/// Verifies `count()` calls `Countable::count()` on a class implementing Countable,
+/// returning the method's result rather than a fixed value.
 #[test]
 fn test_count_dispatches_to_countable_method() {
     let out = compile_and_run(
@@ -26,16 +26,16 @@ echo count($c);
     assert_eq!(out, "70");
 }
 
-// Verifies `count()` still returns the correct length when applied to a plain array
-// (regression: Countable dispatch must not interfere with array counting).
+/// Verifies `count()` still returns the correct length when applied to a plain array
+/// (regression: Countable dispatch must not interfere with array counting).
 #[test]
 fn test_count_on_array_still_works() {
     let out = compile_and_run("<?php echo count([10, 20, 30]);");
     assert_eq!(out, "3");
 }
 
-// Verifies `count()` resolves the most-derived `Countable::count()` override
-// through inheritance, not just the interface-level implementation.
+/// Verifies `count()` resolves the most-derived `Countable::count()` override
+/// through inheritance, not just the interface-level implementation.
 #[test]
 fn test_count_polymorphic_via_inheritance() {
     let out = compile_and_run(
@@ -57,9 +57,9 @@ echo count($doubled);
     assert_eq!(out, "5:10");
 }
 
-// Verifies `count()` works on a class that implements `Countable` alongside
-// `OuterIterator` (which extends `Iterator`); the `Countable` contract is satisfied
-// even though `OuterIterator` is unrelated to counting.
+/// Verifies `count()` works on a class that implements `Countable` alongside
+/// `OuterIterator` (which extends `Iterator`); the `Countable` contract is satisfied
+/// even though `OuterIterator` is unrelated to counting.
 #[test]
 fn test_count_indirect_countable_via_interface_extension() {
     // A class implementing OuterIterator (which extends Iterator) and
@@ -83,8 +83,8 @@ echo count($b);
     assert_eq!(out, "42");
 }
 
-// Verifies `spl_object_id()` returns a stable ID for the same object across multiple
-// calls and a unique ID for different object instances.
+/// Verifies `spl_object_id()` returns a stable ID for the same object across multiple
+/// calls and a unique ID for different object instances.
 #[test]
 fn test_spl_object_id_accepts_concrete_object() {
     let out = compile_and_run(
@@ -100,8 +100,8 @@ echo (spl_object_id($a) !== spl_object_id($b)) ? "unique" : "same";
     assert_eq!(out, "stable:unique");
 }
 
-// Verifies `spl_object_hash()` returns a stable hash for the same object across
-// multiple calls and a unique hash for different object instances.
+/// Verifies `spl_object_hash()` returns a stable hash for the same object across
+/// multiple calls and a unique hash for different object instances.
 #[test]
 fn test_spl_object_hash_accepts_concrete_object() {
     let out = compile_and_run(

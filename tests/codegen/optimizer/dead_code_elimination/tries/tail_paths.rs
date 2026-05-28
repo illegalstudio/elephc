@@ -9,7 +9,7 @@
 
 use super::*;
 
-// Verifies that code after a `try/catch` fallthrough sinks correctly. Confirms "ab!".
+/// Verifies that code after a `try/catch` fallthrough sinks correctly. Confirms "ab!".
 #[test]
 fn test_dead_code_elimination_sinks_tail_into_try_fallthrough_paths() {
     let out = compile_and_run(
@@ -35,8 +35,8 @@ echo "!";
     assert_eq!(out, "ab!");
 }
 
-// Verifies that code after a catch-only fallthrough (no try fallthrough) sinks correctly.
-// Confirms "ab!".
+/// Verifies that code after a catch-only fallthrough (no try fallthrough) sinks correctly.
+/// Confirms "ab!".
 #[test]
 fn test_dead_code_elimination_sinks_tail_into_try_catch_only_fallthrough_paths() {
     let out = compile_and_run(

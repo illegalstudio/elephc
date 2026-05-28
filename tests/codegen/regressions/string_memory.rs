@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies str_replace works correctly inside a foreach associative loop.
-// Fixture: a map of "hello"→"world", "foo"→"bar" applied to "hello foo".
+/// Verifies str_replace works correctly inside a foreach associative loop.
+/// Fixture: a map of "hello"→"world", "foo"→"bar" applied to "hello foo".
 #[test]
 fn test_str_replace_in_foreach_assoc_function() {
     let out = compile_and_run(
@@ -30,8 +30,8 @@ echo transform($map, "hello foo");
 
 // --- Bug fix: fmod sign (frintm → frintz) ---
 
-// Regression test for issue #21: concat buffer overflow after ~362 iterations.
-// Fixture: loop of 1000 single-character `.=` concatenations.
+/// Regression test for issue #21: concat buffer overflow after ~362 iterations.
+/// Fixture: loop of 1000 single-character `.=` concatenations.
 #[test]
 fn test_concat_loop_1000() {
     // Regression test for issue #21: concat buffer overflow after ~362 iterations
@@ -47,8 +47,8 @@ echo strlen($s);
     assert_eq!(out, "1000");
 }
 
-// Regression for x86_64 local-string cleanup: `$s = $s . "x"` must release old heap strings.
-// Fixture: loop of 5000 explicit concat assignments.
+/// Regression for x86_64 local-string cleanup: `$s = $s . "x"` must release old heap strings.
+/// Fixture: loop of 5000 explicit concat assignments.
 #[test]
 fn test_concat_assignment_loop_5000() {
     // Regression for x86_64 local-string cleanup: `$s = $s . "x"` must release old heap strings.
@@ -64,8 +64,8 @@ echo strlen($s);
     assert_eq!(out, "5000");
 }
 
-// Verifies strtolower returns correct string when called repeatedly in a loop.
-// Fixture: 500 iterations of strtolower("HELLO WORLD").
+/// Verifies strtolower returns correct string when called repeatedly in a loop.
+/// Fixture: 500 iterations of strtolower("HELLO WORLD").
 #[test]
 fn test_string_function_in_loop() {
     let out = compile_and_run(
@@ -79,8 +79,8 @@ echo $x;
     assert_eq!(out, "hello world");
 }
 
-// Verifies old string values are freed on reassignment (free-list reuse).
-// Fixture: 2000 iterations reassigning `$s = str_repeat("a", 100)`, then echo final strlen.
+/// Verifies old string values are freed on reassignment (free-list reuse).
+/// Fixture: 2000 iterations reassigning `$s = str_repeat("a", 100)`, then echo final strlen.
 #[test]
 fn test_string_reassignment_loop() {
     // Tests that old string values are freed on reassignment (free-list reuse)
@@ -95,8 +95,8 @@ echo strlen($s);
     assert_eq!(out, "100");
 }
 
-// Verifies string values persist correctly across statement boundaries.
-// Fixture: two concatenated pairs then combined, result should be "foobarbazqux".
+/// Verifies string values persist correctly across statement boundaries.
+/// Fixture: two concatenated pairs then combined, result should be "foobarbazqux".
 #[test]
 fn test_string_variables_survive_statements() {
     // Tests that string persist works: values survive across statement boundaries
@@ -110,9 +110,9 @@ echo $a . $b;
     assert_eq!(out, "foobarbazqux");
 }
 
-// Regression for per-statement concat temporaries: each nested concat only needs
-// a persisted left operand until the next concat has copied it.
-// Fixture: 1200 iterations of 7-way chained concat with heap size 65_536.
+/// Regression for per-statement concat temporaries: each nested concat only needs
+/// a persisted left operand until the next concat has copied it.
+/// Fixture: 1200 iterations of 7-way chained concat with heap size 65_536.
 #[test]
 fn test_echo_concat_chain_releases_intermediate_strings() {
     // Regression for per-statement concat temporaries: each nested concat only needs
@@ -129,9 +129,9 @@ echo "done";
     assert!(out.ends_with("done"));
 }
 
-// Regression for locals first assigned inside control flow: the local slot is
-// zero-initialized, so final cleanup is safe even when the loop does not run.
-// Fixture: 1000 calls to receive_once() whose while(true) loop breaks after one iteration.
+/// Regression for locals first assigned inside control flow: the local slot is
+/// zero-initialized, so final cleanup is safe even when the loop does not run.
+/// Fixture: 1000 calls to receive_once() whose while(true) loop breaks after one iteration.
 #[test]
 fn test_string_local_assigned_in_loop_is_released_on_function_exit() {
     // Regression for locals first assigned inside control flow: the local slot is
@@ -154,9 +154,9 @@ echo "done";
     assert_eq!(out, "done");
 }
 
-// Mirrors the HTTP server's pooled Connection::inbuf slot: each request
-// resets the property and then rebuilds it from an incoming chunk.
-// Fixture: 1000 iterations of reset() then read_once() with 128-byte chunk.
+/// Mirrors the HTTP server's pooled Connection::inbuf slot: each request
+/// resets the property and then rebuilds it from an incoming chunk.
+/// Fixture: 1000 iterations of reset() then read_once() with 128-byte chunk.
 #[test]
 fn test_reused_object_string_property_concat_is_released_on_reset() {
     // Mirrors the HTTP server's pooled Connection::inbuf slot: each request
@@ -188,9 +188,9 @@ echo "done";
     assert_eq!(out, "done");
 }
 
-// Mirrors the HTTP reactor's per-iteration poll map: the array grows from
-// its small initial capacity, then the next assignment must release it.
-// Fixture: 1000 iterations building a 64-element indexed poll_map array.
+/// Mirrors the HTTP reactor's per-iteration poll map: the array grows from
+/// its small initial capacity, then the next assignment must release it.
+/// Fixture: 1000 iterations building a 64-element indexed poll_map array.
 #[test]
 fn test_indexed_array_rebuilt_after_growth_does_not_leak() {
     // Mirrors the HTTP reactor's per-iteration poll map: the array grows from
@@ -212,9 +212,9 @@ echo "done";
     assert_eq!(out, "done");
 }
 
-// Mirrors the real HTTP parser, which splits the header block and request
-// line on every request before reading a few array elements.
-// Fixture: 1000 calls to parse_once() splitting "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n".
+/// Mirrors the real HTTP parser, which splits the header block and request
+/// line on every request before reading a few array elements.
+/// Fixture: 1000 calls to parse_once() splitting "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n".
 #[test]
 fn test_explode_arrays_and_elements_release_on_function_exit() {
     // Mirrors the real HTTP parser, which splits the header block and request
@@ -238,8 +238,8 @@ echo "done";
     assert_eq!(out, "done");
 }
 
-// Verifies explode-based HTTP parser leaves no live heap blocks after 3 iterations.
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies explode-based HTTP parser leaves no live heap blocks after 3 iterations.
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_explode_parser_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -263,9 +263,9 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Verifies echo of property concat log line leaves no live heap blocks after 3 iterations.
-// Fixture: Req/Res objects, echo "  " . method . " " . path . " -> " . status . "\n".
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies echo of property concat log line leaves no live heap blocks after 3 iterations.
+/// Fixture: Req/Res objects, echo "  " . method . " " . path . " -> " . status . "\n".
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_echo_property_concat_log_line_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -296,9 +296,9 @@ for ($i = 0; $i < 3; $i++) {
     assert_eq!(out.stdout, "  GET / -> 200\n  GET / -> 200\n  GET / -> 200\n");
 }
 
-// Verifies full HTTP request parse/route/render cycle leaves no live heap blocks after 3 iterations.
-// Fixture: str_index, Request object, parse_request splitting "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n".
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies full HTTP request parse/route/render cycle leaves no live heap blocks after 3 iterations.
+/// Fixture: str_index, Request object, parse_request splitting "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n".
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_http_parse_request_object_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -375,8 +375,8 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Verifies strpos mixed-result local (int|false) leaves no live heap blocks after 3 iterations.
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies strpos mixed-result local (int|false) leaves no live heap blocks after 3 iterations.
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_strpos_mixed_result_local_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -401,8 +401,8 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Verifies strpos strict compare with === false leaves no live heap blocks after 1000 iterations.
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies strpos strict compare with === false leaves no live heap blocks after 1000 iterations.
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_direct_strpos_strict_compare_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -421,9 +421,9 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Verifies split_head_body property substr assignment leaves no live heap blocks after 3 iterations.
-// Fixture: Request object with substr($raw, 0, $split) and substr($raw, $body_at) writes.
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies split_head_body property substr assignment leaves no live heap blocks after 3 iterations.
+/// Fixture: Request object with substr($raw, 0, $split) and substr($raw, $body_at) writes.
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_split_head_body_property_substr_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -469,9 +469,9 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Verifies object argument call leaves no live heap blocks after 3 iterations.
-// Fixture: Request object passed by reference, mark_seen() increments $req->seen.
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies object argument call leaves no live heap blocks after 3 iterations.
+/// Fixture: Request object passed by reference, mark_seen() increments $req->seen.
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_object_argument_call_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -501,9 +501,9 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Verifies substr property assignment leaves no live heap blocks after 3 iterations.
-// Fixture: Request object, serve_once() assigns substr($raw, 0, 31) and substr($raw, 35).
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies substr property assignment leaves no live heap blocks after 3 iterations.
+/// Fixture: Request object, serve_once() assigns substr($raw, 0, 31) and substr($raw, 35).
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_substr_property_assignment_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -532,9 +532,9 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Verifies string argument call leaves no live heap blocks after 3 iterations.
-// Fixture: use_string() takes string by value, computes strlen().
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies string argument call leaves no live heap blocks after 3 iterations.
+/// Fixture: use_string() takes string by value, computes strlen().
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_string_argument_call_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -555,9 +555,9 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Verifies substr of string argument property assignment leaves no live heap blocks after 3 iterations.
-// Fixture: Request object, write_head() assigns substr($raw, 0, 31).
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies substr of string argument property assignment leaves no live heap blocks after 3 iterations.
+/// Fixture: Request object, write_head() assigns substr($raw, 0, 31).
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_substr_of_string_argument_property_assignment_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -587,9 +587,9 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Verifies empty-tail substr property assignment leaves no live heap blocks after 3 iterations.
-// Fixture: Request object, write_body() assigns substr($raw, 35) (empty tail after "GET ").
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies empty-tail substr property assignment leaves no live heap blocks after 3 iterations.
+/// Fixture: Request object, write_body() assigns substr($raw, 35) (empty tail after "GET ").
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_empty_tail_substr_property_assignment_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -619,9 +619,9 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Verifies two substr property assignments from string argument leave no live heap blocks after 3 iterations.
-// Fixture: Request object, write_parts() assigns substr($raw, 0, 31) and substr($raw, 35).
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies two substr property assignments from string argument leave no live heap blocks after 3 iterations.
+/// Fixture: Request object, write_parts() assigns substr($raw, 0, 31) and substr($raw, 35).
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_two_substr_property_assignments_from_string_argument_leave_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -653,9 +653,9 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Verifies substr property assignments with computed offsets leave no live heap blocks after 3 iterations.
-// Fixture: Request object, write_parts() with intval($split + 4) computed body offset.
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies substr property assignments with computed offsets leave no live heap blocks after 3 iterations.
+/// Fixture: Request object, write_parts() with intval($split + 4) computed body offset.
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_substr_property_assignments_with_computed_offsets_leave_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -689,9 +689,9 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Verifies substr property assignments with str_index offset leave no live heap blocks after 3 iterations.
-// Fixture: Request object, write_parts() uses str_index($raw, "\r\n\r\n") to compute split point.
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies substr property assignments with str_index offset leave no live heap blocks after 3 iterations.
+/// Fixture: Request object, write_parts() uses str_index($raw, "\r\n\r\n") to compute split point.
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_substr_property_assignments_with_str_index_offset_leave_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -733,9 +733,9 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Verifies user function int return assigned inside function leaves no live heap blocks after 3 iterations.
-// Fixture: outer() calls str_index() and discards the result.
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies user function int return assigned inside function leaves no live heap blocks after 3 iterations.
+/// Fixture: outer() calls str_index() and discards the result.
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_user_function_int_return_assigned_inside_function_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -764,9 +764,9 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Exercises the showcase's parse/route/render shape without sockets or Fibers so reactor
-// leaks can be separated from response-path leaks.
-// Fixture: 1000 iterations of serve_once() with Request/Response objects, render() and parse_request().
+/// Exercises the showcase's parse/route/render shape without sockets or Fibers so reactor
+/// leaks can be separated from response-path leaks.
+/// Fixture: 1000 iterations of serve_once() with Request/Response objects, render() and parse_request().
 #[test]
 fn test_http_response_path_releases_per_request_objects_and_strings() {
     // Exercises the showcase's parse/route/render shape without sockets or
@@ -850,9 +850,9 @@ echo "done";
     assert_eq!(out, "done");
 }
 
-// Verifies full HTTP response path leaves no live heap blocks after 3 iterations.
-// Fixture: Request/Response objects, parse_request, handle_request, route_index, render().
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies full HTTP response path leaves no live heap blocks after 3 iterations.
+/// Fixture: Request/Response objects, parse_request, handle_request, route_index, render().
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_http_response_path_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -964,8 +964,8 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Verifies render loop releases per-request Response objects.
-// Fixture: 1000 iterations of route_index() → render() with str_repeat 256-byte body.
+/// Verifies render loop releases per-request Response objects.
+/// Fixture: 1000 iterations of route_index() → render() with str_repeat 256-byte body.
 #[test]
 fn test_response_render_loop_releases_per_request_objects() {
     let out = compile_and_run_with_heap_size(
@@ -1019,9 +1019,9 @@ echo "done";
     assert_eq!(out, "done");
 }
 
-// Verifies response render loop leaves no live heap blocks after 3 iterations.
-// Fixture: Response object with str_repeat("x", 256) body, render().
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies response render loop leaves no live heap blocks after 3 iterations.
+/// Fixture: Response object with str_repeat("x", 256) body, render().
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_response_render_loop_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -1070,8 +1070,8 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Verifies object string properties are released on function exit.
-// Fixture: 1000 iterations of serve_once() creating Response with html(str_repeat("x", 256)).
+/// Verifies object string properties are released on function exit.
+/// Fixture: 1000 iterations of serve_once() creating Response with html(str_repeat("x", 256)).
 #[test]
 fn test_object_string_properties_release_on_function_exit() {
     let out = compile_and_run_with_heap_size(
@@ -1101,8 +1101,8 @@ echo "done";
     assert_eq!(out, "done");
 }
 
-// Verifies returned object with string property is released on caller exit.
-// Fixture: 1000 iterations of serve_once() → make_response() returning Response with 256-byte body.
+/// Verifies returned object with string property is released on caller exit.
+/// Fixture: 1000 iterations of serve_once() → make_response() returning Response with 256-byte body.
 #[test]
 fn test_returned_object_with_string_property_releases_on_caller_exit() {
     let out = compile_and_run_with_heap_size(
@@ -1131,8 +1131,8 @@ echo "done";
     assert_eq!(out, "done");
 }
 
-// Verifies returned object with string property leaves no live heap blocks after 3 iterations.
-// Uses compile_and_run_with_gc_stats to assert allocs == frees.
+/// Verifies returned object with string property leaves no live heap blocks after 3 iterations.
+/// Uses compile_and_run_with_gc_stats to assert allocs == frees.
 #[test]
 fn test_returned_object_with_string_property_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
@@ -1163,8 +1163,8 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-// Verifies response render loop with local object releases strings.
-// Fixture: 1000 iterations of serve_once() creating Response with html(str_repeat("x", 256)) then render().
+/// Verifies response render loop with local object releases strings.
+/// Fixture: 1000 iterations of serve_once() creating Response with html(str_repeat("x", 256)) then render().
 #[test]
 fn test_response_render_loop_with_local_object_releases_strings() {
     let out = compile_and_run_with_heap_size(
@@ -1206,8 +1206,8 @@ echo "done";
     assert_eq!(out, "done");
 }
 
-// Verifies repeated string builder return releases intermediate strings.
-// Fixture: 1000 iterations of serve_once() calling render_payload(str_repeat("x", 256)).
+/// Verifies repeated string builder return releases intermediate strings.
+/// Fixture: 1000 iterations of serve_once() calling render_payload(str_repeat("x", 256)).
 #[test]
 fn test_repeated_string_builder_return_releases_intermediates() {
     let out = compile_and_run_with_heap_size(
@@ -1237,8 +1237,8 @@ echo "done";
     assert_eq!(out, "done");
 }
 
-// Verifies unset frees the string and is_null returns true for unset variable.
-// Fixture: assign concat, strlen, unset, then is_null check.
+/// Verifies unset frees the string and is_null returns true for unset variable.
+/// Fixture: assign concat, strlen, unset, then is_null check.
 #[test]
 fn test_unset_frees_string() {
     let out = compile_and_run(
@@ -1252,8 +1252,8 @@ echo is_null($x) ? "1" : "0";
     assert_eq!(out, "111");
 }
 
-// Ensure multiple string variables don't interfere after concat_buf reset.
-// Fixture: $a="hello", $b="world", $c=$a." ".$b, $d=strtoupper($a), echo $c."|".$d.
+/// Ensure multiple string variables don't interfere after concat_buf reset.
+/// Fixture: $a="hello", $b="world", $c=$a." ".$b, $d=strtoupper($a), echo $c."|".$d.
 #[test]
 fn test_multiple_string_vars_independent() {
     // Ensure multiple string variables don't interfere after concat_buf reset
@@ -1269,8 +1269,8 @@ echo $c . "|" . $d;
     assert_eq!(out, "hello world|HELLO");
 }
 
-// Verifies str_replace returns correct result when called repeatedly in a loop.
-// Fixture: 100 iterations of str_replace("x", "y", "xox"), expects "yoy".
+/// Verifies str_replace returns correct result when called repeatedly in a loop.
+/// Fixture: 100 iterations of str_replace("x", "y", "xox"), expects "yoy".
 #[test]
 fn test_str_replace_in_loop() {
     let out = compile_and_run(

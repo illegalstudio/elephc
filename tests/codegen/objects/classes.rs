@@ -9,10 +9,10 @@
 
 use super::*;
 
+/// Verifies that an empty class (no properties or methods) can be instantiated and
+/// emits the expected "ok" output, confirming object allocation works for minimal classes.
 #[test]
 fn test_class_empty() {
-    // Verifies that an empty class (no properties or methods) can be instantiated and
-    // emits the expected "ok" output, confirming object allocation works for minimal classes.
     let out = compile_and_run(
         r#"<?php
 class Blank {}
@@ -23,10 +23,10 @@ echo "ok";
     assert_eq!(out, "ok");
 }
 
+/// Verifies that assigning an object to a second variable shares the same instance.
+/// Both variables reference the same heap object, so mutating via one is visible via the other.
 #[test]
 fn test_class_object_aliasing() {
-    // Verifies that assigning an object to a second variable shares the same instance.
-    // Both variables reference the same heap object, so mutating via one is visible via the other.
     let out = compile_and_run(
         r#"<?php
 class Box { public $val = 0; }
@@ -39,10 +39,10 @@ echo $b->val;
     assert_eq!(out, "42");
 }
 
+/// Verifies that a constructor can call another method on the same object,
+/// ensuring that `$this` is valid and method dispatch works during construction.
 #[test]
 fn test_class_constructor_calls_method() {
-    // Verifies that a constructor can call another method on the same object,
-    // ensuring that `$this` is valid and method dispatch works during construction.
     let out = compile_and_run(
         r#"<?php
 class Init { public $ready = 0;
@@ -56,10 +56,10 @@ echo $i->ready;
     assert_eq!(out, "1");
 }
 
+/// Verifies that two classes composing each other (Address held inside Person) work correctly,
+/// including cross-object method calls and string concatenation with an embedded object property.
 #[test]
 fn test_class_multiple_classes_composing() {
-    // Verifies that two classes composing each other (Address held inside Person) work correctly,
-    // including cross-object method calls and string concatenation with an embedded object property.
     let out = compile_and_run(
         r#"<?php
 class Address { public $city;
@@ -77,10 +77,10 @@ echo $p->info();
     assert_eq!(out, "Marco from Rome");
 }
 
+/// Verifies that a class property initialized to an empty string behaves correctly:
+/// `strlen()` returns 0, concatenation produces the expected pipe-delimited output.
 #[test]
 fn test_class_empty_string_property() {
-    // Verifies that a class property initialized to an empty string behaves correctly:
-    // `strlen()` returns 0, concatenation produces the expected pipe-delimited output.
     let out = compile_and_run(
         r#"<?php
 class Tag { public $label = "";
@@ -93,10 +93,10 @@ echo strlen($t->label) . "|" . $t->label . "|done";
     assert_eq!(out, "0||done");
 }
 
+/// Verifies that a class property holding a 1000-character string is stored and retrieved
+/// correctly, with `strlen()` returning the correct length.
 #[test]
 fn test_class_long_string_property() {
-    // Verifies that a class property holding a 1000-character string is stored and retrieved
-    // correctly, with `strlen()` returning the correct length.
     let out = compile_and_run(
         r#"<?php
 class Buffer { public $data;
@@ -109,10 +109,10 @@ echo strlen($b->data);
     assert_eq!(out, "1000");
 }
 
+/// Verifies that a method can concatenate multiple string properties and return the result,
+/// ensuring `$this` property reads and string concatenation work inside methods.
 #[test]
 fn test_class_string_concat_in_method() {
-    // Verifies that a method can concatenate multiple string properties and return the result,
-    // ensuring `$this` property reads and string concatenation work inside methods.
     let out = compile_and_run(
         r#"<?php
 class Row { public $a; public $b; public $c;
@@ -126,10 +126,10 @@ echo $r->csv();
     assert_eq!(out, "x,y,z");
 }
 
+/// Verifies that a boolean property can be used in a ternary expression,
+/// returning the correct branch ("yes" / "no") based on the stored `true` value.
 #[test]
 fn test_class_bool_property() {
-    // Verifies that a boolean property can be used in a ternary expression,
-    // returning the correct branch ("yes" / "no") based on the stored `true` value.
     let out = compile_and_run(
         r#"<?php
 class Flag { public $on;
@@ -142,10 +142,10 @@ echo $f->on ? "yes" : "no";
     assert_eq!(out, "yes");
 }
 
+/// Verifies that a class property holding an array works with `count()` inside a method,
+/// confirming array property reads and the builtin `count()` function work correctly.
 #[test]
 fn test_class_array_property() {
-    // Verifies that a class property holding an array works with `count()` inside a method,
-    // confirming array property reads and the builtin `count()` function work correctly.
     let out = compile_and_run(
         r#"<?php
 class Stack { public $items;
@@ -159,10 +159,10 @@ echo $s->size();
     assert_eq!(out, "3");
 }
 
+/// Stress test: creates 1000 object instances in a loop, updating a reference each time.
+/// Verifies that object allocation and last-instance tracking work correctly across many iterations.
 #[test]
 fn test_class_1000_objects_in_loop() {
-    // Stress test: creates 1000 object instances in a loop, updating a reference each time.
-    // Verifies that object allocation and last-instance tracking work correctly across many iterations.
     let out = compile_and_run(
         r#"<?php
 class Obj { public $id;
@@ -178,10 +178,10 @@ echo $last->id;
     assert_eq!(out, "999");
 }
 
+/// Verifies that a class with 10 properties initialized in the constructor
+/// sums them correctly via a method, ensuring multi-property reads and integer arithmetic.
 #[test]
 fn test_class_many_properties() {
-    // Verifies that a class with 10 properties initialized in the constructor
-    // sums them correctly via a method, ensuring multi-property reads and integer arithmetic.
     let out = compile_and_run(
         r#"<?php
 class Big { public $a; public $b; public $c; public $d; public $e;
@@ -202,10 +202,10 @@ echo $b->sum();
     assert_eq!(out, "55");
 }
 
+/// Verifies deeply nested function calls that build nested HTML tags via string concatenation,
+/// ensuring argument evaluation order, nested calls, and string concat work correctly.
 #[test]
 fn test_deeply_nested_string_function_calls() {
-    // Verifies deeply nested function calls that build nested HTML tags via string concatenation,
-    // ensuring argument evaluation order, nested calls, and string concat work correctly.
     let out = compile_and_run(
         r#"<?php
 function wrap($s, $tag) { return "<" . $tag . ">" . $s . "</" . $tag . ">"; }
@@ -215,10 +215,10 @@ echo wrap(wrap(wrap("hello", "b"), "i"), "p");
     assert_eq!(out, "<p><i><b>hello</b></i></p>");
 }
 
+/// Verifies a recursive function that builds a string via repeated concatenation,
+/// ensuring recursion, base-case handling, and string concat work correctly.
 #[test]
 fn test_recursive_string_building() {
-    // Verifies a recursive function that builds a string via repeated concatenation,
-    // ensuring recursion, base-case handling, and string concat work correctly.
     let out = compile_and_run(
         r#"<?php
 function repeat_str($s, $n) {
@@ -231,10 +231,10 @@ echo repeat_str("ab", 5);
     assert_eq!(out, "ababababab");
 }
 
+/// Verifies that a closure can capture an object via `use($c)` and that the captured
+/// reference remains valid after multiple method calls on the object.
 #[test]
 fn test_closure_capturing_object() {
-    // Verifies that a closure can capture an object via `use($c)` and that the captured
-    // reference remains valid after multiple method calls on the object.
     let out = compile_and_run(
         r#"<?php
 class Counter { public $n = 0; public function inc() { $this->n = $this->n + 1; } }
@@ -248,10 +248,10 @@ echo "ok";
     assert_eq!(out, "ok");
 }
 
+/// Verifies that a class property storing a float is read correctly inside a method
+/// and used in a floating-point arithmetic expression, producing the correct area result.
 #[test]
 fn test_class_float_property_via_method() {
-    // Verifies that a class property storing a float is read correctly inside a method
-    // and used in a floating-point arithmetic expression, producing the correct area result.
     let out = compile_and_run(
         r#"<?php
 class Circle {
@@ -266,10 +266,10 @@ echo $c->area();
     assert_eq!(out, "78.53975");
 }
 
+/// Verifies that a method returning a float property emits the value correctly,
+/// ensuring float return types and property reads from methods work end-to-end.
 #[test]
 fn test_class_method_returns_float_property() {
-    // Verifies that a method returning a float property emits the value correctly,
-    // ensuring float return types and property reads from methods work end-to-end.
     let out = compile_and_run(
         r#"<?php
 class Foo {
@@ -284,10 +284,10 @@ echo $f->getX();
     assert_eq!(out, "3.14");
 }
 
+/// Verifies that a method returning `$this` enables fluent chaining:
+/// after `->add()` the object is returned and subsequent calls succeed.
 #[test]
 fn test_class_method_returns_this() {
-    // Verifies that a method returning `$this` enables fluent chaining:
-    // after `->add()` the object is returned and subsequent calls succeed.
     let out = compile_and_run(
         r#"<?php
 class Builder {
@@ -302,10 +302,10 @@ echo "ok";
     assert_eq!(out, "ok");
 }
 
+/// Verifies that a private property is inaccessible from outside the class
+/// but can be read via a public accessor method, ensuring visibility rules are enforced.
 #[test]
 fn test_class_private_property_via_method() {
-    // Verifies that a private property is inaccessible from outside the class
-    // but can be read via a public accessor method, ensuring visibility rules are enforced.
     let out = compile_and_run(
         r#"<?php
 class Secret {
@@ -320,10 +320,10 @@ echo $s->reveal();
     assert_eq!(out, "ok");
 }
 
+/// Verifies that a `readonly` property can be initialized in the constructor
+/// and read via a public accessor method, ensuring readonly semantics are respected.
 #[test]
 fn test_class_readonly_property() {
-    // Verifies that a `readonly` property can be initialized in the constructor
-    // and read via a public accessor method, ensuring readonly semantics are respected.
     let out = compile_and_run(
         r#"<?php
 class User {

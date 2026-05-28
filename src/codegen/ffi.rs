@@ -528,10 +528,13 @@ mod tests {
     use crate::parser::ast::Expr;
     use crate::types::ExternFunctionSig;
 
+    /// Builds a Linux x86_64 emitter for FFI unit tests.
     fn test_emitter_x86() -> Emitter {
         Emitter::new(Target::new(Platform::Linux, Arch::X86_64))
     }
 
+    /// Verifies Linux x86_64 extern calls use native call lowering and sign-extend
+    /// 32-bit integer returns.
     #[test]
     fn test_emit_extern_call_linux_x86_64_uses_native_call_and_sign_extend() {
         let mut emitter = test_emitter_x86();
@@ -566,6 +569,8 @@ mod tests {
         assert!(out.contains("    movsxd rax, eax\n"));
     }
 
+    /// Verifies Linux x86_64 extern calls with string arguments reserve cleanup
+    /// stack space for borrowed C string temporaries.
     #[test]
     fn test_emit_extern_call_linux_x86_64_string_args_use_cleanup_stack() {
         let mut emitter = test_emitter_x86();

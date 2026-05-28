@@ -9,14 +9,14 @@
 
 use super::*;
 
-// Verifies `::` (double colon) tokenizes as `DoubleColon` for static access.
+/// Verifies `::` (double colon) tokenizes as `DoubleColon` for static access.
 #[test]
 fn test_lex_double_colon() {
     let t = tokens("<?php Point::origin();");
     assert!(t.contains(&Token::DoubleColon));
 }
 
-// Verifies `$this` tokenizes as `This`.
+/// Verifies `$this` tokenizes as `This`.
 #[test]
 fn test_lex_this() {
     let t = tokens("<?php $this->value;");

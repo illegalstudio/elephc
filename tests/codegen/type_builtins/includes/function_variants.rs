@@ -9,8 +9,8 @@
 
 use super::*;
 
+/// Verifies conditional include function variants: false branch is dispatched when `$pick = 0`.
 #[test]
-    // Verifies conditional include function variants: false branch is dispatched when `$pick = 0`.
 fn test_conditional_include_function_variants_dispatch_false_branch() {
     let out = compile_and_run_files(
         &[
@@ -34,8 +34,8 @@ echo selected();
     assert_eq!(out, "right");
 }
 
+/// Verifies conditional include function variants: true branch is dispatched when `$pick = 1`.
 #[test]
-    // Verifies conditional include function variants: true branch is dispatched when `$pick = 1`.
 fn test_conditional_include_function_variants_dispatch_true_branch() {
     let out = compile_and_run_files(
         &[
@@ -59,8 +59,8 @@ echo selected_true();
     assert_eq!(out, "left");
 }
 
+/// Verifies a single conditional include marks the branch as loaded; function is callable after the branch.
 #[test]
-    // Verifies a single conditional include marks the branch as loaded; function is callable after the branch.
 fn test_conditional_include_single_function_variant_marks_loaded_branch() {
     let out = compile_and_run_files(
         &[
@@ -81,8 +81,8 @@ echo optional_selected();
     assert_eq!(out, "loaded");
 }
 
+/// Verifies `function_exists()` returns false when a conditional include branch is not taken.
 #[test]
-    // Verifies `function_exists()` returns false when a conditional include branch is not taken.
 fn test_conditional_include_function_exists_tracks_unloaded_variant() {
     let out = compile_and_run_files(
         &[
@@ -106,8 +106,8 @@ if (function_exists('optional_exists')) {
     assert_eq!(out, "missing");
 }
 
+/// Verifies `function_exists()` returns true after a conditional include branch is taken.
 #[test]
-    // Verifies `function_exists()` returns true after a conditional include branch is taken.
 fn test_conditional_include_function_exists_tracks_loaded_variant() {
     let out = compile_and_run_files(
         &[
@@ -134,8 +134,8 @@ if (function_exists('optional_exists_loaded')) {
     assert_eq!(out, "loaded");
 }
 
+/// Verifies `function_exists()` tracks runtime load order: before the include the function does not exist, after it does.
 #[test]
-    // Verifies `function_exists()` tracks runtime load order: before the include the function does not exist, after it does.
 fn test_include_discovered_function_exists_tracks_runtime_load_order() {
     let out = compile_and_run_files(
         &[
@@ -158,8 +158,8 @@ echo function_exists('runtime_loaded') ? runtime_loaded() : 'no-after';
     assert_eq!(out, "no-before|yes-after");
 }
 
+/// Verifies calling a function before its runtime load via include produces "undefined function" error.
 #[test]
-    // Verifies calling a function before its runtime load via include produces "undefined function" error.
 fn test_include_discovered_function_call_before_runtime_load_fails() {
     let err = compile_and_run_files_expect_failure(
         &[
@@ -183,8 +183,8 @@ load_lib();
     assert!(err.contains("Call to undefined function runtime_loaded_late()"));
 }
 
+/// Verifies `function_exists()` tracks runtime load order for `include_once`.
 #[test]
-    // Verifies `function_exists()` tracks runtime load order for `include_once`.
 fn test_include_once_discovered_function_exists_tracks_runtime_load_order() {
     let out = compile_and_run_files(
         &[
@@ -211,8 +211,8 @@ echo function_exists('runtime_loaded_once') ? runtime_loaded_once() : 'no-after'
     assert_eq!(out, "no-before|yes-after");
 }
 
+/// Verifies `function_exists()` is case-insensitive inside a namespace for include-discovered functions.
 #[test]
-    // Verifies `function_exists()` is case-insensitive inside a namespace for include-discovered functions.
 fn test_conditional_include_function_exists_is_case_insensitive_in_namespace() {
     let out = compile_and_run_files(
         &[
@@ -236,8 +236,8 @@ echo function_exists('OPTIONAL_CASE') ? optional_case() : 'missing';
     assert_eq!(out, "loaded");
 }
 
+/// Verifies namespace declarations inside included files are preserved in the correct namespace scope.
 #[test]
-    // Verifies namespace declarations inside included files are preserved in the correct namespace scope.
 fn test_conditional_include_function_variants_preserve_namespace() {
     let out = compile_and_run_files(
         &[
@@ -268,8 +268,8 @@ echo selected_ns();
     assert_eq!(out, "right");
 }
 
+/// Verifies `include_once` in a conditional picks the loaded branch and the function is callable.
 #[test]
-    // Verifies `include_once` in a conditional picks the loaded branch and the function is callable.
 fn test_conditional_include_once_function_variants_dispatch_loaded_branch() {
     let out = compile_and_run_files(
         &[
@@ -293,8 +293,8 @@ echo selected_once();
     assert_eq!(out, "left");
 }
 
+/// Verifies conditional includes with mismatched function signatures (different return types) produce a compile error.
 #[test]
-    // Verifies conditional includes with mismatched function signatures (different return types) produce a compile error.
 fn test_conditional_include_function_variants_require_matching_signatures() {
     assert!(compile_files_fails(
         &[
@@ -320,8 +320,8 @@ echo selected_mismatch();
     ));
 }
 
+/// Verifies two regular includes of the same file in the same branch report a duplicate function error.
 #[test]
-    // Verifies two regular includes of the same file in the same branch report a duplicate function error.
 fn test_same_branch_conditional_includes_still_report_duplicate_function() {
     assert!(compile_files_fails(
         &[
@@ -342,8 +342,8 @@ if ($pick) {
     ));
 }
 
+/// Verifies a regular `include` inside a constant-false branch does not claim the file; later `include` still succeeds.
 #[test]
-    // Verifies a regular `include` inside a constant-false branch does not claim the file; later `include` still succeeds.
 fn test_regular_include_in_constant_false_branch_does_not_duplicate_later_include() {
     let out = compile_and_run_files(
         &[
@@ -364,8 +364,8 @@ echo false_branch_value();
     assert_eq!(out, "ok");
 }
 
+/// Verifies a regular `include` inside a constant-false `elseif` does not claim the file; later `include` still succeeds.
 #[test]
-    // Verifies a regular `include` inside a constant-false `elseif` does not claim the file; later `include` still succeeds.
 fn test_regular_include_in_constant_false_elseif_chain_does_not_duplicate_later_include() {
     let out = compile_and_run_files(
         &[
@@ -388,8 +388,8 @@ echo false_elseif_value();
     assert_eq!(out, "ok");
 }
 
+/// Verifies a runtime-possible include branch followed by a regular include still reports duplicate when both execute.
 #[test]
-    // Verifies a runtime-possible include branch followed by a regular include still reports duplicate when both execute.
 fn test_regular_include_possible_branch_then_later_include_still_reports_duplicate() {
     assert!(compile_files_fails(
         &[
@@ -408,8 +408,8 @@ include 'lib.php';
     ));
 }
 
+/// Verifies regular `include` inside a loop reports duplicate declaration error.
 #[test]
-    // Verifies regular `include` inside a loop reports duplicate declaration error.
 fn test_regular_include_declaration_in_loop_reports_duplicate() {
     assert!(compile_files_fails(
         &[
@@ -429,8 +429,8 @@ while ($i < 2) {
     ));
 }
 
+/// Verifies `include_once` in a loop with a nested regular `include` discovers declarations exactly once.
 #[test]
-    // Verifies `include_once` in a loop with a nested regular `include` discovers declarations exactly once.
 fn test_include_once_in_loop_with_nested_regular_include_discovers_once() {
     let out = compile_and_run_files(
         &[
@@ -453,8 +453,8 @@ echo nested_once_value();
     assert_eq!(out, "ok");
 }
 
+/// Verifies `include_once` in a runtime-possible branch still discovers declarations when the branch is not taken.
 #[test]
-    // Verifies `include_once` in a runtime-possible branch still discovers declarations when the branch is not taken.
 fn test_include_once_possible_branch_then_later_include_once_discovers_once() {
     let out = compile_and_run_files(
         &[
@@ -475,8 +475,8 @@ echo once_later_value();
     assert_eq!(out, "ok");
 }
 
+/// Verifies `include_once` in mutually exclusive branches scans context-sensitive nested includes (dynamic path via define).
 #[test]
-    // Verifies `include_once` in mutually exclusive branches scans context-sensitive nested includes (dynamic path via define).
 fn test_include_once_exclusive_branches_scan_context_sensitive_nested_includes() {
     let out = compile_and_run_files(
         &[

@@ -10,13 +10,13 @@
 
 use super::*;
 
-// Tests that constant propagation preserves a scalar variable whose value is
-// set before a foreach loop and used after it, when the variable is not
-// modified inside the loop.
-//
-// After the optimizer runs, `$base = 2` followed by a foreach over `[1, 2, 3]`
-// and `echo $base ** 3` should reduce to `echo 8.0` since `$base` is never
-// reassigned in the loop body.
+/// Tests that constant propagation preserves a scalar variable whose value is
+/// set before a foreach loop and used after it, when the variable is not
+/// modified inside the loop.
+///
+/// After the optimizer runs, `$base = 2` followed by a foreach over `[1, 2, 3]`
+/// and `echo $base ** 3` should reduce to `echo 8.0` since `$base` is never
+/// reassigned in the loop body.
 #[test]
 fn test_propagate_constants_preserves_unmodified_scalar_across_foreach_loop() {
     let program = vec![

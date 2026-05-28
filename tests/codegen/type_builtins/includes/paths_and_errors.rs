@@ -9,8 +9,8 @@
 
 use super::*;
 
+/// Verifies a.php includes b.php which includes c.php; the leaf function `c_func` is callable from main.
 #[test]
-    // Verifies a.php includes b.php which includes c.php; the leaf function `c_func` is callable from main.
 fn test_include_nested() {
     let out = compile_and_run_files(
         &[
@@ -24,8 +24,8 @@ fn test_include_nested() {
     assert_eq!(out, "deep");
 }
 
+/// Verifies include paths can contain subdirectory separators; function is resolved correctly.
 #[test]
-    // Verifies include paths can contain subdirectory separators; function is resolved correctly.
 fn test_include_subdirectory() {
     let out = compile_and_run_files(
         &[
@@ -40,8 +40,8 @@ fn test_include_subdirectory() {
     assert_eq!(out, "from lib");
 }
 
+/// Verifies variables defined in the main file are accessible in the included file (shared scope).
 #[test]
-    // Verifies variables defined in the main file are accessible in the included file (shared scope).
 fn test_include_variables_shared_scope() {
     let out = compile_and_run_files(
         &[
@@ -59,8 +59,8 @@ include 'greet.php';
     assert_eq!(out, "Hello World");
 }
 
+/// Verifies multiple sequential includes expose functions from each file in the same compilation.
 #[test]
-    // Verifies multiple sequential includes expose functions from each file in the same compilation.
 fn test_include_multiple_files() {
     let out = compile_and_run_files(
         &[
@@ -80,8 +80,8 @@ echo add(1, 2) . " " . mul(3, 4);
     assert_eq!(out, "3 12");
 }
 
+/// Verifies a cycle of includes (a → b → a) produces a compile error.
 #[test]
-    // Verifies a cycle of includes (a → b → a) produces a compile error.
 fn test_circular_include_error() {
     assert!(compile_files_fails(
         &[
@@ -93,8 +93,8 @@ fn test_circular_include_error() {
     ));
 }
 
+/// Verifies `require` of a nonexistent file produces a compile error.
 #[test]
-    // Verifies `require` of a nonexistent file produces a compile error.
 fn test_require_missing_file_error() {
     assert!(compile_files_fails(
         &[("main.php", "<?php require 'nonexistent.php';"),],

@@ -9,7 +9,7 @@
 
 use super::*;
 
-// Tests instanceof with known class names, unknown class names, and non-object LHS.
+/// Tests instanceof with known class names, unknown class names, and non-object LHS.
 #[test]
 fn test_instanceof_classes_and_unknown_target() {
     let out = compile_and_run(
@@ -26,7 +26,7 @@ echo ($a instanceof Missing) ? "T" : "F";
     assert_eq!(out, "TFFF");
 }
 
-// Tests instanceof with class inheritance hierarchies and interface implementations.
+/// Tests instanceof with class inheritance hierarchies and interface implementations.
 #[test]
 fn test_instanceof_inheritance_and_interfaces() {
     let out = compile_and_run(
@@ -58,7 +58,7 @@ echo ($base instanceof User) ? "T" : "F";
     assert_eq!(out, "TTTTF");
 }
 
-// Tests instanceof with self, static, and parent keywords in class methods.
+/// Tests instanceof with self, static, and parent keywords in class methods.
 #[test]
 fn test_instanceof_self_parent_and_late_static() {
     let out = compile_and_run(
@@ -86,8 +86,8 @@ $child->checkParent($child);
     assert_eq!(out, "STStP");
 }
 
-// Verifies that the LHS object expression is evaluated exactly once by calling a
-// factory method with observable side effects.
+/// Verifies that the LHS object expression is evaluated exactly once by calling a
+/// factory method with observable side effects.
 #[test]
 fn test_instanceof_lhs_evaluates_once() {
     let out = compile_and_run(
@@ -111,7 +111,7 @@ echo $factory->count;
     assert_eq!(out, "T1");
 }
 
-// Tests instanceof against mixed-type values and nullable object return types.
+/// Tests instanceof against mixed-type values and nullable object return types.
 #[test]
 fn test_instanceof_handles_mixed_and_nullable_object_values() {
     let out = compile_and_run(
@@ -142,8 +142,8 @@ echo (maybe(false) instanceof User) ? "T" : "F";
     assert_eq!(out, "TTFTF");
 }
 
-// Tests dynamic instanceof with string variables naming classes and interfaces,
-// including case-insensitive lookup and absolute names.
+/// Tests dynamic instanceof with string variables naming classes and interfaces,
+/// including case-insensitive lookup and absolute names.
 #[test]
 fn test_dynamic_instanceof_string_class_and_interface_targets() {
     let out = compile_and_run(
@@ -171,7 +171,7 @@ echo ($user instanceof $missing) ? "T" : "F";
     assert_eq!(out, "TTFTTF");
 }
 
-// Tests dynamic instanceof with string variables naming namespaced classes.
+/// Tests dynamic instanceof with string variables naming namespaced classes.
 #[test]
 fn test_dynamic_instanceof_namespaced_string_targets() {
     let out = compile_and_run(
@@ -192,8 +192,8 @@ echo ($user instanceof $absoluteName) ? "T" : "F";
     assert_eq!(out, "FTT");
 }
 
-// Tests dynamic instanceof with a string naming an interface that the object
-// implements transitively through a child interface.
+/// Tests dynamic instanceof with a string naming an interface that the object
+/// implements transitively through a child interface.
 #[test]
 fn test_dynamic_instanceof_transitive_interface_string_target() {
     let out = compile_and_run(
@@ -210,8 +210,8 @@ echo ($user instanceof $target) ? "T" : "F";
     assert_eq!(out, "T");
 }
 
-// Tests that when the target of dynamic instanceof is an object (not a string),
-// the runtime class of the target object is used for the check.
+/// Tests that when the target of dynamic instanceof is an object (not a string),
+/// the runtime class of the target object is used for the check.
 #[test]
 fn test_dynamic_instanceof_object_target_uses_target_runtime_class() {
     let out = compile_and_run(
@@ -230,8 +230,8 @@ echo ($a instanceof $targetB) ? "T" : "F";
     assert_eq!(out, "TF");
 }
 
-// Tests dynamic instanceof with mixed-type LHS and targets, including null targets
-// from nullable return types.
+/// Tests dynamic instanceof with mixed-type LHS and targets, including null targets
+/// from nullable return types.
 #[test]
 fn test_dynamic_instanceof_mixed_targets_and_scalar_lhs() {
     let out = compile_and_run(
@@ -267,7 +267,7 @@ echo (maybe(false) instanceof $target) ? "T" : "F";
     assert_eq!(out, "TFFFTF");
 }
 
-// Tests dynamic instanceof where the target is a parenthesized string concatenation.
+/// Tests dynamic instanceof where the target is a parenthesized string concatenation.
 #[test]
 fn test_dynamic_instanceof_parenthesized_expression_target() {
     let out = compile_and_run(
@@ -282,7 +282,7 @@ echo ($user instanceof ($prefix . $suffix)) ? "T" : "F";
     assert_eq!(out, "T");
 }
 
-// Tests dynamic instanceof where the target is a parenthesized class constant expression.
+/// Tests dynamic instanceof where the target is a parenthesized class constant expression.
 #[test]
 fn test_dynamic_instanceof_parenthesized_class_constant_target() {
     let out = compile_and_run(
@@ -295,8 +295,8 @@ echo ($user instanceof (User::class)) ? "T" : "F";
     assert_eq!(out, "T");
 }
 
-// Tests that dynamic instanceof with a non-string, non-object target (integer) fails
-// with a Fatal error when the LHS is an object.
+/// Tests that dynamic instanceof with a non-string, non-object target (integer) fails
+/// with a Fatal error when the LHS is an object.
 #[test]
 fn test_dynamic_instanceof_invalid_target_fails_for_object_lhs() {
     let out = compile_and_run_capture(
@@ -316,8 +316,8 @@ echo ($user instanceof $target) ? "T" : "F";
     );
 }
 
-// Verifies that when an invalid target causes a Fatal error, both the LHS and
-// the target expression are evaluated in source order before the error is raised.
+/// Verifies that when an invalid target causes a Fatal error, both the LHS and
+/// the target expression are evaluated in source order before the error is raised.
 #[test]
 fn test_dynamic_instanceof_invalid_target_evaluates_lhs_then_target() {
     let out = compile_and_run_capture(
@@ -345,8 +345,8 @@ echo (lhs() instanceof (rhs())) ? "T" : "F";
     );
 }
 
-// Tests that dynamic instanceof with a null target (from a nullable return) fails
-// with a Fatal error.
+/// Tests that dynamic instanceof with a null target (from a nullable return) fails
+/// with a Fatal error.
 #[test]
 fn test_dynamic_instanceof_null_object_target_fails() {
     let out = compile_and_run_capture(
@@ -374,8 +374,8 @@ echo ($user instanceof $target) ? "T" : "F";
     );
 }
 
-// Tests that dynamic instanceof with an invalid target (integer) fails with a Fatal
-// error when the LHS is a scalar.
+/// Tests that dynamic instanceof with an invalid target (integer) fails with a Fatal
+/// error when the LHS is a scalar.
 #[test]
 fn test_dynamic_instanceof_invalid_target_fails_for_scalar_lhs() {
     let out = compile_and_run_capture(

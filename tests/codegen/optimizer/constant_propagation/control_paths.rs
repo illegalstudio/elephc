@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that when all `case` arms of a `switch` assign the same constant (`$base = 2`)
-// the optimizer merges them and folds `$base ** 3` to `8` with no `pow` call.
+/// Verifies that when all `case` arms of a `switch` assign the same constant (`$base = 2`)
+/// the optimizer merges them and folds `$base ** 3` to `8` with no `pow` call.
 #[test]
 fn test_constant_propagation_merges_identical_switch_constants() {
     let dir = make_cli_test_dir("elephc_constant_propagation_switch_merge");
@@ -51,8 +51,8 @@ echo $base ** 3;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that when the `switch` subject is a known constant (`$mode = 1`) the optimizer
-// selects only the matching arm and folds the resulting `$base ** 3` to `8`.
+/// Verifies that when the `switch` subject is a known constant (`$mode = 1`) the optimizer
+/// selects only the matching arm and folds the resulting `$base ** 3` to `8`.
 #[test]
 fn test_constant_propagation_uses_known_switch_subject_merge() {
     let dir = make_cli_test_dir("elephc_constant_propagation_switch_known_subject");
@@ -94,8 +94,8 @@ echo $base ** 3;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that when both the `try` block and `catch` clause assign the same constant (`$base = 2`)
-// the optimizer merges them and folds `$base ** 3` to `8` with no `pow` call.
+/// Verifies that when both the `try` block and `catch` clause assign the same constant (`$base = 2`)
+/// the optimizer merges them and folds `$base ** 3` to `8` with no `pow` call.
 #[test]
 fn test_constant_propagation_merges_identical_try_catch_constants() {
     let dir = make_cli_test_dir("elephc_constant_propagation_try_merge");
@@ -134,9 +134,9 @@ echo $base ** 3;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that when the `try` body cannot throw, the `catch` branch is unreachable,
-// so `$base` is only assigned in `try` (`$base = 2`) and `$base ** 3` folds to `8`.
-// This is a regression test ensuring unreachable code does not pollute constant merging.
+/// Verifies that when the `try` body cannot throw, the `catch` branch is unreachable,
+/// so `$base` is only assigned in `try` (`$base = 2`) and `$base ** 3` folds to `8`.
+/// This is a regression test ensuring unreachable code does not pollute constant merging.
 #[test]
 fn test_constant_propagation_ignores_unreachable_catch_constants() {
     let dir = make_cli_test_dir("elephc_constant_propagation_non_throwing_try");

@@ -9,7 +9,7 @@
 
 use crate::support::*;
 
-// Verifies a class implementing `Countable` typechecks and that `count()` is callable.
+/// Verifies a class implementing `Countable` typechecks and that `count()` is callable.
 #[test]
 fn test_countable_interface_implementer_typechecks_and_runs() {
     let out = compile_and_run(
@@ -25,7 +25,7 @@ echo $c->count();
     assert_eq!(out, "7");
 }
 
-// Verifies `instanceof` returns `true` for a `Countable` implementer.
+/// Verifies `instanceof` returns `true` for a `Countable` implementer.
 #[test]
 fn test_countable_instanceof_succeeds() {
     let out = compile_and_run(
@@ -40,7 +40,7 @@ var_dump($c instanceof Countable);
     assert_eq!(out, "bool(true)\n");
 }
 
-// Verifies SPL builtin interface names are case-insensitive (e.g., `\countable` and `Countable`).
+/// Verifies SPL builtin interface names are case-insensitive (e.g., `\countable` and `Countable`).
 #[test]
 fn test_builtin_interface_names_are_case_insensitive() {
     let out = compile_and_run(
@@ -56,8 +56,8 @@ var_dump($c instanceof Countable);
     assert_eq!(out, "3bool(true)\n");
 }
 
-// Verifies a class implementing `Iterator` automatically satisfies `Traversable`
-    // (since `Iterator` extends `Traversable`).
+/// Verifies a class implementing `Iterator` automatically satisfies `Traversable`
+/// (since `Iterator` extends `Traversable`).
 #[test]
 fn test_traversable_inherited_via_iterator() {
     let out = compile_and_run(
@@ -79,8 +79,8 @@ var_dump($r instanceof Traversable);
     assert_eq!(out, "bool(true)\nbool(true)\n");
 }
 
-// Verifies `IteratorAggregate::getIterator()` can return a `Traversable`
-    // ( covariant return type: `Iterator` → `Traversable`).
+/// Verifies `IteratorAggregate::getIterator()` can return a `Traversable`
+/// ( covariant return type: `Iterator` → `Traversable`).
 #[test]
 fn test_iterator_aggregate_get_iterator_accepts_traversable_return() {
     let out = compile_and_run(
@@ -102,7 +102,7 @@ var_dump($b instanceof IteratorAggregate);
     assert_eq!(out, "bool(true)\n");
 }
 
-// Verifies `OuterIterator` implementers also satisfy `Iterator` via inheritance.
+/// Verifies `OuterIterator` implementers also satisfy `Iterator` via inheritance.
 #[test]
 fn test_outer_iterator_inherits_iterator_methods() {
     let out = compile_and_run(
@@ -133,7 +133,7 @@ var_dump($w instanceof Iterator);
     assert_eq!(out, "bool(true)\nbool(true)\n");
 }
 
-// Verifies `SeekableIterator` extenders satisfy `Iterator` and that `seek()` works.
+/// Verifies `SeekableIterator` extenders satisfy `Iterator` and that `seek()` works.
 #[test]
 fn test_seekable_iterator_extends_iterator() {
     let out = compile_and_run(
@@ -155,8 +155,8 @@ echo $t->current();
     assert_eq!(out, "4");
 }
 
-// Verifies `RecursiveIterator` extenders satisfy `Iterator` and the additional
-    // `getChildren()`/`hasChildren()` methods are callable.
+/// Verifies `RecursiveIterator` extenders satisfy `Iterator` and the additional
+/// `getChildren()`/`hasChildren()` methods are callable.
 #[test]
 fn test_recursive_iterator_extends_iterator() {
     let out = compile_and_run(
@@ -179,8 +179,8 @@ var_dump($n instanceof Iterator);
     assert_eq!(out, "3bool(true)\n");
 }
 
-// Verifies `SplSubject`/`SplObserver` attach/detach/notify/update contract,
-    // including `instanceof` for both interfaces.
+/// Verifies `SplSubject`/`SplObserver` attach/detach/notify/update contract,
+/// including `instanceof` for both interfaces.
 #[test]
 fn test_spl_observer_subject_interfaces() {
     // Property access through interface-typed parameters isn't supported,
@@ -207,7 +207,7 @@ var_dump($s instanceof SplSubject);
     assert_eq!(out, "1bool(true)\nbool(true)\n");
 }
 
-// Verifies `Stringable` implementer typechecks and `__toString()` is invoked on cast.
+/// Verifies `Stringable` implementer typechecks and `__toString()` is invoked on cast.
 #[test]
 fn test_stringable_interface_runs() {
     let out = compile_and_run(
@@ -224,8 +224,8 @@ var_dump($s instanceof Stringable);
     assert_eq!(out, "[hi]bool(true)\n");
 }
 
-// Verifies a class with `__toString()` implicitly satisfies `Stringable`
-    // (no explicit `implements Stringable` needed).
+/// Verifies a class with `__toString()` implicitly satisfies `Stringable`
+/// (no explicit `implements Stringable` needed).
 #[test]
 fn test_tostring_method_implicitly_implements_stringable() {
     let out = compile_and_run(
@@ -242,7 +242,7 @@ var_dump($s instanceof Stringable);
     assert_eq!(out, "[hi]bool(true)\n");
 }
 
-// Verifies `JsonSerializable` implementer typechecks and `jsonSerialize()` is callable.
+/// Verifies `JsonSerializable` implementer typechecks and `jsonSerialize()` is callable.
 #[test]
 fn test_json_serializable_interface_typechecks() {
     let out = compile_and_run(
@@ -259,7 +259,7 @@ echo $b->jsonSerialize();
     assert_eq!(out, "bool(true)\n42");
 }
 
-// Verifies `ArrayAccess` implementer typechecks with offsetExists/Get/Set/Unset methods.
+/// Verifies `ArrayAccess` implementer typechecks with offsetExists/Get/Set/Unset methods.
 #[test]
 fn test_array_access_interface_typechecks() {
     let out = compile_and_run(
@@ -280,8 +280,8 @@ var_dump($b instanceof ArrayAccess);
     assert_eq!(out, "vbool(true)\n");
 }
 
-// Verifies subscript operations `[]=` / `[]` / `isset()` / `unset()` dispatch via
-    // `ArrayAccess` interface (with trace letters to confirm each method is called).
+/// Verifies subscript operations `[]=` / `[]` / `isset()` / `unset()` dispatch via
+/// `ArrayAccess` interface (with trace letters to confirm each method is called).
 #[test]
 fn test_array_access_subscript_read_write_isset_unset() {
     let out = compile_and_run(
@@ -304,8 +304,8 @@ echo isset($b["k"]);
     assert_eq!(out, "SGvE1UE0");
 }
 
-// Verifies subscript operations work when an `ArrayAccess` implementer is passed
-    // through an interface-typed parameter (dispatch via interface type, not concrete type).
+/// Verifies subscript operations work when an `ArrayAccess` implementer is passed
+/// through an interface-typed parameter (dispatch via interface type, not concrete type).
 #[test]
 fn test_array_access_subscript_dispatches_through_interface_type() {
     let out = compile_and_run(
@@ -330,8 +330,8 @@ use_box_slot(new Box());
     assert_eq!(out, "v10");
 }
 
-// Verifies subscript operations work on `ArrayAccess` through property (`$obj->prop[key]`)
-    // and static property (`Class::$prop[key]`) syntax.
+/// Verifies subscript operations work on `ArrayAccess` through property (`$obj->prop[key]`)
+/// and static property (`Class::$prop[key]`) syntax.
 #[test]
 fn test_array_access_subscript_property_and_static_property_writes() {
     let out = compile_and_run(
@@ -361,8 +361,8 @@ echo Holder::$staticBox["k"];
     assert_eq!(out, "ps");
 }
 
-// Verifies subscript assignment expressions (`$b["k"] = 5`), compound assignment
-    // (`+=`), and null-coalescing assignment (`??=`) return the computed value.
+/// Verifies subscript assignment expressions (`$b["k"] = 5`), compound assignment
+/// (`+=`), and null-coalescing assignment (`??=`) return the computed value.
 #[test]
 fn test_array_access_assignment_expression_returns_computed_value() {
     let out = compile_and_run(
@@ -402,8 +402,8 @@ echo ($c["k"] ??= 3);
     assert_eq!(out, "=S5|GS17|GS3");
 }
 
-// Verifies subscript read on a union type (`LeftBox|RightBox`) dispatches to the
-    // correct implementer based on the actual runtime type.
+/// Verifies subscript read on a union type (`LeftBox|RightBox`) dispatches to the
+/// correct implementer based on the actual runtime type.
 #[test]
 fn test_array_access_union_uses_interface_dispatch() {
     let out = compile_and_run(

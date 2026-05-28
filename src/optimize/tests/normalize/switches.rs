@@ -10,8 +10,8 @@
 
 use super::*;
 
+/// Switch with constant subject matching a case emits only that case body.
 #[test]
-    // Switch with constant subject matching a case emits only that case body.
 fn test_normalize_control_flow_materializes_constant_switch_match() {
     let program = vec![Stmt::new(
         StmtKind::Switch {
@@ -36,8 +36,8 @@ fn test_normalize_control_flow_materializes_constant_switch_match() {
     assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
 }
 
+/// Switch with constant subject that falls through to a later case emits that case body.
 #[test]
-    // Switch with constant subject that falls through to a later case emits that case body.
 fn test_normalize_control_flow_materializes_constant_switch_fallthrough() {
     let program = vec![Stmt::new(
         StmtKind::Switch {
@@ -59,8 +59,8 @@ fn test_normalize_control_flow_materializes_constant_switch_fallthrough() {
     assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
 }
 
+/// Switch with constant subject not matching any case emits the default body.
 #[test]
-    // Switch with constant subject not matching any case emits the default body.
 fn test_normalize_control_flow_materializes_constant_switch_default() {
     let program = vec![Stmt::new(
         StmtKind::Switch {
@@ -79,8 +79,8 @@ fn test_normalize_control_flow_materializes_constant_switch_default() {
     assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
 }
 
+/// Rewrites a single-case switch with a default to an equivalent if statement.
 #[test]
-    // Rewrites a single-case switch with a default to an equivalent if statement.
 fn test_normalize_control_flow_rewrites_single_case_switch_to_if() {
     let program = vec![Stmt::new(
         StmtKind::Switch {
@@ -123,8 +123,8 @@ fn test_normalize_control_flow_rewrites_single_case_switch_to_if() {
     }
 }
 
+/// Merges adjacent switch cases with identical bodies by combining their match expressions.
 #[test]
-    // Merges adjacent switch cases with identical bodies by combining their match expressions.
 fn test_normalize_control_flow_merges_adjacent_identical_switch_cases() {
     let shared_body = vec![
         Stmt::echo(Expr::int_lit(7)),
@@ -170,8 +170,8 @@ fn test_normalize_control_flow_merges_adjacent_identical_switch_cases() {
     }
 }
 
+/// Rewrites a switch with empty cases that fall through into a single if chain with Or conditions.
 #[test]
-    // Rewrites a switch with empty cases that fall through into a single if chain with Or conditions.
 fn test_normalize_control_flow_merges_fallthrough_switch_labels_into_next_case() {
     let shared_body = vec![
         Stmt::echo(Expr::int_lit(7)),

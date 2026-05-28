@@ -10,8 +10,8 @@
 
 use super::*;
 
+/// Inverts a single live else branch: `if (!flag) { echo 7; }`.
 #[test]
-    // Inverts a single live else branch: `if (!flag) { echo 7; }`.
 fn test_normalize_control_flow_inverts_single_live_else_branch() {
     let program = vec![Stmt::new(
         StmtKind::If {
@@ -42,9 +42,9 @@ fn test_normalize_control_flow_inverts_single_live_else_branch() {
     );
 }
 
+/// Converts elseif chain into nested else-if: `if (a) { echo 1; } elseif (b) { echo 2; } else { echo 3; }`
+/// becomes `if (a) { echo 1; } else { if (b) { echo 2; } else { echo 3; } }`.
 #[test]
-    // Converts elseif chain into nested else-if: `if (a) { echo 1; } elseif (b) { echo 2; } else { echo 3; }`
-    // becomes `if (a) { echo 1; } else { if (b) { echo 2; } else { echo 3; } }`.
 fn test_normalize_control_flow_canonicalizes_elseif_chain_into_nested_else_if() {
     let program = vec![Stmt::new(
         StmtKind::If {
@@ -92,8 +92,8 @@ fn test_normalize_control_flow_canonicalizes_elseif_chain_into_nested_else_if() 
     assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(3))]));
 }
 
+/// Merges identical bodies in adjacent if/elseif into `a || b` condition with shared then body.
 #[test]
-    // Merges identical bodies in adjacent if/elseif into `a || b` condition with shared then body.
 fn test_normalize_control_flow_merges_identical_if_chain_bodies_into_or_condition() {
     let shared_body = vec![Stmt::echo(Expr::int_lit(7))];
     let program = vec![Stmt::new(
@@ -143,8 +143,8 @@ fn test_normalize_control_flow_merges_identical_if_chain_bodies_into_or_conditio
     }
 }
 
+/// Merges identical tail bodies using `!a && b` condition when only the else branch differs.
 #[test]
-    // Merges identical tail bodies using `!a && b` condition when only the else branch differs.
 fn test_normalize_control_flow_merges_identical_if_chain_tail_into_inverted_and() {
     let shared_tail = vec![Stmt::echo(Expr::int_lit(9))];
     let program = vec![Stmt::new(
@@ -197,8 +197,8 @@ fn test_normalize_control_flow_merges_identical_if_chain_tail_into_inverted_and(
     }
 }
 
+/// Recursively merges a three-level if chain with shared body into `a || (b || c)`.
 #[test]
-    // Recursively merges a three-level if chain with shared body into `a || (b || c)`.
 fn test_normalize_control_flow_recursively_merges_longer_if_chain_heads() {
     let shared_body = vec![Stmt::echo(Expr::int_lit(7))];
     let program = vec![Stmt::new(
@@ -252,8 +252,8 @@ fn test_normalize_control_flow_recursively_merges_longer_if_chain_heads() {
     }
 }
 
+/// Flattens nested single-path ifs into `a && b` condition with merged then body.
 #[test]
-    // Flattens nested single-path ifs into `a && b` condition with merged then body.
 fn test_normalize_control_flow_flattens_nested_single_path_ifs() {
     let program = vec![Stmt::new(
         StmtKind::If {
@@ -302,8 +302,8 @@ fn test_normalize_control_flow_flattens_nested_single_path_ifs() {
     }
 }
 
+/// Collapses identical if/else branches by evaluating condition (for side effects) and using shared body.
 #[test]
-    // Collapses identical if/else branches by evaluating condition (for side effects) and using shared body.
 fn test_normalize_control_flow_collapses_identical_if_branches_to_condition_effects_plus_body() {
     let program = vec![Stmt::new(
         StmtKind::If {

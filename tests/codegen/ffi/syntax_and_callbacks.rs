@@ -9,7 +9,7 @@
 
 use super::*;
 
-// Verifies extern block declares multiple FFI extern functions and they are callable from PHP.
+/// Verifies extern block declares multiple FFI extern functions and they are callable from PHP.
 #[test]
 fn test_ffi_extern_block_syntax() {
     let out = compile_and_run(
@@ -24,7 +24,7 @@ echo abs(-7) . "," . atoi("99");
     assert_eq!(out, "7,99");
 }
 
-// Verifies single-line `extern "System" function` syntax declares an FFI extern callable from PHP.
+/// Verifies single-line `extern "System" function` syntax declares an FFI extern callable from PHP.
 #[test]
 fn test_ffi_extern_lib_function_syntax() {
     let out = compile_and_run(
@@ -36,7 +36,7 @@ echo abs(-1);
     assert_eq!(out, "1");
 }
 
-// Verifies FFI extern function with `void` return type and `int` argument is compiled correctly.
+/// Verifies FFI extern function with `void` return type and `int` argument is compiled correctly.
 #[test]
 fn test_ffi_extern_void_return() {
     let out = compile_and_run(
@@ -49,7 +49,7 @@ echo $x;
     assert_eq!(out, "5");
 }
 
-// Verifies FFI extern function with `float` argument and `float` return type is compiled correctly.
+/// Verifies FFI extern function with `float` argument and `float` return type is compiled correctly.
 #[test]
 fn test_ffi_extern_float_arg_and_return() {
     let out = compile_and_run(
@@ -61,7 +61,7 @@ echo sqrt(144.0);
     assert_eq!(out, "12");
 }
 
-// Verifies FFI extern function with `ptr` and `int` mixed arguments is compiled correctly.
+/// Verifies FFI extern function with `ptr` and `int` mixed arguments is compiled correctly.
 #[test]
 fn test_ffi_extern_multiple_args() {
     let out = compile_and_run(
@@ -73,7 +73,7 @@ echo strtol("FF", ptr_null(), 16);
     assert_eq!(out, "255");
 }
 
-// Verifies FFI extern function with two `string` arguments is compiled correctly.
+/// Verifies FFI extern function with two `string` arguments is compiled correctly.
 #[test]
 fn test_ffi_extern_multiple_string_args() {
     let out = compile_and_run(
@@ -85,7 +85,7 @@ echo strcmp("aa", "ab") < 0 ? "ok" : "bad";
     assert_eq!(out, "ok");
 }
 
-// Verifies that borrowed C-string temporaries from two FFI extern calls with `string` args are freed without leaking.
+/// Verifies that borrowed C-string temporaries from two FFI extern calls with `string` args are freed without leaking.
 #[test]
 fn test_ffi_extern_multiple_string_args_free_all_borrowed_cstr_temps() {
     let baseline = compile_and_run_with_gc_stats(
@@ -116,7 +116,7 @@ strcmp("bb", "bb");
     );
 }
 
-// Verifies `extern global ptr $environ` declares an FFI external global pointer variable.
+/// Verifies `extern global ptr $environ` declares an FFI external global pointer variable.
 #[test]
 fn test_ffi_extern_global() {
     let out = compile_and_run(
@@ -255,7 +255,7 @@ raise(15);
     assert_eq!(out, "20");
 }
 
-// Smoke test: verifies non-string FFI extern function returning `int` is callable and returns a positive pid.
+/// Smoke test: verifies non-string FFI extern function returning `int` is callable and returns a positive pid.
 #[test]
 fn test_ffi_extern_non_string_global_smoke() {
     let out = compile_and_run(
@@ -268,7 +268,7 @@ echo $pid > 0 ? "ok" : "fail";
     assert_eq!(out, "ok");
 }
 
-// Verifies FFI extern function declared inside a PHP function scope is callable and resolves correctly.
+/// Verifies FFI extern function declared inside a PHP function scope is callable and resolves correctly.
 #[test]
 fn test_ffi_extern_in_function() {
     let out = compile_and_run(

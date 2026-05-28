@@ -405,6 +405,7 @@ pub(super) fn collect_main_try_slots(stmts: &[Stmt], ctx: &mut Context) {
 mod tests {
     use super::*;
 
+    /// Implements the `int_constant` operation for this module.
     fn int_constant(constants: &HashMap<String, (ExprKind, PhpType)>, name: &str) -> i64 {
         match &constants[name].0 {
             ExprKind::IntLiteral(value) => *value,
@@ -412,6 +413,7 @@ mod tests {
         }
     }
 
+    /// Verifies fnmatch constants follow target platform.
     #[test]
     fn test_fnmatch_constants_follow_target_platform() {
         let mac = collect_constants(&vec![], Platform::MacOS);

@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that an empty switch shell (all branches dead after DCE) does not emit `switch_end`
-// in user assembly. Confirms "s!".
+/// Verifies that an empty switch shell (all branches dead after DCE) does not emit `switch_end`
+/// in user assembly. Confirms "s!".
 #[test]
 fn test_dead_code_elimination_collapses_empty_switch_shell_after_branch_dce() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_empty_switch_shell");
@@ -54,10 +54,10 @@ echo "!";
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that tail code after a switch statement sinks correctly through all exit paths
-// when cases fall through to each other. Tests switch with three cases (1, 2, default)
-// where no branch has a break, so execution falls through: case 1 → case 2 → default.
-// Expected output: case 1 emits "abc", case 2 emits "bc", default emits "c", each followed by "!".
+/// Verifies that tail code after a switch statement sinks correctly through all exit paths
+/// when cases fall through to each other. Tests switch with three cases (1, 2, default)
+/// where no branch has a break, so execution falls through: case 1 → case 2 → default.
+/// Expected output: case 1 emits "abc", case 2 emits "bc", default emits "c", each followed by "!".
 #[test]
 fn test_dead_code_elimination_sinks_tail_into_switch_exit_paths() {
     let out = compile_and_run(
@@ -83,8 +83,8 @@ run(3);
     assert_eq!(out, "abc!bc!c!");
 }
 
-// Verifies that code after a switch with a break in one case and fallthrough in another sinks
-// correctly. Confirms "a!bc!c!".
+/// Verifies that code after a switch with a break in one case and fallthrough in another sinks
+/// correctly. Confirms "a!bc!c!".
 #[test]
 fn test_dead_code_elimination_sinks_tail_into_switch_break_paths() {
     let out = compile_and_run(

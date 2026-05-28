@@ -414,6 +414,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
 mod tests {
     use super::*;
 
+    /// Verifies syntactic indexed plus assoc array union type.
     #[test]
     fn test_syntactic_indexed_plus_assoc_array_union_type() {
         let ty = array_union_type_syntactic(
@@ -433,6 +434,7 @@ mod tests {
         );
     }
 
+    /// Verifies syntactic assoc plus indexed array union type.
     #[test]
     fn test_syntactic_assoc_plus_indexed_array_union_type() {
         let ty = array_union_type_syntactic(

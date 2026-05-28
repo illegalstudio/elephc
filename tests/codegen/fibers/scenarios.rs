@@ -9,7 +9,7 @@
 
 use super::*;
 
-// Verifies try/finally, foreach, match, and `new` work inside a fiber body across a suspend boundary.
+/// Verifies try/finally, foreach, match, and `new` work inside a fiber body across a suspend boundary.
 #[test]
 fn test_fiber_php_constructs_inside_body() {
     let out = compile_and_run(
@@ -39,7 +39,7 @@ $f->resume(0);
     assert_eq!(out, "T;A;F;v10;v20;v30;mtwo;owidget");
 }
 
-// Verifies the canonical PHP documentation example for fibers: suspend with a string value and resume with a different value.
+/// Verifies the canonical PHP documentation example for fibers: suspend with a string value and resume with a different value.
 #[test]
 fn test_fiber_canonical_php_doc_example() {
     let out = compile_and_run(
@@ -56,7 +56,7 @@ $fiber->resume("test");
     assert_eq!(out, "Value from fiber suspending: fiber|Value used to resume fiber: test");
 }
 
-// Verifies closure-captured string variables survive a suspend/resume cycle.
+/// Verifies closure-captured string variables survive a suspend/resume cycle.
 #[test]
 fn test_fiber_closure_capture_string_survives_suspend() {
     let out = compile_and_run(
@@ -73,7 +73,7 @@ $f->resume(0);
     assert_eq!(out, "after=stable");
 }
 
-// Verifies closure-captured integer variables survive a suspend/resume cycle.
+/// Verifies closure-captured integer variables survive a suspend/resume cycle.
 #[test]
 fn test_fiber_closure_capture_survives_suspend_resume() {
     let out = compile_and_run(
@@ -90,7 +90,7 @@ $f->resume(0);
     assert_eq!(out, "after-resume base=100");
 }
 
-// Verifies string payloads round-trip correctly through suspend and start (no data corruption).
+/// Verifies string payloads round-trip correctly through suspend and start (no data corruption).
 #[test]
 fn test_fiber_string_payload_round_trip() {
     let out = compile_and_run(
@@ -104,7 +104,7 @@ echo $f->start();
     assert_eq!(out, "hello");
 }
 
-// Verifies Fiber state transitions: Start → Suspended → Terminated, checking isStarted/isSuspended/isTerminated at each stage.
+/// Verifies Fiber state transitions: Start → Suspended → Terminated, checking isStarted/isSuspended/isTerminated at each stage.
 #[test]
 fn test_fiber_state_transitions() {
     let out = compile_and_run(
@@ -122,7 +122,7 @@ echo $f->isTerminated() ? "T" : "t";
     assert_eq!(out, "sSPtT");
 }
 
-// Verifies FiberError is a subclass of Error (catchable by Error, not Exception).
+/// Verifies FiberError is a subclass of Error (catchable by Error, not Exception).
 #[test]
 fn test_fiber_error_subclasses_error() {
     let out = compile_and_run(
@@ -139,7 +139,7 @@ try {
     assert_eq!(out, "error");
 }
 
-// Verifies FiberError is caught by its specific type before Exception.
+/// Verifies FiberError is caught by its specific type before Exception.
 #[test]
 fn test_fiber_error_caught_by_specific_type() {
     let out = compile_and_run(
@@ -156,7 +156,7 @@ try {
     assert_eq!(out, "fiber-err");
 }
 
-// Verifies Fiber:: throw delivers a FiberError to a fiber's internal try/catch, and execution resumes after the catch block.
+/// Verifies Fiber:: throw delivers a FiberError to a fiber's internal try/catch, and execution resumes after the catch block.
 #[test]
 fn test_fiber_throw_caught_by_internal_try_catch() {
     let out = compile_and_run(

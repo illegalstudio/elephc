@@ -9,7 +9,7 @@
 
 use super::*;
 
-// Verifies that a catch block is dropped when the try body cannot throw. Confirms "t!".
+/// Verifies that a catch block is dropped when the try body cannot throw. Confirms "t!".
 #[test]
 fn test_dead_code_elimination_drops_unreachable_catch_after_non_throwing_try() {
     let out = compile_and_run(
@@ -26,8 +26,8 @@ echo "!";
     assert_eq!(out, "t!");
 }
 
-// Verifies that a catch block preceding a finally block is dropped when unreachable.
-// Confirms "tf!".
+/// Verifies that a catch block preceding a finally block is dropped when unreachable.
+/// Confirms "tf!".
 #[test]
 fn test_dead_code_elimination_drops_unreachable_catch_before_finally() {
     let out = compile_and_run(
@@ -46,8 +46,8 @@ echo "!";
     assert_eq!(out, "tf!");
 }
 
-// Verifies that a shadowed catch (Throwable before Exception) is dropped from assembly.
-// Confirms "a!" with "shadowed" absent from user assembly.
+/// Verifies that a shadowed catch (Throwable before Exception) is dropped from assembly.
+/// Confirms "a!" with "shadowed" absent from user assembly.
 #[test]
 fn test_dead_code_elimination_drops_shadowed_throwable_catch_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_shadowed_throwable_catch");
@@ -87,8 +87,8 @@ echo "!";
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that adjacent catch blocks with identical bodies (same `pow` call) are merged.
-// Confirms output "1".
+/// Verifies that adjacent catch blocks with identical bodies (same `pow` call) are merged.
+/// Confirms output "1".
 #[test]
 fn test_dead_code_elimination_merges_identical_adjacent_catches() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_merge_identical_catches");
@@ -127,8 +127,8 @@ try {
     assert_eq!(out, "1");
 }
 
-// Verifies that multi-catch types are deduplicated when their merged set is identical to
-// one branch. Confirms "8".
+/// Verifies that multi-catch types are deduplicated when their merged set is identical to
+/// one branch. Confirms "8".
 #[test]
 fn test_dead_code_elimination_deduplicates_merged_catch_types() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_dedup_catch_types");
@@ -171,8 +171,8 @@ try {
     assert_eq!(out, "8");
 }
 
-// Verifies that multi-catch with sorted types (Zed | Alpha | Mid) is accepted and handles
-// the catch correctly. Confirms "ok".
+/// Verifies that multi-catch with sorted types (Zed | Alpha | Mid) is accepted and handles
+/// the catch correctly. Confirms "ok".
 #[test]
 fn test_dead_code_elimination_accepts_sorted_multi_catch_types() {
     let out = compile_and_run(

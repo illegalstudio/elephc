@@ -10,6 +10,7 @@
 
 use super::*;
 
+/// Verifies attribute open token.
 #[test]
 fn test_attribute_open_token() {
     // `#[` is a single `AttrOpen` token; the following identifier and `]`
@@ -21,6 +22,7 @@ fn test_attribute_open_token() {
     assert_eq!(t[4], Token::Class);
 }
 
+/// Verifies attribute with arguments.
 #[test]
 fn test_attribute_with_arguments() {
     // An attribute with parenthesized arguments tokenizes as
@@ -36,10 +38,10 @@ fn test_attribute_with_arguments() {
     assert_eq!(t[8], Token::RBracket);
 }
 
+/// A single attribute group can contain multiple comma-separated attributes.
+/// Verifies that `AttrOpen` is followed by `Identifier`, `Comma`, `Identifier`.
 #[test]
 fn test_multiple_attributes_in_one_group() {
-    // A single attribute group can contain multiple comma-separated attributes.
-    // Verifies that `AttrOpen` is followed by `Identifier`, `Comma`, `Identifier`.
     let t = tokens("<?php #[A, B(1)]");
     assert_eq!(t[1], Token::AttrOpen);
     assert_eq!(t[2], Token::Identifier("A".into()));
@@ -47,6 +49,7 @@ fn test_multiple_attributes_in_one_group() {
     assert_eq!(t[4], Token::Identifier("B".into()));
 }
 
+/// Verifies PHP hash line comment is skipped.
 #[test]
 fn test_php_hash_line_comment_is_skipped() {
     // `# ...` is a PHP line comment when not followed by `[`. The lexer must
@@ -64,6 +67,7 @@ fn test_php_hash_line_comment_is_skipped() {
     );
 }
 
+/// Verifies hash immediately followed by bracket is attribute.
 #[test]
 fn test_hash_immediately_followed_by_bracket_is_attribute() {
     // No space between `#` and `[` must still produce `AttrOpen`, not a
@@ -75,10 +79,10 @@ fn test_hash_immediately_followed_by_bracket_is_attribute() {
     assert_eq!(t[4], Token::Echo);
 }
 
+/// PHP allows fully-qualified attribute names like `#[\Symfony\Required]`.
+/// Verifies `AttrOpen Backslash Identifier Backslash Identifier RBracket`.
 #[test]
 fn test_qualified_attribute_name() {
-    // PHP allows fully-qualified attribute names like `#[\Symfony\Required]`.
-    // Verifies `AttrOpen Backslash Identifier Backslash Identifier RBracket`.
     let t = tokens("<?php #[\\Symfony\\Required]");
     assert_eq!(t[1], Token::AttrOpen);
     assert_eq!(t[2], Token::Backslash);
@@ -88,6 +92,7 @@ fn test_qualified_attribute_name() {
     assert_eq!(t[6], Token::RBracket);
 }
 
+/// Verifies hash bracket inside double quoted string is literal.
 #[test]
 fn test_hash_bracket_inside_double_quoted_string_is_literal() {
     // The lexer scans string literals atomically — `#[` inside a double-
@@ -102,6 +107,7 @@ fn test_hash_bracket_inside_double_quoted_string_is_literal() {
     assert_eq!(s_count, 1, "string literal must contain the literal `#[` text");
 }
 
+/// Verifies hash bracket inside heredoc is literal.
 #[test]
 fn test_hash_bracket_inside_heredoc_is_literal() {
     // Heredoc body is scanned atomically — `#[` inside a heredoc is plain text
@@ -112,6 +118,7 @@ fn test_hash_bracket_inside_heredoc_is_literal() {
     assert_eq!(attr_count, 0, "no AttrOpen should appear inside a heredoc");
 }
 
+/// Verifies hash bracket inside single quoted string is literal.
 #[test]
 fn test_hash_bracket_inside_single_quoted_string_is_literal() {
     // Single-quoted strings are scanned atomically — `#[` inside a single-
@@ -121,6 +128,7 @@ fn test_hash_bracket_inside_single_quoted_string_is_literal() {
     assert_eq!(attr_count, 0);
 }
 
+/// Verifies hash at end of file does not panic.
 #[test]
 fn test_hash_at_end_of_file_does_not_panic() {
     // A bare `#` with no newline and no following `[` was a corner case in
@@ -135,6 +143,7 @@ fn test_hash_at_end_of_file_does_not_panic() {
     assert!(matches!(last_real, Token::Semicolon));
 }
 
+/// Verifies hash followed by space and bracket is comment.
 #[test]
 fn test_hash_followed_by_space_and_bracket_is_comment() {
     // `# [Foo]` (with a space) must be treated as a line comment, not an

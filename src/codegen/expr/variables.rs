@@ -401,10 +401,12 @@ mod tests {
     use crate::codegen::platform::{Arch, Platform, Target};
     use crate::parser::ast::{Expr, ExprKind};
 
+    /// Verifies emitter x86.
     fn test_emitter_x86() -> Emitter {
         Emitter::new(Target::new(Platform::Linux, Arch::X86_64))
     }
 
+    /// Verifies emit ref variable linux x86_64 uses native indirect loads.
     #[test]
     fn test_emit_ref_variable_linux_x86_64_uses_native_indirect_loads() {
         let mut emitter = test_emitter_x86();
@@ -420,6 +422,7 @@ mod tests {
         assert!(out.contains("    mov rax, QWORD PTR [r11]\n"));
     }
 
+    /// Verifies emit local pre and post increment linux x86_64 use native registers.
     #[test]
     fn test_emit_local_pre_and_post_increment_linux_x86_64_use_native_registers() {
         let mut emitter = test_emitter_x86();
@@ -438,6 +441,7 @@ mod tests {
         assert!(out.contains("    mov QWORD PTR [rbp - 8], r10\n"));
     }
 
+    /// Verifies emit throw linux x86_64 uses native result register.
     #[test]
     fn test_emit_throw_linux_x86_64_uses_native_result_register() {
         let mut emitter = test_emitter_x86();

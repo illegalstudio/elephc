@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that `2 ** 3` is constant-folded when both operands are assigned literals,
-// producing `8` with no `pow` call in the generated assembly.
+/// Verifies that `2 ** 3` is constant-folded when both operands are assigned literals,
+/// producing `8` with no `pow` call in the generated assembly.
 #[test]
 fn test_constant_propagation_removes_pow_call_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_constant_propagation_pow");
@@ -45,8 +45,8 @@ echo $x ** $y;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that when both branches of an `if` assign the same constant (`$base = 2`)
-// the optimizer merges them and folds `$base ** 3` to `8` with no `pow` call.
+/// Verifies that when both branches of an `if` assign the same constant (`$base = 2`)
+/// the optimizer merges them and folds `$base ** 3` to `8` with no `pow` call.
 #[test]
 fn test_constant_propagation_merges_identical_if_constants() {
     let dir = make_cli_test_dir("elephc_constant_propagation_if_merge");
@@ -85,8 +85,8 @@ echo $base ** 3;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that when both arms of a ternary assign the same constant (`$base = 2`)
-// the optimizer recognizes uniform assignment and folds `$base ** 3` to `8`.
+/// Verifies that when both arms of a ternary assign the same constant (`$base = 2`)
+/// the optimizer recognizes uniform assignment and folds `$base ** 3` to `8`.
 #[test]
 fn test_constant_propagation_tracks_uniform_ternary_assignment() {
     let dir = make_cli_test_dir("elephc_constant_propagation_ternary_uniform");
@@ -120,8 +120,8 @@ echo $base ** 3;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that when all arms of a `match` assign the same constant (`$base = 2`)
-// the optimizer merges them and folds `$base ** 3` to `8`.
+/// Verifies that when all arms of a `match` assign the same constant (`$base = 2`)
+/// the optimizer merges them and folds `$base ** 3` to `8`.
 #[test]
 fn test_constant_propagation_tracks_uniform_match_assignment() {
     let dir = make_cli_test_dir("elephc_constant_propagation_match_uniform");
@@ -158,8 +158,8 @@ echo $base ** 3;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that when the `match` subject is a known constant (`$mode = 1`) the optimizer
-// can fold the selected arm (`$base = 2`) and then fold `$base ** 3` to `8`.
+/// Verifies that when the `match` subject is a known constant (`$mode = 1`) the optimizer
+/// can fold the selected arm (`$base = 2`) and then fold `$base ** 3` to `8`.
 #[test]
 fn test_constant_propagation_tracks_known_match_assignment() {
     let dir = make_cli_test_dir("elephc_constant_propagation_match_known");

@@ -9,9 +9,9 @@
 
 use crate::support::*;
 
-// Compiles and runs the cow example PHP, asserting stdout matches expected output.
-// Regression: ensures copy-on-write array behavior produces correct distinct values
-// when arrays share backing store then are written to.
+/// Compiles and runs the cow example PHP, asserting stdout matches expected output.
+/// Regression: ensures copy-on-write array behavior produces correct distinct values
+/// when arrays share backing store then are written to.
 #[test]
 fn test_example_cow_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/cow/main.php"));
@@ -21,9 +21,9 @@ fn test_example_cow_compiles_and_runs() {
     );
 }
 
-// Compiles and runs inline PHP that uses spread operators with range() to fill
-// a 30-element array, asserting count and a specific index value.
-// Edge case: spread grows past the initial small-array capacity (no pre-allocated size hint).
+/// Compiles and runs inline PHP that uses spread operators with range() to fill
+/// a 30-element array, asserting count and a specific index value.
+/// Edge case: spread grows past the initial small-array capacity (no pre-allocated size hint).
 #[test]
 fn test_array_literal_spread_grows_past_initial_capacity() {
     let out = compile_and_run(
@@ -35,10 +35,10 @@ echo count($nums) . "|" . $nums[25];
     assert_eq!(out, "30|26");
 }
 
-// Compiles and runs inline PHP that creates two refcounted arrays ($a, $b) filled
-// with a shared $inner reference, then spreads both into $c three times.
-// Regression: refcounted values must survive multiple spread expansions without
-// use-after-free or incorrect refcount when the destination grows past initial capacity.
+/// Compiles and runs inline PHP that creates two refcounted arrays ($a, $b) filled
+/// with a shared $inner reference, then spreads both into $c three times.
+/// Regression: refcounted values must survive multiple spread expansions without
+/// use-after-free or incorrect refcount when the destination grows past initial capacity.
 #[test]
 fn test_array_literal_spread_refcounted_grows_past_initial_capacity() {
     let out = compile_and_run(

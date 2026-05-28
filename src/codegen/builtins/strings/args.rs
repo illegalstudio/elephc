@@ -89,6 +89,7 @@ mod tests {
 
     use super::*;
 
+    /// Verifies emit string arg coerces mixed on x86_64.
     #[test]
     fn test_emit_string_arg_coerces_mixed_on_x86_64() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));

@@ -11,10 +11,10 @@
 
 use crate::support::*;
 
-// Verifies that integer division in a yield expression is evaluated correctly.
-//
-// `$i / 2 * 2 == $i` is true exactly when `$i` is even (signed integer division
-// truncates toward zero). The generator should emit only even numbers.
+/// Verifies that integer division in a yield expression is evaluated correctly.
+///
+/// `$i / 2 * 2 == $i` is true exactly when `$i` is even (signed integer division
+/// truncates toward zero). The generator should emit only even numbers.
 #[test]
 fn test_generator_int_division_in_yield_expr() {
     let out = compile_and_run(
@@ -32,7 +32,7 @@ foreach (gen(10) as $v) { echo $v; echo " "; }
     assert_eq!(out, "0 2 4 6 8 ");
 }
 
-// Verifies that function parameters are preserved across multiple yields.
+/// Verifies that function parameters are preserved across multiple yields.
 #[test]
 fn test_generator_yields_int_parameters() {
     let out = compile_and_run(
@@ -51,7 +51,7 @@ foreach (gen(7, 9) as $v) {
     assert_eq!(out, "7 9 7 ");
 }
 
-// Verifies that constant-folded arithmetic expressions are inlined at compile time.
+/// Verifies that constant-folded arithmetic expressions are inlined at compile time.
 #[test]
 fn test_generator_yields_const_folded_arithmetic() {
     let out = compile_and_run(
@@ -66,7 +66,7 @@ foreach (gen() as $v) { echo $v; echo " "; }
     assert_eq!(out, "3 12 ");
 }
 
-// Verifies that arithmetic on parameters is evaluated at yield time, not at resume time.
+/// Verifies that arithmetic on parameters is evaluated at yield time, not at resume time.
 #[test]
 fn test_generator_yields_param_arithmetic() {
     let out = compile_and_run(
@@ -81,7 +81,7 @@ foreach (gen(10) as $v) { echo $v; echo " "; }
     assert_eq!(out, "11 20 ");
 }
 
-// Verifies that local variables are preserved across yields and can be mutated between yields.
+/// Verifies that local variables are preserved across yields and can be mutated between yields.
 #[test]
 fn test_generator_local_variable_across_yields() {
     let out = compile_and_run(
@@ -100,7 +100,7 @@ foreach (gen() as $v) { echo $v; echo " "; }
     assert_eq!(out, "5 10 99 ");
 }
 
-// Verifies that a counter using `$i = $i + 1` arithmetic assignment survives across yields.
+/// Verifies that a counter using `$i = $i + 1` arithmetic assignment survives across yields.
 #[test]
 fn test_generator_counter_with_arithmetic_assignment() {
     let out = compile_and_run(
@@ -121,7 +121,7 @@ foreach (gen() as $v) { echo $v; echo " "; }
     assert_eq!(out, "0 1 2 3 ");
 }
 
-// Verifies that post-increment on a local variable works correctly across yields.
+/// Verifies that post-increment on a local variable works correctly across yields.
 #[test]
 fn test_generator_post_increment_local() {
     let out = compile_and_run(
@@ -140,10 +140,10 @@ foreach (gen() as $v) { echo $v; echo " "; }
     assert_eq!(out, "10 11 12 ");
 }
 
-// Verifies that a user-defined function can be called in a yield expression.
-//
-// The call is evaluated into a register (x0 for int return), then the result is
-// boxed into the generator's Mixed yield cell. Parameters are passed in registers.
+/// Verifies that a user-defined function can be called in a yield expression.
+///
+/// The call is evaluated into a register (x0 for int return), then the result is
+/// boxed into the generator's Mixed yield cell. Parameters are passed in registers.
 #[test]
 fn test_generator_calls_user_function() {
     let out = compile_and_run(
@@ -160,10 +160,10 @@ foreach (gen() as $v) { echo $v; echo " "; }
     assert_eq!(out, "101 102 103 ");
 }
 
-// Verifies that a user function with 7 stack-passed arguments can be called in a yield expression.
-//
-// Verifies stack argument materialization for user functions with parameters beyond
-// the 8-register ABI limit.
+/// Verifies that a user function with 7 stack-passed arguments can be called in a yield expression.
+///
+/// Verifies stack argument materialization for user functions with parameters beyond
+/// the 8-register ABI limit.
 #[test]
 fn test_generator_calls_user_function_with_stack_passed_arg() {
     let out = compile_and_run(
@@ -182,10 +182,10 @@ foreach (gen() as $v) {
     assert_eq!(out, "28");
 }
 
-// Verifies that stack-passed parameters (beyond the 8-register ABI limit) are preserved in the generator frame.
-//
-// All 7 parameters cannot fit in registers; the 7th parameter (`$g`) is stack-passed.
-// Verifies that both `$g` and `$a + $g` (mixing a register and stack argument) are correct after resume.
+/// Verifies that stack-passed parameters (beyond the 8-register ABI limit) are preserved in the generator frame.
+///
+/// All 7 parameters cannot fit in registers; the 7th parameter (`$g`) is stack-passed.
+/// Verifies that both `$g` and `$a + $g` (mixing a register and stack argument) are correct after resume.
 #[test]
 fn test_generator_stack_passed_parameter_survives_in_frame() {
     let out = compile_and_run(
@@ -203,7 +203,7 @@ foreach (gen(1, 2, 3, 4, 5, 6, 7) as $v) {
     assert_eq!(out, "7 8 ");
 }
 
-// Verifies that a user function call embedded in arithmetic is correctly evaluated within a yield expression.
+/// Verifies that a user function call embedded in arithmetic is correctly evaluated within a yield expression.
 #[test]
 fn test_generator_calls_user_function_in_arithmetic() {
     let out = compile_and_run(
@@ -222,7 +222,7 @@ foreach (gen() as $v) { echo $v; echo " "; }
     assert_eq!(out, "12 14 16 18 ");
 }
 
-// Verifies that both explicit keys and parameter-derived values are correctly placed in yielded pairs.
+/// Verifies that both explicit keys and parameter-derived values are correctly placed in yielded pairs.
 #[test]
 fn test_generator_combined_param_key_and_value() {
     let out = compile_and_run(

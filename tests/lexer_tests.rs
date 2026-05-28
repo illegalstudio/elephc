@@ -9,9 +9,9 @@
 
 use elephc::lexer::{tokenize, Token};
 
-// Tokenizes source and returns only the Token values (discarding spans) for
-// assertions that only need token kind, not position. Used throughout lexer
-// regression tests to keep fixture assertions concise.
+/// Tokenizes source and returns only the Token values (discarding spans) for
+/// assertions that only need token kind, not position. Used throughout lexer
+/// regression tests to keep fixture assertions concise.
 fn tokens(source: &str) -> Vec<Token> {
     tokenize(source)
         .unwrap()

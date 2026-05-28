@@ -9,9 +9,9 @@
 
 use super::*;
 
+/// Verifies that `<?php try { throw $e; } catch (MyException $err) { echo 1; } finally { echo 2; }`
+/// parses to a `Try` with one catch clause, a finally body, and a throw expression in the try body.
 #[test]
-// Verifies that `<?php try { throw $e; } catch (MyException $err) { echo 1; } finally { echo 2; }`
-// parses to a `Try` with one catch clause, a finally body, and a throw expression in the try body.
 fn test_parse_try_catch_finally() {
     let stmts = parse_source(
         "<?php try { throw $e; } catch (MyException $err) { echo 1; } finally { echo 2; }",
@@ -36,9 +36,9 @@ fn test_parse_try_catch_finally() {
     );
 }
 
+/// Verifies that `<?php try { throw $e; } catch (FooException | BarException $err) { echo 1; }`
+/// parses to a `Try` with a multi-type catch clause (union of exception types).
 #[test]
-// Verifies that `<?php try { throw $e; } catch (FooException | BarException $err) { echo 1; }`
-// parses to a `Try` with a multi-type catch clause (union of exception types).
 fn test_parse_multi_catch() {
     let stmts = parse_source(
         "<?php try { throw $e; } catch (FooException | BarException $err) { echo 1; }",
@@ -63,9 +63,9 @@ fn test_parse_multi_catch() {
     );
 }
 
+/// Verifies that `<?php try { throw $e; } catch (Exception) { echo 1; }` parses with a catch
+/// clause that has no variable (exception is caught but not bound to a name).
 #[test]
-// Verifies that `<?php try { throw $e; } catch (Exception) { echo 1; }` parses with a catch
-// clause that has no variable (exception is caught but not bound to a name).
 fn test_parse_catch_without_variable() {
     let stmts = parse_source("<?php try { throw $e; } catch (Exception) { echo 1; }");
     assert_eq!(
@@ -88,10 +88,10 @@ fn test_parse_catch_without_variable() {
     );
 }
 
+/// Verifies that `<?php $value = $maybe ?? throw new Exception();` parses throw expressions
+/// as valid right-hand side of the null coalescing operator, with the throw expression
+/// nested inside an assignment statement.
 #[test]
-// Verifies that `<?php $value = $maybe ?? throw new Exception();` parses throw expressions
-// as valid right-hand side of the null coalescing operator, with the throw expression
-// nested inside an assignment statement.
 fn test_parse_throw_expression_in_null_coalesce() {
     let stmts = parse_source("<?php $value = $maybe ?? throw new Exception();");
     assert_eq!(stmts.len(), 1);

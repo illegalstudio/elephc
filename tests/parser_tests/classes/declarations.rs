@@ -9,9 +9,9 @@
 
 use super::*;
 
+/// Verifies that `<?php class Point { public $x; private $y = 1; ... }` parses to a `ClassDecl`
+/// with two properties (public and private), two methods (one static), and no extends/implements.
 #[test]
-// Verifies that `<?php class Point { public $x; private $y = 1; ... }` parses to a `ClassDecl`
-// with two properties (public and private), two methods (one static), and no extends/implements.
 fn test_parse_class_decl() {
     let stmts = parse_source("<?php class Point { public $x; private $y = 1; public function get() { return $this->x; } public static function origin() { return new Point(); } }");
     match &stmts[0].kind {
@@ -46,9 +46,9 @@ fn test_parse_class_decl() {
     }
 }
 
+/// Verifies that `<?php $p = new Point(1, 2);` parses `new` expression with constructor args
+/// into `StmtKind::Assign` wrapping `ExprKind::NewObject` with class name and argument list.
 #[test]
-// Verifies that `<?php $p = new Point(1, 2);` parses `new` expression with constructor args
-// into `StmtKind::Assign` wrapping `ExprKind::NewObject` with class name and argument list.
 fn test_parse_new_object() {
     let stmts = parse_source("<?php $p = new Point(1, 2);");
     match &stmts[0].kind {
@@ -63,9 +63,9 @@ fn test_parse_new_object() {
     }
 }
 
+/// Verifies that `<?php class Child extends Base { ... }` parses to `ClassDecl` with the
+/// extends name set and the subclass body (method count, name) correctly captured.
 #[test]
-// Verifies that `<?php class Child extends Base { ... }` parses to `ClassDecl` with the
-// extends name set and the subclass body (method count, name) correctly captured.
 fn test_parse_class_decl_with_extends() {
     let stmts =
         parse_source("<?php class Child extends Base { public function run() { return 1; } }");
@@ -85,10 +85,10 @@ fn test_parse_class_decl_with_extends() {
     }
 }
 
+/// Verifies that `<?php interface Named extends Renderable, Jsonable { public function name(); }`
+/// parses to `InterfaceDecl` with multiple extends names, one abstract method (no body),
+/// and confirms `is_abstract` and `has_body` flags are set correctly.
 #[test]
-// Verifies that `<?php interface Named extends Renderable, Jsonable { public function name(); }`
-// parses to `InterfaceDecl` with multiple extends names, one abstract method (no body),
-// and confirms `is_abstract` and `has_body` flags are set correctly.
 fn test_parse_interface_decl() {
     let stmts = parse_source(
         "<?php interface Named extends Renderable, Jsonable { public function name(); }",
@@ -115,10 +115,10 @@ fn test_parse_interface_decl() {
     }
 }
 
+/// Verifies that `<?php interface HasName { public string $name { get; set; } }` parses an
+/// interface property with explicit getter/setter hooks into `InterfaceDecl` with the hooks
+/// flags set on the property entry.
 #[test]
-// Verifies that `<?php interface HasName { public string $name { get; set; } }` parses an
-// interface property with explicit getter/setter hooks into `InterfaceDecl` with the hooks
-// flags set on the property entry.
 fn test_parse_interface_property_hooks() {
     let stmts = parse_source(
         "<?php interface HasName { public string $name { get; set; } }",
@@ -140,9 +140,9 @@ fn test_parse_interface_property_hooks() {
     }
 }
 
+/// Verifies that `<?php echo new self();` parses `new self` into `ExprKind::NewScopedObject`
+/// with `StaticReceiver::Self_` and no constructor arguments.
 #[test]
-// Verifies that `<?php echo new self();` parses `new self` into `ExprKind::NewScopedObject`
-// with `StaticReceiver::Self_` and no constructor arguments.
 fn test_parse_new_self() {
     let stmts = parse_source("<?php echo new self();");
     match echoed_expr(&stmts) {
@@ -154,9 +154,9 @@ fn test_parse_new_self() {
     }
 }
 
+/// Verifies that `<?php echo new static();` parses `new static` into `ExprKind::NewScopedObject`
+/// with `StaticReceiver::Static` and no constructor arguments.
 #[test]
-// Verifies that `<?php echo new static();` parses `new static` into `ExprKind::NewScopedObject`
-// with `StaticReceiver::Static` and no constructor arguments.
 fn test_parse_new_static() {
     let stmts = parse_source("<?php echo new static();");
     match echoed_expr(&stmts) {
@@ -168,9 +168,9 @@ fn test_parse_new_static() {
     }
 }
 
+/// Verifies that `<?php echo new parent(1, 2);` parses `new parent` with positional args into
+/// `ExprKind::NewScopedObject` with `StaticReceiver::Parent` and two constructor arguments.
 #[test]
-// Verifies that `<?php echo new parent(1, 2);` parses `new parent` with positional args into
-// `ExprKind::NewScopedObject` with `StaticReceiver::Parent` and two constructor arguments.
 fn test_parse_new_parent_with_args() {
     let stmts = parse_source("<?php echo new parent(1, 2);");
     match echoed_expr(&stmts) {

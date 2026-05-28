@@ -9,27 +9,27 @@
 
 use super::*;
 
+/// Verifies that heredoc syntax with a basic label (`<<<EOT`) tokenizes
+/// the body as a single `StringLiteral` token without interpolation.
 #[test]
-// Verifies that heredoc syntax with a basic label (`<<<EOT`) tokenizes
-// the body as a single `StringLiteral` token without interpolation.
 fn test_heredoc_token() {
     let t = tokens("<?php <<<EOT\nHello\nEOT;");
     assert!(t.contains(&Token::StringLiteral("Hello".into())));
 }
 
+/// Verifies that nowdoc syntax with a single-quoted label (`<<<'EOT'`)
+/// tokenizes the body as a literal `StringLiteral` token with no variable
+/// interpolation, even when `$`-prefixed identifiers appear in the body.
 #[test]
-// Verifies that nowdoc syntax with a single-quoted label (`<<<'EOT'`)
-// tokenizes the body as a literal `StringLiteral` token with no variable
-// interpolation, even when `$`-prefixed identifiers appear in the body.
 fn test_nowdoc_token() {
     let t = tokens("<?php <<<'EOT'\nHello\nEOT;");
     assert!(t.contains(&Token::StringLiteral("Hello".into())));
 }
 
+/// Verifies that heredoc with a variable reference (`$name`) emits separate
+/// `Variable` and `StringLiteral` tokens, and that a `Dot` token separates
+/// the literal from the variable in the token stream.
 #[test]
-// Verifies that heredoc with a variable reference (`$name`) emits separate
-// `Variable` and `StringLiteral` tokens, and that a `Dot` token separates
-// the literal from the variable in the token stream.
 fn test_heredoc_interpolation_token() {
     let t = tokens("<?php <<<EOT\nHello $name\nEOT;");
     assert!(t.contains(&Token::Variable("name".into())));
@@ -37,18 +37,18 @@ fn test_heredoc_interpolation_token() {
     assert!(t.contains(&Token::StringLiteral("Hello ".into())));
 }
 
+/// Verifies that PHP escape sequences inside heredoc are correctly decoded:
+/// `\r` → carriage return, `\x42` → hex byte, `\102` → octal byte,
+/// `\u{1F600}` → UTF-8 emoji codepoint.
 #[test]
-// Verifies that PHP escape sequences inside heredoc are correctly decoded:
-// `\r` → carriage return, `\x42` → hex byte, `\102` → octal byte,
-// `\u{1F600}` → UTF-8 emoji codepoint.
 fn test_heredoc_php_escape_sequences() {
     let t = tokens("<?php <<<EOT\nA\\r\\x42\\102\\u{1F600}\nEOT;");
     assert!(t.contains(&Token::StringLiteral("A\rBB😀".into())));
 }
 
+/// Verifies that nowdoc with a variable-like sequence in the body preserves it
+/// as a literal `StringLiteral` and does not emit a `Variable` token.
 #[test]
-// Verifies that nowdoc with a variable-like sequence in the body preserves it
-// as a literal `StringLiteral` and does not emit a `Variable` token.
 fn test_nowdoc_no_interpolation_token() {
     let t = tokens("<?php <<<'EOT'\nHello $name\nEOT;");
     // Nowdoc: $name stays as literal text, no Variable token

@@ -11,22 +11,22 @@ use crate::support::*;
 
 // --- Single-quoted strings ---
 
-// Compiles `<?php echo 'hello';` and asserts stdout is `hello`.
+/// Compiles `<?php echo 'hello';` and asserts stdout is `hello`.
 #[test]
 fn test_single_quoted_string() {
     let out = compile_and_run("<?php echo 'hello';");
     assert_eq!(out, "hello");
 }
 
-// Compiles raw string `<?php echo 'no\n escape';` and asserts stdout is `no\n escape`
-// (backslash is literal in single-quoted strings; only `\'` is an escape).
+/// Compiles raw string `<?php echo 'no\n escape';` and asserts stdout is `no\n escape`
+/// (backslash is literal in single-quoted strings; only `\'` is an escape).
 #[test]
 fn test_single_quoted_no_escape() {
     let out = compile_and_run(r"<?php echo 'no\n escape';");
     assert_eq!(out, "no\\n escape");
 }
 
-// Compiles `<?php echo 'it\'s';` and asserts stdout is `it's` (`\'` produces a literal single quote).
+/// Compiles `<?php echo 'it\'s';` and asserts stdout is `it's` (`\'` produces a literal single quote).
 #[test]
 fn test_single_quoted_escaped_quote() {
     let out = compile_and_run("<?php echo 'it\\'s';");
@@ -35,63 +35,63 @@ fn test_single_quoted_escaped_quote() {
 
 // --- null ---
 
-// Compiles `<?php echo null;` and asserts stdout is empty (null produces no output).
+/// Compiles `<?php echo null;` and asserts stdout is empty (null produces no output).
 #[test]
 fn test_null_echo_nothing() {
     let out = compile_and_run("<?php echo null;");
     assert_eq!(out, "");
 }
 
-// Compiles `<?php $x = null; echo $x;` and asserts stdout is empty (null variable produces no output).
+/// Compiles `<?php $x = null; echo $x;` and asserts stdout is empty (null variable produces no output).
 #[test]
 fn test_null_variable_echo_nothing() {
     let out = compile_and_run("<?php $x = null; echo $x;");
     assert_eq!(out, "");
 }
 
-// Compiles `<?php $x = null; echo is_null($x);` and asserts stdout is `1` (null is null).
+/// Compiles `<?php $x = null; echo is_null($x);` and asserts stdout is `1` (null is null).
 #[test]
 fn test_is_null_true() {
     let out = compile_and_run("<?php $x = null; echo is_null($x);");
     assert_eq!(out, "1");
 }
 
-// Compiles `<?php $x = 42; echo is_null($x);` and asserts stdout is empty (integer is not null).
+/// Compiles `<?php $x = 42; echo is_null($x);` and asserts stdout is empty (integer is not null).
 #[test]
 fn test_is_null_false() {
     let out = compile_and_run("<?php $x = 42; echo is_null($x);");
     assert_eq!(out, "");
 }
 
-// Compiles `<?php $x = null; echo $x + 5;` and asserts stdout is `5` (null coerces to 0 in arithmetic).
+/// Compiles `<?php $x = null; echo $x + 5;` and asserts stdout is `5` (null coerces to 0 in arithmetic).
 #[test]
 fn test_null_plus_int() {
     let out = compile_and_run("<?php $x = null; echo $x + 5;");
     assert_eq!(out, "5");
 }
 
-// Compiles `<?php $x = null; echo $x . "hello";` and asserts stdout is `hello` (null is empty string in concat).
+/// Compiles `<?php $x = null; echo $x . "hello";` and asserts stdout is `hello` (null is empty string in concat).
 #[test]
 fn test_null_concat() {
     let out = compile_and_run("<?php $x = null; echo $x . \"hello\";");
     assert_eq!(out, "hello");
 }
 
-// Compiles `<?php $x = null; echo $x == 0;` and asserts stdout is `1` (null equals 0 in loose comparison).
+/// Compiles `<?php $x = null; echo $x == 0;` and asserts stdout is `1` (null equals 0 in loose comparison).
 #[test]
 fn test_null_equals_zero() {
     let out = compile_and_run("<?php $x = null; echo $x == 0;");
     assert_eq!(out, "1");
 }
 
-// Compiles `<?php $y = null; $y += 10; echo $y;` and asserts stdout is `10` (null becomes 0, then adds 10).
+/// Compiles `<?php $y = null; $y += 10; echo $y;` and asserts stdout is `10` (null becomes 0, then adds 10).
 #[test]
 fn test_null_plus_assign() {
     let out = compile_and_run("<?php $y = null; $y += 10; echo $y;");
     assert_eq!(out, "10");
 }
 
-// Compiles `<?php $x = null; $x = 42; echo $x;` and asserts stdout is `42` (null reassigned to int).
+/// Compiles `<?php $x = null; $x = 42; echo $x;` and asserts stdout is `42` (null reassigned to int).
 #[test]
 fn test_null_reassign() {
     let out = compile_and_run("<?php $x = null; $x = 42; echo $x;");
@@ -100,43 +100,43 @@ fn test_null_reassign() {
 
 // --- Built-in functions ---
 
-// Compiles `<?php echo strlen("hello");` and asserts stdout is `5`.
+/// Compiles `<?php echo strlen("hello");` and asserts stdout is `5`.
 #[test]
 fn test_strlen() {
     let out = compile_and_run("<?php echo strlen(\"hello\");");
     assert_eq!(out, "5");
 }
 
-// Compiles `<?php echo strlen("");` and asserts stdout is `0` (empty string has length 0).
+/// Compiles `<?php echo strlen("");` and asserts stdout is `0` (empty string has length 0).
 #[test]
 fn test_strlen_empty() {
     let out = compile_and_run("<?php echo strlen(\"\");");
     assert_eq!(out, "0");
 }
 
-// Compiles `<?php echo intval("42");` and asserts stdout is `42` (string to int conversion).
+/// Compiles `<?php echo intval("42");` and asserts stdout is `42` (string to int conversion).
 #[test]
 fn test_intval_string() {
     let out = compile_and_run("<?php echo intval(\"42\");");
     assert_eq!(out, "42");
 }
 
-// Compiles `<?php echo intval("-7");` and asserts stdout is `-7` (negative string to int).
+/// Compiles `<?php echo intval("-7");` and asserts stdout is `-7` (negative string to int).
 #[test]
 fn test_intval_negative() {
     let out = compile_and_run("<?php echo intval(\"-7\");");
     assert_eq!(out, "-7");
 }
 
-// Compiles `<?php echo intval(42);` and asserts stdout is `42` (int passthrough, no conversion).
+/// Compiles `<?php echo intval(42);` and asserts stdout is `42` (int passthrough, no conversion).
 #[test]
 fn test_intval_int_passthrough() {
     let out = compile_and_run("<?php echo intval(42);");
     assert_eq!(out, "42");
 }
 
-// Compiles `<?php echo "before"; exit(0); echo "after";` and asserts stdout is `before`.
-// Verifies `exit` stops execution and prevents output of subsequent statements.
+/// Compiles `<?php echo "before"; exit(0); echo "after";` and asserts stdout is `before`.
+/// Verifies `exit` stops execution and prevents output of subsequent statements.
 #[test]
 fn test_exit_code() {
     // We can't easily test exit code in compile_and_run, so test that
@@ -147,7 +147,7 @@ fn test_exit_code() {
 
 // --- $argc ---
 
-// Compiles `<?php echo $argc;` and asserts stdout is `1` (test binary is run with no extra args).
+/// Compiles `<?php echo $argc;` and asserts stdout is `1` (test binary is run with no extra args).
 #[test]
 fn test_argc_exists() {
     let out = compile_and_run("<?php echo $argc;");
@@ -155,14 +155,14 @@ fn test_argc_exists() {
     assert_eq!(out, "1");
 }
 
-// Compiles `<?php echo count($argv);` and asserts stdout is `1` (`$argv` has one element: the binary name).
+/// Compiles `<?php echo count($argv);` and asserts stdout is `1` (`$argv` has one element: the binary name).
 #[test]
 fn test_argv_count_exists() {
     let out = compile_and_run("<?php echo count($argv);");
     assert_eq!(out, "1");
 }
 
-// Compiles `<?php echo $argv[0];` and asserts it ends with `/test` (script path is set by test runner).
+/// Compiles `<?php echo $argv[0];` and asserts it ends with `/test` (script path is set by test runner).
 #[test]
 fn test_argv_first_entry_exists() {
     let out = compile_and_run("<?php echo $argv[0];");

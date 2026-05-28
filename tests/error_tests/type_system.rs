@@ -9,67 +9,67 @@
 
 use super::*;
 
+/// Verifies that `??=` with no right-hand side expression produces an "Unexpected token" error.
+/// Input: `$x ??=;` — the semicolon terminates the expression with no RHS.
 #[test]
 fn test_error_null_coalesce_assignment_missing_rhs() {
-    // Verifies that `??=` with no right-hand side expression produces an "Unexpected token" error.
-    // Input: `$x ??=;` — the semicolon terminates the expression with no RHS.
     expect_error("<?php $x ??=;", "Unexpected token");
 }
 
+/// Verifies that `??=` rejects a type-changing initializer on an existing typed variable.
+/// Input: `$x = 5; $x ??= 2.5;` — `$x` is int, RHS is float, which widens and is rejected.
 #[test]
 fn test_error_null_coalesce_assignment_type_change() {
-    // Verifies that `??=` rejects a type-changing initializer on an existing typed variable.
-    // Input: `$x = 5; $x ??= 2.5;` — `$x` is int, RHS is float, which widens and is rejected.
     expect_error(
         "<?php $x = 5; $x ??= 2.5;",
         "null coalescing assignment for $x must keep int, got float",
     );
 }
 
+/// Verifies that a non-integer string subscript is rejected on a string value.
+/// Input: `$s = "hello"; echo $s["x"];` — string key "x" is not integer.
 #[test]
 fn test_error_string_index_requires_integer() {
-    // Verifies that a non-integer string subscript is rejected on a string value.
-    // Input: `$s = "hello"; echo $s["x"];` — string key "x" is not integer.
     expect_error(
         "<?php $s = \"hello\"; echo $s[\"x\"];",
         "String index must be integer",
     );
 }
 
+/// Verifies that assigning to a string offset (character replacement) is rejected.
+/// Input: `$s = "hello"; $s[0] = "H";` — offset assignment on a string is unsupported.
 #[test]
 fn test_error_string_offset_assignment_is_not_supported() {
-    // Verifies that assigning to a string offset (character replacement) is rejected.
-    // Input: `$s = "hello"; $s[0] = "H";` — offset assignment on a string is unsupported.
     expect_error(
         "<?php $s = \"hello\"; $s[0] = \"H\";",
         "String offset assignment is not supported",
     );
 }
 
+/// Verifies that by-reference foreach over a parameter typed `iterable` is rejected.
+/// Input: `function f(iterable $items) { foreach ($items as &$value) {} }`
 #[test]
 fn test_error_by_reference_foreach_rejects_iterable_type() {
-    // Verifies that by-reference foreach over a parameter typed `iterable` is rejected.
-    // Input: `function f(iterable $items) { foreach ($items as &$value) {} }`
     expect_error(
         "<?php function f(iterable $items) { foreach ($items as &$value) {} }",
         "by-reference foreach over Iterator/IteratorAggregate objects",
     );
 }
 
+/// Verifies that by-reference foreach over a parameter typed `Iterator` is rejected.
+/// Input: `function f(Iterator $items) { foreach ($items as &$value) {} }`
 #[test]
 fn test_error_by_reference_foreach_rejects_iterator_object_type() {
-    // Verifies that by-reference foreach over a parameter typed `Iterator` is rejected.
-    // Input: `function f(Iterator $items) { foreach ($items as &$value) {} }`
     expect_error(
         "<?php function f(Iterator $items) { foreach ($items as &$value) {} }",
         "by-reference foreach over Iterator/IteratorAggregate objects",
     );
 }
 
+/// Verifies that by-reference foreach over a concrete class implementing `Iterator` is rejected.
+/// Uses a `Counter` class that implements Iterator with an int counter field.
 #[test]
 fn test_error_by_reference_foreach_rejects_concrete_iterator_object() {
-    // Verifies that by-reference foreach over a concrete class implementing `Iterator` is rejected.
-    // Uses a `Counter` class that implements Iterator with an int counter field.
     expect_error(
         r#"<?php
 class Counter implements Iterator {
@@ -86,10 +86,10 @@ foreach (new Counter() as &$value) {}
     );
 }
 
+/// Verifies that by-reference foreach over a concrete class implementing `IteratorAggregate` is rejected.
+/// Uses a `Counters` class that returns a `Counter` iterator via `getIterator()`.
 #[test]
 fn test_error_by_reference_foreach_rejects_iterator_aggregate_object() {
-    // Verifies that by-reference foreach over a concrete class implementing `IteratorAggregate` is rejected.
-    // Uses a `Counters` class that returns a `Counter` iterator via `getIterator()`.
     expect_error(
         r#"<?php
 class Counter implements Iterator {
@@ -109,162 +109,162 @@ foreach (new Counters() as &$value) {}
     );
 }
 
+/// Verifies that a union-typed local variable rejects an initializer of an incompatible type.
+/// Input: `int|string $value = 1.5;` — float is not int or string.
 #[test]
 fn test_error_union_typed_local_rejects_invalid_initializer() {
-    // Verifies that a union-typed local variable rejects an initializer of an incompatible type.
-    // Input: `int|string $value = 1.5;` — float is not int or string.
     expect_error("<?php int|string $value = 1.5;", "cannot initialize $value");
 }
 
+/// Verifies that referencing an undefined variable produces an "Undefined variable" error.
 #[test]
 fn test_error_undefined_variable() {
-    // Verifies that referencing an undefined variable produces an "Undefined variable" error.
     expect_error("<?php echo $x;", "Undefined variable: $x");
 }
 
+/// Verifies that reassigning a typed variable to a different type is rejected.
+/// Input: `$x = 42; $x = "hello";` — `$x` is int, reassignment to string fails.
 #[test]
 fn test_error_type_mismatch_reassign() {
-    // Verifies that reassigning a typed variable to a different type is rejected.
-    // Input: `$x = 42; $x = "hello";` — `$x` is int, reassignment to string fails.
     expect_error("<?php $x = 42; $x = \"hello\";", "cannot reassign $x");
 }
 
+/// Verifies that arithmetic on a string operand produces an error.
+/// Input: `$x = "hi"; echo $x + 1;` — string is not numeric.
 #[test]
 fn test_error_arithmetic_on_string() {
-    // Verifies that arithmetic on a string operand produces an error.
-    // Input: `$x = "hi"; echo $x + 1;` — string is not numeric.
     expect_error(
         "<?php $x = \"hi\"; echo $x + 1;",
         "Arithmetic operators require numeric operands",
     );
 }
 
+/// Verifies that negating a non-numeric string produces an error.
+/// Input: `$x = "hi"; echo -$x;`
 #[test]
 fn test_error_negate_string() {
-    // Verifies that negating a non-numeric string produces an error.
-    // Input: `$x = "hi"; echo -$x;`
     expect_error(
         "<?php $x = \"hi\"; echo -$x;",
         "Cannot negate a non-numeric value",
     );
 }
 
+/// Verifies that comparison operators on strings produce an error.
+/// Input: `$x = "a"; echo $x < 1;` — string vs int comparison is invalid.
 #[test]
 fn test_error_comparison_on_string() {
-    // Verifies that comparison operators on strings produce an error.
-    // Input: `$x = "a"; echo $x < 1;` — string vs int comparison is invalid.
     expect_error(
         "<?php $x = \"a\"; echo $x < 1;",
         "Comparison operators require numeric operands",
     );
 }
 
+/// Verifies that `xor` with no right-hand side produces an "Unexpected token" error.
 #[test]
 fn test_error_word_logical_missing_rhs() {
-    // Verifies that `xor` with no right-hand side produces an "Unexpected token" error.
     expect_error("<?php echo true xor;", "Unexpected token: Semicolon");
 }
 
+/// Verifies that an assignment expression with a non-lvalue target is rejected.
+/// Input: `echo 1 = 2;` — 1 is not a valid assignment target.
 #[test]
 fn test_error_assignment_expression_rejects_non_lvalue() {
-    // Verifies that an assignment expression with a non-lvalue target is rejected.
-    // Input: `echo 1 = 2;` — 1 is not a valid assignment target.
     expect_error("<?php echo 1 = 2;", "Invalid assignment target");
 }
 
+/// Verifies that a variable assigned inside a short-circuit `&&` is flagged as possibly undefined
+/// when referenced after the `&&` expression that did not execute.
+/// Input: `echo false && ($x = 1); echo $x;` — `$x` may not be defined.
 #[test]
 fn test_error_short_circuit_assignment_effect_is_not_definite() {
-    // Verifies that a variable assigned inside a short-circuit `&&` is flagged as possibly undefined
-    // when referenced after the `&&` expression that did not execute.
-    // Input: `echo false && ($x = 1); echo $x;` — `$x` may not be defined.
     expect_error(
         "<?php echo false && ($x = 1); echo $x;",
         "Undefined variable: $x",
     );
 }
 
+/// Verifies that the short ternary (`?:`) with no default expression produces an error.
 #[test]
 fn test_error_short_ternary_missing_default() {
-    // Verifies that the short ternary (`?:`) with no default expression produces an error.
     expect_error("<?php echo $x ?:;", "Unexpected token: Semicolon");
 }
 
+/// Verifies that `break` outside any loop or switch produces an error.
 #[test]
 fn test_error_break_outside_loop_or_switch() {
-    // Verifies that `break` outside any loop or switch produces an error.
     expect_error("<?php break;", "Cannot 'break' 1 levels");
 }
 
+/// Verifies that `break N` with N exceeding the available nesting levels produces an error.
 #[test]
 fn test_error_break_too_many_levels() {
-    // Verifies that `break N` with N exceeding the available nesting levels produces an error.
     expect_error("<?php while (1) { break 2; }", "Cannot 'break' 2 levels");
 }
 
+/// Verifies that `continue N` with N exceeding available loop nesting produces an error.
 #[test]
 fn test_error_continue_too_many_levels() {
-    // Verifies that `continue N` with N exceeding available loop nesting produces an error.
     expect_error(
         "<?php while (1) { continue 2; }",
         "Cannot 'continue' 2 levels",
     );
 }
 
+/// Verifies that `break` inside a `finally` block cannot jump out of the finally.
 #[test]
 fn test_error_break_cannot_jump_out_of_finally() {
-    // Verifies that `break` inside a `finally` block cannot jump out of the finally.
     expect_error(
         "<?php while (1) { try { echo 1; } finally { break; } }",
         "Cannot jump out of a finally block",
     );
 }
 
+/// Verifies that `continue` inside a `finally` block cannot jump out of the finally.
 #[test]
 fn test_error_continue_cannot_jump_out_of_finally() {
-    // Verifies that `continue` inside a `finally` block cannot jump out of the finally.
     expect_error(
         "<?php while (1) { try { echo 1; } finally { continue; } }",
         "Cannot jump out of a finally block",
     );
 }
 
+/// Verifies that a multi-level `break N` inside a `finally` block cannot jump out of the finally.
 #[test]
 fn test_error_multilevel_break_cannot_jump_out_of_finally() {
-    // Verifies that a multi-level `break N` inside a `finally` block cannot jump out of the finally.
     expect_error(
         "<?php while (1) { try { echo 1; } finally { while (1) { break 2; } } }",
         "Cannot jump out of a finally block",
     );
 }
 
+/// Verifies that calling an undefined function produces an error.
 #[test]
 fn test_error_undefined_function() {
-    // Verifies that calling an undefined function produces an error.
     expect_error("<?php nope();", "Undefined function: nope");
 }
 
+/// Verifies that passing too many arguments to a user-defined function is rejected.
 #[test]
 fn test_error_wrong_arg_count() {
-    // Verifies that passing too many arguments to a user-defined function is rejected.
     expect_error(
         "<?php function f($a) { return $a; } f(1, 2);",
         "expects 1 arguments, got 2",
     );
 }
 
+/// Verifies that increment/decrement on a string is rejected.
 #[test]
 fn test_error_increment_string() {
-    // Verifies that increment/decrement on a string is rejected.
     expect_error("<?php $x = \"hi\"; $x++;", "Cannot increment/decrement");
 }
 
 // --- Error positions ---
 
+/// Verifies that the null coalesce operator widens the inferred return type to float
+/// when one branch is int and the other is a float literal.
+/// Input: `function fallback_pi($x) { return $x ?? 3.14159; }`
 #[test]
 fn test_null_coalesce_widens_function_return_type_in_checker() {
-    // Verifies that the null coalesce operator widens the inferred return type to float
-    // when one branch is int and the other is a float literal.
-    // Input: `function fallback_pi($x) { return $x ?? 3.14159; }`
     let tokens = tokenize("<?php function fallback_pi($x) { return $x ?? 3.14159; }")
         .expect("tokenize failed");
     let ast = parse(&tokens).expect("parse failed");
@@ -296,6 +296,7 @@ fn test_null_coalesce_widens_function_return_type_in_checker() {
 
 }
 
+/// Verifies generic array return hint keeps specific method and property types.
 #[test]
 fn test_generic_array_return_hint_keeps_specific_method_and_property_types() {
     let result = check_source_full(
@@ -350,6 +351,7 @@ class Wad {
     );
 }
 
+/// Verifies generic array param and return hints keep specific string array types.
 #[test]
 fn test_generic_array_param_and_return_hints_keep_specific_string_array_types() {
     let result = check_source_full(
@@ -389,30 +391,30 @@ echo pickSecond(loadNames());
 
 // --- Include/Require errors ---
 
+/// Verifies that passing more arguments than a function with optional parameters accepts is rejected.
+/// Input: `function f($a, $b = 1) { return $a + $b; } f(1, 2, 3);`
 #[test]
 fn test_error_too_many_args_with_defaults() {
-    // Verifies that passing more arguments than a function with optional parameters accepts is rejected.
-    // Input: `function f($a, $b = 1) { return $a + $b; } f(1, 2, 3);`
     expect_error(
         "<?php function f($a, $b = 1) { return $a + $b; } f(1, 2, 3);",
         "expects 1 to 2 arguments, got 3",
     );
 }
 
+/// Verifies that passing fewer arguments than a function with optional parameters requires is rejected.
+/// Input: `function f($a, $b = 1) { return $a + $b; } f();`
 #[test]
 fn test_error_too_few_args_with_defaults() {
-    // Verifies that passing fewer arguments than a function with optional parameters requires is rejected.
-    // Input: `function f($a, $b = 1) { return $a + $b; } f();`
     expect_error(
         "<?php function f($a, $b = 1) { return $a + $b; } f();",
         "expects 1 to 2 arguments, got 0",
     );
 }
 
+/// Verifies that a promoted constructor parameter with a type mismatch is rejected.
+/// Input: `class Box { public function __construct(public int $value) {} } new Box("bad");`
 #[test]
 fn test_error_promoted_property_type_mismatch() {
-    // Verifies that a promoted constructor parameter with a type mismatch is rejected.
-    // Input: `class Box { public function __construct(public int $value) {} } new Box("bad");`
     expect_error(
         r#"<?php
 class Box {
@@ -424,164 +426,164 @@ $box = new Box("bad");
     );
 }
 
+/// Verifies that assigning an incompatible value to a static property is rejected.
+/// Input: `class Box { public static int $count = 1; } Box::$count = "x";`
 #[test]
 fn test_error_static_property_type_mismatch() {
-    // Verifies that assigning an incompatible value to a static property is rejected.
-    // Input: `class Box { public static int $count = 1; } Box::$count = "x";`
     expect_error(
         "<?php class Box { public static int $count = 1; } Box::$count = \"x\";",
         "Static property Box::$count expects",
     );
 }
 
+/// Verifies that a child class static property redeclared with an incompatible type is rejected.
+/// Input: `class Base { public static int $count = 1; } class Child extends Base { public static string $count = "x"; }`
 #[test]
 fn test_error_static_property_redeclaration_type_mismatch() {
-    // Verifies that a child class static property redeclared with an incompatible type is rejected.
-    // Input: `class Base { public static int $count = 1; } class Child extends Base { public static string $count = "x"; }`
     expect_error(
         "<?php class Base { public static int $count = 1; } class Child extends Base { public static string $count = \"x\"; }",
         "Type of Child::$count must be int, not string (as in class Base)",
     );
 }
 
+/// Verifies that `date()` with too many arguments is rejected.
 #[test]
 fn test_error_date_too_many_args() {
-    // Verifies that `date()` with too many arguments is rejected.
     expect_error(r#"<?php date("Y", 0, 0);"#, "date() takes 1 or 2 arguments");
 }
 
+/// Verifies that `json_encode()` flags argument must be int (not string).
 #[test]
 fn test_error_json_encode_flag_must_be_int() {
-    // Verifies that `json_encode()` flags argument must be int (not string).
     expect_error(
         r#"<?php json_encode("a", "b");"#,
         "json_encode() flags and depth must be integers",
     );
 }
 
+/// Verifies that `json_encode()` depth argument must be int (not string).
 #[test]
 fn test_error_json_encode_depth_must_be_int() {
-    // Verifies that `json_encode()` depth argument must be int (not string).
     expect_error(
         r#"<?php json_encode("a", 0, "deep");"#,
         "json_encode() flags and depth must be integers",
     );
 }
 
+/// Verifies that `json_encode()` with too many arguments is rejected.
 #[test]
 fn test_error_json_encode_too_many_args() {
-    // Verifies that `json_encode()` with too many arguments is rejected.
     expect_error(
         "<?php json_encode(1, 2, 3, 4);",
         "json_encode() takes 1 to 3 arguments",
     );
 }
 
+/// Verifies that `json_decode()` with too many arguments is rejected.
 #[test]
 fn test_error_json_decode_too_many_args() {
-    // Verifies that `json_decode()` with too many arguments is rejected.
     expect_error(
         r#"<?php json_decode("1", true, 1, 0, 99);"#,
         "json_decode() takes 1 to 4 arguments",
     );
 }
 
+/// Verifies that `json_decode()` requires a string-compatible first argument (array is rejected).
 #[test]
 fn test_error_json_decode_json_arg_must_be_string_compatible() {
-    // Verifies that `json_decode()` requires a string-compatible first argument (array is rejected).
     expect_error(
         r#"<?php json_decode([]);"#,
         "json_decode() json argument must be string-compatible",
     );
 }
 
+/// Verifies that `json_decode()` associative argument must be bool-compatible or null (array is rejected).
 #[test]
 fn test_error_json_decode_associative_must_be_bool_compatible() {
-    // Verifies that `json_decode()` associative argument must be bool-compatible or null (array is rejected).
     expect_error(
         r#"<?php json_decode("{}", []);"#,
         "json_decode() associative argument must be bool-compatible or null",
     );
 }
 
+/// Verifies that `json_decode()` depth argument must be int (not string).
 #[test]
 fn test_error_json_decode_depth_must_be_int() {
-    // Verifies that `json_decode()` depth argument must be int (not string).
     expect_error(
         r#"<?php json_decode("{}", false, "deep");"#,
         "json_decode() depth and flags must be integers",
     );
 }
 
+/// Verifies that `json_decode()` flags argument must be int (not string).
 #[test]
 fn test_error_json_decode_flags_must_be_int() {
-    // Verifies that `json_decode()` flags argument must be int (not string).
     expect_error(
         r#"<?php json_decode("{}", false, 512, "flags");"#,
         "json_decode() depth and flags must be integers",
     );
 }
 
+/// Verifies that `json_validate()` with too many arguments is rejected.
 #[test]
 fn test_error_json_validate_too_many_args() {
-    // Verifies that `json_validate()` with too many arguments is rejected.
     expect_error(
         r#"<?php json_validate("1", 1, 0, 99);"#,
         "json_validate() takes 1 to 3 arguments",
     );
 }
 
+/// Verifies that `json_validate()` requires a string-compatible first argument (array is rejected).
 #[test]
 fn test_error_json_validate_json_arg_must_be_string_compatible() {
-    // Verifies that `json_validate()` requires a string-compatible first argument (array is rejected).
     expect_error(
         r#"<?php json_validate([]);"#,
         "json_validate() json argument must be string-compatible",
     );
 }
 
+/// Verifies that `json_validate()` depth argument must be int (not string).
 #[test]
 fn test_error_json_validate_flag_must_be_int() {
-    // Verifies that `json_validate()` depth argument must be int (not string).
     expect_error(
         r#"<?php json_validate("1", "deep");"#,
         "json_validate() depth and flags must be integers",
     );
 }
 
+/// Verifies that `json_validate()` rejects `JSON_THROW_ON_ERROR` in flags.
 #[test]
 fn test_error_json_validate_rejects_throw_on_error_flag() {
-    // Verifies that `json_validate()` rejects `JSON_THROW_ON_ERROR` in flags.
     expect_error(
         r#"<?php json_validate("1", 512, JSON_THROW_ON_ERROR);"#,
         "json_validate() flags must be 0 or JSON_INVALID_UTF8_IGNORE",
     );
 }
 
+/// Verifies that `json_validate()` rejects combined flags mixing invalid values.
 #[test]
 fn test_error_json_validate_rejects_combined_invalid_flags() {
-    // Verifies that `json_validate()` rejects combined flags mixing invalid values.
     expect_error(
         r#"<?php json_validate("1", 512, JSON_INVALID_UTF8_IGNORE | JSON_THROW_ON_ERROR);"#,
         "json_validate() flags must be 0 or JSON_INVALID_UTF8_IGNORE",
     );
 }
 
+/// Verifies that `sin()` with more than 1 argument is rejected.
 #[test]
 fn test_error_sin_too_many_args() {
-    // Verifies that `sin()` with more than 1 argument is rejected.
     expect_error("<?php sin(1, 2);", "sin() takes exactly 1 argument");
 }
 
+/// Verifies that `log()` with more than 2 arguments is rejected.
 #[test]
 fn test_error_log_too_many_args() {
-    // Verifies that `log()` with more than 2 arguments is rejected.
     expect_error("<?php log(1, 2, 3);", "log() takes 1 or 2 arguments");
 }
 
+/// Verifies that a closure `use()` clause referencing an undefined variable is rejected.
 #[test]
 fn test_error_closure_use_undefined_variable() {
-    // Verifies that a closure `use()` clause referencing an undefined variable is rejected.
     expect_error(
         r#"<?php
 $fn = function() use ($undefined) { echo $undefined; };
@@ -592,10 +594,10 @@ $fn = function() use ($undefined) { echo $undefined; };
 
 // --- Pointer error tests ---
 
+/// Verifies that loose pointer comparison (`==` or `!=`) is rejected; only `===`/`!==` are allowed.
+/// Input: `$p = ptr($x); $q = ptr($x); echo $p == $q;`
 #[test]
 fn test_error_pointer_loose_comparison_is_rejected() {
-    // Verifies that loose pointer comparison (`==` or `!=`) is rejected; only `===`/`!==` are allowed.
-    // Input: `$p = ptr($x); $q = ptr($x); echo $p == $q;`
     expect_error(
         "<?php $x = 1; $p = ptr($x); $q = ptr($x); echo $p == $q;",
         "Loose pointer comparison is not supported; use === or !==",
@@ -604,10 +606,10 @@ fn test_error_pointer_loose_comparison_is_rejected() {
 
 // --- FFI error tests ---
 
+/// Verifies that using `$this` inside a static closure via a short ternary expression is rejected.
+/// Input: `class C { public int $count = 5; public function bad() { $f = static fn($x) => $x ?: $this->count; } }`
 #[test]
 fn test_error_static_closure_uses_this_through_short_ternary() {
-    // Verifies that using `$this` inside a static closure via a short ternary expression is rejected.
-    // Input: `class C { public int $count = 5; public function bad() { $f = static fn($x) => $x ?: $this->count; } }`
     expect_error(
         "<?php class C { public int $count = 5; public function bad() { $f = static fn($x) => $x ?: $this->count; return $f; } }",
         "Cannot use $this inside a static closure",

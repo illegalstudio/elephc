@@ -15,15 +15,15 @@ use elephc::parser::ast::{
 };
 use elephc::parser::parse;
 
-// Parses `src` as a PHP program and returns the list of statements.
-// Asserts that tokenization and parsing both succeed without error.
+/// Parses `src` as a PHP program and returns the list of statements.
+/// Asserts that tokenization and parsing both succeed without error.
 fn parse_source(src: &str) -> Vec<Stmt> {
     let tokens = tokenize(src).unwrap();
     parse(&tokens).unwrap()
 }
 
-// Returns `true` if tokenization or parsing `src` fails.
-// Used to verify that malformed input is correctly rejected.
+/// Returns `true` if tokenization or parsing `src` fails.
+/// Used to verify that malformed input is correctly rejected.
 fn parse_fails(src: &str) -> bool {
     let tokens = match tokenize(src) {
         Ok(t) => t,
@@ -32,8 +32,8 @@ fn parse_fails(src: &str) -> bool {
     parse(&tokens).is_err()
 }
 
-// Asserts that `path` is a `StringLiteral` with value `expected`.
-// Used by include/require tests to verify the path expression shape.
+/// Asserts that `path` is a `StringLiteral` with value `expected`.
+/// Used by include/require tests to verify the path expression shape.
 fn assert_path_string_literal(path: &Expr, expected: &str) {
     match &path.kind {
         ExprKind::StringLiteral(s) => assert_eq!(s, expected),
@@ -41,8 +41,8 @@ fn assert_path_string_literal(path: &Expr, expected: &str) {
     }
 }
 
-// Asserts that `stmt` is a `PropertyAssign` on `$this` with the given `property` name
-// and that the value is a `Variable` with the same name (constructor promotion pattern).
+/// Asserts that `stmt` is a `PropertyAssign` on `$this` with the given `property` name
+/// and that the value is a `Variable` with the same name (constructor promotion pattern).
 fn assert_promoted_assignment(stmt: &Stmt, expected: &str) {
     match &stmt.kind {
         StmtKind::PropertyAssign {
@@ -58,9 +58,9 @@ fn assert_promoted_assignment(stmt: &Stmt, expected: &str) {
     }
 }
 
-// Extracts the expression from the single `Echo` statement in `stmts`.
-// Panics if the first statement is not an `Echo`. Used to inspect magic constants
-// and other expressions that appear as the sole statement in `echo ...;` input.
+/// Extracts the expression from the single `Echo` statement in `stmts`.
+/// Panics if the first statement is not an `Echo`. Used to inspect magic constants
+/// and other expressions that appear as the sole statement in `echo ...;` input.
 fn echoed_expr(stmts: &[Stmt]) -> &ExprKind {
     match &stmts[0].kind {
         StmtKind::Echo(expr) => &expr.kind,

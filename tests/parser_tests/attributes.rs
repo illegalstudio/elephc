@@ -11,8 +11,8 @@
 use super::*;
 use elephc::parser::ast::{AttributeGroup, ClassMethod, ClassProperty};
 
-// Extracts the first ClassDecl from a parsed program.
-// Panics if no ClassDecl is found.
+/// Extracts the first ClassDecl from a parsed program.
+/// Panics if no ClassDecl is found.
 fn first_class_decl_name(stmts: &[Stmt]) -> &str {
     for stmt in stmts {
         if let StmtKind::ClassDecl { name, .. } = &stmt.kind {
@@ -22,8 +22,8 @@ fn first_class_decl_name(stmts: &[Stmt]) -> &str {
     panic!("expected a ClassDecl in {:?}", stmts);
 }
 
-// Extracts attribute groups, properties, and methods from the first ClassDecl in a parsed program.
-// Panics if no ClassDecl is found.
+/// Extracts attribute groups, properties, and methods from the first ClassDecl in a parsed program.
+/// Panics if no ClassDecl is found.
 fn class_decl<'a>(stmts: &'a [Stmt]) -> (&'a Vec<AttributeGroup>, &'a Vec<ClassProperty>, &'a Vec<ClassMethod>) {
     for stmt in stmts {
         if let StmtKind::ClassDecl { properties, methods, .. } = &stmt.kind {
@@ -33,6 +33,7 @@ fn class_decl<'a>(stmts: &'a [Stmt]) -> (&'a Vec<AttributeGroup>, &'a Vec<ClassP
     panic!("expected a ClassDecl in {:?}", stmts);
 }
 
+/// Verifies class attribute is accepted and does not alter decl.
 #[test]
 fn test_class_attribute_is_accepted_and_does_not_alter_decl() {
     // `#[Foo]` on a class declaration parses without error and produces the
@@ -42,6 +43,7 @@ fn test_class_attribute_is_accepted_and_does_not_alter_decl() {
     assert_eq!(with_attr, without);
 }
 
+/// Verifies method attribute is accepted.
 #[test]
 fn test_method_attribute_is_accepted() {
     // `#[Required]` on a class method parses without error.
@@ -51,6 +53,7 @@ fn test_method_attribute_is_accepted() {
     );
 }
 
+/// Verifies property attribute is accepted.
 #[test]
 fn test_property_attribute_is_accepted() {
     // `#[Bar]` on a class property parses without error.
@@ -58,6 +61,7 @@ fn test_property_attribute_is_accepted() {
     let _ = parse_source("<?php class C { #[Bar] public int $n = 0; }");
 }
 
+/// Verifies multiple attributes in one group.
 #[test]
 fn test_multiple_attributes_in_one_group() {
     // `#[A, B(1)]` on a class parses with no error; the class name is recovered.
@@ -65,6 +69,7 @@ fn test_multiple_attributes_in_one_group() {
     assert_eq!(first_class_decl_name(&with_attr), "D");
 }
 
+/// Verifies stacked attribute groups.
 #[test]
 fn test_stacked_attribute_groups() {
     // Stacked groups `#[A] #[B]` are equivalent to `#[A, B]`.
@@ -75,6 +80,7 @@ fn test_stacked_attribute_groups() {
     assert_eq!(stacked, bare);
 }
 
+/// Verifies attribute on interface method.
 #[test]
 fn test_attribute_on_interface_method() {
     // `#[Pure]` on an interface method parses without error.
@@ -84,6 +90,7 @@ fn test_attribute_on_interface_method() {
     );
 }
 
+/// Verifies attribute on function decl.
 #[test]
 fn test_attribute_on_function_decl() {
     // `#[Memoized]` on a function declaration parses without error and does not alter the AST.
@@ -92,6 +99,7 @@ fn test_attribute_on_function_decl() {
     assert_eq!(with_attr, without);
 }
 
+/// Verifies attribute on enum case.
 #[test]
 fn test_attribute_on_enum_case() {
     // `#[Primary]` on an enum case parses without error.
@@ -101,6 +109,7 @@ fn test_attribute_on_enum_case() {
     );
 }
 
+/// Verifies qualified attribute name parses.
 #[test]
 fn test_qualified_attribute_name_parses() {
     // Fully-qualified names with leading and inner backslashes must be
@@ -111,6 +120,7 @@ fn test_qualified_attribute_name_parses() {
     assert_eq!(first_class_decl_name(&stmts), "C");
 }
 
+/// Verifies attribute on function parameter.
 #[test]
 fn test_attribute_on_function_parameter() {
     // PHP 8 allows `#[Sensitive]` immediately before a function parameter.
@@ -122,6 +132,7 @@ fn test_attribute_on_function_parameter() {
     assert_eq!(with_attr, without);
 }
 
+/// Verifies attribute on method parameter.
 #[test]
 fn test_attribute_on_method_parameter() {
     // `#[Sensitive]` on a method parameter parses without error and does not alter the AST.
@@ -134,6 +145,7 @@ fn test_attribute_on_method_parameter() {
     assert_eq!(with_attr, without);
 }
 
+/// Verifies attribute on promoted constructor property.
 #[test]
 fn test_attribute_on_promoted_constructor_property() {
     // `#[Inject]` precedes the visibility keyword of a promoted constructor property.
@@ -147,6 +159,7 @@ fn test_attribute_on_promoted_constructor_property() {
     assert_eq!(with_attr, without);
 }
 
+/// Verifies attribute on closure expression.
 #[test]
 fn test_attribute_on_closure_expression() {
     // `#[Pure]` on a closure expression parses without error and does not alter the AST.
@@ -159,6 +172,7 @@ fn test_attribute_on_closure_expression() {
     assert_eq!(with_attr, without);
 }
 
+/// Verifies attribute on arrow function.
 #[test]
 fn test_attribute_on_arrow_function() {
     // `#[Pure]` on an arrow function (`fn`) parses without error and does not alter the AST.
@@ -167,6 +181,7 @@ fn test_attribute_on_arrow_function() {
     assert_eq!(with_attr, without);
 }
 
+/// Verifies attribute on static closure.
 #[test]
 fn test_attribute_on_static_closure() {
     // `#[Pure]` on a static closure parses without error and does not alter the AST.
@@ -179,6 +194,7 @@ fn test_attribute_on_static_closure() {
     assert_eq!(with_attr, without);
 }
 
+/// Verifies attribute on static arrow function.
 #[test]
 fn test_attribute_on_static_arrow_function() {
     // `#[Pure]` on a static arrow function parses without error and does not alter the AST.
@@ -187,6 +203,7 @@ fn test_attribute_on_static_arrow_function() {
     assert_eq!(with_attr, without);
 }
 
+/// Verifies attribute on closure parameter.
 #[test]
 fn test_attribute_on_closure_parameter() {
     // `#[Sensitive]` on a closure parameter parses without error and does not alter the AST.
@@ -199,6 +216,7 @@ fn test_attribute_on_closure_parameter() {
     assert_eq!(with_attr, without);
 }
 
+/// Verifies attribute on arrow function parameter.
 #[test]
 fn test_attribute_on_arrow_function_parameter() {
     // `#[X]` on an arrow function parameter parses without error and does not alter the AST.
@@ -207,6 +225,7 @@ fn test_attribute_on_arrow_function_parameter() {
     assert_eq!(with_attr, without);
 }
 
+/// Verifies stacked attributes on parameter.
 #[test]
 fn test_stacked_attributes_on_parameter() {
     // Stacked `#[A] #[B]` on a parameter parse without error and do not alter the AST.
@@ -219,6 +238,7 @@ fn test_stacked_attributes_on_parameter() {
 
 // -- Persistence: attributes are now captured in the AST --
 
+/// Verifies class attribute is persisted on stmt.
 #[test]
 fn test_class_attribute_is_persisted_on_stmt() {
     // `#[Foo]` on a class declaration is persisted as a single attribute group
@@ -231,6 +251,7 @@ fn test_class_attribute_is_persisted_on_stmt() {
     assert!(groups[0].attributes[0].args.is_empty());
 }
 
+/// Verifies attribute args are captured.
 #[test]
 fn test_attribute_args_are_captured() {
     // `#[Bar(1, "two")]` on a class stores two positional arguments in the attribute.
@@ -240,6 +261,7 @@ fn test_attribute_args_are_captured() {
     assert_eq!(arg_count, 2, "expected 2 args, got {}", arg_count);
 }
 
+/// Verifies method attribute is persisted.
 #[test]
 fn test_method_attribute_is_persisted() {
     // `#[Required]` on method `setX` is persisted as a nested attribute group on the method node.
@@ -252,6 +274,7 @@ fn test_method_attribute_is_persisted() {
     assert_eq!(method.attributes[0].attributes[0].name.as_str(), "Required");
 }
 
+/// Verifies property attribute is persisted.
 #[test]
 fn test_property_attribute_is_persisted() {
     // `#[Slot]` on property `$n` is persisted as a nested attribute group on the property node.
@@ -264,6 +287,7 @@ fn test_property_attribute_is_persisted() {
     assert_eq!(prop.attributes[0].attributes[0].name.as_str(), "Slot");
 }
 
+/// Verifies qualified attribute name preserves parts.
 #[test]
 fn test_qualified_attribute_name_preserves_parts() {
     // Fully-qualified attribute name `#[\Symfony\...\Required]` is stored with
@@ -280,6 +304,7 @@ fn test_qualified_attribute_name_preserves_parts() {
     );
 }
 
+/// Verifies attribute on non declaration is rejected.
 #[test]
 fn test_attribute_on_non_declaration_is_rejected() {
     // PHP rejects attributes on non-declaration statements; the parser must
@@ -289,6 +314,7 @@ fn test_attribute_on_non_declaration_is_rejected() {
     assert!(parse_fails("<?php #[Foo] if (true) {}"));
 }
 
+/// Verifies attribute on enum case is persisted.
 #[test]
 fn test_attribute_on_enum_case_is_persisted() {
     // `#[Primary]` on enum case `Red` is persisted as an attribute on that case node.

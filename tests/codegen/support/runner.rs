@@ -9,9 +9,9 @@
 
 use super::*;
 
-// Returns the cached default runtime object path, assembling the runtime on first call.
-// Creates a temp directory, generates 8_388_608-byte heap runtime assembly, assembles it with
-// `as`, and caches the `.o` path for reuse across all tests.
+/// Returns the cached default runtime object path, assembling the runtime on first call.
+/// Creates a temp directory, generates 8_388_608-byte heap runtime assembly, assembles it with
+/// `as`, and caches the `.o` path for reuse across all tests.
 pub(crate) fn get_runtime_obj() -> &'static Path {
     RUNTIME_OBJ.get_or_init(|| {
         let dir = std::env::temp_dir().join(format!("elephc_test_runtime_{}", std::process::id()));
@@ -32,9 +32,9 @@ pub(crate) fn get_runtime_obj() -> &'static Path {
     })
 }
 
-// Assembles a runtime object with a custom heap size, writing the `.o` to `dir`.
-// Generates ARM64/x86_64 runtime assembly via `elephc::codegen::generate_runtime`
-// and assembles it using `assembler_cmd()`. Used by tests that need non-default heap sizes.
+/// Assembles a runtime object with a custom heap size, writing the `.o` to `dir`.
+/// Generates ARM64/x86_64 runtime assembly via `elephc::codegen::generate_runtime`
+/// and assembles it using `assembler_cmd()`. Used by tests that need non-default heap sizes.
 pub(crate) fn assemble_custom_runtime(heap_size: usize, dir: &Path) -> std::path::PathBuf {
     let runtime_asm = elephc::codegen::generate_runtime(heap_size, target());
     let asm_path = dir.join("runtime.s");
@@ -52,9 +52,9 @@ pub(crate) fn assemble_custom_runtime(heap_size: usize, dir: &Path) -> std::path
 }
 
 
-// Links a user object file and a runtime object into a final native binary.
-// On macOS uses `ld` with SDK/platform_version flags; on Linux uses `gcc` with
-// static linking when no extra libs are needed. Adds `-lm -lpthread` on Linux.
+/// Links a user object file and a runtime object into a final native binary.
+/// On macOS uses `ld` with SDK/platform_version flags; on Linux uses `gcc` with
+/// static linking when no extra libs are needed. Adds `-lm -lpthread` on Linux.
 pub(crate) fn link_binary(
     obj_path: &Path,
     runtime_obj: &Path,
@@ -120,9 +120,9 @@ pub(crate) fn link_binary(
     }
 }
 
-// Runs a compiled binary directly, using qemu on Linux x86_64 to emulate ARM64.
-// On other platform/arch combinations, execs the binary natively.
-// Used for post-link execution of already-assembled test binaries.
+/// Runs a compiled binary directly, using qemu on Linux x86_64 to emulate ARM64.
+/// On other platform/arch combinations, execs the binary natively.
+/// Used for post-link execution of already-assembled test binaries.
 pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> std::process::Output {
     if target().platform == Platform::Linux
         && target().arch == Arch::AArch64
@@ -144,8 +144,8 @@ pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> std::process::Output {
     }
 }
 
-// Assembles user assembly, links it with a runtime object, runs the binary,
-// and returns stdout. Asserts the binary exits successfully. Used for happy-path codegen tests.
+/// Assembles user assembly, links it with a runtime object, runs the binary,
+/// and returns stdout. Asserts the binary exits successfully. Used for happy-path codegen tests.
 pub(crate) fn assemble_and_run(
     user_asm: &str,
     runtime_obj: &Path,
@@ -199,8 +199,8 @@ pub(crate) struct ProgramOutput {
     pub(crate) success: bool,
 }
 
-// Assembles user assembly, links it with a runtime object, runs the binary,
-// and captures stdout, stderr, and exit status. Asserts the binary exits successfully.
+/// Assembles user assembly, links it with a runtime object, runs the binary,
+/// and captures stdout, stderr, and exit status. Asserts the binary exits successfully.
 pub(crate) fn assemble_and_run_capture(
     user_asm: &str,
     runtime_obj: &Path,
@@ -241,8 +241,8 @@ pub(crate) fn assemble_and_run_capture(
     }
 }
 
-// Assembles user assembly, links it with a runtime object, runs the binary,
-// and returns stderr. Asserts the binary exits with failure. Used for error/regression tests.
+/// Assembles user assembly, links it with a runtime object, runs the binary,
+/// and returns stderr. Asserts the binary exits with failure. Used for error/regression tests.
 pub(crate) fn assemble_and_run_expect_failure(
     user_asm: &str,
     runtime_obj: &Path,

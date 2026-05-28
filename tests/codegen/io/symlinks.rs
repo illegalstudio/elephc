@@ -11,8 +11,8 @@
 
 use super::*;
 
-// Verifies `symlink()` creates a valid symbolic link and that reads through
-// the link return the original file's contents.
+/// Verifies `symlink()` creates a valid symbolic link and that reads through
+/// the link return the original file's contents.
 #[test]
 fn test_symlink_creates_link() {
     let (out, dir) = compile_and_run_in_dir(
@@ -29,8 +29,8 @@ unlink("orig.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies `link()` creates a hard link and that reads through the hard link
-// return the original file's contents.
+/// Verifies `link()` creates a hard link and that reads through the hard link
+/// return the original file's contents.
 #[test]
 fn test_link_creates_hard_link() {
     let (out, dir) = compile_and_run_in_dir(
@@ -47,8 +47,8 @@ unlink("orig.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies `readlink()` returns the target path string for an existing
-// symbolic link.
+/// Verifies `readlink()` returns the target path string for an existing
+/// symbolic link.
 #[test]
 fn test_readlink_returns_target_path() {
     let (out, dir) = compile_and_run_in_dir(
@@ -65,8 +65,8 @@ unlink("orig.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies `readlink()` returns `false` (PHP `=== false` check) when the
-// path does not exist or is not a symlink.
+/// Verifies `readlink()` returns `false` (PHP `=== false` check) when the
+/// path does not exist or is not a symlink.
 #[test]
 fn test_readlink_missing_returns_false() {
     let (out, dir) = compile_and_run_in_dir(
@@ -79,8 +79,8 @@ echo $res === false ? "false" : "ok";
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies `linkinfo()` returns a positive (non-zero) device number for an
-// existing symlink.
+/// Verifies `linkinfo()` returns a positive (non-zero) device number for an
+/// existing symlink.
 #[test]
 fn test_linkinfo_returns_nonzero_dev_for_existing_link() {
     let (out, dir) = compile_and_run_in_dir(
@@ -97,7 +97,7 @@ unlink("orig.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies `linkinfo()` returns `-1` when the path does not exist.
+/// Verifies `linkinfo()` returns `-1` when the path does not exist.
 #[test]
 fn test_linkinfo_returns_minus_one_for_missing() {
     let out = compile_and_run(
@@ -108,8 +108,8 @@ echo linkinfo("/nonexistent/missing-path");
     assert_eq!(out, "-1");
 }
 
-// Verifies all four link-related builtins (`symlink`, `link`, `readlink`,
-// `linkinfo`) are registered and return `true` from `function_exists()`.
+/// Verifies all four link-related builtins (`symlink`, `link`, `readlink`,
+/// `linkinfo`) are registered and return `true` from `function_exists()`.
 #[test]
 fn test_function_exists_symlinks() {
     let out = compile_and_run(
@@ -123,8 +123,8 @@ echo function_exists('linkinfo') ? "y" : "n";
     assert_eq!(out, "yyyy");
 }
 
-// Verifies PHP's case-insensitive builtin function name resolution: calling
-// `SYMLINK()` in uppercase still resolves to the `symlink` builtin.
+/// Verifies PHP's case-insensitive builtin function name resolution: calling
+/// `SYMLINK()` in uppercase still resolves to the `symlink` builtin.
 #[test]
 fn test_symlinks_case_insensitive_calls() {
     let (out, dir) = compile_and_run_in_dir(
@@ -140,8 +140,8 @@ unlink("orig.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that inside a namespace, `symlink` and `readlink` are reachable
-// without a `use` statement via PHP's builtin namespace fallback.
+/// Verifies that inside a namespace, `symlink` and `readlink` are reachable
+/// without a `use` statement via PHP's builtin namespace fallback.
 #[test]
 fn test_symlinks_namespace_fallback() {
     let (out, dir) = compile_and_run_in_dir(

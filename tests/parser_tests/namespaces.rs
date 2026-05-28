@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Parses a namespace declaration with semicolon syntax and a use group import
-// that combines class, function, and const imports with aliases.
+/// Parses a namespace declaration with semicolon syntax and a use group import
+/// that combines class, function, and const imports with aliases.
 #[test]
 fn test_parse_namespace_semicolon_and_use_group() {
     let stmts = parse_source(
@@ -40,8 +40,8 @@ fn test_parse_namespace_semicolon_and_use_group() {
     }
 }
 
-// Parses a namespace block containing a class with extends, implements, trait use,
-// and a fully-qualified static method call inside a method body.
+/// Parses a namespace block containing a class with extends, implements, trait use,
+/// and a fully-qualified static method call inside a method body.
 #[test]
 fn test_parse_namespace_block_with_qualified_names() {
     let stmts = parse_source(
@@ -90,8 +90,8 @@ fn test_parse_namespace_block_with_qualified_names() {
     }
 }
 
-// Parses the `__NAMESPACE__` magic constant in an echo statement and verifies
-// it is lowered to the internal `MagicConstant::Namespace` variant.
+/// Parses the `__NAMESPACE__` magic constant in an echo statement and verifies
+/// it is lowered to the internal `MagicConstant::Namespace` variant.
 #[test]
 fn test_parse_dunder_namespace_magic_constant() {
     let stmts = parse_source("<?php echo __NAMESPACE__;");

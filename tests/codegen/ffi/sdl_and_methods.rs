@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies SDL2 `SDL_Init` and `SDL_GetTicks` are called via FFI extern block.
-// Requires SDL2 library installed locally (marked #[ignore]).
+/// Verifies SDL2 `SDL_Init` and `SDL_GetTicks` are called via FFI extern block.
+/// Requires SDL2 library installed locally (marked #[ignore]).
 #[test]
 #[ignore] // requires SDL2 library installed locally
 fn test_ffi_sdl_init_and_ticks() {
@@ -37,7 +37,7 @@ SDL_Quit();
     assert_eq!(out, "init|ticks");
 }
 
-// Verifies variadic instance method `headAndCount($a, ...$rest)` binds `$a` to 7 and `$rest` to [8, 9].
+/// Verifies variadic instance method `headAndCount($a, ...$rest)` binds `$a` to 7 and `$rest` to [8, 9].
 #[test]
 fn test_variadic_instance_method() {
     let out = compile_and_run(
@@ -57,7 +57,7 @@ $counter->headAndCount(7, 8, 9);
     assert_eq!(out, "7:2");
 }
 
-// Verifies variadic static method `headAndCount($a, ...$rest)` binds `$a` to 7 and `$rest` to [8, 9].
+/// Verifies variadic static method `headAndCount($a, ...$rest)` binds `$a` to 7 and `$rest` to [8, 9].
 #[test]
 fn test_variadic_static_method() {
     let out = compile_and_run(
@@ -76,8 +76,8 @@ Counter::headAndCount(7, 8, 9);
     assert_eq!(out, "7:2");
 }
 
-// Verifies SDL2 window creation and destruction via FFI extern block.
-// Requires SDL2 library installed locally and dummy video driver (marked #[ignore]).
+/// Verifies SDL2 window creation and destruction via FFI extern block.
+/// Requires SDL2 library installed locally and dummy video driver (marked #[ignore]).
 #[test]
 #[ignore] // requires SDL2 library installed locally
 fn test_ffi_sdl_window_with_dummy_driver() {
@@ -109,8 +109,8 @@ SDL_Quit();
     assert_eq!(out, "ok");
 }
 
-// Verifies SDL2 `SDL_GetKeyboardState` returns a non-null pointer via FFI extern block.
-// Requires SDL2 library installed locally (marked #[ignore]).
+/// Verifies SDL2 `SDL_GetKeyboardState` returns a non-null pointer via FFI extern block.
+/// Requires SDL2 library installed locally (marked #[ignore]).
 #[test]
 #[ignore] // requires SDL2 library installed locally
 fn test_ffi_sdl_keyboard_state_pointer() {

@@ -10,8 +10,8 @@
 
 use super::*;
 
+/// Verifies DCE drops the second case (case 2) when its body is empty after eliminating the pure builtin strlen call.
 #[test]
-// Verifies DCE drops the second case (case 2) when its body is empty after eliminating the pure builtin strlen call.
 fn test_eliminate_dead_code_drops_trailing_empty_switch_cases() {
     let touch = Expr::new(
         ExprKind::FunctionCall {
@@ -81,8 +81,8 @@ fn test_eliminate_dead_code_drops_trailing_empty_switch_cases() {
     );
 }
 
+/// Verifies DCE sinks the trailing statement into the default branch when no case has a Break.
 #[test]
-// Verifies DCE sinks the trailing statement into the default branch when no case has a Break.
 fn test_eliminate_dead_code_sinks_tail_into_switch_exit_paths() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -129,8 +129,8 @@ fn test_eliminate_dead_code_sinks_tail_into_switch_exit_paths() {
     );
 }
 
+/// Verifies DCE sinks the trailing statement into all switch exit paths (case 1 with Break, case 2, and default).
 #[test]
-// Verifies DCE sinks the trailing statement into all switch exit paths (case 1 with Break, case 2, and default).
 fn test_eliminate_dead_code_sinks_tail_into_switch_break_paths() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {

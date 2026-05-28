@@ -9,16 +9,16 @@
 
 use super::*;
 
+/// Verifies that `<?php if (1 == 1) { echo "yes"; }` parses to an `If` statement.
 #[test]
-// Verifies that `<?php if (1 == 1) { echo "yes"; }` parses to an `If` statement.
 fn test_if_parses() {
     let stmts = parse_source("<?php if (1 == 1) { echo \"yes\"; }");
     assert_eq!(stmts.len(), 1);
     assert!(matches!(&stmts[0].kind, StmtKind::If { .. }));
 }
 
+/// Verifies that `<?php if (1) { echo "a"; } else { echo "b"; }` parses to an `If` with `else_body` present.
 #[test]
-// Verifies that `<?php if (1) { echo "a"; } else { echo "b"; }` parses to an `If` with `else_body` present.
 fn test_if_else_parses() {
     let stmts = parse_source("<?php if (1) { echo \"a\"; } else { echo \"b\"; }");
     if let StmtKind::If { else_body, .. } = &stmts[0].kind {
@@ -28,9 +28,9 @@ fn test_if_else_parses() {
     }
 }
 
+/// Verifies that `<?php if (1) { echo "a"; } elseif (2) { echo "b"; } else { echo "c"; }`
+/// parses to an `If` with one `elseif_clause` and an `else_body`.
 #[test]
-// Verifies that `<?php if (1) { echo "a"; } elseif (2) { echo "b"; } else { echo "c"; }`
-// parses to an `If` with one `elseif_clause` and an `else_body`.
 fn test_if_elseif_else_parses() {
     let stmts = parse_source(
         "<?php if (1) { echo \"a\"; } elseif (2) { echo \"b\"; } else { echo \"c\"; }",
@@ -48,30 +48,30 @@ fn test_if_elseif_else_parses() {
     }
 }
 
+/// Verifies that `<?php while (1) { echo "loop"; }` parses to a `While` statement.
 #[test]
-// Verifies that `<?php while (1) { echo "loop"; }` parses to a `While` statement.
 fn test_while_parses() {
     let stmts = parse_source("<?php while (1) { echo \"loop\"; }");
     assert!(matches!(&stmts[0].kind, StmtKind::While { .. }));
 }
 
+/// Verifies that `<?php do { echo "loop"; } while (1);` parses to a `DoWhile` statement.
 #[test]
-// Verifies that `<?php do { echo "loop"; } while (1);` parses to a `DoWhile` statement.
 fn test_do_while_parses() {
     let stmts = parse_source("<?php do { echo \"loop\"; } while (1);");
     assert!(matches!(&stmts[0].kind, StmtKind::DoWhile { .. }));
 }
 
+/// Verifies that `<?php for ($i = 0; $i < 10; $i++) { echo $i; }` parses to a `For` statement.
 #[test]
-// Verifies that `<?php for ($i = 0; $i < 10; $i++) { echo $i; }` parses to a `For` statement.
 fn test_for_parses() {
     let stmts = parse_source("<?php for ($i = 0; $i < 10; $i++) { echo $i; }");
     assert!(matches!(&stmts[0].kind, StmtKind::For { .. }));
 }
 
+/// Verifies that `<?php while (1) { break; }` parses with the `Break(1)` statement nested
+/// inside `While`. The argument 1 means break one level.
 #[test]
-// Verifies that `<?php while (1) { break; }` parses with the `Break(1)` statement nested
-// inside `While`. The argument 1 means break one level.
 fn test_break_parses() {
     let stmts = parse_source("<?php while (1) { break; }");
     if let StmtKind::While { body, .. } = &stmts[0].kind {
@@ -79,9 +79,9 @@ fn test_break_parses() {
     }
 }
 
+/// Verifies that `<?php while (1) { while (1) { break 2; } }` parses with `Break(2)` at depth 2.
+/// The numeric argument must be preserved correctly across nesting levels.
 #[test]
-// Verifies that `<?php while (1) { while (1) { break 2; } }` parses with `Break(2)` at depth 2.
-// The numeric argument must be preserved correctly across nesting levels.
 fn test_multilevel_break_parses() {
     let stmts = parse_source("<?php while (1) { while (1) { break 2; } }");
     if let StmtKind::While { body, .. } = &stmts[0].kind {
@@ -95,8 +95,8 @@ fn test_multilevel_break_parses() {
     }
 }
 
+/// Verifies that `<?php while (1) { continue; }` parses with `Continue(1)` inside `While`.
 #[test]
-// Verifies that `<?php while (1) { continue; }` parses with `Continue(1)` inside `While`.
 fn test_continue_parses() {
     let stmts = parse_source("<?php while (1) { continue; }");
     if let StmtKind::While { body, .. } = &stmts[0].kind {
@@ -104,9 +104,9 @@ fn test_continue_parses() {
     }
 }
 
+/// Verifies that `<?php while (1) { while (1) { continue (2); } }` parses with `Continue(2)`
+/// at depth 2. The parenthesized form of the level argument must be accepted.
 #[test]
-// Verifies that `<?php while (1) { while (1) { continue (2); } }` parses with `Continue(2)`
-// at depth 2. The parenthesized form of the level argument must be accepted.
 fn test_multilevel_continue_parses() {
     let stmts = parse_source("<?php while (1) { while (1) { continue (2); } }");
     if let StmtKind::While { body, .. } = &stmts[0].kind {
@@ -122,9 +122,9 @@ fn test_multilevel_continue_parses() {
 
 // --- Functions ---
 
+/// Verifies that `<?php switch ($x) { case 1: echo "one"; break; default: echo "other"; }`
+/// parses to a `Switch` statement with a default case.
 #[test]
-// Verifies that `<?php switch ($x) { case 1: echo "one"; break; default: echo "other"; }`
-// parses to a `Switch` statement with a default case.
 fn test_parse_switch() {
     let stmts =
         parse_source("<?php switch ($x) { case 1: echo \"one\"; break; default: echo \"other\"; }");
@@ -134,9 +134,9 @@ fn test_parse_switch() {
 
 // --- Match ---
 
+/// Verifies that `<?php foreach ($a as $k => $v) {}` parses with `key_var = Some("k")`,
+/// `value_var = "v"`, and `value_by_ref = false`.
 #[test]
-// Verifies that `<?php foreach ($a as $k => $v) {}` parses with `key_var = Some("k")`,
-// `value_var = "v"`, and `value_by_ref = false`.
 fn test_parse_foreach_key_value() {
     let stmts = parse_source("<?php foreach ($a as $k => $v) {}");
     assert_eq!(stmts.len(), 1);
@@ -155,9 +155,9 @@ fn test_parse_foreach_key_value() {
     }
 }
 
+/// Verifies that `<?php foreach ($a as $value) {}` parses with no key variable,
+/// `value_var = "value"`, and `value_by_ref = false`.
 #[test]
-// Verifies that `<?php foreach ($a as $value) {}` parses with no key variable,
-// `value_var = "value"`, and `value_by_ref = false`.
 fn test_parse_foreach_value_only() {
     let stmts = parse_source("<?php foreach ($a as $value) {}");
     assert_eq!(stmts.len(), 1);
@@ -176,9 +176,9 @@ fn test_parse_foreach_value_only() {
     }
 }
 
+/// Verifies that `<?php foreach ($a as &$value) {}` parses with no key variable,
+/// `value_var = "value"`, and `value_by_ref = true`.
 #[test]
-// Verifies that `<?php foreach ($a as &$value) {}` parses with no key variable,
-// `value_var = "value"`, and `value_by_ref = true`.
 fn test_parse_foreach_value_by_ref() {
     let stmts = parse_source("<?php foreach ($a as &$value) {}");
     assert_eq!(stmts.len(), 1);
@@ -197,9 +197,9 @@ fn test_parse_foreach_value_by_ref() {
     }
 }
 
+/// Verifies that `<?php foreach ($a as $key => &$value) {}` parses with key_var = Some("key"),
+/// `value_var = "value"`, and `value_by_ref = true`.
 #[test]
-// Verifies that `<?php foreach ($a as $key => &$value) {}` parses with key_var = Some("key"),
-// `value_var = "value"`, and `value_by_ref = true`.
 fn test_parse_foreach_key_value_by_ref() {
     let stmts = parse_source("<?php foreach ($a as $key => &$value) {}");
     assert_eq!(stmts.len(), 1);

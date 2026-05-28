@@ -9,7 +9,7 @@
 
 use super::*;
 
-// Tests calling a class static method with a string parameter and concatenating the result.
+/// Tests calling a class static method with a string parameter and concatenating the result.
 #[test]
 fn test_class_static_method_string_param() {
     let out = compile_and_run(
@@ -23,8 +23,8 @@ echo Utils::greet("World");
     assert_eq!(out, "Hello World");
 }
 
-// Tests calling a class static method that returns a new instance via `new`, then
-// invoking an instance method on the returned object.
+/// Tests calling a class static method that returns a new instance via `new`, then
+/// invoking an instance method on the returned object.
 #[test]
 fn test_class_static_and_instance() {
     let out = compile_and_run(
@@ -44,7 +44,7 @@ echo $c->next();
 
 // === Nested array access tests ===
 
-// Tests static property read of an `int` typed static, followed by a write, then another read.
+/// Tests static property read of an `int` typed static, followed by a write, then another read.
 #[test]
 fn test_static_property_read_write() {
     let out = compile_and_run(
@@ -60,8 +60,8 @@ echo Counter::$count;
     assert_eq!(out, "15");
 }
 
-// Tests `self::$prop` access and mutation of an `int` typed static within a static method.
-// Verifies that `self::` resolves to the declaring class, not the called class.
+/// Tests `self::$prop` access and mutation of an `int` typed static within a static method.
+/// Verifies that `self::` resolves to the declaring class, not the called class.
 #[test]
 fn test_static_property_self_access_in_static_method() {
     let out = compile_and_run(
@@ -80,7 +80,7 @@ echo Counter::bump();
     assert_eq!(out, "23");
 }
 
-// Tests `parent::$prop` access to a `protected` static property from a child class.
+/// Tests `parent::$prop` access to a `protected` static property from a child class.
 #[test]
 fn test_static_property_parent_access_in_static_method() {
     let out = compile_and_run(
@@ -99,8 +99,8 @@ echo Child::read();
     assert_eq!(out, "4");
 }
 
-// Tests that a non-redeclared static property has a single shared slot across inheritance
-// when accessed via `static::$prop` from a parent class method.
+/// Tests that a non-redeclared static property has a single shared slot across inheritance
+/// when accessed via `static::$prop` from a parent class method.
 #[test]
 fn test_static_property_inherited_storage_is_shared() {
     let out = compile_and_run(
@@ -120,8 +120,8 @@ echo Child::$count;
     assert_eq!(out, "99");
 }
 
-// Tests that a redeclared static property creates a separate storage slot per class,
-// and that `static::$prop` and `$obj::$prop` both dispatch to the late-bound class's slot.
+/// Tests that a redeclared static property creates a separate storage slot per class,
+/// and that `static::$prop` and `$obj::$prop` both dispatch to the late-bound class's slot.
 #[test]
 fn test_static_property_redeclaration_uses_child_storage() {
     let out = compile_and_run(
@@ -146,7 +146,7 @@ echo Base::$count . ":" . Child::$count;
     assert_eq!(out, "1:2:1:9");
 }
 
-// Tests appending to and updating a static `array` property directly via `$Class::$prop[idx]`.
+/// Tests appending to and updating a static `array` property directly via `$Class::$prop[idx]`.
 #[test]
 fn test_static_property_direct_array_writes() {
     let out = compile_and_run(
@@ -163,7 +163,7 @@ echo Registry::$items[0] . ":" . Registry::$items[1];
     assert_eq!(out, "4:8");
 }
 
-// Tests `+=` and `*=` compound assignment on an `int` typed static property.
+/// Tests `+=` and `*=` compound assignment on an `int` typed static property.
 #[test]
 fn test_static_property_compound_assign() {
     let out = compile_and_run(
@@ -179,7 +179,7 @@ echo Counter::$count;
     assert_eq!(out, "20");
 }
 
-// Tests `+=` and `-=` compound assignment on individual elements of a static `array` property.
+/// Tests `+=` and `-=` compound assignment on individual elements of a static `array` property.
 #[test]
 fn test_static_property_array_compound_assign() {
     let out = compile_and_run(
@@ -195,8 +195,8 @@ echo Registry::$items[0] . ":" . Registry::$items[2];
     assert_eq!(out, "12:3");
 }
 
-// Tests that the index expression in `Registry::$items[idx()] += 6` is evaluated exactly once.
-// The side-effect function `idx()` echoes "i" and the result proves no double-evaluation.
+/// Tests that the index expression in `Registry::$items[idx()] += 6` is evaluated exactly once.
+/// The side-effect function `idx()` echoes "i" and the result proves no double-evaluation.
 #[test]
 fn test_static_property_array_compound_assign_evaluates_index_once() {
     let out = compile_and_run(
@@ -217,8 +217,8 @@ echo ":" . Registry::$items[1];
     assert_eq!(out, "i:11");
 }
 
-// Tests that `static::$items[]` and `static::$items[0]` in a parent method write to the
-// late-bound class's redeclared static array, not the parent's, when called on a child.
+/// Tests that `static::$items[]` and `static::$items[0]` in a parent method write to the
+/// late-bound class's redeclared static array, not the parent's, when called on a child.
 #[test]
 fn test_static_property_redeclared_array_writes_are_late_bound() {
     let out = compile_and_run(
@@ -247,8 +247,8 @@ echo BaseBag::first() . ":" . ChildBag::first();
     assert_eq!(out, "1:7");
 }
 
-// Tests that `static::$count` inside a parent static method causes a fatal error when
-// the calling class has a private redeclaration of the same static property.
+/// Tests that `static::$count` inside a parent static method causes a fatal error when
+/// the calling class has a private redeclaration of the same static property.
 #[test]
 fn test_static_property_late_bound_private_redeclaration_read_is_fatal() {
     let err = compile_and_run_expect_failure(
@@ -271,8 +271,8 @@ Child::read();
     );
 }
 
-// Tests that `static::$count` inside a parent static method causes a fatal error when
-// the calling class has a private redeclaration and the property is being written.
+/// Tests that `static::$count` inside a parent static method causes a fatal error when
+/// the calling class has a private redeclaration and the property is being written.
 #[test]
 fn test_static_property_late_bound_private_redeclaration_write_is_fatal() {
     let err = compile_and_run_expect_failure(
@@ -295,7 +295,7 @@ Child::write();
     );
 }
 
-// Tests typed `string` static property read and write.
+/// Tests typed `string` static property read and write.
 #[test]
 fn test_static_string_property_assignment() {
     let out = compile_and_run(

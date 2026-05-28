@@ -256,6 +256,7 @@ pub(super) fn emit_mixed_property_access(
     PhpType::Mixed
 }
 
+/// Emits named dynamic property access for this module.
 fn emit_named_dynamic_property_access(
     property: &str,
     emitter: &mut Emitter,

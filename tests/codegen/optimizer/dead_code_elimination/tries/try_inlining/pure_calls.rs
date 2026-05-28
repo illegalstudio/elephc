@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that a non-throwing try/catch inlines the try body and drops the catch body from
-// assembly. Confirms "7" with `pow` absent.
+/// Verifies that a non-throwing try/catch inlines the try body and drops the catch body from
+/// assembly. Confirms "7" with `pow` absent.
 #[test]
 fn test_dead_code_elimination_inlines_non_throwing_try_catch() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_try_catch_inline");
@@ -47,8 +47,8 @@ try {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a try with a pure builtin call inlines the try body, letting the dead catch
-// disappear. Confirms "3" with `pow` absent.
+/// Verifies that a try with a pure builtin call inlines the try body, letting the dead catch
+/// disappear. Confirms "3" with `pow` absent.
 #[test]
 fn test_dead_code_elimination_inlines_try_with_pure_builtin_call() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_try_pure_builtin");
@@ -85,8 +85,8 @@ try {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a try with a pure user function inlines the try body, letting the dead catch
-// disappear. Confirms "3" with `pow` absent.
+/// Verifies that a try with a pure user function inlines the try body, letting the dead catch
+/// disappear. Confirms "3" with `pow` absent.
 #[test]
 fn test_dead_code_elimination_inlines_try_with_pure_user_function_call() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_try_pure_user_function");
@@ -127,7 +127,7 @@ try {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a try with a pure static method call inlines the try body. Confirms "3".
+/// Verifies that a try with a pure static method call inlines the try body. Confirms "3".
 #[test]
 fn test_dead_code_elimination_inlines_try_with_pure_static_method_call() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_try_pure_static_method");
@@ -170,7 +170,7 @@ try {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a try with a pure `self::` static relay call inlines correctly. Confirms "3".
+/// Verifies that a try with a pure `self::` static relay call inlines correctly. Confirms "3".
 #[test]
 fn test_dead_code_elimination_inlines_try_with_pure_self_static_method_call() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_try_pure_self_static_method");
@@ -217,8 +217,8 @@ try {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a try with a pure private instance method on `$this` inlines correctly.
-// Confirms "3".
+/// Verifies that a try with a pure private instance method on `$this` inlines correctly.
+/// Confirms "3".
 #[test]
 fn test_dead_code_elimination_inlines_try_with_pure_private_instance_method_call() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_try_pure_private_instance_method");
@@ -266,7 +266,7 @@ echo $util->relay();
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a try with a pure closure alias inlines the try body. Confirms "3".
+/// Verifies that a try with a pure closure alias inlines the try body. Confirms "3".
 #[test]
 fn test_dead_code_elimination_inlines_try_with_pure_closure_alias() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_try_pure_closure_alias");
@@ -307,9 +307,9 @@ try {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a try prefix with a subsequent throw inlines the non-throwing prefix
-// before the throw, then executes the catch. Confirms "ab" — output before throw
-// is preserved (no reordering across the throw boundary).
+/// Verifies that a try prefix with a subsequent throw inlines the non-throwing prefix
+/// before the throw, then executes the catch. Confirms "ab" — output before throw
+/// is preserved (no reordering across the throw boundary).
 #[test]
 fn test_dead_code_elimination_hoists_non_throwing_try_prefix() {
     let out = compile_and_run(

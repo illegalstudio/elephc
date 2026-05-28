@@ -9,9 +9,9 @@
 
 use crate::support::*;
 
-// Verifies GC heap free coalesces adjacent freed blocks into a single larger block.
-// Allocates two 2000-element arrays, frees them with unset, then allocates a 3000-element array
-// to confirm the freed adjacent blocks are merged and reused.
+/// Verifies GC heap free coalesces adjacent freed blocks into a single larger block.
+/// Allocates two 2000-element arrays, frees them with unset, then allocates a 3000-element array
+/// to confirm the freed adjacent blocks are merged and reused.
 #[test]
 fn test_gc_heap_free_coalesces_adjacent_blocks() {
     let out = compile_and_run_with_heap_size(
@@ -29,9 +29,9 @@ echo $c[0] . "|" . count($c) . "|" . $keep[0];
     assert_eq!(out, "4|3000|3");
 }
 
-// Verifies GC heap free trims the free tail chain when allocating from a block with trailing free space.
-// Allocates three 2000-element arrays, frees the second and third (tail), then allocates a 5000-element
-// array to confirm the free tail chain is properly trimmed and the block is reused.
+/// Verifies GC heap free trims the free tail chain when allocating from a block with trailing free space.
+/// Allocates three 2000-element arrays, frees the second and third (tail), then allocates a 5000-element
+/// array to confirm the free tail chain is properly trimmed and the block is reused.
 #[test]
 fn test_gc_heap_free_trims_free_tail_chain() {
     let out = compile_and_run_with_heap_size(
@@ -49,9 +49,9 @@ echo $c[0] . "|" . count($c) . "|" . $a[0];
     assert_eq!(out, "4|5000|1");
 }
 
-// Verifies GC heap alloc splits an oversized free block when the request fits in the remainder.
-// Allocates a 4000-element array, frees it, then allocates a 1000-element array and a 2500-element
-// array to confirm the large free block is split and both requests are satisfied.
+/// Verifies GC heap alloc splits an oversized free block when the request fits in the remainder.
+/// Allocates a 4000-element array, frees it, then allocates a 1000-element array and a 2500-element
+/// array to confirm the large free block is split and both requests are satisfied.
 #[test]
 fn test_gc_heap_alloc_splits_oversized_free_block() {
     let out = compile_and_run_with_heap_size(
@@ -68,11 +68,11 @@ echo $small[0] . "|" . count($mid) . "|" . $keep[0];
     assert_eq!(out, "3|2500|2");
 }
 
-// Verifies heap_alloc walks past a small free block when it cannot satisfy the current request,
-// rather than incorrectly returning it. Inline assembly harness: allocates 8, 8, 16, 8 bytes
-// (pushing results), frees the 16-byte block at offset 48, frees the 8-byte block at offset 16,
-// then requests 16 bytes — the result must NOT be the first small block. Target-specific ARM64/x86_64
-// assembly is embedded directly in the test.
+/// Verifies heap_alloc walks past a small free block when it cannot satisfy the current request,
+/// rather than incorrectly returning it. Inline assembly harness: allocates 8, 8, 16, 8 bytes
+/// (pushing results), frees the 16-byte block at offset 48, frees the 8-byte block at offset 16,
+/// then requests 16 bytes — the result must NOT be the first small block. Target-specific ARM64/x86_64
+/// assembly is embedded directly in the test.
 #[test]
 fn test_gc_heap_alloc_walks_past_small_first_free_block() {
     let harness = match target().arch {
@@ -147,10 +147,10 @@ fn test_gc_heap_alloc_walks_past_small_first_free_block() {
     assert_eq!(out, "1");
 }
 
-// Verifies heap_alloc reuses a small bin entry before bumping the heap pointer.
-// Inline assembly harness: zeroes small bins, allocates 16 then 24 bytes, frees the 16-byte block,
-// saves heap_off to the stack, allocates 12 bytes, and confirms (1) the new 12-byte alloc reuses
-// the freed 16-byte bin slot and (2) heap_off is unchanged. Target-specific ARM64/x86_64 assembly.
+/// Verifies heap_alloc reuses a small bin entry before bumping the heap pointer.
+/// Inline assembly harness: zeroes small bins, allocates 16 then 24 bytes, frees the 16-byte block,
+/// saves heap_off to the stack, allocates 12 bytes, and confirms (1) the new 12-byte alloc reuses
+/// the freed 16-byte bin slot and (2) heap_off is unchanged. Target-specific ARM64/x86_64 assembly.
 #[test]
 fn test_gc_heap_alloc_reuses_small_bin_before_bump() {
     let harness = match target().arch {
@@ -238,10 +238,10 @@ fn test_gc_heap_alloc_reuses_small_bin_before_bump() {
     assert_eq!(out, "1");
 }
 
-// Verifies heap debug mode detects and reports a double free error.
-// Inline assembly harness: allocates 16 bytes, then 24 bytes, pushes both pointers,
-// frees the first block, then frees it again — expecting "heap debug detected double free" error.
-// Target-specific ARM64/x86_64 assembly.
+/// Verifies heap debug mode detects and reports a double free error.
+/// Inline assembly harness: allocates 16 bytes, then 24 bytes, pushes both pointers,
+/// frees the first block, then frees it again — expecting "heap debug detected double free" error.
+/// Target-specific ARM64/x86_64 assembly.
 #[test]
 fn test_heap_debug_double_free_reports_error() {
     let harness = match target().arch {
@@ -274,9 +274,9 @@ fn test_heap_debug_double_free_reports_error() {
     assert!(err.contains("heap debug detected double free"), "{err}");
 }
 
-// Verifies heap debug mode detects a bad refcount by writing zero to the refcount field before calling incref.
-// Inline assembly harness: allocates 16 bytes, sets refcount to zero at offset -12, calls __rt_incref —
-// expecting "heap debug detected bad refcount" error. Target-specific ARM64/x86_64 assembly.
+/// Verifies heap debug mode detects a bad refcount by writing zero to the refcount field before calling incref.
+/// Inline assembly harness: allocates 16 bytes, sets refcount to zero at offset -12, calls __rt_incref —
+/// expecting "heap debug detected bad refcount" error. Target-specific ARM64/x86_64 assembly.
 #[test]
 fn test_heap_debug_bad_refcount_reports_error() {
     let harness = match target().arch {
@@ -297,10 +297,10 @@ fn test_heap_debug_bad_refcount_reports_error() {
     assert!(err.contains("heap debug detected bad refcount"), "{err}");
 }
 
-// Verifies heap debug mode detects free-list corruption caused by an incorrect link in the free chain.
-// Inline assembly harness: allocates 16 bytes, pushes it, allocates 24 bytes, pops and frees the 24-byte
-// block, then writes an invalid address (block minus 16) as its own forward link at offset +16, and
-// requests 8 bytes — expecting "heap debug detected free-list corruption" error. Target-specific ARM64/x86_64 assembly.
+/// Verifies heap debug mode detects free-list corruption caused by an incorrect link in the free chain.
+/// Inline assembly harness: allocates 16 bytes, pushes it, allocates 24 bytes, pops and frees the 24-byte
+/// block, then writes an invalid address (block minus 16) as its own forward link at offset +16, and
+/// requests 8 bytes — expecting "heap debug detected free-list corruption" error. Target-specific ARM64/x86_64 assembly.
 #[test]
 fn test_heap_debug_free_list_corruption_reports_error() {
     let harness = match target().arch {
@@ -339,9 +339,9 @@ fn test_heap_debug_free_list_corruption_reports_error() {
     );
 }
 
-// Verifies heap debug mode reports an exit summary on stderr including allocs count and peak_live_bytes.
-// PHP fixture: allocates an array and unsets it; the exit summary must contain "HEAP DEBUG: allocs=",
-// "peak_live_bytes=", and "HEAP DEBUG: leak summary:".
+/// Verifies heap debug mode reports an exit summary on stderr including allocs count and peak_live_bytes.
+/// PHP fixture: allocates an array and unsets it; the exit summary must contain "HEAP DEBUG: allocs=",
+/// "peak_live_bytes=", and "HEAP DEBUG: leak summary:".
 #[test]
 fn test_heap_debug_reports_exit_summary() {
     let out = compile_and_run_with_heap_debug("<?php $a = [1, 2, 3]; unset($a);");
@@ -355,9 +355,9 @@ fn test_heap_debug_reports_exit_summary() {
     );
 }
 
-// Verifies heap debug mode preserves correct alloc size during associative string-key insertions.
-// PHP fixture: creates a string-keyed array, accesses and echoes two keys — confirms no memory corruption
-// or size bookkeeping errors occur during string-key insert and read.
+/// Verifies heap debug mode preserves correct alloc size during associative string-key insertions.
+/// PHP fixture: creates a string-keyed array, accesses and echoes two keys — confirms no memory corruption
+/// or size bookkeeping errors occur during string-key insert and read.
 #[test]
 fn test_heap_debug_preserves_alloc_size_during_assoc_string_insertions() {
     let out = compile_and_run_with_heap_debug(
@@ -371,9 +371,9 @@ echo "City: " . $user["city"] . "\n";
     assert_eq!(out.stdout, "Name: Alice\nCity: NYC\n");
 }
 
-// Verifies freed payload memory is poisoned with 0xA5 and remains readable.
-// Inline assembly harness: allocates 16 bytes, frees the block, pops the pointer, reads the byte at
-// offset +8 (poison byte), and prints it — expects 165 (0xA5). Target-specific ARM64/x86_64 assembly.
+/// Verifies freed payload memory is poisoned with 0xA5 and remains readable.
+/// Inline assembly harness: allocates 16 bytes, frees the block, pops the pointer, reads the byte at
+/// offset +8 (poison byte), and prints it — expects 165 (0xA5). Target-specific ARM64/x86_64 assembly.
 #[test]
 fn test_heap_debug_poison_freed_payload() {
     let harness = match target().arch {
@@ -408,10 +408,10 @@ fn test_heap_debug_poison_freed_payload() {
     assert_eq!(out, "165");
 }
 
-// Verifies __rt_heap_kind returns distinct tags for raw alloc, array, hash, and string.
-// Inline assembly harness: allocates raw 16 bytes, creates an array with __rt_array_new,
-// creates a hash with __rt_hash_new, persists a 3-byte string "ABC" with __rt_str_persist,
-// and calls __rt_heap_kind after each to produce output "0231". Target-specific ARM64/x86_64 assembly.
+/// Verifies __rt_heap_kind returns distinct tags for raw alloc, array, hash, and string.
+/// Inline assembly harness: allocates raw 16 bytes, creates an array with __rt_array_new,
+/// creates a hash with __rt_hash_new, persists a 3-byte string "ABC" with __rt_str_persist,
+/// and calls __rt_heap_kind after each to produce output "0231". Target-specific ARM64/x86_64 assembly.
 #[test]
 fn test_heap_kind_tags_raw_array_hash_and_string() {
     let harness = match target().arch {
@@ -501,10 +501,10 @@ fn test_heap_kind_tags_raw_array_hash_and_string() {
     assert_eq!(out, "0231");
 }
 
-// Verifies __rt_heap_free_safe ignores non-heap pointers and does not crash or corrupt state.
-// Inline assembly harness: calls __rt_heap_free_safe with null (0), the concat_buf address,
-// and the max address (0x7FFF_FFFF_FFFF_FFFE), then prints 1. None of these should trigger
-// a heap error or prevent the final output. Target-specific ARM64/x86_64 assembly.
+/// Verifies __rt_heap_free_safe ignores non-heap pointers and does not crash or corrupt state.
+/// Inline assembly harness: calls __rt_heap_free_safe with null (0), the concat_buf address,
+/// and the max address (0x7FFF_FFFF_FFFF_FFFE), then prints 1. None of these should trigger
+/// a heap error or prevent the final output. Target-specific ARM64/x86_64 assembly.
 #[test]
 fn test_heap_free_safe_ignores_non_heap_pointers() {
     let harness = match target().arch {
@@ -544,10 +544,10 @@ fn test_heap_free_safe_ignores_non_heap_pointers() {
     assert_eq!(out, "1");
 }
 
-// Verifies __rt_decref_* helpers ignore the null sentinel value (0xFFFF_FFFF_FFFF_FFFE) and return safely.
-// Inline assembly harness: loads the null sentinel value and calls __rt_decref_array, __rt_decref_hash,
-// __rt_decref_object, and __rt_decref_mixed — none should crash. Prints 1 on success.
-// Target-specific ARM64/x86_64 assembly.
+/// Verifies __rt_decref_* helpers ignore the null sentinel value (0xFFFF_FFFF_FFFF_FFFE) and return safely.
+/// Inline assembly harness: loads the null sentinel value and calls __rt_decref_array, __rt_decref_hash,
+/// __rt_decref_object, and __rt_decref_mixed — none should crash. Prints 1 on success.
+/// Target-specific ARM64/x86_64 assembly.
 #[test]
 fn test_direct_decref_helpers_ignore_null_sentinel() {
     let harness = match target().arch {

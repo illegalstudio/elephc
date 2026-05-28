@@ -509,7 +509,7 @@ gaps that must be fixed first.
 - [x] Runtime callable descriptor ABI/storage foundation — closure, first-class callable, SPL callback-adapter, object-property, array, local, and Fiber storage now carries descriptor pointers; indirect call sites and callback runtimes load the entry ABI slot before invocation
 - [x] Universal runtime callable descriptors — complete runtime descriptor metadata for signature/default/by-ref/variadic handling, receiver/capture environments, and invocation support for string, array, closure, first-class callable, object `__invoke`, static/instance method, builtin, and extern callable shapes
 - [x] Phase 5 follow-up — iterator-dependent Phase 4 parity: `SplFixedArray::getIterator()` plus `IteratorAggregate`/`InternalIterator` runtime wiring once iterator classes are available
-- [ ] Phase 6 — `SplHeap`, `SplMaxHeap`, `SplMinHeap`, `SplPriorityQueue`, `SplObjectStorage`, and per-instance handle finalization
+- [x] Phase 6 — `SplHeap`, `SplMaxHeap`, `SplMinHeap`, `SplPriorityQueue`, `SplObjectStorage`, and per-instance handle finalization
 - [ ] Phase 7 — `RegexIterator`, `RecursiveRegexIterator`
 - [ ] Phase 8 — file/directory iterators: `SplFileInfo`, `SplFileObject`, `SplTempFileObject`, `DirectoryIterator`, `FilesystemIterator`, `GlobIterator`, `RecursiveDirectoryIterator`, `RecursiveCachingIterator`
 

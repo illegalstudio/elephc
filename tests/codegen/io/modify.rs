@@ -9,9 +9,9 @@
 
 use super::*;
 
+/// Verifies that function_exists() recognizes all file-modify builtins: touch,
+/// chmod, chown, chgrp, umask, ftruncate, fflush, fsync, and fdatasync.
 #[test]
-// Verifies that function_exists() recognizes all file-modify builtins: touch,
-// chmod, chown, chgrp, umask, ftruncate, fflush, fsync, and fdatasync.
 fn test_function_exists_recognizes_file_modify_builtins() {
     let out = compile_and_run(
         r#"<?php
@@ -29,9 +29,9 @@ echo (function_exists("touch") ? "1" : "0")
     assert_eq!(out, "111111111");
 }
 
+/// Verifies file-modify builtins are case-insensitive and resolve correctly
+/// inside a namespace via PHP's namespace fallback rules.
 #[test]
-// Verifies file-modify builtins are case-insensitive and resolve correctly
-// inside a namespace via PHP's namespace fallback rules.
 fn test_file_modify_builtins_are_case_insensitive_and_namespaced() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -45,8 +45,8 @@ echo ($ok ? "y" : "n") . "|" . (FiLe_ExIsTs("case.txt") ? "y" : "n");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies chmod() succeeds on an existing file and returns true.
 #[test]
-// Verifies chmod() succeeds on an existing file and returns true.
 fn test_chmod_existing_file_succeeds() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -58,9 +58,9 @@ echo chmod("perms.txt", 0o644) ? "y" : "n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies chmod() actually removes write permission when mode 0400 is set;
+/// fileperms() confirms the mode before chmod restores it.
 #[test]
-// Verifies chmod() actually removes write permission when mode 0400 is set;
-// fileperms() confirms the mode before chmod restores it.
 fn test_chmod_makes_file_unwritable() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -75,8 +75,8 @@ echo $mode;
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies chmod() returns false when the path does not exist.
 #[test]
-// Verifies chmod() returns false when the path does not exist.
 fn test_chmod_missing_path_returns_false() {
     let out = compile_and_run(
         r#"<?php echo chmod("/nonexistent/xyz/abc.txt", 0o644) ? "y" : "n";"#,
@@ -84,8 +84,8 @@ fn test_chmod_missing_path_returns_false() {
     assert_eq!(out, "n");
 }
 
+/// Verifies chown() returns false when the path does not exist.
 #[test]
-// Verifies chown() returns false when the path does not exist.
 fn test_chown_missing_path_returns_false() {
     let out = compile_and_run(
         r#"<?php echo chown("/nonexistent/xyz/abc.txt", 1000) ? "y" : "n";"#,
@@ -93,8 +93,8 @@ fn test_chown_missing_path_returns_false() {
     assert_eq!(out, "n");
 }
 
+/// Verifies chgrp() returns false when the path does not exist.
 #[test]
-// Verifies chgrp() returns false when the path does not exist.
 fn test_chgrp_missing_path_returns_false() {
     let out = compile_and_run(
         r#"<?php echo chgrp("/nonexistent/xyz/abc.txt", 1000) ? "y" : "n";"#,
@@ -102,9 +102,9 @@ fn test_chgrp_missing_path_returns_false() {
     assert_eq!(out, "n");
 }
 
+/// Verifies chown() returns false when the owner string does not correspond to
+/// a valid user on the host system.
 #[test]
-// Verifies chown() returns false when the owner string does not correspond to
-// a valid user on the host system.
 fn test_chown_unknown_user_string_returns_false() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -116,9 +116,9 @@ echo chown("owner.txt", "elephc_user_that_should_not_exist") ? "y" : "n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies chgrp() returns false when the group string does not correspond to
+/// a valid group on the host system.
 #[test]
-// Verifies chgrp() returns false when the group string does not correspond to
-// a valid group on the host system.
 fn test_chgrp_unknown_group_string_returns_false() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -130,8 +130,8 @@ echo chgrp("group.txt", "elephc_group_that_should_not_exist") ? "y" : "n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies umask() returns the previous mask when called with an argument.
 #[test]
-// Verifies umask() returns the previous mask when called with an argument.
 fn test_umask_set_then_set_back() {
     let out = compile_and_run(
         r#"<?php
@@ -143,9 +143,9 @@ echo $set;
     assert_eq!(out, format!("{}", 0o027));
 }
 
+/// Verifies umask() with no arguments only reads the current mask without
+/// modifying it by checking identity before and after a null-probed call.
 #[test]
-// Verifies umask() with no arguments only reads the current mask without
-// modifying it by checking identity before and after a null-probed call.
 fn test_umask_no_args_does_not_change() {
     let out = compile_and_run(
         r#"<?php
@@ -158,9 +158,9 @@ echo ($probed === 0o022 ? "y" : "n") . "|" . ($restored === 0o022 ? "y" : "n");
     assert_eq!(out, "y|y");
 }
 
+/// Verifies ftruncate() shrinks the file to the specified byte length and that
+/// filesize() reflects the truncated size.
 #[test]
-// Verifies ftruncate() shrinks the file to the specified byte length and that
-// filesize() reflects the truncated size.
 fn test_ftruncate_shrinks_file() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -175,9 +175,9 @@ echo ($ok ? "y" : "n") . "|" . filesize("trunc.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies ftruncate() extends the file with zero bytes when the offset is
+/// larger than the current file size, and that filesize() reflects the new size.
 #[test]
-// Verifies ftruncate() extends the file with zero bytes when the offset is
-// larger than the current file size, and that filesize() reflects the new size.
 fn test_ftruncate_extends_file_with_zeros() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -192,8 +192,8 @@ echo ($ok ? "y" : "n") . "|" . filesize("ext.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies fsync() succeeds on an open file and returns true.
 #[test]
-// Verifies fsync() succeeds on an open file and returns true.
 fn test_fsync_open_file_succeeds() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -208,8 +208,8 @@ echo $ok ? "y" : "n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies fflush() succeeds on an open file and returns true.
 #[test]
-// Verifies fflush() succeeds on an open file and returns true.
 fn test_fflush_open_file_succeeds() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -224,8 +224,8 @@ echo $ok ? "y" : "n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies fdatasync() succeeds on an open file and returns true.
 #[test]
-// Verifies fdatasync() succeeds on an open file and returns true.
 fn test_fdatasync_open_file_succeeds() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -240,8 +240,8 @@ echo $ok ? "y" : "n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies touch() creates a file that did not exist and returns true.
 #[test]
-// Verifies touch() creates a file that did not exist and returns true.
 fn test_touch_creates_missing_file() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -253,14 +253,14 @@ echo ($ok ? "y" : "n") . "|" . (file_exists("freshly_touched.txt") ? "y" : "n");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Regression: touch() previously called libc open() with the mode in x2,
+/// but Darwin ARM64 passes variadic libc args on the stack — so the
+/// kernel ignored the requested 0644 and created the file with garbage
+/// permissions (often 0240). Subsequent reads then failed with EACCES.
+/// After the fix, file_get_contents on a freshly-touched-then-written
+/// file must succeed.
 #[test]
 fn test_touch_creates_file_with_readable_permissions() {
-    // Regression: touch() previously called libc open() with the mode in x2,
-    // but Darwin ARM64 passes variadic libc args on the stack — so the
-    // kernel ignored the requested 0644 and created the file with garbage
-    // permissions (often 0240). Subsequent reads then failed with EACCES.
-    // After the fix, file_get_contents on a freshly-touched-then-written
-    // file must succeed.
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
 touch("readback.txt");
@@ -272,9 +272,9 @@ echo file_get_contents("readback.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies touch() creates a file with PHP's default permission of 0666 when
+/// umask is 0, confirming fileperms() reflects the expected mode.
 #[test]
-// Verifies touch() creates a file with PHP's default permission of 0666 when
-// umask is 0, confirming fileperms() reflects the expected mode.
 fn test_touch_creates_file_with_php_default_permissions() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -288,9 +288,9 @@ echo sprintf("%04o", fileperms("mode.txt") & 0o777);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies touch() does not modify the content of an existing file; after
+/// touch() the file must still contain its original data.
 #[test]
-// Verifies touch() does not modify the content of an existing file; after
-// touch() the file must still contain its original data.
 fn test_touch_does_not_truncate_existing_file() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -303,9 +303,9 @@ echo file_get_contents("preserved.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies touch() with a null mtime argument uses the current system time
+/// (filemtime() must return a value greater than a known past epoch).
 #[test]
-// Verifies touch() with a null mtime argument uses the current system time
-// (filemtime() must return a value greater than a known past epoch).
 fn test_touch_null_mtime_uses_current_time() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -318,9 +318,9 @@ echo ($ok ? "y" : "n") . "|" . (filemtime("current.txt") > 1000000000 ? "y" : "n
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies touch() with a null variable passed as mtime uses the current
+/// system time, same as the literal null case.
 #[test]
-// Verifies touch() with a null variable passed as mtime uses the current
-// system time, same as the literal null case.
 fn test_touch_null_mtime_variable_uses_current_time() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -334,9 +334,9 @@ echo ($ok ? "y" : "n") . "|" . (filemtime("current_var.txt") > 1000000000 ? "y" 
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies touch() applies the provided Unix timestamp as the modification
+/// time and that filemtime() reads back the same value.
 #[test]
-// Verifies touch() applies the provided Unix timestamp as the modification
-// time and that filemtime() reads back the same value.
 fn test_touch_with_explicit_mtime() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -349,9 +349,9 @@ echo filemtime("mtime.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies touch() with -1 as the mtime argument writes the literal -1 as
+/// the modification time (not interpreted as current time).
 #[test]
-// Verifies touch() with -1 as the mtime argument writes the literal -1 as
-// the modification time (not interpreted as current time).
 fn test_touch_negative_one_is_explicit_timestamp() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -364,9 +364,9 @@ echo filemtime("negative.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies touch() with a null atime argument defaults to the explicit mtime
+/// value, and that both filemtime() and fileatime() return the same timestamp.
 #[test]
-// Verifies touch() with a null atime argument defaults to the explicit mtime
-// value, and that both filemtime() and fileatime() return the same timestamp.
 fn test_touch_null_atime_defaults_to_explicit_mtime() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -379,9 +379,9 @@ echo filemtime("null_atime.txt") . "|" . fileatime("null_atime.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies touch() with a null variable atime argument defaults to the
+/// explicit mtime, same as the literal null case.
 #[test]
-// Verifies touch() with a null variable atime argument defaults to the
-// explicit mtime, same as the literal null case.
 fn test_touch_null_atime_variable_defaults_to_explicit_mtime() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -395,9 +395,9 @@ echo filemtime("null_atime_var.txt") . "|" . fileatime("null_atime_var.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies touch() with explicit mtime and atime arguments succeeds and that
+/// mtime is preserved; atime readback is platform-dependent and not asserted.
 #[test]
-// Verifies touch() with explicit mtime and atime arguments succeeds and that
-// mtime is preserved; atime readback is platform-dependent and not asserted.
 fn test_touch_with_explicit_mtime_and_atime() {
     // The atime cannot be reliably read back without fileatime() (introduced in
     // Phase 2 on a separate branch), so this test only verifies that

@@ -117,6 +117,7 @@ impl Name {
 }
 
 impl std::fmt::Display for Name {
+    /// Formats this value for display or debug output.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
@@ -125,36 +126,42 @@ impl std::fmt::Display for Name {
 impl std::ops::Deref for Name {
     type Target = str;
 
+    /// Returns the borrowed target for deref coercions.
     fn deref(&self) -> &Self::Target {
         self.as_str()
     }
 }
 
 impl PartialEq<str> for Name {
+    /// Compares this value with another value for equality.
     fn eq(&self, other: &str) -> bool {
         self.as_str() == other
     }
 }
 
 impl PartialEq<&str> for Name {
+    /// Compares this value with another value for equality.
     fn eq(&self, other: &&str) -> bool {
         self.as_str() == *other
     }
 }
 
 impl PartialEq<String> for Name {
+    /// Compares this value with another value for equality.
     fn eq(&self, other: &String) -> bool {
         self.as_str() == other
     }
 }
 
 impl From<&str> for Name {
+    /// Converts the input value into this type.
     fn from(value: &str) -> Self {
         Name::unqualified(value)
     }
 }
 
 impl From<String> for Name {
+    /// Converts the input value into this type.
     fn from(value: String) -> Self {
         Name::unqualified(value)
     }

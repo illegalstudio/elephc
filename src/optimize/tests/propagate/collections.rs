@@ -10,10 +10,10 @@
 
 use super::*;
 
+/// Tests that constant propagation tracks scalar values unpacked from a `list()` assignment.
+/// The `base` and `exp` variables are initialized from a fixed array literal `[2, 3]`.
+/// After propagation, the subsequent `echo $base ** $exp` expression is folded to `8.0`.
 #[test]
-// Tests that constant propagation tracks scalar values unpacked from a `list()` assignment.
-// The `base` and `exp` variables are initialized from a fixed array literal `[2, 3]`.
-// After propagation, the subsequent `echo $base ** $exp` expression is folded to `8.0`.
 fn test_propagate_constants_tracks_scalar_list_unpack() {
     let program = vec![
         Stmt::new(
@@ -37,10 +37,10 @@ fn test_propagate_constants_tracks_scalar_list_unpack() {
     );
 }
 
+/// Tests that constant propagation tracks scalar values accessed from a numeric-indexed array literal.
+/// `$base` is assigned `&$arr[0]` where `$arr = [2, 9]`; after propagation `$base = 2`.
+/// The subsequent `echo $base ** 3` is folded to `8.0`.
 #[test]
-// Tests that constant propagation tracks scalar values accessed from a numeric-indexed array literal.
-// `$base` is assigned `&$arr[0]` where `$arr = [2, 9]`; after propagation `$base = 2`.
-// The subsequent `echo $base ** 3` is folded to `8.0`.
 fn test_propagate_constants_tracks_scalar_array_literal_access() {
     let program = vec![
         Stmt::assign(
@@ -68,10 +68,10 @@ fn test_propagate_constants_tracks_scalar_array_literal_access() {
     );
 }
 
+/// Tests that constant propagation tracks scalar values accessed from an associative array literal.
+/// `$base` is assigned `&$arr["left"]` where `$arr = ["left" => 2, "right" => 9]`; after propagation `$base = 2`.
+/// The subsequent `echo $base ** 3` is folded to `8.0`.
 #[test]
-// Tests that constant propagation tracks scalar values accessed from an associative array literal.
-// `$base` is assigned `&$arr["left"]` where `$arr = ["left" => 2, "right" => 9]`; after propagation `$base = 2`.
-// The subsequent `echo $base ** 3` is folded to `8.0`.
 fn test_propagate_constants_tracks_scalar_assoc_array_literal_access() {
     let program = vec![
         Stmt::assign(
@@ -102,10 +102,10 @@ fn test_propagate_constants_tracks_scalar_assoc_array_literal_access() {
     );
 }
 
+/// Tests that constant propagation preserves scalar values that are not targeted by `unset()`.
+/// `$base = 2` and `$tmp = 9`; `unset($tmp)` invalidates `$tmp` but `$base` remains a constant.
+/// After propagation, `echo $base ** 3` is folded to `8.0` while `echo $tmp` is unaffected.
 #[test]
-// Tests that constant propagation preserves scalar values that are not targeted by `unset()`.
-// `$base = 2` and `$tmp = 9`; `unset($tmp)` invalidates `$tmp` but `$base` remains a constant.
-// After propagation, `echo $base ** 3` is folded to `8.0` while `echo $tmp` is unaffected.
 fn test_propagate_constants_preserves_unmodified_scalar_across_unset() {
     let program = vec![
         Stmt::assign("base", Expr::int_lit(2)),
@@ -131,10 +131,10 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_unset() {
     );
 }
 
+/// Tests that `unset()` with multiple targets correctly invalidates all named variables.
+/// `$base = 2`, `$tmp = 9`, `$other = 10`; `unset($tmp, $other)` invalidates `$tmp` and `$other`.
+/// After propagation, `echo $tmp` remains a variable (not folded) and `echo $base ** 3` is `8.0`.
 #[test]
-// Tests that `unset()` with multiple targets correctly invalidates all named variables.
-// `$base = 2`, `$tmp = 9`, `$other = 10`; `unset($tmp, $other)` invalidates `$tmp` and `$other`.
-// After propagation, `echo $tmp` remains a variable (not folded) and `echo $base ** 3` is `8.0`.
 fn test_propagate_constants_invalidates_multiple_unset_targets() {
     let program = vec![
         Stmt::assign("base", Expr::int_lit(2)),

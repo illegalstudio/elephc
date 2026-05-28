@@ -9,9 +9,9 @@
 
 use super::*;
 
-// Tests variadic function called via first-class callable syntax `func(...)]`.
-// Verifies that positional arguments are collected into the variadic parameter
-// and count() returns the correct number.
+/// Tests variadic function called via first-class callable syntax `func(...)]`.
+/// Verifies that positional arguments are collected into the variadic parameter
+/// and count() returns the correct number.
 #[test]
 fn test_first_class_callable_variadic_function_call() {
     let out = compile_and_run(
@@ -27,9 +27,9 @@ $f(1, 2, 3);
     assert_eq!(out, "3");
 }
 
-// Tests variadic closure called directly as a callable expression.
-// Verifies that positional arguments are collected into the variadic closure
-// parameter and count() returns the correct number.
+/// Tests variadic closure called directly as a callable expression.
+/// Verifies that positional arguments are collected into the variadic closure
+/// parameter and count() returns the correct number.
 #[test]
 fn test_closure_variadic_call() {
     let out = compile_and_run(
@@ -44,10 +44,10 @@ $f(1, 2, 3);
     assert_eq!(out, "3");
 }
 
-// Tests variadic function with a regular parameter before the variadic,
-// called via first-class callable syntax.
-// Verifies the regular parameter receives the first positional argument,
-// remaining arguments fill the variadic, and both are handled correctly.
+/// Tests variadic function with a regular parameter before the variadic,
+/// called via first-class callable syntax.
+/// Verifies the regular parameter receives the first positional argument,
+/// remaining arguments fill the variadic, and both are handled correctly.
 #[test]
 fn test_first_class_callable_variadic_with_regular_param() {
     let out = compile_and_run(
@@ -65,8 +65,8 @@ $f(7, 8, 9);
     assert_eq!(out, "7:2");
 }
 
-// Tests first-class callable syntax on builtin count() with a sequentially-keyed array.
-// Verifies builtin callables work with variadic-compatible signatures.
+/// Tests first-class callable syntax on builtin count() with a sequentially-keyed array.
+/// Verifies builtin callables work with variadic-compatible signatures.
 #[test]
 fn test_first_class_callable_builtin_count_accepts_string_arrays() {
     let out = compile_and_run(
@@ -79,8 +79,8 @@ echo $f($xs);
     assert_eq!(out, "2");
 }
 
-// Tests first-class callable syntax on builtin count() with an associative array.
-// Verifies builtin callables work with associative array inputs.
+/// Tests first-class callable syntax on builtin count() with an associative array.
+/// Verifies builtin callables work with associative array inputs.
 #[test]
 fn test_first_class_callable_builtin_count_accepts_assoc_arrays() {
     let out = compile_and_run(

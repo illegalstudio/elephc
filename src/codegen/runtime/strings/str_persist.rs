@@ -136,6 +136,7 @@ mod tests {
 
     use super::*;
 
+    /// Verifies emit str persist linux x86_64 uses heap helper.
     #[test]
     fn test_emit_str_persist_linux_x86_64_uses_heap_helper() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));

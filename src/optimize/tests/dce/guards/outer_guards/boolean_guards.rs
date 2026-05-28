@@ -10,9 +10,9 @@
 
 use super::*;
 
-// Tests that a nested if inside a strict-boolean-true outer guard is pruned when the
-// inner condition is a strict-boolean-false guard (the inner then branch is dead code).
-// After DCE, the outer if's then_body collapses to the inner if's else_body.
+/// Tests that a nested if inside a strict-boolean-true outer guard is pruned when the
+/// inner condition is a strict-boolean-false guard (the inner then branch is dead code).
+/// After DCE, the outer if's then_body collapses to the inner if's else_body.
 #[test]
 fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_strict_bool_guard() {
     let strict_true = Expr::new(
@@ -70,9 +70,9 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_strict_bool_guard
     assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
 }
 
-// Tests that a nested if inside an AND-guarded outer branch is pruned when the inner
-// condition is a logical contradiction (NOT a OR NOT b is false when a AND b is true).
-// After DCE, the outer if's then_body collapses to the inner if's else_body.
+/// Tests that a nested if inside an AND-guarded outer branch is pruned when the inner
+/// condition is a logical contradiction (NOT a OR NOT b is false when a AND b is true).
+/// After DCE, the outer if's then_body collapses to the inner if's else_body.
 #[test]
 fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_and_guard() {
     let contradiction = Expr::binop(
@@ -119,9 +119,9 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_and_guard() {
     assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
 }
 
-// Tests that a nested if inside a negated-AND outer guard is pruned when the inner
-// condition is the same conjunction (a AND b is true, so negated_conjunction is false).
-// After DCE, the outer if's then_body collapses to the inner if's else_body.
+/// Tests that a nested if inside a negated-AND outer guard is pruned when the inner
+/// condition is the same conjunction (a AND b is true, so negated_conjunction is false).
+/// After DCE, the outer if's then_body collapses to the inner if's else_body.
 #[test]
 fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_negated_and_guard() {
     let conjunction = Expr::binop(Expr::var("a"), BinOp::And, Expr::var("b"));
@@ -165,9 +165,9 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_negated_and_guard
     assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
 }
 
-// Tests that a nested if inside an OR-guarded outer else-branch is pruned when the inner
-// condition's then-branch is unreachable (a && !b is true when !a || b is false).
-// After DCE, the outer if's else_body collapses to the inner if's then_body.
+/// Tests that a nested if inside an OR-guarded outer else-branch is pruned when the inner
+/// condition's then-branch is unreachable (a && !b is true when !a || b is false).
+/// After DCE, the outer if's else_body collapses to the inner if's then_body.
 #[test]
 fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_or_false_branch() {
     let outer = Expr::binop(

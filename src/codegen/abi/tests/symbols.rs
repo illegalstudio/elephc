@@ -10,9 +10,9 @@
 
 use super::*;
 
+/// Verifies `emit_symbol_address` uses platform-appropriate relocations (ADRP + ADD
+/// with @PAGE/@PAGEOFF) rather than raw immediates on ARM64.
 #[test]
-// Verifies `emit_symbol_address` uses platform-appropriate relocations (ADRP + ADD
-// with @PAGE/@PAGEOFF) rather than raw immediates on ARM64.
 fn test_emit_symbol_address_uses_platform_relocations() {
     let mut emitter = test_emitter();
     emit_symbol_address(&mut emitter, "x9", "_demo_symbol");
@@ -26,10 +26,10 @@ fn test_emit_symbol_address_uses_platform_relocations() {
     );
 }
 
+/// Checks that `emit_store_result_to_symbol` stores both registers of a string (ptr in x1,
+/// len in x2) at the symbol address, and that `emit_load_symbol_to_result` reverses the
+/// operation correctly. Verifies str/ldr pair for x1 and x2.
 #[test]
-// Checks that `emit_store_result_to_symbol` stores both registers of a string (ptr in x1,
-// len in x2) at the symbol address, and that `emit_load_symbol_to_result` reverses the
-// operation correctly. Verifies str/ldr pair for x1 and x2.
 fn test_emit_store_and_load_result_to_symbol_for_string() {
     let mut emitter = test_emitter();
     emit_store_result_to_symbol(&mut emitter, "_demo_symbol", &PhpType::Str, false);
@@ -42,9 +42,9 @@ fn test_emit_store_and_load_result_to_symbol_for_string() {
     assert!(out.contains("    ldr x2, [x9, #8]\n"));
 }
 
+/// Verifies `emit_extern_symbol_address` on ARM64 emits GOT-relative relocations
+/// (ADRP + ldr via @GOTPAGE/@GOTPAGEOFF) rather than direct symbol addressing.
 #[test]
-// Verifies `emit_extern_symbol_address` on ARM64 emits GOT-relative relocations
-// (ADRP + ldr via @GOTPAGE/@GOTPAGEOFF) rather than direct symbol addressing.
 fn test_emit_extern_symbol_address_uses_got_relocations_on_aarch64() {
     let mut emitter = test_emitter();
     crate::codegen::abi::symbols::emit_extern_symbol_address(&mut emitter, "x9", "_demo_extern");

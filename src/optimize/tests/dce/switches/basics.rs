@@ -10,8 +10,8 @@
 
 use super::*;
 
+/// Verifies DCE removes a switch with no side-effect subject and all-empty cases, replacing it with the subject expression.
 #[test]
-// Verifies DCE removes a switch with no side-effect subject and all-empty cases, replacing it with the subject expression.
 fn test_eliminate_dead_code_drops_empty_switch_shell_created_by_branch_dce() {
     let touch = Expr::new(
         ExprKind::FunctionCall {

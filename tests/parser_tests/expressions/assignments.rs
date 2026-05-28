@@ -9,10 +9,10 @@
 
 use super::*;
 
+/// Verifies that compound assignment operators `**=`, `&=`, `|=`, `^=`, `<<=`, `>>=`
+/// parse correctly as `Assign` nodes where the value is a `BinaryOp` on the variable.
+/// Each case checks the operator, lhs variable, and rhs integer literal match the expected AST shape.
 #[test]
-// Verifies that compound assignment operators `**=`, `&=`, `|=`, `^=`, `<<=`, `>>=`
-// parse correctly as `Assign` nodes where the value is a `BinaryOp` on the variable.
-// Each case checks the operator, lhs variable, and rhs integer literal match the expected AST shape.
 fn test_compound_assignment_missing_ops_parse() {
     let cases = [
         ("<?php $x **= 3;", BinOp::Pow),
@@ -42,9 +42,9 @@ fn test_compound_assignment_missing_ops_parse() {
     }
 }
 
+/// Verifies that `<?php $items[0] += 3;` parses to an `ArrayAssign` (not a generic `Assign`).
+/// Compound assignment on an array element must produce the correct AST shape.
 #[test]
-// Verifies that `<?php $items[0] += 3;` parses to an `ArrayAssign` (not a generic `Assign`).
-// Compound assignment on an array element must produce the correct AST shape.
 fn test_parse_array_compound_assignment() {
     let stmts = parse_source("<?php $items[0] += 3;");
     match &stmts[0].kind {
@@ -74,10 +74,10 @@ fn test_parse_array_compound_assignment() {
     }
 }
 
+/// Verifies that `<?php $items[idx()] += 3;` lowers to a `Synthetic` stmt containing
+/// a temporary assignment for `idx()` and a subsequent `ArrayAssign`.
+/// This protects against registering the call effect directly on the ArrayAssign.
 #[test]
-// Verifies that `<?php $items[idx()] += 3;` lowers to a `Synthetic` stmt containing
-// a temporary assignment for `idx()` and a subsequent `ArrayAssign`.
-// This protects against registering the call effect directly on the ArrayAssign.
 fn test_parse_effectful_array_compound_assignment_uses_synthetic_temporary() {
     let stmts = parse_source("<?php $items[idx()] += 3;");
     match &stmts[0].kind {
@@ -90,9 +90,9 @@ fn test_parse_effectful_array_compound_assignment_uses_synthetic_temporary() {
     }
 }
 
+/// Verifies that `<?php $data["a"][0]["b"] = "changed";` parses to a `NestedArrayAssign`
+/// with the right-most key "b" as the index and the remainder as a nested `ArrayAccess` chain.
 #[test]
-// Verifies that `<?php $data["a"][0]["b"] = "changed";` parses to a `NestedArrayAssign`
-// with the right-most key "b" as the index and the remainder as a nested `ArrayAccess` chain.
 fn test_parse_nested_array_assignment_target() {
     let stmts = parse_source("<?php $data[\"a\"][0][\"b\"] = \"changed\";");
     match &stmts[0].kind {
@@ -110,9 +110,9 @@ fn test_parse_nested_array_assignment_target() {
     }
 }
 
+/// Verifies that `<?php ?int $value = null;` parses to a `TypedAssign` with a nullable `?int`
+/// type expression and a null initializer.
 #[test]
-// Verifies that `<?php ?int $value = null;` parses to a `TypedAssign` with a nullable `?int`
-// type expression and a null initializer.
 fn test_parse_nullable_typed_assign() {
     let stmts = parse_source("<?php ?int $value = null;");
     match &stmts[0].kind {
@@ -129,9 +129,9 @@ fn test_parse_nullable_typed_assign() {
     }
 }
 
+/// Verifies that `<?php int|string $value = 1;` parses to a `TypedAssign` with a union type
+/// expression `int|string` and an integer initializer.
 #[test]
-// Verifies that `<?php int|string $value = 1;` parses to a `TypedAssign` with a union type
-// expression `int|string` and an integer initializer.
 fn test_parse_union_typed_assign() {
     let stmts = parse_source("<?php int|string $value = 1;");
     match &stmts[0].kind {

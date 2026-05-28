@@ -280,6 +280,7 @@ pub enum StmtKind {
 }
 
 impl PartialEq for Stmt {
+    /// Compares this value with another value for equality.
     fn eq(&self, other: &Self) -> bool {
         self.kind == other.kind
     }

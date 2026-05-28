@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Parses `$obj->run(1, 2)` and verifies `MethodCall` AST with correct method name,
-// argument count, and object expression kind (Variable).
+/// Parses `$obj->run(1, 2)` and verifies `MethodCall` AST with correct method name,
+/// argument count, and object expression kind (Variable).
 #[test]
 fn test_parse_method_call() {
     let stmts = parse_source("<?php $obj->run(1, 2);");
@@ -31,8 +31,8 @@ fn test_parse_method_call() {
     }
 }
 
-// Parses `$obj->run(...)` and verifies `FirstClassCallable(Method)` AST with
-// spread args, correct method name, and object expression kind (Variable).
+/// Parses `$obj->run(...)` and verifies `FirstClassCallable(Method)` AST with
+/// spread args, correct method name, and object expression kind (Variable).
 #[test]
 fn test_parse_first_class_callable_instance_method() {
     let stmts = parse_source("<?php $obj->run(...);");
@@ -48,8 +48,8 @@ fn test_parse_first_class_callable_instance_method() {
     }
 }
 
-// Parses `Factory::make(1)` and verifies `StaticMethodCall` AST with named
-// receiver, method name, and single argument.
+/// Parses `Factory::make(1)` and verifies `StaticMethodCall` AST with named
+/// receiver, method name, and single argument.
 #[test]
 fn test_parse_static_method_call() {
     let stmts = parse_source("<?php Factory::make(1);");
@@ -70,8 +70,8 @@ fn test_parse_static_method_call() {
     }
 }
 
-// Parses `static::make(...)` and verifies `FirstClassCallable(StaticMethod)` AST
-// with `Static` receiver (not named) and spread args.
+/// Parses `static::make(...)` and verifies `FirstClassCallable(StaticMethod)` AST
+/// with `Static` receiver (not named) and spread args.
 #[test]
 fn test_parse_first_class_callable_static_method_static_receiver() {
     let stmts = parse_source("<?php static::make(...);");

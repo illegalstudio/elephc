@@ -9,7 +9,7 @@
 
 use super::*;
 
-// Verifies a function with `never` return type that throws an exception can be caught via `try`/`catch`.
+/// Verifies a function with `never` return type that throws an exception can be caught via `try`/`catch`.
 #[test]
 fn test_never_return_type_throws_and_is_caught() {
     let out = compile_and_run(
@@ -28,8 +28,8 @@ fn test_never_return_type_throws_and_is_caught() {
     assert_eq!(out, "boom");
 }
 
-// Verifies an instance method with `never` return type that throws can be caught via `try`/`catch`
-// when called on an object instance.
+/// Verifies an instance method with `never` return type that throws can be caught via `try`/`catch`
+/// when called on an object instance.
 #[test]
 fn test_never_instance_method_throws_and_is_caught() {
     let out = compile_and_run(
@@ -51,8 +51,8 @@ fn test_never_instance_method_throws_and_is_caught() {
     assert_eq!(out, "method-boom");
 }
 
-// Verifies a static method with `never` return type that throws can be caught via `try`/`catch`
-// when called via the class.
+/// Verifies a static method with `never` return type that throws can be caught via `try`/`catch`
+/// when called via the class.
 #[test]
 fn test_never_static_method_throws_and_is_caught() {
     let out = compile_and_run(
@@ -73,8 +73,8 @@ fn test_never_static_method_throws_and_is_caught() {
     assert_eq!(out, "static-boom");
 }
 
-// Verifies a `never`-returning function that calls `exit` produces no further output and the binary
-// exits gracefully (no "unreachable" echoed).
+/// Verifies a `never`-returning function that calls `exit` produces no further output and the binary
+/// exits gracefully (no "unreachable" echoed).
 #[test]
 fn test_never_function_calls_exit() {
     let out = compile_and_run_expect_failure(
@@ -93,8 +93,8 @@ fn test_never_function_calls_exit() {
     );
 }
 
-// Verifies that code following a `never`-returning call (`panic("oops")`) is treated as unreachable
-// and does not cause a compile error; the exception is caught and "oops" is echoed.
+/// Verifies that code following a `never`-returning call (`panic("oops")`) is treated as unreachable
+/// and does not cause a compile error; the exception is caught and "oops" is echoed.
 #[test]
 fn test_never_function_call_followed_by_unreachable_code_compiles() {
     let out = compile_and_run(
@@ -114,8 +114,8 @@ fn test_never_function_call_followed_by_unreachable_code_compiles() {
     assert_eq!(out, "oops");
 }
 
-// Verifies that a `never`-returning function with no explicit return produces a runtime fatal error
-// containing "never-returning function must not implicitly return".
+/// Verifies that a `never`-returning function with no explicit return produces a runtime fatal error
+/// containing "never-returning function must not implicitly return".
 #[test]
 fn test_never_function_implicit_return_fails_at_runtime() {
     let err = compile_and_run_expect_failure(
@@ -133,8 +133,8 @@ fn test_never_function_implicit_return_fails_at_runtime() {
     );
 }
 
-// Verifies that calling `gettype()` on a `never`-returning function does not materialize
-// a never-type value at runtime; the binary must fail and stderr must contain the implicit-return error.
+/// Verifies that calling `gettype()` on a `never`-returning function does not materialize
+/// a never-type value at runtime; the binary must fail and stderr must contain the implicit-return error.
 #[test]
 fn test_gettype_never_call_does_not_materialize_never_value() {
     let out = compile_and_run_capture(
@@ -161,8 +161,8 @@ fn test_gettype_never_call_does_not_materialize_never_value() {
     );
 }
 
-// Verifies that a `never`-returning method overrides a `void` return type from a parent class;
-// the derived method throws and the exception is caught.
+/// Verifies that a `never`-returning method overrides a `void` return type from a parent class;
+/// the derived method throws and the exception is caught.
 #[test]
 fn test_never_overrides_void_parent() {
     let out = compile_and_run(
@@ -188,8 +188,8 @@ fn test_never_overrides_void_parent() {
     assert_eq!(out, "derived");
 }
 
-// Compiles and runs the checked-in `examples/never/main.php` fixture and asserts stdout is
-// "port = 8080\ncaught: config error: workers must be positive, got 0\n".
+/// Compiles and runs the checked-in `examples/never/main.php` fixture and asserts stdout is
+/// "port = 8080\ncaught: config error: workers must be positive, got 0\n".
 #[test]
 fn test_example_never_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/never/main.php"));

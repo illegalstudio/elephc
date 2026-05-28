@@ -9,8 +9,8 @@
 
 use super::*;
 
+/// Verifies `require` inside a function triggers declaration discovery before the function is called.
 #[test]
-    // Verifies `require` inside a function triggers declaration discovery before the function is called.
 fn test_include_declaration_discovery_inside_function() {
     let out = compile_and_run_files(
         &[
@@ -42,8 +42,8 @@ function later() {
     assert_eq!(out, "beforeloadafter");
 }
 
+/// Verifies a chain of requires (main → a.php → b.php) allows calling a function declared in the leaf file.
 #[test]
-    // Verifies a chain of requires (main → a.php → b.php) allows calling a function declared in the leaf file.
 fn test_include_graph_declaration_discovery_inside_function() {
     let out = compile_and_run_files(
         &[
@@ -66,8 +66,8 @@ echo deep();
     assert_eq!(out, "deep");
 }
 
+/// Verifies a function loaded via require can itself contain a nested require; the inner function is callable.
 #[test]
-    // Verifies a function loaded via require can itself contain a nested require; the inner function is callable.
 fn test_discovered_function_body_resolves_nested_include() {
     let out = compile_and_run_files(
         &[
@@ -98,8 +98,8 @@ function from_lib() {
     assert_eq!(out, "inner");
 }
 
+/// Verifies `require` inside a function discovers interface, trait, and class declarations; polymorphism via trait and interface works.
 #[test]
-    // Verifies `require` inside a function discovers interface, trait, and class declarations; polymorphism via trait and interface works.
 fn test_include_declaration_discovery_for_class_interface_and_trait() {
     let out = compile_and_run_files(
         &[
@@ -139,8 +139,8 @@ class Box implements Labelled {
     assert_eq!(out, "boxed");
 }
 
+/// Verifies `require_once` triggers class alias registration; `class_exists()` and `new` resolve the alias.
 #[test]
-    // Verifies `require_once` triggers class alias registration; `class_exists()` and `new` resolve the alias.
 fn test_require_once_discovers_top_level_class_alias() {
     let out = compile_and_run_files(
         &[
@@ -173,8 +173,8 @@ class_alias("OriginalInsideInclude", "AliasInsideInclude");
     assert_eq!(out, "yes\nok\n");
 }
 
+/// Verifies declarations inside a namespace block loaded via require do not leak into the caller's namespace.
 #[test]
-    // Verifies declarations inside a namespace block loaded via require do not leak into the caller's namespace.
 fn test_discovered_namespaced_declarations_do_not_leak_to_caller() {
     let out = compile_and_run_files(
         &[
@@ -210,8 +210,8 @@ function label() {
     assert_eq!(out, "Root|lib");
 }
 
+/// Verifies `use` imports inside a file loaded via require do not leak into the caller's scope.
 #[test]
-    // Verifies `use` imports inside a file loaded via require do not leak into the caller's scope.
 fn test_discovered_use_imports_do_not_leak_to_caller() {
     let out = compile_and_run_files(
         &[
@@ -247,8 +247,8 @@ function imported_alias_name() {
     assert_eq!(out, "Alias|Vendor\\Thing");
 }
 
+/// Verifies two separate include loads maintain independent namespace scopes; no cross-contamination.
 #[test]
-    // Verifies two separate include loads maintain independent namespace scopes; no cross-contamination.
 fn test_discovered_namespaces_do_not_leak_between_included_files() {
     let out = compile_and_run_files(
         &[
@@ -295,8 +295,8 @@ function b() {
     assert_eq!(out, "a|b");
 }
 
+/// Verifies re-including the same file via regular `include` reports a duplicate declaration error.
 #[test]
-    // Verifies re-including the same file via regular `include` reports a duplicate declaration error.
 fn test_regular_reinclude_still_reports_duplicate_declaration() {
     assert!(compile_files_fails(
         &[
@@ -313,8 +313,8 @@ include 'lib.php';
     ));
 }
 
+/// Verifies mutually exclusive includes (runtime branch) discover declarations once (deterministic branch coverage).
 #[test]
-    // Verifies mutually exclusive includes (runtime branch) discover declarations once (deterministic branch coverage).
 fn test_regular_include_same_file_in_exclusive_branches_discovers_once() {
     let out = compile_and_run_files(
         &[

@@ -9,28 +9,28 @@
 
 use super::*;
 
-// Verifies STDIN constant evaluates to the expected resource display string.
+/// Verifies STDIN constant evaluates to the expected resource display string.
 #[test]
 fn test_stdin_constant() {
     let out = compile_and_run("<?php echo STDIN;");
     assert_eq!(out, "Resource id #1");
 }
 
-// Verifies STDOUT constant evaluates to the expected resource display string.
+/// Verifies STDOUT constant evaluates to the expected resource display string.
 #[test]
 fn test_stdout_constant() {
     let out = compile_and_run("<?php echo STDOUT;");
     assert_eq!(out, "Resource id #2");
 }
 
-// Verifies STDERR constant evaluates to the expected resource display string.
+/// Verifies STDERR constant evaluates to the expected resource display string.
 #[test]
 fn test_stderr_constant() {
     let out = compile_and_run("<?php echo STDERR;");
     assert_eq!(out, "Resource id #3");
 }
 
-// Verifies all three standard stream constants are typed as resources via gettype().
+/// Verifies all three standard stream constants are typed as resources via gettype().
 #[test]
 fn test_standard_stream_constants_are_resources() {
     let out = compile_and_run(
@@ -43,7 +43,7 @@ echo gettype(STDERR);
     assert_eq!(out, "resource|resource|resource");
 }
 
-// Verifies standard stream constants are resolved from the global scope inside a namespace block.
+/// Verifies standard stream constants are resolved from the global scope inside a namespace block.
 #[test]
 fn test_standard_stream_constants_resolve_from_namespace() {
     let out = compile_and_run(
@@ -56,7 +56,7 @@ echo STDOUT;
     assert_eq!(out, "resource|Resource id #2");
 }
 
-// Verifies fopen() returns a stream resource and that resource-to-string coercion produces the PHP display string.
+/// Verifies fopen() returns a stream resource and that resource-to-string coercion produces the PHP display string.
 #[test]
 fn test_fopen_returns_stream_resource() {
     let (out, dir) = compile_and_run_in_dir(
@@ -72,7 +72,7 @@ unlink("resource.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies fopen() returns false with a warning when opening a non-existent file for reading.
+/// Verifies fopen() returns false with a warning when opening a non-existent file for reading.
 #[test]
 fn test_fopen_missing_returns_false_and_warns() {
     let out = compile_and_run_capture(
@@ -90,7 +90,7 @@ echo $f === false ? "false" : "resource";
     );
 }
 
-// Verifies @-suppression prevents the fopen() warning when opening a non-existent file.
+/// Verifies @-suppression prevents the fopen() warning when opening a non-existent file.
 #[test]
 fn test_error_control_suppresses_fopen_missing_warning() {
     let out = compile_and_run_capture(
@@ -105,7 +105,7 @@ echo $f === false ? "false" : "resource";
     assert_eq!(out.stderr, "");
 }
 
-// Verifies fopen() returns false for invalid or empty mode strings without emitting a warning.
+/// Verifies fopen() returns false for invalid or empty mode strings without emitting a warning.
 #[test]
 fn test_fopen_invalid_modes_return_false() {
     let out = compile_and_run_capture(
@@ -121,7 +121,7 @@ echo ($empty === false ? "e" : "!");
     assert_eq!(out.stderr, "");
 }
 
-// Verifies a stream resource passed through a mixed-type parameter preserves its resource type.
+/// Verifies a stream resource passed through a mixed-type parameter preserves its resource type.
 #[test]
 fn test_mixed_file_handle_preserves_resource_type() {
     let (out, dir) = compile_and_run_in_dir(
@@ -141,15 +141,15 @@ unlink("mixed-resource.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies stream resources use PHP's resource display string ("Resource id #N") in string concatenation.
+/// Verifies stream resources use PHP's resource display string ("Resource id #N") in string concatenation.
 #[test]
 fn test_resource_concatenation_uses_php_display_string() {
     let out = compile_and_run("<?php echo \"stream=\" . STDOUT;");
     assert_eq!(out, "stream=Resource id #2");
 }
 
-// Verifies stream resources are truthy and not empty according to PHP semantics, not raw file descriptor zero.
-// STDIN is always truthy even though its underlying fd is 0; regression for raw descriptor-based truthiness.
+/// Verifies stream resources are truthy and not empty according to PHP semantics, not raw file descriptor zero.
+/// STDIN is always truthy even though its underlying fd is 0; regression for raw descriptor-based truthiness.
 #[test]
 fn test_resource_truthiness_does_not_use_raw_descriptor_zero() {
     let out = compile_and_run(
@@ -162,14 +162,14 @@ echo empty(STDIN) ? "empty" : "not-empty";
     assert_eq!(out, "truthy|not-empty");
 }
 
-// Verifies var_dump() emits the correct resource shape: "resource(N) of type (stream)".
+/// Verifies var_dump() emits the correct resource shape: "resource(N) of type (stream)".
 #[test]
 fn test_var_dump_resource_uses_stream_shape() {
     let out = compile_and_run("<?php var_dump(STDOUT);");
     assert_eq!(out, "resource(2) of type (stream)\n");
 }
 
-// Verifies fopen/fwrite/fclose/fread round-trip: write "test data" to a file and read it back.
+/// Verifies fopen/fwrite/fclose/fread round-trip: write "test data" to a file and read it back.
 #[test]
 fn test_fopen_fwrite_fclose_fread() {
     let (out, dir) = compile_and_run_in_dir(
@@ -188,7 +188,7 @@ unlink("rw.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies fgets() reads one line from STDIN when piped input is provided.
+/// Verifies fgets() reads one line from STDIN when piped input is provided.
 #[test]
 fn test_fgets_stdin() {
     let out = compile_and_run_with_stdin(
@@ -201,7 +201,7 @@ echo "got: " . $line;
     assert_eq!(out, "got: hello\n");
 }
 
-// Verifies fgets() raises a TypeError when passed false (e.g., from a failed fopen).
+/// Verifies fgets() raises a TypeError when passed false (e.g., from a failed fopen).
 #[test]
 fn test_fopen_false_stream_use_is_type_error() {
     let out = compile_and_run_capture(
@@ -219,7 +219,7 @@ echo "done";
     );
 }
 
-// Verifies fgets() TypeError reports the actual runtime type when a non-stream is passed.
+/// Verifies fgets() TypeError reports the actual runtime type when a non-stream is passed.
 #[test]
 fn test_stream_type_error_reports_runtime_string_type() {
     let out = compile_and_run_capture(
@@ -238,7 +238,7 @@ fgets(identity("not a stream"));
     );
 }
 
-// Verifies fopen() result can be guarded with a false check before reading from it.
+/// Verifies fopen() result can be guarded with a false check before reading from it.
 #[test]
 fn test_fopen_guarded_resource_path_can_read() {
     let (out, dir) = compile_and_run_in_dir(
@@ -258,7 +258,7 @@ unlink("guarded.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies feof() is not incorrectly set stale when a file descriptor is closed and reopened.
+/// Verifies feof() is not incorrectly set stale when a file descriptor is closed and reopened.
 #[test]
 fn test_fopen_clears_stale_eof_for_reused_descriptor() {
     let (out, dir) = compile_and_run_in_dir(
@@ -280,7 +280,7 @@ unlink("second.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies fseek() positions and ftell() reports the correct offset; fread reads from the seek position.
+/// Verifies fseek() positions and ftell() reports the correct offset; fread reads from the seek position.
 #[test]
 fn test_fseek_ftell() {
     let (out, dir) = compile_and_run_in_dir(
@@ -300,7 +300,7 @@ unlink("seek.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies fseek() returns 0 on success and SEEK_SET/SEEK_CUR/SEEK_END constant modes work correctly.
+/// Verifies fseek() returns 0 on success and SEEK_SET/SEEK_CUR/SEEK_END constant modes work correctly.
 #[test]
 fn test_fseek_return_value() {
     let (out, dir) = compile_and_run_in_dir(
@@ -322,7 +322,7 @@ unlink("seek2.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies fseek() clears the EOF flag after reading past end-of-file.
+/// Verifies fseek() clears the EOF flag after reading past end-of-file.
 #[test]
 fn test_fseek_clears_eof_after_successful_seek() {
     let (out, dir) = compile_and_run_in_dir(
@@ -342,7 +342,7 @@ unlink("seek-eof.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies fgetcsv() parses a single CSV row and access to the first field.
+/// Verifies fgetcsv() parses a single CSV row and access to the first field.
 #[test]
 fn test_fgetcsv() {
     let (out, dir) = compile_and_run_in_dir(
@@ -359,7 +359,7 @@ unlink("data.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies fputcsv() writes a valid CSV line and file_get_contents() reads it back.
+/// Verifies fputcsv() writes a valid CSV line and file_get_contents() reads it back.
 #[test]
 fn test_fputcsv() {
     let (out, dir) = compile_and_run_in_dir(
@@ -377,7 +377,7 @@ unlink("out.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies rewind() resets the read position to the start and data can be re-read.
+/// Verifies rewind() resets the read position to the start and data can be re-read.
 #[test]
 fn test_rewind() {
     let (out, dir) = compile_and_run_in_dir(
@@ -396,7 +396,7 @@ unlink("rw.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies rewind() clears the EOF flag after reading past end-of-file.
+/// Verifies rewind() clears the EOF flag after reading past end-of-file.
 #[test]
 fn test_rewind_clears_eof_after_successful_seek() {
     let (out, dir) = compile_and_run_in_dir(
@@ -416,7 +416,7 @@ unlink("rewind-eof.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies feof() returns true only after reading past the end of a file.
+/// Verifies feof() returns true only after reading past the end of a file.
 #[test]
 fn test_feof() {
     let (out, dir) = compile_and_run_in_dir(

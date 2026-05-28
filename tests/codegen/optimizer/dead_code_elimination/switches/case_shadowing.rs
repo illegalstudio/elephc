@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that a shadowed switch case (duplicate `case 1:` with "a" first and "shadowed" second)
-// is dropped from assembly. Confirms "a!" with "shadowed" absent from user assembly.
+/// Verifies that a shadowed switch case (duplicate `case 1:` with "a" first and "shadowed" second)
+/// is dropped from assembly. Confirms "a!" with "shadowed" absent from user assembly.
 #[test]
 fn test_dead_code_elimination_drops_shadowed_switch_case_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_shadowed_switch_case");
@@ -53,8 +53,8 @@ echo "!";
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that unreachable case labels inside a live mixed switch case are pruned while the
-// live case body remains. Confirms "A" with "dead-first-case" and "dead-default" absent.
+/// Verifies that unreachable case labels inside a live mixed switch case are pruned while the
+/// live case body remains. Confirms "A" with "dead-first-case" and "dead-default" absent.
 #[test]
 fn test_dead_code_elimination_prunes_dead_label_inside_live_mixed_switch_case() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_live_case_label_prune");
@@ -101,9 +101,9 @@ run(true);
     assert!(!user_asm.contains("dead-default"));
 }
 
-// Verifies that identical adjacent switch cases (both `case 1:` and `case 2:` echo "A")
-// are merged by the optimizer. Uses `step()` to confirm side effects execute exactly once
-// and output is "sA".
+/// Verifies that identical adjacent switch cases (both `case 1:` and `case 2:` echo "A")
+/// are merged by the optimizer. Uses `step()` to confirm side effects execute exactly once
+/// and output is "sA".
 #[test]
 fn test_dead_code_elimination_merges_identical_adjacent_switch_cases() {
     let out = compile_and_run(
@@ -128,8 +128,8 @@ switch (step("s", 2)) {
     assert_eq!(out, "sA");
 }
 
-// Verifies that fallthrough switch labels (case 1, 2, 3) are merged into one case body.
-// Confirms "sA".
+/// Verifies that fallthrough switch labels (case 1, 2, 3) are merged into one case body.
+/// Confirms "sA".
 #[test]
 fn test_dead_code_elimination_merges_fallthrough_switch_labels_into_next_case() {
     let out = compile_and_run(

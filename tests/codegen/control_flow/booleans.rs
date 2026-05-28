@@ -9,6 +9,7 @@
 
 use super::*;
 
+/// Verifies standalone increment.
 #[test]
 fn test_standalone_increment() {
     // Post-increment `$x++` three times from 0 yields 3.
@@ -16,6 +17,7 @@ fn test_standalone_increment() {
     assert_eq!(out, "3");
 }
 
+/// Verifies standalone decrement.
 #[test]
 fn test_standalone_decrement() {
     // Post-decrement `$x--` twice from 10 yields 8.
@@ -23,6 +25,7 @@ fn test_standalone_decrement() {
     assert_eq!(out, "8");
 }
 
+/// Verifies and true.
 #[test]
 fn test_and_true() {
     // Logical AND of two true values yields 1 (true prints "1").
@@ -30,6 +33,7 @@ fn test_and_true() {
     assert_eq!(out, "1");
 }
 
+/// Verifies and false.
 #[test]
 fn test_and_false() {
     // Logical AND with false right operand yields empty (false prints nothing).
@@ -37,6 +41,7 @@ fn test_and_false() {
     assert_eq!(out, "");
 }
 
+/// Verifies or true.
 #[test]
 fn test_or_true() {
     // Logical OR with true right operand yields 1 (PHP true is "1").
@@ -44,6 +49,7 @@ fn test_or_true() {
     assert_eq!(out, "1");
 }
 
+/// Verifies or false.
 #[test]
 fn test_or_false() {
     // Logical OR of two false values yields empty (false prints nothing).
@@ -51,6 +57,7 @@ fn test_or_false() {
     assert_eq!(out, "");
 }
 
+/// Verifies not zero.
 #[test]
 fn test_not_zero() {
     // Negation of zero yields true ("1").
@@ -58,6 +65,7 @@ fn test_not_zero() {
     assert_eq!(out, "1");
 }
 
+/// Verifies not nonzero.
 #[test]
 fn test_not_nonzero() {
     // Negation of non-zero value (42) yields false (empty string).
@@ -65,6 +73,7 @@ fn test_not_nonzero() {
     assert_eq!(out, "");
 }
 
+/// Verifies short circuit and.
 #[test]
 fn test_short_circuit_and() {
     // `0 && inc()` short-circuits: left operand is false, so RHS is never evaluated.
@@ -79,6 +88,7 @@ echo $r;
     assert_eq!(out, ""); // false prints nothing
 }
 
+/// Verifies short circuit or.
 #[test]
 fn test_short_circuit_or() {
     // `1 || inc()` short-circuits: left operand is true, so RHS is never evaluated; result is "1".
@@ -92,6 +102,7 @@ echo $r;
     assert_eq!(out, "1");
 }
 
+/// Verifies word and short circuit.
 #[test]
 fn test_word_and_short_circuit() {
     // `(false and mark())` short-circuits: word AND does not evaluate RHS when left is false.
@@ -105,6 +116,7 @@ echo $r ? "T" : "F";
     assert_eq!(out, "F");
 }
 
+/// Verifies word or short circuit.
 #[test]
 fn test_word_or_short_circuit() {
     // `(true or mark())` short-circuits: word OR does not evaluate RHS when left is true.
@@ -118,6 +130,7 @@ echo $r ? "T" : "F";
     assert_eq!(out, "T");
 }
 
+/// Verifies word xor evaluates right-hand side.
 #[test]
 fn test_word_xor_evaluates_rhs() {
     // `xor` is non-short-circuiting: both operands are always evaluated.
@@ -131,6 +144,7 @@ echo $r ? "T" : "F";
     assert_eq!(out, "rhsT");
 }
 
+/// Verifies word logical operators are case insensitive codegen.
 #[test]
 fn test_word_logical_operators_are_case_insensitive_codegen() {
     // Word logical operators (AND, Or, xOr) are case-insensitive keywords.
@@ -144,6 +158,7 @@ echo (true xOr false) ? "T" : "F";
     assert_eq!(out, "FTT");
 }
 
+/// Verifies word logical precedence against symbolic logical.
 #[test]
 fn test_word_logical_precedence_against_symbolic_logical() {
     // Word operators (and, or, xor) have lower precedence than symbolic (&&, ||); verifies correct parsing of mixed expressions.
@@ -160,6 +175,7 @@ echo $c ? "T" : "F";
     assert_eq!(out, "FTT");
 }
 
+/// Verifies boolean true.
 #[test]
 fn test_boolean_true() {
     // `echo true` outputs "1" (PHP booleans print as "1" or empty string).
@@ -167,6 +183,7 @@ fn test_boolean_true() {
     assert_eq!(out, "1");
 }
 
+/// Verifies boolean false.
 #[test]
 fn test_boolean_false() {
     // `echo false` outputs empty string.
@@ -174,6 +191,7 @@ fn test_boolean_false() {
     assert_eq!(out, "");
 }
 
+/// Verifies boolean in condition.
 #[test]
 fn test_boolean_in_condition() {
     // Boolean literals in `if` conditions: `if (true)` executes, `if (false)` skips.
@@ -183,6 +201,7 @@ fn test_boolean_in_condition() {
 
 // --- Assignment operators ---
 
+/// Verifies logical with comparison.
 #[test]
 fn test_logical_with_comparison() {
     // Logical AND combines two comparison expressions: `$x > 3 && $x < 10` is true for $x = 5.
@@ -192,6 +211,7 @@ fn test_logical_with_comparison() {
 
 // --- Logical operators with null ---
 
+/// Verifies null and true.
 #[test]
 fn test_null_and_true() {
     // `null` is falsy; `null && true` evaluates to false (empty string).
@@ -199,6 +219,7 @@ fn test_null_and_true() {
     assert_eq!(out, "");
 }
 
+/// Verifies true and null.
 #[test]
 fn test_true_and_null() {
     // `null` is falsy; `true && null` evaluates to false (empty string).
@@ -206,6 +227,7 @@ fn test_true_and_null() {
     assert_eq!(out, "");
 }
 
+/// Verifies null or false.
 #[test]
 fn test_null_or_false() {
     // `null` is falsy; `null || false` evaluates to false (empty string).
@@ -213,6 +235,7 @@ fn test_null_or_false() {
     assert_eq!(out, "");
 }
 
+/// Verifies false or null.
 #[test]
 fn test_false_or_null() {
     // `false || null` evaluates to null; both operands are falsy, null propagates.
@@ -220,6 +243,7 @@ fn test_false_or_null() {
     assert_eq!(out, "");
 }
 
+/// Verifies null or true.
 #[test]
 fn test_null_or_true() {
     // `null || true` evaluates to true; RHS is returned when LHS is falsy.
@@ -227,6 +251,7 @@ fn test_null_or_true() {
     assert_eq!(out, "1");
 }
 
+/// Verifies null and false.
 #[test]
 fn test_null_and_false() {
     // `null && false` evaluates to false (empty string); both operands are falsy.
@@ -234,6 +259,7 @@ fn test_null_and_false() {
     assert_eq!(out, "");
 }
 
+/// Verifies null var and.
 #[test]
 fn test_null_var_and() {
     // `$x = null; $x && true` evaluates to false; null is falsy.
@@ -241,6 +267,7 @@ fn test_null_var_and() {
     assert_eq!(out, "");
 }
 
+/// Verifies null var or.
 #[test]
 fn test_null_var_or() {
     // `$x = null; $x || false` evaluates to false; both operands are falsy, null propagates.
@@ -248,6 +275,7 @@ fn test_null_var_or() {
     assert_eq!(out, "");
 }
 
+/// Verifies not null is true.
 #[test]
 fn test_not_null_is_true() {
     // Negation of null yields true; `!null` is true ("1").
@@ -255,6 +283,7 @@ fn test_not_null_is_true() {
     assert_eq!(out, "1");
 }
 
+/// Verifies short ternary truthy and falsy values.
 #[test]
 fn test_short_ternary_truthy_and_falsy_values() {
     // Elvis operator `?:` returns left for truthy values (5, "hi", "0") and right for falsy (0, "", null).
@@ -271,6 +300,7 @@ echo (null ?: "null");
     assert_eq!(out, "5:9:hi:empty:zero:null");
 }
 
+/// Verifies short ternary evaluates left once.
 #[test]
 fn test_short_ternary_evaluates_left_once() {
     // Elvis operator `?:` evaluates the left operand exactly once; static counter increments per call.
@@ -289,6 +319,7 @@ echo next_value();
     assert_eq!(out, "1:2");
 }
 
+/// Verifies short ternary right-hand side only evaluates when left is falsy.
 #[test]
 fn test_short_ternary_rhs_only_evaluates_when_left_is_falsy() {
     // Elvis operator `?:` is short-circuiting: RHS (fallback) is only evaluated when LHS is falsy.

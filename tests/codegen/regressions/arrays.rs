@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that the builtin `array_push` function is recognized by `function_exists`.
-// Fixture: simple `function_exists("array_push")` call.
+/// Verifies that the builtin `array_push` function is recognized by `function_exists`.
+/// Fixture: simple `function_exists("array_push")` call.
 #[test]
 fn test_function_exists_builtin_array_push() {
     let out = compile_and_run(r#"<?php echo function_exists("array_push") ? "yes" : "no";"#);
@@ -19,8 +19,8 @@ fn test_function_exists_builtin_array_push() {
 
 // --- Issue #12: preg_split with \s shorthand ---
 
-// Verifies that a negative integer array index returns null instead of corrupt data.
-// Fixture: 3-element array accessed at index `-1`.
+/// Verifies that a negative integer array index returns null instead of corrupt data.
+/// Fixture: 3-element array accessed at index `-1`.
 #[test]
 fn test_negative_array_index_returns_null() {
     let out = compile_and_run(
@@ -33,8 +33,8 @@ if (is_null($v)) { echo "null"; } else { echo "not null"; }
     assert_eq!(out, "null");
 }
 
-// Verifies that an out-of-bounds integer array index returns null.
-// Fixture: 3-element array accessed at index `5`.
+/// Verifies that an out-of-bounds integer array index returns null.
+/// Fixture: 3-element array accessed at index `5`.
 #[test]
 fn test_array_out_of_bounds_returns_null() {
     let out = compile_and_run(
@@ -47,8 +47,8 @@ if (is_null($v)) { echo "null"; } else { echo "not null"; }
     assert_eq!(out, "null");
 }
 
-// Verifies that valid integer indices still work correctly after the null-bounds check.
-// Fixture: 3-element array accessed at indices `0`, `1`, and `2`.
+/// Verifies that valid integer indices still work correctly after the null-bounds check.
+/// Fixture: 3-element array accessed at indices `0`, `1`, and `2`.
 #[test]
 fn test_array_valid_index_still_works() {
     let out = compile_and_run(
@@ -62,9 +62,9 @@ echo $a[0] . "|" . $a[1] . "|" . $a[2];
 
 // -- Issue #20: assoc array missing key should return null, not garbage --
 
-// Verifies that accessing a missing key in an associative array returns null (not garbage).
-// Issue #20: assoc array missing key should return null, not garbage.
-// Fixture: assoc array `["a" => 1]` accessed at key `"missing"`.
+/// Verifies that accessing a missing key in an associative array returns null (not garbage).
+/// Issue #20: assoc array missing key should return null, not garbage.
+/// Fixture: assoc array `["a" => 1]` accessed at key `"missing"`.
 #[test]
 fn test_assoc_array_missing_key_returns_null() {
     let out = compile_and_run(
@@ -78,9 +78,9 @@ echo $m["missing"];
 
 // -- Issue #28: array_map should handle string return values from callbacks --
 
-// Verifies that `array_map` correctly handles string return values from callbacks.
-// Issue #28: array_map should handle string return values from callbacks.
-// Fixture: `array_map(fn($x) => "v" . $x, [1, 2, 3])`, checks first element.
+/// Verifies that `array_map` correctly handles string return values from callbacks.
+/// Issue #28: array_map should handle string return values from callbacks.
+/// Fixture: `array_map(fn($x) => "v" . $x, [1, 2, 3])`, checks first element.
 #[test]
 fn test_array_map_str_callback() {
     let out = compile_and_run(
@@ -92,8 +92,8 @@ echo $r[0];
     assert_eq!(out, "v1");
 }
 
-// Verifies that `array_map` with string callback returns all elements correctly.
-// Fixture: `array_map(fn($x) => "item" . $x, [1, 2, 3])`, checks all three elements.
+/// Verifies that `array_map` with string callback returns all elements correctly.
+/// Fixture: `array_map(fn($x) => "item" . $x, [1, 2, 3])`, checks all three elements.
 #[test]
 fn test_array_map_str_callback_all_elements() {
     let out = compile_and_run(
@@ -107,9 +107,9 @@ echo $r[0] . "|" . $r[1] . "|" . $r[2];
 
 // -- Issue #13: empty array literal should be accepted by type checker --
 
-// Verifies that an empty array literal `[]` is accepted by the type checker and can be grown.
-// Issue #13: empty array literal should be accepted by type checker.
-// Fixture: `$a = []; $a[] = 1; count($a)`.
+/// Verifies that an empty array literal `[]` is accepted by the type checker and can be grown.
+/// Issue #13: empty array literal should be accepted by type checker.
+/// Fixture: `$a = []; $a[] = 1; count($a)`.
 #[test]
 fn test_empty_array_literal() {
     let out = compile_and_run(
@@ -122,8 +122,8 @@ echo count($a);
     assert_eq!(out, "1");
 }
 
-// Verifies that an empty array literal can be passed to `json_encode`.
-// Fixture: `json_encode([])` returns `"[]"`.
+/// Verifies that an empty array literal can be passed to `json_encode`.
+/// Fixture: `json_encode([])` returns `"[]"`.
 #[test]
 fn test_empty_array_json_encode() {
     let out = compile_and_run(
@@ -136,8 +136,8 @@ echo json_encode([]);
 
 // -- Issue #16: Spread operator unpacking into named parameters --
 
-// Verifies that chained array builtin calls (implode + array_reverse) produce correct output.
-// Fixture: `implode(",", array_reverse([3, 1, 2]))` returns `"2,1,3"`.
+/// Verifies that chained array builtin calls (implode + array_reverse) produce correct output.
+/// Fixture: `implode(",", array_reverse([3, 1, 2]))` returns `"2,1,3"`.
 #[test]
 fn test_implode_chained_array_builtins() {
     let out = compile_and_run(
@@ -148,8 +148,8 @@ echo implode(",", array_reverse([3, 1, 2]));
     assert_eq!(out, "2,1,3");
 }
 
-// Verifies that appending a string to an empty array via `$arr[]` works.
-// Fixture: `$a = []; $a[] = "hello"; echo $a[0]`.
+/// Verifies that appending a string to an empty array via `$arr[]` works.
+/// Fixture: `$a = []; $a[] = "hello"; echo $a[0]`.
 #[test]
 fn test_array_push_string_to_empty() {
     let out = compile_and_run(
@@ -162,8 +162,8 @@ echo $a[0];
     assert_eq!(out, "hello");
 }
 
-// Verifies that appending a concatenated expression to an array via `$arr[]` works.
-// Fixture: `$tokens = []; $word = "42"; $tokens[] = "NUM:" . $word;`.
+/// Verifies that appending a concatenated expression to an array via `$arr[]` works.
+/// Fixture: `$tokens = []; $word = "42"; $tokens[] = "NUM:" . $word;`.
 #[test]
 fn test_array_push_concat_expr() {
     let out = compile_and_run(
@@ -177,9 +177,9 @@ echo $tokens[0];
     assert_eq!(out, "NUM:42");
 }
 
-// Verifies that pass-by-reference array mutation via index assignment works.
-// Issue #32: pass-by-reference array mutation via index assignment.
-// Fixture: `swap(&$a)` exchanges `$a[0]` and `$a[1]` in place.
+/// Verifies that pass-by-reference array mutation via index assignment works.
+/// Issue #32: pass-by-reference array mutation via index assignment.
+/// Fixture: `swap(&$a)` exchanges `$a[0]` and `$a[1]` in place.
 #[test]
 fn test_ref_array_assign() {
     // Issue #32: pass-by-reference array mutation via index assignment
@@ -199,9 +199,9 @@ echo $x[1];
     assert_eq!(out, "21");
 }
 
-// Verifies that pass-by-reference array mutation via `$arr[]` push works.
-// Issue #32: pass-by-reference array mutation via push.
-// Fixture: `append(&$arr, $val)` appends via `$arr[]`.
+/// Verifies that pass-by-reference array mutation via `$arr[]` push works.
+/// Issue #32: pass-by-reference array mutation via push.
+/// Fixture: `append(&$arr, $val)` appends via `$arr[]`.
 #[test]
 fn test_ref_array_push() {
     // Issue #32: pass-by-reference array mutation via push
@@ -219,9 +219,9 @@ echo $x[2];
     assert_eq!(out, "330");
 }
 
-// Verifies that writing to two different computed indices of a by-ref array does not corrupt values.
-// Fixture: `write_two(&$arr, $base, $val1, $val2)` writes at `$arr[$base]` and `$arr[$base+1]`
-// with computed indices, called twice with different bases.
+/// Verifies that writing to two different computed indices of a by-ref array does not corrupt values.
+/// Fixture: `write_two(&$arr, $base, $val1, $val2)` writes at `$arr[$base]` and `$arr[$base+1]`
+/// with computed indices, called twice with different bases.
 #[test]
 fn test_ref_array_multi_index_write() {
     // Writing to two different computed indices of a by-ref array must not corrupt values
@@ -245,10 +245,10 @@ echo $data[4] . "\n";
     assert_eq!(out, "42\n99\n77\n88\n");
 }
 
-// Verifies that looping over a stride-3 packed array with read+write does not corrupt data.
-// Reproduces DOOM showcase bug: loop over stride-3 packed array with read+write.
-// Fixture: `process(&$data, 4)` iterates stride-3 records, conditionally rewriting
-// `$data[$base]` and `$data[$base+1]`.
+/// Verifies that looping over a stride-3 packed array with read+write does not corrupt data.
+/// Reproduces DOOM showcase bug: loop over stride-3 packed array with read+write.
+/// Fixture: `process(&$data, 4)` iterates stride-3 records, conditionally rewriting
+/// `$data[$base]` and `$data[$base+1]`.
 #[test]
 fn test_ref_array_stride_loop_multi_write() {
     // Reproduces DOOM showcase bug: loop over stride-3 packed array with read+write
@@ -288,11 +288,11 @@ echo $data[5] . "\n";
     assert_eq!(out, "50\n999\n599\n50\n999\n599\n");
 }
 
-// Verifies no register corruption when a by-ref param lives at a stack offset > 255.
-// Regression: load_at_offset used x9 as scratch at grow_ready, clobbering the
-// array index register when the by-ref param lived at stack offset > 255.
-// Fixture: 32 integer params followed by a by-ref array `$arr`, writes at
-// computed offset `$p1 * 3`, then sums and echoes all params to force many stack slots.
+/// Verifies no register corruption when a by-ref param lives at a stack offset > 255.
+/// Regression: load_at_offset used x9 as scratch at grow_ready, clobbering the
+/// array index register when the by-ref param lived at stack offset > 255.
+/// Fixture: 32 integer params followed by a by-ref array `$arr`, writes at
+/// computed offset `$p1 * 3`, then sums and echoes all params to force many stack slots.
 #[test]
 fn test_ref_array_large_offset_multi_write() {
     // Regression: load_at_offset used x9 as scratch at grow_ready, clobbering the
@@ -326,9 +326,9 @@ echo "\n" . $data[0] . "\n" . $data[1] . "\n";
     assert_eq!(out, "0000\n50\n999\n");
 }
 
-// Verifies that `array_column` on arrays of assoc arrays with string values works with `implode`.
-// Issue #33: array_column on arrays of assoc arrays with string values + implode.
-// Fixture: `$s = [["n" => "Alice"], ["n" => "Bob"]]; array_column($s, "n")`.
+/// Verifies that `array_column` on arrays of assoc arrays with string values works with `implode`.
+/// Issue #33: array_column on arrays of assoc arrays with string values + implode.
+/// Fixture: `$s = [["n" => "Alice"], ["n" => "Bob"]]; array_column($s, "n")`.
 #[test]
 fn test_array_column_string_implode() {
     // Issue #33: array_column on arrays of assoc arrays with string values + implode
@@ -342,10 +342,10 @@ echo implode(",", $names);
     assert_eq!(out, "Alice,Bob");
 }
 
-// Verifies that hash keys survive concat_buf reset (persisted to heap).
-// Tests that computed string keys in associative arrays remain valid after
-// concat_buf is reused during a loop.
-// Fixture: `$h = ["init" => 0];` then loop appending `$h["k" . $i] = $i` for 10 iterations.
+/// Verifies that hash keys survive concat_buf reset (persisted to heap).
+/// Tests that computed string keys in associative arrays remain valid after
+/// concat_buf is reused during a loop.
+/// Fixture: `$h = ["init" => 0];` then loop appending `$h["k" . $i] = $i` for 10 iterations.
 #[test]
 fn test_hash_table_computed_keys_loop() {
     // Tests that hash keys survive concat_buf reset (persisted to heap)
@@ -361,8 +361,8 @@ echo $h["k9"];
     assert_eq!(out, "9");
 }
 
-// Verifies that an integer array grows beyond initial capacity via reallocation.
-// Fixture: start with 3 elements, append 97 more via `$arr[]`, verify count and endpoints.
+/// Verifies that an integer array grows beyond initial capacity via reallocation.
+/// Fixture: start with 3 elements, append 97 more via `$arr[]`, verify count and endpoints.
 #[test]
 fn test_array_dynamic_growth_int() {
     // Array grows beyond initial capacity via reallocation
@@ -378,8 +378,8 @@ echo count($arr) . "|" . $arr[0] . "|" . $arr[99];
     assert_eq!(out, "100|1|100");
 }
 
-// Verifies that a string array grows beyond initial capacity via reallocation.
-// Fixture: start with 1 string element, append 50 more via `$arr[]`, verify count and endpoints.
+/// Verifies that a string array grows beyond initial capacity via reallocation.
+/// Fixture: start with 1 string element, append 50 more via `$arr[]`, verify count and endpoints.
 #[test]
 fn test_array_dynamic_growth_str() {
     // String array grows beyond initial capacity
@@ -395,8 +395,8 @@ echo count($arr) . "|" . $arr[0] . "|" . $arr[50];
     assert_eq!(out, "51|first|item49");
 }
 
-// Verifies that direct growth via `$arr[3] = 40` on an indexed array preserves existing int slots.
-// Fixture: `$arr = [10, 20, 30]; $arr[3] = 40;` check all 4 elements and count.
+/// Verifies that direct growth via `$arr[3] = 40` on an indexed array preserves existing int slots.
+/// Fixture: `$arr = [10, 20, 30]; $arr[3] = 40;` check all 4 elements and count.
 #[test]
 fn test_indexed_array_direct_growth_preserves_int_slots() {
     let out = compile_and_run(
@@ -409,8 +409,8 @@ echo count($arr) . "|" . $arr[0] . "|" . $arr[1] . "|" . $arr[2] . "|" . $arr[3]
     assert_eq!(out, "4|10|20|30|40");
 }
 
-// Verifies that direct growth via `$arr[2] = "c"` on an indexed array preserves existing string slots.
-// Fixture: `$arr = ["a", "b"]; $arr[2] = "c";` check all 3 elements and count.
+/// Verifies that direct growth via `$arr[2] = "c"` on an indexed array preserves existing string slots.
+/// Fixture: `$arr = ["a", "b"]; $arr[2] = "c";` check all 3 elements and count.
 #[test]
 fn test_indexed_array_direct_growth_preserves_string_slots() {
     let out = compile_and_run(
@@ -423,8 +423,8 @@ echo count($arr) . "|" . $arr[0] . "|" . $arr[1] . "|" . $arr[2];
     assert_eq!(out, "3|a|b|c");
 }
 
-// Verifies that `array_push()` triggers array growth correctly.
-// Fixture: `$arr = [10];` loop 20 times with `array_push($arr, $i * 10)`, verify count and last element.
+/// Verifies that `array_push()` triggers array growth correctly.
+/// Fixture: `$arr = [10];` loop 20 times with `array_push($arr, $i * 10)`, verify count and last element.
 #[test]
 fn test_array_push_function_growth() {
     // array_push() triggers growth
@@ -440,9 +440,9 @@ echo count($arr) . "|" . $arr[20];
     assert_eq!(out, "21|190");
 }
 
-// Verifies that arrays returned from a function can be grown and reassigned multiple times.
-// Fixture: `grow($arr)` pushes 32 elements and returns the array; call it 20 times in a loop,
-// then verify final count > 100.
+/// Verifies that arrays returned from a function can be grown and reassigned multiple times.
+/// Fixture: `grow($arr)` pushes 32 elements and returns the array; call it 20 times in a loop,
+/// then verify final count > 100.
 #[test]
 fn test_array_reassign_after_function_growth() {
     let out = compile_and_run(
@@ -464,8 +464,8 @@ echo count($arr) > 100 ? "ok" : "bad";
     assert_eq!(out, "ok");
 }
 
-// Verifies that `array_push()` can push float values.
-// Fixture: `$arr = [1.1]; array_push($arr, 2.2);` check count and second element.
+/// Verifies that `array_push()` can push float values.
+/// Fixture: `$arr = [1.1]; array_push($arr, 2.2);` check count and second element.
 #[test]
 fn test_array_push_float() {
     let out = compile_and_run(
@@ -478,8 +478,8 @@ echo count($arr) . "|" . $arr[1];
     assert_eq!(out, "2|2.2");
 }
 
-// Verifies that `array_push()` can push boolean values.
-// Fixture: `$arr = [true]; array_push($arr, false);` check count is 2.
+/// Verifies that `array_push()` can push boolean values.
+/// Fixture: `$arr = [true]; array_push($arr, false);` check count is 2.
 #[test]
 fn test_array_push_bool() {
     let out = compile_and_run(
@@ -492,8 +492,8 @@ echo count($arr);
     assert_eq!(out, "2");
 }
 
-// Verifies that `array_push()` can push object values and read back a property.
-// Fixture: `$items = [new Item("a")]; array_push($items, new Item("b"));`.
+/// Verifies that `array_push()` can push object values and read back a property.
+/// Fixture: `$items = [new Item("a")]; array_push($items, new Item("b"));`.
 #[test]
 fn test_array_push_object() {
     let out = compile_and_run(
@@ -509,8 +509,8 @@ echo count($items) . "|" . $items[1]->name;
     assert_eq!(out, "2|b");
 }
 
-// Verifies that appending float values via `$arr[] = float` syntax works.
-// Fixture: `$arr = [1.0]; $arr[] = 2.5; $arr[] = 3.7;` check count and last element.
+/// Verifies that appending float values via `$arr[] = float` syntax works.
+/// Fixture: `$arr = [1.0]; $arr[] = 2.5; $arr[] = 3.7;` check count and last element.
 #[test]
 fn test_array_push_syntax_float() {
     // $arr[] = float syntax

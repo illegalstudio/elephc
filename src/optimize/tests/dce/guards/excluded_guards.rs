@@ -10,9 +10,9 @@
 
 use super::*;
 
-// Verifies DCE eliminates the outer then-branch when the outer if guard is
-// `value === 0` (a falsy excluded guard), leaving only the inner else-branch
-// (`echo 7`). The inner nested if with the same guard is also eliminated.
+/// Verifies DCE eliminates the outer then-branch when the outer if guard is
+/// `value === 0` (a falsy excluded guard), leaving only the inner else-branch
+/// (`echo 7`). The inner nested if with the same guard is also eliminated.
 #[test]
 fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_zero_guard() {
     let program = vec![Stmt::new(
@@ -57,9 +57,9 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_zero_guard() {
     assert_eq!(else_body, &vec![Stmt::echo(Expr::int_lit(7))]);
 }
 
-// Verifies DCE prunes dead branches when the outer guard is `value !== null`
-// (excluded null check). The outer else-branch (`echo 9`) is kept, and the
-// inner then-branch is reduced to `echo 7` while the inner else is eliminated.
+/// Verifies DCE prunes dead branches when the outer guard is `value !== null`
+/// (excluded null check). The outer else-branch (`echo 9`) is kept, and the
+/// inner then-branch is reduced to `echo 7` while the inner else is eliminated.
 #[test]
 fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_null_guard() {
     let program = vec![Stmt::new(
@@ -109,9 +109,9 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_null_guard() {
     assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
 }
 
-// Verifies DCE eliminates the outer then-branch when the outer if guard is
-// `value === ""` (an excluded empty-string guard), leaving only the inner
-// else-branch (`echo 7`).
+/// Verifies DCE eliminates the outer then-branch when the outer if guard is
+/// `value === ""` (an excluded empty-string guard), leaving only the inner
+/// else-branch (`echo 7`).
 #[test]
 fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_empty_string_guard() {
     let program = vec![Stmt::new(
@@ -164,9 +164,9 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_empty_string_g
     assert_eq!(else_body, &vec![Stmt::echo(Expr::int_lit(7))]);
 }
 
-// Verifies DCE eliminates the outer then-branch when the outer if guard is
-// `value === "0"` (an excluded string-zero guard), leaving only the inner
-// else-branch (`echo 7`).
+/// Verifies DCE eliminates the outer then-branch when the outer if guard is
+/// `value === "0"` (an excluded string-zero guard), leaving only the inner
+/// else-branch (`echo 7`).
 #[test]
 fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_string_zero_guard() {
     let program = vec![Stmt::new(
@@ -219,9 +219,9 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_string_zero_gu
     assert_eq!(else_body, &vec![Stmt::echo(Expr::int_lit(7))]);
 }
 
-// Verifies DCE eliminates the outer then-branch when the outer if guard is
-// `value === 1.5` (an excluded float guard), leaving only the inner
-// else-branch (`echo 7`).
+/// Verifies DCE eliminates the outer then-branch when the outer if guard is
+/// `value === 1.5` (an excluded float guard), leaving only the inner
+/// else-branch (`echo 7`).
 #[test]
 fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_float_guard() {
     let program = vec![Stmt::new(

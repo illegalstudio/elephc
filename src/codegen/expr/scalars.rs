@@ -194,10 +194,12 @@ mod tests {
     use crate::codegen::platform::{Arch, Platform, Target};
     use crate::parser::ast::Expr;
 
+    /// Verifies emitter x86.
     fn test_emitter_x86() -> Emitter {
         Emitter::new(Target::new(Platform::Linux, Arch::X86_64))
     }
 
+    /// Verifies emit scalar literals for linux x86_64 use native result registers.
     #[test]
     fn test_emit_scalar_literals_for_linux_x86_64_use_native_result_registers() {
         let mut emitter = test_emitter_x86();
@@ -219,6 +221,7 @@ mod tests {
         assert!(out.contains("    movsd xmm0, QWORD PTR [r11]\n"));
     }
 
+    /// Verifies emit negate and bit not for linux x86_64 use native instructions.
     #[test]
     fn test_emit_negate_and_bit_not_for_linux_x86_64_use_native_instructions() {
         let mut emitter = test_emitter_x86();
@@ -235,6 +238,7 @@ mod tests {
         assert!(out.contains("    not rax\n"));
     }
 
+    /// Verifies emit not for linux x86_64 uses native boolean normalization.
     #[test]
     fn test_emit_not_for_linux_x86_64_uses_native_boolean_normalization() {
         let mut emitter = test_emitter_x86();

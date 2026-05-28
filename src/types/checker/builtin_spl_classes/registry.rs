@@ -40,6 +40,11 @@ pub(super) const SPL_CLASS_NAMES: &[&str] = &[
     "ParentIterator",
     "AppendIterator",
     "MultipleIterator",
+    "SplHeap",
+    "SplMaxHeap",
+    "SplMinHeap",
+    "SplPriorityQueue",
+    "SplObjectStorage",
 ];
 
 /// Ensures no redeclarations is available before the caller continues.

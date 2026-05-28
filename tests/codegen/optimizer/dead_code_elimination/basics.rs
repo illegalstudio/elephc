@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that a pure `strlen(...)` expression statement is removed from user assembly
-// and does not appear as a runtime call. The `echo 7` output confirms behavior is preserved.
+/// Verifies that a pure `strlen(...)` expression statement is removed from user assembly
+/// and does not appear as a runtime call. The `echo 7` output confirms behavior is preserved.
 #[test]
 fn test_dead_code_elimination_prunes_pure_builtin_expr_statement() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_pure_builtin_expr_stmt");
@@ -44,8 +44,8 @@ echo 7;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a duplicated match arm (same value 1 => "a", 1 => "shadowed") produces
-// output "a!" with "shadowed" absent from user assembly.
+/// Verifies that a duplicated match arm (same value 1 => "a", 1 => "shadowed") produces
+/// output "a!" with "shadowed" absent from user assembly.
 #[test]
 fn test_dead_code_elimination_drops_shadowed_match_arm_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_shadowed_match_arm");
@@ -87,8 +87,8 @@ echo "!";
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a single live `else` branch is inverted to a plain block when the `if`
-// condition is constant false. Confirms "e".
+/// Verifies that a single live `else` branch is inverted to a plain block when the `if`
+/// condition is constant false. Confirms "e".
 #[test]
 fn test_dead_code_elimination_inverts_single_live_else_branch() {
     let out = compile_and_run(
@@ -104,8 +104,8 @@ if ($flag) {
     assert_eq!(out, "e");
 }
 
-// Verifies that a pure pipe expression (`strtoupper(...) |> strlen(...)`) statement is
-// removed from user assembly. The `echo 7` output confirms behavior is preserved.
+/// Verifies that a pure pipe expression (`strtoupper(...) |> strlen(...)`) statement is
+/// removed from user assembly. The `echo 7` output confirms behavior is preserved.
 #[test]
 fn test_dead_code_elimination_prunes_pure_pipe_expr_statement() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_pure_pipe_expr_stmt");

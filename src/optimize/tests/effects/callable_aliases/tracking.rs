@@ -10,9 +10,9 @@
 
 use super::*;
 
-// Verifies that a closure stored in a local variable is tracked as a callable alias.
-// The function `relay` captures a closure in `$f` and calls it; effects must reflect that
-// the captured closure (which calls `strlen`) is reachable through `$f`.
+/// Verifies that a closure stored in a local variable is tracked as a callable alias.
+/// The function `relay` captures a closure in `$f` and calls it; effects must reflect that
+/// the captured closure (which calls `strlen`) is reachable through `$f`.
 #[test]
 fn test_program_function_effects_track_closure_alias_locals() {
     let program = vec![Stmt::new(
@@ -73,9 +73,9 @@ fn test_program_function_effects_track_closure_alias_locals() {
     );
 }
 
-// Verifies that a ternary expression producing a first-class callable preserves alias tracking.
-// `$flag ? strlen(...) : strlen(...)` assigns the same callable target in both branches;
-// calling `$f(...)` after assignment must reflect that `strlen` is the reachable target.
+/// Verifies that a ternary expression producing a first-class callable preserves alias tracking.
+/// `$flag ? strlen(...) : strlen(...)` assigns the same callable target in both branches;
+/// calling `$f(...)` after assignment must reflect that `strlen` is the reachable target.
 #[test]
 fn test_program_function_effects_track_callable_alias_through_ternary() {
     let program = vec![Stmt::new(
@@ -132,9 +132,9 @@ fn test_program_function_effects_track_callable_alias_through_ternary() {
     );
 }
 
-// Verifies that a match expression producing a first-class callable preserves alias tracking.
-// `match ($flag) { 1 => strlen(...), default => strlen(...) }` assigns the same callable
-// target in all arms; calling `$f(...)` after assignment must reflect `strlen` reachability.
+/// Verifies that a match expression producing a first-class callable preserves alias tracking.
+/// `match ($flag) { 1 => strlen(...), default => strlen(...) }` assigns the same callable
+/// target in all arms; calling `$f(...)` after assignment must reflect `strlen` reachability.
 #[test]
 fn test_program_function_effects_track_callable_alias_through_match() {
     let program = vec![Stmt::new(
@@ -194,9 +194,9 @@ fn test_program_function_effects_track_callable_alias_through_match() {
     );
 }
 
-// Verifies that a null-coalesce expression producing a first-class callable preserves alias tracking.
-// `strlen(...) ?? strlen(...)` assigns the same callable target in both operands;
-// calling `$f(...)` after assignment must reflect that `strlen` is the reachable target.
+/// Verifies that a null-coalesce expression producing a first-class callable preserves alias tracking.
+/// `strlen(...) ?? strlen(...)` assigns the same callable target in both operands;
+/// calling `$f(...)` after assignment must reflect that `strlen` is the reachable target.
 #[test]
 fn test_program_function_effects_track_callable_alias_through_null_coalesce() {
     let program = vec![Stmt::new(
@@ -252,9 +252,9 @@ fn test_program_function_effects_track_callable_alias_through_null_coalesce() {
     );
 }
 
-// Verifies that chained variable assignments propagate callable alias tracking.
-// `$f = strlen(...); $g = $f;` followed by calling `$g(...)` must track `strlen` as the
-// reachable callable, demonstrating that alias copy does not break tracking.
+/// Verifies that chained variable assignments propagate callable alias tracking.
+/// `$f = strlen(...); $g = $f;` followed by calling `$g(...)` must track `strlen` as the
+/// reachable callable, demonstrating that alias copy does not break tracking.
 #[test]
 fn test_program_function_effects_track_callable_alias_locals() {
     let program = vec![Stmt::new(

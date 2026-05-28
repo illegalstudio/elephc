@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that `if/else` with identical bodies collapses to a single branch, preserving
-// condition effects. Confirms "cX" where `step("c", false)` runs before the collapsed echo.
+/// Verifies that `if/else` with identical bodies collapses to a single branch, preserving
+/// condition effects. Confirms "cX" where `step("c", false)` runs before the collapsed echo.
 #[test]
 fn test_dead_code_elimination_collapses_identical_if_branches() {
     let out = compile_and_run(
@@ -30,8 +30,8 @@ if (step("c", false)) {
     assert_eq!(out, "cX");
 }
 
-// Verifies that a two-branch `if/else` chain with one identical body and a diverging
-// inner guard inlines correctly. Confirms "aX" where `step("a", true)` drives the outer guard.
+/// Verifies that a two-branch `if/else` chain with one identical body and a diverging
+/// inner guard inlines correctly. Confirms "aX" where `step("a", true)` drives the outer guard.
 #[test]
 fn test_dead_code_elimination_merges_identical_if_chain_bodies_with_short_circuit() {
     let out = compile_and_run(
@@ -55,8 +55,8 @@ if (step("a", true)) {
     assert_eq!(out, "aX");
 }
 
-// Verifies that a three-branch `if/elseif/else` chain with identical "X" bodies collapses
-// to one output per branch. Confirms "abcX|defY" across two chain variants.
+/// Verifies that a three-branch `if/elseif/else` chain with identical "X" bodies collapses
+/// to one output per branch. Confirms "abcX|defY" across two chain variants.
 #[test]
 fn test_dead_code_elimination_recursively_merges_longer_if_chains() {
     let out = compile_and_run(
@@ -98,7 +98,7 @@ if (step("d", false)) {
     assert_eq!(out, "abcX|defY");
 }
 
-// Verifies that nested `if` with a single live path is flattened to a single `if`. Confirms "7".
+/// Verifies that nested `if` with a single live path is flattened to a single `if`. Confirms "7".
 #[test]
 fn test_dead_code_elimination_flattens_nested_single_path_ifs() {
     let out = compile_and_run(

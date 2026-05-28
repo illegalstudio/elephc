@@ -174,6 +174,60 @@ fn test_error_spl_fixed_array_cannot_be_redeclared() {
     );
 }
 
+/// Verifies that `SplHeap` cannot be redeclared as a user class.
+#[test]
+fn test_error_spl_heap_cannot_be_redeclared() {
+    expect_error(
+        "<?php class SplHeap {}",
+        "Cannot redeclare built-in SPL class: SplHeap",
+    );
+}
+
+/// Verifies that `SplMaxHeap` cannot be redeclared as a user class.
+#[test]
+fn test_error_spl_max_heap_cannot_be_redeclared() {
+    expect_error(
+        "<?php class SplMaxHeap {}",
+        "Cannot redeclare built-in SPL class: SplMaxHeap",
+    );
+}
+
+/// Verifies that `SplMinHeap` cannot be redeclared as a user class.
+#[test]
+fn test_error_spl_min_heap_cannot_be_redeclared() {
+    expect_error(
+        "<?php class SplMinHeap {}",
+        "Cannot redeclare built-in SPL class: SplMinHeap",
+    );
+}
+
+/// Verifies that `SplPriorityQueue` cannot be redeclared as a user class.
+#[test]
+fn test_error_spl_priority_queue_cannot_be_redeclared() {
+    expect_error(
+        "<?php class SplPriorityQueue {}",
+        "Cannot redeclare built-in SPL class: SplPriorityQueue",
+    );
+}
+
+/// Verifies that `SplObjectStorage` cannot be redeclared as a user class.
+#[test]
+fn test_error_spl_object_storage_cannot_be_redeclared() {
+    expect_error(
+        "<?php class SplObjectStorage {}",
+        "Cannot redeclare built-in SPL class: SplObjectStorage",
+    );
+}
+
+/// Verifies that `SplHeap` stays abstract and cannot be instantiated directly.
+#[test]
+fn test_error_spl_heap_is_abstract() {
+    expect_error(
+        "<?php $heap = new SplHeap();",
+        "Cannot instantiate abstract class: SplHeap",
+    );
+}
+
 // Tests that `SplFixedArray::getIterator()` is deferred until the iterator phase.
 // The method exists at codegen time but the error is raised at runtime iteration.
 /// Verifies that error internal iterator cannot be redeclared.

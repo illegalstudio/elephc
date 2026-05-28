@@ -10,12 +10,12 @@
 
 use super::*;
 
-// Tests that constant propagation merges identical assignments across all switch cases.
-//
-// When every switch case assigns the same constant to a variable, and the variable
-// is subsequently used in a foldable expression, the optimizer must compute the
-// final constant result directly from any case (since all are equivalent).
-// This test verifies `2 ^ 3 = 8` is folded correctly from `base = 2` in switch.
+/// Tests that constant propagation merges identical assignments across all switch cases.
+///
+/// When every switch case assigns the same constant to a variable, and the variable
+/// is subsequently used in a foldable expression, the optimizer must compute the
+/// final constant result directly from any case (since all are equivalent).
+/// This test verifies `2 ^ 3 = 8` is folded correctly from `base = 2` in switch.
 #[test]
 fn test_propagate_constants_merges_identical_switch_assignments() {
     let program = vec![
@@ -44,12 +44,12 @@ fn test_propagate_constants_merges_identical_switch_assignments() {
     );
 }
 
-// Tests that constant propagation merges identical assignments across try and catch blocks.
-//
-// When both the try body and every catch clause assign the same constant to a variable,
-// the optimizer must treat the variable as constant regardless of which path executes.
-// This test verifies `2 ^ 3 = 8` is folded correctly when `base = 2` appears in both
-// the try and catch branches.
+/// Tests that constant propagation merges identical assignments across try and catch blocks.
+///
+/// When both the try body and every catch clause assign the same constant to a variable,
+/// the optimizer must treat the variable as constant regardless of which path executes.
+/// This test verifies `2 ^ 3 = 8` is folded correctly when `base = 2` appears in both
+/// the try and catch branches.
 #[test]
 fn test_propagate_constants_merges_identical_try_catch_assignments() {
     let program = vec![
@@ -76,12 +76,12 @@ fn test_propagate_constants_merges_identical_try_catch_assignments() {
     );
 }
 
-// Tests that constant propagation ignores catch assignments when the try body cannot throw.
-//
-// A non-throwing try body means the catch is unreachable. The optimizer must not
-// propagate the catch's assignment when computing the variable's value, even if
-// the catch assigns a different constant. This test verifies `base` remains `2`
-// from the try body, not `9` from the catch, yielding `2 ^ 3 = 8`.
+/// Tests that constant propagation ignores catch assignments when the try body cannot throw.
+///
+/// A non-throwing try body means the catch is unreachable. The optimizer must not
+/// propagate the catch's assignment when computing the variable's value, even if
+/// the catch assigns a different constant. This test verifies `base` remains `2`
+/// from the try body, not `9` from the catch, yielding `2 ^ 3 = 8`.
 #[test]
 fn test_propagate_constants_ignores_unreachable_catch_after_non_throwing_try() {
     let program = vec![

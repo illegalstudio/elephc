@@ -135,6 +135,17 @@ pub(crate) fn push_expr_arg(
     data: &mut DataSection,
 ) -> PhpType {
     let source_ty = super::super::super::emit_expr(arg, emitter, ctx, data);
+    let source_repr = source_ty.codegen_repr();
+    if target_ty
+        .is_some_and(|target_ty| matches!(target_ty.codegen_repr(), PhpType::Mixed))
+        && !matches!(source_repr, PhpType::Mixed)
+    {
+        crate::codegen::emit_box_current_expr_value_as_mixed_for_container(
+            emitter, arg, &source_ty,
+        );
+        push_arg_value(emitter, &PhpType::Mixed);
+        return PhpType::Mixed;
+    }
     let release_mixed_after_coerce =
         should_release_owned_mixed_after_arg_coerce(arg, &source_ty, target_ty);
     if release_mixed_after_coerce {

@@ -100,6 +100,7 @@ pub(crate) fn emit_json_encode_float(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the (possibly extended) formatted slice
 }
 
+/// Emits x86_64 for this module.
 fn emit_x86_64(emitter: &mut Emitter) {
     //! Emits x86_64-specific runtime helper for JSON float encoding.
     //!

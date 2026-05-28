@@ -10,11 +10,11 @@
 
 use super::*;
 
-// Verifies that a scalar variable assigned before a for loop is not propagated
-// through the loop when the loop contains a `switch` that could theoretically
-// skip iterations. The variable `base` is assigned 2 outside the loop and
-// never modified inside the loop body (which contains a switch on the loop
-// index). After constant propagation, `base ^ 3` must be folded to `8.0`.
+/// Verifies that a scalar variable assigned before a for loop is not propagated
+/// through the loop when the loop contains a `switch` that could theoretically
+/// skip iterations. The variable `base` is assigned 2 outside the loop and
+/// never modified inside the loop body (which contains a switch on the loop
+/// index). After constant propagation, `base ^ 3` must be folded to `8.0`.
 #[test]
 fn test_propagate_constants_preserves_unmodified_scalar_across_loop_with_switch() {
     let program = vec![
@@ -58,11 +58,11 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_loop_with_switch(
     );
 }
 
-// Verifies that a scalar variable assigned before a for loop is not propagated
-// through the loop when the loop body contains a `try` statement. The variable
-// `base` is assigned 2 outside the loop and never modified inside the loop body
-// (which contains a try/catch on the loop index). After constant propagation,
-// `base ^ 3` must be folded to `8.0`.
+/// Verifies that a scalar variable assigned before a for loop is not propagated
+/// through the loop when the loop body contains a `try` statement. The variable
+/// `base` is assigned 2 outside the loop and never modified inside the loop body
+/// (which contains a try/catch on the loop index). After constant propagation,
+/// `base ^ 3` must be folded to `8.0`.
 #[test]
 fn test_propagate_constants_preserves_unmodified_scalar_across_loop_with_try() {
     let program = vec![
@@ -104,11 +104,11 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_loop_with_try() {
     );
 }
 
-// Verifies that a scalar variable assigned before nested loops is not propagated
-// through the loops when the inner loop contains local statements. The variable
-// `base` is assigned 2 before the outer for loop and never modified inside either
-// loop (which modifies loop indices `i` and `j`). After constant propagation,
-// `base ^ 3` must be folded to `8.0`.
+/// Verifies that a scalar variable assigned before nested loops is not propagated
+/// through the loops when the inner loop contains local statements. The variable
+/// `base` is assigned 2 before the outer for loop and never modified inside either
+/// loop (which modifies loop indices `i` and `j`). After constant propagation,
+/// `base ^ 3` must be folded to `8.0`.
 #[test]
 fn test_propagate_constants_preserves_unmodified_scalar_across_nested_loops() {
     let program = vec![
@@ -162,12 +162,12 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_nested_loops() {
     );
 }
 
-// Verifies that a scalar variable assigned before a for loop is not propagated
-// through the loop when the loop body contains array writes on a local variable
-// (`items`). The variable `base` is assigned 2 outside the loop and never modified.
-// The loop body performs `ArrayPush` and `ArrayAssign` on `items`, which must not
-// be treated as modifications of `base`. After constant propagation, `base ^ 3`
-// must be folded to `8.0`.
+/// Verifies that a scalar variable assigned before a for loop is not propagated
+/// through the loop when the loop body contains array writes on a local variable
+/// (`items`). The variable `base` is assigned 2 outside the loop and never modified.
+/// The loop body performs `ArrayPush` and `ArrayAssign` on `items`, which must not
+/// be treated as modifications of `base`. After constant propagation, `base ^ 3`
+/// must be folded to `8.0`.
 #[test]
 fn test_propagate_constants_preserves_unmodified_scalar_across_loop_local_array_writes() {
     let program = vec![
@@ -214,12 +214,12 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_loop_local_array_
     );
 }
 
-// Verifies that a scalar variable assigned before a for loop is not propagated
-// through the loop when the loop body contains property writes on an object
-// (`box`). The variable `base` is assigned 2 outside the loop and never modified.
-// The loop body performs `PropertyAssign`, `PropertyArrayPush`, and
-// `PropertyArrayAssign` on `$box->...`, which must not be treated as modifications
-// of `base`. After constant propagation, `base ^ 3` must be folded to `8.0`.
+/// Verifies that a scalar variable assigned before a for loop is not propagated
+/// through the loop when the loop body contains property writes on an object
+/// (`box`). The variable `base` is assigned 2 outside the loop and never modified.
+/// The loop body performs `PropertyAssign`, `PropertyArrayPush`, and
+/// `PropertyArrayAssign` on `$box->...`, which must not be treated as modifications
+/// of `base`. After constant propagation, `base ^ 3` must be folded to `8.0`.
 #[test]
 fn test_propagate_constants_preserves_unmodified_scalar_across_loop_property_writes() {
     let program = vec![

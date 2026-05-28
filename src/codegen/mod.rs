@@ -209,8 +209,8 @@ pub fn generate_user_asm(
     }
 
     // Emit flattened class methods in class-id order for deterministic output.
-    // The x86_64 path filters classes to those visibly used by the program so
-    // that the test asm stays compact; the filter must include every parent
+    // Filter classes to those visibly used by the program so that test asm
+    // stays compact; the filter must include every parent
     // and implemented interface in the inheritance chain because vtables and
     // interface_impl tables reference the inherited method symbols (e.g.
     // JsonException's vtable points at _method_Exception_getmessage).
@@ -221,10 +221,8 @@ pub fn generate_user_asm(
     // (parent_ids, vtable_ptrs, interface_ptrs). Without those slots
     // populated, the catch-time inheritance walk in __rt_exception_matches
     // sees a -1 parent for the thrown class and reports no match.
-    let emitted_class_names = if target.arch == platform::Arch::X86_64
-        && !program_has_dynamic_instanceof(program)
-    {
-        Some(collect_x86_emitted_class_names(program, classes))
+    let emitted_class_names = if !program_has_dynamic_instanceof(program) {
+        Some(collect_emitted_class_names(program, classes))
     } else {
         None
     };
@@ -441,12 +439,12 @@ fn is_internal_synthetic_class_name(name: &str) -> bool {
     crate::names::php_symbol_key(name).starts_with("__elephc")
 }
 
-/// Returns the set of class names that should be emitted in the x86_64
+/// Returns the set of class names that should be emitted in the
 /// user-asm section. Starts from required classes, unconditionally includes
 /// the throwable hierarchy (needed by runtime JSON helpers), reflection
 /// classes, and attribute factories, then expands to cover the full
 /// inheritance and implementation dependency chain.
-fn collect_x86_emitted_class_names(
+fn collect_emitted_class_names(
     program: &Program,
     classes: &HashMap<String, ClassInfo>,
 ) -> HashSet<String> {

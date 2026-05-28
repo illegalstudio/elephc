@@ -10,7 +10,7 @@
 
 use super::*;
 
-// Verifies fold_constants evaluates (2+3)*4 to 20, respecting AST structure.
+/// Verifies fold_constants evaluates (2+3)*4 to 20, respecting AST structure.
 #[test]
 fn test_fold_nested_integer_arithmetic() {
     let program = vec![Stmt::new(
@@ -37,7 +37,7 @@ fn test_fold_nested_integer_arithmetic() {
     assert_eq!(folded, vec![Stmt::echo(Expr::int_lit(20))]);
 }
 
-// Verifies 2 ** 3 is folded to FloatLiteral(8.0) — exponentiation yields float.
+/// Verifies 2 ** 3 is folded to FloatLiteral(8.0) — exponentiation yields float.
 #[test]
 fn test_fold_constant_pow_to_float_literal() {
     let program = vec![Stmt::echo(Expr::new(
@@ -60,7 +60,7 @@ fn test_fold_constant_pow_to_float_literal() {
     );
 }
 
-// Verifies division by zero is NOT folded — PHP would fatal, optimizer preserves the AST.
+/// Verifies division by zero is NOT folded — PHP would fatal, optimizer preserves the AST.
 #[test]
 fn test_skip_division_by_zero_fold() {
     let expr = Expr::new(
@@ -77,7 +77,7 @@ fn test_skip_division_by_zero_fold() {
     assert_eq!(folded, vec![Stmt::echo(expr)]);
 }
 
-// Verifies string concatenation is folded in class property defaults ("hello " + "world" -> "hello world").
+/// Verifies string concatenation is folded in class property defaults ("hello " + "world" -> "hello world").
 #[test]
 fn test_fold_string_concat_and_property_default() {
     let property = ClassProperty {
@@ -127,7 +127,7 @@ fn test_fold_string_concat_and_property_default() {
     );
 }
 
-// Verifies StrictEq (2===2), Lt (2.5<3.0), and Spaceship (2<=>3) are folded to true, true, -1.
+/// Verifies StrictEq (2===2), Lt (2.5<3.0), and Spaceship (2<=>3) are folded to true, true, -1.
 #[test]
 fn test_fold_strict_and_numeric_comparisons() {
     let program = vec![
@@ -169,7 +169,7 @@ fn test_fold_strict_and_numeric_comparisons() {
     );
 }
 
-// Verifies NullCoalesce (null ?? "fallback") and Ternary ("0" ? 10 : 20) fold to "fallback" and 20.
+/// Verifies NullCoalesce (null ?? "fallback") and Ternary ("0" ? 10 : 20) fold to "fallback" and 20.
 #[test]
 fn test_fold_null_coalesce_and_ternary_only_for_scalar_constants() {
     let program = vec![
@@ -201,7 +201,7 @@ fn test_fold_null_coalesce_and_ternary_only_for_scalar_constants() {
     );
 }
 
-// Verifies Or ("0" or "hello") folds to true and Not(!) on "0" folds to true using PHP truthiness.
+/// Verifies Or ("0" or "hello") folds to true and Not(!) on "0" folds to true using PHP truthiness.
 #[test]
 fn test_fold_logical_ops_and_not_using_php_truthiness() {
     let program = vec![
@@ -230,7 +230,7 @@ fn test_fold_logical_ops_and_not_using_php_truthiness() {
     );
 }
 
-// Verifies int(float), float(string), bool(string), string(int) casts fold when result is unambiguous.
+/// Verifies int(float), float(string), bool(string), string(int) casts fold when result is unambiguous.
 #[test]
 fn test_fold_scalar_casts_when_result_is_unambiguous() {
     let program = vec![
@@ -277,7 +277,7 @@ fn test_fold_scalar_casts_when_result_is_unambiguous() {
     );
 }
 
-// Verifies int("42abc") is NOT folded — ambiguous string casts must stay unfolded.
+/// Verifies int("42abc") is NOT folded — ambiguous string casts must stay unfolded.
 #[test]
 fn test_keep_ambiguous_string_casts_unfolded() {
     let expr = Expr::new(
@@ -293,7 +293,7 @@ fn test_keep_ambiguous_string_casts_unfolded() {
     assert_eq!(folded, vec![Stmt::echo(expr)]);
 }
 
-// Verifies `$items[0] = 5` result_target is dropped when structurally equal to target.
+/// Verifies `$items[0] = 5` result_target is dropped when structurally equal to target.
 #[test]
 fn test_fold_drops_assignment_result_target_when_equal_to_target() {
     // `$items[0] = 5` parses with `result_target = Some(target.clone())`

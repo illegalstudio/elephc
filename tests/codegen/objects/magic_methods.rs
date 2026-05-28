@@ -9,7 +9,7 @@
 
 use super::*;
 
-// Verifies `__toString` result is usable in direct `echo`, string concatenation, and explicit `(string)` cast.
+/// Verifies `__toString` result is usable in direct `echo`, string concatenation, and explicit `(string)` cast.
 #[test]
 fn test_magic_tostring_supports_echo_concat_and_cast() {
     let out = compile_and_run(
@@ -28,7 +28,7 @@ echo "|" . (string)$u;
     assert_eq!(out, "@nahime|@nahime|@nahime");
 }
 
-// Verifies that a class without `__toString` causes a runtime fatal error when echoed.
+/// Verifies that a class without `__toString` causes a runtime fatal error when echoed.
 #[test]
 fn test_magic_tostring_missing_method_is_runtime_fatal() {
     let err = compile_and_run_expect_failure(
@@ -41,7 +41,7 @@ echo $p;
     assert!(err.contains("could not be converted to string"), "{err}");
 }
 
-// Verifies `__get` is invoked for undefined property reads, returning the intercepted name.
+/// Verifies `__get` is invoked for undefined property reads, returning the intercepted name.
 #[test]
 fn test_magic_get_handles_missing_property_reads() {
     let out = compile_and_run(
@@ -58,8 +58,8 @@ echo $b->title . "|" . $b->slug;
     assert_eq!(out, "[title]|[slug]");
 }
 
-// Verifies the type checker merges `__get` return types across top-level branches so that
-// concatenating two successive calls with different internal-state return types works correctly.
+/// Verifies the type checker merges `__get` return types across top-level branches so that
+/// concatenating two successive calls with different internal-state return types works correctly.
 #[test]
 fn test_magic_get_merges_return_types_across_top_level_branches() {
     let out = compile_and_run(
@@ -81,7 +81,7 @@ echo $b->id . "|" . $b->slug;
     assert_eq!(out, "123|[slug]");
 }
 
-// Verifies `__set` is invoked for undefined property writes, capturing the name and value.
+/// Verifies `__set` is invoked for undefined property writes, capturing the name and value.
 #[test]
 fn test_magic_set_handles_missing_property_writes() {
     let out = compile_and_run(
@@ -101,7 +101,7 @@ echo $r->log;
     assert_eq!(out, "count=42;label=ok;");
 }
 
-// Verifies `__get` and `__set` interact correctly: a write via `__set` is readable via `__get`.
+/// Verifies `__get` and `__set` interact correctly: a write via `__set` is readable via `__get`.
 #[test]
 fn test_magic_get_and_set_can_work_together() {
     let out = compile_and_run(
@@ -119,7 +119,7 @@ echo $m->answer;
     assert_eq!(out, "answer:99|answer");
 }
 
-// Verifies `__invoke` is called when an object is invoked as a function via a variable holding the object.
+/// Verifies `__invoke` is called when an object is invoked as a function via a variable holding the object.
 #[test]
 fn test_magic_invoke_handles_variable_object_call() {
     let out = compile_and_run(
@@ -134,7 +134,7 @@ echo $obj(21);
     assert_eq!(out, "42");
 }
 
-// Verifies `__invoke` is called when an object is invoked as a function via a loaded expression (`new`).
+/// Verifies `__invoke` is called when an object is invoked as a function via a loaded expression (`new`).
 #[test]
 fn test_magic_invoke_handles_loaded_object_expr_call() {
     let out = compile_and_run(
@@ -148,7 +148,7 @@ echo (new CallableObj())(21);
     assert_eq!(out, "42");
 }
 
-// Verifies `__call` is invoked for undefined methods, receiving the method name and argument list.
+/// Verifies `__call` is invoked for undefined methods, receiving the method name and argument list.
 #[test]
 fn test_magic_call_handles_missing_method() {
     let out = compile_and_run(

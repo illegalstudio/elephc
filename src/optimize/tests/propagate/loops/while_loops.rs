@@ -10,10 +10,10 @@
 
 use super::*;
 
+/// Tests that constant propagation preserves scalar values across a while loop with a
+/// false condition. The body writes to `base`, but since the loop never executes,
+/// the initial assignment `base = 2` should be the only value propagated.
 #[test]
-// Tests that constant propagation preserves scalar values across a while loop with a
-// false condition. The body writes to `base`, but since the loop never executes,
-// the initial assignment `base = 2` should be the only value propagated.
 fn test_propagate_constants_preserves_scalar_across_while_false_body_writes() {
     let program = vec![
         Stmt::assign("base", Expr::int_lit(2)),
@@ -35,10 +35,10 @@ fn test_propagate_constants_preserves_scalar_across_while_false_body_writes() {
     );
 }
 
+/// Tests that constant propagation correctly tracks an assignment written in a
+/// do-while body when the condition is false. Since the body executes once before
+/// the condition is evaluated, `base = 2` should be propagated to the echo.
 #[test]
-// Tests that constant propagation correctly tracks an assignment written in a
-// do-while body when the condition is false. Since the body executes once before
-// the condition is evaluated, `base = 2` should be propagated to the echo.
 fn test_propagate_constants_tracks_assignment_through_do_while_false() {
     let program = vec![
         Stmt::new(
@@ -59,10 +59,10 @@ fn test_propagate_constants_tracks_assignment_through_do_while_false() {
     );
 }
 
+/// Tests that constant propagation tracks an assignment written in a while loop body
+/// that executes once before a break. The loop condition is true, `base = 2` is
+/// assigned, then `break 1` exits — so `base = 2` should be propagated.
 #[test]
-// Tests that constant propagation tracks an assignment written in a while loop body
-// that executes once before a break. The loop condition is true, `base = 2` is
-// assigned, then `break 1` exits — so `base = 2` should be propagated.
 fn test_propagate_constants_tracks_assignment_through_while_true_break() {
     let program = vec![
         Stmt::new(
@@ -86,10 +86,10 @@ fn test_propagate_constants_tracks_assignment_through_while_true_break() {
     );
 }
 
+/// Tests that constant propagation merges branches when both arms of an if statement
+/// inside a while loop assign the same value to `base` before breaking. The value
+/// should be propagated since both paths through the if assign to `base`.
 #[test]
-// Tests that constant propagation merges branches when both arms of an if statement
-// inside a while loop assign the same value to `base` before breaking. The value
-// should be propagated since both paths through the if assign to `base`.
 fn test_propagate_constants_merges_branch_breaks_through_while_true() {
     let program = vec![
         Stmt::new(
@@ -124,10 +124,10 @@ fn test_propagate_constants_merges_branch_breaks_through_while_true() {
     );
 }
 
+/// Tests that constant propagation tracks an assignment written in a do-while body
+/// when a continue statement precedes the condition evaluation. The body executes
+/// once, assigns `base = 2`, then continues — so `base = 2` should be propagated.
 #[test]
-// Tests that constant propagation tracks an assignment written in a do-while body
-// when a continue statement precedes the condition evaluation. The body executes
-// once, assigns `base = 2`, then continues — so `base = 2` should be propagated.
 fn test_propagate_constants_tracks_continue_through_do_while_false() {
     let program = vec![
         Stmt::new(
@@ -151,10 +151,10 @@ fn test_propagate_constants_tracks_continue_through_do_while_false() {
     );
 }
 
+/// Tests that constant propagation preserves unmodified scalar values inside a while
+/// loop body. The variable `base` is assigned before the loop and never modified
+/// inside the loop, so the echo statement should be folded to a literal `8.0`.
 #[test]
-// Tests that constant propagation preserves unmodified scalar values inside a while
-// loop body. The variable `base` is assigned before the loop and never modified
-// inside the loop, so the echo statement should be folded to a literal `8.0`.
 fn test_propagate_constants_preserves_unmodified_scalar_inside_while_loop_body() {
     let program = vec![
         Stmt::assign("base", Expr::int_lit(2)),

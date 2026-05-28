@@ -9,10 +9,10 @@
 
 use super::*;
 
+/// Verifies that a copy-on-write array alias survives unset of the original variable.
+/// Fixture: two variables share a 3-element array; unset the first; read from the second.
+/// Regression: ensures GC does not collect the shared backing store prematurely.
 #[test]
-// Verifies that a copy-on-write array alias survives unset of the original variable.
-// Fixture: two variables share a 3-element array; unset the first; read from the second.
-// Regression: ensures GC does not collect the shared backing store prematurely.
 fn test_gc_array_alias_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -27,10 +27,10 @@ echo $b[2];
     assert_eq!(out, "102030");
 }
 
+/// Verifies that a returned array alias survives caller-side unset of the original variable.
+/// Fixture: pass an array to a function that returns it; unset the caller's copy; read the returned alias.
+/// Regression: ensures callee-owned array backing store survives caller-side unset.
 #[test]
-// Verifies that a returned array alias survives caller-side unset of the original variable.
-// Fixture: pass an array to a function that returns it; unset the caller's copy; read the returned alias.
-// Regression: ensures callee-owned array backing store survives caller-side unset.
 fn test_gc_returned_array_alias_survives_caller_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -48,10 +48,10 @@ echo $b[1];
     assert_eq!(out, "78");
 }
 
+/// Verifies that a returned object alias survives caller-side unset of the original variable.
+/// Fixture: pass an object to a function that returns it; unset the caller's copy; read the returned alias's property.
+/// Regression: ensures GC-preserved object identity is maintained through caller-side unset.
 #[test]
-// Verifies that a returned object alias survives caller-side unset of the original variable.
-// Fixture: pass an object to a function that returns it; unset the caller's copy; read the returned alias's property.
-// Regression: ensures GC-preserved object identity is maintained through caller-side unset.
 fn test_gc_returned_object_alias_survives_caller_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -71,10 +71,10 @@ echo $b->val;
     assert_eq!(out, "41");
 }
 
+/// Verifies that an inner array pushed into an outer array survives unset of the original.
+/// Fixture: create inner array, push it into outer array, unset inner, read from outer.
+/// Regression: ensures push-path does not break GC alias on nested array.
 #[test]
-// Verifies that an inner array pushed into an outer array survives unset of the original.
-// Fixture: create inner array, push it into outer array, unset inner, read from outer.
-// Regression: ensures push-path does not break GC alias on nested array.
 fn test_gc_array_push_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -88,10 +88,10 @@ echo $outer[0][0];
     assert_eq!(out, "9");
 }
 
+/// Verifies that an inner array in an array literal survives unset of the original.
+/// Fixture: assign inner array to indexed position in outer array literal, unset inner, read from outer.
+/// Regression: ensures array literal initialization preserves GC alias.
 #[test]
-// Verifies that an inner array in an array literal survives unset of the original.
-// Fixture: assign inner array to indexed position in outer array literal, unset inner, read from outer.
-// Regression: ensures array literal initialization preserves GC alias.
 fn test_gc_indexed_array_literal_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -104,10 +104,10 @@ echo $outer[0][1];
     assert_eq!(out, "4");
 }
 
+/// Verifies that an inner array assigned by index to an outer array survives unset of the original.
+/// Fixture: create outer array with literal elements, assign inner array to a specific index, unset inner, read from outer.
+/// Regression: ensures index-based assignment preserves GC alias for nested arrays.
 #[test]
-// Verifies that an inner array assigned by index to an outer array survives unset of the original.
-// Fixture: create outer array with literal elements, assign inner array to a specific index, unset inner, read from outer.
-// Regression: ensures index-based assignment preserves GC alias for nested arrays.
 fn test_gc_array_assign_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -121,10 +121,10 @@ echo $outer[1][0];
     assert_eq!(out, "4");
 }
 
+/// Verifies that an inner array assigned to an object property survives unset of the original.
+/// Fixture: create Holder object, assign inner array to property, unset inner, read from property.
+/// Regression: ensures property store preserves GC alias for nested arrays.
 #[test]
-// Verifies that an inner array assigned to an object property survives unset of the original.
-// Fixture: create Holder object, assign inner array to property, unset inner, read from property.
-// Regression: ensures property store preserves GC alias for nested arrays.
 fn test_gc_property_assign_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -141,10 +141,10 @@ echo $saved[0];
     assert_eq!(out, "7");
 }
 
+/// Verifies that a static variable that receives a borrowed inner array survives unset of the original.
+/// Fixture: assign inner array to static variable, unset temp, read from static.
+/// Regression: ensures static storage preserves GC alias across unset of source.
 #[test]
-// Verifies that a static variable that receives a borrowed inner array survives unset of the original.
-// Fixture: assign inner array to static variable, unset temp, read from static.
-// Regression: ensures static storage preserves GC alias across unset of source.
 fn test_gc_static_assign_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -162,10 +162,10 @@ hold_once();
     assert_eq!(out, "5");
 }
 
+/// Verifies that an inner array spread into a new destination array survives unset of the original.
+/// Fixture: nest inner in src, spread src into dst, unset src and inner, read from dst.
+/// Regression: ensures spread creates a COW copy that preserves inner alias after unset.
 #[test]
-// Verifies that an inner array spread into a new destination array survives unset of the original.
-// Fixture: nest inner in src, spread src into dst, unset src and inner, read from dst.
-// Regression: ensures spread creates a COW copy that preserves inner alias after unset.
 fn test_gc_spread_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -180,10 +180,10 @@ echo $dst[0][0];
     assert_eq!(out, "8");
 }
 
+/// Verifies that an inner array merged via array_merge survives unset of the original.
+/// Fixture: left array contains inner array, right array contains separate element, merge, unset left and inner, read merged result.
+/// Regression: ensures array_merge does not break GC alias for nested inner arrays.
 #[test]
-// Verifies that an inner array merged via array_merge survives unset of the original.
-// Fixture: left array contains inner array, right array contains separate element, merge, unset left and inner, read merged result.
-// Regression: ensures array_merge does not break GC alias for nested inner arrays.
 fn test_gc_array_merge_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -199,10 +199,10 @@ echo $merged[0][0] . "|" . $merged[1][0];
     assert_eq!(out, "6|7");
 }
 
+/// Verifies that an inner array in an array_chunk result survives unset of the source.
+/// Fixture: create rows array with inner array, chunk it, unset rows and inner, read from first chunk element.
+/// Regression: ensures array_chunk output preserves GC alias for nested inner arrays.
 #[test]
-// Verifies that an inner array in an array_chunk result survives unset of the source.
-// Fixture: create rows array with inner array, chunk it, unset rows and inner, read from first chunk element.
-// Regression: ensures array_chunk output preserves GC alias for nested inner arrays.
 fn test_gc_array_chunk_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -217,10 +217,10 @@ echo $chunks[0][0][0] . "|" . $chunks[1][0][0];
     assert_eq!(out, "5|9");
 }
 
+/// Verifies that an inner array extracted via array_slice survives unset of the source.
+/// Fixture: src contains inner array at index 1 among other elements, slice index 1 length 1, unset src and inner, read from slice.
+/// Regression: ensures array_slice output preserves GC alias for nested inner arrays.
 #[test]
-// Verifies that an inner array extracted via array_slice survives unset of the source.
-// Fixture: src contains inner array at index 1 among other elements, slice index 1 length 1, unset src and inner, read from slice.
-// Regression: ensures array_slice output preserves GC alias for nested inner arrays.
 fn test_gc_array_slice_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -235,10 +235,10 @@ echo $slice[0][0];
     assert_eq!(out, "2");
 }
 
+/// Verifies that an inner array in an array_reverse result survives unset of the source.
+/// Fixture: src contains inner array at index 1 among other elements, reverse src, unset src and inner, read from reversed index 1.
+/// Regression: ensures array_reverse output preserves GC alias for nested inner arrays.
 #[test]
-// Verifies that an inner array in an array_reverse result survives unset of the source.
-// Fixture: src contains inner array at index 1 among other elements, reverse src, unset src and inner, read from reversed index 1.
-// Regression: ensures array_reverse output preserves GC alias for nested inner arrays.
 fn test_gc_array_reverse_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -253,10 +253,10 @@ echo $rev[1][0];
     assert_eq!(out, "4");
 }
 
+/// Verifies that an inner array used as array_pad fill value survives unset of the original.
+/// Fixture: create src with one element, pad to length 3 using inner as fill value, unset src and inner, read padded indices 1 and 2.
+/// Regression: ensures array_pad fill-value path preserves GC alias.
 #[test]
-// Verifies that an inner array used as array_pad fill value survives unset of the original.
-// Fixture: create src with one element, pad to length 3 using inner as fill value, unset src and inner, read padded indices 1 and 2.
-// Regression: ensures array_pad fill-value path preserves GC alias.
 fn test_gc_array_pad_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -271,10 +271,10 @@ echo $padded[1][0] . "|" . $padded[2][0];
     assert_eq!(out, "5|5");
 }
 
+/// Verifies that an inner array in array_unique output survives unset of the original.
+/// Fixture: src contains inner array twice and a separate element, run array_unique, unset src and inner, verify count and read values.
+/// Regression: ensures array_unique preserves GC alias for deduplicated inner arrays.
 #[test]
-// Verifies that an inner array in array_unique output survives unset of the original.
-// Fixture: src contains inner array twice and a separate element, run array_unique, unset src and inner, verify count and read values.
-// Regression: ensures array_unique preserves GC alias for deduplicated inner arrays.
 fn test_gc_array_unique_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -289,10 +289,10 @@ echo count($uniq) . "|" . $uniq[0][0] . "|" . $uniq[1][0];
     assert_eq!(out, "2|3|4");
 }
 
+/// Verifies that an inner array extracted via array_splice (removed portion) survives unset of the source.
+/// Fixture: src contains inner array at index 1 among other elements, splice out index 1, unset src and inner, read removed portion.
+/// Regression: ensures array_splice removed portion preserves GC alias for nested inner arrays.
 #[test]
-// Verifies that an inner array extracted via array_splice (removed portion) survives unset of the source.
-// Fixture: src contains inner array at index 1 among other elements, splice out index 1, unset src and inner, read removed portion.
-// Regression: ensures array_splice removed portion preserves GC alias for nested inner arrays.
 fn test_gc_array_splice_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -307,10 +307,10 @@ echo $removed[0][0];
     assert_eq!(out, "7");
 }
 
+/// Verifies that an inner array in array_diff output survives unset of the original.
+/// Fixture: left contains inner array and another element, right contains only the other element, diff, unset left and inner, read result.
+/// Regression: ensures array_diff output preserves GC alias for nested inner arrays.
 #[test]
-// Verifies that an inner array in array_diff output survives unset of the original.
-// Fixture: left contains inner array and another element, right contains only the other element, diff, unset left and inner, read result.
-// Regression: ensures array_diff output preserves GC alias for nested inner arrays.
 fn test_gc_array_diff_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -326,10 +326,10 @@ echo $diff[0][0];
     assert_eq!(out, "6");
 }
 
+/// Verifies that an inner array in array_intersect output survives unset of the originals.
+/// Fixture: left contains inner array and another element, right contains inner array, intersect, unset all, read result.
+/// Regression: ensures array_intersect output preserves GC alias for nested inner arrays.
 #[test]
-// Verifies that an inner array in array_intersect output survives unset of the originals.
-// Fixture: left contains inner array and another element, right contains inner array, intersect, unset all, read result.
-// Regression: ensures array_intersect output preserves GC alias for nested inner arrays.
 fn test_gc_array_intersect_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -346,10 +346,10 @@ echo $both[0][0];
     assert_eq!(out, "9");
 }
 
+/// Verifies that an inner array in array_filter output survives unset of the original.
+/// Fixture: rows contain inner array among other elements, filter by a callback that keeps 2-element arrays, unset rows and inner, read filtered result.
+/// Regression: ensures array_filter output preserves GC alias for nested inner arrays.
 #[test]
-// Verifies that an inner array in array_filter output survives unset of the original.
-// Fixture: rows contain inner array among other elements, filter by a callback that keeps 2-element arrays, unset rows and inner, read filtered result.
-// Regression: ensures array_filter output preserves GC alias for nested inner arrays.
 fn test_gc_array_filter_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -365,10 +365,10 @@ echo $filtered[0][1] . "|" . $filtered[1][0];
     assert_eq!(out, "11|2");
 }
 
+/// Verifies that an inner array used as array_fill fill value survives unset of the original.
+/// Fixture: create inner array, fill an array of length 2 with inner as fill value, unset inner, read both fill positions.
+/// Regression: ensures array_fill fill-value path preserves GC alias.
 #[test]
-// Verifies that an inner array used as array_fill fill value survives unset of the original.
-// Fixture: create inner array, fill an array of length 2 with inner as fill value, unset inner, read both fill positions.
-// Regression: ensures array_fill fill-value path preserves GC alias.
 fn test_gc_array_fill_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -381,10 +381,10 @@ echo $filled[0][0] . "|" . $filled[1][0];
     assert_eq!(out, "12|12");
 }
 
+/// Verifies that an inner array used as array_combine value survives unset of the original.
+/// Fixture: create keys array and inner array as values, combine them, unset vals and inner, read from combined map.
+/// Regression: ensures array_combine value path preserves GC alias for nested arrays.
 #[test]
-// Verifies that an inner array used as array_combine value survives unset of the original.
-// Fixture: create keys array and inner array as values, combine them, unset vals and inner, read from combined map.
-// Regression: ensures array_combine value path preserves GC alias for nested arrays.
 fn test_gc_array_combine_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -401,10 +401,10 @@ echo $saved[0];
     assert_eq!(out, "13");
 }
 
+/// Verifies that an inner array used as array_fill_keys fill value survives unset of the original.
+/// Fixture: create keys ["a","b"] and inner array as fill value, call array_fill_keys, unset inner, read both map entries.
+/// Regression: ensures array_fill_keys fill-value path preserves GC alias for nested arrays.
 #[test]
-// Verifies that an inner array used as array_fill_keys fill value survives unset of the original.
-// Fixture: create keys ["a","b"] and inner array as fill value, call array_fill_keys, unset inner, read both map entries.
-// Regression: ensures array_fill_keys fill-value path preserves GC alias for nested arrays.
 fn test_gc_array_fill_keys_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php

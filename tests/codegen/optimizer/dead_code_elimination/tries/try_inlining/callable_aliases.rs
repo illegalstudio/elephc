@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that a ternary-selected callable alias lets the dead catch body disappear.
-// Confirms "3" with `pow` absent.
+/// Verifies that a ternary-selected callable alias lets the dead catch body disappear.
+/// Confirms "3" with `pow` absent.
 #[test]
 fn test_dead_code_elimination_inlines_try_with_ternary_callable_alias() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_try_ternary_callable_alias");
@@ -50,8 +50,8 @@ try {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a match-selected callable alias lets the dead catch body disappear.
-// Confirms "3" with `pow` absent.
+/// Verifies that a match-selected callable alias lets the dead catch body disappear.
+/// Confirms "3" with `pow` absent.
 #[test]
 fn test_dead_code_elimination_inlines_try_with_match_callable_alias() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_try_match_callable_alias");
@@ -94,8 +94,8 @@ try {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a named first-class callable expr call lets the dead catch body disappear.
-// Confirms "3" with `pow` absent.
+/// Verifies that a named first-class callable expr call lets the dead catch body disappear.
+/// Confirms "3" with `pow` absent.
 #[test]
 fn test_dead_code_elimination_inlines_try_with_named_first_class_callable_expr_call() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_try_named_first_class_expr_call");
@@ -132,8 +132,8 @@ try {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a chained callable alias (`$f = strlen(...); $g = $f;`) inlines correctly.
-// Confirms "3" with `pow` absent.
+/// Verifies that a chained callable alias (`$f = strlen(...); $g = $f;`) inlines correctly.
+/// Confirms "3" with `pow` absent.
 #[test]
 fn test_dead_code_elimination_inlines_try_with_callable_alias_chain() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_try_callable_alias_chain");
@@ -173,8 +173,8 @@ try {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that callable aliases merged across if paths let the dead catch body disappear.
-// Confirms "3" with `pow` absent.
+/// Verifies that callable aliases merged across if paths let the dead catch body disappear.
+/// Confirms "3" with `pow` absent.
 #[test]
 fn test_dead_code_elimination_inlines_try_with_callable_alias_if_merge() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_try_callable_alias_if_merge");
@@ -218,8 +218,8 @@ try {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that callable aliases merged across try/catch/finally let the dead catch disappear.
-// Confirms "3" with `pow` absent.
+/// Verifies that callable aliases merged across try/catch/finally let the dead catch disappear.
+/// Confirms "3" with `pow` absent.
 #[test]
 fn test_dead_code_elimination_inlines_try_with_callable_alias_try_merge() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_try_callable_alias_try_merge");
@@ -264,8 +264,8 @@ try {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that callable aliases merged across switch fallthrough paths let the dead catch
-// disappear. Confirms "3" with `pow` absent.
+/// Verifies that callable aliases merged across switch fallthrough paths let the dead catch
+/// disappear. Confirms "3" with `pow` absent.
 #[test]
 fn test_dead_code_elimination_inlines_try_with_callable_alias_switch_merge() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_try_callable_alias_switch_merge");

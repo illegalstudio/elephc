@@ -10,8 +10,8 @@
 
 use super::*;
 
-// Verifies that `yield` is lexed as a keyword when used with a trailing expression.
-// Input: `<?php yield $x;` → expects `Token::Yield` followed by `Token::Variable("x")`.
+/// Verifies that `yield` is lexed as a keyword when used with a trailing expression.
+/// Input: `<?php yield $x;` → expects `Token::Yield` followed by `Token::Variable("x")`.
 #[test]
 fn test_yield_keyword() {
     let t = tokens("<?php yield $x;");
@@ -27,8 +27,8 @@ fn test_yield_keyword() {
     );
 }
 
-// Verifies that `yield` without a trailing expression is lexed as a standalone keyword token.
-// Input: `<?php yield;` → expects `Token::Yield` directly followed by `Token::Semicolon`.
+/// Verifies that `yield` without a trailing expression is lexed as a standalone keyword token.
+/// Input: `<?php yield;` → expects `Token::Yield` directly followed by `Token::Semicolon`.
 #[test]
 fn test_yield_alone() {
     let t = tokens("<?php yield;");
@@ -38,9 +38,9 @@ fn test_yield_alone() {
     );
 }
 
-// Verifies that `yield from` is lexed as two separate tokens — `Yield` and `Identifier("from")`.
-// The `from` keyword is contextual: it remains an identifier at lex time; the parser
-// handles the `yield from` combination. Input: `<?php yield from $g;`.
+/// Verifies that `yield from` is lexed as two separate tokens — `Yield` and `Identifier("from")`.
+/// The `from` keyword is contextual: it remains an identifier at lex time; the parser
+/// handles the `yield from` combination. Input: `<?php yield from $g;`.
 #[test]
 fn test_yield_from_lexed_as_two_tokens() {
     let t = tokens("<?php yield from $g;");
@@ -57,8 +57,8 @@ fn test_yield_from_lexed_as_two_tokens() {
     );
 }
 
-// Verifies that `yield` with a key-value pair (`=>`) is lexed correctly.
-// Input: `<?php yield $k => $v;` → expects `Yield`, variable, `DoubleArrow`, variable.
+/// Verifies that `yield` with a key-value pair (`=>`) is lexed correctly.
+/// Input: `<?php yield $k => $v;` → expects `Yield`, variable, `DoubleArrow`, variable.
 #[test]
 fn test_yield_key_value() {
     let t = tokens("<?php yield $k => $v;");

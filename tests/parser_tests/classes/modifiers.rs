@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Parses `abstract class` with `implements` interfaces and verifies the AST captures
-// `is_abstract`, interface names, and an abstract method with visibility and no body.
+/// Parses `abstract class` with `implements` interfaces and verifies the AST captures
+/// `is_abstract`, interface names, and an abstract method with visibility and no body.
 #[test]
 fn test_parse_abstract_class_with_implements() {
     let stmts = parse_source(
@@ -37,8 +37,8 @@ fn test_parse_abstract_class_with_implements() {
     }
 }
 
-// Parses a `readonly class` declaration and verifies `is_readonly_class` is set and
-// the property name is preserved.
+/// Parses a `readonly class` declaration and verifies `is_readonly_class` is set and
+/// the property name is preserved.
 #[test]
 fn test_parse_readonly_class_flag() {
     let stmts = parse_source("<?php readonly class User { public $id; }");
@@ -58,8 +58,8 @@ fn test_parse_readonly_class_flag() {
     }
 }
 
-// Parses a `final class` declaration and verifies `is_final` is set while
-// `is_abstract` and `is_readonly_class` are both false.
+/// Parses a `final class` declaration and verifies `is_final` is set while
+/// `is_abstract` and `is_readonly_class` are both false.
 #[test]
 fn test_parse_final_class_flag() {
     let stmts = parse_source("<?php final class User { public function id() { return 1; } }");
@@ -82,8 +82,8 @@ fn test_parse_final_class_flag() {
     }
 }
 
-// Parses both `final readonly` and `readonly final` orderings and verifies both
-// flags are set in each case.
+/// Parses both `final readonly` and `readonly final` orderings and verifies both
+/// flags are set in each case.
 #[test]
 fn test_parse_final_readonly_class_flags() {
     for source in [
@@ -107,8 +107,8 @@ fn test_parse_final_readonly_class_flags() {
     }
 }
 
-// Parses `abstract readonly class` and verifies both `is_abstract` and
-// `is_readonly_class` are set.
+/// Parses `abstract readonly class` and verifies both `is_abstract` and
+/// `is_readonly_class` are set.
 #[test]
 fn test_parse_abstract_readonly_class_flags() {
     let stmts = parse_source("<?php abstract readonly class User {}");
@@ -127,8 +127,8 @@ fn test_parse_abstract_readonly_class_flags() {
     }
 }
 
-// Parses a method with the `final` modifier inside a non-final class and verifies
-// `is_final` is set, the method has a body, and is not abstract.
+/// Parses a method with the `final` modifier inside a non-final class and verifies
+/// `is_final` is set, the method has a body, and is not abstract.
 #[test]
 fn test_parse_final_method_flag() {
     let stmts = parse_source("<?php class User { final public function id() { return 1; } }");
@@ -144,9 +144,9 @@ fn test_parse_final_method_flag() {
     }
 }
 
-// Parses a class with typed properties including nullable types, visibility, default
-// values, and the `final` property flag. Verifies name, type_expr, visibility, and
-// `is_final` are all correctly captured.
+/// Parses a class with typed properties including nullable types, visibility, default
+/// values, and the `final` property flag. Verifies name, type_expr, visibility, and
+/// `is_final` are all correctly captured.
 #[test]
 fn test_parse_typed_properties() {
     let stmts = parse_source(
@@ -171,10 +171,10 @@ fn test_parse_typed_properties() {
     }
 }
 
-// Parses a constructor with promoted parameters covering all visibility levels,
-// nullable and non-nullable types, default values, `readonly` promoted params,
-// and by-reference (`&`) promoted params. Verifies the promoted properties are
-// correctly added to the class and the original constructor body is preserved.
+/// Parses a constructor with promoted parameters covering all visibility levels,
+/// nullable and non-nullable types, default values, `readonly` promoted params,
+/// and by-reference (`&`) promoted params. Verifies the promoted properties are
+/// correctly added to the class and the original constructor body is preserved.
 #[test]
 fn test_parse_constructor_promoted_properties() {
     let stmts = parse_source(
@@ -233,8 +233,8 @@ fn test_parse_constructor_promoted_properties() {
     }
 }
 
-// Parses an abstract property hook contract in an `abstract class` and verifies
-// `is_abstract` and both `hooks.get` and `hooks.set` are set.
+/// Parses an abstract property hook contract in an `abstract class` and verifies
+/// `is_abstract` and both `hooks.get` and `hooks.set` are set.
 #[test]
 fn test_parse_abstract_property_hook_contract() {
     let stmts = parse_source(
@@ -252,8 +252,8 @@ fn test_parse_abstract_property_hook_contract() {
     }
 }
 
-// Parses an `abstract` property with a by-reference getter hook inside a trait and
-// verifies `is_abstract` and `hooks.get_by_ref` are set.
+/// Parses an `abstract` property with a by-reference getter hook inside a trait and
+/// verifies `is_abstract` and `hooks.get_by_ref` are set.
 #[test]
 fn test_parse_trait_abstract_property_hook_contract() {
     let stmts = parse_source(

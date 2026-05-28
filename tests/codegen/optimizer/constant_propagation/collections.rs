@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that list unpacking of a scalar literal array (`[$base, $exp] = [2, 3]`)
-// propagates the constants so `$base ** $exp` folds to `8` with no `pow` call.
+/// Verifies that list unpacking of a scalar literal array (`[$base, $exp] = [2, 3]`)
+/// propagates the constants so `$base ** $exp` folds to `8` with no `pow` call.
 #[test]
 fn test_constant_propagation_tracks_scalar_list_unpack() {
     let dir = make_cli_test_dir("elephc_constant_propagation_list_unpack");
@@ -44,8 +44,8 @@ echo $base ** $exp;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a literal indexed array access (`$base = [2, 9][0]`) is folded to `2`
-// before propagation, so `$base ** 3` folds to `8` with no `pow` call.
+/// Verifies that a literal indexed array access (`$base = [2, 9][0]`) is folded to `2`
+/// before propagation, so `$base ** 3` folds to `8` with no `pow` call.
 #[test]
 fn test_constant_propagation_tracks_scalar_array_literal_access() {
     let dir = make_cli_test_dir("elephc_constant_propagation_array_literal_access");
@@ -79,8 +79,8 @@ echo $base ** 3;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a literal associative array access (`$base = ["left" => 2, "right" => 9]["left"]`)
-// is folded to `2` before propagation, so `$base ** 3` folds to `8` with no `pow` call.
+/// Verifies that a literal associative array access (`$base = ["left" => 2, "right" => 9]["left"]`)
+/// is folded to `2` before propagation, so `$base ** 3` folds to `8` with no `pow` call.
 #[test]
 fn test_constant_propagation_tracks_scalar_assoc_array_literal_access() {
     let dir = make_cli_test_dir("elephc_constant_propagation_assoc_array_literal_access");

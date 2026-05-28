@@ -9,6 +9,7 @@
 
 use super::*;
 
+/// Verifies parsing support for deep property assign after array access.
 #[test]
 fn test_parse_deep_property_assign_after_array_access() {
     // Parses `$catalog->palette->colors[$i]->r = 12;` and verifies the AST
@@ -52,6 +53,7 @@ fn test_parse_deep_property_assign_after_array_access() {
     }
 }
 
+/// Verifies parsing support for deep property array assign after array access.
 #[test]
 fn test_parse_deep_property_array_assign_after_array_access() {
     // Parses `$catalog->palette->colors[$i]->shades[1] = 12;` and verifies
@@ -96,6 +98,7 @@ fn test_parse_deep_property_array_assign_after_array_access() {
     }
 }
 
+/// Verifies parsing support for deep property array push after array access.
 #[test]
 fn test_parse_deep_property_array_push_after_array_access() {
     // Parses `$catalog->palette->colors[$i]->shades[] = 12;` and verifies
@@ -138,6 +141,7 @@ fn test_parse_deep_property_array_push_after_array_access() {
     }
 }
 
+/// Verifies parsing support for chained access.
 #[test]
 fn test_parse_chained_access() {
     // Parses `echo $obj->make()->prop;` and verifies method call result
@@ -166,6 +170,7 @@ fn test_parse_chained_access() {
     }
 }
 
+/// Verifies parsing support for property access after array index.
 #[test]
 fn test_parse_property_access_after_array_index() {
     // Parses `echo $items[0]->name;` and verifies the AST is an Echo with
@@ -189,6 +194,7 @@ fn test_parse_property_access_after_array_index() {
     }
 }
 
+/// Verifies parsing support for deep mixed property and array chain.
 #[test]
 fn test_parse_deep_mixed_property_and_array_chain() {
     // Parses `echo $catalog->palette->colors[$i]->r;` and verifies the AST
@@ -228,6 +234,7 @@ fn test_parse_deep_mixed_property_and_array_chain() {
     }
 }
 
+/// Verifies parsing support for property access after array access on method call result.
 #[test]
 fn test_parse_property_access_after_array_access_on_method_call_result() {
     // Parses `echo $shop->getItems()[0]->name;` and verifies the AST is an

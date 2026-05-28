@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that effectful (observable side-effect) calls in an empty `if` condition
-// are preserved and executed. Confirms "t!".
+/// Verifies that effectful (observable side-effect) calls in an empty `if` condition
+/// are preserved and executed. Confirms "t!".
 #[test]
 fn test_dead_code_elimination_preserves_effectful_empty_if_condition() {
     let out = compile_and_run(
@@ -28,8 +28,8 @@ echo "!";
     assert_eq!(out, "t!");
 }
 
-// Verifies that an empty `if/elseif` chain where both branches are pruned still executes
-// the condition effects. Confirms "ab!" where both `poke()` and `tap()` run.
+/// Verifies that an empty `if/elseif` chain where both branches are pruned still executes
+/// the condition effects. Confirms "ab!" where both `poke()` and `tap()` run.
 #[test]
 fn test_dead_code_elimination_reduces_empty_if_chain_to_needed_condition_checks() {
     let out = compile_and_run(
@@ -57,8 +57,8 @@ echo "!";
     assert_eq!(out, "ab!");
 }
 
-// Verifies that code after an `if/else` with a `return` in one branch sinks into the
-// fallthrough branch. Confirms "abc!" (true→"a" return; false→"b" fallthrough + "c").
+/// Verifies that code after an `if/else` with a `return` in one branch sinks into the
+/// fallthrough branch. Confirms "abc!" (true→"a" return; false→"b" fallthrough + "c").
 #[test]
 fn test_dead_code_elimination_sinks_tail_into_if_fallthrough_branch() {
     let out = compile_and_run(
@@ -82,8 +82,8 @@ echo "!";
     assert_eq!(out, "abc!");
 }
 
-// Verifies that equivalent `if/else` bodies joined by short-circuit guards are merged and
-// dead branches dropped. Confirms "aX|cdY" where both paths with `true` guards produce "X".
+/// Verifies that equivalent `if/else` bodies joined by short-circuit guards are merged and
+/// dead branches dropped. Confirms "aX|cdY" where both paths with `true` guards produce "X".
 #[test]
 fn test_dead_code_elimination_merges_identical_if_chain_tail_with_short_circuit() {
     let out = compile_and_run(

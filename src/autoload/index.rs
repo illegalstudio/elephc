@@ -456,18 +456,21 @@ fn glob_match_bytes(p: &[u8], s: &[u8]) -> bool {
 mod tests {
     use super::glob_match;
 
+    /// Implements the `glob_literal` operation for this module.
     #[test]
     fn glob_literal() {
         assert!(glob_match("/a/b/c.php", "/a/b/c.php"));
         assert!(!glob_match("/a/b/c.php", "/a/b/d.php"));
     }
 
+    /// Implements the `glob_star_within_segment` operation for this module.
     #[test]
     fn glob_star_within_segment() {
         assert!(glob_match("/a/*.php", "/a/foo.php"));
         assert!(!glob_match("/a/*.php", "/a/sub/foo.php"));
     }
 
+    /// Implements the `glob_double_star_crosses_segments` operation for this module.
     #[test]
     fn glob_double_star_crosses_segments() {
         assert!(glob_match("/a/**/foo.php", "/a/foo.php"));
@@ -475,6 +478,7 @@ mod tests {
         assert!(glob_match("/a/**/foo.php", "/a/x/y/foo.php"));
     }
 
+    /// Implements the `glob_directory_shorthand` operation for this module.
     #[test]
     fn glob_directory_shorthand() {
         assert!(glob_match("/a/tests/**", "/a/tests/foo.php"));
@@ -482,6 +486,7 @@ mod tests {
         assert!(!glob_match("/a/tests/**", "/a/lib/foo.php"));
     }
 
+    /// Implements the `glob_question_single_char` operation for this module.
     #[test]
     fn glob_question_single_char() {
         assert!(glob_match("/a/?.php", "/a/x.php"));

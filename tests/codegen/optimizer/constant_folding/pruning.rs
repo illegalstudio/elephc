@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that a constant `if (false)` branch is pruned so no `pow` call appears
-// in user assembly and the else branch is taken.
+/// Verifies that a constant `if (false)` branch is pruned so no `pow` call appears
+/// in user assembly and the else branch is taken.
 #[test]
 fn test_constant_folding_prunes_constant_if_branch_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_constant_folding_if_prune");
@@ -48,8 +48,8 @@ if (false) {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a `while (false)` loop body is pruned so no `pow` call appears
-// in user assembly and the following statement executes.
+/// Verifies that a `while (false)` loop body is pruned so no `pow` call appears
+/// in user assembly and the following statement executes.
 #[test]
 fn test_constant_folding_prunes_while_false_body_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_constant_folding_while_prune");
@@ -86,8 +86,8 @@ echo 3;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that `for (false)` eliminates both the loop body and the update clause
-// from user assembly; only the post-loop statement executes.
+/// Verifies that `for (false)` eliminates both the loop body and the update clause
+/// from user assembly; only the post-loop statement executes.
 #[test]
 fn test_constant_folding_prunes_for_false_body_and_update_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_constant_folding_for_prune");
@@ -124,8 +124,8 @@ echo $i;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a constant `match` expression selects the correct arm and prunes
-// all dead arms so no `pow` call appears in user assembly.
+/// Verifies that a constant `match` expression selects the correct arm and prunes
+/// all dead arms so no `pow` call appears in user assembly.
 #[test]
 fn test_constant_folding_prunes_match_to_selected_arm_in_user_assembly() {
     let dir = make_cli_test_dir("elephc_constant_folding_match_prune");
@@ -163,8 +163,8 @@ echo match (3) {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a constant `switch` expression prunes leading dead cases so no
-// `pow` call appears in user assembly for the unselected case.
+/// Verifies that a constant `switch` expression prunes leading dead cases so no
+/// `pow` call appears in user assembly for the unselected case.
 #[test]
 fn test_constant_folding_prunes_switch_leading_cases_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_constant_folding_switch_prune");
@@ -207,8 +207,8 @@ switch (3) {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that statements dominated by a function `return` are pruned so no
-// `pow` call appears in user assembly after the return.
+/// Verifies that statements dominated by a function `return` are pruned so no
+/// `pow` call appears in user assembly after the return.
 #[test]
 fn test_constant_folding_prunes_dead_statements_after_return_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_constant_folding_return_dce");
@@ -245,8 +245,8 @@ echo answer();
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that pure expression statements (e.g., `strlen(...)` with no output)
-// are pruned from user assembly as dead code.
+/// Verifies that pure expression statements (e.g., `strlen(...)` with no output)
+/// are pruned from user assembly as dead code.
 #[test]
 fn test_constant_folding_prunes_pure_expr_statements_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_constant_folding_pure_expr_stmt_dce");
@@ -274,8 +274,8 @@ echo 7;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that statements after an unconditional `break` in a switch are pruned
-// so no `pow` call appears in user assembly.
+/// Verifies that statements after an unconditional `break` in a switch are pruned
+/// so no `pow` call appears in user assembly.
 #[test]
 fn test_constant_folding_prunes_dead_statements_after_break_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_constant_folding_break_dce");
@@ -315,8 +315,8 @@ switch (1) {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that an exhaustive `if` (both branches return) eliminates post-if
-// statements so no `pow` call appears in user assembly.
+/// Verifies that an exhaustive `if` (both branches return) eliminates post-if
+/// statements so no `pow` call appears in user assembly.
 #[test]
 fn test_constant_folding_prunes_dead_statements_after_exhaustive_if_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_constant_folding_exhaustive_if_dce");
@@ -357,8 +357,8 @@ echo answer(true);
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that an exhaustive `switch` (every case returns) eliminates post-switch
-// statements so no `pow` call appears in user assembly.
+/// Verifies that an exhaustive `switch` (every case returns) eliminates post-switch
+/// statements so no `pow` call appears in user assembly.
 #[test]
 fn test_constant_folding_prunes_dead_statements_after_exhaustive_switch_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_constant_folding_exhaustive_switch_dce");
@@ -400,8 +400,8 @@ echo answer(1);
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a ternary with a constant true condition prunes the unselected
-// pure branch so no `pow` call appears in user assembly.
+/// Verifies that a ternary with a constant true condition prunes the unselected
+/// pure branch so no `pow` call appears in user assembly.
 #[test]
 fn test_constant_folding_prunes_unused_pure_ternary_branch_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_constant_folding_ternary_dead_branch");

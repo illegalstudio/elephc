@@ -9,6 +9,7 @@
 
 use crate::support::*;
 
+/// Verifies PSR-4 single namespace autoload.
 #[test]
 fn test_psr4_single_namespace_autoload() {
     // PSR-4 single namespace maps "App\" → "src/" and class is autoloaded.
@@ -32,6 +33,7 @@ fn test_psr4_single_namespace_autoload() {
     assert_eq!(out, "hi");
 }
 
+/// Verifies PSR-4 nested namespace autoload.
 #[test]
 fn test_psr4_nested_namespace_autoload() {
     // PSR-4 with a two-segment namespace App\Models maps src/ and resolves correctly.
@@ -55,6 +57,7 @@ fn test_psr4_nested_namespace_autoload() {
     assert_eq!(out, "hello World");
 }
 
+/// Verifies PSR-4 transitive autoload.
 #[test]
 fn test_psr4_transitive_autoload() {
     // Greeter uses User via use statement; both classes must be autoloaded transitively.
@@ -82,6 +85,7 @@ fn test_psr4_transitive_autoload() {
     assert_eq!(out, "hi Ada");
 }
 
+/// Verifies PSR-4 static property assignment triggers autoload.
 #[test]
 fn test_psr4_static_property_assignment_triggers_autoload() {
     // Static property write on App\State\::$count triggers PSR-4 autoload.
@@ -105,6 +109,7 @@ fn test_psr4_static_property_assignment_triggers_autoload() {
     assert_eq!(out, "ok");
 }
 
+/// Verifies PSR-4 scoped constant access triggers autoload.
 #[test]
 fn test_psr4_scoped_constant_access_triggers_autoload() {
     // Class constant access App\Config::NAME triggers PSR-4 autoload.
@@ -125,6 +130,7 @@ fn test_psr4_scoped_constant_access_triggers_autoload() {
     assert_eq!(out, "cfg");
 }
 
+/// Verifies PSR-4 pipe value triggers autoload.
 #[test]
 fn test_psr4_pipe_value_triggers_autoload() {
     // First-class callable pipe syntax `|>` with class argument triggers PSR-4 autoload.
@@ -148,6 +154,7 @@ fn test_psr4_pipe_value_triggers_autoload() {
     assert_eq!(out, "pipe");
 }
 
+/// Verifies PSR-4 vendor autoload.
 #[test]
 fn test_psr4_vendor_autoload() {
     // Nested vendor PSR-4: Acme\Widgets\ maps vendor/acme/widgets/src/.
@@ -175,6 +182,7 @@ fn test_psr4_vendor_autoload() {
     assert_eq!(out, "WIDGET");
 }
 
+/// Verifies no composer JSON compiles normally.
 #[test]
 fn test_no_composer_json_compiles_normally() {
     // Program without composer.json must still compile; autoload index is empty and class loads via include path.
@@ -188,6 +196,7 @@ fn test_no_composer_json_compiles_normally() {
     assert_eq!(out, "local");
 }
 
+/// Verifies SPL autoload register returns true.
 #[test]
 fn test_spl_autoload_register_returns_true() {
     // spl_autoload_register with a closure returns true on success.
@@ -200,6 +209,7 @@ echo $ok ? "true" : "false";
     assert_eq!(out, "true");
 }
 
+/// Verifies SPL autoload unregister returns true.
 #[test]
 fn test_spl_autoload_unregister_returns_true() {
     // spl_autoload_unregister returns true after removing a registered autoloader.
@@ -212,6 +222,7 @@ echo $ok ? "true" : "false";
     assert_eq!(out, "true");
 }
 
+/// Verifies SPL autoload functions returns empty array.
 #[test]
 fn test_spl_autoload_functions_returns_empty_array() {
     // spl_autoload_functions() returns empty array when no autoloaders are registered.
@@ -224,6 +235,7 @@ echo count($fns);
     assert_eq!(out, "0");
 }
 
+/// Verifies SPL autoload extensions returns default.
 #[test]
 fn test_spl_autoload_extensions_returns_default() {
     // spl_autoload_extensions() returns the default ".inc,.php" when called with no argument.
@@ -235,6 +247,7 @@ echo spl_autoload_extensions();
     assert_eq!(out, ".inc,.php");
 }
 
+/// Verifies SPL autoload call compiles as noop.
 #[test]
 fn test_spl_autoload_call_compiles_as_noop() {
     // spl_autoload_call with a literal class name compiles as a no-op (no registered autoloaders).
@@ -247,6 +260,7 @@ echo "after";
     assert_eq!(out, "after");
 }
 
+/// Verifies SPL autoload compiles as noop.
 #[test]
 fn test_spl_autoload_compiles_as_noop() {
     // spl_autoload (deprecated no-op) must compile and execute without error.
@@ -261,6 +275,7 @@ echo "after";
 
 // --- closure-aware spl_autoload_register ---
 
+/// Verifies register with concat closure loads class.
 #[test]
 fn test_register_with_concat_closure_loads_class() {
     // Closure with direct concatenation __DIR__ . '/lib/' . $name . '.php' loads class from lib/.
@@ -280,6 +295,7 @@ fn test_register_with_concat_closure_loads_class() {
     assert_eq!(out, "widget");
 }
 
+/// Verifies register name is case insensitive before name resolver.
 #[test]
 fn test_register_name_is_case_insensitive_before_name_resolver() {
     // SPL_AUTOLOAD_REGISTER case-insensitive alias compiles and loads class.
@@ -305,6 +321,7 @@ echo $m->tag();
     assert_eq!(out, "case");
 }
 
+/// Verifies namespaced local SPL autoload register is not collected.
 #[test]
 fn test_namespaced_local_spl_autoload_register_is_not_collected() {
     // Namespaced local spl_autoload_register shadows the builtin and is called directly.
@@ -318,6 +335,7 @@ spl_autoload_register(function ($name) {});
     assert_eq!(out, "local");
 }
 
+/// Verifies unregister name is case insensitive before name resolver.
 #[test]
 fn test_unregister_name_is_case_insensitive_before_name_resolver() {
     // sPl_AuToLoAd_UnReGiStEr case-insensitive alias removes the autoloader from the stack.
@@ -335,6 +353,7 @@ echo count(spl_autoload_functions());
     assert_eq!(out, "0");
 }
 
+/// Verifies register with str replace closure.
 #[test]
 fn test_register_with_str_replace_closure() {
     // PSR-0-style autoloader: str_replace('\', '_', $name) maps class name to file path.
@@ -354,6 +373,7 @@ fn test_register_with_str_replace_closure() {
     assert_eq!(out, "Ada");
 }
 
+/// Verifies register with intermediate variable.
 #[test]
 fn test_register_with_intermediate_variable() {
     // Closure captures $path in local variable before require_once; variable threading must be correct.
@@ -373,6 +393,7 @@ fn test_register_with_intermediate_variable() {
     assert_eq!(out, "box");
 }
 
+/// Verifies register with file exists positive branch.
 #[test]
 fn test_register_with_file_exists_positive_branch() {
     // Closure guards require_once with file_exists($path); file is present so then-branch loads class.
@@ -392,6 +413,7 @@ fn test_register_with_file_exists_positive_branch() {
     assert_eq!(out, "present");
 }
 
+/// Verifies register file exists directory guard loads file.
 #[test]
 fn test_register_file_exists_directory_guard_loads_file() {
     // file_exists() returns true for directories; base-dir guard passes and class file is loaded.
@@ -411,6 +433,7 @@ fn test_register_file_exists_directory_guard_loads_file() {
     assert_eq!(out, "dir");
 }
 
+/// Verifies register is readable directory guard loads file.
 #[test]
 fn test_register_is_readable_directory_guard_loads_file() {
     // is_readable() on a directory returns true; class file is loaded through the guard.
@@ -430,6 +453,7 @@ fn test_register_is_readable_directory_guard_loads_file() {
     assert_eq!(out, "readable");
 }
 
+/// Verifies register chain first misses second loads.
 #[test]
 fn test_register_chain_first_misses_second_loads() {
     // Two registered closures; first misses (file not in lib/missing/), second hits (file in lib/).
@@ -449,6 +473,7 @@ fn test_register_chain_first_misses_second_loads() {
     assert_eq!(out, "chained");
 }
 
+/// Verifies register unregister round trip.
 #[test]
 fn test_register_unregister_round_trip() {
     // Register two closures, unregister the first; second closure still loads class.
@@ -468,6 +493,7 @@ fn test_register_unregister_round_trip() {
     assert_eq!(out, "alive");
 }
 
+/// Verifies register with use capture falls back to PSR-4.
 #[test]
 fn test_register_with_use_capture_falls_back_to_psr4() {
     // Closure with `use ($base)` capture is rejected by collector; PSR-4 from composer.json takes over.
@@ -491,6 +517,7 @@ fn test_register_with_use_capture_falls_back_to_psr4() {
     assert_eq!(out, "psr4");
 }
 
+/// Verifies SPL autoload extensions round trip.
 #[test]
 fn test_spl_autoload_extensions_round_trip() {
     // Read default, write new value (returns old), read again returns the new value.
@@ -507,6 +534,7 @@ echo spl_autoload_extensions();
     assert_eq!(out, ".inc,.php\n.inc,.php\n.php,.inc");
 }
 
+/// Verifies SPL autoload extensions null arg is readonly.
 #[test]
 fn test_spl_autoload_extensions_null_arg_is_readonly() {
     // spl_autoload_extensions(null) is explicit read-only; global is unchanged afterward.
@@ -522,6 +550,7 @@ echo spl_autoload_extensions();
     assert_eq!(out, ".custom\n.custom");
 }
 
+/// Verifies SPL autoload functions size reflects register count.
 #[test]
 fn test_spl_autoload_functions_size_reflects_register_count() {
     // Two registered closures; spl_autoload_functions() count is 2 and class loads via second rule.
@@ -552,6 +581,7 @@ echo $a->tag();
     assert_eq!(out, "2a");
 }
 
+/// Verifies SPL autoload functions iterable.
 #[test]
 fn test_spl_autoload_functions_iterable() {
     // foreach over spl_autoload_functions() iterates one entry per registered rule.
@@ -584,6 +614,7 @@ echo $b->tag();
 
 // --- composer.json autoload sections ---
 
+/// Verifies autoload files section always inlines.
 #[test]
 fn test_autoload_files_section_always_inlines() {
     // Files listed under autoload.files are inlined unconditionally; no class autoload needed.
@@ -607,6 +638,7 @@ fn test_autoload_files_section_always_inlines() {
     assert_eq!(out, "HELLO");
 }
 
+/// Verifies autoload files section executes before main in composer order.
 #[test]
 fn test_autoload_files_section_executes_before_main_in_composer_order() {
     // Files autoload sections execute in composer.json order before main.php.
@@ -625,6 +657,7 @@ fn test_autoload_files_section_executes_before_main_in_composer_order() {
     assert_eq!(out, "abm");
 }
 
+/// Verifies class triggered autoload executes before first use.
 #[test]
 fn test_class_triggered_autoload_executes_before_first_use() {
     // Class file echoes "load" when parsed; must execute before first class instantiation in main.
@@ -648,6 +681,7 @@ fn test_class_triggered_autoload_executes_before_first_use() {
     assert_eq!(out, "loadmain");
 }
 
+/// Verifies autoload classmap explicit file.
 #[test]
 fn test_autoload_classmap_explicit_file() {
     // classmap entry with explicit .php file scans it for class declarations and indexes by FQN.
@@ -671,6 +705,7 @@ fn test_autoload_classmap_explicit_file() {
     assert_eq!(out, "mapped");
 }
 
+/// Verifies autoload classmap directory scan.
 #[test]
 fn test_autoload_classmap_directory_scan() {
     // classmap entry with directory path recursively walks it and indexes all class FQNs.
@@ -694,6 +729,7 @@ fn test_autoload_classmap_directory_scan() {
     assert_eq!(out, "legacy-tool");
 }
 
+/// Verifies autoload dev PSR-4 section.
 #[test]
 fn test_autoload_dev_psr4_section() {
     // autoload-dev PSR-4 is merged into the same AOT index as autoload; both sections contribute to one binary.
@@ -721,6 +757,7 @@ fn test_autoload_dev_psr4_section() {
     assert_eq!(out, "svc:test");
 }
 
+/// Verifies PSR-0 namespaced prefix.
 #[test]
 fn test_psr0_namespaced_prefix() {
     // Legacy PSR-0 with namespaced prefix Vendor\Pkg maps to vendor-src/ directory.
@@ -744,6 +781,7 @@ fn test_psr0_namespaced_prefix() {
     assert_eq!(out, "psr0");
 }
 
+/// Verifies PSR-0 underscore class convention.
 #[test]
 fn test_psr0_underscore_class_convention() {
     // Twig_Loader_Filesystem-style underscore-as-directory convention: Twig_ prefix maps to lib/.
@@ -767,6 +805,7 @@ fn test_psr0_underscore_class_convention() {
     assert_eq!(out, "twig");
 }
 
+/// Verifies PSR-4 longest prefix wins.
 #[test]
 fn test_psr4_longest_prefix_wins() {
     // Two PSR-4 prefixes both matching App\Models\User; the longer prefix wins (App\Models\ > App\).
@@ -794,6 +833,7 @@ fn test_psr4_longest_prefix_wins() {
     assert_eq!(out, "models");
 }
 
+/// Verifies class exists literal triggers autoload.
 #[test]
 fn test_class_exists_literal_triggers_autoload() {
     // class_exists with a literal class name and default autoload=true loads class via PSR-4.
@@ -817,6 +857,7 @@ fn test_class_exists_literal_triggers_autoload() {
     assert_eq!(out, "probed");
 }
 
+/// Verifies class exists with explicit true triggers autoload.
 #[test]
 fn test_class_exists_with_explicit_true_triggers_autoload() {
     // class_exists with explicit autoload=true (second arg = true) triggers PSR-4 autoload.
@@ -840,6 +881,7 @@ fn test_class_exists_with_explicit_true_triggers_autoload() {
     assert_eq!(out, "f");
 }
 
+/// Verifies class exists with int nonzero triggers autoload.
 #[test]
 fn test_class_exists_with_int_nonzero_triggers_autoload() {
     // class_exists($name, 1) with integer non-zero second arg behaves like autoload=true.
@@ -863,6 +905,7 @@ fn test_class_exists_with_int_nonzero_triggers_autoload() {
     assert_eq!(out, "int");
 }
 
+/// Verifies class exists dynamic autoload arg does not trigger aot autoload.
 #[test]
 fn test_class_exists_dynamic_autoload_arg_does_not_trigger_aot_autoload() {
     // class_exists with a variable (non-literal) second arg must not trigger AOT autoload; panics.
@@ -888,6 +931,7 @@ fn test_class_exists_dynamic_autoload_arg_does_not_trigger_aot_autoload() {
     assert!(result.is_err());
 }
 
+/// Verifies interface exists literal triggers autoload.
 #[test]
 fn test_interface_exists_literal_triggers_autoload() {
     // interface_exists with literal name triggers PSR-4 autoload and class implementing it is available.
@@ -915,6 +959,7 @@ fn test_interface_exists_literal_triggers_autoload() {
     assert_eq!(out, "w");
 }
 
+/// Verifies class like exists literals are case insensitive.
 #[test]
 fn test_class_like_exists_literals_are_case_insensitive() {
     // class_exists, interface_exists, enum_exists with lowercase names are case-insensitive.
@@ -931,6 +976,7 @@ echo enum_exists("status", false) ? "e" : "n";
     assert_eq!(out, "cie");
 }
 
+/// Verifies trait exists reports declared traits.
 #[test]
 fn test_trait_exists_reports_declared_traits() {
     // trait_exists reports declared traits; both canonical and lowercase names return true.
@@ -946,6 +992,7 @@ echo trait_exists("visibletrait", false) ? "y" : "n";
 
 // --- alternative register call shapes ---
 
+/// Verifies register with variable stored closure.
 #[test]
 fn test_register_with_variable_stored_closure() {
     // Closure stored in $loader variable then registered with spl_autoload_register($loader) loads class.
@@ -972,6 +1019,7 @@ echo $s->tag();
     assert_eq!(out, "stored");
 }
 
+/// Verifies register with function name string.
 #[test]
 fn test_register_with_function_name_string() {
     // spl_autoload_register('myAutoloader') with function name string loads class via named autoloader.
@@ -998,6 +1046,7 @@ echo $n->tag();
     assert_eq!(out, "named");
 }
 
+/// Verifies register inside if true block.
 #[test]
 fn test_register_inside_if_true_block() {
     // if (true) { spl_autoload_register(...); } folds at compile time; closure is collected.
@@ -1025,6 +1074,7 @@ echo $g->tag();
     assert_eq!(out, "in");
 }
 
+/// Verifies register inside if false else block.
 #[test]
 fn test_register_inside_if_false_else_block() {
     // if (false) { ... } else { register(...); } else branch taken at compile time; closure is collected.
@@ -1056,6 +1106,7 @@ echo $e->tag();
     assert_eq!(out, "else");
 }
 
+/// Verifies register with sprintf in closure.
 #[test]
 fn test_register_with_sprintf_in_closure() {
     // Closure uses sprintf to construct the require_once path; class file is found and loaded.
@@ -1081,6 +1132,7 @@ echo $f->tag();
     assert_eq!(out, "fmt");
 }
 
+/// Verifies register with dirname in closure.
 #[test]
 fn test_register_with_dirname_in_closure() {
     // Closure uses dirname(__DIR__) to navigate to sibling lib/ directory; class is loaded.
@@ -1108,6 +1160,7 @@ echo $a->tag();
 
 // --- introspection + alias + extra autoload sections ---
 
+/// Verifies SPL object ID unique and stable.
 #[test]
 fn test_spl_object_id_unique_and_stable() {
     // spl_object_id returns same value for same object (stable) and different values for distinct objects (unique).
@@ -1124,6 +1177,7 @@ echo (spl_object_id($a) !== spl_object_id($b)) ? "unique" : "same";
     assert_eq!(out, "stable:unique");
 }
 
+/// Verifies SPL object hash distinct.
 #[test]
 fn test_spl_object_hash_distinct() {
     // spl_object_hash returns same value for same object (stable) and different values for distinct objects (unique).
@@ -1140,6 +1194,7 @@ echo (spl_object_hash($a) !== spl_object_hash($b)) ? "unique" : "same";
     assert_eq!(out, "stable:unique");
 }
 
+/// Verifies SPL classes returns known set.
 #[test]
 fn test_spl_classes_returns_known_set() {
     // spl_classes() includes Exception, Error, and LogicException in the returned array.
@@ -1162,6 +1217,7 @@ echo $found_logic ? "l" : "-";
     assert_eq!(out, "erl");
 }
 
+/// Verifies get class returns static type.
 #[test]
 fn test_get_class_returns_static_type() {
     // get_class($dog) returns "Dog"; get_parent_class returns "Animal".
@@ -1178,6 +1234,7 @@ echo get_parent_class($d);
     assert_eq!(out, "Dog:Animal");
 }
 
+/// Verifies is a walks parent chain.
 #[test]
 fn test_is_a_walks_parent_chain() {
     // is_a and is_subclass_of walk the parent chain: Dog → Animal.
@@ -1196,6 +1253,7 @@ echo is_subclass_of($d, "Animal") ? "y" : "n";
     assert_eq!(out, "yynny");
 }
 
+/// Verifies is a target string is case insensitive.
 #[test]
 fn test_is_a_target_string_is_case_insensitive() {
     // is_a and is_subclass_of target string is case-insensitive (lowercase "dog", "animal", "pettable").
@@ -1214,6 +1272,7 @@ echo is_subclass_of($dog, "animal") ? "s" : "n";
     assert_eq!(out, "daps");
 }
 
+/// Verifies is a parent chain normalizes namespaced parent.
 #[test]
 fn test_is_a_parent_chain_normalizes_namespaced_parent() {
     // is_a with backslash-prefixed uppercase namespaced parent class normalizes correctly.
@@ -1230,6 +1289,7 @@ echo is_subclass_of($dog, "\\APP\\ANIMAL") ? "s" : "n";
     assert_eq!(out, "as");
 }
 
+/// Verifies is a walks implemented interface.
 #[test]
 fn test_is_a_walks_implemented_interface() {
     // is_a and is_subclass_of walk implemented interfaces: Cat implements Pettable.
@@ -1246,6 +1306,7 @@ echo is_subclass_of($c, "Pettable") ? "y" : "n";
     assert_eq!(out, "yyy");
 }
 
+/// Verifies register with use capture warns.
 #[test]
 fn test_register_with_use_capture_warns() {
     // Closure with `use ($base)` capture is rejected; count(spl_autoload_functions) is 0 afterward.
@@ -1267,6 +1328,7 @@ echo count(spl_autoload_functions());
     assert_eq!(out, "0");
 }
 
+/// Verifies get declared classes includes user classes.
 #[test]
 fn test_get_declared_classes_includes_user_classes() {
     // get_declared_classes() includes user-declared Alpha and Beta.
@@ -1288,6 +1350,7 @@ echo $found_beta ? "b" : "-";
     assert_eq!(out, "ab");
 }
 
+/// Verifies get declared classes preserves user declaration order.
 #[test]
 fn test_get_declared_classes_preserves_user_declaration_order() {
     // get_declared_classes() preserves declaration order: Zebra appears before Alpha.
@@ -1310,6 +1373,7 @@ echo ($zebra >= 0 && $alpha >= 0 && $zebra < $alpha) ? "ok" : "bad";
     assert_eq!(out, "ok");
 }
 
+/// Verifies get declared interfaces includes user interfaces.
 #[test]
 fn test_get_declared_interfaces_includes_user_interfaces() {
     // get_declared_interfaces() includes user-declared MyContract.
@@ -1327,6 +1391,7 @@ echo $found ? "yes" : "no";
     assert_eq!(out, "yes");
 }
 
+/// Verifies get declared interfaces preserves user declaration order.
 #[test]
 fn test_get_declared_interfaces_preserves_user_declaration_order() {
     // get_declared_interfaces() preserves declaration order: ZebraContract appears before AlphaContract.
@@ -1349,6 +1414,7 @@ echo ($zebra >= 0 && $alpha >= 0 && $zebra < $alpha) ? "ok" : "bad";
     assert_eq!(out, "ok");
 }
 
+/// Verifies get declared traits preserves user declaration order.
 #[test]
 fn test_get_declared_traits_preserves_user_declaration_order() {
     // get_declared_traits() preserves declaration order: ZebraTrait appears before AlphaTrait.
@@ -1371,6 +1437,7 @@ echo ($zebra >= 0 && $alpha >= 0 && $zebra < $alpha) ? "ok" : "bad";
     assert_eq!(out, "ok");
 }
 
+/// Verifies class alias creates subclass.
 #[test]
 fn test_class_alias_creates_subclass() {
     // class_alias("Original", "Alias") creates Alias as subclass of Original; instanceof works both ways.
@@ -1391,6 +1458,7 @@ echo ($a instanceof Alias) ? "yes" : "no";
     assert_eq!(out, "orig:yes:yes");
 }
 
+/// Verifies class alias with namespace.
 #[test]
 fn test_class_alias_with_namespace() {
     // class_alias with namespaced original App\Original and namespaced alias App\Alias creates valid alias.
@@ -1408,6 +1476,7 @@ echo $a->tag();
     assert_eq!(out, "ns-orig");
 }
 
+/// Verifies class alias name is case insensitive before name resolver.
 #[test]
 fn test_class_alias_name_is_case_insensitive_before_name_resolver() {
     // CLASS_ALIAS case-insensitive alias compiles and creates alias; new alias class is usable.
@@ -1424,6 +1493,7 @@ echo $a->tag();
     assert_eq!(out, "alias-case");
 }
 
+/// Verifies PSR-4 empty prefix root namespace.
 #[test]
 fn test_psr4_empty_prefix_root_namespace() {
     // PSR-4 with empty prefix "" maps root namespace to src/; Plain class in src/ is found.
@@ -1447,6 +1517,7 @@ fn test_psr4_empty_prefix_root_namespace() {
     assert_eq!(out, "root");
 }
 
+/// Verifies autoload does not shadow builtin exception.
 #[test]
 fn test_autoload_does_not_shadow_builtin_exception() {
     // User-defined Exception class in autoload must not shadow the builtin SPL Exception.
@@ -1470,6 +1541,7 @@ fn test_autoload_does_not_shadow_builtin_exception() {
     assert_eq!(out, "core");
 }
 
+/// Verifies classmap exclude from classmap.
 #[test]
 fn test_classmap_exclude_from_classmap() {
     // lib/ contains Real class plus tests/ subdirectory excluded via exclude-from-classmap; Excluded is missing.
@@ -1502,6 +1574,7 @@ echo class_exists("Excluded", false) ? "exists" : "missing";
     assert_eq!(out, "real:missing");
 }
 
+/// Verifies classmap exclude with double star.
 #[test]
 fn test_classmap_exclude_with_double_star() {
     // **/internal/** glob pattern excludes lib/sub/internal/Hidden.php from classmap; Hidden is missing.
@@ -1534,6 +1607,7 @@ echo class_exists("Hidden", false) ? "exists" : "missing";
     assert_eq!(out, "real:missing");
 }
 
+/// Verifies classmap exclude with filename glob.
 #[test]
 fn test_classmap_exclude_with_filename_glob() {
     // lib/*.test.php glob excludes lib/Foo.test.php from classmap; FooTest is missing.
@@ -1566,6 +1640,7 @@ echo class_exists("FooTest", false) ? "exists" : "missing";
     assert_eq!(out, "real:missing");
 }
 
+/// Verifies SPL autoload call with literal loads class.
 #[test]
 fn test_spl_autoload_call_with_literal_loads_class() {
     // spl_autoload_call("App\\Forced") forces autoload resolution even when program doesn't reference the class.

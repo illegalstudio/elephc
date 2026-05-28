@@ -9,7 +9,7 @@
 
 use super::*;
 
-// Verifies that a switch with only a default case inlines to just the default body. Confirms "d".
+/// Verifies that a switch with only a default case inlines to just the default body. Confirms "d".
 #[test]
 fn test_dead_code_elimination_inlines_default_only_switch() {
     let out = compile_and_run(
@@ -25,8 +25,8 @@ switch ($x) {
     assert_eq!(out, "d");
 }
 
-// Verifies that a switch with a single case and effectful subject evaluates both the subject
-// and case expression. Confirms "saA".
+/// Verifies that a switch with a single case and effectful subject evaluates both the subject
+/// and case expression. Confirms "saA".
 #[test]
 fn test_dead_code_elimination_normalizes_single_case_switch_with_effectful_subject() {
     let out = compile_and_run(
@@ -48,8 +48,8 @@ switch (step("s", 1)) {
     assert_eq!(out, "saA");
 }
 
-// Verifies that a constant switch match inlines the selected case and drops dead `pow` calls.
-// Confirms "7" with `pow` absent from user assembly.
+/// Verifies that a constant switch match inlines the selected case and drops dead `pow` calls.
+/// Confirms "7" with `pow` absent from user assembly.
 #[test]
 fn test_dead_code_elimination_materializes_constant_switch_match() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_match");
@@ -91,8 +91,8 @@ switch (2) {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a constant switch fallthrough inlines the selected tail and drops dead `pow`
-// calls. Confirms "7" with `pow` absent from user assembly.
+/// Verifies that a constant switch fallthrough inlines the selected tail and drops dead `pow`
+/// calls. Confirms "7" with `pow` absent from user assembly.
 #[test]
 fn test_dead_code_elimination_materializes_constant_switch_fallthrough() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_fallthrough");
@@ -132,8 +132,8 @@ switch (1) {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a constant switch default inlines the default path and drops dead `pow`
-// calls. Confirms "7" with `pow` absent from user assembly.
+/// Verifies that a constant switch default inlines the default path and drops dead `pow`
+/// calls. Confirms "7" with `pow` absent from user assembly.
 #[test]
 fn test_dead_code_elimination_materializes_constant_switch_default() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_default");

@@ -10,6 +10,7 @@
 
 use super::*;
 
+/// Verifies class constant int.
 #[test]
 fn test_class_constant_int() {
     //! Verifies integer class constant is inlined and accessible via ClassName::CONST.
@@ -24,6 +25,7 @@ echo Math::PI;
     assert_eq!(out, "314");
 }
 
+/// Verifies class constant string.
 #[test]
 fn test_class_constant_string() {
     //! Verifies string class constant is inlined and accessible via ClassName::CONST.
@@ -38,6 +40,7 @@ echo Greet::HELLO;
     assert_eq!(out, "hi");
 }
 
+/// Verifies class constant inherited from parent.
 #[test]
 fn test_class_constant_inherited_from_parent() {
     //! Verifies child class inherits parent constants via ClassName::CONST lookup.
@@ -53,6 +56,7 @@ echo Child::VERSION;
     assert_eq!(out, "7");
 }
 
+/// Verifies class constant expression can reference self constant.
 #[test]
 fn test_class_constant_expression_can_reference_self_constant() {
     //! Verifies constant expressions can use self:: to reference other constants in the same class.
@@ -68,6 +72,7 @@ echo Box::B;
     assert_eq!(out, "3");
 }
 
+/// Verifies inherited class constant expression keeps lexical self.
 #[test]
 fn test_inherited_class_constant_expression_keeps_lexical_self() {
     //! Verifies self:: in a parent constant expression refers to the defining class, not the runtime subclass.
@@ -87,6 +92,7 @@ echo Child::B;
     assert_eq!(out, "3");
 }
 
+/// Verifies class constant expression can reference parent constant.
 #[test]
 fn test_class_constant_expression_can_reference_parent_constant() {
     //! Verifies constant expressions can use parent:: to access inherited constants.
@@ -104,6 +110,7 @@ echo Child::B;
     assert_eq!(out, "3");
 }
 
+/// Verifies class constant expression can use self class.
 #[test]
 fn test_class_constant_expression_can_use_self_class() {
     //! Verifies self::class magic constant works inside a constant expression.
@@ -118,6 +125,7 @@ echo Box::NAME;
     assert_eq!(out, "Box");
 }
 
+/// Verifies class constant self access inside method.
 #[test]
 fn test_class_constant_self_access_inside_method() {
     //! Verifies self::CONST inside an instance method resolves to the defining class constant.
@@ -134,6 +142,7 @@ echo $b->describe();
     assert_eq!(out, "42");
 }
 
+/// Verifies interface constant.
 #[test]
 fn test_interface_constant() {
     //! Verifies interface constants are accessible through implementing class and via ClassName::CONST.
@@ -152,6 +161,7 @@ echo $b->get();
     assert_eq!(out, "100");
 }
 
+/// Verifies class constant with attribute compiles.
 #[test]
 fn test_class_constant_with_attribute_compiles() {
     //! Verifies constants with PHP attributes compile without error; attribute is discarded.

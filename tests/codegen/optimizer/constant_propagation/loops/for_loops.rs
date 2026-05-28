@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that a scalar assigned before a `for` loop (`$base = 2`) is preserved across
-// the loop and `$base ** 3` folds to `8`, while loop-side-effects (`echo $i`) still run.
+/// Verifies that a scalar assigned before a `for` loop (`$base = 2`) is preserved across
+/// the loop and `$base ** 3` folds to `8`, while loop-side-effects (`echo $i`) still run.
 #[test]
 fn test_constant_propagation_preserves_scalar_across_simple_for_loop() {
     let dir = make_cli_test_dir("elephc_constant_propagation_for_loop");
@@ -47,8 +47,8 @@ echo $base ** 3;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that `for (;;) { $base = 2; break; }` produces a constant `$base` after the loop,
-// so `$base ** 3` folds to `8`.
+/// Verifies that `for (;;) { $base = 2; break; }` produces a constant `$base` after the loop,
+/// so `$base ** 3` folds to `8`.
 #[test]
 fn test_constant_propagation_tracks_for_infinite_break_assignment() {
     let dir = make_cli_test_dir("elephc_constant_propagation_for_infinite_break");
@@ -85,9 +85,9 @@ echo $base ** 3;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that when the `for` condition is `false` at entry (`for ($base = 2; false; ...)`),
-// the init assignment `$base = 2` is used and body/update writes are ignored,
-// so `$base ** 3` folds to `8`.
+/// Verifies that when the `for` condition is `false` at entry (`for ($base = 2; false; ...)`),
+/// the init assignment `$base = 2` is used and body/update writes are ignored,
+/// so `$base ** 3` folds to `8`.
 #[test]
 fn test_constant_propagation_preserves_for_init_when_condition_is_false() {
     let dir = make_cli_test_dir("elephc_constant_propagation_for_false_init");
@@ -123,8 +123,8 @@ echo $base ** 3;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that stable init/expression assignments in a `for` loop (`$base = 2`, `$exp = 3`)
-// allow `$base ** $exp` to be constant-folded inside the loop body and after it.
+/// Verifies that stable init/expression assignments in a `for` loop (`$base = 2`, `$exp = 3`)
+/// allow `$base ** $exp` to be constant-folded inside the loop body and after it.
 #[test]
 fn test_constant_propagation_tracks_stable_for_init_assignments() {
     let dir = make_cli_test_dir("elephc_constant_propagation_for_init");

@@ -11,13 +11,13 @@
 
 use super::*;
 
+/// Verifies that arbitrary user-defined attributes on classes, methods,
+/// and properties do not change the compiled output or observable runtime
+/// behavior. The class under test has multiple attributes and a method
+/// that increments a field; the expected output is identical to the
+/// attribute-free version.
 #[test]
 fn test_attributes_do_not_alter_runtime_behavior() {
-    // Verifies that arbitrary user-defined attributes on classes, methods,
-    // and properties do not change the compiled output or observable runtime
-    // behavior. The class under test has multiple attributes and a method
-    // that increments a field; the expected output is identical to the
-    // attribute-free version.
     let out = compile_and_run(
         r#"<?php
 #[Foo]
@@ -42,10 +42,10 @@ echo $c->n;
     assert_eq!(out, "3");
 }
 
+/// Verifies that the `#[\Memoized]` attribute on a named function does not
+/// prevent compilation and does not change the function's output.
 #[test]
 fn test_attribute_on_function_decl_compiles() {
-    // Verifies that the `#[\Memoized]` attribute on a named function does not
-    // prevent compilation and does not change the function's output.
     let out = compile_and_run(
         r#"<?php
 #[Memoized]
@@ -58,12 +58,12 @@ echo double(7);
     assert_eq!(out, "14");
 }
 
+/// Verifies that fully-qualified attribute names (e.g. `#[\App\Annotations\Mark]`,
+/// `#[\Symfony\Contracts\Service\Attribute\Required]`) are accepted by the parser
+/// and pass through codegen unchanged. Symfony-style attributes must not affect
+/// runtime behavior.
 #[test]
 fn test_qualified_attribute_name_compiles() {
-    // Verifies that fully-qualified attribute names (e.g. `#[\App\Annotations\Mark]`,
-    // `#[\Symfony\Contracts\Service\Attribute\Required]`) are accepted by the parser
-    // and pass through codegen unchanged. Symfony-style attributes must not affect
-    // runtime behavior.
     let out = compile_and_run(
         r#"<?php
 #[\App\Annotations\Mark]
@@ -81,12 +81,12 @@ echo "ok";
     assert_eq!(out, "ok");
 }
 
+/// Verifies that PHP-style `# comment` lines are treated as ordinary line
+/// comments and do not produce syntax errors or alter output. Both a
+/// mid-line comment and a trailing comment without a trailing newline are
+/// tested.
 #[test]
 fn test_php_hash_line_comment_is_ignored() {
-    // Verifies that PHP-style `# comment` lines are treated as ordinary line
-    // comments and do not produce syntax errors or alter output. Both a
-    // mid-line comment and a trailing comment without a trailing newline are
-    // tested.
     let out = compile_and_run(
         r#"<?php
 # this is a PHP-style line comment
@@ -96,11 +96,11 @@ echo 1;
     assert_eq!(out, "1");
 }
 
+/// Verifies that attributes on function parameters (`#[Sensitive]`) compile
+/// identically to the bare parameter version. The function body must still
+/// execute correctly with the parameter value.
 #[test]
 fn test_parameter_attribute_compiles() {
-    // Verifies that attributes on function parameters (`#[Sensitive]`) compile
-    // identically to the bare parameter version. The function body must still
-    // execute correctly with the parameter value.
     let out = compile_and_run(
         r#"<?php
 function hash_password(#[Sensitive] string $pw): string {
@@ -112,10 +112,10 @@ echo hash_password("secret");
     assert_eq!(out, "secret_hashed");
 }
 
+/// Verifies that promoted constructor parameters (`#[Inject] public string $prefix`)
+/// compile correctly and the promoted property is accessible on the constructed object.
 #[test]
 fn test_promoted_property_attribute_compiles() {
-    // Verifies that promoted constructor parameters (`#[Inject] public string $prefix`)
-    // compile correctly and the promoted property is accessible on the constructed object.
     let out = compile_and_run(
         r#"<?php
 class Logger {
@@ -128,10 +128,10 @@ echo $l->prefix;
     assert_eq!(out, "[L] ");
 }
 
+/// Verifies that an attribute (`#[Pure]`) on an anonymous function expression
+/// compiles without error and the closure is callable.
 #[test]
 fn test_closure_attribute_compiles() {
-    // Verifies that an attribute (`#[Pure]`) on an anonymous function expression
-    // compiles without error and the closure is callable.
     let out = compile_and_run(
         r#"<?php
 $double = #[Pure] function (int $x): int { return $x * 2; };
@@ -141,10 +141,10 @@ echo $double(21);
     assert_eq!(out, "42");
 }
 
+/// Verifies that an attribute (`#[Pure]`) on an arrow function (`fn`)
+/// compiles without error and the arrow function is callable.
 #[test]
 fn test_arrow_function_attribute_compiles() {
-    // Verifies that an attribute (`#[Pure]`) on an arrow function (`fn`)
-    // compiles without error and the arrow function is callable.
     let out = compile_and_run(
         r#"<?php
 $inc = #[Pure] fn (int $x) => $x + 1;
@@ -154,10 +154,10 @@ echo $inc(41);
     assert_eq!(out, "42");
 }
 
+/// Verifies that an attribute (`#[Pure]`) on a `static function` anonymous
+/// closure compiles without error and the closure is callable.
 #[test]
 fn test_static_closure_attribute_compiles() {
-    // Verifies that an attribute (`#[Pure]`) on a `static function` anonymous
-    // closure compiles without error and the closure is callable.
     let out = compile_and_run(
         r#"<?php
 $triple = #[Pure] static function (int $x): int { return $x * 3; };
@@ -167,10 +167,10 @@ echo $triple(14);
     assert_eq!(out, "42");
 }
 
+/// Verifies that an attribute on a parameter inside a closure (`#[Sensitive]`)
+/// compiles without error and the closure is callable.
 #[test]
 fn test_closure_parameter_attribute_compiles() {
-    // Verifies that an attribute on a parameter inside a closure (`#[Sensitive]`)
-    // compiles without error and the closure is callable.
     let out = compile_and_run(
         r#"<?php
 $mask = function (#[Sensitive] string $pw): string { return "***"; };
@@ -180,11 +180,11 @@ echo $mask("secret");
     assert_eq!(out, "***");
 }
 
+/// Verifies that `#[\Override]` on a method that genuinely overrides a parent
+/// method compiles without error and the method behaves identically to the
+/// attribute-free version.
 #[test]
 fn test_override_attribute_on_valid_override_compiles() {
-    // Verifies that `#[\Override]` on a method that genuinely overrides a parent
-    // method compiles without error and the method behaves identically to the
-    // attribute-free version.
     let out = compile_and_run(
         r#"<?php
 class Animal {
@@ -201,10 +201,10 @@ echo $d->name();
     assert_eq!(out, "Dog");
 }
 
+/// Verifies that `#[\Override]` on a method that implements an interface
+/// (not a direct parent class override) is accepted by the compiler.
 #[test]
 fn test_override_attribute_through_interface_compiles() {
-    // Verifies that `#[\Override]` on a method that implements an interface
-    // (not a direct parent class override) is accepted by the compiler.
     let out = compile_and_run(
         r#"<?php
 interface Greeter {
@@ -223,10 +223,10 @@ echo $g->hello();
 
 // --- #[\AllowDynamicProperties] runtime support (PHP 8.2) ---
 
+/// Verifies that a class with `#[\AllowDynamicProperties]` permits dynamic
+/// integer property assignment and reading without error.
 #[test]
 fn test_allow_dynamic_properties_basic_int() {
-    // Verifies that a class with `#[\AllowDynamicProperties]` permits dynamic
-    // integer property assignment and reading without error.
     let out = compile_and_run(
         r#"<?php
 #[\AllowDynamicProperties]
@@ -239,10 +239,10 @@ echo $b->n;
     assert_eq!(out, "42");
 }
 
+/// Verifies that `#[\AllowDynamicProperties]` permits dynamic string property
+/// assignment and reading.
 #[test]
 fn test_allow_dynamic_properties_string_value() {
-    // Verifies that `#[\AllowDynamicProperties]` permits dynamic string property
-    // assignment and reading.
     let out = compile_and_run(
         r#"<?php
 #[\AllowDynamicProperties]
@@ -255,10 +255,10 @@ echo $b->msg;
     assert_eq!(out, "hello");
 }
 
+/// Verifies that `#[\AllowDynamicProperties]` permits repeated assignment to
+/// the same dynamic key, keeping only the final value.
 #[test]
 fn test_allow_dynamic_properties_overwrite() {
-    // Verifies that `#[\AllowDynamicProperties]` permits repeated assignment to
-    // the same dynamic key, keeping only the final value.
     let out = compile_and_run(
         r#"<?php
 #[\AllowDynamicProperties]
@@ -273,11 +273,11 @@ echo $b->v;
     assert_eq!(out, "3");
 }
 
+/// Verifies that `#[\AllowDynamicProperties]` works when a class also has
+/// declared (typed) properties — both declared and dynamic properties are
+/// accessible independently.
 #[test]
 fn test_allow_dynamic_properties_mixed_with_declared() {
-    // Verifies that `#[\AllowDynamicProperties]` works when a class also has
-    // declared (typed) properties — both declared and dynamic properties are
-    // accessible independently.
     let out = compile_and_run(
         r#"<?php
 #[\AllowDynamicProperties]
@@ -294,10 +294,10 @@ echo $b->extra;
     assert_eq!(out, "7|13");
 }
 
+/// Verifies that `#[\AllowDynamicProperties]` is accepted without the
+/// leading backslash (unqualified form) on the class.
 #[test]
 fn test_allow_dynamic_properties_unqualified_form() {
-    // Verifies that `#[\AllowDynamicProperties]` is accepted without the
-    // leading backslash (unqualified form) on the class.
     let out = compile_and_run(
         r#"<?php
 #[AllowDynamicProperties]
@@ -310,10 +310,10 @@ echo $b->x;
     assert_eq!(out, "99");
 }
 
+/// Verifies that `#[\AllowDynamicProperties]` can be applied via a use-group
+/// import alias (`use AllowDynamicProperties as DynamicBag; #[DynamicBag]`).
 #[test]
 fn test_allow_dynamic_properties_import_alias() {
-    // Verifies that `#[\AllowDynamicProperties]` can be applied via a use-group
-    // import alias (`use AllowDynamicProperties as DynamicBag; #[DynamicBag]`).
     let out = compile_and_run(
         r#"<?php
 use AllowDynamicProperties as DynamicBag;
@@ -327,11 +327,11 @@ echo $b->x;
     assert_eq!(out, "55");
 }
 
+/// Verifies that `#[\AllowDynamicProperties]` is inherited by child classes
+/// — a dynamic property set on a child instance of a parent marked with
+/// `#[\AllowDynamicProperties]` must work.
 #[test]
 fn test_allow_dynamic_properties_is_inherited() {
-    // Verifies that `#[\AllowDynamicProperties]` is inherited by child classes
-    // — a dynamic property set on a child instance of a parent marked with
-    // `#[\AllowDynamicProperties]` must work.
     let out = compile_and_run(
         r#"<?php
 #[\AllowDynamicProperties]
@@ -345,10 +345,10 @@ echo $c->x;
     assert_eq!(out, "7");
 }
 
+/// Verifies that `#[\AllowDynamicProperties]` permits multiple distinct dynamic
+/// properties on the same object, preserving each key's value independently.
 #[test]
 fn test_allow_dynamic_properties_multiple_keys() {
-    // Verifies that `#[\AllowDynamicProperties]` permits multiple distinct dynamic
-    // properties on the same object, preserving each key's value independently.
     let out = compile_and_run(
         r#"<?php
 #[\AllowDynamicProperties]
@@ -369,10 +369,10 @@ echo $c->ssl;
 
 // --- class_attribute_names() reflection-style builtin ---
 
+/// Verifies that `class_attribute_names()` returns the short names (without
+/// namespace) of all attributes decorating a class, in source order.
 #[test]
 fn test_class_attribute_names_returns_decorated_attributes() {
-    // Verifies that `class_attribute_names()` returns the short names (without
-    // namespace) of all attributes decorating a class, in source order.
     let out = compile_and_run(
         r#"<?php
 #[Author("Ada"), Version(1)]
@@ -387,11 +387,11 @@ foreach ($names as $n) {
     assert_eq!(out, "Author\nVersion\n");
 }
 
+/// Verifies that `class_attribute_names()` returns the canonical short name
+/// (no leading backslash) for a fully-qualified attribute, matching PHP's
+/// `ReflectionAttribute::getName()` normalization.
 #[test]
 fn test_class_attribute_names_normalises_fully_qualified_form() {
-    // Verifies that `class_attribute_names()` returns the canonical short name
-    // (no leading backslash) for a fully-qualified attribute, matching PHP's
-    // `ReflectionAttribute::getName()` normalization.
     let out = compile_and_run(
         r#"<?php
 #[\Override]
@@ -403,10 +403,10 @@ echo $names[0];
     assert_eq!(out, "Override");
 }
 
+/// Verifies that `class_attribute_names()` returns an empty array for a
+/// class with no attributes.
 #[test]
 fn test_class_attribute_names_returns_empty_array_for_undecorated_class() {
-    // Verifies that `class_attribute_names()` returns an empty array for a
-    // class with no attributes.
     let out = compile_and_run(
         r#"<?php
 class Bare {}
@@ -418,10 +418,10 @@ echo count($names);
     assert_eq!(out, "count=0");
 }
 
+/// Verifies that `class_attribute_names()` returns attributes in the exact
+/// source order, not sorted alphabetically.
 #[test]
 fn test_class_attribute_names_preserves_source_order() {
-    // Verifies that `class_attribute_names()` returns attributes in the exact
-    // source order, not sorted alphabetically.
     let out = compile_and_run(
         r#"<?php
 #[Z]
@@ -435,11 +435,11 @@ echo implode("|", $names);
     assert_eq!(out, "Z|A|M");
 }
 
+/// Verifies that `class_attribute_names()` is per-class — a class with one
+/// attribute and a class with two attributes each return the correct counts
+/// and names independently.
 #[test]
 fn test_class_attribute_names_per_class_isolation() {
-    // Verifies that `class_attribute_names()` is per-class — a class with one
-    // attribute and a class with two attributes each return the correct counts
-    // and names independently.
     let out = compile_and_run(
         r#"<?php
 #[Foo]
@@ -463,10 +463,10 @@ echo $ys[1];
     assert_eq!(out, "1/2/Foo,Bar,Baz");
 }
 
+/// Verifies that `class_attribute_names()` performs case-insensitive class
+/// lookup (lowercase `'greeter'` resolves to `Greeter`).
 #[test]
 fn test_class_attribute_names_class_lookup_is_case_insensitive() {
-    // Verifies that `class_attribute_names()` performs case-insensitive class
-    // lookup (lowercase `'greeter'` resolves to `Greeter`).
     let out = compile_and_run(
         r#"<?php
 #[Foo]
@@ -478,10 +478,10 @@ echo $names[0];
     assert_eq!(out, "Foo");
 }
 
+/// Verifies that `class_attribute_names()` accepts a fully-qualified class
+/// name with a leading backslash (`'\App\Greeter'`).
 #[test]
 fn test_class_attribute_names_accepts_leading_global_class_string() {
-    // Verifies that `class_attribute_names()` accepts a fully-qualified class
-    // name with a leading backslash (`'\App\Greeter'`).
     let out = compile_and_run(
         r#"<?php
 namespace App;
@@ -494,11 +494,11 @@ echo $names[0];
     assert_eq!(out, "App\\Foo");
 }
 
+/// Verifies that `class_attribute_names()` does not require attribute
+/// arguments to be reflectable — a constant expression argument (1 + 2)
+/// is accepted and the attribute name is still returned.
 #[test]
 fn test_class_attribute_names_does_not_require_reflectable_args() {
-    // Verifies that `class_attribute_names()` does not require attribute
-    // arguments to be reflectable — a constant expression argument (1 + 2)
-    // is accepted and the attribute name is still returned.
     let out = compile_and_run(
         r#"<?php
 #[Foo(1 + 2)]
@@ -510,10 +510,10 @@ echo $names[0];
     assert_eq!(out, "Foo");
 }
 
+/// Verifies that an attribute class declaration using `Attribute::TARGET_CLASS`
+/// compiles without error and the resulting class is instantiable.
 #[test]
 fn test_attribute_class_declaration_with_constant_arg_compiles_without_reflection_query() {
-    // Verifies that an attribute class declaration using `Attribute::TARGET_CLASS`
-    // compiles without error and the resulting class is instantiable.
     let out = compile_and_run(
         r#"<?php
 #[Attribute(Attribute::TARGET_CLASS)]
@@ -524,10 +524,10 @@ echo "ok";
     assert_eq!(out, "ok");
 }
 
+/// Verifies that `class_attribute_names()` supports named argument syntax
+/// (`class_name: 'Greeter'`) in addition to positional arguments.
 #[test]
 fn test_class_attribute_names_supports_named_argument_planning() {
-    // Verifies that `class_attribute_names()` supports named argument syntax
-    // (`class_name: 'Greeter'`) in addition to positional arguments.
     let out = compile_and_run(
         r#"<?php
 #[Foo]
@@ -541,10 +541,10 @@ echo $names[0];
 
 // --- class_attribute_args() reflection-style builtin ---
 
+/// Verifies that `class_attribute_args()` returns all positional arguments
+/// of a named attribute on a class, in source order, as an array of strings.
 #[test]
 fn test_class_attribute_args_returns_string_args_in_order() {
-    // Verifies that `class_attribute_args()` returns all positional arguments
-    // of a named attribute on a class, in source order, as an array of strings.
     let out = compile_and_run(
         r#"<?php
 #[Route("/api/users", "GET")]
@@ -560,10 +560,10 @@ echo $args[1];
     assert_eq!(out, "2//api/users,GET");
 }
 
+/// Verifies that `class_attribute_args()` returns an empty array when the
+/// attribute has no arguments.
 #[test]
 fn test_class_attribute_args_returns_empty_when_no_args() {
-    // Verifies that `class_attribute_args()` returns an empty array when the
-    // attribute has no arguments.
     let out = compile_and_run(
         r#"<?php
 #[Marker]
@@ -575,11 +575,11 @@ echo count($args);
     assert_eq!(out, "0");
 }
 
+/// Verifies that `class_attribute_args()` returns an empty array when the
+/// named attribute is not present on the class (the class has `Foo` and
+/// `Bar` but we query for `Missing`).
 #[test]
 fn test_class_attribute_args_returns_empty_when_attr_missing() {
-    // Verifies that `class_attribute_args()` returns an empty array when the
-    // named attribute is not present on the class (the class has `Foo` and
-    // `Bar` but we query for `Missing`).
     let out = compile_and_run(
         r#"<?php
 #[Foo("a"), Bar("b")]
@@ -591,11 +591,11 @@ echo count($args);
     assert_eq!(out, "0");
 }
 
+/// Verifies that `class_attribute_args()` preserves integer and string
+/// literal arguments as strings in the returned array, matching PHP's
+/// standard echo conversion for those types.
 #[test]
 fn test_class_attribute_args_preserves_int_and_string_literals() {
-    // Verifies that `class_attribute_args()` preserves integer and string
-    // literal arguments as strings in the returned array, matching PHP's
-    // standard echo conversion for those types.
     let out = compile_and_run(
         r#"<?php
 #[Mixed("kept", 42, "also-kept")]
@@ -613,12 +613,12 @@ echo $args[2];
     assert_eq!(out, "3/kept,42,also-kept");
 }
 
+/// Verifies that boolean (`true`, `false`) and `null` literal arguments are
+/// preserved by `class_attribute_args()` as strings. Booleans render as
+/// PHP echo would (true → "1", false → ""), null renders as empty string,
+/// pinning down the runtime shape preservation.
 #[test]
 fn test_class_attribute_args_preserves_bool_and_null_literals() {
-    // Verifies that boolean (`true`, `false`) and `null` literal arguments are
-    // preserved by `class_attribute_args()` as strings. Booleans render as
-    // PHP echo would (true → "1", false → ""), null renders as empty string,
-    // pinning down the runtime shape preservation.
     let out = compile_and_run(
         r#"<?php
 #[Status(true, false, null)]
@@ -634,10 +634,10 @@ echo "[" . $args[2] . "]";
     assert_eq!(out, "3|[1][][]");
 }
 
+/// Verifies that `class_attribute_args()` preserves negated integer literals
+/// (`-1`, `-42`) as strings in the returned array.
 #[test]
 fn test_class_attribute_args_preserves_negated_int_literals() {
-    // Verifies that `class_attribute_args()` preserves negated integer literals
-    // (`-1`, `-42`) as strings in the returned array.
     let out = compile_and_run(
         r#"<?php
 #[Code(-1, -42)]
@@ -651,10 +651,10 @@ echo $args[1];
     assert_eq!(out, "-1/-42");
 }
 
+/// Verifies that `class_attribute_args()` performs case-insensitive class
+/// lookup (lowercase `'controller'` resolves to `Controller`).
 #[test]
 fn test_class_attribute_args_class_lookup_is_case_insensitive() {
-    // Verifies that `class_attribute_args()` performs case-insensitive class
-    // lookup (lowercase `'controller'` resolves to `Controller`).
     let out = compile_and_run(
         r#"<?php
 #[Route("/x")]
@@ -666,10 +666,10 @@ echo $args[0];
     assert_eq!(out, "/x");
 }
 
+/// Verifies that `class_attribute_args()` accepts a fully-qualified class
+/// name with a leading backslash (`'\Controller'`).
 #[test]
 fn test_class_attribute_args_accepts_leading_global_class_string() {
-    // Verifies that `class_attribute_args()` accepts a fully-qualified class
-    // name with a leading backslash (`'\Controller'`).
     let out = compile_and_run(
         r#"<?php
 #[Route("/x")]
@@ -681,11 +681,11 @@ echo $args[0];
     assert_eq!(out, "/x");
 }
 
+/// Verifies that `class_attribute_args()` supports named argument syntax
+/// with reversed parameter order (`attribute_name:`, `class_name:`) in
+/// addition to the default positional order.
 #[test]
 fn test_class_attribute_args_supports_named_argument_reordering() {
-    // Verifies that `class_attribute_args()` supports named argument syntax
-    // with reversed parameter order (`attribute_name:`, `class_name:`) in
-    // addition to the default positional order.
     let out = compile_and_run(
         r#"<?php
 #[Route("/x")]
@@ -699,11 +699,11 @@ echo $args[0];
 
 // --- ReflectionAttribute synthetic class + class_get_attributes() ---
 
+/// Verifies that `class_get_attributes()` returns an array of
+/// `ReflectionAttribute` objects with correct `getName()` and
+/// `getArguments()` for a class decorated with two attributes.
 #[test]
 fn test_class_get_attributes_returns_reflection_attribute_array() {
-    // Verifies that `class_get_attributes()` returns an array of
-    // `ReflectionAttribute` objects with correct `getName()` and
-    // `getArguments()` for a class decorated with two attributes.
     let out = compile_and_run(
         r#"<?php
 #[Author("Ada", 1815), Version("1.0", true)]
@@ -725,10 +725,10 @@ foreach ($attrs as $attr) {
     );
 }
 
+/// Verifies that `class_get_attributes()` returns an empty array for a
+/// class with no attributes.
 #[test]
 fn test_class_get_attributes_returns_empty_for_undecorated_class() {
-    // Verifies that `class_get_attributes()` returns an empty array for a
-    // class with no attributes.
     let out = compile_and_run(
         r#"<?php
 class Bare {}
@@ -739,11 +739,11 @@ echo count($attrs);
     assert_eq!(out, "0");
 }
 
+/// Verifies that `class_get_attributes()` returns the resolved short name
+/// (no leading backslash) from a fully-qualified attribute like `#[\Override]`,
+/// matching PHP's `ReflectionAttribute::getName()` normalization.
 #[test]
 fn test_class_get_attributes_normalises_fully_qualified_name() {
-    // Verifies that `class_get_attributes()` returns the resolved short name
-    // (no leading backslash) from a fully-qualified attribute like `#[\Override]`,
-    // matching PHP's `ReflectionAttribute::getName()` normalization.
     let out = compile_and_run(
         r#"<?php
 #[\Override]
@@ -755,11 +755,11 @@ echo $attrs[0]->getName();
     assert_eq!(out, "Override");
 }
 
+/// Verifies that `class_get_attributes()` correctly handles an attribute
+/// with no arguments — `getName()` returns the name and `getArguments()`
+/// returns an empty array.
 #[test]
 fn test_class_get_attributes_handles_attribute_without_args() {
-    // Verifies that `class_get_attributes()` correctly handles an attribute
-    // with no arguments — `getName()` returns the name and `getArguments()`
-    // returns an empty array.
     let out = compile_and_run(
         r#"<?php
 #[Marker]
@@ -774,10 +774,10 @@ echo count($attr->getArguments());
     assert_eq!(out, "Marker/0");
 }
 
+/// Verifies that `class_get_attributes()` performs case-insensitive class
+/// lookup (lowercase `'greeter'` resolves to `Greeter`).
 #[test]
 fn test_class_get_attributes_class_lookup_is_case_insensitive() {
-    // Verifies that `class_get_attributes()` performs case-insensitive class
-    // lookup (lowercase `'greeter'` resolves to `Greeter`).
     let out = compile_and_run(
         r#"<?php
 #[Foo("bar")]
@@ -791,10 +791,10 @@ echo $attrs[0]->getArguments()[0];
     assert_eq!(out, "Foo/bar");
 }
 
+/// Verifies that `class_get_attributes()` accepts a fully-qualified class
+/// name with a leading backslash (`'\Greeter'`).
 #[test]
 fn test_class_get_attributes_accepts_leading_global_class_string() {
-    // Verifies that `class_get_attributes()` accepts a fully-qualified class
-    // name with a leading backslash (`'\Greeter'`).
     let out = compile_and_run(
         r#"<?php
 #[Foo("bar")]
@@ -808,11 +808,11 @@ echo $attrs[0]->getArguments()[0];
     assert_eq!(out, "Foo/bar");
 }
 
+/// Verifies that `class_get_attributes()` supports static associative
+/// array spread syntax (`...["class_name" => "Greeter"]`) for named argument
+/// passing.
 #[test]
 fn test_class_get_attributes_supports_static_assoc_spread() {
-    // Verifies that `class_get_attributes()` supports static associative
-    // array spread syntax (`...["class_name" => "Greeter"]`) for named argument
-    // passing.
     let out = compile_and_run(
         r#"<?php
 #[Foo("bar")]
@@ -824,11 +824,11 @@ echo $attrs[0]->getName();
     assert_eq!(out, "Foo");
 }
 
+/// Verifies that `CLASS_ATTRIBUTE_NAMES`, `Class_Attribute_Args`, and
+/// `Class_Get_Attributes` are case-insensitive and correctly resolve
+/// namespaced attributes on a namespaced class.
 #[test]
 fn test_attribute_reflection_builtins_are_case_insensitive_and_namespaced() {
-    // Verifies that `CLASS_ATTRIBUTE_NAMES`, `Class_Attribute_Args`, and
-    // `Class_Get_Attributes` are case-insensitive and correctly resolve
-    // namespaced attributes on a namespaced class.
     let out = compile_and_run(
         r#"<?php
 namespace App;
@@ -847,10 +847,10 @@ echo $attrs[0]->getName();
     assert_eq!(out, "App\\Route//home/App\\Route");
 }
 
+/// Verifies that `class_attribute_args()` performs case-insensitive
+/// attribute name lookup (lowercase `'route'` matches `Route`).
 #[test]
 fn test_class_attribute_args_matches_attribute_name_case_insensitively() {
-    // Verifies that `class_attribute_args()` performs case-insensitive
-    // attribute name lookup (lowercase `'route'` matches `Route`).
     let out = compile_and_run(
         r#"<?php
 #[Route("/x")]
@@ -862,10 +862,10 @@ echo $args[0];
     assert_eq!(out, "/x");
 }
 
+/// Verifies that when the same attribute appears multiple times on a class,
+/// `class_attribute_args()` returns the arguments of the first occurrence.
 #[test]
 fn test_class_attribute_args_picks_first_matching_attribute() {
-    // Verifies that when the same attribute appears multiple times on a class,
-    // `class_attribute_args()` returns the arguments of the first occurrence.
     let out = compile_and_run(
         r#"<?php
 #[Tag("first"), Tag("second")]
@@ -879,11 +879,11 @@ echo $args[0];
     assert_eq!(out, "1/first");
 }
 
+/// Verifies that when the same attribute appears multiple times and a later
+/// occurrence has unsupported argument expressions, `class_attribute_args()`
+/// returns the args of the first matching occurrence and ignores the later one.
 #[test]
 fn test_class_attribute_args_ignores_later_unsupported_duplicate_match() {
-    // Verifies that when the same attribute appears multiple times and a later
-    // occurrence has unsupported argument expressions, `class_attribute_args()`
-    // returns the args of the first matching occurrence and ignores the later one.
     let out = compile_and_run(
         r#"<?php
 #[Tag("first"), Tag(1 + 2)]
@@ -897,11 +897,11 @@ echo $args[0];
     assert_eq!(out, "1/first");
 }
 
+/// Verifies that `ReflectionClass::getAttributes()` returns an array of
+/// `ReflectionAttribute` objects with correct `getName()` and
+/// `getArguments()` for a class decorated with two attributes.
 #[test]
 fn test_reflection_class_get_attributes_returns_reflection_attribute_array() {
-    // Verifies that `ReflectionClass::getAttributes()` returns an array of
-    // `ReflectionAttribute` objects with correct `getName()` and
-    // `getArguments()` for a class decorated with two attributes.
     let out = compile_and_run(
         r#"<?php
 #[Author("Ada", 1815), Version("1.0", true)]
@@ -921,12 +921,12 @@ foreach ($attrs as $attr) {
     assert_eq!(out, "2\nAuthor:[Ada][1815]\nVersion:[1.0][1]\n");
 }
 
+/// Verifies that `ReflectionClass::getAttributes()` works when called on
+/// a temporary `ReflectionClass` object directly (without storing the
+/// reflector in a variable), and returns the correct attribute name and
+/// argument.
 #[test]
 fn test_reflection_get_attributes_survives_temporary_reflector() {
-    // Verifies that `ReflectionClass::getAttributes()` works when called on
-    // a temporary `ReflectionClass` object directly (without storing the
-    // reflector in a variable), and returns the correct attribute name and
-    // argument.
     let out = compile_and_run(
         r#"<?php
 #[Marker("owned")]
@@ -939,10 +939,10 @@ echo $attrs[0]->getArguments()[0];
     assert_eq!(out, "Marker/owned");
 }
 
+/// Verifies that `ReflectionMethod::getAttributes()` returns attribute
+/// name and arguments for a method decorated with `#[Route("/home", "GET")]`.
 #[test]
 fn test_reflection_method_get_attributes_returns_method_attributes() {
-    // Verifies that `ReflectionMethod::getAttributes()` returns attribute
-    // name and arguments for a method decorated with `#[Route("/home", "GET")]`.
     let out = compile_and_run(
         r#"<?php
 class Controller {
@@ -960,11 +960,11 @@ echo $attrs[0]->getArguments()[1];
     assert_eq!(out, "1/Route//home/GET");
 }
 
+/// Verifies that `ReflectionMethod`'s constructor accepts named arguments
+/// (`method_name:`, `class_name:`) and `getAttributes()` returns the
+/// correct attribute data.
 #[test]
 fn test_reflection_method_constructor_supports_named_arguments() {
-    // Verifies that `ReflectionMethod`'s constructor accepts named arguments
-    // (`method_name:`, `class_name:`) and `getAttributes()` returns the
-    // correct attribute data.
     let out = compile_and_run(
         r#"<?php
 class Controller {
@@ -981,11 +981,11 @@ echo $attrs[0]->getArguments()[0];
     assert_eq!(out, "1/Route//home");
 }
 
+/// Verifies that `ReflectionProperty::getAttributes()` works when the class
+/// is specified via `User::class` (a class constant) and returns the correct
+/// attribute name and argument.
 #[test]
 fn test_reflection_property_get_attributes_accepts_class_constant() {
-    // Verifies that `ReflectionProperty::getAttributes()` works when the class
-    // is specified via `User::class` (a class constant) and returns the correct
-    // attribute name and argument.
     let out = compile_and_run(
         r#"<?php
 class User {
@@ -1002,11 +1002,11 @@ echo $attrs[0]->getArguments()[0];
     assert_eq!(out, "1/Column/id");
 }
 
+/// Verifies that `ReflectionProperty`'s constructor accepts static associative
+/// array spread syntax (`...["property_name" => ..., "class_name" => ...]`) for
+/// named argument passing.
 #[test]
 fn test_reflection_property_constructor_supports_static_assoc_spread() {
-    // Verifies that `ReflectionProperty`'s constructor accepts static associative
-    // array spread syntax (`...["property_name" => ..., "class_name" => ...]`) for
-    // named argument passing.
     let out = compile_and_run(
         r#"<?php
 class User {
@@ -1023,11 +1023,11 @@ echo $attrs[0]->getArguments()[0];
     assert_eq!(out, "1/Column/id");
 }
 
+/// Verifies that `ReflectionClass` accepts `user::class` (lowercase class
+/// constant) for case-insensitive class resolution and `getAttributes()`
+/// returns the correct attribute data.
 #[test]
 fn test_reflection_class_constant_lookup_is_case_insensitive() {
-    // Verifies that `ReflectionClass` accepts `user::class` (lowercase class
-    // constant) for case-insensitive class resolution and `getAttributes()`
-    // returns the correct attribute data.
     let out = compile_and_run(
         r#"<?php
 #[Marker("ok")]
@@ -1042,12 +1042,12 @@ echo $attrs[0]->getArguments()[0];
     assert_eq!(out, "1/Marker/ok");
 }
 
+/// Verifies that `ReflectionAttribute::newInstance()` invokes the attribute
+/// class constructor lazily (on demand) and returns an instance of the
+/// attribute class. The test also verifies that the reflector is not
+/// destructed before the `newInstance()` call completes.
 #[test]
 fn test_reflection_attribute_new_instance_runs_on_demand() {
-    // Verifies that `ReflectionAttribute::newInstance()` invokes the attribute
-    // class constructor lazily (on demand) and returns an instance of the
-    // attribute class. The test also verifies that the reflector is not
-    // destructed before the `newInstance()` call completes.
     let out = compile_and_run(
         r#"<?php
 class Route {
@@ -1068,11 +1068,11 @@ echo ($instance instanceof Route) ? "instance\n" : "bad\n";
     assert_eq!(out, "before\nmiddle\nctor:/lazy\ninstance\n");
 }
 
+/// Verifies that a bare expression statement calling
+/// `$attrs[0]->newInstance()` (without using the return value) compiles
+/// correctly and the side effect (constructor echo) is preserved.
 #[test]
 fn test_reflection_attribute_new_instance_expression_statement_is_preserved() {
-    // Verifies that a bare expression statement calling
-    // `$attrs[0]->newInstance()` (without using the return value) compiles
-    // correctly and the side effect (constructor echo) is preserved.
     let out = compile_and_run(
         r#"<?php
 class Route {
@@ -1089,11 +1089,11 @@ $attrs[0]->newInstance();
     assert_eq!(out, "ctor:/effect");
 }
 
+/// Verifies that `ReflectionAttribute::getArguments()` and
+/// `ReflectionAttribute::newInstance()` both preserve large negative integer
+/// arguments (-65537) without truncation or sign flipping.
 #[test]
 fn test_reflection_attribute_new_instance_preserves_large_negative_int_args() {
-    // Verifies that `ReflectionAttribute::getArguments()` and
-    // `ReflectionAttribute::newInstance()` both preserve large negative integer
-    // arguments (-65537) without truncation or sign flipping.
     let out = compile_and_run(
         r#"<?php
 class Code {

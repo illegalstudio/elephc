@@ -9,9 +9,9 @@
 
 use crate::support::*;
 
+/// Verifies `--check` stops after type-checking and produces "Checked" output
+/// without emitting any assembly (.s), object (.o), or binary files.
 #[test]
-// Verifies `--check` stops after type-checking and produces "Checked" output
-// without emitting any assembly (.s), object (.o), or binary files.
 fn test_cli_check_stops_after_typecheck() {
     let dir = make_cli_test_dir("elephc_cli_check");
     let php_path = dir.join("main.php");
@@ -55,9 +55,9 @@ echo "ok";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `--emit-asm` writes a .s assembly file containing the `_main` label
+/// but does NOT produce object or binary files.
 #[test]
-// Verifies `--emit-asm` writes a .s assembly file containing the `_main` label
-// but does NOT produce object or binary files.
 fn test_cli_emit_asm_writes_assembly_only() {
     let dir = make_cli_test_dir("elephc_cli_emit_asm");
     let php_path = dir.join("main.php");
@@ -105,9 +105,9 @@ echo "ok";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies that passing `--emit-asm` and `--check` together fails with a
+/// "mutually exclusive" error message.
 #[test]
-// Verifies that passing `--emit-asm` and `--check` together fails with a
-// "mutually exclusive" error message.
 fn test_cli_rejects_emit_asm_and_check_together() {
     let dir = make_cli_test_dir("elephc_cli_flag_conflict");
     let php_path = dir.join("main.php");
@@ -133,9 +133,9 @@ fn test_cli_rejects_emit_asm_and_check_together() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `--check --timings` reports per-phase timings for tokenize, parse,
+/// typecheck, and total — without running codegen/assemble/link phases.
 #[test]
-// Verifies `--check --timings` reports per-phase timings for tokenize, parse,
-// typecheck, and total — without running codegen/assemble/link phases.
 fn test_cli_timings_reports_check_phases() {
     let dir = make_cli_test_dir("elephc_cli_timings_check");
     let php_path = dir.join("main.php");
@@ -164,9 +164,9 @@ fn test_cli_timings_reports_check_phases() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `--timings` reports codegen, assemble, link, and total durations
+/// when compiling a full binary, and that the binary is emitted.
 #[test]
-// Verifies `--timings` reports codegen, assemble, link, and total durations
-// when compiling a full binary, and that the binary is emitted.
 fn test_cli_timings_reports_assemble_and_link() {
     let dir = make_cli_test_dir("elephc_cli_timings_build");
     let php_path = dir.join("main.php");
@@ -194,10 +194,10 @@ fn test_cli_timings_reports_assemble_and_link() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the runtime cache: the first compile produces a "runtime-cache miss"
+/// and caches a runtime .o object; the second compile with the same input hits
+/// the cache ("runtime-cache hit") without recompiling the runtime.
 #[test]
-// Verifies the runtime cache: the first compile produces a "runtime-cache miss"
-// and caches a runtime .o object; the second compile with the same input hits
-// the cache ("runtime-cache hit") without recompiling the runtime.
 fn test_cli_runtime_cache_reuses_runtime_object() {
     let dir = make_cli_test_dir("elephc_cli_runtime_cache");
     let cache_root = dir.join("cache-root");
@@ -256,9 +256,9 @@ fn test_cli_runtime_cache_reuses_runtime_object() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `--source-map` emits a sidecar .map file containing the
+/// "elephc-source-map-v1" format header and the correct PHP source line.
 #[test]
-// Verifies `--source-map` emits a sidecar .map file containing the
-// "elephc-source-map-v1" format header and the correct PHP source line.
 fn test_cli_source_map_writes_sidecar_file() {
     let dir = make_cli_test_dir("elephc_cli_source_map");
     let php_path = dir.join("main.php");

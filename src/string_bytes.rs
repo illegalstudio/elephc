@@ -106,6 +106,7 @@ pub(crate) fn literal_byte_len(value: &str) -> usize {
 mod tests {
     use super::{literal_byte_len, literal_bytes, push_escaped_byte, push_literal_char};
 
+    /// Verifies high escaped byte round trips to single PHP byte.
     #[test]
     fn test_high_escaped_byte_round_trips_to_single_php_byte() {
         let mut value = String::new();
@@ -115,12 +116,14 @@ mod tests {
         assert_eq!(literal_bytes(&value), vec![0xff]);
     }
 
+    /// Verifies unicode source text stays UTF-8.
     #[test]
     fn test_unicode_source_text_stays_utf8() {
         assert_eq!(literal_byte_len("😀"), 4);
         assert_eq!(literal_bytes("é"), vec![0xc3, 0xa9]);
     }
 
+    /// Verifies private use source text does not collide with byte markers.
     #[test]
     fn test_private_use_source_text_does_not_collide_with_byte_markers() {
         let mut value = String::new();

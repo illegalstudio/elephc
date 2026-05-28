@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that `instanceof parent` reports "Class has no parent class" when the class
-// has no parent.
+/// Verifies that `instanceof parent` reports "Class has no parent class" when the class
+/// has no parent.
 #[test]
 fn test_error_instanceof_parent_requires_parent_class() {
     expect_error(
@@ -19,8 +19,8 @@ fn test_error_instanceof_parent_requires_parent_class() {
     );
 }
 
-// Verifies that a class using two traits with conflicting method names (both `foo`)
-// reports "ambiguous trait method" when no `insteadof` resolution is provided.
+/// Verifies that a class using two traits with conflicting method names (both `foo`)
+/// reports "ambiguous trait method" when no `insteadof` resolution is provided.
 #[test]
 fn test_error_trait_method_conflict_requires_insteadof() {
     expect_error(
@@ -33,8 +33,8 @@ class C { use A, B; }
     );
 }
 
-// Verifies that a class using two traits with a property of the same name but
-// incompatible visibility reports "incompatible duplicate property".
+/// Verifies that a class using two traits with a property of the same name but
+/// incompatible visibility reports "incompatible duplicate property".
 #[test]
 fn test_error_trait_property_conflict_must_be_compatible() {
     expect_error(
@@ -47,8 +47,8 @@ class C { use A, B; }
     );
 }
 
-// Verifies that calling a protected trait method on an instance from outside the class
-// hierarchy reports "Cannot access protected method".
+/// Verifies that calling a protected trait method on an instance from outside the class
+/// hierarchy reports "Cannot access protected method".
 #[test]
 fn test_error_cannot_access_protected_trait_method_outside_class() {
     expect_error(
@@ -62,8 +62,8 @@ echo $c->foo();
     );
 }
 
-// Verifies that circular trait composition (trait A uses B, B uses A) is detected
-// and reported as an error.
+/// Verifies that circular trait composition (trait A uses B, B uses A) is detected
+/// and reported as an error.
 #[test]
 fn test_error_circular_trait_composition() {
     expect_error(
@@ -76,8 +76,8 @@ class C { use A; }
     );
 }
 
-// Verifies that accessing a protected property from outside the class hierarchy
-// reports "Cannot access protected property: Secret::value".
+/// Verifies that accessing a protected property from outside the class hierarchy
+/// reports "Cannot access protected property: Secret::value".
 #[test]
 fn test_error_cannot_access_protected_property_outside_class() {
     expect_error(
@@ -92,8 +92,8 @@ echo $s->value;
     );
 }
 
-// Verifies that accessing a protected method from outside the class hierarchy
-// reports "Cannot access protected method: Secret::hidden".
+/// Verifies that accessing a protected method from outside the class hierarchy
+/// reports "Cannot access protected method: Secret::hidden".
 #[test]
 fn test_error_cannot_access_protected_method_outside_class() {
     expect_error(
@@ -110,8 +110,8 @@ echo $s->hidden();
     );
 }
 
-// Verifies that declaring two classes differing only by case (Box vs box) reports
-// "Duplicate class declaration: box".
+/// Verifies that declaring two classes differing only by case (Box vs box) reports
+/// "Duplicate class declaration: box".
 #[test]
 fn test_error_duplicate_classes_differing_only_by_case() {
     expect_error(
@@ -120,8 +120,8 @@ fn test_error_duplicate_classes_differing_only_by_case() {
     );
 }
 
-// Verifies that declaring two interfaces differing only by case reports
-// "Duplicate interface declaration: named".
+/// Verifies that declaring two interfaces differing only by case reports
+/// "Duplicate interface declaration: named".
 #[test]
 fn test_error_duplicate_interfaces_differing_only_by_case() {
     expect_error(
@@ -130,8 +130,8 @@ fn test_error_duplicate_interfaces_differing_only_by_case() {
     );
 }
 
-// Verifies that declaring two traits differing only by case reports
-// "Duplicate trait declaration: reusable".
+/// Verifies that declaring two traits differing only by case reports
+/// "Duplicate trait declaration: reusable".
 #[test]
 fn test_error_duplicate_traits_differing_only_by_case() {
     expect_error(
@@ -140,8 +140,8 @@ fn test_error_duplicate_traits_differing_only_by_case() {
     );
 }
 
-// Verifies that declaring two enums differing only by case reports
-// "Duplicate class or enum declaration: mode".
+/// Verifies that declaring two enums differing only by case reports
+/// "Duplicate class or enum declaration: mode".
 #[test]
 fn test_error_duplicate_enums_differing_only_by_case() {
     expect_error(
@@ -150,8 +150,8 @@ fn test_error_duplicate_enums_differing_only_by_case() {
     );
 }
 
-// Verifies that a class with two methods differing only by case (Save vs save) reports
-// "Duplicate method declaration in Box: save".
+/// Verifies that a class with two methods differing only by case (Save vs save) reports
+/// "Duplicate method declaration in Box: save".
 #[test]
 fn test_error_duplicate_methods_differing_only_by_case() {
     expect_error(
@@ -160,8 +160,8 @@ fn test_error_duplicate_methods_differing_only_by_case() {
     );
 }
 
-// Verifies that calling `parent::boot()` inside a class with no parent reports
-// "Class Solo has no parent class".
+/// Verifies that calling `parent::boot()` inside a class with no parent reports
+/// "Class Solo has no parent class".
 #[test]
 fn test_error_parent_without_parent_class() {
     expect_error(
@@ -170,8 +170,8 @@ fn test_error_parent_without_parent_class() {
     );
 }
 
-// Verifies that a subclass cannot override a final trait method and reports
-// "Cannot override final method Base::run".
+/// Verifies that a subclass cannot override a final trait method and reports
+/// "Cannot override final method Base::run".
 #[test]
 fn test_error_trait_final_method_cannot_be_overridden_by_subclass() {
     expect_error(
@@ -180,8 +180,8 @@ fn test_error_trait_final_method_cannot_be_overridden_by_subclass() {
     );
 }
 
-// Verifies that a subclass cannot override a final trait property and reports
-// "Cannot override final property Base::$value".
+/// Verifies that a subclass cannot override a final trait property and reports
+/// "Cannot override final property Base::$value".
 #[test]
 fn test_error_trait_final_property_cannot_be_overridden_by_subclass() {
     expect_error(
@@ -190,8 +190,8 @@ fn test_error_trait_final_property_cannot_be_overridden_by_subclass() {
     );
 }
 
-// Verifies that `self::class` outside a class context reports
-// "Cannot use self::class or static::class outside a class context".
+/// Verifies that `self::class` outside a class context reports
+/// "Cannot use self::class or static::class outside a class context".
 #[test]
 fn test_error_self_class_outside_class() {
     expect_error(
@@ -200,8 +200,8 @@ fn test_error_self_class_outside_class() {
     );
 }
 
-// Verifies that `parent::class` inside a class with no parent reports
-// "Class 'C' has no parent class".
+/// Verifies that `parent::class` inside a class with no parent reports
+/// "Class 'C' has no parent class".
 #[test]
 fn test_error_parent_class_without_parent() {
     expect_error(
@@ -210,8 +210,8 @@ fn test_error_parent_class_without_parent() {
     );
 }
 
-// Verifies that using `static::` in a class constant expression reports
-// "Cannot use static:: in class constant expression".
+/// Verifies that using `static::` in a class constant expression reports
+/// "Cannot use static:: in class constant expression".
 #[test]
 fn test_error_static_constant_reference_in_class_constant_expression() {
     expect_error(
@@ -220,8 +220,8 @@ fn test_error_static_constant_reference_in_class_constant_expression() {
     );
 }
 
-// Verifies that `new static()` on a child with a required constructor parameter
-// reports a missing argument error.
+/// Verifies that `new static()` on a child with a required constructor parameter
+/// reports a missing argument error.
 #[test]
 fn test_error_new_static_validates_child_constructor() {
     expect_error(
@@ -232,8 +232,8 @@ fn test_error_new_static_validates_child_constructor() {
 
 // --- #[\Override] enforcement (PHP 8.3) ---
 
-// Verifies that `#[Override]` on a method with no matching parent method reports
-// "no matching parent method".
+/// Verifies that `#[Override]` on a method with no matching parent method reports
+/// "no matching parent method".
 #[test]
 fn test_error_override_attribute_with_no_parent_method() {
     expect_error(
@@ -242,8 +242,8 @@ fn test_error_override_attribute_with_no_parent_method() {
     );
 }
 
-// Verifies that `#[Override]` on a root class (with no parent) reports
-// "no matching parent method".
+/// Verifies that `#[Override]` on a root class (with no parent) reports
+/// "no matching parent method".
 #[test]
 fn test_error_override_attribute_on_root_class() {
     expect_error(
@@ -252,8 +252,8 @@ fn test_error_override_attribute_on_root_class() {
     );
 }
 
-// Verifies that `#[Override]` on a misspelled method name reports "no matching parent
-// method" rather than silently allowing the typo.
+/// Verifies that `#[Override]` on a misspelled method name reports "no matching parent
+/// method" rather than silently allowing the typo.
 #[test]
 fn test_error_override_attribute_on_misspelled_method() {
     expect_error(
@@ -262,8 +262,8 @@ fn test_error_override_attribute_on_misspelled_method() {
     );
 }
 
-// Verifies that the unqualified `#[Override]` form (without a leading backslash) is
-// recognized as the PHP 8.3 built-in and enforces parent-method matching.
+/// Verifies that the unqualified `#[Override]` form (without a leading backslash) is
+/// recognized as the PHP 8.3 built-in and enforces parent-method matching.
 #[test]
 fn test_error_override_attribute_unqualified_form_is_recognized() {
     expect_error(
@@ -272,8 +272,8 @@ fn test_error_override_attribute_unqualified_form_is_recognized() {
     );
 }
 
-// Verifies that `#[Override]` imported under an alias (e.g., `use Override as
-// MustOverride`) is still recognized as the built-in and enforces parent-method matching.
+/// Verifies that `#[Override]` imported under an alias (e.g., `use Override as
+/// MustOverride`) is still recognized as the built-in and enforces parent-method matching.
 #[test]
 fn test_error_override_attribute_import_alias_is_recognized() {
     expect_error(
@@ -282,9 +282,9 @@ fn test_error_override_attribute_import_alias_is_recognized() {
     );
 }
 
-// Verifies that a namespaced user attribute that looks like `Foo\Override` is NOT
-// treated as the PHP 8.3 built-in `#[Override]` and therefore does not enforce
-// parent-method matching.
+/// Verifies that a namespaced user attribute that looks like `Foo\Override` is NOT
+/// treated as the PHP 8.3 built-in `#[Override]` and therefore does not enforce
+/// parent-method matching.
 #[test]
 fn test_override_attribute_qualified_lookalike_is_not_builtin() {
     check_source(
@@ -293,9 +293,9 @@ fn test_override_attribute_qualified_lookalike_is_not_builtin() {
     .expect("qualified user attribute should not enforce #[\\Override]");
 }
 
-// Verifies that a namespaced `#[Override]` attribute is NOT treated as the PHP 8.3
-// built-in when the `Override` class does not resolve to the built-in, so no
-// parent-method enforcement occurs.
+/// Verifies that a namespaced `#[Override]` attribute is NOT treated as the PHP 8.3
+/// built-in when the `Override` class does not resolve to the built-in, so no
+/// parent-method enforcement occurs.
 #[test]
 fn test_override_attribute_namespaced_unqualified_lookalike_is_not_builtin() {
     check_source(
@@ -304,8 +304,8 @@ fn test_override_attribute_namespaced_unqualified_lookalike_is_not_builtin() {
     .expect("namespaced user attribute should not enforce #[\\Override]");
 }
 
-// Verifies that `#[Override]` on a static method with no matching parent static method
-// reports "no matching parent method".
+/// Verifies that `#[Override]` on a static method with no matching parent static method
+/// reports "no matching parent method".
 #[test]
 fn test_error_override_attribute_on_static_with_no_parent() {
     expect_error(
@@ -314,9 +314,9 @@ fn test_error_override_attribute_on_static_with_no_parent() {
     );
 }
 
-// Verifies that `#[AllowDynamicProperties]` inside a namespace is treated as a
-// user-defined attribute (not the built-in), so dynamic properties are rejected
-// with "Undefined property".
+/// Verifies that `#[AllowDynamicProperties]` inside a namespace is treated as a
+/// user-defined attribute (not the built-in), so dynamic properties are rejected
+/// with "Undefined property".
 #[test]
 fn test_allow_dynamic_properties_namespaced_unqualified_lookalike_is_not_builtin() {
     expect_error(
@@ -327,8 +327,8 @@ fn test_allow_dynamic_properties_namespaced_unqualified_lookalike_is_not_builtin
 
 // --- class_attribute_names() argument validation ---
 
-// Verifies that `class_attribute_names()` with an undefined class reports
-// "undefined class 'DoesNotExist'".
+/// Verifies that `class_attribute_names()` with an undefined class reports
+/// "undefined class 'DoesNotExist'".
 #[test]
 fn test_error_class_attribute_names_undefined_class() {
     expect_error(
@@ -337,8 +337,8 @@ fn test_error_class_attribute_names_undefined_class() {
     );
 }
 
-// Verifies that `class_attribute_names()` with a dynamic (variable) argument instead
-// of a string literal reports "requires a string literal class name".
+/// Verifies that `class_attribute_names()` with a dynamic (variable) argument instead
+/// of a string literal reports "requires a string literal class name".
 #[test]
 fn test_error_class_attribute_names_dynamic_argument() {
     expect_error(
@@ -347,8 +347,8 @@ fn test_error_class_attribute_names_dynamic_argument() {
     );
 }
 
-// Verifies that `class_attribute_names()` with no argument reports "exactly 1
-// argument".
+/// Verifies that `class_attribute_names()` with no argument reports "exactly 1
+/// argument".
 #[test]
 fn test_error_class_attribute_names_no_argument() {
     expect_error(
@@ -357,8 +357,8 @@ fn test_error_class_attribute_names_no_argument() {
     );
 }
 
-// Verifies that `class_attribute_names()` with a non-string argument (e.g., integer)
-// reports "must be a string class name".
+/// Verifies that `class_attribute_names()` with a non-string argument (e.g., integer)
+/// reports "must be a string class name".
 #[test]
 fn test_error_class_attribute_names_non_string_argument() {
     expect_error(
@@ -369,8 +369,8 @@ fn test_error_class_attribute_names_non_string_argument() {
 
 // --- class_attribute_args() argument validation ---
 
-// Verifies that `class_attribute_args()` with an undefined class reports
-// "undefined class 'DoesNotExist'".
+/// Verifies that `class_attribute_args()` with an undefined class reports
+/// "undefined class 'DoesNotExist'".
 #[test]
 fn test_error_class_attribute_args_undefined_class() {
     expect_error(
@@ -379,8 +379,8 @@ fn test_error_class_attribute_args_undefined_class() {
     );
 }
 
-// Verifies that `class_attribute_args()` with a dynamic class name argument reports
-// "requires a string literal class name".
+/// Verifies that `class_attribute_args()` with a dynamic class name argument reports
+/// "requires a string literal class name".
 #[test]
 fn test_error_class_attribute_args_dynamic_class_argument() {
     expect_error(
@@ -389,8 +389,8 @@ fn test_error_class_attribute_args_dynamic_class_argument() {
     );
 }
 
-// Verifies that `class_attribute_args()` with a dynamic attribute name argument reports
-// "requires a string literal attribute name".
+/// Verifies that `class_attribute_args()` with a dynamic attribute name argument reports
+/// "requires a string literal attribute name".
 #[test]
 fn test_error_class_attribute_args_dynamic_attr_argument() {
     expect_error(
@@ -399,8 +399,8 @@ fn test_error_class_attribute_args_dynamic_attr_argument() {
     );
 }
 
-// Verifies that `class_attribute_args()` called with only one argument (instead of
-// two) reports "exactly 2 arguments".
+/// Verifies that `class_attribute_args()` called with only one argument (instead of
+/// two) reports "exactly 2 arguments".
 #[test]
 fn test_error_class_attribute_args_wrong_arity() {
     expect_error(
@@ -409,8 +409,8 @@ fn test_error_class_attribute_args_wrong_arity() {
     );
 }
 
-// Verifies that `class_attribute_args()` with a non-string first argument reports
-// "first argument must be a string class name".
+/// Verifies that `class_attribute_args()` with a non-string first argument reports
+/// "first argument must be a string class name".
 #[test]
 fn test_error_class_attribute_args_non_string_class() {
     expect_error(
@@ -419,8 +419,8 @@ fn test_error_class_attribute_args_non_string_class() {
     );
 }
 
-// Verifies that `class_attribute_args()` with a non-string second argument reports
-// "second argument must be a string attribute name".
+/// Verifies that `class_attribute_args()` with a non-string second argument reports
+/// "second argument must be a string attribute name".
 #[test]
 fn test_error_class_attribute_args_non_string_attr() {
     expect_error(
@@ -429,8 +429,8 @@ fn test_error_class_attribute_args_non_string_attr() {
     );
 }
 
-// Verifies that `class_attribute_args()` on an attribute with named arguments reports
-// "requested attribute uses argument metadata that is not supported yet".
+/// Verifies that `class_attribute_args()` on an attribute with named arguments reports
+/// "requested attribute uses argument metadata that is not supported yet".
 #[test]
 fn test_error_class_attribute_named_args_are_not_silently_dropped() {
     expect_error(
@@ -439,9 +439,9 @@ fn test_error_class_attribute_named_args_are_not_silently_dropped() {
     );
 }
 
-// Verifies that `class_attribute_args()` on an attribute with expression arguments
-// (e.g., `1 + 2`) reports "requested attribute uses argument metadata that is not
-// supported yet".
+/// Verifies that `class_attribute_args()` on an attribute with expression arguments
+/// (e.g., `1 + 2`) reports "requested attribute uses argument metadata that is not
+/// supported yet".
 #[test]
 fn test_error_class_attribute_expression_args_are_not_silently_dropped() {
     expect_error(
@@ -450,8 +450,8 @@ fn test_error_class_attribute_expression_args_are_not_silently_dropped() {
     );
 }
 
-// Verifies that `class_get_attributes()` on a class with a float attribute argument
-// reports "class has attribute argument metadata that is not supported yet".
+/// Verifies that `class_get_attributes()` on a class with a float attribute argument
+/// reports "class has attribute argument metadata that is not supported yet".
 #[test]
 fn test_error_class_attribute_float_args_are_not_silently_dropped() {
     expect_error(
@@ -462,8 +462,8 @@ fn test_error_class_attribute_float_args_are_not_silently_dropped() {
 
 // --- class_get_attributes() argument validation ---
 
-// Verifies that `class_get_attributes()` with an undefined class reports
-// "undefined class 'DoesNotExist'".
+/// Verifies that `class_get_attributes()` with an undefined class reports
+/// "undefined class 'DoesNotExist'".
 #[test]
 fn test_error_class_get_attributes_undefined_class() {
     expect_error(
@@ -472,8 +472,8 @@ fn test_error_class_get_attributes_undefined_class() {
     );
 }
 
-// Verifies that `class_get_attributes()` with a dynamic (variable) argument reports
-// "requires a string literal class name".
+/// Verifies that `class_get_attributes()` with a dynamic (variable) argument reports
+/// "requires a string literal class name".
 #[test]
 fn test_error_class_get_attributes_dynamic_argument() {
     expect_error(
@@ -482,8 +482,8 @@ fn test_error_class_get_attributes_dynamic_argument() {
     );
 }
 
-// Verifies that `class_get_attributes()` with no argument reports "exactly 1
-// argument".
+/// Verifies that `class_get_attributes()` with no argument reports "exactly 1
+/// argument".
 #[test]
 fn test_error_class_get_attributes_no_argument() {
     expect_error(
@@ -492,8 +492,8 @@ fn test_error_class_get_attributes_no_argument() {
     );
 }
 
-// Verifies that `class_get_attributes()` with a non-string argument reports
-// "must be a string class name".
+/// Verifies that `class_get_attributes()` with a non-string argument reports
+/// "must be a string class name".
 #[test]
 fn test_error_class_get_attributes_non_string_argument() {
     expect_error(
@@ -502,8 +502,8 @@ fn test_error_class_get_attributes_non_string_argument() {
     );
 }
 
-// Verifies that declaring a class named `ReflectionAttribute` reports
-// "Cannot redeclare built-in reflection type: ReflectionAttribute".
+/// Verifies that declaring a class named `ReflectionAttribute` reports
+/// "Cannot redeclare built-in reflection type: ReflectionAttribute".
 #[test]
 fn test_error_reflection_attribute_redeclaration() {
     expect_error(
@@ -512,8 +512,8 @@ fn test_error_reflection_attribute_redeclaration() {
     );
 }
 
-// Verifies that declaring an interface named `ReflectionAttribute` reports
-// "Cannot redeclare built-in reflection type: ReflectionAttribute".
+/// Verifies that declaring an interface named `ReflectionAttribute` reports
+/// "Cannot redeclare built-in reflection type: ReflectionAttribute".
 #[test]
 fn test_error_reflection_attribute_interface_redeclaration() {
     expect_error(
@@ -522,8 +522,8 @@ fn test_error_reflection_attribute_interface_redeclaration() {
     );
 }
 
-// Verifies that declaring a trait named `ReflectionAttribute` reports
-// "Cannot redeclare built-in reflection type: ReflectionAttribute".
+/// Verifies that declaring a trait named `ReflectionAttribute` reports
+/// "Cannot redeclare built-in reflection type: ReflectionAttribute".
 #[test]
 fn test_error_reflection_attribute_trait_redeclaration() {
     expect_error(
@@ -532,8 +532,8 @@ fn test_error_reflection_attribute_trait_redeclaration() {
     );
 }
 
-// Verifies that `new ReflectionAttribute()` reports "Cannot access private
-// constructor: ReflectionAttribute::__construct".
+/// Verifies that `new ReflectionAttribute()` reports "Cannot access private
+/// constructor: ReflectionAttribute::__construct".
 #[test]
 fn test_error_reflection_attribute_constructor_is_private() {
     expect_error(
@@ -542,8 +542,8 @@ fn test_error_reflection_attribute_constructor_is_private() {
     );
 }
 
-// Verifies that accessing `ReflectionAttribute::__name` property reports
-// "Cannot access private property: ReflectionAttribute::__name".
+/// Verifies that accessing `ReflectionAttribute::__name` property reports
+/// "Cannot access private property: ReflectionAttribute::__name".
 #[test]
 fn test_error_reflection_attribute_internal_properties_are_private() {
     expect_error(
@@ -552,8 +552,8 @@ fn test_error_reflection_attribute_internal_properties_are_private() {
     );
 }
 
-// Verifies that declaring a class named `ReflectionClass` reports
-// "Cannot redeclare built-in reflection type: ReflectionClass".
+/// Verifies that declaring a class named `ReflectionClass` reports
+/// "Cannot redeclare built-in reflection type: ReflectionClass".
 #[test]
 fn test_error_reflection_class_redeclaration() {
     expect_error(
@@ -562,7 +562,7 @@ fn test_error_reflection_class_redeclaration() {
     );
 }
 
-// Verifies that `new ReflectionClass('Missing')` reports "undefined class 'Missing'".
+/// Verifies that `new ReflectionClass('Missing')` reports "undefined class 'Missing'".
 #[test]
 fn test_error_reflection_class_undefined_class() {
     expect_error(
@@ -571,8 +571,8 @@ fn test_error_reflection_class_undefined_class() {
     );
 }
 
-// Verifies that `new ReflectionClass($name)` with a dynamic variable reports
-// "requires a string literal class name".
+/// Verifies that `new ReflectionClass($name)` with a dynamic variable reports
+/// "requires a string literal class name".
 #[test]
 fn test_error_reflection_class_dynamic_argument() {
     expect_error(
@@ -581,8 +581,8 @@ fn test_error_reflection_class_dynamic_argument() {
     );
 }
 
-// Verifies that `new ReflectionMethod('C', 'missing')` on an undefined method reports
-// "undefined method 'C::missing'".
+/// Verifies that `new ReflectionMethod('C', 'missing')` on an undefined method reports
+/// "undefined method 'C::missing'".
 #[test]
 fn test_error_reflection_method_undefined_method() {
     expect_error(
@@ -591,8 +591,8 @@ fn test_error_reflection_method_undefined_method() {
     );
 }
 
-// Verifies that `new ReflectionProperty('C', 'missing')` on an undefined property
-// reports "undefined property 'C::$missing'".
+/// Verifies that `new ReflectionProperty('C', 'missing')` on an undefined property
+/// reports "undefined property 'C::$missing'".
 #[test]
 fn test_error_reflection_property_undefined_property() {
     expect_error(
@@ -601,9 +601,9 @@ fn test_error_reflection_property_undefined_property() {
     );
 }
 
-// Verifies that `new ReflectionMethod` on a method with unsupported attribute
-// argument metadata reports "method has attribute argument metadata that is not
-// supported yet".
+/// Verifies that `new ReflectionMethod` on a method with unsupported attribute
+/// argument metadata reports "method has attribute argument metadata that is not
+/// supported yet".
 #[test]
 fn test_error_reflection_method_unsupported_attribute_args() {
     expect_error(

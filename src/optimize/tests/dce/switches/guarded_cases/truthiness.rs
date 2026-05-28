@@ -10,8 +10,8 @@
 
 use super::*;
 
+/// Verifies DCE removes the falsy case (false literal) and default when the switch subject is known truthy (flag variable).
 #[test]
-// Verifies DCE removes the falsy case (false literal) and default when the switch subject is known truthy (flag variable).
 fn test_eliminate_dead_code_prunes_truthy_switch_cases_and_default() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -73,8 +73,8 @@ fn test_eliminate_dead_code_prunes_truthy_switch_cases_and_default() {
     assert!(default.is_none());
 }
 
+/// Verifies DCE removes falsy scalar labels (0 and "") from a switch when the subject is known truthy (flag variable).
 #[test]
-// Verifies DCE removes falsy scalar labels (0 and "") from a switch when the subject is known truthy (flag variable).
 fn test_eliminate_dead_code_prunes_falsy_scalar_labels_from_truthy_switch_subject() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
@@ -134,8 +134,8 @@ fn test_eliminate_dead_code_prunes_falsy_scalar_labels_from_truthy_switch_subjec
     assert!(default.is_none());
 }
 
+/// Verifies DCE combines exclusion (value!=1) and truthy guard (value truthy) to keep only cases [2, true] in the inner switch.
 #[test]
-// Verifies DCE combines exclusion (value!=1) and truthy guard (value truthy) to keep only cases [2, true] in the inner switch.
 fn test_eliminate_dead_code_combines_exclusion_and_truthy_switch_guards() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {

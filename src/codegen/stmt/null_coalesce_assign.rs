@@ -182,6 +182,7 @@ pub(crate) fn null_coalesce_static_property_array_target<'a>(
     }
 }
 
+/// Implements the `expr_equivalent` operation for this module.
 fn expr_equivalent(left: &Expr, right: &Expr) -> bool {
     match (&left.kind, &right.kind) {
         (ExprKind::Variable(a), ExprKind::Variable(b)) => a == b,

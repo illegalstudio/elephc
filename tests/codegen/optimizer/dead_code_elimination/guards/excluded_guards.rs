@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that a nested `if` contradicting an outer `=== 0` exclusion guard is pruned.
-// Confirms "ab".
+/// Verifies that a nested `if` contradicting an outer `=== 0` exclusion guard is pruned.
+/// Confirms "ab".
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_excluded_zero_guard() {
     let out = compile_and_run(
@@ -35,8 +35,8 @@ run(0);
     assert_eq!(out, "ab");
 }
 
-// Verifies that a nested `if` contradicting an outer `!== null` exclusion guard is pruned.
-// Tests both the non-null case and the null case. Confirms "ab".
+/// Verifies that a nested `if` contradicting an outer `!== null` exclusion guard is pruned.
+/// Tests both the non-null case and the null case. Confirms "ab".
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_excluded_null_guard() {
     let out = compile_and_run(
@@ -71,8 +71,8 @@ runNull();
     assert_eq!(out, "ab");
 }
 
-// Verifies that a nested `if` contradicting an outer `=== ""` exclusion guard is pruned.
-// Confirms "ab".
+/// Verifies that a nested `if` contradicting an outer `=== ""` exclusion guard is pruned.
+/// Confirms "ab".
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_excluded_empty_string_guard() {
     let out = compile_and_run(
@@ -97,8 +97,8 @@ run("");
     assert_eq!(out, "ab");
 }
 
-// Verifies that a nested `if` contradicting an outer `=== "0"` exclusion guard is pruned.
-// Confirms "ab".
+/// Verifies that a nested `if` contradicting an outer `=== "0"` exclusion guard is pruned.
+/// Confirms "ab".
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_excluded_string_zero_guard() {
     let out = compile_and_run(
@@ -123,8 +123,8 @@ run("0");
     assert_eq!(out, "ab");
 }
 
-// Verifies that a nested `if` contradicting an outer `=== 1.5` exclusion guard is pruned.
-// Confirms "ab".
+/// Verifies that a nested `if` contradicting an outer `=== 1.5` exclusion guard is pruned.
+/// Confirms "ab".
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_excluded_float_guard() {
     let out = compile_and_run(

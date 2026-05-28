@@ -9,7 +9,7 @@
 
 use super::*;
 
-// Verifies `$foo` tokenizes as `Variable("foo")`.
+/// Verifies `$foo` tokenizes as `Variable("foo")`.
 #[test]
 fn test_variable() {
     let t = tokens("<?php $foo");
@@ -18,21 +18,21 @@ fn test_variable() {
 
 // --- Operators ---
 
-// Verifies `{` and `}` tokenize as `LBrace` / `RBrace`.
+/// Verifies `{` and `}` tokenize as `LBrace` / `RBrace`.
 #[test]
 fn test_braces() {
     let t = tokens("<?php { }");
     assert_eq!(t[1..3], [Token::LBrace, Token::RBrace]);
 }
 
-// Verifies `(` and `)` tokenize as `LParen` / `RParen`.
+/// Verifies `(` and `)` tokenize as `LParen` / `RParen`.
 #[test]
 fn test_parens() {
     let t = tokens("<?php ( )");
     assert_eq!(t[1..3], [Token::LParen, Token::RParen]);
 }
 
-// Verifies `,` tokenizes as `Comma`.
+/// Verifies `,` tokenizes as `Comma`.
 #[test]
 fn test_comma() {
     let t = tokens("<?php ,");
@@ -41,7 +41,7 @@ fn test_comma() {
 
 // --- Keywords ---
 
-// Verifies `foo` (bare identifier) tokenizes as `Identifier("foo")`.
+/// Verifies `foo` (bare identifier) tokenizes as `Identifier("foo")`.
 #[test]
 fn test_identifier() {
     assert_eq!(
@@ -52,7 +52,7 @@ fn test_identifier() {
 
 // --- Comments ---
 
-// Verifies `==` is not two `Assign` tokens (no token fusion regression).
+/// Verifies `==` is not two `Assign` tokens (no token fusion regression).
 #[test]
 fn test_equals_vs_assign() {
     // = followed by = should be ==, not two Assigns
@@ -61,7 +61,7 @@ fn test_equals_vs_assign() {
     assert_eq!(t[2], Token::Assign);
 }
 
-// Verifies `global $a, $b;` produces the correct token sequence with comma.
+/// Verifies `global $a, $b;` produces the correct token sequence with comma.
 #[test]
 fn test_global_multiple() {
     let t = tokens("<?php global $a, $b;");
@@ -81,7 +81,7 @@ fn test_global_multiple() {
 
 // --- Static keyword ---
 
-// Verifies `&$x` (ref parameter) produces `Ampersand` + `Variable` in params.
+/// Verifies `&$x` (ref parameter) produces `Ampersand` + `Variable` in params.
 #[test]
 fn test_ref_param_in_function() {
     let t = tokens("<?php function foo(&$x) {}");

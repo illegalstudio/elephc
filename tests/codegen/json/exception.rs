@@ -10,7 +10,7 @@
 
 use super::*;
 
-// Verifies JsonException can be constructed with a message and the message is retrievable.
+/// Verifies JsonException can be constructed with a message and the message is retrievable.
 #[test]
 fn test_json_exception_construct_and_get_message() {
     let out = compile_and_run(
@@ -19,7 +19,7 @@ fn test_json_exception_construct_and_get_message() {
     assert_eq!(out, "decode failed");
 }
 
-// Verifies RuntimeException can be constructed with a message and the message is retrievable.
+/// Verifies RuntimeException can be constructed with a message and the message is retrievable.
 #[test]
 fn test_runtime_exception_construct_and_get_message() {
     let out = compile_and_run(
@@ -28,7 +28,7 @@ fn test_runtime_exception_construct_and_get_message() {
     assert_eq!(out, "rte");
 }
 
-// Verifies JsonException is catchable as JsonException via a typed catch clause.
+/// Verifies JsonException is catchable as JsonException via a typed catch clause.
 #[test]
 fn test_json_exception_caught_as_json_exception() {
     let out = compile_and_run(
@@ -40,7 +40,7 @@ catch (JsonException $e) { echo "caught: " . $e->getMessage(); }
     assert_eq!(out, "caught: decode failed");
 }
 
-// Verifies JsonException is catchable as RuntimeException (parent class).
+/// Verifies JsonException is catchable as RuntimeException (parent class).
 #[test]
 fn test_json_exception_caught_as_runtime_exception() {
     let out = compile_and_run(
@@ -52,7 +52,7 @@ catch (RuntimeException $e) { echo "rte: " . $e->getMessage(); }
     assert_eq!(out, "rte: again");
 }
 
-// Verifies JsonException is catchable as Exception (root of exception hierarchy).
+/// Verifies JsonException is catchable as Exception (root of exception hierarchy).
 #[test]
 fn test_json_exception_caught_as_exception() {
     let out = compile_and_run(
@@ -64,7 +64,7 @@ catch (Exception $e) { echo "ex: " . $e->getMessage(); }
     assert_eq!(out, "ex: third");
 }
 
-// Verifies JsonException is an instanceof RuntimeException.
+/// Verifies JsonException is an instanceof RuntimeException.
 #[test]
 fn test_json_exception_instanceof_runtime_exception() {
     let out = compile_and_run(
@@ -76,7 +76,7 @@ echo ($e instanceof RuntimeException ? "yes" : "no");
     assert_eq!(out, "yes");
 }
 
-// Verifies JsonException is an instanceof Exception.
+/// Verifies JsonException is an instanceof Exception.
 #[test]
 fn test_json_exception_instanceof_exception() {
     let out = compile_and_run(
@@ -88,7 +88,7 @@ echo ($e instanceof Exception ? "yes" : "no");
     assert_eq!(out, "yes");
 }
 
-// Verifies JsonException is an instanceof Throwable.
+/// Verifies JsonException is an instanceof Throwable.
 #[test]
 fn test_json_exception_instanceof_throwable() {
     let out = compile_and_run(
@@ -100,7 +100,7 @@ echo ($e instanceof Throwable ? "yes" : "no");
     assert_eq!(out, "yes");
 }
 
-// Verifies RuntimeException is an instanceof Exception.
+/// Verifies RuntimeException is an instanceof Exception.
 #[test]
 fn test_runtime_exception_instanceof_exception() {
     let out = compile_and_run(
@@ -112,7 +112,7 @@ echo ($e instanceof Exception ? "yes" : "no");
     assert_eq!(out, "yes");
 }
 
-// Verifies a plain Exception is NOT an instanceof JsonException.
+/// Verifies a plain Exception is NOT an instanceof JsonException.
 #[test]
 fn test_plain_exception_is_not_json_exception() {
     let out = compile_and_run(
@@ -127,7 +127,7 @@ echo ($e instanceof JsonException ? "yes" : "no");
 // JsonException::getCode() — the JSON_ERROR_* code that triggered the throw
 // is exposed via Exception's standard $code property and getCode() accessor.
 
-// Verifies JsonException::getCode() returns JSON_ERROR_SYNTAX (4) for malformed JSON input.
+/// Verifies JsonException::getCode() returns JSON_ERROR_SYNTAX (4) for malformed JSON input.
 #[test]
 fn test_json_exception_get_code_syntax() {
     let out = compile_and_run(
@@ -139,7 +139,7 @@ fn test_json_exception_get_code_syntax() {
     assert_eq!(out, "4");
 }
 
-// Verifies JsonException::getCode() returns JSON_ERROR_DEPTH (1) for depth limit exceeded.
+/// Verifies JsonException::getCode() returns JSON_ERROR_DEPTH (1) for depth limit exceeded.
 #[test]
 fn test_json_exception_get_code_depth() {
     let out = compile_and_run(
@@ -151,7 +151,7 @@ fn test_json_exception_get_code_depth() {
     assert_eq!(out, "1");
 }
 
-// Verifies JsonException::getCode() returns JSON_ERROR_UTF16 (10) for lone UTF-16 surrogate.
+/// Verifies JsonException::getCode() returns JSON_ERROR_UTF16 (10) for lone UTF-16 surrogate.
 #[test]
 fn test_json_exception_get_code_utf16() {
     let out = compile_and_run(
@@ -163,7 +163,7 @@ fn test_json_exception_get_code_utf16() {
     assert_eq!(out, "10");
 }
 
-// Verifies JsonException::getCode() returns JSON_ERROR_INF_OR_NAN (7) for encoding INF or NAN.
+/// Verifies JsonException::getCode() returns JSON_ERROR_INF_OR_NAN (7) for encoding INF or NAN.
 #[test]
 fn test_json_exception_get_code_inf_or_nan() {
     let out = compile_and_run(
@@ -175,7 +175,7 @@ fn test_json_exception_get_code_inf_or_nan() {
     assert_eq!(out, "7");
 }
 
-// Verifies Exception constructor accepts an optional integer code argument.
+/// Verifies Exception constructor accepts an optional integer code argument.
 #[test]
 fn test_exception_get_code_user_constructor() {
     let out = compile_and_run(
@@ -187,7 +187,7 @@ fn test_exception_get_code_user_constructor() {
     assert_eq!(out, "42");
 }
 
-// Verifies Exception defaults to code 0 when no second argument is provided.
+/// Verifies Exception defaults to code 0 when no second argument is provided.
 #[test]
 fn test_exception_get_code_default_zero() {
     let out = compile_and_run(

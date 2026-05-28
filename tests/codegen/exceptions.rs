@@ -9,6 +9,7 @@
 
 use crate::support::*;
 
+/// Verifies exception try catch same function.
 #[test]
 fn test_exception_try_catch_same_function() {
     // Compiles a custom exception class, throws it, and catches it within the
@@ -20,6 +21,7 @@ fn test_exception_try_catch_same_function() {
     assert_eq!(out, "42");
 }
 
+/// Verifies builtin exception try catch.
 #[test]
 fn test_builtin_exception_try_catch() {
     // Catches a builtin Exception with a catch clause that has no variable (PHP 8+).
@@ -29,6 +31,7 @@ fn test_builtin_exception_try_catch() {
     assert_eq!(out, "11");
 }
 
+/// Verifies builtin error try catch.
 #[test]
 fn test_builtin_error_try_catch() {
     // Throws a builtin Error and catches it, verifying getMessage() returns the
@@ -39,26 +42,27 @@ fn test_builtin_error_try_catch() {
     assert_eq!(out, "boom");
 }
 
+/// Verifies Error and Exception are distinct hierarchies — an Error is NOT
+/// caught by catch (Exception), confirming the separate catch ordering.
 #[test]
 fn test_builtin_error_is_not_caught_by_exception() {
-    // Verifies Error and Exception are distinct hierarchies — an Error is NOT
-    // caught by catch (Exception), confirming the separate catch ordering.
     let out = compile_and_run(
         "<?php try { throw new Error(\"boom\"); } catch (Exception $e) { echo \"exception\"; } catch (Error $e) { echo \"error\"; }",
     );
     assert_eq!(out, "error");
 }
 
+/// Checks that the public `$message` property and getMessage() both return the
+/// constructor argument, verifying the Exception property surface.
 #[test]
 fn test_builtin_exception_message_api() {
-    // Checks that the public `$message` property and getMessage() both return the
-    // constructor argument, verifying the Exception property surface.
     let out = compile_and_run(
         "<?php $e = new Exception(\"boom\"); echo $e->message; echo \":\"; echo $e->getMessage();",
     );
     assert_eq!(out, "boom:boom");
 }
 
+/// Verifies builtin throwable catches exception.
 #[test]
 fn test_builtin_throwable_catches_exception() {
     // Throwable (the root interface) catches a builtin Exception.
@@ -67,6 +71,7 @@ fn test_builtin_throwable_catches_exception() {
     assert_eq!(out, "12");
 }
 
+/// Verifies builtin throwable catches error.
 #[test]
 fn test_builtin_throwable_catches_error() {
     // Throwable (the root interface) catches a builtin Error.
@@ -75,32 +80,32 @@ fn test_builtin_throwable_catches_error() {
     assert_eq!(out, "13");
 }
 
+/// Verifies that getMessage() is called correctly on both Exception and Error
+/// when caught via Throwable, confirming virtual dispatch to the right subclass.
 #[test]
 fn test_builtin_throwable_catch_dispatches_get_message() {
-    // Verifies that getMessage() is called correctly on both Exception and Error
-    // when caught via Throwable, confirming virtual dispatch to the right subclass.
     let out = compile_and_run(
         "<?php try { throw new Exception(\"caught\"); } catch (Throwable $e) { echo $e->getMessage(); } try { throw new Error(\"core\"); } catch (Throwable $e) { echo \":\" . $e->getMessage(); }",
     );
     assert_eq!(out, "caught:core");
 }
 
+/// Verifies the full Throwable API surface on a caught Exception: getMessage,
+/// getCode, getFile, getLine, getTrace, getTraceAsString, getPrevious, and
+/// __toString all return expected values. File/line reflect the throw site.
 #[test]
 fn test_builtin_throwable_catch_exposes_standard_api() {
-    // Verifies the full Throwable API surface on a caught Exception: getMessage,
-    // getCode, getFile, getLine, getTrace, getTraceAsString, getPrevious, and
-    // __toString all return expected values. File/line reflect the throw site.
     let out = compile_and_run(
         "<?php try { throw new Exception(\"caught\", 42); } catch (Throwable $e) { echo $e->getMessage(); echo \":\"; echo $e->getCode(); echo \":\"; echo $e->getFile(); echo \":\"; echo $e->getLine(); echo \":\"; echo count($e->getTrace()); echo \":\"; echo $e->getTraceAsString(); echo \":\"; echo $e->getPrevious() === null ? \"none\" : \"some\"; echo \":\"; echo $e->__toString(); }",
     );
     assert_eq!(out, "caught:42::0:0::none:caught");
 }
 
+/// Tests a user-defined interface (AppThrowable) that extends Throwable and an
+/// Exception implementing it (AppException). Verifies that catching as the
+/// interface type correctly dispatches getMessage() and getCode().
 #[test]
 fn test_user_throwable_interface_extending_builtin_throwable_dispatches_methods() {
-    // Tests a user-defined interface (AppThrowable) that extends Throwable and an
-    // Exception implementing it (AppException). Verifies that catching as the
-    // interface type correctly dispatches getMessage() and getCode().
     let out = compile_and_run(
         r#"<?php
 interface AppThrowable extends Throwable {}
@@ -122,6 +127,7 @@ try {
     assert_eq!(out, "custom:7:iface:9");
 }
 
+/// Verifies exception throw during concat resets concat cursor.
 #[test]
 fn test_exception_throw_during_concat_resets_concat_cursor() {
     // Throws an exception mid-concatenation operand. Verifies the left-hand side
@@ -132,6 +138,7 @@ fn test_exception_throw_during_concat_resets_concat_cursor() {
     assert_eq!(out, "[\"ok\"]");
 }
 
+/// Verifies the error diagnostic for control restores runtime warnings after exception.
 #[test]
 fn test_error_control_restores_runtime_warnings_after_exception() {
     // Uses @ to suppress a warning in a function that throws, then after the try/catch
@@ -159,16 +166,17 @@ try {
     );
 }
 
+/// Verifies PHP multi-catch (AException | BException) branches to the handler
+/// for the thrown type, testing the union-type catch dispatch logic.
 #[test]
 fn test_exception_multi_catch_matches_each_type() {
-    // Verifies PHP multi-catch (AException | BException) branches to the handler
-    // for the thrown type, testing the union-type catch dispatch logic.
     let out = compile_and_run(
         "<?php class AException extends Exception {} class BException extends Exception {} function boom($flag) { if ($flag) { throw new AException(); } throw new BException(); } try { boom(true); } catch (AException | BException $e) { echo 1; } try { boom(false); } catch (AException | BException $e) { echo 2; }",
     );
     assert_eq!(out, "12");
 }
 
+/// Verifies exception catch without variable.
 #[test]
 fn test_exception_catch_without_variable() {
     // Catches an exception without binding it to a variable (PHP 8+ short syntax).
@@ -178,6 +186,7 @@ fn test_exception_catch_without_variable() {
     assert_eq!(out, "21");
 }
 
+/// Verifies exception catch can read builtin message.
 #[test]
 fn test_exception_catch_can_read_builtin_message() {
     // Catches a builtin Exception and reads getMessage() to confirm the exception
@@ -188,48 +197,49 @@ fn test_exception_catch_can_read_builtin_message() {
     assert_eq!(out, "caught");
 }
 
+/// Tests throw as a right-hand side expression in ?? (null coalescing operator).
+/// Verifies that when the left side is null, the exception is thrown and caught,
+/// and when the left side is non-null, the exception is not thrown.
 #[test]
 fn test_throw_expression_in_null_coalesce() {
-    // Tests throw as a right-hand side expression in ?? (null coalescing operator).
-    // Verifies that when the left side is null, the exception is thrown and caught,
-    // and when the left side is non-null, the exception is not thrown.
     let out = compile_and_run(
         "<?php $value = 42; echo $value ?? throw new Exception(); try { $missing = null; echo $missing ?? throw new Exception(); } catch (Exception) { echo 22; }",
     );
     assert_eq!(out, "4222");
 }
 
+/// Tests throw as the false branch of a ternary expression. The exception is
+/// thrown and caught, confirming throw can appear in expression contexts.
 #[test]
 fn test_throw_expression_in_ternary() {
-    // Tests throw as the false branch of a ternary expression. The exception is
-    // thrown and caught, confirming throw can appear in expression contexts.
     let out = compile_and_run(
         "<?php try { echo false ? 1 : throw new Exception(); } catch (Exception) { echo 23; }",
     );
     assert_eq!(out, "23");
 }
 
+/// Throws a custom exception from a callee and catches it in the caller.
+/// Verifies the unwind across function boundaries and that the catch runs.
 #[test]
 fn test_exception_try_catch_cross_function() {
-    // Throws a custom exception from a callee and catches it in the caller.
-    // Verifies the unwind across function boundaries and that the catch runs.
     let out = compile_and_run(
         "<?php class MyException extends Exception {} function boom() { throw new MyException(); } try { boom(); } catch (MyException $e) { echo 7; }",
     );
     assert_eq!(out, "7");
 }
 
+/// Verifies nested try-catch where the inner catch handles InnerException and
+/// the outer catch only runs for other exception types. Tests correct dispatch
+/// to the innermost matching catch.
 #[test]
 fn test_exception_nested_try_catch() {
-    // Verifies nested try-catch where the inner catch handles InnerException and
-    // the outer catch only runs for other exception types. Tests correct dispatch
-    // to the innermost matching catch.
     let out = compile_and_run(
         "<?php class InnerException extends Exception {} try { try { throw new InnerException(); } catch (InnerException $e) { echo 31; } } catch (Exception $e) { echo 99; }",
     );
     assert_eq!(out, "31");
 }
 
+/// Verifies exception throw in catch rethrows.
 #[test]
 fn test_exception_throw_in_catch_rethrows() {
     // Throws a second exception from within a catch block. The first exception is
@@ -240,6 +250,7 @@ fn test_exception_throw_in_catch_rethrows() {
     assert_eq!(out, "3233");
 }
 
+/// Verifies exception throw in finally overrides prior exception.
 #[test]
 fn test_exception_throw_in_finally_overrides_prior_exception() {
     // Throws from a finally block after a prior exception is already unwinding.
@@ -251,6 +262,7 @@ fn test_exception_throw_in_finally_overrides_prior_exception() {
     assert_eq!(out, "34");
 }
 
+/// Verifies exception uncaught reports fatal error.
 #[test]
 fn test_exception_uncaught_reports_fatal_error() {
     // Throws an exception with no enclosing try-catch. Verifies the compiler
@@ -259,6 +271,7 @@ fn test_exception_uncaught_reports_fatal_error() {
     assert!(err.contains("Fatal error: uncaught exception"), "{err}");
 }
 
+/// Verifies exception with properties.
 #[test]
 fn test_exception_with_properties() {
     // Catches a user-defined exception subclass with a public property set in
@@ -269,25 +282,25 @@ fn test_exception_with_properties() {
     assert_eq!(out, "404");
 }
 
+/// Verifies that a try-catch nested inside a loop correctly catches exceptions
+/// thrown from within that iteration, and that loop state is preserved across
+/// iterations. The exception is thrown at $i==1 and caught, then the loop
+/// continues to completion.
 #[test]
 fn test_exception_try_catch_inside_loop() {
-    // Verifies that a try-catch nested inside a loop correctly catches exceptions
-    // thrown from within that iteration, and that loop state is preserved across
-    // iterations. The exception is thrown at $i==1 and caught, then the loop
-    // continues to completion.
     let out = compile_and_run(
         "<?php class LoopException extends Exception {} for ($i = 0; $i < 3; $i++) { try { if ($i == 1) { throw new LoopException(); } echo $i; } catch (LoopException $e) { echo 9; } }",
     );
     assert_eq!(out, "092");
 }
 
+/// Regression test: verifies that exiting the top-level script scope does not
+/// leak owned local variables. Compiles an empty baseline and a script with a
+/// local array, parses GC allocation/free counts from stderr, and asserts they
+/// are balanced (allocs == frees). This guards against cleanup paths that drop
+/// owned values without freeing them.
 #[test]
 fn test_gc_main_scope_cleanup_releases_owned_locals_on_exit() {
-    // Regression test: verifies that exiting the top-level script scope does not
-    // leak owned local variables. Compiles an empty baseline and a script with a
-    // local array, parses GC allocation/free counts from stderr, and asserts they
-    // are balanced (allocs == frees). This guards against cleanup paths that drop
-    // owned values without freeing them.
     let baseline = compile_and_run_with_gc_stats("<?php");
     let out = compile_and_run_with_gc_stats("<?php $items = [1, 2, 3];");
     assert!(
@@ -306,24 +319,24 @@ fn test_gc_main_scope_cleanup_releases_owned_locals_on_exit() {
     );
 }
 
+/// Verifies that finally blocks execute even when the try body exits via return,
+/// break, or continue. Checks: return value is 5 but finally prints 1 first,
+/// break exits a try inside a for and finally prints 3, and continue in a for
+/// runs finally (prints 9) before the next iteration.
 #[test]
 fn test_exception_finally_runs_on_return_break_continue() {
-    // Verifies that finally blocks execute even when the try body exits via return,
-    // break, or continue. Checks: return value is 5 but finally prints 1 first,
-    // break exits a try inside a for and finally prints 3, and continue in a for
-    // runs finally (prints 9) before the next iteration.
     let out = compile_and_run(
         "<?php function f() { try { return 5; } finally { echo 1; } } echo f(); for ($i = 0; $i < 1; $i++) { try { echo 2; break; } finally { echo 3; } } for ($j = 0; $j < 2; $j++) { try { echo $j; continue; } finally { echo 9; } }",
     );
     assert_eq!(out, "15230919");
 }
 
+/// A break inside a finally block exits the while loop that encloses the try.
+/// The finally block itself runs, then break transfers control out of the loop.
+/// Verifies the loop is entered, the try body prints 1, and finally runs the
+/// break that terminates the loop before echo 4 executes.
 #[test]
 fn test_exception_finally_allows_local_loop_break() {
-    // A break inside a finally block exits the while loop that encloses the try.
-    // The finally block itself runs, then break transfers control out of the loop.
-    // Verifies the loop is entered, the try body prints 1, and finally runs the
-    // break that terminates the loop before echo 4 executes.
     let out = compile_and_run(
         "<?php try { echo 1; } finally { while (1) { echo 2; break; } echo 3; } echo 4;",
     );

@@ -9,56 +9,56 @@
 
 use super::*;
 
-// Verifies `=>` (double arrow) tokenizes in array context.
+/// Verifies `=>` (double arrow) tokenizes in array context.
 #[test]
 fn test_double_arrow_token() {
     let t = tokens("<?php [1 => 2];");
     assert!(t.contains(&Token::DoubleArrow));
 }
 
-// Verifies `&` (bitwise AND) tokenizes as `Ampersand`.
+/// Verifies `&` (bitwise AND) tokenizes as `Ampersand`.
 #[test]
 fn test_ampersand_token() {
     let t = tokens("<?php $x & $y;");
     assert!(t.contains(&Token::Ampersand));
 }
 
-// Verifies `|` (bitwise OR) tokenizes as `Pipe`.
+/// Verifies `|` (bitwise OR) tokenizes as `Pipe`.
 #[test]
 fn test_pipe_token() {
     let t = tokens("<?php $x | $y;");
     assert!(t.contains(&Token::Pipe));
 }
 
-// Verifies `^` (bitwise XOR) tokenizes as `Caret`.
+/// Verifies `^` (bitwise XOR) tokenizes as `Caret`.
 #[test]
 fn test_caret_token() {
     let t = tokens("<?php $x ^ $y;");
     assert!(t.contains(&Token::Caret));
 }
 
-// Verifies `~` (bitwise NOT) tokenizes as `Tilde`.
+/// Verifies `~` (bitwise NOT) tokenizes as `Tilde`.
 #[test]
 fn test_tilde_token() {
     let t = tokens("<?php ~$x;");
     assert!(t.contains(&Token::Tilde));
 }
 
-// Verifies `<<` (left shift) tokenizes as `LessLess`.
+/// Verifies `<<` (left shift) tokenizes as `LessLess`.
 #[test]
 fn test_shift_left_token() {
     let t = tokens("<?php $x << $y;");
     assert!(t.contains(&Token::LessLess));
 }
 
-// Verifies `>>` (right shift) tokenizes as `GreaterGreater`.
+/// Verifies `>>` (right shift) tokenizes as `GreaterGreater`.
 #[test]
 fn test_shift_right_token() {
     let t = tokens("<?php $x >> $y;");
     assert!(t.contains(&Token::GreaterGreater));
 }
 
-// Verifies `<=>` (spaceship) tokenizes as `Spaceship`.
+/// Verifies `<=>` (spaceship) tokenizes as `Spaceship`.
 #[test]
 fn test_spaceship_token() {
     let t = tokens("<?php $x <=> $y;");
@@ -67,14 +67,14 @@ fn test_spaceship_token() {
 
 // --- Null coalescing operator ---
 
-// Verifies `??` (null coalescing) tokenizes as `QuestionQuestion`.
+/// Verifies `??` (null coalescing) tokenizes as `QuestionQuestion`.
 #[test]
 fn test_question_question_token() {
     let t = tokens("<?php $x ?? $y;");
     assert!(t.contains(&Token::QuestionQuestion));
 }
 
-// Verifies `??=` (null coalescing assign) tokenizes as `QuestionQuestionAssign`.
+/// Verifies `??=` (null coalescing assign) tokenizes as `QuestionQuestionAssign`.
 #[test]
 fn test_question_question_assign_token() {
     let t = tokens("<?php $x ??= $y;");
@@ -93,14 +93,14 @@ fn test_question_question_assign_token() {
 
 // --- PHP 8.5 pipe operator ---
 
-// Verifies `|>` (pipe arrow, PHP 8.5) tokenizes as `PipeArrow`.
+/// Verifies `|>` (pipe arrow, PHP 8.5) tokenizes as `PipeArrow`.
 #[test]
 fn test_pipe_arrow_token() {
     let t = tokens("<?php $x |> $y;");
     assert!(t.contains(&Token::PipeArrow));
 }
 
-// Verifies `|>` does not shadow bitwise `|` when both appear.
+/// Verifies `|>` does not shadow bitwise `|` when both appear.
 #[test]
 fn test_pipe_arrow_does_not_shadow_bitwise_pipe() {
     let t = tokens("<?php $x | $y;");
@@ -108,7 +108,7 @@ fn test_pipe_arrow_does_not_shadow_bitwise_pipe() {
     assert!(!t.contains(&Token::PipeArrow));
 }
 
-// Verifies `|>` does not shadow `|=` compound assignment.
+/// Verifies `|>` does not shadow `|=` compound assignment.
 #[test]
 fn test_pipe_arrow_does_not_shadow_pipe_assign() {
     let t = tokens("<?php $x |= $y;");
@@ -116,7 +116,7 @@ fn test_pipe_arrow_does_not_shadow_pipe_assign() {
     assert!(!t.contains(&Token::PipeArrow));
 }
 
-// Verifies `|>` does not shadow `||` logical OR.
+/// Verifies `|>` does not shadow `||` logical OR.
 #[test]
 fn test_pipe_arrow_does_not_shadow_or_or() {
     let t = tokens("<?php $x || $y;");
@@ -124,7 +124,7 @@ fn test_pipe_arrow_does_not_shadow_or_or() {
     assert!(!t.contains(&Token::PipeArrow));
 }
 
-// Verifies `|>` without spaces still tokenizes correctly.
+/// Verifies `|>` without spaces still tokenizes correctly.
 #[test]
 fn test_pipe_arrow_without_spaces() {
     let t = tokens("<?php $x|>$y;");

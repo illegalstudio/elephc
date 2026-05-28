@@ -13,7 +13,7 @@ use super::*;
 // Uses the parent module's `tokens` helper so tests receive bare `Token`
 // entries consistent with other lexer submodules.
 
-// Verifies `+`, `-`, `*`, `/`, `%` tokenize as distinct arithmetic operators.
+/// Verifies `+`, `-`, `*`, `/`, `%` tokenize as distinct arithmetic operators.
 #[test]
 fn test_arithmetic_operators() {
     let t = tokens("<?php + - * / %");
@@ -23,14 +23,14 @@ fn test_arithmetic_operators() {
     );
 }
 
-// Verifies `.` and `=` tokenize as concat and assignment respectively.
+/// Verifies `.` and `=` tokenize as concat and assignment respectively.
 #[test]
 fn test_assignment_and_dot() {
     let t = tokens("<?php . =");
     assert_eq!(t[1..3], [Token::Dot, Token::Assign]);
 }
 
-// Verifies `==`, `!=`, `<`, `>`, `<=`, `>=` tokenize as comparison operators.
+/// Verifies `==`, `!=`, `<`, `>`, `<=`, `>=` tokenize as comparison operators.
 #[test]
 fn test_comparison_operators() {
     let t = tokens("<?php == != < > <= >=");
@@ -47,7 +47,7 @@ fn test_comparison_operators() {
     );
 }
 
-// Verifies `&&`, `||`, `and`, `or`, `xor` tokenize as logical operators.
+/// Verifies `&&`, `||`, `and`, `or`, `xor` tokenize as logical operators.
 #[test]
 fn test_logical_operators() {
     let t = tokens("<?php && || and or xor");
@@ -57,21 +57,21 @@ fn test_logical_operators() {
     );
 }
 
-// Verifies `and`, `or`, `xor` are case-insensitive (`AND`, `Or`, `xOr` all valid).
+/// Verifies `and`, `or`, `xor` are case-insensitive (`AND`, `Or`, `xOr` all valid).
 #[test]
 fn test_word_logical_operators_are_case_insensitive() {
     let t = tokens("<?php AND Or xOr");
     assert_eq!(t[1..4], [Token::And, Token::Or, Token::Xor]);
 }
 
-// Verifies `!` tokenizes as `Bang`.
+/// Verifies `!` tokenizes as `Bang`.
 #[test]
 fn test_bang() {
     let t = tokens("<?php !");
     assert_eq!(t[1], Token::Bang);
 }
 
-// Verifies compound assignment operators (`+=`, `-=`, `*=`, `**=`, etc.) tokenize correctly.
+/// Verifies compound assignment operators (`+=`, `-=`, `*=`, `**=`, etc.) tokenize correctly.
 #[test]
 fn test_compound_assignment() {
     let t = tokens("<?php += -= *= **= /= .= %= &= |= ^= <<= >>=");
@@ -94,14 +94,14 @@ fn test_compound_assignment() {
     );
 }
 
-// Verifies `++` and `--` tokenize as increment/decrement operators.
+/// Verifies `++` and `--` tokenize as increment/decrement operators.
 #[test]
 fn test_increment_decrement() {
     let t = tokens("<?php ++ --");
     assert_eq!(t[1..3], [Token::PlusPlus, Token::MinusMinus]);
 }
 
-// Verifies array subscript access `$a[0]` tokenizes correctly with brackets.
+/// Verifies array subscript access `$a[0]` tokenizes correctly with brackets.
 #[test]
 fn test_array_subscript_brackets() {
     let t = tokens("<?php $a[0];");
@@ -117,7 +117,7 @@ fn test_array_subscript_brackets() {
     );
 }
 
-// Verifies a complete assignment statement (`$x = 42;`) tokenizes with expected sequence.
+/// Verifies a complete assignment statement (`$x = 42;`) tokenizes with expected sequence.
 #[test]
 fn test_assignment_statement() {
     let t = tokens("<?php $x = 42;");
@@ -134,21 +134,21 @@ fn test_assignment_statement() {
     );
 }
 
-// Verifies `===` tokenizes as strict equality (`EqualEqualEqual`).
+/// Verifies `===` tokenizes as strict equality (`EqualEqualEqual`).
 #[test]
 fn test_strict_equal() {
     let t = tokens("<?php ===");
     assert_eq!(t[1], Token::EqualEqualEqual);
 }
 
-// Verifies `!==` tokenizes as strict inequality (`NotEqualEqual`).
+/// Verifies `!==` tokenizes as strict inequality (`NotEqualEqual`).
 #[test]
 fn test_strict_not_equal() {
     let t = tokens("<?php !==");
     assert_eq!(t[1], Token::NotEqualEqual);
 }
 
-// Verifies `===` is distinct from `==` (no token merging).
+/// Verifies `===` is distinct from `==` (no token merging).
 #[test]
 fn test_strict_equal_vs_loose_equal() {
     let t = tokens("<?php === ==");
@@ -156,7 +156,7 @@ fn test_strict_equal_vs_loose_equal() {
     assert_eq!(t[2], Token::EqualEqual);
 }
 
-// Verifies `!==` is distinct from `!=` (no token merging).
+/// Verifies `!==` is distinct from `!=` (no token merging).
 #[test]
 fn test_strict_not_equal_vs_loose_not_equal() {
     let t = tokens("<?php !== !=");
@@ -166,14 +166,14 @@ fn test_strict_not_equal_vs_loose_not_equal() {
 
 // --- Include/Require ---
 
-// Verifies `**` tokenizes as exponentiation (`StarStar`), not two stars.
+/// Verifies `**` tokenizes as exponentiation (`StarStar`), not two stars.
 #[test]
 fn test_star_star() {
     let t = tokens("<?php **");
     assert_eq!(t[1], Token::StarStar);
 }
 
-// Verifies `**` vs `*` are distinct tokens with correct precedence.
+/// Verifies `**` vs `*` are distinct tokens with correct precedence.
 #[test]
 fn test_star_vs_star_star() {
     let t = tokens("<?php ** *");
@@ -183,7 +183,7 @@ fn test_star_vs_star_star() {
 
 // --- Constants ---
 
-// Verifies `.` in string concatenation is not mistaken for a float.
+/// Verifies `.` in string concatenation is not mistaken for a float.
 #[test]
 fn test_dot_operator_not_float() {
     let t = tokens("<?php \"a\" . \"b\"");
@@ -192,7 +192,7 @@ fn test_dot_operator_not_float() {
 
 // --- Print keyword ---
 
-// Verifies `&` vs `&&` are distinct tokens (bitwise vs logical AND).
+/// Verifies `&` vs `&&` are distinct tokens (bitwise vs logical AND).
 #[test]
 fn test_ampersand_vs_andand() {
     let t = tokens("<?php $x & $y && $z;");
@@ -200,7 +200,7 @@ fn test_ampersand_vs_andand() {
     assert!(t.contains(&Token::AndAnd));
 }
 
-// Verifies `|` vs `||` are distinct tokens (bitwise vs logical OR).
+/// Verifies `|` vs `||` are distinct tokens (bitwise vs logical OR).
 #[test]
 fn test_pipe_vs_oror() {
     let t = tokens("<?php $x | $y || $z;");
@@ -208,14 +208,14 @@ fn test_pipe_vs_oror() {
     assert!(t.contains(&Token::OrOr));
 }
 
-// Verifies `->` (arrow) tokenizes correctly for property access.
+/// Verifies `->` (arrow) tokenizes correctly for property access.
 #[test]
 fn test_lex_arrow_operator() {
     let t = tokens("<?php $obj->prop;");
     assert!(t.contains(&Token::Arrow));
 }
 
-// Verifies `?->` (nullsafe arrow) tokenizes as `QuestionArrow`, not `Question` + `Arrow`.
+/// Verifies `?->` (nullsafe arrow) tokenizes as `QuestionArrow`, not `Question` + `Arrow`.
 #[test]
 fn test_lex_nullsafe_arrow_operator() {
     let t = tokens("<?php $obj?->prop;");
@@ -224,7 +224,7 @@ fn test_lex_nullsafe_arrow_operator() {
     assert!(!t.contains(&Token::Arrow));
 }
 
-// Verifies `?` vs `??` are distinct tokens (ternary vs null coalescing).
+/// Verifies `?` vs `??` are distinct tokens (ternary vs null coalescing).
 #[test]
 fn test_question_vs_question_question() {
     let t = tokens("<?php $x ? $y : $z ?? $w;");

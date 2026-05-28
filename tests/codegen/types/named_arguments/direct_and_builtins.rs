@@ -9,7 +9,7 @@
 
 use super::*;
 
-// Verifies named arguments can reorder parameters; `describe(age: 30, name: "Alice")` outputs "Alice:30".
+/// Verifies named arguments can reorder parameters; `describe(age: 30, name: "Alice")` outputs "Alice:30".
 #[test]
 fn test_named_arguments_reorder_function_call() {
     let out = compile_and_run(
@@ -25,7 +25,7 @@ fn test_named_arguments_reorder_function_call() {
     assert_eq!(out, "Alice:30");
 }
 
-// Verifies named arguments use parameter defaults for omitted arguments; `greet(suffix: "?")` outputs "world?".
+/// Verifies named arguments use parameter defaults for omitted arguments; `greet(suffix: "?")` outputs "world?".
 #[test]
 fn test_named_arguments_use_defaults_for_missing_params() {
     let out = compile_and_run(
@@ -39,7 +39,7 @@ fn test_named_arguments_use_defaults_for_missing_params() {
     assert_eq!(out, "world?");
 }
 
-// Verifies named arguments work on closure calls; `$f(age: 30, name: "Alice")` outputs "Alice:30".
+/// Verifies named arguments work on closure calls; `$f(age: 30, name: "Alice")` outputs "Alice:30".
 #[test]
 fn test_named_arguments_closure_call() {
     let out = compile_and_run(
@@ -55,8 +55,8 @@ fn test_named_arguments_closure_call() {
     assert_eq!(out, "Alice:30");
 }
 
-// Verifies named arguments work on first-class callable calls;
-// `$f = describe(...); $f(age: 30, name: "Alice")` outputs "Alice:30".
+/// Verifies named arguments work on first-class callable calls;
+/// `$f = describe(...); $f(age: 30, name: "Alice")` outputs "Alice:30".
 #[test]
 fn test_named_arguments_first_class_callable_call() {
     let out = compile_and_run(
@@ -73,8 +73,8 @@ fn test_named_arguments_first_class_callable_call() {
     assert_eq!(out, "Alice:30");
 }
 
-// Verifies named arguments work on instance method calls and constructor calls;
-// `new User(age: 30, name: "Alice")` and `$user->describe(suffix: "?", prefix: "user=")` output "user=Alice:30?".
+/// Verifies named arguments work on instance method calls and constructor calls;
+/// `new User(age: 30, name: "Alice")` and `$user->describe(suffix: "?", prefix: "user=")` output "user=Alice:30?".
 #[test]
 fn test_named_arguments_method_and_constructor_calls() {
     let out = compile_and_run(
@@ -100,7 +100,7 @@ fn test_named_arguments_method_and_constructor_calls() {
     assert_eq!(out, "user=Alice:30?");
 }
 
-// Verifies named arguments work on static method calls; `Greeter::hi(punct: "?", name: "Alice")` outputs "Hi Alice?".
+/// Verifies named arguments work on static method calls; `Greeter::hi(punct: "?", name: "Alice")` outputs "Hi Alice?".
 #[test]
 fn test_named_arguments_static_method_call() {
     let out = compile_and_run(
@@ -116,7 +116,7 @@ fn test_named_arguments_static_method_call() {
     assert_eq!(out, "Hi Alice?");
 }
 
-// Verifies named arguments work on builtins `strlen` and `str_repeat`; outputs "5:hahaha".
+/// Verifies named arguments work on builtins `strlen` and `str_repeat`; outputs "5:hahaha".
 #[test]
 fn test_named_arguments_builtin_call() {
     let out = compile_and_run(
@@ -129,8 +129,8 @@ echo str_repeat(times: 3, string: "ha");
     assert_eq!(out, "5:hahaha");
 }
 
-// Verifies that calling a builtin with an all-caps name inside a namespace falls back correctly;
-// `STRLEN(string: "abc")` outputs "3".
+/// Verifies that calling a builtin with an all-caps name inside a namespace falls back correctly;
+/// `STRLEN(string: "abc")` outputs "3".
 #[test]
 fn test_named_arguments_builtin_case_insensitive_namespace_fallback() {
     let out = compile_and_run(
@@ -142,7 +142,7 @@ echo STRLEN(string: "abc");
     assert_eq!(out, "3");
 }
 
-// Verifies `number_format(num: 1234, thousands_separator: " ")` uses defaults for omitted optional params.
+/// Verifies `number_format(num: 1234, thousands_separator: " ")` uses defaults for omitted optional params.
 #[test]
 fn test_named_arguments_builtin_uses_defaults_for_skipped_optional_params() {
     let out = compile_and_run(
@@ -153,7 +153,7 @@ echo number_format(num: 1234, thousands_separator: " ");
     assert_eq!(out, "1 234");
 }
 
-// Verifies `settype(type: "string", var: $value)` reorders call args correctly; outputs "string:42".
+/// Verifies `settype(type: "string", var: $value)` reorders call args correctly; outputs "string:42".
 #[test]
 fn test_named_arguments_builtin_settype_reorders_call() {
     let out = compile_and_run(
@@ -166,8 +166,8 @@ echo gettype($value) . ":" . $value;
     assert_eq!(out, "string:42");
 }
 
-// Verifies that `sort(array: $items)` mutates the caller's array variable in place and iteration
-// produces the sorted order "123".
+/// Verifies that `sort(array: $items)` mutates the caller's array variable in place and iteration
+/// produces the sorted order "123".
 #[test]
 fn test_named_arguments_builtin_mutating_array_arg_keeps_original_variable() {
     let out = compile_and_run(
@@ -182,7 +182,7 @@ foreach ($items as $item) {
     assert_eq!(out, "123");
 }
 
-// Verifies named arguments work after a spread prefix; `str_repeat(...$args, times: 3)` outputs "hahaha".
+/// Verifies named arguments work after a spread prefix; `str_repeat(...$args, times: 3)` outputs "hahaha".
 #[test]
 fn test_named_arguments_builtin_with_spread_prefix() {
     let out = compile_and_run(
@@ -194,8 +194,8 @@ echo str_repeat(...$args, times: 3);
     assert_eq!(out, "hahaha");
 }
 
-// Verifies source evaluation order is preserved for builtin named args;
-// `str_repeat(times: times_arg(), string: string_arg())` outputs "ts:hahaha" (strings before times).
+/// Verifies source evaluation order is preserved for builtin named args;
+/// `str_repeat(times: times_arg(), string: string_arg())` outputs "ts:hahaha" (strings before times).
 #[test]
 fn test_named_arguments_builtin_preserve_source_evaluation_order() {
     let out = compile_and_run(
@@ -214,8 +214,8 @@ echo ":" . str_repeat(times: times_arg(), string: string_arg());
     assert_eq!(out, "ts:hahaha");
 }
 
-// Verifies that a spread argument is evaluated exactly once when followed by named arguments;
-// `str_repeat(...args(), times: times_arg())` outputs "xt:hahaha" (x printed once from args, t from times_arg).
+/// Verifies that a spread argument is evaluated exactly once when followed by named arguments;
+/// `str_repeat(...args(), times: times_arg())` outputs "xt:hahaha" (x printed once from args, t from times_arg).
 #[test]
 fn test_named_arguments_builtin_after_spread_evaluates_spread_once() {
     let out = compile_and_run(

@@ -9,8 +9,8 @@
 
 use super::*;
 
+/// Verifies that constructing a Fiber with an empty callable does not crash the compiler/runtime.
 #[test]
-// Verifies that constructing a Fiber with an empty callable does not crash the compiler/runtime.
 fn test_fiber_construction_does_not_crash() {
     let out = compile_and_run(
         r#"<?php
@@ -21,9 +21,9 @@ echo "ok";
     assert_eq!(out, "ok");
 }
 
+/// Verifies that a newly constructed fiber reports the correct initial state predicates:
+/// isStarted=false, isRunning=false, isSuspended=false, isTerminated=false.
 #[test]
-// Verifies that a newly constructed fiber reports the correct initial state predicates:
-// isStarted=false, isRunning=false, isSuspended=false, isTerminated=false.
 fn test_fiber_state_predicates_initial() {
     let out = compile_and_run(
         r#"<?php
@@ -37,9 +37,9 @@ if ($f->isTerminated()) { echo "T"; } else { echo "t"; }
     assert_eq!(out, "srpt");
 }
 
+/// Verifies that Fiber::getCurrent() returns null (a boxed null Mixed cell) when called
+/// outside of any fiber. Uses is_null() for a clean boolean assertion.
 #[test]
-// Verifies that Fiber::getCurrent() returns null (a boxed null Mixed cell) when called
-// outside of any fiber. Uses is_null() for a clean boolean assertion.
 fn test_fiber_get_current_returns_null_outside_fiber() {
     // From outside any fiber, getCurrent returns the boxed null Mixed cell.
     // is_null() narrows back to a clean boolean we can assert on.
@@ -51,9 +51,9 @@ echo is_null(Fiber::getCurrent()) ? "null" : "not-null";
     assert_eq!(out, "null");
 }
 
+/// Verifies that Fiber::getCurrent() inside a running fiber returns the Fiber object
+/// itself (boxed as a Mixed cell), and that isRunning() is true on that object.
 #[test]
-// Verifies that Fiber::getCurrent() inside a running fiber returns the Fiber object
-// itself (boxed as a Mixed cell), and that isRunning() is true on that object.
 fn test_fiber_get_current_inside_is_boxed_fiber_object() {
     let out = compile_and_run(
         r#"<?php
@@ -69,9 +69,9 @@ $f->start();
     assert_eq!(out, "fiber/running");
 }
 
+/// Verifies that a fiber runs to completion when started, that control returns to the
+/// caller after the fiber function exits, and that isTerminated() is true after finish.
 #[test]
-// Verifies that a fiber runs to completion when started, that control returns to the
-// caller after the fiber function exits, and that isTerminated() is true after finish.
 fn test_fiber_runs_to_completion() {
     let out = compile_and_run(
         r#"<?php
@@ -84,8 +84,8 @@ if ($f->isTerminated()) { echo "|term"; }
     assert_eq!(out, "inside|after|term");
 }
 
+/// Verifies that Fiber::suspend(value) returns the value to the caller's start() return.
 #[test]
-// Verifies that Fiber::suspend(value) returns the value to the caller's start() return.
 fn test_fiber_suspend_returns_value_to_caller() {
     let out = compile_and_run(
         r#"<?php
@@ -99,8 +99,8 @@ echo $r;
     assert_eq!(out, "42");
 }
 
+/// Verifies that Fiber::suspend() with no argument yields null to the caller.
 #[test]
-// Verifies that Fiber::suspend() with no argument yields null to the caller.
 fn test_fiber_suspend_without_value_yields_null() {
     let out = compile_and_run(
         r#"<?php
@@ -114,8 +114,8 @@ echo is_null($r) ? "null" : "not-null";
     assert_eq!(out, "null");
 }
 
+/// Verifies that resume(value) delivers a value to the suspend call that receives it.
 #[test]
-// Verifies that resume(value) delivers a value to the suspend call that receives it.
 fn test_fiber_resume_delivers_value_to_suspend() {
     let out = compile_and_run(
         r#"<?php
@@ -130,10 +130,10 @@ $f->resume(99);
     assert_eq!(out, "got=99");
 }
 
+/// Verifies that resume delivers a nested array value to the suspend call and that
+/// array indexing into the received value works correctly (regression for Mixed
+/// cell payload handling).
 #[test]
-// Verifies that resume delivers a nested array value to the suspend call and that
-// array indexing into the received value works correctly (regression for Mixed
-// cell payload handling).
 fn test_fiber_resume_delivers_nested_array_to_suspend() {
     let out = compile_and_run(
         r#"<?php
@@ -149,9 +149,9 @@ $f->resume(["b" => [99, 77]]);
     assert_eq!(out, "77");
 }
 
+/// Verifies a full suspend-resume cycle across three sequential suspend/resume pairs,
+/// confirming Mixed-tagged values flow correctly through transfer_value.
 #[test]
-// Verifies a full suspend-resume cycle across three sequential suspend/resume pairs,
-// confirming Mixed-tagged values flow correctly through transfer_value.
 fn test_fiber_full_suspend_resume_cycle() {
     // Mixed-tagged values flow through `transfer_value`. We echo each
     // received Mixed payload directly without arithmetic so the test does
@@ -175,9 +175,9 @@ echo $f->resume("resume-B");
     assert_eq!(out, "yield-1|[got resume-A]yield-2|[got resume-B]yield-3");
 }
 
+/// Verifies that the fiber return value is only available via getReturn(), not via
+/// start() return, and that is_null() correctly identifies the null start() return.
 #[test]
-// Verifies that the fiber return value is only available via getReturn(), not via
-// start() return, and that is_null() correctly identifies the null start() return.
 fn test_fiber_terminal_return_available_only_from_get_return() {
     let out = compile_and_run(
         r#"<?php
@@ -193,9 +193,9 @@ echo $f->getReturn();
     assert_eq!(out, "null/ret");
 }
 
+/// Verifies that resume() returns null when the fiber terminates (after the final
+/// suspend), and that getReturn() still yields the terminal return value.
 #[test]
-// Verifies that resume() returns null when the fiber terminates (after the final
-// suspend), and that getReturn() still yields the terminal return value.
 fn test_fiber_resume_returns_null_when_fiber_terminates() {
     let out = compile_and_run(
         r#"<?php
@@ -214,9 +214,9 @@ echo $f->getReturn();
     assert_eq!(out, "yield/null/ret");
 }
 
+/// Verifies that an int return type produces the correct integer via getReturn(), and
+/// that the start() return is null.
 #[test]
-// Verifies that an int return type produces the correct integer via getReturn(), and
-// that the start() return is null.
 fn test_fiber_int_return_is_boxed_for_get_return() {
     let out = compile_and_run(
         r#"<?php
@@ -232,10 +232,10 @@ echo $f->getReturn();
     assert_eq!(out, "null/42");
 }
 
+/// Verifies that fiber stacks are released when Fiber objects are freed. Reassigning
+/// $f over 50 iterations drops each Fiber's refcount to 0; object_free_deep must
+/// release the stack or the process aborts with "heap memory exhausted".
 #[test]
-// Verifies that fiber stacks are released when Fiber objects are freed. Reassigning
-// $f over 50 iterations drops each Fiber's refcount to 0; object_free_deep must
-// release the stack or the process aborts with "heap memory exhausted".
 fn test_fiber_stack_is_released_when_object_is_freed() {
     // Each fiber owns a 256 KB stack from the heap (default 8 MB). Reassigning
     // $f over 50 iterations drops the previous Fiber's refcount to 0; the
@@ -253,10 +253,10 @@ echo "iters=" . $i;
     assert_eq!(out, "iters=50");
 }
 
+/// Verifies that a Fiber stored in a Mixed-typed property is released when the
+/// property is nulled and the object is reset. Uses a reduced heap to surface
+/// any missing cleanup.
 #[test]
-// Verifies that a Fiber stored in a Mixed-typed property is released when the
-// property is nulled and the object is reset. Uses a reduced heap to surface
-// any missing cleanup.
 fn test_fiber_stored_in_mixed_property_is_released_on_reset() {
     let out = compile_and_run_with_heap_size(
         r#"<?php
@@ -281,9 +281,9 @@ echo "iters=" . $i;
     assert_eq!(out, "iters=300");
 }
 
+/// Verifies that a Fiber capturing $this in a closure is released when the property
+/// is nulled and the cycle completes. Uses a reduced heap to surface any missing cleanup.
 #[test]
-// Verifies that a Fiber capturing $this in a closure is released when the property
-// is nulled and the cycle completes. Uses a reduced heap to surface any missing cleanup.
 fn test_fiber_capture_cycle_is_released_on_property_reset() {
     let out = compile_and_run_with_heap_size(
         r#"<?php
@@ -313,10 +313,10 @@ echo "iters=" . $i;
     assert_eq!(out, "iters=300");
 }
 
+/// Verifies that unset($s) after a cycle with a closure-capturing Fiber leaves zero
+/// live heap blocks (allocs == frees). Confirms there are no reference cycles preventing
+/// deallocation.
 #[test]
-// Verifies that unset($s) after a cycle with a closure-capturing Fiber leaves zero
-// live heap blocks (allocs == frees). Confirms there are no reference cycles preventing
-// deallocation.
 fn test_fiber_capture_cycle_reset_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
         r#"<?php
@@ -349,9 +349,9 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
+/// Verifies that discarding a Fiber (via unset) after start() leaves zero live heap
+/// blocks (allocs == frees). Confirms start() result cleanup.
 #[test]
-// Verifies that discarding a Fiber (via unset) after start() leaves zero live heap
-// blocks (allocs == frees). Confirms start() result cleanup.
 fn test_discarded_fiber_start_result_leaves_no_live_heap_blocks() {
     let out = compile_and_run_with_gc_stats(
         r#"<?php
@@ -369,9 +369,9 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
+/// Verifies that a Fiber with a suspend value, when discarded (unset) after start(),
+/// does not double-free the suspend value. Uses heap debug to catch double-free.
 #[test]
-// Verifies that a Fiber with a suspend value, when discarded (unset) after start(),
-// does not double-free the suspend value. Uses heap debug to catch double-free.
 fn test_discarded_suspend_value_is_not_released_again_with_fiber() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
@@ -399,9 +399,9 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
+/// Verifies that resume(value) with an active fiber does not double-free that value
+/// when the fiber is later discarded. Uses heap debug to catch double-free.
 #[test]
-// Verifies that resume(value) with an active fiber does not double-free that value
-// when the fiber is later discarded. Uses heap debug to catch double-free.
 fn test_resume_value_is_not_released_again_with_fiber() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
@@ -421,9 +421,9 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
+/// Verifies that getReturn() value survives beyond Fiber object destruction (unset).
+/// Confirms the return value is not tied to the fiber's heap lifetime.
 #[test]
-// Verifies that getReturn() value survives beyond Fiber object destruction (unset).
-// Confirms the return value is not tied to the fiber's heap lifetime.
 fn test_fiber_get_return_result_survives_fiber_release() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php

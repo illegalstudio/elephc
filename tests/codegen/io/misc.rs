@@ -9,9 +9,9 @@
 
 use super::*;
 
-// Compiles `echo @file_get_contents("missing.txt"); echo "after";` and verifies
-// the `@` error-control operator suppresses the runtime warning from the missing file,
-// that stdout contains only "after", and stderr is empty.
+/// Compiles `echo @file_get_contents("missing.txt"); echo "after";` and verifies
+/// the `@` error-control operator suppresses the runtime warning from the missing file,
+/// that stdout contains only "after", and stderr is empty.
 #[test]
 fn test_error_control_suppresses_runtime_warning() {
     let out = compile_and_run_capture(
@@ -25,10 +25,10 @@ echo "after";
     assert_eq!(out.stderr, "");
 }
 
-// Compiles `@file_get_contents("missing.txt"); echo "continued";` and verifies
-// the `@` error-control operator suppresses the runtime warning when the call
-// appears as a standalone expression statement (not embedded in echo),
-// that stdout contains "continued", and stderr is empty.
+/// Compiles `@file_get_contents("missing.txt"); echo "continued";` and verifies
+/// the `@` error-control operator suppresses the runtime warning when the call
+/// appears as a standalone expression statement (not embedded in echo),
+/// that stdout contains "continued", and stderr is empty.
 #[test]
 fn test_error_control_expression_statement_suppresses_runtime_warning() {
     let out = compile_and_run_capture(
@@ -42,8 +42,8 @@ echo "continued";
     assert_eq!(out.stderr, "");
 }
 
-// Compiles a `readline()` call piped with "world\n" on stdin and verifies
-// the input is read, trimmed, and printed as "read: world".
+/// Compiles a `readline()` call piped with "world\n" on stdin and verifies
+/// the input is read, trimmed, and printed as "read: world".
 #[test]
 fn test_readline() {
     let out = compile_and_run_with_stdin(

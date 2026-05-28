@@ -9,7 +9,7 @@
 
 use super::*;
 
-// Verifies that a nested `if` contradicting an outer guard is pruned. Confirms "ab".
+/// Verifies that a nested `if` contradicting an outer guard is pruned. Confirms "ab".
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_outer_guard() {
     let out = compile_and_run(
@@ -34,7 +34,7 @@ run(false);
     assert_eq!(out, "ab");
 }
 
-// Verifies that an outer guard is invalidated after a local write. Confirms "a".
+/// Verifies that an outer guard is invalidated after a local write. Confirms "a".
 #[test]
 fn test_dead_code_elimination_invalidates_outer_guard_after_local_write() {
     let out = compile_and_run(
@@ -56,6 +56,7 @@ run(true);
 
     assert_eq!(out, "a");
 }
+/// Verifies dead code elimination prunes nested if region from outer strict bool guard.
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_outer_strict_bool_guard() {
     let out = compile_and_run(
@@ -77,6 +78,7 @@ run(false);
     );
     assert_eq!(out, "ab");
 }
+/// Verifies dead code elimination invalidates outer strict bool guard after local write.
 #[test]
 fn test_dead_code_elimination_invalidates_outer_strict_bool_guard_after_local_write() {
     let out = compile_and_run(
@@ -96,6 +98,7 @@ run(true);
     );
     assert_eq!(out, "a");
 }
+/// Verifies dead code elimination prunes nested if region from outer and guard.
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_outer_and_guard() {
     let out = compile_and_run(
@@ -117,6 +120,7 @@ run(true, false);
     );
     assert_eq!(out, "ab");
 }
+/// Verifies dead code elimination prunes nested if region from outer negated and guard.
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_outer_negated_and_guard() {
     let out = compile_and_run(
@@ -139,8 +143,8 @@ run(true, true);
     assert_eq!(out, "ab");
 }
 
-// Verifies that a nested `if` contradicting an outer `|| false` guard is pruned.
-// Confirms "ab".
+/// Verifies that a nested `if` contradicting an outer `|| false` guard is pruned.
+/// Confirms "ab".
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_outer_or_false_branch() {
     let out = compile_and_run(
@@ -165,8 +169,8 @@ run(false, false);
     assert_eq!(out, "ab");
 }
 
-// Verifies that a nested `if` contradicting an outer `=== null` guard is pruned. Tests both
-// null guard and int non-null case. Confirms "ab".
+/// Verifies that a nested `if` contradicting an outer `=== null` guard is pruned. Tests both
+/// null guard and int non-null case. Confirms "ab".
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_outer_null_guard() {
     let out = compile_and_run(
@@ -201,7 +205,7 @@ runInt();
     assert_eq!(out, "ab");
 }
 
-// Verifies that a nested `if` contradicting an outer `=== 0` guard is pruned. Confirms "ab".
+/// Verifies that a nested `if` contradicting an outer `=== 0` guard is pruned. Confirms "ab".
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_outer_zero_guard() {
     let out = compile_and_run(
@@ -226,7 +230,7 @@ run(1);
     assert_eq!(out, "ab");
 }
 
-// Verifies that a nested `if` contradicting an outer `=== ""` guard is pruned. Confirms "ab".
+/// Verifies that a nested `if` contradicting an outer `=== ""` guard is pruned. Confirms "ab".
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_outer_empty_string_guard() {
     let out = compile_and_run(
@@ -251,7 +255,7 @@ run("x");
     assert_eq!(out, "ab");
 }
 
-// Verifies that a nested `if` contradicting an outer `=== "0"` guard is pruned. Confirms "ab".
+/// Verifies that a nested `if` contradicting an outer `=== "0"` guard is pruned. Confirms "ab".
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_outer_string_zero_guard() {
     let out = compile_and_run(
@@ -276,7 +280,7 @@ run("1");
     assert_eq!(out, "ab");
 }
 
-// Verifies that a nested `if` contradicting an outer `=== 0.0` guard is pruned. Confirms "ab".
+/// Verifies that a nested `if` contradicting an outer `=== 0.0` guard is pruned. Confirms "ab".
 #[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_outer_zero_float_guard() {
     let out = compile_and_run(

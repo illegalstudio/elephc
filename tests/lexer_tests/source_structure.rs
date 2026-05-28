@@ -9,28 +9,28 @@
 
 use super::*;
 
-// Verifies `<?php` produces `OpenTag` and EOF, the bare minimum valid PHP script.
+/// Verifies `<?php` produces `OpenTag` and EOF, the bare minimum valid PHP script.
 #[test]
 fn test_open_tag() {
     let t = tokens("<?php");
     assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
 }
 
-// Verifies `// ...` line comments are consumed and do not appear in the token stream.
+/// Verifies `// ...` line comments are consumed and do not appear in the token stream.
 #[test]
 fn test_line_comment() {
     let t = tokens("<?php // this is a comment\necho \"hi\";");
     assert_eq!(t[1], Token::Echo);
 }
 
-// Verifies `/* ... */` block comments are consumed and do not appear in the token stream.
+/// Verifies `/* ... */` block comments are consumed and do not appear in the token stream.
 #[test]
 fn test_block_comment() {
     let t = tokens("<?php /* block */ echo \"hi\";");
     assert_eq!(t[1], Token::Echo);
 }
 
-// Verifies consecutive comments (block and line) are all skipped correctly.
+/// Verifies consecutive comments (block and line) are all skipped correctly.
 #[test]
 fn test_consecutive_comments() {
     let t = tokens("<?php /* a *//* b */// c\necho \"ok\";");
@@ -39,13 +39,13 @@ fn test_consecutive_comments() {
 
 // --- Complex tokens ---
 
-// Verifies missing `<?php` open tag produces a lex error.
+/// Verifies missing `<?php` open tag produces a lex error.
 #[test]
 fn test_missing_open_tag() {
     assert!(tokenize("echo \"hi\";").is_err());
 }
 
-// Verifies an unterminated double-quoted string produces a lex error.
+/// Verifies an unterminated double-quoted string produces a lex error.
 #[test]
 fn test_unterminated_string() {
     assert!(tokenize("<?php \"no closing").is_err());
@@ -53,7 +53,7 @@ fn test_unterminated_string() {
 
 // --- Spans ---
 
-// Verifies line tracking: `echo` on line 2 reports line=2, col=1.
+/// Verifies line tracking: `echo` on line 2 reports line=2, col=1.
 #[test]
 fn test_span_tracking() {
     let spanned = tokenize("<?php\necho \"hi\";").unwrap();
@@ -62,7 +62,7 @@ fn test_span_tracking() {
     assert_eq!(echo_span.col, 1);
 }
 
-// Verifies multiline sources report the correct line number for the last token.
+/// Verifies multiline sources report the correct line number for the last token.
 #[test]
 fn test_span_multiline() {
     let spanned = tokenize("<?php\n\n\n$x").unwrap();
@@ -72,35 +72,35 @@ fn test_span_multiline() {
 
 // --- Strict comparison ---
 
-// Verifies trailing space after `<?php` still produces only `OpenTag` + `Eof`.
+/// Verifies trailing space after `<?php` still produces only `OpenTag` + `Eof`.
 #[test]
 fn test_empty_after_open_tag() {
     let t = tokens("<?php ");
     assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
 }
 
-// Verifies `<?php` with no trailing whitespace produces `OpenTag` + `Eof`.
+/// Verifies `<?php` with no trailing whitespace produces `OpenTag` + `Eof`.
 #[test]
 fn test_open_tag_no_trailing_space() {
     let t = tokens("<?php");
     assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
 }
 
-// Verifies `<?php\n` (newline only after open tag) produces `OpenTag` + `Eof`.
+/// Verifies `<?php\n` (newline only after open tag) produces `OpenTag` + `Eof`.
 #[test]
 fn test_open_tag_newline_only() {
     let t = tokens("<?php\n");
     assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
 }
 
-// Verifies a line comment after open tag with no trailing code produces `OpenTag` + `Eof`.
+/// Verifies a line comment after open tag with no trailing code produces `OpenTag` + `Eof`.
 #[test]
 fn test_open_tag_with_comment_no_code() {
     let t = tokens("<?php // nothing here\n");
     assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
 }
 
-// Verifies a block comment after open tag with no trailing code produces `OpenTag` + `Eof`.
+/// Verifies a block comment after open tag with no trailing code produces `OpenTag` + `Eof`.
 #[test]
 fn test_open_tag_with_block_comment_no_code() {
     let t = tokens("<?php /* empty */");

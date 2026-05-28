@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that code after a `try/catch` that always returns is pruned. Confirms "7" and
-// that `pow` (2**8) does not appear in user assembly.
+/// Verifies that code after a `try/catch` that always returns is pruned. Confirms "7" and
+/// that `pow` (2**8) does not appear in user assembly.
 #[test]
 fn test_dead_code_elimination_prunes_after_exhaustive_try_catch() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_try_catch");
@@ -51,8 +51,8 @@ echo answer();
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that an empty `try/catch/finally` with pure bodies in try and catch collapses
-// to just the finally block. Confirms "f!".
+/// Verifies that an empty `try/catch/finally` with pure bodies in try and catch collapses
+/// to just the finally block. Confirms "f!".
 #[test]
 fn test_dead_code_elimination_collapses_empty_try_shell_after_branch_dce() {
     let out = compile_and_run(
@@ -71,9 +71,9 @@ echo "!";
     assert_eq!(out, "f!");
 }
 
-// Verifies that a switch case guarded by `$other` (unknown at compile time) is kept when
-// preceded by a truthy guard on `$flag`. Confirms "A" with "maybe-first" present and
-// "dead-default" absent from assembly.
+/// Verifies that a switch case guarded by `$other` (unknown at compile time) is kept when
+/// preceded by a truthy guard on `$flag`. Confirms "A" with "maybe-first" present and
+/// "dead-default" absent from assembly.
 #[test]
 fn test_dead_code_elimination_keeps_unknown_truthy_switch_entry_before_matching_case() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_truthy_switch_unknown_entry");
@@ -117,8 +117,8 @@ run(true, false);
     assert!(!user_asm.contains("dead-default"));
 }
 
-// Verifies that a guard invalidation inside a try body propagates to the catch guard,
-// pruning the "bad" path. Confirms "a".
+/// Verifies that a guard invalidation inside a try body propagates to the catch guard,
+/// pruning the "bad" path. Confirms "a".
 #[test]
 fn test_dead_code_elimination_invalidates_outer_guard_before_catch_body() {
     let out = compile_and_run(
@@ -145,8 +145,8 @@ run(true);
     assert_eq!(out, "a");
 }
 
-// Verifies that guard invalidation via a switch throw path propagates to the catch guard.
-// Confirms "a".
+/// Verifies that guard invalidation via a switch throw path propagates to the catch guard.
+/// Confirms "a".
 #[test]
 fn test_dead_code_elimination_invalidates_outer_guard_before_catch_body_from_switch_throw_path() {
     let out = compile_and_run(
@@ -178,8 +178,8 @@ run(true, 1);
     assert_eq!(out, "a");
 }
 
-// Verifies that an unreachable switch throw path whose guard is already invalidated does
-// not affect the catch guard analysis. Confirms "a" with "dead-switch-unreachable" absent.
+/// Verifies that an unreachable switch throw path whose guard is already invalidated does
+/// not affect the catch guard analysis. Confirms "a" with "dead-switch-unreachable" absent.
 #[test]
 fn test_dead_code_elimination_ignores_unreachable_switch_throw_path_writes_before_catch_body() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_throw_path_cfg_prune");
@@ -228,8 +228,8 @@ run(true, 1);
     assert!(!user_asm.contains("dead-switch-unreachable"));
 }
 
-// Verifies that a guard is preserved when only other locals change inside the try.
-// Confirms "a".
+/// Verifies that a guard is preserved when only other locals change inside the try.
+/// Confirms "a".
 #[test]
 fn test_dead_code_elimination_preserves_outer_guard_for_catch_when_only_non_throw_path_writes() {
     let out = compile_and_run(

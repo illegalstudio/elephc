@@ -9,7 +9,7 @@
 
 use super::*;
 
-// Verifies that `iterable` typed parameter returns "array" from `gettype()` for both hash and indexed arrays.
+/// Verifies that `iterable` typed parameter returns "array" from `gettype()` for both hash and indexed arrays.
 #[test]
 fn test_gettype_iterable_returns_array() {
     let out = compile_and_run(
@@ -25,7 +25,7 @@ fn test_gettype_iterable_returns_array() {
     assert_eq!(out, "array|array");
 }
 
-// Verifies `var_dump` on a hash (associative) `iterable` prints the array shell with correct count.
+/// Verifies `var_dump` on a hash (associative) `iterable` prints the array shell with correct count.
 #[test]
 fn test_var_dump_iterable_hash_prints_array_shell() {
     let out = compile_and_run(
@@ -39,7 +39,7 @@ fn test_var_dump_iterable_hash_prints_array_shell() {
     assert_eq!(out, "array(2) {\n}\n");
 }
 
-// Verifies `var_dump` on an indexed `iterable` prints the array shell with the correct element count.
+/// Verifies `var_dump` on an indexed `iterable` prints the array shell with the correct element count.
 #[test]
 fn test_var_dump_iterable_indexed_array_prints_array_shell() {
     let out = compile_and_run(
@@ -53,7 +53,7 @@ fn test_var_dump_iterable_indexed_array_prints_array_shell() {
     assert_eq!(out, "array(3) {\n}\n");
 }
 
-// Verifies `echo` on an `iterable` parameter prints "Array" for both hash and indexed variants.
+/// Verifies `echo` on an `iterable` parameter prints "Array" for both hash and indexed variants.
 #[test]
 fn test_echo_iterable_prints_array_literal() {
     let out = compile_and_run(
@@ -69,8 +69,8 @@ fn test_echo_iterable_prints_array_literal() {
     assert_eq!(out, "Array|Array");
 }
 
-// Verifies strict equality (`===`) on two `iterable` parameters reflects pointer identity:
-// same variable is equal, a copy with the same content is not equal.
+/// Verifies strict equality (`===`) on two `iterable` parameters reflects pointer identity:
+/// same variable is equal, a copy with the same content is not equal.
 #[test]
 fn test_strict_eq_two_iterables_pointer_identity() {
     let out = compile_and_run(
@@ -87,7 +87,7 @@ fn test_strict_eq_two_iterables_pointer_identity() {
     assert_eq!(out, "eq|ne");
 }
 
-// Verifies that casting an `iterable` to `string` produces "Array" regardless of indexed or hash content.
+/// Verifies that casting an `iterable` to `string` produces "Array" regardless of indexed or hash content.
 #[test]
 fn test_iterable_string_cast_is_array_literal() {
     let out = compile_and_run(
@@ -103,8 +103,8 @@ fn test_iterable_string_cast_is_array_literal() {
     assert_eq!(out, "Array|Array");
 }
 
-// Verifies `(int)` and `(float)` casts on `iterable` follow PHP's array truthiness: empty array is 0/false,
-// non-empty indexed and associative arrays are 1/true.
+/// Verifies `(int)` and `(float)` casts on `iterable` follow PHP's array truthiness: empty array is 0/false,
+/// non-empty indexed and associative arrays are 1/true.
 #[test]
 fn test_iterable_numeric_casts_follow_php_array_truthiness() {
     let out = compile_and_run(
@@ -129,7 +129,7 @@ fn test_iterable_numeric_casts_follow_php_array_truthiness() {
     assert_eq!(out, "0|1|1|0|1");
 }
 
-// Verifies `is_iterable()` predicates at compile time for literal arrays, int, and `iterable` typed parameter.
+/// Verifies `is_iterable()` predicates at compile time for literal arrays, int, and `iterable` typed parameter.
 #[test]
 fn test_is_iterable_compile_time_predicates() {
     let out = compile_and_run(
@@ -147,7 +147,7 @@ fn test_is_iterable_compile_time_predicates() {
     assert_eq!(out, "yyny");
 }
 
-// Verifies `is_iterable()` runtime dispatch for a `mixed` parameter: arrays return true, non-arrays return false.
+/// Verifies `is_iterable()` runtime dispatch for a `mixed` parameter: arrays return true, non-arrays return false.
 #[test]
 fn test_is_iterable_runtime_dispatch_for_mixed() {
     let out = compile_and_run(
@@ -165,8 +165,8 @@ fn test_is_iterable_runtime_dispatch_for_mixed() {
     assert_eq!(out, "yynnn");
 }
 
-// Verifies `is_iterable()` returns true for both `Iterator` and `IteratorAggregate` objects when passed
-// to a `mixed` typed function or used directly.
+/// Verifies `is_iterable()` returns true for both `Iterator` and `IteratorAggregate` objects when passed
+/// to a `mixed` typed function or used directly.
 #[test]
 fn test_is_iterable_accepts_iterator_objects() {
     let out = compile_and_run(
@@ -199,8 +199,8 @@ echo check(new Values()) ? 'y' : 'n';
     assert_eq!(out, "yyyy");
 }
 
-// Verifies an `iterable` return value is boxed to `mixed` with a concrete array tag and is still
-// recognized as an iterable; `var_dump` prints the array structure.
+/// Verifies an `iterable` return value is boxed to `mixed` with a concrete array tag and is still
+/// recognized as an iterable; `var_dump` prints the array structure.
 #[test]
 fn test_iterable_boxes_to_mixed_with_concrete_array_tag() {
     let out = compile_and_run(
@@ -218,8 +218,8 @@ fn test_iterable_boxes_to_mixed_with_concrete_array_tag() {
     assert_eq!(out, "y|array|array(2) {\n}\n");
 }
 
-// Verifies `empty()` on an `iterable` uses the underlying array length: empty array is "empty",
-// non-empty indexed and associative arrays are "not".
+/// Verifies `empty()` on an `iterable` uses the underlying array length: empty array is "empty",
+/// non-empty indexed and associative arrays are "not".
 #[test]
 fn test_empty_iterable_uses_underlying_array_length() {
     let out = compile_and_run(
@@ -237,8 +237,8 @@ fn test_empty_iterable_uses_underlying_array_length() {
     assert_eq!(out, "empty|not|not");
 }
 
-// Verifies that `iterable` cleanup uses the uniform `__rt_decref_any` path (ARM64: `bl __rt_decref_any`,
-// x86_64: `call __rt_decref_any`) by inspecting the emitted assembly for both targets.
+/// Verifies that `iterable` cleanup uses the uniform `__rt_decref_any` path (ARM64: `bl __rt_decref_any`,
+/// x86_64: `call __rt_decref_any`) by inspecting the emitted assembly for both targets.
 #[test]
 fn test_iterable_cleanup_uses_uniform_decref_dispatch() {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);

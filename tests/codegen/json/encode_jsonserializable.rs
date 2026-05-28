@@ -10,8 +10,8 @@
 
 use super::*;
 
-// Verifies json_encode dispatches through jsonSerialize() when a class implements
-// JsonSerializable, returning the string value from jsonSerialize().
+/// Verifies json_encode dispatches through jsonSerialize() when a class implements
+/// JsonSerializable, returning the string value from jsonSerialize().
 #[test]
 fn test_jsonserialize_dispatched_for_string_return() {
     let out = compile_and_run(
@@ -26,7 +26,7 @@ echo json_encode(new Custom());
     assert_eq!(out, r#""served""#);
 }
 
-// Verifies json_encode dispatches through jsonSerialize() and returns the int value.
+/// Verifies json_encode dispatches through jsonSerialize() and returns the int value.
 #[test]
 fn test_jsonserialize_dispatched_for_int_return() {
     let out = compile_and_run(
@@ -41,7 +41,7 @@ echo json_encode(new Wrapped());
     assert_eq!(out, "42");
 }
 
-// Verifies json_encode dispatches through jsonSerialize() returning an assoc array.
+/// Verifies json_encode dispatches through jsonSerialize() returning an assoc array.
 #[test]
 fn test_jsonserialize_dispatched_for_assoc_return() {
     let out = compile_and_run(
@@ -58,7 +58,7 @@ echo json_encode(new Custom());
     assert_eq!(out, r#"{"public":1,"from_jsonSerialize":true}"#);
 }
 
-// Verifies jsonSerialize result is encoded when the implementing object is inside an array.
+/// Verifies jsonSerialize result is encoded when the implementing object is inside an array.
 #[test]
 fn test_jsonserialize_dispatched_inside_array() {
     let out = compile_and_run(
@@ -74,7 +74,7 @@ echo json_encode([new Box(1), new Box(2), new Box(3)]);
     assert_eq!(out, "[10,20,30]");
 }
 
-// Verifies jsonSerialize result is encoded when the implementing object is inside an assoc array.
+/// Verifies jsonSerialize result is encoded when the implementing object is inside an assoc array.
 #[test]
 fn test_jsonserialize_dispatched_inside_assoc() {
     let out = compile_and_run(
@@ -90,8 +90,8 @@ echo json_encode(["a" => new Tag("hi"), "b" => new Tag("world")]);
     assert_eq!(out, r#"{"a":"HI","b":"WORLD"}"#);
 }
 
-// Verifies a nested json_encode call inside jsonSerialize does not clobber the outer
-// JSON_PRETTY_PRINT flag; the encoder state must be preserved across recursive calls.
+/// Verifies a nested json_encode call inside jsonSerialize does not clobber the outer
+/// JSON_PRETTY_PRINT flag; the encoder state must be preserved across recursive calls.
 #[test]
 fn test_jsonserialize_nested_json_encode_does_not_clobber_pretty_flags() {
     let out = compile_and_run(
@@ -108,8 +108,8 @@ echo json_encode(new Bad(), JSON_PRETTY_PRINT);
     assert_eq!(out, "{\n    \"inner\": [\n        3,\n        4\n    ]\n}");
 }
 
-// Verifies a failing json_encode inside jsonSerialize does not poison the outer result;
-// the outer json_encode must succeed and report no error.
+/// Verifies a failing json_encode inside jsonSerialize does not poison the outer result;
+/// the outer json_encode must succeed and report no error.
 #[test]
 fn test_jsonserialize_nested_json_encode_error_does_not_poison_outer_result() {
     let out = compile_and_run(
@@ -126,8 +126,8 @@ echo json_encode(new Noisy()) . "\n" . json_last_error();
     assert_eq!(out, "{\"ok\":1}\n0");
 }
 
-// Verifies a class that does NOT implement JsonSerializable walks public properties
-// and does NOT invoke any jsonSerialize method.
+/// Verifies a class that does NOT implement JsonSerializable walks public properties
+/// and does NOT invoke any jsonSerialize method.
 #[test]
 fn test_class_without_jsonserializable_walks_public_props() {
     // Sanity test: a class that does NOT implement JsonSerializable should

@@ -9,8 +9,8 @@
 
 use super::*;
 
-// Verifies that a scalar assigned before a `while (false)` loop (`$base = 2`) is preserved
-// because the body never executes, so `$base ** 3` folds to `8`.
+/// Verifies that a scalar assigned before a `while (false)` loop (`$base = 2`) is preserved
+/// because the body never executes, so `$base ** 3` folds to `8`.
 #[test]
 fn test_constant_propagation_preserves_scalar_across_while_false_body_writes() {
     let dir = make_cli_test_dir("elephc_constant_propagation_while_false");
@@ -47,8 +47,8 @@ echo $base ** 3;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a `do/while(false)` loop body assigns `$base = 2` which is used after,
-// so `$base ** 3` folds to `8`.
+/// Verifies that a `do/while(false)` loop body assigns `$base = 2` which is used after,
+/// so `$base ** 3` folds to `8`.
 #[test]
 fn test_constant_propagation_tracks_do_while_false_assignment() {
     let dir = make_cli_test_dir("elephc_constant_propagation_do_while_false");
@@ -84,8 +84,8 @@ echo $base ** 3;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that `while (true) { $base = 2; break; }` produces a constant `$base` after the loop,
-// so `$base ** 3` folds to `8`.
+/// Verifies that `while (true) { $base = 2; break; }` produces a constant `$base` after the loop,
+/// so `$base ** 3` folds to `8`.
 #[test]
 fn test_constant_propagation_tracks_while_true_break_assignment() {
     let dir = make_cli_test_dir("elephc_constant_propagation_while_true_break");
@@ -122,8 +122,8 @@ echo $base ** 3;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that when both branches of an `if` inside `while (true)` `break` with the same
-// constant (`$base = 2`), they merge and `$base ** 3` folds to `8`.
+/// Verifies that when both branches of an `if` inside `while (true)` `break` with the same
+/// constant (`$base = 2`), they merge and `$base ** 3` folds to `8`.
 #[test]
 fn test_constant_propagation_merges_branch_breaks_through_while_true() {
     let dir = make_cli_test_dir("elephc_constant_propagation_while_branch_breaks");
@@ -165,8 +165,8 @@ echo $base ** 3;
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that `continue` in a `do/while(false)` loop still assigns `$base = 2` which is
-// used after the loop, so `$base ** 3` folds to `8`.
+/// Verifies that `continue` in a `do/while(false)` loop still assigns `$base = 2` which is
+/// used after the loop, so `$base ** 3` folds to `8`.
 #[test]
 fn test_constant_propagation_tracks_do_while_false_continue_assignment() {
     let dir = make_cli_test_dir("elephc_constant_propagation_do_while_false_continue");

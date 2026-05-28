@@ -14,8 +14,8 @@ use crate::support::*;
 // synthetic main path, so __FILE__ ends with "test.php" and __DIR__ is the
 // canonical temp directory.
 
-// Verifies `__FILE__` is an absolute path ending in `test.php`. The temp
-// directory provides an absolute path; __FILE__ is substituted at lowering.
+/// Verifies `__FILE__` is an absolute path ending in `test.php`. The temp
+/// directory provides an absolute path; __FILE__ is substituted at lowering.
 #[test]
 fn test_dunder_file_is_absolute_path_ending_in_test_php() {
     let out = compile_and_run("<?php echo __FILE__;");
@@ -31,8 +31,8 @@ fn test_dunder_file_is_absolute_path_ending_in_test_php() {
     );
 }
 
-// Verifies `__DIR__` is an absolute path with no trailing slash. The temp
-// directory provides an absolute path; __DIR__ is substituted at lowering.
+/// Verifies `__DIR__` is an absolute path with no trailing slash. The temp
+/// directory provides an absolute path; __DIR__ is substituted at lowering.
 #[test]
 fn test_dunder_dir_is_absolute_path_with_no_trailing_slash() {
     let out = compile_and_run("<?php echo __DIR__;");
@@ -44,9 +44,9 @@ fn test_dunder_dir_is_absolute_path_with_no_trailing_slash() {
     );
 }
 
-// Verifies `__DIR__ . '/sub/file.php'` is folded into a single literal at
-// compile time. The optimizer concatenates the constant dir with the relative
-// path and emits one string constant.
+/// Verifies `__DIR__ . '/sub/file.php'` is folded into a single literal at
+/// compile time. The optimizer concatenates the constant dir with the relative
+/// path and emits one string constant.
 #[test]
 fn test_dunder_dir_concat_produces_single_folded_string() {
     // The optimizer should fold `__DIR__ . '/sub'` into a single literal.
@@ -55,8 +55,8 @@ fn test_dunder_dir_concat_produces_single_folded_string() {
     assert!(out.ends_with("/sub/file.php"));
 }
 
-// Verifies `__dir__` and `__LiNe__` (alternative casing) resolve correctly.
-// Magic constants are case-insensitive per PHP semantics.
+/// Verifies `__dir__` and `__LiNe__` (alternative casing) resolve correctly.
+/// Magic constants are case-insensitive per PHP semantics.
 #[test]
 fn test_magic_constants_are_case_insensitive() {
     let out = compile_and_run("<?php echo __dir__ . '|'; echo __LiNe__;");
@@ -66,23 +66,23 @@ fn test_magic_constants_are_case_insensitive() {
 
 // `__LINE__` is substituted at parse time using the span line.
 
-// Verifies `__LINE__` equals 1 at the first line of a PHP script.
+/// Verifies `__LINE__` equals 1 at the first line of a PHP script.
 #[test]
 fn test_dunder_line_at_first_line() {
     let out = compile_and_run("<?php echo __LINE__;");
     assert_eq!(out, "1");
 }
 
-// Verifies `__LINE__` accounts for blank lines before the reference. With
-// three blank lines before `echo`, the span line is 4.
+/// Verifies `__LINE__` accounts for blank lines before the reference. With
+/// three blank lines before `echo`, the span line is 4.
 #[test]
 fn test_dunder_line_after_blank_lines() {
     let out = compile_and_run("<?php\n\n\necho __LINE__;\n");
     assert_eq!(out, "4");
 }
 
-// Verifies `__LINE__` inside a function body reports the line within the
-// function, not the top-level script. The echo is on line 3 of the script.
+/// Verifies `__LINE__` inside a function body reports the line within the
+/// function, not the top-level script. The echo is on line 3 of the script.
 #[test]
 fn test_dunder_line_inside_function_body() {
     let out = compile_and_run(
@@ -94,14 +94,14 @@ fn test_dunder_line_inside_function_body() {
 // `__FUNCTION__` returns the (FQN) function name inside a function, empty
 // outside.
 
-// Verifies `__FUNCTION__` is empty when accessed outside any function body.
+/// Verifies `__FUNCTION__` is empty when accessed outside any function body.
 #[test]
 fn test_dunder_function_outside_any_function_is_empty() {
     let out = compile_and_run("<?php echo '[' . __FUNCTION__ . ']';");
     assert_eq!(out, "[]");
 }
 
-// Verifies `__FUNCTION__` inside a plain function returns the function name.
+/// Verifies `__FUNCTION__` inside a plain function returns the function name.
 #[test]
 fn test_dunder_function_inside_plain_function() {
     let out = compile_and_run(
@@ -110,8 +110,8 @@ fn test_dunder_function_inside_plain_function() {
     assert_eq!(out, "greet");
 }
 
-// Verifies `__FUNCTION__` inside a namespaced function returns the fully-
-// qualified name (e.g. `App\Util\greet`).
+/// Verifies `__FUNCTION__` inside a namespaced function returns the fully-
+/// qualified name (e.g. `App\Util\greet`).
 #[test]
 fn test_dunder_function_inside_namespaced_function_uses_fqn() {
     let out = compile_and_run(
@@ -120,8 +120,8 @@ fn test_dunder_function_inside_namespaced_function_uses_fqn() {
     assert_eq!(out, "App\\Util\\greet");
 }
 
-// Verifies `__FUNCTION__` inside a closure returns a PHP-style closure
-// marker string (e.g. `{closure:test.php:2}`) rather than empty or a path.
+/// Verifies `__FUNCTION__` inside a closure returns a PHP-style closure
+/// marker string (e.g. `{closure:test.php:2}`) rather than empty or a path.
 #[test]
 fn test_dunder_function_inside_closure_returns_closure_marker() {
     let out = compile_and_run(
@@ -136,14 +136,14 @@ fn test_dunder_function_inside_closure_returns_closure_marker() {
 
 // `__CLASS__` returns the (FQN) class name, empty outside.
 
-// Verifies `__CLASS__` is empty when accessed outside any class body.
+/// Verifies `__CLASS__` is empty when accessed outside any class body.
 #[test]
 fn test_dunder_class_outside_any_class_is_empty() {
     let out = compile_and_run("<?php echo '[' . __CLASS__ . ']';");
     assert_eq!(out, "[]");
 }
 
-// Verifies `__CLASS__` inside a method returns the class name (no namespace).
+/// Verifies `__CLASS__` inside a method returns the class name (no namespace).
 #[test]
 fn test_dunder_class_inside_method() {
     let out = compile_and_run(
@@ -152,8 +152,8 @@ fn test_dunder_class_inside_method() {
     assert_eq!(out, "C");
 }
 
-// Verifies `__CLASS__` inside a namespaced class returns the fully-qualified
-// name (e.g. `App\C`).
+/// Verifies `__CLASS__` inside a namespaced class returns the fully-qualified
+/// name (e.g. `App\C`).
 #[test]
 fn test_dunder_class_inside_namespaced_class_uses_fqn() {
     let out = compile_and_run(
@@ -164,14 +164,14 @@ fn test_dunder_class_inside_namespaced_class_uses_fqn() {
 
 // `__METHOD__` returns "Class::method" inside a method.
 
-// Verifies `__METHOD__` is empty when accessed outside any function or method.
+/// Verifies `__METHOD__` is empty when accessed outside any function or method.
 #[test]
 fn test_dunder_method_outside_any_function_is_empty() {
     let out = compile_and_run("<?php echo '[' . __METHOD__ . ']';");
     assert_eq!(out, "[]");
 }
 
-// Verifies `__METHOD__` inside a method returns `Class::method`.
+/// Verifies `__METHOD__` inside a method returns `Class::method`.
 #[test]
 fn test_dunder_method_inside_method_is_class_qualified() {
     let out = compile_and_run(
@@ -180,8 +180,8 @@ fn test_dunder_method_inside_method_is_class_qualified() {
     assert_eq!(out, "C::go");
 }
 
-// Verifies `__METHOD__` inside a namespaced method returns the FQN form
-// (e.g. `App\C::go`).
+/// Verifies `__METHOD__` inside a namespaced method returns the FQN form
+/// (e.g. `App\C::go`).
 #[test]
 fn test_dunder_method_inside_namespaced_method_uses_fqn() {
     let out = compile_and_run(
@@ -190,8 +190,8 @@ fn test_dunder_method_inside_namespaced_method_uses_fqn() {
     assert_eq!(out, "App\\C::go");
 }
 
-// Verifies `__METHOD__` inside a plain function (not a method) returns the
-// function name, not a class-qualified form.
+/// Verifies `__METHOD__` inside a plain function (not a method) returns the
+/// function name, not a class-qualified form.
 #[test]
 fn test_dunder_method_inside_plain_function_is_function_name() {
     let out = compile_and_run(
@@ -202,16 +202,16 @@ fn test_dunder_method_inside_plain_function_is_function_name() {
 
 // `__NAMESPACE__` returns the current namespace, empty outside.
 
-// Verifies `__NAMESPACE__` is empty when accessed outside any namespace
-// declaration.
+/// Verifies `__NAMESPACE__` is empty when accessed outside any namespace
+/// declaration.
 #[test]
 fn test_dunder_namespace_outside_namespace_is_empty() {
     let out = compile_and_run("<?php echo '[' . __NAMESPACE__ . ']';");
     assert_eq!(out, "[]");
 }
 
-// Verifies `__NAMESPACE__` inside a namespace declaration returns that
-// namespace (e.g. `App\Util`).
+/// Verifies `__NAMESPACE__` inside a namespace declaration returns that
+/// namespace (e.g. `App\Util`).
 #[test]
 fn test_dunder_namespace_inside_namespace_decl() {
     let out = compile_and_run(
@@ -222,14 +222,14 @@ fn test_dunder_namespace_inside_namespace_decl() {
 
 // `__TRAIT__` returns the trait name inside a trait method.
 
-// Verifies `__TRAIT__` is empty when accessed outside any trait.
+/// Verifies `__TRAIT__` is empty when accessed outside any trait.
 #[test]
 fn test_dunder_trait_outside_trait_is_empty() {
     let out = compile_and_run("<?php echo '[' . __TRAIT__ . ']';");
     assert_eq!(out, "[]");
 }
 
-// Verifies `__TRAIT__` inside a trait method returns the trait name.
+/// Verifies `__TRAIT__` inside a trait method returns the trait name.
 #[test]
 fn test_dunder_trait_inside_trait_method() {
     let out = compile_and_run(
@@ -238,9 +238,9 @@ fn test_dunder_trait_inside_trait_method() {
     assert_eq!(out, "Greetable");
 }
 
-// Verifies `__CLASS__` inside a trait method that is used by a class returns
-// the importing class name, not the trait name. Combines `__CLASS__` and
-// `__METHOD__` in one expression to confirm both resolve to `C`.
+/// Verifies `__CLASS__` inside a trait method that is used by a class returns
+/// the importing class name, not the trait name. Combines `__CLASS__` and
+/// `__METHOD__` in one expression to confirm both resolve to `C`.
 #[test]
 fn test_dunder_class_inside_trait_method_uses_importing_class() {
     let out = compile_and_run(
@@ -249,9 +249,9 @@ fn test_dunder_class_inside_trait_method_uses_importing_class() {
     assert_eq!(out, "C|Greetable::name");
 }
 
-// Verifies `__CLASS__` in a property default inside a trait resolves to the
-// importing class (`C`), not the trait (`Named`). Regression for trait property
-// initializers that reference magic constants.
+/// Verifies `__CLASS__` in a property default inside a trait resolves to the
+/// importing class (`C`), not the trait (`Named`). Regression for trait property
+/// initializers that reference magic constants.
 #[test]
 fn test_dunder_class_inside_trait_property_uses_importing_class() {
     let out = compile_and_run(
@@ -260,10 +260,10 @@ fn test_dunder_class_inside_trait_property_uses_importing_class() {
     assert_eq!(out, "C");
 }
 
-// Verifies `__CLASS__`, `__METHOD__`, and `__TRAIT__` inside a namespaced
-// trait method all resolve to their FQN forms using the importing class's
-// namespace (e.g. `App\C`, `App\C::info`, `App\Named`). Confirms namespace
-// context is preserved through the trait use chain.
+/// Verifies `__CLASS__`, `__METHOD__`, and `__TRAIT__` inside a namespaced
+/// trait method all resolve to their FQN forms using the importing class's
+/// namespace (e.g. `App\C`, `App\C::info`, `App\Named`). Confirms namespace
+/// context is preserved through the trait use chain.
 #[test]
 fn test_dunder_class_inside_namespaced_trait_uses_importing_class_fqn() {
     let out = compile_and_run(
@@ -272,10 +272,10 @@ fn test_dunder_class_inside_namespaced_trait_uses_importing_class_fqn() {
     assert_eq!(out, "App\\C|App\\C|App\\Named::info|App\\Named");
 }
 
-// Verifies `__FUNCTION__` and `__METHOD__` inside a closure defined within
-// a method use PHP-style closure markers that embed the enclosing method's
-// context (e.g. `{closure:C::m():4}`). Both constants resolve identically
-// inside closures in this configuration.
+/// Verifies `__FUNCTION__` and `__METHOD__` inside a closure defined within
+/// a method use PHP-style closure markers that embed the enclosing method's
+/// context (e.g. `{closure:C::m():4}`). Both constants resolve identically
+/// inside closures in this configuration.
 #[test]
 fn test_dunder_function_inside_closure_in_method_uses_php_style_name() {
     let out = compile_and_run(
@@ -284,10 +284,10 @@ fn test_dunder_function_inside_closure_in_method_uses_php_style_name() {
     assert_eq!(out, "{closure:C::m():4}|{closure:C::m():4}");
 }
 
-// Verifies `__FUNCTION__` in a short ternary (`expr ?: fallback`) and in
-// the alternate branch (`'' ?: __FUNCTION__`) is lowered correctly without
-// special-case syntax breaking constant substitution. Regression for
-// short-circuit operators mishandling magic constant operands.
+/// Verifies `__FUNCTION__` in a short ternary (`expr ?: fallback`) and in
+/// the alternate branch (`'' ?: __FUNCTION__`) is lowered correctly without
+/// special-case syntax breaking constant substitution. Regression for
+/// short-circuit operators mishandling magic constant operands.
 #[test]
 fn test_magic_constant_inside_short_ternary_is_lowered() {
     let out = compile_and_run(
@@ -299,8 +299,8 @@ fn test_magic_constant_inside_short_ternary_is_lowered() {
 // `__FILE__` and `__DIR__` from an *included* file should reflect that
 // file's path, not the main file's.
 
-// Verifies `__FILE__` inside an included file reflects the included file's
-// path, not the main script's path. Uses a two-file fixture with `require`.
+/// Verifies `__FILE__` inside an included file reflects the included file's
+/// path, not the main script's path. Uses a two-file fixture with `require`.
 #[test]
 fn test_dunder_file_inside_include_uses_included_files_path() {
     let out = compile_and_run_files(
@@ -323,9 +323,9 @@ fn test_dunder_file_inside_include_uses_included_files_path() {
     );
 }
 
-// Verifies `__DIR__` inside an included file reflects the included file's
-// directory (`lib/`), not the main script's directory. Uses a two-file
-// fixture with `require`.
+/// Verifies `__DIR__` inside an included file reflects the included file's
+/// directory (`lib/`), not the main script's directory. Uses a two-file
+/// fixture with `require`.
 #[test]
 fn test_dunder_dir_inside_include_uses_included_files_dir() {
     let out = compile_and_run_files(
@@ -348,9 +348,9 @@ fn test_dunder_dir_inside_include_uses_included_files_dir() {
     );
 }
 
-// Verifies `__NAMESPACE__` inside an included file is independent of the
-// caller's namespace. Main file has `namespace App` but included file has
-// no namespace, so the included file's `__NAMESPACE__` is empty.
+/// Verifies `__NAMESPACE__` inside an included file is independent of the
+/// caller's namespace. Main file has `namespace App` but included file has
+/// no namespace, so the included file's `__NAMESPACE__` is empty.
 #[test]
 fn test_included_file_magic_namespace_does_not_inherit_caller_namespace() {
     let out = compile_and_run_files(
@@ -369,9 +369,9 @@ fn test_included_file_magic_namespace_does_not_inherit_caller_namespace() {
     assert_eq!(out, "[][App]");
 }
 
-// Verifies `__NAMESPACE__` inside an included file with its own namespace
-// declaration (`namespace Lib`) does not affect the main file's
-// `__NAMESPACE__`. Each file maintains its own namespace context.
+/// Verifies `__NAMESPACE__` inside an included file with its own namespace
+/// declaration (`namespace Lib`) does not affect the main file's
+/// `__NAMESPACE__`. Each file maintains its own namespace context.
 #[test]
 fn test_included_file_namespace_does_not_leak_to_caller_magic_constants() {
     let out = compile_and_run_files(
@@ -390,11 +390,11 @@ fn test_included_file_namespace_does_not_leak_to_caller_magic_constants() {
     assert_eq!(out, "[Lib][App]");
 }
 
-// Verifies `__FUNCTION__` inside an included file does not inherit the
-// calling function's context. When `inner.php` is required from within
-// function `load()`, the included file's `__FUNCTION__` remains empty because
-// the include happens at runtime and does not place the included code inside
-// the calling function's scope.
+/// Verifies `__FUNCTION__` inside an included file does not inherit the
+/// calling function's context. When `inner.php` is required from within
+/// function `load()`, the included file's `__FUNCTION__` remains empty because
+/// the include happens at runtime and does not place the included code inside
+/// the calling function's scope.
 #[test]
 fn test_included_file_magic_function_does_not_inherit_calling_function() {
     let out = compile_and_run_files(

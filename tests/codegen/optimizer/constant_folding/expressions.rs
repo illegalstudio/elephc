@@ -9,16 +9,16 @@
 
 use super::*;
 
-// Verifies that nested integer arithmetic with literals is constant-folded at compile time
-// and the result is emitted directly as a literal in the generated binary.
+/// Verifies that nested integer arithmetic with literals is constant-folded at compile time
+/// and the result is emitted directly as a literal in the generated binary.
 #[test]
 fn test_constant_folding_nested_integer_arithmetic_runtime() {
     let out = compile_and_run("<?php echo (2 + 3) * 4;");
     assert_eq!(out, "20");
 }
 
-// Verifies that a literal power expression is folded so the `pow` runtime call is
-// eliminated from user assembly. Regression: compiler must not emit a `pow` symbol.
+/// Verifies that a literal power expression is folded so the `pow` runtime call is
+/// eliminated from user assembly. Regression: compiler must not emit a `pow` symbol.
 #[test]
 fn test_constant_folding_pow_removes_pow_call_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_constant_folding_pow");
@@ -44,8 +44,8 @@ fn test_constant_folding_pow_removes_pow_call_from_user_assembly() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a string literal concatenation is folded so the `__rt_concat`
-// runtime call is eliminated from user assembly.
+/// Verifies that a string literal concatenation is folded so the `__rt_concat`
+/// runtime call is eliminated from user assembly.
 #[test]
 fn test_constant_folding_string_concat_removes_runtime_concat_call() {
     let dir = make_cli_test_dir("elephc_constant_folding_concat");
@@ -76,8 +76,8 @@ fn test_constant_folding_string_concat_removes_runtime_concat_call() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that `null ?? <constant string concat>` is folded, eliminating the
-// `__rt_concat` call from user assembly even when the concat is inside the null-coalesce.
+/// Verifies that `null ?? <constant string concat>` is folded, eliminating the
+/// `__rt_concat` call from user assembly even when the concat is inside the null-coalesce.
 #[test]
 fn test_constant_folding_null_coalesce_removes_runtime_concat_call() {
     let dir = make_cli_test_dir("elephc_constant_folding_null_coalesce");
@@ -108,8 +108,8 @@ fn test_constant_folding_null_coalesce_removes_runtime_concat_call() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a ternary with constant-foldable power expressions eliminates
-// `pow` calls from both branches (selected and unselected) in user assembly.
+/// Verifies that a ternary with constant-foldable power expressions eliminates
+/// `pow` calls from both branches (selected and unselected) in user assembly.
 #[test]
 fn test_constant_folding_ternary_removes_pow_call_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_constant_folding_ternary");
@@ -140,8 +140,8 @@ fn test_constant_folding_ternary_removes_pow_call_from_user_assembly() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies constant folding of truthiness negation and spaceship operator with
-// literal operands that all fold to a single integer result.
+/// Verifies constant folding of truthiness negation and spaceship operator with
+/// literal operands that all fold to a single integer result.
 #[test]
 fn test_constant_folding_truthiness_and_spaceship_runtime() {
     let out = compile_and_run(
@@ -153,8 +153,8 @@ echo (2 <=> 3) + 2;
     assert_eq!(out, "11");
 }
 
-// Verifies that a literal int-cast from a string is folded, eliminating the
-// `__rt_atoi` call from user assembly.
+/// Verifies that a literal int-cast from a string is folded, eliminating the
+/// `__rt_atoi` call from user assembly.
 #[test]
 fn test_constant_folding_int_cast_removes_runtime_atoi_call() {
     let dir = make_cli_test_dir("elephc_constant_folding_cast_int");
@@ -180,8 +180,8 @@ fn test_constant_folding_int_cast_removes_runtime_atoi_call() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-// Verifies that a literal string-cast from an integer is folded, eliminating the
-// `__rt_itoa` call from user assembly.
+/// Verifies that a literal string-cast from an integer is folded, eliminating the
+/// `__rt_itoa` call from user assembly.
 #[test]
 fn test_constant_folding_string_cast_removes_runtime_itoa_call() {
     let dir = make_cli_test_dir("elephc_constant_folding_cast_string");
