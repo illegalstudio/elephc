@@ -45,6 +45,7 @@ pub(crate) fn normalized_array_key_type(expr: &Expr, raw_ty: PhpType) -> PhpType
 /// Returns true if a static array key forces hash-map (associative) storage in PHP.
 ///
 /// An integer key forces hash storage unless it is exactly `0`.
+/// Boolean and float literals are tested after their PHP integer-key cast.
 /// A string key forces hash storage if it is a valid PHP integer string and not `"0"`.
 /// Other expressions (variables, function calls, etc.) do not force hash storage
 /// and may use packed array optimization.
@@ -54,6 +55,8 @@ pub(crate) fn normalized_array_key_type(expr: &Expr, raw_ty: PhpType) -> PhpType
 pub(crate) fn static_array_key_forces_hash_storage(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::IntLiteral(value) => *value != 0,
+        ExprKind::BoolLiteral(value) => *value,
+        ExprKind::FloatLiteral(value) => (*value as i64) != 0,
         ExprKind::StringLiteral(value) => is_php_integer_array_key(value) && value != "0",
         _ => false,
     }

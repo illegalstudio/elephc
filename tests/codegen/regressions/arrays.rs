@@ -61,6 +61,38 @@ echo $a[0] . "|" . $a[1] . "|" . $a[2];
     assert_eq!(out, "10|20|30");
 }
 
+/// Verifies that float indexed-array keys are truncated to PHP integer keys on write and read.
+/// Issue #302: float keys must not use stale integer registers and grow the array until heap exhaustion.
+#[test]
+fn test_float_array_key_assignment_and_read_truncate_to_int() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[1.9] = 3;
+$b = [10, 20];
+echo $a[1] . "|" . $a[1.2] . "|" . $b[1.9];
+"#,
+    );
+    assert_eq!(out, "3|3|20");
+}
+
+/// Verifies that multiple float keys that truncate to the same integer key update one slot.
+/// Issue #302: repeated float-key writes should replace the integer slot instead of crashing.
+#[test]
+fn test_float_array_key_collisions_replace_integer_slot() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[1.2] = "x";
+$a[1.8] = "y";
+foreach ($a as $k => $v) {
+    echo $k, ":", $v, "\n";
+}
+"#,
+    );
+    assert_eq!(out, "1:y\n");
+}
+
 // -- Issue #20: assoc array missing key should return null, not garbage --
 
 /// Verifies that accessing a missing key in an associative array returns null (not garbage).

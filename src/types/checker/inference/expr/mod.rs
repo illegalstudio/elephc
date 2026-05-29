@@ -160,6 +160,7 @@ impl Checker {
             ExprKind::ArrayAccess { array, index } => {
                 let arr_ty = self.infer_type(array, env)?;
                 let idx_ty = self.infer_type(index, env)?;
+                let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
                 match &arr_ty {
                     PhpType::Str => {
                         if !is_valid_string_offset_index(index, &idx_ty) {
@@ -171,7 +172,7 @@ impl Checker {
                         Ok(PhpType::Str)
                     }
                     PhpType::Array(elem_ty) => {
-                        if idx_ty != PhpType::Int {
+                        if normalized_idx_ty != PhpType::Int {
                             return Err(CompileError::new(
                                 expr.span,
                                 "Array index must be integer",
@@ -208,7 +209,7 @@ impl Checker {
                                 }
                                 PhpType::Array(elem_ty) => {
                                     saw_indexable_member = true;
-                                    if idx_ty != PhpType::Int {
+                                    if normalized_idx_ty != PhpType::Int {
                                         first_index_error =
                                             first_index_error.or(Some("Array index must be integer"));
                                         continue;

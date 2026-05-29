@@ -106,6 +106,15 @@ pub(crate) fn coerce_result_to_type(
             emitter.instruction("mov x0, #0");                                  // null widens to numeric zero before float coercion
         }
         crate::codegen::abi::emit_int_result_to_float_result(emitter);          // convert the integer-like result into the active target float-result register
+    } else if *target_ty == PhpType::Int && *source_ty == PhpType::Float {
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                emitter.instruction("fcvtzs x0, d0");                           // truncate the float result to an integer for PHP coercion
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                emitter.instruction("cvttsd2si rax, xmm0");                     // truncate the float result to an integer for PHP coercion
+            }
+        }
     }
 }
 
