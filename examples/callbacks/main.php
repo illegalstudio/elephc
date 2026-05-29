@@ -17,7 +17,7 @@ foreach ($doubled as $v) { echo $v . " "; }
 echo "\n";
 
 // array_filter: keep only matching elements
-$positives = array_filter($numbers, "is_positive");
+$positives = array_filter($numbers, "is_positive", ARRAY_FILTER_USE_VALUE);
 echo "Positives: ";
 foreach ($positives as $v) { echo $v . " "; }
 echo "\n";

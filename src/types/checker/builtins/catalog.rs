@@ -77,6 +77,7 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "ctype_space",
     "date",
     "define",
+    "defined",
     "deg2rad",
     "die",
     "dirname",

@@ -169,7 +169,7 @@ pub(super) fn infer_function_call_type(
         | "is_file" | "is_dir" | "is_readable" | "is_writable" | "file_exists"
         | "in_array" | "array_key_exists" | "str_contains" | "str_starts_with"
         | "str_ends_with" | "ctype_alpha" | "ctype_digit" | "ctype_alnum"
-        | "ctype_space" | "function_exists" | "chmod" | "chown" | "chgrp"
+        | "ctype_space" | "function_exists" | "defined" | "chmod" | "chown" | "chgrp"
         | "touch" | "ftruncate" | "fflush" | "fsync" | "fdatasync" | "ptr_is_null"
         | "json_validate" | "flock" | "symlink" | "link" => {
             PhpType::Bool

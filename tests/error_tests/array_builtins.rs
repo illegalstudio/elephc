@@ -373,7 +373,7 @@ fn test_error_array_map_wrong_args() {
 fn test_error_array_filter_wrong_args() {
     expect_error(
         r#"<?php array_filter([]);"#,
-        "array_filter() takes exactly 2 arguments",
+        "array_filter() takes 2 or 3 arguments",
     );
 }
 

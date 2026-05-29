@@ -138,6 +138,101 @@ foreach ($b as $value) { echo $value; }
     assert_eq!(out, "2aaab");
 }
 
+/// Verifies explicit `ARRAY_FILTER_USE_VALUE` keeps the default value-only callback shape.
+#[test]
+fn test_array_filter_explicit_use_value_mode() {
+    let out = compile_and_run(
+        r#"<?php
+function positive_value($value) { return $value > 0; }
+$filtered = array_filter([-1, 2, 0, 3], "positive_value", ARRAY_FILTER_USE_VALUE);
+echo count($filtered);
+foreach ($filtered as $value) { echo $value; }
+"#,
+    );
+    assert_eq!(out, "223");
+}
+
+/// Verifies `ARRAY_FILTER_USE_BOTH` passes value and key to the callback.
+#[test]
+fn test_array_filter_use_both_mode() {
+    let out = compile_and_run(
+        r#"<?php
+function keep_value_key($value, $key) { return ($value + $key) >= 5; }
+$filtered = array_filter([1, 2, 3, 4], "keep_value_key", ARRAY_FILTER_USE_BOTH);
+echo count($filtered);
+foreach ($filtered as $value) { echo $value; }
+"#,
+    );
+    assert_eq!(out, "234");
+}
+
+/// Verifies `ARRAY_FILTER_USE_KEY` passes only the source key to the callback.
+#[test]
+fn test_array_filter_use_key_mode() {
+    let out = compile_and_run(
+        r#"<?php
+function keep_odd_key($key) { return $key % 2 == 1; }
+$filtered = array_filter([10, 20, 30, 40], "keep_odd_key", ARRAY_FILTER_USE_KEY);
+echo count($filtered);
+foreach ($filtered as $value) { echo $value; }
+"#,
+    );
+    assert_eq!(out, "22040");
+}
+
+/// Verifies invalid literal modes throw a catchable `ValueError` before callback invocation.
+#[test]
+fn test_array_filter_invalid_literal_mode_throws_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+function keep_value($value) { echo "callback"; return true; }
+try {
+    array_filter([1], "keep_value", 3);
+    echo "bad";
+} catch (ValueError $e) {
+    echo "ValueError";
+}
+"#,
+    );
+    assert_eq!(out, "ValueError");
+}
+
+/// Verifies invalid runtime mode variables throw a catchable `ValueError`.
+#[test]
+fn test_array_filter_invalid_runtime_mode_throws_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+function keep_value_runtime($value) { echo "callback"; return true; }
+$mode = 9;
+try {
+    array_filter([1], "keep_value_runtime", $mode);
+    echo "bad";
+} catch (ValueError $e) {
+    echo "ValueError";
+}
+"#,
+    );
+    assert_eq!(out, "ValueError");
+}
+
+/// Verifies PHP 8.6 array_filter mode constants resolve in namespaces and through `defined()`.
+#[test]
+fn test_array_filter_use_value_constant_defined_and_namespaced() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo;
+echo defined("ARRAY_FILTER_USE_VALUE") ? "Y" : "N";
+echo ":";
+echo ARRAY_FILTER_USE_VALUE;
+echo ":";
+echo ARRAY_FILTER_USE_BOTH;
+echo ":";
+echo \ARRAY_FILTER_USE_KEY;
+"#,
+    );
+    assert_eq!(out, "Y:0:1:2");
+}
+
 /// Verifies array callback runtimes accept callback names selected through string variables.
 #[test]
 fn test_array_callback_runtimes_dynamic_string_callbacks_use_descriptor_invokers() {

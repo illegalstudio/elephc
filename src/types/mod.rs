@@ -14,6 +14,8 @@ pub mod checker;
 pub mod traits;
 /// Array key type inference, normalization, and PHP integer/string coercion rules.
 mod array_keys;
+/// PHP array extension integer constants.
+pub(crate) mod array_constants;
 /// Call argument planning: named, positional, and spread semantics.
 pub(crate) mod call_args;
 /// Fiber/stack introspection for async and coroutine analysis.

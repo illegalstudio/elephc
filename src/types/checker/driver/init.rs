@@ -11,6 +11,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Platform;
+use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::PhpType;
 
@@ -20,9 +21,9 @@ impl Checker {
     /// Constructs a new `Checker` with pre-populated builtin constants and empty declaration tables.
     ///
     /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, pathinfo
-    /// constants, `FNM_*` flags, `STDIN`/`STDOUT`/`STDERR` stream resources, `LOCK_*` constants)
-    /// and JSON integer constants. All other tables (function declarations, classes, interfaces,
-    /// enums, etc.) are initialized empty.
+    /// constants, `FNM_*` flags, `STDIN`/`STDOUT`/`STDERR` stream resources, `LOCK_*` constants),
+    /// array constants, and JSON integer constants. All other tables (function declarations,
+    /// classes, interfaces, enums, etc.) are initialized empty.
     ///
     /// # Arguments
     /// * `target_platform` - The compilation target platform, stored for use in platform-specific
@@ -49,6 +50,9 @@ impl Checker {
         constants.insert("LOCK_EX".to_string(), PhpType::Int);
         constants.insert("LOCK_UN".to_string(), PhpType::Int);
         constants.insert("LOCK_NB".to_string(), PhpType::Int);
+        for (name, _value) in ARRAY_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
         for (name, _value) in JSON_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }

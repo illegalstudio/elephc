@@ -126,6 +126,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
             "array must contain only positive integer keys",
         ),
         (
+            "_array_filter_mode_msg",
+            "array_filter(): Argument #3 ($mode) must be one of ARRAY_FILTER_USE_VALUE, ARRAY_FILTER_USE_KEY, or ARRAY_FILTER_USE_BOTH.",
+        ),
+        (
             "_iterator_iterator_downcast_msg",
             "Class to downcast to not found or not base class or does not implement Traversable",
         ),

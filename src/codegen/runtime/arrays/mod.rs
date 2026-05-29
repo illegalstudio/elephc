@@ -130,6 +130,7 @@ mod shuffle;
 mod sort_int;
 mod undefined_array_key_warning;
 mod usort;
+mod value_error;
 
 pub use array_chunk::emit_array_chunk;
 /// Emit array chunk helper (split array into chunks).

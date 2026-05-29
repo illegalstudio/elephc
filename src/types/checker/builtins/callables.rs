@@ -11,6 +11,7 @@
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
+use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::canonical_builtin_function_name;
@@ -793,10 +794,10 @@ pub(super) fn check_builtin(
             }
         }
         "array_filter" => {
-            if args.len() != 2 {
+            if args.len() < 2 || args.len() > 3 {
                 return Err(CompileError::new(
                     span,
-                    "array_filter() takes exactly 2 arguments",
+                    "array_filter() takes 2 or 3 arguments",
                 ));
             }
             for arg in args {
@@ -806,7 +807,7 @@ pub(super) fn check_builtin(
             match arr_ty {
                 PhpType::Array(elem_ty) => {
                     let arr_ty = PhpType::Array(elem_ty.clone());
-                    let dummy_args = vec![dummy_arg_for_array_scalar_elem(&arr_ty, span)];
+                    let dummy_args = array_filter_callback_dummy_args(&arr_ty, args.get(2), span);
                     check_callback_builtin_call(
                         checker,
                         &args[1],
@@ -1390,5 +1391,35 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Bool))
         }
         _ => Ok(None),
+    }
+}
+
+/// Builds synthetic callback arguments for `array_filter()` based on a static mode.
+///
+/// Unknown or invalid runtime modes use the default value-only shape for type checking;
+/// runtime validation still throws before invoking the callback when the mode is invalid.
+fn array_filter_callback_dummy_args(
+    arr_ty: &PhpType,
+    mode_arg: Option<&Expr>,
+    span: crate::span::Span,
+) -> Vec<Expr> {
+    match mode_arg.and_then(static_array_filter_mode_value) {
+        Some(1) => vec![
+            dummy_arg_for_array_scalar_elem(arr_ty, span),
+            Expr::new(ExprKind::IntLiteral(0), span),
+        ],
+        Some(2) => vec![Expr::new(ExprKind::IntLiteral(0), span)],
+        _ => vec![dummy_arg_for_array_scalar_elem(arr_ty, span)],
+    }
+}
+
+/// Returns a compile-time `array_filter()` mode value for integer literals and predefined constants.
+fn static_array_filter_mode_value(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::ConstRef(name) => ARRAY_INT_CONSTANTS
+            .iter()
+            .find_map(|(constant, value)| (*constant == name.as_str()).then_some(*value)),
+        _ => None,
     }
 }

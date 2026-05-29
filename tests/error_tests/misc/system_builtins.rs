@@ -42,6 +42,21 @@ fn test_error_define_non_string_name() {
     );
 }
 
+/// Verifies that `defined()` requires exactly one argument.
+#[test]
+fn test_error_defined_wrong_args() {
+    expect_error("<?php defined();", "defined() takes exactly 1 argument");
+}
+
+/// Verifies that `defined()` requires a string literal in AOT mode.
+#[test]
+fn test_error_defined_non_literal_name() {
+    expect_error(
+        "<?php $name = \"PHP_OS\"; defined($name);",
+        "defined() first argument must be a string literal in AOT mode",
+    );
+}
+
 // -- List unpack errors --
 
 /// Verifies that `time()` with any arguments yields a no-args diagnostic.

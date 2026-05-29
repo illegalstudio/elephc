@@ -13,6 +13,7 @@ mod class_attribute_names;
 mod class_get_attributes;
 mod date;
 mod define;
+mod defined;
 mod exec_fn;
 mod exit;
 mod getenv;
@@ -58,6 +59,7 @@ pub fn emit(
     match name {
         "exit" | "die" => exit::emit(name, args, emitter, ctx, data),
         "define" => define::emit(name, args, emitter, ctx, data),
+        "defined" => defined::emit(name, args, emitter, ctx, data),
         "time" => time::emit(name, args, emitter, ctx, data),
         "microtime" => microtime::emit(name, args, emitter, ctx, data),
         "sleep" => sleep::emit(name, args, emitter, ctx, data),

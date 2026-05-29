@@ -254,6 +254,19 @@ pub(super) fn check_builtin(
             checker.constants.entry(name_str).or_insert(ty);
             Ok(Some(PhpType::Bool))
         }
+        "defined" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "defined() takes exactly 1 argument"));
+            }
+            checker.infer_type(&args[0], env)?;
+            if !matches!(args[0].kind, ExprKind::StringLiteral(_)) {
+                return Err(CompileError::new(
+                    span,
+                    "defined() first argument must be a string literal in AOT mode",
+                ));
+            }
+            Ok(Some(PhpType::Bool))
+        }
         "date" => {
             if args.is_empty() || args.len() > 2 {
                 return Err(CompileError::new(span, "date() takes 1 or 2 arguments"));
