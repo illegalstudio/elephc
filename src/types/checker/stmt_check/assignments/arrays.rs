@@ -183,6 +183,7 @@ pub(super) fn check_nested_array_assign(
 ///
 /// Type-checks the value, then merges it into the element type of the array.
 /// For `PhpType::Array`, updates the element type in `env` to the merged type.
+/// For `PhpType::AssocArray`, merges the pushed value type and adds integer keys.
 /// For buffers, returns an error (buffers do not support push).
 /// For objects implementing `ArrayAccess`, allows the push without element type merging.
 ///
@@ -210,6 +211,24 @@ pub(super) fn check_array_push(
                 .unwrap_or(PhpType::Mixed);
             env.insert(array.to_string(), PhpType::Array(Box::new(merged_ty)));
         }
+    } else if let PhpType::AssocArray {
+        key,
+        value: existing_value,
+    } = &arr_ty
+    {
+        let merged_key = merge_array_key_types(*key.clone(), PhpType::Int);
+        let merged_value = if **existing_value == val_ty {
+            *existing_value.clone()
+        } else {
+            PhpType::Mixed
+        };
+        env.insert(
+            array.to_string(),
+            PhpType::AssocArray {
+                key: Box::new(merged_key),
+                value: Box::new(merged_value),
+            },
+        );
     } else if matches!(arr_ty, PhpType::Buffer(_)) {
         return Err(CompileError::new(
             span,

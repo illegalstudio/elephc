@@ -80,6 +80,7 @@ mod gc_collect_cycles_x86_64;
 mod gc_mark_reachable;
 mod gc_note_child_ref;
 mod hash_count;
+mod hash_append;
 mod hash_clone_shallow;
 mod hash_fnv1a;
 mod hash_free_deep;
@@ -264,6 +265,8 @@ pub use decref_object::emit_decref_object;
 /// Emit object reference decrement helper.
 pub use hash_count::emit_hash_count;
 /// Emit hash count helper.
+pub use hash_append::emit_hash_append;
+/// Emit hash append helper.
 pub use hash_clone_shallow::emit_hash_clone_shallow;
 /// Emit shallow hash clone helper.
 pub use gc_collect_cycles::emit_gc_collect_cycles;

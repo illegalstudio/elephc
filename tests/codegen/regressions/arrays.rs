@@ -1,5 +1,6 @@
 //! Purpose:
-//! Integration or regression tests for end-to-end codegen coverage of regressions arrays, including function exists builtin array push, negative array index returns null, and out of bounds returns null.
+//! Integration or regression tests for end-to-end codegen coverage of array regressions,
+//! including array push metadata, associative append keys, and bounds behavior.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -217,6 +218,39 @@ echo $x[2];
 "#,
     );
     assert_eq!(out, "330");
+}
+
+/// Verifies that appending after a negative integer key uses the next PHP auto key.
+/// Issue #305: appending after `$a[-2] = ...` should insert at key `-1`, not drop the value.
+#[test]
+fn test_append_after_negative_assoc_key_preserves_next_key() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[-2] = 10;
+$a[] = 20;
+foreach ($a as $k => $v) {
+    echo $k, ":", $v, "\n";
+}
+"#,
+    );
+    assert_eq!(out, "-2:10\n-1:20\n");
+}
+
+/// Verifies that appending to a string-key-only associative array starts at integer key zero.
+/// Fixture: `["name" => 10]` followed by `$a[] = 20` should preserve both entries.
+#[test]
+fn test_append_to_string_key_assoc_array_starts_at_zero() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["name" => 10];
+$a[] = 20;
+foreach ($a as $k => $v) {
+    echo $k, ":", $v, "\n";
+}
+"#,
+    );
+    assert_eq!(out, "name:10\n0:20\n");
 }
 
 /// Verifies that writing to two different computed indices of a by-ref array does not corrupt values.

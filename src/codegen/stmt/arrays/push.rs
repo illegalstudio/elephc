@@ -12,10 +12,10 @@ use crate::codegen::abi;
 use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::{emit_expr, expr_result_heap_ownership};
+use crate::codegen::expr::{coerce_result_to_type, emit_expr, expr_result_heap_ownership};
 use crate::codegen::platform::Arch;
 use crate::parser::ast::{Expr, ExprKind};
-use crate::types::PhpType;
+use crate::types::{merge_array_key_types, PhpType};
 
 /// Emits `$array[] = value` (append to a named array variable).
 /// Handles `ArrayAccess` objects, by-ref parameters, `Mixed` conversions, and
@@ -53,6 +53,24 @@ pub(super) fn emit_array_push_stmt(
             emitter,
             ctx,
             data,
+        );
+        return;
+    }
+    if let PhpType::AssocArray {
+        key,
+        value: assoc_value,
+    } = var_ty.clone()
+    {
+        emit_assoc_array_push_stmt(
+            array,
+            value,
+            emitter,
+            ctx,
+            data,
+            offset,
+            is_ref,
+            *key,
+            *assoc_value,
         );
         return;
     }
@@ -170,6 +188,120 @@ pub(super) fn emit_array_push_stmt(
         emitter.instruction("str x0, [x9]");                                    // store new array ptr through ref
     } else {
         abi::store_at_offset(emitter, "x0", offset);                                // save possibly-new array pointer
+    }
+}
+
+/// Emits `$array[] = value` for a hash-backed associative array.
+///
+/// Preserves PHP source-order evaluation, stores the appended value with a per-entry
+/// runtime tag, and delegates next-key selection plus insertion to `__rt_hash_append`.
+/// Updates local type metadata so later reads see the widened key/value shape.
+#[allow(clippy::too_many_arguments)]
+fn emit_assoc_array_push_stmt(
+    array: &str,
+    value: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+    offset: usize,
+    is_ref: bool,
+    assoc_key_ty: PhpType,
+    assoc_value_ty: PhpType,
+) {
+    let table_reg = abi::int_result_reg(emitter);
+    let ref_reg = abi::symbol_scratch_reg(emitter);
+    if is_ref {
+        abi::load_at_offset(emitter, ref_reg, offset);                         // load the by-reference slot that points at the hash-table local
+        abi::emit_load_from_address(emitter, table_reg, ref_reg, 0);           // dereference the by-reference slot to get the current hash-table pointer
+    } else {
+        abi::load_at_offset(emitter, table_reg, offset);                       // load the current hash-table pointer from the local slot
+    }
+    abi::emit_push_reg(emitter, table_reg);                                    // preserve the hash-table pointer while evaluating the appended value
+
+    let mut val_ty = emit_expr(value, emitter, ctx, data);
+    if matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
+        && !matches!(assoc_value_ty, PhpType::Mixed | PhpType::Union(_))
+        && crate::codegen::expr::can_coerce_result_to_type(&val_ty, &assoc_value_ty)
+    {
+        coerce_result_to_type(emitter, ctx, data, &val_ty, &assoc_value_ty);
+        val_ty = assoc_value_ty.clone();
+    }
+    let boxed_iterable =
+        crate::codegen::emit_box_iterable_value_for_mixed_container(emitter, &mut val_ty);
+    if !boxed_iterable {
+        super::super::helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
+    }
+    update_callable_array_metadata(array, value, &val_ty, ctx);
+
+    let updated_key_ty = merge_array_key_types(assoc_key_ty.clone(), PhpType::Int);
+    let updated_value_ty = if assoc_value_ty == val_ty {
+        assoc_value_ty.clone()
+    } else {
+        PhpType::Mixed
+    };
+    if updated_key_ty != assoc_key_ty || updated_value_ty != assoc_value_ty {
+        let updated_ty = PhpType::AssocArray {
+            key: Box::new(updated_key_ty),
+            value: Box::new(updated_value_ty),
+        };
+        ctx.update_var_type_and_ownership(
+            array,
+            updated_ty.clone(),
+            super::super::helpers::local_slot_ownership_after_store(&updated_ty),
+        );
+    }
+
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            let (val_lo, val_hi) = match &val_ty {
+                PhpType::Int | PhpType::Bool => ("x0", "xzr"),
+                PhpType::Str => {
+                    abi::emit_call_label(emitter, "__rt_str_persist");         // persist the appended string value before transferring ownership to the hash table
+                    ("x1", "x2")
+                }
+                PhpType::Float => {
+                    emitter.instruction("fmov x9, d0");                         // move the floating-point payload bits into an integer register for the hash runtime ABI
+                    ("x9", "xzr")
+                }
+                _ => ("x0", "xzr"),
+            };
+            emitter.instruction(&format!("mov x1, {}", val_lo));                // place the low payload word into the hash-append helper argument
+            emitter.instruction(&format!("mov x2, {}", val_hi));                // place the high payload word into the hash-append helper argument
+            let value_tag = super::super::super::runtime_value_tag(&val_ty);
+            emitter.instruction(&format!("mov x3, #{}", value_tag));            // materialize the runtime value tag for the appended hash payload
+            abi::emit_pop_reg(emitter, "x0");                                  // restore the preserved hash-table pointer into the hash-append receiver argument
+            abi::emit_call_label(emitter, "__rt_hash_append");                 // append using PHP's next automatic integer key for hash-backed arrays
+        }
+        Arch::X86_64 => {
+            match &val_ty {
+                PhpType::Str => {
+                    abi::emit_call_label(emitter, "__rt_str_persist");         // persist the appended string value before transferring ownership to the hash table
+                    emitter.instruction("mov rsi, rax");                        // place the owned string pointer into the hash-append low-payload register
+                }
+                PhpType::Float => {
+                    emitter.instruction("movq rsi, xmm0");                      // move the floating-point payload bits into the hash-append low-payload register
+                    emitter.instruction("xor rdx, rdx");                        // float associative-array payloads only use the low payload word
+                }
+                _ => {
+                    emitter.instruction("mov rsi, rax");                        // place the scalar or pointer payload into the hash-append low-payload register
+                    emitter.instruction("xor rdx, rdx");                        // scalar or pointer associative-array payloads only use the low payload word
+                }
+            }
+            abi::emit_load_int_immediate(
+                emitter,
+                "rcx",
+                super::super::super::runtime_value_tag(&val_ty) as i64,
+            ); // materialize the runtime value tag that describes the appended associative-array payload
+            abi::emit_pop_reg(emitter, "rdi");                                 // restore the preserved hash-table pointer into the hash-append receiver argument
+            abi::emit_call_label(emitter, "__rt_hash_append");                 // append using PHP's next automatic integer key for hash-backed arrays
+        }
+    }
+
+    if is_ref {
+        abi::load_at_offset(emitter, ref_reg, offset);                         // reload the by-reference slot after the append helper may have reallocated the hash table
+        abi::emit_store_to_address(emitter, table_reg, ref_reg, 0);            // store the updated hash-table pointer through the by-reference slot
+    } else {
+        abi::store_at_offset(emitter, table_reg, offset);                      // save the possibly-reallocated hash-table pointer back into the local slot
     }
 }
 
