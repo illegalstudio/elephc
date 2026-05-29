@@ -8,6 +8,8 @@
 //! Key details:
 //! - Closure bodies and parameter defaults must preserve their own spans and PHP evaluation context.
 
+use std::collections::HashSet;
+
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::parser::ast::{
@@ -212,7 +214,7 @@ pub(super) fn parse_closure(
 
 /// Parses a PHP arrow function: `fn(...) => expr`.
 /// Consumes the `fn` keyword and parameter list, optional `: ReturnType`, then the `=>` and body expression.
-/// Wraps the body expression in a `Return` statement. Sets `is_arrow: true`, `captures: []`.
+/// Wraps the body expression in a `Return` statement and stores implicit by-value captures.
 pub(super) fn parse_arrow_closure(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -234,6 +236,7 @@ pub(super) fn parse_arrow_closure(
     }
     *pos += 1;
     let body_expr = parse_expr(tokens, pos)?;
+    let captures = infer_arrow_captures(&body_expr, &params, variadic.as_ref());
     let body = vec![Stmt::new(StmtKind::Return(Some(body_expr)), span)];
     Ok(Expr::new(
         ExprKind::Closure {
@@ -243,11 +246,206 @@ pub(super) fn parse_arrow_closure(
             body,
             is_arrow: true,
             is_static,
-            captures: vec![],
+            captures,
             capture_refs: vec![],
         },
         span,
     ))
+}
+
+/// Infers PHP arrow-function implicit captures from free variable reads in the body expression.
+fn infer_arrow_captures(
+    body_expr: &Expr,
+    params: &[(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)],
+    variadic: Option<&String>,
+) -> Vec<String> {
+    let mut bound = HashSet::new();
+    for (name, _, _, _) in params {
+        bound.insert(name.clone());
+    }
+    if let Some(name) = variadic {
+        bound.insert(name.clone());
+    }
+
+    let mut captures = Vec::new();
+    let mut seen = HashSet::new();
+    collect_arrow_expr_captures(body_expr, &bound, &mut seen, &mut captures);
+    captures
+}
+
+/// Records `name` as an arrow capture unless it is bound locally or already recorded.
+fn push_arrow_capture(
+    name: &str,
+    bound: &HashSet<String>,
+    seen: &mut HashSet<String>,
+    captures: &mut Vec<String>,
+) {
+    if bound.contains(name) || name.starts_with("__elephc") {
+        return;
+    }
+    if seen.insert(name.to_string()) {
+        captures.push(name.to_string());
+    }
+}
+
+/// Recursively collects variables that an arrow function body reads from its enclosing scope.
+fn collect_arrow_expr_captures(
+    expr: &Expr,
+    bound: &HashSet<String>,
+    seen: &mut HashSet<String>,
+    captures: &mut Vec<String>,
+) {
+    match &expr.kind {
+        ExprKind::Variable(name)
+        | ExprKind::PreIncrement(name)
+        | ExprKind::PostIncrement(name)
+        | ExprKind::PreDecrement(name)
+        | ExprKind::PostDecrement(name) => push_arrow_capture(name, bound, seen, captures),
+        ExprKind::BinaryOp { left, right, .. } => {
+            collect_arrow_expr_captures(left, bound, seen, captures);
+            collect_arrow_expr_captures(right, bound, seen, captures);
+        }
+        ExprKind::InstanceOf { value, target } => {
+            collect_arrow_expr_captures(value, bound, seen, captures);
+            if let crate::parser::ast::InstanceOfTarget::Expr(target_expr) = target {
+                collect_arrow_expr_captures(target_expr, bound, seen, captures);
+            }
+        }
+        ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Throw(inner)
+        | ExprKind::ErrorSuppress(inner)
+        | ExprKind::Print(inner)
+        | ExprKind::Spread(inner)
+        | ExprKind::PtrCast { expr: inner, .. }
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::YieldFrom(inner) => collect_arrow_expr_captures(inner, bound, seen, captures),
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
+            collect_arrow_expr_captures(value, bound, seen, captures);
+            collect_arrow_expr_captures(default, bound, seen, captures);
+        }
+        ExprKind::Pipe { value, callable } => {
+            collect_arrow_expr_captures(value, bound, seen, captures);
+            collect_arrow_expr_captures(callable, bound, seen, captures);
+        }
+        ExprKind::Assignment { target, value, .. } => {
+            if !matches!(target.kind, ExprKind::Variable(_)) {
+                collect_arrow_expr_captures(target, bound, seen, captures);
+            }
+            collect_arrow_expr_captures(value, bound, seen, captures);
+        }
+        ExprKind::FunctionCall { args, .. }
+        | ExprKind::NewObject { args, .. }
+        | ExprKind::NewScopedObject { args, .. }
+        | ExprKind::StaticMethodCall { args, .. } => {
+            for arg in args {
+                collect_arrow_expr_captures(arg, bound, seen, captures);
+            }
+        }
+        ExprKind::ClosureCall { var, args } => {
+            push_arrow_capture(var, bound, seen, captures);
+            for arg in args {
+                collect_arrow_expr_captures(arg, bound, seen, captures);
+            }
+        }
+        ExprKind::ExprCall { callee, args } => {
+            collect_arrow_expr_captures(callee, bound, seen, captures);
+            for arg in args {
+                collect_arrow_expr_captures(arg, bound, seen, captures);
+            }
+        }
+        ExprKind::ArrayLiteral(items) => {
+            for item in items {
+                collect_arrow_expr_captures(item, bound, seen, captures);
+            }
+        }
+        ExprKind::ArrayLiteralAssoc(items) => {
+            for (key, value) in items {
+                collect_arrow_expr_captures(key, bound, seen, captures);
+                collect_arrow_expr_captures(value, bound, seen, captures);
+            }
+        }
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            collect_arrow_expr_captures(subject, bound, seen, captures);
+            for (patterns, result) in arms {
+                for pattern in patterns {
+                    collect_arrow_expr_captures(pattern, bound, seen, captures);
+                }
+                collect_arrow_expr_captures(result, bound, seen, captures);
+            }
+            if let Some(default) = default {
+                collect_arrow_expr_captures(default, bound, seen, captures);
+            }
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            collect_arrow_expr_captures(array, bound, seen, captures);
+            collect_arrow_expr_captures(index, bound, seen, captures);
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            collect_arrow_expr_captures(condition, bound, seen, captures);
+            collect_arrow_expr_captures(then_expr, bound, seen, captures);
+            collect_arrow_expr_captures(else_expr, bound, seen, captures);
+        }
+        ExprKind::Closure { captures: nested, .. } => {
+            for name in nested {
+                push_arrow_capture(name, bound, seen, captures);
+            }
+        }
+        ExprKind::NamedArg { value, .. } => {
+            collect_arrow_expr_captures(value, bound, seen, captures);
+        }
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::NullsafePropertyAccess { object, .. } => {
+            collect_arrow_expr_captures(object, bound, seen, captures);
+        }
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            collect_arrow_expr_captures(object, bound, seen, captures);
+            collect_arrow_expr_captures(property, bound, seen, captures);
+        }
+        ExprKind::MethodCall { object, args, .. }
+        | ExprKind::NullsafeMethodCall { object, args, .. } => {
+            collect_arrow_expr_captures(object, bound, seen, captures);
+            for arg in args {
+                collect_arrow_expr_captures(arg, bound, seen, captures);
+            }
+        }
+        ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => {
+            collect_arrow_expr_captures(object, bound, seen, captures);
+        }
+        ExprKind::BufferNew { len, .. } => {
+            collect_arrow_expr_captures(len, bound, seen, captures);
+        }
+        ExprKind::Yield { key, value } => {
+            if let Some(key) = key {
+                collect_arrow_expr_captures(key, bound, seen, captures);
+            }
+            if let Some(value) = value {
+                collect_arrow_expr_captures(value, bound, seen, captures);
+            }
+        }
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::ConstRef(_)
+        | ExprKind::StaticPropertyAccess { .. }
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::FirstClassCallable(_)
+        | ExprKind::This
+        | ExprKind::MagicConstant(_) => {}
+    }
 }
 
 /// Parses the optional `: ReturnType` clause after a closure's parameter list.

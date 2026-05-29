@@ -175,12 +175,38 @@ fn test_parse_arrow_function() {
     assert_eq!(stmts.len(), 1);
     if let StmtKind::Assign { value, .. } = &stmts[0].kind {
         if let ExprKind::Closure {
-            params, is_arrow, ..
+            params,
+            captures,
+            is_arrow,
+            ..
         } = &value.kind
         {
             let param_names: Vec<&str> = params.iter().map(|(n, _, _, _)| n.as_str()).collect();
             assert_eq!(param_names, &["x"]);
+            assert!(captures.is_empty());
             assert!(is_arrow);
+        } else {
+            panic!("expected Closure (arrow)");
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+/// Verifies arrow functions record outer variable reads as implicit by-value captures.
+#[test]
+fn test_parse_arrow_function_implicit_capture() {
+    let stmts = parse_source("<?php $fn = fn($x) => $x + $y;");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        if let ExprKind::Closure {
+            captures,
+            is_arrow,
+            ..
+        } = &value.kind
+        {
+            assert!(is_arrow);
+            assert_eq!(captures, &["y".to_string()]);
         } else {
             panic!("expected Closure (arrow)");
         }

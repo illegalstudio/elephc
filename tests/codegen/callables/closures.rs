@@ -59,6 +59,20 @@ echo $calc(5);
     assert_eq!(out, "26");
 }
 
+/// Regression for #300: arrow functions capture outer locals by value at definition time.
+#[test]
+fn test_arrow_function_captures_outer_local_by_value() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+$f = fn() => $x;
+$x = 2;
+echo $f();
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
 /// Verifies closure with typed parameter, return type annotation, and `use` clause capturing a string variable.
 #[test]
 fn test_closure_return_type_annotation() {
