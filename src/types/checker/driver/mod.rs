@@ -21,6 +21,7 @@ use super::builtin_types::{
     patch_builtin_fiber_signatures, patch_builtin_reflection_signatures,
     patch_magic_method_signatures, InterfaceDeclInfo,
 };
+use super::builtin_enums::inject_builtin_enums;
 use super::builtin_interfaces::{
     apply_implicit_stringable_interfaces, inject_builtin_interfaces,
 };
@@ -190,6 +191,9 @@ pub(super) fn check_types_impl(
         ) {
             errors.extend(error.flatten());
         }
+    }
+    if let Err(error) = inject_builtin_enums(program, &mut checker, &mut next_class_id) {
+        errors.extend(error.flatten());
     }
     for stmt in program {
         if let StmtKind::EnumDecl {

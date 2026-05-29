@@ -42,6 +42,7 @@ const BUILTIN_CLASS_LIKE_SYMBOLS: &[&str] = &[
     "RecursiveIterator",
     "RecursiveIteratorIterator",
     "SeekableIterator",
+    "SortDirection",
     "SplDoublyLinkedList",
     "SplFixedArray",
     "SplObserver",

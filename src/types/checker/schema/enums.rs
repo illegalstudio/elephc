@@ -222,6 +222,23 @@ pub(crate) fn build_enum_info(
         });
     }
 
+    insert_enum_metadata(name, resolved_backing, enum_cases, checker, next_class_id);
+    Ok(())
+}
+
+/// Inserts validated enum metadata and its parallel final readonly class metadata.
+///
+/// Used by parsed enum declarations and builtin enum injection after case/backing
+/// validation has already happened. Synthesizes the static enum methods exposed
+/// by PHP: all enums get `cases()`, while backed enums also get `from()` and
+/// `tryFrom()`.
+pub(crate) fn insert_enum_metadata(
+    name: &str,
+    backing_type: Option<PhpType>,
+    enum_cases: Vec<EnumCaseInfo>,
+    checker: &mut Checker,
+    next_class_id: &mut u64,
+) {
     let mut properties = Vec::new();
     let mut property_offsets = HashMap::new();
     let mut property_declaring_classes = HashMap::new();
@@ -231,7 +248,7 @@ pub(crate) fn build_enum_info(
     let final_properties = HashSet::new();
     let mut readonly_properties = HashSet::new();
     let reference_properties = HashSet::new();
-    if let Some(backing_ty) = &resolved_backing {
+    if let Some(backing_ty) = &backing_type {
         properties.push(("value".to_string(), backing_ty.clone()));
         property_offsets.insert("value".to_string(), 8);
         property_declaring_classes.insert("value".to_string(), name.to_string());
@@ -261,7 +278,7 @@ pub(crate) fn build_enum_info(
     static_method_visibilities.insert("cases".to_string(), Visibility::Public);
     static_method_declaring_classes.insert("cases".to_string(), name.to_string());
     static_method_impl_classes.insert("cases".to_string(), name.to_string());
-    if let Some(backing_ty) = &resolved_backing {
+    if let Some(backing_ty) = &backing_type {
         for method_name in ["from", "tryfrom"] {
             static_methods.insert(
                 method_name.to_string(),
@@ -347,10 +364,9 @@ pub(crate) fn build_enum_info(
     checker.enums.insert(
         name.to_string(),
         EnumInfo {
-            backing_type: resolved_backing,
+            backing_type,
             cases: enum_cases,
         },
     );
     *next_class_id += 1;
-    Ok(())
 }

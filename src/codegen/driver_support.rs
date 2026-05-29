@@ -82,10 +82,14 @@ pub(super) fn emit_enum_singleton_initializers(
     emitter: &mut Emitter,
     data: &mut DataSection,
     ctx: &Context,
+    allowed_class_names: Option<&std::collections::HashSet<String>>,
 ) {
     let mut sorted_enums: Vec<(&String, &EnumInfo)> = ctx.enums.iter().collect();
     sorted_enums.sort_by_key(|(name, _)| name.as_str());
     for (enum_name, enum_info) in sorted_enums {
+        if allowed_class_names.is_some_and(|allowed| !allowed.contains(enum_name)) {
+            continue;
+        }
         let Some(class_info) = ctx.classes.get(enum_name) else {
             continue;
         };

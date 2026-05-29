@@ -131,11 +131,12 @@ fn test_enum_from_string_failure_throws_value_error() {
     );
 }
 
-/// Compiles and runs the checked-in `examples/enums/main.php` fixture and asserts stdout is "1\n2\n3".
+/// Compiles and runs the checked-in `examples/enums/main.php` fixture and asserts stdout includes
+/// both user-declared enum output and the builtin `SortDirection` helper result.
 #[test]
 fn test_example_enums_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/enums/main.php"));
-    assert_eq!(out, "1\n2\n3");
+    assert_eq!(out, "1\n2\n3\nDESC");
 }
 
 /// Verifies `Color::tryFrom(2)` returns a non-null value and `Color::tryFrom(99)` returns `null`,
@@ -237,4 +238,85 @@ echo Renderer::isSplit(RenderMode::Split) ? "import" : "bad";
 "#,
     );
     assert_eq!(out, "local|import");
+}
+
+/// Verifies PHP 8.6's builtin `SortDirection` unit enum exposes both singleton
+/// cases through direct access, `cases()`, `enum_exists()`, and class-like introspection.
+#[test]
+fn test_builtin_sort_direction_cases_and_introspection() {
+    let out = compile_and_run(
+        "<?php
+        $cases = SortDirection::cases();
+        echo count($cases);
+        echo '|';
+        echo $cases[0] === SortDirection::Ascending ? 'A' : 'bad';
+        echo '|';
+        echo $cases[1] === SortDirection::Descending ? 'D' : 'bad';
+        echo '|';
+        echo enum_exists('sortdirection', false) ? 'enum' : 'missing';
+        echo '|';
+        echo class_exists('SortDirection', false) ? 'class' : 'missing';
+        ",
+    );
+    assert_eq!(out, "2|A|D|enum|class");
+}
+
+/// Verifies builtin `SortDirection` can be used in parameter and return type
+/// declarations and can drive a `match` expression over enum case singletons.
+#[test]
+fn test_builtin_sort_direction_typed_function_return_and_match() {
+    let out = compile_and_run(
+        "<?php
+        function default_direction(): SortDirection {
+            return SortDirection::Ascending;
+        }
+
+        function sort_keyword(SortDirection $direction): string {
+            return match ($direction) {
+                SortDirection::Ascending => 'ASC',
+                SortDirection::Descending => 'DESC',
+            };
+        }
+
+        echo sort_keyword(default_direction());
+        echo '|';
+        echo sort_keyword(SortDirection::Descending);
+        ",
+    );
+    assert_eq!(out, "ASC|DESC");
+}
+
+/// Verifies namespaced code can reference the global builtin `SortDirection`
+/// through PHP class-like name rules: imports and fully-qualified names work.
+#[test]
+fn test_builtin_sort_direction_resolves_from_namespaced_code() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+
+use SortDirection;
+
+function is_ascending(SortDirection $direction): bool {
+    return $direction === \SortDirection::Ascending;
+}
+
+echo is_ascending(SortDirection::Ascending) ? "import" : "bad";
+echo "|";
+echo \SortDirection::Descending === SortDirection::Descending ? "fqcn" : "bad";
+"#,
+    );
+    assert_eq!(out, "import|fqcn");
+}
+
+/// Verifies builtin `SortDirection` cases can be used as enum case constants
+/// and then compared by singleton identity.
+#[test]
+fn test_builtin_sort_direction_case_constant() {
+    let out = compile_and_run(
+        "<?php
+        const DEFAULT_DIRECTION = SortDirection::Descending;
+        echo DEFAULT_DIRECTION === SortDirection::Descending ? 'ok' : 'bad';
+        ",
+    );
+    assert_eq!(out, "ok");
 }

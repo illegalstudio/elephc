@@ -215,9 +215,21 @@ pub fn emit_expr(
                     return PhpType::Int;
                 }
             };
+            let is_literal_constant = matches!(
+                value,
+                ExprKind::IntLiteral(_)
+                    | ExprKind::FloatLiteral(_)
+                    | ExprKind::StringLiteral(_)
+                    | ExprKind::BoolLiteral(_)
+                    | ExprKind::Null
+            );
             let synthetic_expr = Expr::new(value, expr.span);
-            emit_expr(&synthetic_expr, emitter, ctx, data);
-            ty
+            let emitted_ty = emit_expr(&synthetic_expr, emitter, ctx, data);
+            if is_literal_constant {
+                ty
+            } else {
+                emitted_ty
+            }
         }
         ExprKind::BinaryOp { left, op, right } => emit_binop(left, op, right, emitter, ctx, data),
         ExprKind::InstanceOf { value, target } => {

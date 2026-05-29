@@ -77,6 +77,7 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "ReflectionProperty",
     "RuntimeException",
     "SeekableIterator",
+    "SortDirection",
     "SplDoublyLinkedList",
     "SplFixedArray",
     "SplObserver",

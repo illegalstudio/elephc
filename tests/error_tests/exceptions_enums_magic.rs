@@ -249,6 +249,36 @@ fn test_error_cannot_redeclare_builtin_error_type() {
     );
 }
 
+/// Verifies that redeclaring the PHP 8.6 builtin `SortDirection` enum reports
+/// a built-in type redeclaration diagnostic.
+#[test]
+fn test_error_cannot_redeclare_builtin_sort_direction_enum() {
+    expect_error(
+        "<?php enum SortDirection { case Up; }",
+        "Cannot redeclare built-in type: SortDirection",
+    );
+}
+
+/// Verifies that class-like declarations cannot reuse the builtin
+/// `SortDirection` enum name.
+#[test]
+fn test_error_cannot_redeclare_builtin_sort_direction_class() {
+    expect_error(
+        "<?php class SortDirection {}",
+        "Cannot redeclare built-in type: SortDirection",
+    );
+}
+
+/// Verifies that unknown cases on the builtin `SortDirection` enum report the
+/// same enum-case diagnostic as user-declared enums.
+#[test]
+fn test_error_builtin_sort_direction_unknown_case() {
+    expect_error(
+        "<?php SortDirection::Sideways;",
+        "Undefined enum case: SortDirection::Sideways",
+    );
+}
+
 /// Verifies that directly instantiating the `Throwable` interface
 /// (`$e = new Throwable();`) reports "Cannot instantiate interface: Throwable".
 #[test]

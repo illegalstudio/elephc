@@ -12,3 +12,13 @@ echo PHP_EOL;
 echo Color::Green->value;
 echo PHP_EOL;
 echo count(Color::cases());
+echo PHP_EOL;
+
+function sql_sort_keyword(SortDirection $direction): string {
+    return match ($direction) {
+        SortDirection::Ascending => "ASC",
+        SortDirection::Descending => "DESC",
+    };
+}
+
+echo sql_sort_keyword(SortDirection::Descending);

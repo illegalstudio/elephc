@@ -471,6 +471,24 @@ echo Color::from(2) === Color::Green; // 1
 ```
 Pure and backed enums. `->value`, `::from()`, `::tryFrom()`, `::cases()`. Only `int` and `string` backing types.
 
+### Built-in `SortDirection`
+
+PHP 8.6's global unit enum is available without a user declaration:
+
+```php
+<?php
+function sqlSortKeyword(SortDirection $direction): string {
+    return match ($direction) {
+        SortDirection::Ascending => "ASC",
+        SortDirection::Descending => "DESC",
+    };
+}
+
+echo sqlSortKeyword(SortDirection::Descending); // DESC
+```
+
+`SortDirection` has two cases, `Ascending` and `Descending`, no backing value, and works with enum case identity, `SortDirection::cases()`, `enum_exists()`, type declarations, `match`, imports, and fully-qualified `\SortDirection` references.
+
 ## Magic methods
 - `__toString()` — string coercion
 - `__get($name)` — reading undefined property
