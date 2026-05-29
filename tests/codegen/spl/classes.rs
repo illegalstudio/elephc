@@ -225,6 +225,16 @@ echo count($lifo);
     assert_eq!(out, "0:a;0:b;0:c;\n0\n2:c;1:b;0:a;\n0");
 }
 
+/// Verifies the checked-in SPL delete-iteration mutation stress example observes
+/// PHP-compatible traversal order when the active list is mutated inside foreach.
+#[test]
+fn test_spl_delete_iteration_mutation_example() {
+    let out = compile_and_run(include_str!(
+        "../../../examples/spl-delete-iteration-mutation/main.php"
+    ));
+    assert_eq!(out, "0:a|0:b|0:c|0:x|\ncount=0\n");
+}
+
 // Tests SplDoublyLinkedList ArrayAccess implementation: offsetExists, offsetGet, offsetSet,
 // and offsetUnset via direct bracket access on an empty list, populated list, after unset,
 // and that iteration order follows LIFO mode.
