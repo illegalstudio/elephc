@@ -352,6 +352,39 @@ fn test_exception_finally_runs_on_return_break_continue() {
     assert_eq!(out, "15230919");
 }
 
+/// Verifies that finally blocks run before returns from both try and catch bodies.
+/// Issue #301: catch-body returns must route through the same pending finally state as try-body returns.
+#[test]
+fn test_exception_finally_runs_on_try_and_catch_return() {
+    let out = compile_and_run(
+        r#"<?php
+function from_try() {
+    try {
+        return "t";
+    } catch (Exception $e) {
+        return "x";
+    } finally {
+        echo "F";
+    }
+}
+
+function from_catch() {
+    try {
+        throw new Exception();
+    } catch (Exception $e) {
+        return "c";
+    } finally {
+        echo "f";
+    }
+}
+
+echo from_try();
+echo from_catch();
+"#,
+    );
+    assert_eq!(out, "Ftfc");
+}
+
 /// A break inside a finally block exits the while loop that encloses the try.
 /// The finally block itself runs, then break transfers control out of the loop.
 /// Verifies the loop is entered, the try body prints 1, and finally runs the

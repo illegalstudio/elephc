@@ -9,7 +9,7 @@
 //! - Pending control-flow state must survive handler transitions and be replayed after finally blocks.
 
 use crate::codegen::abi;
-use crate::codegen::context::Context;
+use crate::codegen::context::{Context, FinallyContext};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::parser::ast::CatchClause;
@@ -86,8 +86,16 @@ pub(super) fn emit_catch_dispatch(
 
         emitter.label(&catch_label);
         handlers::bind_catch_variable(catch_clause, emitter, ctx);
+        if let Some(label) = finally_label {
+            ctx.finally_stack.push(FinallyContext {
+                entry_label: label.to_string(),
+            });
+        }
         for stmt in &catch_clause.body {
             super::super::super::emit_stmt(stmt, emitter, ctx, data);
+        }
+        if finally_label.is_some() {
+            ctx.finally_stack.pop();
         }
         if let Some(label) = finally_label {
             abi::emit_jump(emitter, label);                                        // run finally after the matching catch body completes
