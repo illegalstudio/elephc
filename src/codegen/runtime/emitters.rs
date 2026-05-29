@@ -65,6 +65,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     strings::emit_strrpos(emitter);
     strings::emit_str_repeat(emitter);
     strings::emit_strrev(emitter);
+    strings::emit_grapheme_strrev(emitter);
     strings::emit_chr(emitter);
     strings::emit_strcmp(emitter);
     strings::emit_strcasecmp(emitter);

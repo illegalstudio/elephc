@@ -144,6 +144,7 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "getenv",
     "gettype",
     "glob",
+    "grapheme_strrev",
     "hash",
     "hex2bin",
     "html_entity_decode",

@@ -38,6 +38,7 @@ echo "chop form-feed: [" . chop("tail\f") . "]\n";
 echo "\n--- Transform ---\n";
 echo "str_repeat: " . str_repeat("ha", 3) . "\n";
 echo "strrev: " . strrev("desserts") . "\n";
+echo "grapheme_strrev: " . grapheme_strrev("A\u{0065}\u{0301}\u{1F469}\u{1F3FD}\u{200D}\u{1F4BB}") . "\n";
 echo "str_replace: " . str_replace("World", "PHP", $str) . "\n";
 
 // Split and join

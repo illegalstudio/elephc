@@ -92,6 +92,7 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "chop"
             | "str_repeat"
             | "strrev"
+            | "grapheme_strrev"
             | "str_pad"
             | "explode"
             | "implode"

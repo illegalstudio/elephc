@@ -258,9 +258,10 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "base64_encode" | "base64_decode" | "bin2hex" | "hex2bin" | "number_format"
             | "date" | "json_encode" | "json_decode" | "json_last_error_msg" | "gettype"
             | "str_word_count" | "chunk_split" => PhpType::Str,
-            "strpos" | "strrpos" | "array_search" | "fileatime" | "filectime" | "fileperms"
-            | "fileowner" | "filegroup" | "fileinode" | "filetype" | "stat" | "lstat"
-            | "fstat" | "fgetc" | "readfile" | "readlink" => PhpType::Mixed,
+            "strpos" | "strrpos" | "array_search" | "grapheme_strrev" | "fileatime"
+            | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
+            | "filetype" | "stat" | "lstat" | "fstat" | "fgetc" | "readfile"
+            | "readlink" => PhpType::Mixed,
             "fopen" | "tmpfile" => PhpType::Union(vec![PhpType::stream_resource(), PhpType::Bool]),
             "strlen" | "ord" | "count" | "intval" | "abs" | "intdiv"
             | "rand" | "time" | "fpassthru" | "linkinfo" => PhpType::Int,

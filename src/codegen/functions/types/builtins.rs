@@ -176,9 +176,10 @@ pub(super) fn infer_function_call_type(
         }
         "define" => PhpType::Bool,
         "umask" | "fpassthru" | "linkinfo" => PhpType::Int,
-        "strpos" | "strrpos" | "array_search" | "file_get_contents" | "json_encode" | "fileatime"
-        | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
-        | "filetype" | "stat" | "lstat" | "fstat" | "fgetc" | "readfile" | "readlink" => PhpType::Mixed,
+        "strpos" | "strrpos" | "array_search" | "file_get_contents" | "json_encode"
+        | "grapheme_strrev" | "fileatime" | "filectime" | "fileperms" | "fileowner"
+        | "filegroup" | "fileinode" | "filetype" | "stat" | "lstat" | "fstat"
+        | "fgetc" | "readfile" | "readlink" => PhpType::Mixed,
         "fopen" | "tmpfile" => merge_union_members(vec![PhpType::stream_resource(), PhpType::Bool]),
         "pathinfo" => infer_pathinfo_type(args),
         "abs" => {

@@ -103,6 +103,7 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `str_pad()` | `str_pad($str, $len [, $pad, $type]): string` | Pad string to length |
 | `str_split()` | `str_split($str [, $len]): array` | Split into chunks |
 | `strrev()` | `strrev($str): string` | Reverse a string |
+| `grapheme_strrev()` | `grapheme_strrev($str): string\|false` | Reverse a UTF-8 string by grapheme clusters, preserving embedded NUL bytes and keeping combining marks, emoji modifiers, and ZWJ sequences with their base cluster. Returns `false` on malformed UTF-8. |
 | `strcmp()` | `strcmp($a, $b): int` | Binary-safe string comparison |
 | `strcasecmp()` | `strcasecmp($a, $b): int` | Case-insensitive comparison |
 | `str_contains()` | `str_contains($hay, $needle): bool` | Check if string contains substring |

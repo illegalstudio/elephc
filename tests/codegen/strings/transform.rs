@@ -95,6 +95,51 @@ fn test_strrev() {
     assert_eq!(out, "olleH");
 }
 
+/// Verifies grapheme_strrev reverses ASCII text like strrev while returning the PHP string|false shape.
+#[test]
+fn test_grapheme_strrev_ascii() {
+    let out = compile_and_run(r#"<?php echo grapheme_strrev("ABCDE");"#);
+    assert_eq!(out, "EDCBA");
+}
+
+/// Verifies grapheme_strrev keeps a combining mark attached to its base character.
+#[test]
+fn test_grapheme_strrev_combining_mark_cluster() {
+    let out = compile_and_run("<?php echo grapheme_strrev(\"Ae\\u{0301}B\");");
+    assert_eq!(out, "Be\u{0301}A");
+}
+
+/// Verifies grapheme_strrev keeps emoji modifiers and ZWJ sequences together as one cluster.
+#[test]
+fn test_grapheme_strrev_emoji_modifier_zwj_cluster() {
+    let out = compile_and_run("<?php echo grapheme_strrev(\"A\\u{1F469}\\u{1F3FD}\\u{200D}\\u{1F4BB}B\");");
+    assert_eq!(out, "B\u{1F469}\u{1F3FD}\u{200D}\u{1F4BB}A");
+}
+
+/// Verifies grapheme_strrev preserves embedded NUL bytes while reversing surrounding clusters.
+#[test]
+fn test_grapheme_strrev_preserves_nul_bytes() {
+    let out = compile_and_run(r#"<?php echo grapheme_strrev("ab\0cd");"#);
+    assert_eq!(out.as_bytes(), b"dc\0ba");
+}
+
+/// Verifies grapheme_strrev participates in builtin lookup, namespace fallback, and first-class callable syntax.
+#[test]
+fn test_grapheme_strrev_lookup_and_first_class_callable() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo;
+echo function_exists("GrApHeMe_StRrEv") ? "1" : "0";
+echo ":";
+echo GrApHeMe_StRrEv("desk");
+echo ":";
+$rev = grapheme_strrev(...);
+echo $rev("tool");
+"#,
+    );
+    assert_eq!(out, "1:ksed:loot");
+}
+
 /// Verifies str_replace performs a simple find-and-replace on a string.
 #[test]
 fn test_str_replace() {

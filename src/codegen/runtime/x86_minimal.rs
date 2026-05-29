@@ -70,6 +70,7 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_strpos(emitter);
     strings::emit_strrpos(emitter);
     strings::emit_strrev(emitter);
+    strings::emit_grapheme_strrev(emitter);
     strings::emit_strcmp(emitter);
     strings::emit_strcasecmp(emitter);
     strings::emit_str_starts_with(emitter);

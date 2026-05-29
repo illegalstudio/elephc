@@ -19,6 +19,7 @@ mod ctype_alpha;
 mod ctype_digit;
 mod ctype_space;
 mod explode;
+mod grapheme_strrev;
 mod hash;
 mod hex2bin;
 mod html_entity_decode;
@@ -102,6 +103,7 @@ pub fn emit(
         "chop" => rtrim::emit(name, args, emitter, ctx, data),
         "str_repeat" => str_repeat::emit(name, args, emitter, ctx, data),
         "strrev" => strrev::emit(name, args, emitter, ctx, data),
+        "grapheme_strrev" => grapheme_strrev::emit(name, args, emitter, ctx, data),
         "ord" => ord::emit(name, args, emitter, ctx, data),
         "chr" => chr::emit(name, args, emitter, ctx, data),
         "strcmp" => strcmp::emit(name, args, emitter, ctx, data),

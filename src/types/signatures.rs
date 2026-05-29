@@ -82,10 +82,10 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         | "ptr_null" | "getcwd" | "sys_get_temp_dir" | "tmpfile" => Some(fixed(&[])),
 
         "strlen" | "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "strrev"
-        | "addslashes" | "stripslashes" | "nl2br" | "bin2hex" | "hex2bin"
-        | "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode"
-        | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode"
-        | "base64_decode" => Some(fixed(&["string"])),
+        | "grapheme_strrev" | "addslashes" | "stripslashes" | "nl2br" | "bin2hex"
+        | "hex2bin" | "htmlspecialchars" | "htmlentities" | "html_entity_decode"
+        | "urlencode" | "urldecode" | "rawurlencode" | "rawurldecode"
+        | "base64_encode" | "base64_decode" => Some(fixed(&["string"])),
         "ord" => Some(fixed(&["character"])),
         "chr" => Some(fixed(&["codepoint"])),
 
@@ -496,6 +496,11 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             name,
             &[PhpType::Mixed],
             PhpType::Str,
+        )),
+        "grapheme_strrev" => Some(typed_first_class_builtin_sig(
+            name,
+            &[PhpType::Str],
+            PhpType::Union(vec![PhpType::Str, PhpType::Bool]),
         )),
         "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "strrev"
         | "addslashes" | "stripslashes" | "nl2br" | "bin2hex" | "hex2bin"

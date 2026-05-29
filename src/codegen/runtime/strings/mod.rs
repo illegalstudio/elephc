@@ -17,6 +17,7 @@ mod str_to_number;
 mod str_to_int;
 mod number_format;
 mod atoi;
+mod grapheme_strrev;
 mod strcopy;
 mod str_persist;
 mod strtolower;
@@ -107,6 +108,8 @@ pub use str_repeat::emit_str_repeat;
 /// Emit string repeat helper.
 pub use strrev::emit_strrev;
 /// Emit string reverse helper.
+pub use grapheme_strrev::emit_grapheme_strrev;
+/// Emit grapheme-aware string reverse helper.
 pub use chr::emit_chr;
 /// Emit character code to string helper.
 pub use strcmp::emit_strcmp;

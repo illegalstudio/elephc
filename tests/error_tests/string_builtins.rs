@@ -27,6 +27,24 @@ expect_builtin_arity_error!(
     "base64_decode() takes exactly 1 argument"
 );
 
+/// Verifies that `grapheme_strrev()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_grapheme_strrev_wrong_args() {
+    expect_error(
+        "<?php grapheme_strrev();",
+        "grapheme_strrev() takes exactly 1 argument",
+    );
+}
+
+/// Verifies that `grapheme_strrev()` rejects statically non-string arguments.
+#[test]
+fn test_error_grapheme_strrev_non_string_argument() {
+    expect_error(
+        "<?php grapheme_strrev(123);",
+        "grapheme_strrev() argument must be string",
+    );
+}
+
 expect_builtin_arity_error!(
     test_error_ctype_digit_wrong_args,
     "<?php ctype_digit();",
