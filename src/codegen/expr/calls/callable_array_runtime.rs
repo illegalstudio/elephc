@@ -375,8 +375,13 @@ fn emit_instance_literal_case_call(
     if save_concat_before_args {
         super::super::save_concat_offset_before_nested_call(emitter, ctx);
     }
+    let concat_save_stack_bytes = if save_concat_before_args {
+        concat_save_stack_bytes(emitter, ctx)
+    } else {
+        0
+    };
     let object_stack_offset =
-        MIXED_RECEIVER_PAYLOAD_OFFSET + if save_concat_before_args { 16 } else { 0 };
+        MIXED_RECEIVER_PAYLOAD_OFFSET + concat_save_stack_bytes;
     let arr_ty = if let Some(arg_array) = single_spread_inner(args) {
         let arg_array_ty = crate::codegen::functions::infer_contextual_type(arg_array, ctx);
         let emitted_saved_args = receiver_call_args::emit_saved_receiver_prefixed_dynamic_arg_mixed(
@@ -422,6 +427,15 @@ fn emit_instance_literal_case_call(
         ctx,
         data,
     );
+}
+
+/// Returns how many temporary stack bytes the concat-offset save added.
+fn concat_save_stack_bytes(emitter: &Emitter, ctx: &Context) -> usize {
+    match emitter.target.arch {
+        Arch::AArch64 => 16,
+        Arch::X86_64 if ctx.nested_concat_offset_offset.is_none() => 16,
+        Arch::X86_64 => 0,
+    }
 }
 
 /// Returns the inner argument array when descriptor invocation forwards one spread segment.
@@ -723,4 +737,26 @@ fn callable_array_slot_expr(var: &str, index: i64) -> Expr {
 /// Returns true when an expression is a two-element indexed-array literal.
 fn is_two_slot_callable_array_literal(callee: &Expr) -> bool {
     matches!(&callee.kind, ExprKind::ArrayLiteral(elems) if elems.len() == 2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::{Platform, Target};
+
+    /// Verifies x86_64 frame-slot concat saves do not shift saved callable-array selector offsets.
+    #[test]
+    fn test_concat_save_stack_bytes_tracks_actual_stack_pushes() {
+        let x86 = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        let mut x86_frame_ctx = Context::new();
+        x86_frame_ctx.nested_concat_offset_offset = Some(24);
+        assert_eq!(concat_save_stack_bytes(&x86, &x86_frame_ctx), 0);
+
+        let x86_raw_ctx = Context::new();
+        assert_eq!(concat_save_stack_bytes(&x86, &x86_raw_ctx), 16);
+
+        let arm = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        let arm_ctx = Context::new();
+        assert_eq!(concat_save_stack_bytes(&arm, &arm_ctx), 16);
+    }
 }
