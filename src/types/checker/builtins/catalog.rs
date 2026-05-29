@@ -62,6 +62,7 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "ceil",
     "chgrp",
     "chmod",
+    "chop",
     "chown",
     "chdir",
     "chr",

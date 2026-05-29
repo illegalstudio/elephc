@@ -45,6 +45,12 @@ expect_builtin_arity_error!(
     "ctype_space() takes exactly 1 argument"
 );
 
+expect_builtin_arity_error!(
+    test_error_chop_wrong_args,
+    "<?php chop();",
+    "chop() takes 1 or 2 arguments"
+);
+
 /// Verifies that `substr()` with only one string argument produces the correct arity error.
 #[test]
 fn test_error_substr_wrong_args() {

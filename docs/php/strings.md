@@ -95,9 +95,10 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `ucfirst()` | `ucfirst($str): string` | Uppercase first character |
 | `lcfirst()` | `lcfirst($str): string` | Lowercase first character |
 | `ucwords()` | `ucwords($str): string` | Uppercase first letter of each word |
-| `trim()` | `trim($str [, $chars]): string` | Strip whitespace from both ends |
-| `ltrim()` | `ltrim($str [, $chars]): string` | Strip whitespace from left |
-| `rtrim()` | `rtrim($str [, $chars]): string` | Strip whitespace from right |
+| `trim()` | `trim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from both ends |
+| `ltrim()` | `ltrim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from the left |
+| `rtrim()` | `rtrim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from the right |
+| `chop()` | `chop($str [, $chars]): string` | Alias of `rtrim()` |
 | `str_repeat()` | `str_repeat($str, $times): string` | Repeat a string |
 | `str_pad()` | `str_pad($str, $len [, $pad, $type]): string` | Pad string to length |
 | `str_split()` | `str_split($str [, $len]): array` | Split into chunks |
@@ -142,6 +143,8 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string` | Replace all regex matches; supports `$0`..`$9` and `\0`..`\9` replacement backreferences |
 | `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): string` | Replace all regex matches with the callback return value; callback receives `array<string>` matches |
 | `preg_split()` | `preg_split($pattern, $subject): array` | Split string by regex pattern |
+
+When the `$chars` mask is omitted, `trim()`, `ltrim()`, `rtrim()`, and `chop()` strip space, newline, carriage return, tab, vertical tab, form feed, and NUL. Passing an explicit mask strips only the characters in that mask.
 
 ### Regex limitations
 

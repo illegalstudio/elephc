@@ -145,10 +145,12 @@ pub(super) fn try_fold_pure_pipe(value: &Expr, callable: &Expr) -> Option<ExprKi
             Some(ExprKind::StringLiteral(out))
         }
         // `trim` with no second argument strips PHP's default whitespace set:
-        // " \t\n\r\0\x0B".
+        // " \t\n\r\0\x0B\x0C".
         ("trim", ExprKind::StringLiteral(s)) => {
             let trimmed: String = s
-                .trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\0' | '\x0B'))
+                .trim_matches(|c: char| {
+                    matches!(c, ' ' | '\t' | '\n' | '\r' | '\0' | '\x0B' | '\x0C')
+                })
                 .to_string();
             Some(ExprKind::StringLiteral(trimmed))
         }

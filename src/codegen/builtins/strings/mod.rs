@@ -99,6 +99,7 @@ pub fn emit(
         "trim" => trim::emit(name, args, emitter, ctx, data),
         "ltrim" => ltrim::emit(name, args, emitter, ctx, data),
         "rtrim" => rtrim::emit(name, args, emitter, ctx, data),
+        "chop" => rtrim::emit(name, args, emitter, ctx, data),
         "str_repeat" => str_repeat::emit(name, args, emitter, ctx, data),
         "strrev" => strrev::emit(name, args, emitter, ctx, data),
         "ord" => ord::emit(name, args, emitter, ctx, data),

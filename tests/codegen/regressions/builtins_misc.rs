@@ -93,6 +93,53 @@ fn test_trim_mask() {
     assert_eq!(out, "hello");
 }
 
+/// Verifies default trim masks include form-feed bytes on both sides.
+#[test]
+fn test_trim_default_mask_includes_form_feed() {
+    let out = compile_and_run(r#"<?php echo "[" . trim("\f value \f") . "]";"#);
+    assert_eq!(out, "[value]");
+}
+
+/// Verifies default ltrim masks include leading form-feed bytes.
+#[test]
+fn test_ltrim_default_mask_includes_form_feed() {
+    let out = compile_and_run(r#"<?php echo "[" . ltrim("\f value") . "]";"#);
+    assert_eq!(out, "[value]");
+}
+
+/// Verifies default rtrim masks include trailing form-feed bytes.
+#[test]
+fn test_rtrim_default_mask_includes_form_feed() {
+    let out = compile_and_run(r#"<?php echo "[" . rtrim("value \f") . "]";"#);
+    assert_eq!(out, "[value]");
+}
+
+/// Verifies explicit trim masks remain exact and do not strip form-feed unless requested.
+#[test]
+fn test_trim_explicit_mask_keeps_form_feed_when_omitted() {
+    let out = compile_and_run(r#"<?php echo "[" . trim("\f value \f", " ") . "]";"#);
+    assert_eq!(out, "[\x0c value \x0c]");
+}
+
+/// Verifies `chop()` behaves as PHP's alias for `rtrim()` and strips form-feed by default.
+#[test]
+fn test_chop_alias_trims_default_form_feed() {
+    let out = compile_and_run(r#"<?php echo "[" . chop("value\f") . "]";"#);
+    assert_eq!(out, "[value]");
+}
+
+/// Verifies `chop()` participates in case-insensitive namespaced builtin fallback.
+#[test]
+fn test_chop_case_insensitive_namespaced_builtin() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo;
+echo ChOp("value\f");
+"#,
+    );
+    assert_eq!(out, "value");
+}
+
 /// Verifies `min(3, 1, 2)` returns `"1"` (smallest of three integers).
 #[test]
 fn test_min_three_args() {

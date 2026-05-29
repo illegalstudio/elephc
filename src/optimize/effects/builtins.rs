@@ -89,6 +89,7 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "trim"
             | "ltrim"
             | "rtrim"
+            | "chop"
             | "str_repeat"
             | "strrev"
             | "str_pad"

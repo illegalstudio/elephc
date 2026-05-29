@@ -29,6 +29,10 @@ echo "lcfirst: " . lcfirst("HELLO") . "\n";
 // Trimming
 echo "\n--- Trim ---\n";
 echo "trim: [" . trim("  spaced  ") . "]\n";
+echo "trim form-feed: [" . trim("\f boxed \f") . "]\n";
+echo "ltrim form-feed: [" . ltrim("\fleft") . "]\n";
+echo "rtrim form-feed: [" . rtrim("right\f") . "]\n";
+echo "chop form-feed: [" . chop("tail\f") . "]\n";
 
 // Transform
 echo "\n--- Transform ---\n";

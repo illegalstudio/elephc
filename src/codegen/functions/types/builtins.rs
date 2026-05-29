@@ -33,7 +33,7 @@ pub(super) fn infer_function_call_type(
 ) -> PhpType {
     match name {
         "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "ucwords" | "trim"
-        | "ltrim" | "rtrim" | "substr" | "str_repeat" | "strrev" | "str_replace"
+        | "ltrim" | "rtrim" | "chop" | "substr" | "str_repeat" | "strrev" | "str_replace"
         | "str_ireplace" | "substr_replace" | "str_pad" | "chr" | "implode" | "join"
         | "sprintf" | "number_format" | "nl2br" | "wordwrap" | "addslashes"
         | "stripslashes" | "htmlspecialchars" | "html_entity_decode" | "htmlentities"

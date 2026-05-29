@@ -167,10 +167,10 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "umask" => Some(optional(&["mask"], 0, vec![null_lit()])),
         "exit" | "die" => Some(optional(&["status"], 0, vec![int_lit(0)])),
 
-        "trim" | "ltrim" | "rtrim" => Some(optional(
+        "trim" | "ltrim" | "rtrim" | "chop" => Some(optional(
             &["string", "characters"],
             1,
-            vec![string_lit(" \n\r\t\u{0b}\0")],
+            vec![string_lit(" \n\r\t\u{0b}\u{0c}\0")],
         )),
         "ucwords" => Some(optional(
             &["string", "separators"],
@@ -495,7 +495,7 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         | "addslashes" | "stripslashes" | "nl2br" | "bin2hex" | "hex2bin"
         | "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode"
         | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode"
-        | "base64_decode" | "trim" | "ltrim" | "rtrim" | "ucwords" | "substr"
+        | "base64_decode" | "trim" | "ltrim" | "rtrim" | "chop" | "ucwords" | "substr"
         | "str_repeat" | "strstr" | "str_replace" | "str_ireplace" | "explode"
         | "implode" | "substr_replace" | "str_pad" | "str_split" | "wordwrap"
         | "sprintf" | "hash" | "md5" | "sha1" | "number_format" | "chr" => {
