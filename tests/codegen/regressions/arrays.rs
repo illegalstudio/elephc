@@ -38,14 +38,34 @@ if (is_null($v)) { echo "null"; } else { echo "not null"; }
 /// Fixture: 3-element array accessed at index `5`.
 #[test]
 fn test_array_out_of_bounds_returns_null() {
-    let out = compile_and_run(
+    let out = compile_and_run_capture(
         r#"<?php
 $a = [10, 20, 30];
 $v = $a[5];
 if (is_null($v)) { echo "null"; } else { echo "not null"; }
 "#,
     );
-    assert_eq!(out, "null");
+    assert!(out.success);
+    assert_eq!(out.stdout, "null");
+    assert!(out.stderr.contains("Warning: Undefined array key 5"));
+}
+
+/// Verifies missing indexed-array reads emit PHP's undefined-key warning.
+/// Issue #293: the nested receiver expression must still run exactly once.
+#[test]
+fn test_array_out_of_bounds_warns_and_preserves_index_side_effects() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function bump(&$i) { $i++; return $i - 1; }
+$arr = [["ok"], []];
+$i = 0;
+var_dump($arr[bump($i)][1]);
+echo "i=$i\n";
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "NULL\ni=1\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 1"));
 }
 
 /// Verifies that valid integer indices still work correctly after the null-bounds check.

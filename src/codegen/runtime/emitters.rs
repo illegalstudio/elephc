@@ -195,6 +195,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_hash_count(emitter);
     arrays::emit_hash_free_deep(emitter);
     arrays::emit_array_key_exists(emitter);
+    arrays::emit_undefined_array_key_warning(emitter);
     arrays::emit_array_search(emitter);
     arrays::emit_array_reverse(emitter);
     arrays::emit_array_reverse_refcounted(emitter);

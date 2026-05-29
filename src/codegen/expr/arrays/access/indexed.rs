@@ -488,6 +488,7 @@ pub(crate) fn emit_array_access_with_loaded_base(
     }
 
     emitter.label(&null_label);
+    emit_undefined_index_warning(emitter);
     if boxed_indexed_base || matches!(elem_ty, PhpType::Mixed | PhpType::Union(_)) {
         objects_boxed_null_for_array_access(emitter);
     } else {
@@ -536,4 +537,9 @@ fn objects_boxed_null_for_array_access(emitter: &mut Emitter) {
         0x7fff_ffff_ffff_fffe,
     );
     crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Void);
+}
+
+/// Emits the PHP warning for an undefined indexed-array key.
+fn emit_undefined_index_warning(emitter: &mut Emitter) {
+    abi::emit_call_label(emitter, "__rt_warn_undefined_array_key_int");         // emit or suppress the PHP undefined-array-key warning for the current index
 }

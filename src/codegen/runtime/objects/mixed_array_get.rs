@@ -81,9 +81,9 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x12, [sp, #8]");                                   // x12 = key_lo (int index)
     emitter.instruction("ldr x9, [x10]");                                       // x9 = array length (header offset 0)
     emitter.instruction("cmp x12, #0");                                         // negative index → null
-    emitter.instruction("b.lt __rt_mixed_array_get_null");                      // branch on the current JSON decoder condition
+    emitter.instruction("b.lt __rt_mixed_array_get_indexed_missing");           // warn and return null for a negative indexed-array key
     emitter.instruction("cmp x12, x9");                                         // index >= length → null
-    emitter.instruction("b.ge __rt_mixed_array_get_null");                      // branch on the current JSON decoder condition
+    emitter.instruction("b.ge __rt_mixed_array_get_indexed_missing");           // warn and return null for an out-of-bounds indexed-array key
     emitter.instruction("ldr x13, [x10, #-8]");                                 // load packed indexed-array kind metadata
     emitter.instruction("ubfx x13, x13, #8, #7");                               // extract the runtime element value_type tag
     emitter.instruction("add x10, x10, #24");                                   // skip the 24-byte array header to reach the contiguous payload
@@ -124,6 +124,10 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
+    emitter.label("__rt_mixed_array_get_indexed_missing");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the missing integer key for the PHP warning
+    emitter.instruction("bl __rt_warn_undefined_array_key_int");                // emit or suppress the undefined-array-key warning
+    emitter.instruction("b __rt_mixed_array_get_null");                         // return boxed Mixed(null) after the warning
 
     // Associative array: hash_get with normalized key.
     emitter.label("__rt_mixed_array_get_assoc");
@@ -230,9 +234,9 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // r8 = key_lo (int index)
     emitter.instruction("mov r9, QWORD PTR [r10]");                             // r9 = array length
     emitter.instruction("cmp r8, 0");                                           // negative index → null
-    emitter.instruction("jl __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    emitter.instruction("jl __rt_mixed_array_get_indexed_missing");             // warn and return null for a negative indexed-array key
     emitter.instruction("cmp r8, r9");                                          // index >= length → null
-    emitter.instruction("jge __rt_mixed_array_get_null");                       // branch on the current JSON decoder condition
+    emitter.instruction("jge __rt_mixed_array_get_indexed_missing");            // warn and return null for an out-of-bounds indexed-array key
     emitter.instruction("mov r9, QWORD PTR [r10 - 8]");                         // load packed indexed-array kind metadata
     emitter.instruction("shr r9, 8");                                           // shift the runtime element value_type tag into the low bits
     emitter.instruction("and r9, 0x7f");                                        // remove the persistent COW flag from the extracted tag
@@ -275,6 +279,10 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
+    emitter.label("__rt_mixed_array_get_indexed_missing");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the missing integer key for the PHP warning
+    emitter.instruction("call __rt_warn_undefined_array_key_int");              // emit or suppress the undefined-array-key warning
+    emitter.instruction("jmp __rt_mixed_array_get_null");                       // return boxed Mixed(null) after the warning
 
     emitter.label("__rt_mixed_array_get_assoc");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = hash pointer
