@@ -154,6 +154,51 @@ fn test_parse_nested_array_assignment_target() {
     }
 }
 
+/// Verifies that nested append (`$items[0][] = 2`) lowers to a synthetic
+/// read/append/write-back sequence instead of overwriting `$items[0]` directly.
+#[test]
+fn test_parse_nested_array_append_lowers_to_temp_push_writeback() {
+    let stmts = parse_source("<?php $items[0][] = 2;");
+    match &stmts[0].kind {
+        StmtKind::Synthetic(stmts) => {
+            assert_eq!(stmts.len(), 3);
+            let temp = match &stmts[0].kind {
+                StmtKind::Assign { name, value } => {
+                    match &value.kind {
+                        ExprKind::ArrayAccess { array, index } => {
+                            assert!(matches!(array.kind, ExprKind::Variable(ref name) if name == "items"));
+                            assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
+                        }
+                        other => panic!("Expected temp read from ArrayAccess, got {:?}", other),
+                    }
+                    name.clone()
+                }
+                other => panic!("Expected temp Assign, got {:?}", other),
+            };
+            match &stmts[1].kind {
+                StmtKind::ArrayPush { array, value } => {
+                    assert_eq!(array, &temp);
+                    assert!(matches!(value.kind, ExprKind::IntLiteral(2)));
+                }
+                other => panic!("Expected temp ArrayPush, got {:?}", other),
+            }
+            match &stmts[2].kind {
+                StmtKind::ArrayAssign {
+                    array,
+                    index,
+                    value,
+                } => {
+                    assert_eq!(array, "items");
+                    assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
+                    assert!(matches!(value.kind, ExprKind::Variable(ref name) if name == &temp));
+                }
+                other => panic!("Expected write-back ArrayAssign, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Synthetic lowering, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php ?int $value = null;` parses to a `TypedAssign` with a nullable `?int`
 /// type expression and a null initializer.
 #[test]

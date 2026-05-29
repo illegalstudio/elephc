@@ -131,6 +131,21 @@ echo $copy[0][0];
     assert_eq!(out, "19");
 }
 
+/// Verifies that appending through a copied nested array slot detaches the child
+/// array, writes it back to the copy, and leaves the original child untouched.
+#[test]
+fn test_cow_nested_array_append_on_copied_outer_keeps_source_child() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [[1]];
+$b = $a;
+$b[0][] = 2;
+echo count($a[0]), ":", count($b[0]);
+"#,
+    );
+    assert_eq!(out, "1:2");
+}
+
 /// Verifies that a COW split path balances GC allocs and frees, confirming no
 /// leaked references or premature frees when an alias is written and then unset.
 #[test]

@@ -63,15 +63,31 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
         return lower_effectful_postfix_assignment(lhs_expr, op, rhs, span).map(Some);
     }
+    let lhs_span = lhs_expr.span;
+    if is_append {
+        let stmt = match lhs_expr.kind {
+            ExprKind::Variable(array) => StmtKind::ArrayPush { array, value: rhs },
+            ExprKind::PropertyAccess { object, property } => StmtKind::PropertyArrayPush {
+                object,
+                property,
+                value: rhs,
+            },
+            ExprKind::ArrayAccess { array, index } => {
+                return lower_nested_append_assignment(
+                    Expr::new(ExprKind::ArrayAccess { array, index }, lhs_span),
+                    rhs,
+                    span,
+                )
+                .map(Some);
+            }
+            _ => return Err(CompileError::new(span, "Invalid assignment target")),
+        };
+        return Ok(Some(Stmt::new(stmt, span)));
+    }
+
     let value = assignment_value(lhs_expr.clone(), op, rhs, span);
 
     let stmt = match lhs_expr.kind {
-        ExprKind::Variable(array) if is_append => StmtKind::ArrayPush { array, value },
-        ExprKind::PropertyAccess { object, property } if is_append => StmtKind::PropertyArrayPush {
-            object,
-            property,
-            value,
-        },
         ExprKind::ArrayAccess { array, index } => {
             match array.kind {
                 ExprKind::Variable(array) => StmtKind::ArrayAssign {
@@ -100,6 +116,95 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     };
 
     Ok(Some(Stmt::new(stmt, span)))
+}
+
+/// Lowers an append through a nested array target (`$a[0][] = $value`) into a
+/// synthetic read/append/write-back sequence. The temporary append triggers the
+/// existing copy-on-write split, and the final assignment stores the detached
+/// nested array back into the original slot.
+fn lower_nested_append_assignment(
+    target: Expr,
+    value: Expr,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let mut lowerer = EffectfulTargetLowerer::new(span);
+    let target = lowerer.stabilize_array_target(target);
+    let temp = lowerer.next_temp_name();
+    lowerer.stmts.push(Stmt::new(
+        StmtKind::Assign {
+            name: temp.clone(),
+            value: target.clone(),
+        },
+        span,
+    ));
+    lowerer.stmts.push(Stmt::new(
+        StmtKind::ArrayPush {
+            array: temp.clone(),
+            value,
+        },
+        span,
+    ));
+    let write_back = assignment_target_store_stmt(
+        target,
+        Expr::new(ExprKind::Variable(temp), span),
+        span,
+    )?;
+    Ok(lowerer.finish(write_back))
+}
+
+/// Builds the statement that writes `value` back into an already-stabilized
+/// assignment target. Supports the same local, property, static property, and
+/// array target families as postfix assignment lowering.
+fn assignment_target_store_stmt(
+    target: Expr,
+    value: Expr,
+    span: Span,
+) -> Result<StmtKind, CompileError> {
+    match target.kind {
+        ExprKind::Variable(name) => Ok(StmtKind::Assign { name, value }),
+        ExprKind::PropertyAccess { object, property } => {
+            Ok(StmtKind::PropertyAssign {
+                object,
+                property,
+                value,
+            })
+        }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            Ok(StmtKind::StaticPropertyAssign {
+                receiver,
+                property,
+                value,
+            })
+        }
+        ExprKind::ArrayAccess { array, index } => match array.kind {
+            ExprKind::Variable(array) => Ok(StmtKind::ArrayAssign {
+                array,
+                index: *index,
+                value,
+            }),
+            ExprKind::PropertyAccess { object, property } => {
+                Ok(StmtKind::PropertyArrayAssign {
+                    object,
+                    property,
+                    index: *index,
+                    value,
+                })
+            }
+            ExprKind::StaticPropertyAccess { receiver, property } => {
+                Ok(StmtKind::StaticPropertyArrayAssign {
+                    receiver,
+                    property,
+                    index: *index,
+                    value,
+                })
+            }
+            _ => Ok(StmtKind::NestedArrayAssign {
+                target: Expr::new(ExprKind::ArrayAccess { array, index }, span),
+                value,
+            }),
+        },
+        _ => Err(CompileError::new(span, "Invalid assignment target")),
+    }
 }
 
 /// Parses discarded post-increment/decrement on a complex l-value target.
@@ -557,11 +662,7 @@ impl EffectfulTargetLowerer {
         if can_replay_assignment_target(&expr) {
             return expr;
         }
-        let name = format!(
-            "__elephc_compound_{}_{}_{}",
-            self.span.line, self.span.col, self.next_temp
-        );
-        self.next_temp += 1;
+        let name = self.next_temp_name();
         self.stmts.push(Stmt::new(
             StmtKind::Assign {
                 name: name.clone(),
@@ -570,6 +671,16 @@ impl EffectfulTargetLowerer {
             self.span,
         ));
         Expr::new(ExprKind::Variable(name), self.span)
+    }
+
+    /// Returns a unique synthetic temporary name for this lowered statement.
+    fn next_temp_name(&mut self) -> String {
+        let name = format!(
+            "__elephc_compound_{}_{}_{}",
+            self.span.line, self.span.col, self.next_temp
+        );
+        self.next_temp += 1;
+        name
     }
 
     /// Stabilizes an array-access target, recursively stabilizing both the array base
