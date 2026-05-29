@@ -65,6 +65,32 @@ fn static_storage_label(ctx: &Context, name: &str) -> String {
     format!("_static_{}_{}", current_function_name(ctx), name)
 }
 
+/// Returns whether pre-scanned runtime data will emit `data_label`.
+fn prescanned_static_storage_exists(ctx: &Context, name: &str, data_label: &str) -> bool {
+    ctx.all_static_vars
+        .keys()
+        .any(|(func_name, var_name)| {
+            var_name == name
+                && format!("_static_{}_{}", crate::names::mangle_fqn(func_name), var_name)
+                    == data_label
+        })
+}
+
+/// Declares static-local storage for function-like scopes that were not pre-scanned.
+fn ensure_static_storage_symbols(
+    data: &mut DataSection,
+    ctx: &Context,
+    name: &str,
+    data_label: &str,
+    init_label: &str,
+) {
+    if prescanned_static_storage_exists(ctx, name, data_label) {
+        return;
+    }
+    data.add_comm(data_label.to_string(), 16);
+    data.add_comm(init_label.to_string(), 8);
+}
+
 /// Emits a static variable store operation, delegating to the storage module.
 fn emit_static_store(emitter: &mut Emitter, ctx: &Context, name: &str, ty: &PhpType) {
     storage::emit_static_store(emitter, ctx, name, ty);
@@ -269,9 +295,9 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
         StmtKind::StaticVar { name, init } => {
             emitter.blank();
             emitter.comment(&format!("static ${}", name));
-            let func_name = current_function_name(ctx);
-            let init_label = format!("_static_{}_{}_init", func_name, name);
-            let data_label = format!("_static_{}_{}", func_name, name);
+            let data_label = static_storage_label(ctx, name);
+            let init_label = format!("{}_init", data_label);
+            ensure_static_storage_symbols(data, ctx, name, &data_label, &init_label);
             let skip_label = ctx.next_label("static_skip");
 
             // -- check if already initialized --

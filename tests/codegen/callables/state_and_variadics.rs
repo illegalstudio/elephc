@@ -118,6 +118,22 @@ counter();
     assert_eq!(out, "123");
 }
 
+/// Verifies that a static variable inside a closure links and persists across calls.
+#[test]
+fn test_closure_static_local_preserves_value_across_calls() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function () {
+    static $x = 0;
+    echo ++$x;
+};
+$f();
+$f();
+"#,
+    );
+    assert_eq!(out, "12");
+}
+
 /// Verifies that a static variable's value is preserved and updated correctly across calls.
 #[test]
 fn test_static_preserves_value() {
