@@ -460,7 +460,7 @@ echo MAX;
 
 Constants declared with `const` or `define()` are resolved at compile time. When the codegen encounters a `ConstRef`, it looks up the constant's value and emits it as a literal — `mov x0, #100` for an integer, or loads a string label from the data section. `define()` call sites still emit a per-constant runtime seen flag so the call returns `true` only for the first runtime definition and returns `false` with a suppressible warning on duplicate attempts.
 
-Enum cases reuse the same idea, but through enum metadata instead of scalar constants: parser output uses `ExprKind::ScopedConstantAccess` for `Color::Red`, and codegen detects enum receivers to load the canonical enum-case symbol emitted in runtime data. Helper builtins such as `Enum::from()` / `Enum::tryFrom()` lower through the checker/codegen enum tables carried in `Context`.
+Enum cases reuse the same idea, but through enum metadata instead of scalar constants: parser output uses `ExprKind::ScopedConstantAccess` for `Color::Red`, and codegen detects enum receivers to load the canonical enum-case symbol emitted in runtime data. Helper builtins such as `Enum::from()` / `Enum::tryFrom()` lower through the checker/codegen enum tables carried in `Context`; a missing `Enum::from()` value constructs a catchable `ValueError` with the PHP-compatible backing-value message.
 
 ### Pointer values and casts
 

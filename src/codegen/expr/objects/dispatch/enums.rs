@@ -13,9 +13,13 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::platform::Arch;
 use crate::names::enum_case_symbol;
 use crate::parser::ast::Expr;
 use crate::types::{EnumCaseValue, EnumInfo, PhpType};
+
+const ENUM_FROM_INVALID_BACKING_SUFFIX: &str = " is not a valid backing value for enum ";
+const ENUM_FROM_INVALID_STRING_BACKING_SUFFIX: &str = "\" is not a valid backing value for enum ";
 
 /// Lowers `EnumName::method(...)` by routing through builtin enum helpers.
 pub(super) fn emit_enum_static_method_call(
@@ -94,11 +98,11 @@ fn emit_enum_cases(
 
 /// Emits the `EnumName::from(value)` or `EnumName::tryFrom(value)` static method.
 ///
-/// `from` aborts if no case matches. `tryFrom` returns `null` (boxed as `Void`)
-/// when no case matches and yields a `EnumName|Void` union type. Backing type
-/// must be `Int` or `Str`. For `Str` backing, the input string is preserved on
-/// the temporary stack across candidate comparisons and cleaned up on both the
-/// success and "no match" paths.
+/// `from` throws a catchable `ValueError` if no case matches. `tryFrom` returns
+/// `null` (boxed as `Void`) when no case matches and yields a `EnumName|Void`
+/// union type. Backing type must be `Int` or `Str`. For `Str` backing, the input
+/// string is preserved on the temporary stack across candidate comparisons and
+/// cleaned up on both the success and "no match" paths.
 fn emit_enum_from_like(
     enum_name: &str,
     enum_info: &EnumInfo,
@@ -145,10 +149,10 @@ fn emit_enum_from_like(
                 load_immediate(emitter, case_value_reg, *value);                // materialize the current enum backing integer for comparison
                 emitter.instruction(&format!("cmp {}, {}", result_reg, case_value_reg)); // compare the input integer with the current enum backing value
                 match emitter.target.arch {
-                    crate::codegen::platform::Arch::AArch64 => {
+                    Arch::AArch64 => {
                         emitter.instruction(&format!("b.ne {}", next_label));   // continue scanning when the current enum backing value does not match
                     }
-                    crate::codegen::platform::Arch::X86_64 => {
+                    Arch::X86_64 => {
                         emitter.instruction(&format!("jne {}", next_label));    // continue scanning when the current enum backing value does not match
                     }
                 }
@@ -170,8 +174,8 @@ fn emit_enum_from_like(
                 let (label, len) = data.add_string(&bytes);
                 let (input_ptr_reg, input_len_reg, candidate_ptr_reg, candidate_len_reg) =
                     match emitter.target.arch {
-                        crate::codegen::platform::Arch::AArch64 => ("x1", "x2", "x3", "x4"),
-                        crate::codegen::platform::Arch::X86_64 => ("rdi", "rsi", "rdx", "rcx"),
+                        Arch::AArch64 => ("x1", "x2", "x3", "x4"),
+                        Arch::X86_64 => ("rdi", "rsi", "rdx", "rcx"),
                     };
                 abi::emit_load_temporary_stack_slot(emitter, input_ptr_reg, 0); // reload the input string pointer into the first __rt_str_eq argument register for this candidate comparison
                 abi::emit_load_temporary_stack_slot(emitter, input_len_reg, 8); // reload the input string length into the paired __rt_str_eq argument register for this candidate comparison
@@ -188,7 +192,6 @@ fn emit_enum_from_like(
                 }
                 emitter.label(&next_label);
             }
-            abi::emit_release_temporary_stack(emitter, 16);                     // drop the preserved input string payload after the scan
         }
         _ => {
             emitter.comment("WARNING: unsupported enum backing type in codegen");
@@ -196,18 +199,21 @@ fn emit_enum_from_like(
         }
     }
 
-    if let Some(cleanup_label) = &string_cleanup_label {
-        emitter.label(cleanup_label);
-        abi::emit_release_temporary_stack(emitter, 16);                         // drop the preserved input string payload before returning the matching singleton
-        abi::emit_jump(emitter, &success_label);                                // continue through the shared success path with a clean stack
-    }
-
     if is_try {
+        if matches!(backing_ty, PhpType::Str) {
+            abi::emit_release_temporary_stack(emitter, 16);                     // drop the preserved input string payload before returning null
+        }
         emit_null_into_x0(emitter);
         crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Void);
         abi::emit_jump(emitter, &done_label);                                   // return boxed null when tryFrom() does not match any case
     } else {
-        abi::emit_call_label(emitter, "__rt_enum_from_fail");                   // abort when from() does not match any case
+        emit_enum_from_value_error(enum_name, backing_ty, emitter, data);
+    }
+
+    if let Some(cleanup_label) = &string_cleanup_label {
+        emitter.label(cleanup_label);
+        abi::emit_release_temporary_stack(emitter, 16);                         // drop the preserved input string payload before returning the matching singleton
+        abi::emit_jump(emitter, &success_label);                                // continue through the shared success path with a clean stack
     }
 
     emitter.label(&success_label);
@@ -222,6 +228,145 @@ fn emit_enum_from_like(
         PhpType::Union(vec![PhpType::Object(enum_name.to_string()), PhpType::Void])
     } else {
         PhpType::Object(enum_name.to_string())
+    }
+}
+
+/// Builds and throws the PHP-compatible `ValueError` for `Enum::from()` when
+/// no declared case has the requested backing value. Leaves no enum-input
+/// temporary stack storage behind before entering the exception unwinder.
+fn emit_enum_from_value_error(
+    enum_name: &str,
+    backing_ty: &PhpType,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    match backing_ty {
+        PhpType::Int => emit_enum_from_int_value_error_message(enum_name, emitter, data),
+        PhpType::Str => emit_enum_from_string_value_error_message(enum_name, emitter, data),
+        _ => return,
+    }
+    abi::emit_call_label(emitter, "__rt_str_persist");                          // copy the dynamically composed ValueError message into stable heap storage
+    if matches!(backing_ty, PhpType::Str) {
+        abi::emit_release_temporary_stack(emitter, 16);                         // drop the preserved unmatched string after the message has been copied
+    }
+    emit_throw_value_error_from_string_result(emitter);
+}
+
+/// Emits the dynamic error-message text for an unmatched integer-backed enum
+/// value. The unmatched integer is still in the active integer result register
+/// when this helper runs.
+fn emit_enum_from_int_value_error_message(
+    enum_name: &str,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    abi::emit_call_label(emitter, "__rt_itoa");                                 // convert the unmatched backing integer to decimal text
+    let suffix = format!("{}{}", ENUM_FROM_INVALID_BACKING_SUFFIX, enum_name);
+    emit_concat_current_string_with_static_suffix(&suffix, emitter, data);
+}
+
+/// Emits the dynamic error-message text for an unmatched string-backed enum
+/// value. The input string pointer and length are still preserved in the
+/// temporary stack slot created before candidate scanning.
+fn emit_enum_from_string_value_error_message(
+    enum_name: &str,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    emit_concat_static_prefix_with_preserved_string("\"", emitter, data);
+    let suffix = format!(
+        "{}{}",
+        ENUM_FROM_INVALID_STRING_BACKING_SUFFIX,
+        enum_name
+    );
+    emit_concat_current_string_with_static_suffix(&suffix, emitter, data);
+}
+
+/// Concatenates a static prefix with the preserved enum input string and leaves
+/// the resulting string in the target's string-result registers.
+fn emit_concat_static_prefix_with_preserved_string(
+    prefix: &str,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    let (prefix_label, prefix_len) = data.add_string(prefix.as_bytes());
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x1", &prefix_label);
+            abi::emit_load_int_immediate(emitter, "x2", prefix_len as i64);
+            abi::emit_load_temporary_stack_slot(emitter, "x3", 0);
+            abi::emit_load_temporary_stack_slot(emitter, "x4", 8);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "rax", &prefix_label);
+            abi::emit_load_int_immediate(emitter, "rdx", prefix_len as i64);
+            abi::emit_load_temporary_stack_slot(emitter, "rdi", 0);
+            abi::emit_load_temporary_stack_slot(emitter, "rsi", 8);
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_concat");                               // copy the static prefix and preserved input into the concat buffer
+}
+
+/// Concatenates the current string result with a static suffix and leaves the
+/// resulting string in the target's string-result registers.
+fn emit_concat_current_string_with_static_suffix(
+    suffix: &str,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    let (suffix_label, suffix_len) = data.add_string(suffix.as_bytes());
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x3", &suffix_label);
+            abi::emit_load_int_immediate(emitter, "x4", suffix_len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "rdi", &suffix_label);
+            abi::emit_load_int_immediate(emitter, "rsi", suffix_len as i64);
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_concat");                               // append the static suffix to the current dynamic message prefix
+}
+
+/// Allocates a `ValueError` object using the current string result as its
+/// message, publishes it in `_exc_value`, and enters the standard exception
+/// unwinder. The current string must already be heap-persisted by the caller.
+fn emit_throw_value_error_from_string_result(emitter: &mut Emitter) {
+    let (message_ptr_reg, message_len_reg) = abi::string_result_regs(emitter);
+    abi::emit_push_reg_pair(emitter, message_ptr_reg, message_len_reg);         // preserve the dynamic message while allocating the exception object
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(emitter, "x0", 32);                   // request Throwable payload storage
+            abi::emit_call_label(emitter, "__rt_heap_alloc");                  // allocate the ValueError object payload
+            emitter.instruction("mov x9, #6");                                  // heap kind 6 = throwable object instance
+            emitter.instruction("str x9, [x0, #-8]");                           // stamp allocation as a runtime object
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_value_error_class_id", 0);
+            emitter.instruction("str x9, [x0]");                                // store ValueError class id at object header
+            abi::emit_load_temporary_stack_slot(emitter, "x9", 0);
+            emitter.instruction("str x9, [x0, #8]");                            // store dynamic exception message pointer
+            abi::emit_load_temporary_stack_slot(emitter, "x9", 8);
+            emitter.instruction("str x9, [x0, #16]");                           // store dynamic exception message length
+            emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
+            abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
+            abi::emit_release_temporary_stack(emitter, 16);                     // release the preserved dynamic-message pair before unwinding
+            abi::emit_jump(emitter, "__rt_throw_current");                     // enter the standard exception unwinder
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(emitter, "rax", 32);                  // request Throwable payload storage
+            abi::emit_call_label(emitter, "__rt_heap_alloc");                  // allocate the ValueError object payload
+            emitter.instruction("mov r10, 0x4548504c00000006");                 // x86_64 heap-kind word: HE LP magic + kind 6 object
+            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp allocation as a runtime object
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_value_error_class_id", 0);
+            emitter.instruction("mov QWORD PTR [rax], r10");                    // store ValueError class id at object header
+            abi::emit_load_temporary_stack_slot(emitter, "r10", 0);
+            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store dynamic exception message pointer
+            abi::emit_load_temporary_stack_slot(emitter, "r10", 8);
+            emitter.instruction("mov QWORD PTR [rax + 16], r10");               // store dynamic exception message length
+            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
+            abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
+            abi::emit_release_temporary_stack(emitter, 16);                     // release the preserved dynamic-message pair before unwinding
+            abi::emit_jump(emitter, "__rt_throw_current");                     // enter the standard exception unwinder
+        }
     }
 }
 

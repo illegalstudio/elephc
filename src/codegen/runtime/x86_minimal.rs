@@ -317,7 +317,6 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     system::emit_preg_replace_callback(emitter);
     system::emit_preg_split(emitter);
     system::emit_match_unhandled(emitter);
-    system::emit_enum_from_fail(emitter);
 }
 
 #[cfg(test)]
@@ -494,6 +493,5 @@ mod tests {
         assert!(asm.contains("__rt_json_decode:\n"));
         assert!(asm.contains("__rt_json_encode_array_int:\n"));
         assert!(asm.contains("__rt_json_encode_array_str:\n"));
-        assert!(asm.contains("__rt_enum_from_fail:\n"));
     }
 }

@@ -315,7 +315,7 @@ src/
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (6 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, mktime, strtotime, match_unhandled, enum_from_fail, json_encode_*, json_decode, preg_*, ... (35 files)
+│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, mktime, strtotime, match_unhandled, json_encode_*, json_decode, preg_*, ... (34 files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 files) + `api/` (target-aware public API helpers)
 │       ├── objects/           stdClass, Mixed property/index access, JSON stdClass encoding helpers (4 files)
@@ -423,7 +423,7 @@ The runtime data emission in `src/codegen/runtime/data/` is split into `emit_run
 | String scratch | `_concat_buf`, `_concat_off` | Temporary string results for expression evaluation |
 | CLI globals | `_global_argc`, `_global_argv` | Saved OS argument state used to build `$argv` |
 | Heap allocator | `_heap_buf`, `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_heap_max` | Heap storage plus general/small-bin allocator metadata and heap-debug toggle |
-| Runtime diagnostics | `_rt_diag_suppression`, `_diag_*`, `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_enum_from_msg`, `_uncaught_exc_msg`, `_instanceof_target_type_msg`, `_heap_dbg_*` | Suppressible warning state/text plus fatal error messages and heap-debug summary/failure strings |
+| Runtime diagnostics | `_rt_diag_suppression`, `_diag_*`, `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_uncaught_exc_msg`, `_instanceof_target_type_msg`, `_heap_dbg_*` | Suppressible warning state/text plus fatal error messages and heap-debug summary/failure strings |
 | GC statistics and cycle state | `_gc_allocs`, `_gc_frees`, `_gc_live`, `_gc_peak`, `_gc_collecting`, `_gc_release_suppressed` | Allocation/free/live-byte counters plus targeted-cycle-collector coordination flags |
 | Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_class_parent_ids` | Active handler stack, activation cleanup stack, current exception object, and parent links used for catch matching |
 | Include-once guards | `_include_once_<hash>` | Per-resolved-file loaded flags used by `include_once` / `require_once` runtime guards |

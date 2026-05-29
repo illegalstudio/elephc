@@ -11,7 +11,6 @@
 mod build_argv;
 mod date;
 mod date_data;
-mod enum_from_fail;
 mod getenv;
 mod json_decode;
 mod json_decode_mixed;
@@ -51,7 +50,6 @@ mod php_uname;
 pub(crate) use build_argv::emit_build_argv;
 pub(crate) use date::emit_date;
 pub(crate) use date_data::emit_date_data;
-pub(crate) use enum_from_fail::emit_enum_from_fail;
 pub(crate) use getenv::emit_getenv;
 pub(crate) use json_data::emit_json_data;
 pub(crate) use json_decode::emit_json_decode;

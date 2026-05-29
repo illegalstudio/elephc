@@ -87,19 +87,48 @@ fn test_pure_enum_cases_identity() {
     assert_eq!(out, "2\n1");
 }
 
-/// Verifies that `Color::from(99)` (value not in enum) produces a fatal error containing
-/// "Fatal error: enum case not found".
+/// Verifies that `Color::from(99)` throws a catchable `ValueError` with PHP's
+/// invalid backing-value message.
 #[test]
-fn test_enum_from_failure_is_fatal() {
-    let err = compile_and_run_expect_failure(
+fn test_enum_from_int_failure_throws_value_error() {
+    let out = compile_and_run(
         "<?php
         enum Color: int {
             case Red = 1;
         }
-        Color::from(99);
+        try {
+            Color::from(99);
+        } catch (ValueError $e) {
+            echo get_class($e), \":\", $e->getMessage();
+        }
         ",
     );
-    assert!(err.contains("Fatal error: enum case not found"));
+    assert_eq!(
+        out,
+        "ValueError:99 is not a valid backing value for enum Color"
+    );
+}
+
+/// Verifies that a missing string-backed enum value is quoted in the catchable
+/// `ValueError` message, matching PHP's backed-enum contract.
+#[test]
+fn test_enum_from_string_failure_throws_value_error() {
+    let out = compile_and_run(
+        "<?php
+        enum Status: string {
+            case Draft = \"draft\";
+        }
+        try {
+            Status::from(\"live\");
+        } catch (ValueError $e) {
+            echo get_class($e), \":\", $e->getMessage();
+        }
+        ",
+    );
+    assert_eq!(
+        out,
+        "ValueError:\"live\" is not a valid backing value for enum Status"
+    );
 }
 
 /// Compiles and runs the checked-in `examples/enums/main.php` fixture and asserts stdout is "1\n2\n3".
