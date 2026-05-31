@@ -10,5 +10,6 @@
 use super::*;
 
 mod nullsafe;
+mod nullsafe_side_effects;
 mod mutations;
 mod deep_chains;
