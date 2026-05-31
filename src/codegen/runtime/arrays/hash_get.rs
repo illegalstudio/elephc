@@ -139,7 +139,7 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving lookup spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved hash-table pointer and key payload
-    emitter.instruction("sub rsp, 32");                                         // reserve local slots for the hash-table pointer, key pointer, key length, and probe index
+    emitter.instruction("sub rsp, 48");                                         // reserve local slots for lookup inputs, probe state, and call alignment padding
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash-table pointer across helper calls and probe iterations
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the key pointer across helper calls and probe iterations
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the key length across helper calls and probe iterations
@@ -156,9 +156,14 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edx, edx");                                        // clear the high dividend half before dividing the 64-bit hash by the capacity
     emitter.instruction("div r11");                                             // compute hash % capacity using the SysV integer divide remainder register
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save the initial probe index so the loop can survive helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize the bounded-probe counter for full-table misses
 
     emitter.label("__rt_hash_get_probe");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer at the top of every probe iteration
+    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // reload capacity so full tables can still terminate failed lookups
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // load how many slots this failed lookup has already inspected
+    emitter.instruction("cmp rdx, r11");                                        // has this lookup already scanned every slot in the table?
+    emitter.instruction("jae __rt_hash_get_not_found");                         // report a miss instead of looping forever on a full table
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the current probe index before deriving the slot address
     emitter.instruction("mov r8, r11");                                         // copy the probe index before scaling it into a byte offset
     emitter.instruction("shl r8, 6");                                           // convert the probe index into a 64-byte entry offset
@@ -188,6 +193,9 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_get_store_probe");
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // persist the updated probe index before the next loop iteration
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // reload the bounded-probe counter after advancing the cursor
+    emitter.instruction("add rdx, 1");                                          // count the slot that failed to satisfy this lookup
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // persist the updated probe count for the next loop guard
     emitter.instruction("jmp __rt_hash_get_probe");                             // continue probing until a matching or empty slot is reached
 
     emitter.label("__rt_hash_get_found");
@@ -201,7 +209,7 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [r8 + 32]");                        // return the high payload word in the second borrowed-value result register
     emitter.instruction("mov rcx, QWORD PTR [r8 + 40]");                        // return the runtime value tag in the borrowed-value tag result register
     emitter.instruction("mov rax, 1");                                          // return found = 1 in the standard integer result register
-    emitter.instruction("add rsp, 32");                                         // release the lookup spill slots before returning the borrowed payload
+    emitter.instruction("add rsp, 48");                                         // release the lookup spill slots before returning the borrowed payload
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
     emitter.instruction("ret");                                                 // return the successful lookup result to generated code
 
@@ -210,7 +218,7 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edi, edi");                                        // clear the low payload word for the failed lookup path
     emitter.instruction("xor esi, esi");                                        // clear the high payload word for the failed lookup path
     emitter.instruction("mov ecx, 8");                                          // return runtime value tag 8 = null for failed hash lookups
-    emitter.instruction("add rsp, 32");                                         // release the lookup spill slots before returning the failed lookup result
+    emitter.instruction("add rsp, 48");                                         // release the lookup spill slots before returning the failed lookup result
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
     emitter.instruction("ret");                                                 // return the failed lookup result to generated code
 }

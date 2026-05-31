@@ -381,7 +381,7 @@ fn emit_new_receiver_prefixed_hash(source_stack_offset: usize, emitter: &mut Emi
     let tag_reg = abi::int_arg_reg_name(emitter.target, 1);
     let source_reg = abi::secondary_scratch_reg(emitter);
     abi::emit_load_temporary_stack_slot(emitter, source_reg, source_stack_offset);
-    abi::emit_load_from_address(emitter, capacity_reg, source_reg, 0);
+    abi::emit_load_from_address(emitter, capacity_reg, source_reg, 8);
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("add {}, {}, #1", capacity_reg, capacity_reg)); // reserve one extra hash slot for the synthetic receiver argument

@@ -375,8 +375,13 @@ fn emit_instance_literal_case_call(
     if save_concat_before_args {
         super::super::save_concat_offset_before_nested_call(emitter, ctx);
     }
-    let object_stack_offset =
-        MIXED_RECEIVER_PAYLOAD_OFFSET + if save_concat_before_args { 16 } else { 0 };
+    let concat_stack_bytes =
+        if save_concat_before_args && ctx.nested_concat_offset_offset.is_none() {
+            16
+        } else {
+            0
+        };
+    let object_stack_offset = MIXED_RECEIVER_PAYLOAD_OFFSET + concat_stack_bytes;
     let arr_ty = if let Some(arg_array) = single_spread_inner(args) {
         let arg_array_ty = crate::codegen::functions::infer_contextual_type(arg_array, ctx);
         let emitted_saved_args = receiver_call_args::emit_saved_receiver_prefixed_dynamic_arg_mixed(

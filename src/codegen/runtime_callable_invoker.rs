@@ -24,6 +24,7 @@ use crate::types::PhpType;
 use super::abi;
 
 const INVOKER_DESCRIPTOR_OFFSET: usize = 8;
+const INVOKER_CONCAT_OFFSET: usize = 16;
 
 /// Emits a descriptor invoker wrapper for a runtime-callable signature.
 pub(crate) fn emit_runtime_callable_invoker(
@@ -34,6 +35,7 @@ pub(crate) fn emit_runtime_callable_invoker(
 ) {
     let mut wrapper_ctx = invoker_context(parent_ctx);
     wrapper_ctx.runtime_capture_descriptor_offset = Some(INVOKER_DESCRIPTOR_OFFSET);
+    wrapper_ctx.nested_concat_offset_offset = Some(INVOKER_CONCAT_OFFSET);
     let frame_size = 32;
     let call_reg = abi::nested_call_reg(emitter);
 
