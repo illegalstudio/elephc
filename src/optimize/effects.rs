@@ -255,6 +255,12 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::NewObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()
             .with_may_throw(),
+        ExprKind::NewDynamicObject {
+            class_name, args, ..
+        } => expr_effect(class_name)
+            .combine(combine_effects(args.iter().map(expr_effect)))
+            .with_side_effects()
+            .with_may_throw(),
         ExprKind::MethodCall { object, method, args } => expr_effect(object)
             .combine(combine_effects(args.iter().map(expr_effect)))
             .combine(private_instance_method_call_effect(object, method)),

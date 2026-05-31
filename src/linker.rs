@@ -73,6 +73,11 @@ pub(crate) fn link(
             cmd
         }
     };
+    if target.platform == Platform::MacOS && !extra_link_libs.is_empty() {
+        for path in default_macos_library_paths() {
+            ld_cmd.arg(format!("-L{}", path));
+        }
+    }
     for path in extra_link_paths {
         ld_cmd.arg(format!("-L{}", path));
     }
@@ -118,6 +123,14 @@ fn macos_sdk_path() -> String {
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default()
+}
+
+/// Returns common Homebrew library directories used for optional native deps on macOS.
+fn default_macos_library_paths() -> Vec<&'static str> {
+    ["/opt/homebrew/lib", "/usr/local/lib"]
+        .into_iter()
+        .filter(|path| Path::new(path).exists())
+        .collect()
 }
 
 /// Returns the macOS SDK version string by running `xcrun --sdk macosx --show-sdk-version`.

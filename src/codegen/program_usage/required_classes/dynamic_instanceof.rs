@@ -183,6 +183,12 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }
         | ExprKind::NewObject { args, .. } => args.iter().any(expr_has_dynamic_instanceof),
+        ExprKind::NewDynamicObject {
+            class_name, args, ..
+        } => {
+            expr_has_dynamic_instanceof(class_name)
+                || args.iter().any(expr_has_dynamic_instanceof)
+        }
         ExprKind::ExprCall { callee, args } => {
             expr_has_dynamic_instanceof(callee) || args.iter().any(expr_has_dynamic_instanceof)
         }

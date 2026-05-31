@@ -50,6 +50,21 @@ foreach ($filter as $key => $value) {
     echo "\n";
 }
 
+echo "regex:\n";
+$regex = new RegexIterator(
+    new ArrayIterator(["first" => "item-10", "second" => "skip", "third" => "task-7"]),
+    "/([a-z]+)-([0-9]+)/",
+    RegexIterator::GET_MATCH
+);
+foreach ($regex as $key => $matches) {
+    echo $key;
+    echo "=";
+    echo $matches[1];
+    echo ":";
+    echo $matches[2];
+    echo "\n";
+}
+
 echo "cache:\n";
 $cache = new CachingIterator(
     new ArrayIterator(["a" => "A", "b" => "B"]),
@@ -124,5 +139,19 @@ foreach (new RecursiveIteratorIterator($recursiveFilter) as $key => $value) {
     echo $key;
     echo "=";
     echo $value;
+    echo "\n";
+}
+
+echo "recursive regex:\n";
+$recursiveRegex = new RecursiveRegexIterator(
+    new RecursiveArrayIterator(["keep" => ["apple" => 1, "skip" => 2], "drop" => ["pear" => 3]]),
+    "/keep|apple/",
+    RecursiveRegexIterator::MATCH,
+    RecursiveRegexIterator::USE_KEY
+);
+foreach (new RecursiveIteratorIterator($recursiveRegex, RecursiveIteratorIterator::SELF_FIRST) as $key => $value) {
+    echo $key;
+    echo "=";
+    echo gettype($value) === "array" ? "array" : $value;
     echo "\n";
 }

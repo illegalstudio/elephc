@@ -992,6 +992,37 @@ fn test_preg_match_simple() {
     assert_eq!(out, "1");
 }
 
+/// Verifies literal `call_user_func()` dispatch to `preg_match()` includes regex runtime helpers.
+#[test]
+fn test_preg_match_call_user_func_literal() {
+    let out = compile_and_run(r#"<?php echo call_user_func("preg_match", "/a/", "cat");"#);
+    assert_eq!(out, "1");
+}
+
+/// Verifies first-class `preg_replace_callback()` references include regex runtime helpers.
+#[test]
+fn test_preg_replace_callback_first_class_callable_runtime() {
+    let out = compile_and_run(
+        r#"<?php
+$cb = preg_replace_callback(...);
+echo $cb("/[0-9]+/", function($m): string { return "X"; }, "a12b");
+"#,
+    );
+    assert_eq!(out, "aXb");
+}
+
+/// Verifies first-class `preg_replace_callback()` still types callback matches as arrays.
+#[test]
+fn test_preg_replace_callback_first_class_callable_match_array_context() {
+    let out = compile_and_run(
+        r#"<?php
+$cb = preg_replace_callback(...);
+echo $cb("/a/", function($m): string { return strtoupper($m[0]); }, "cat");
+"#,
+    );
+    assert_eq!(out, "cAt");
+}
+
 /// Verifies `preg_match("/xyz/", "hello world")` returns 0 (no match).
 #[test]
 fn test_preg_match_no_match() {
@@ -1011,6 +1042,103 @@ fn test_preg_match_case_insensitive() {
 fn test_preg_match_pattern() {
     let out = compile_and_run(r#"<?php echo preg_match("/[0-9]+/", "abc123def");"#);
     assert_eq!(out, "1");
+}
+
+/// Verifies PCRE positive lookahead works through the PCRE2-backed regex runtime.
+#[test]
+fn test_preg_match_pcre_positive_lookahead() {
+    let out = compile_and_run(r#"<?php echo preg_match("/foo(?=bar)/", "foobar");"#);
+    assert_eq!(out, "1");
+}
+
+/// Verifies PCRE positive lookbehind works through the PCRE2-backed regex runtime.
+#[test]
+fn test_preg_match_pcre_positive_lookbehind() {
+    let out = compile_and_run(r#"<?php echo preg_match("/(?<=foo)bar/", "foobar");"#);
+    assert_eq!(out, "1");
+}
+
+/// Verifies `preg_match()` writes the full match and capture groups into `$matches`.
+#[test]
+fn test_preg_match_populates_matches_array() {
+    let out = compile_and_run(
+        r#"<?php
+$ok = preg_match("/(a)(b)/", "zab", $matches);
+echo $ok . "|" . count($matches) . "|" . $matches[0] . "," . $matches[1] . "," . $matches[2];
+"#,
+    );
+    assert_eq!(out, "1|3|ab,a,b");
+}
+
+/// Verifies `preg_match()` sizes `$matches` from the compiled capture count, not a fixed window.
+#[test]
+fn test_preg_match_populates_matches_beyond_ninety_nine() {
+    let out = compile_and_run(
+        r#"<?php
+$pattern = "/";
+$subject = "";
+$i = 0;
+while ($i < 105) {
+    $pattern = $pattern . "(a)";
+    $subject = $subject . "a";
+    $i = $i + 1;
+}
+$pattern = $pattern . "/";
+preg_match($pattern, $subject, $matches);
+echo count($matches) . "|" . $matches[100] . $matches[105];
+"#,
+    );
+    assert_eq!(out, "106|aa");
+}
+
+/// Verifies `preg_match()` replaces an existing matches variable with an empty array on no-match.
+#[test]
+fn test_preg_match_no_match_clears_matches_array() {
+    let out = compile_and_run(
+        r#"<?php
+$matches = ["old"];
+$ok = preg_match("/x/", "abc", $matches);
+echo $ok . "|" . count($matches);
+"#,
+    );
+    assert_eq!(out, "0|0");
+}
+
+/// Verifies unmatched optional captures before later captures materialize as empty strings.
+#[test]
+fn test_preg_match_unmatched_interior_capture_is_empty() {
+    let out = compile_and_run(
+        r#"<?php
+preg_match("/(a)?(b)/", "b", $matches);
+echo count($matches) . "|" . $matches[0] . "|" . $matches[1] . "|" . $matches[2];
+"#,
+    );
+    assert_eq!(out, "3|b||b");
+}
+
+/// Verifies named arguments can provide the optional by-reference `$matches` output variable.
+#[test]
+fn test_preg_match_named_matches_argument() {
+    let out = compile_and_run(
+        r#"<?php
+preg_match(pattern: "/([0-9]+)/", subject: "id=42", matches: $matches);
+echo $matches[1];
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Verifies a `$matches` variable created by `preg_match()` is visible after an `if` condition.
+#[test]
+fn test_preg_match_matches_array_visible_after_condition() {
+    let out = compile_and_run(
+        r#"<?php
+if (preg_match("/([A-Z]+)/", "abcXYZ", $matches)) {
+    echo $matches[1];
+}
+"#,
+    );
+    assert_eq!(out, "XYZ");
 }
 
 /// Verifies `preg_match("/[0-9]+/", "abcdef")` returns 0 when no digits are present.
@@ -1079,6 +1207,13 @@ fn test_preg_replace_pattern() {
     assert_eq!(out, "aXbXcX");
 }
 
+/// Verifies PCRE lazy quantifiers keep their non-greedy behavior through PCRE2.
+#[test]
+fn test_preg_replace_pcre_lazy_quantifier() {
+    let out = compile_and_run(r#"<?php echo preg_replace("/a+?/", "X", "aaa");"#);
+    assert_eq!(out, "XXX");
+}
+
 /// Verifies `preg_replace` with Unicode property escape `\p{N}+` replaces all digit runs in a string.
 #[test]
 fn test_preg_replace_unicode_property_number() {
@@ -1128,6 +1263,66 @@ echo preg_replace_callback(
 "#,
     );
     assert_eq!(out, "id:42 and item:7");
+}
+
+/// Verifies `preg_replace_callback` materializes captures beyond `$matches[9]`.
+#[test]
+fn test_preg_replace_callback_capture_groups_beyond_nine() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_replace_callback(
+    "/(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)/",
+    function($matches) {
+        return $matches[10] . $matches[11] . $matches[12];
+    },
+    "abcdefghijkl"
+);
+"#,
+    );
+    assert_eq!(out, "jkl");
+}
+
+/// Verifies `preg_replace_callback` materializes every compiled capture group beyond the
+/// old fixed 99-capture runtime window.
+#[test]
+fn test_preg_replace_callback_capture_groups_beyond_ninety_nine() {
+    let out = compile_and_run(
+        r#"<?php
+$pattern = "/";
+$subject = "";
+for ($i = 1; $i <= 105; $i = $i + 1) {
+    $pattern = $pattern . "(.)";
+    $subject = $subject . ($i === 105 ? "z" : "a");
+}
+$pattern = $pattern . "/";
+echo preg_replace_callback(
+    $pattern,
+    function($matches) {
+        return count($matches) . ":" . $matches[105];
+    },
+    $subject
+);
+"#,
+    );
+    assert_eq!(out, "106:z");
+}
+
+/// Verifies `preg_replace_callback` keeps interior unmatched captures as empty strings
+/// while omitting the trailing unmatched capture group from the callback array.
+#[test]
+fn test_preg_replace_callback_unmatched_interior_capture_is_empty() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_replace_callback(
+    "/(a)?(b)(c)?/",
+    function($matches) {
+        return count($matches) . ":" . $matches[1] . ":" . $matches[2];
+    },
+    "b"
+);
+"#,
+    );
+    assert_eq!(out, "3::b");
 }
 
 /// Verifies `preg_replace_callback` closure captures a by-value `use` variable and the captured
@@ -1365,6 +1560,43 @@ echo count($parts) . "|" . $parts[0] . "|" . $parts[1];
     assert_eq!(out, "2|hello|world");
 }
 
+/// Verifies `preg_split` applies limit, delimiter capture, and offset capture flags.
+#[test]
+fn test_preg_split_limit_delimiter_and_offset_capture() {
+    let out = compile_and_run(
+        r#"<?php
+$parts = preg_split("/([,])/", "a,b,c", 2, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_OFFSET_CAPTURE);
+echo count($parts) . "|";
+foreach ($parts as $part) {
+    echo $part[0] . "@" . $part[1] . ";";
+}
+"#,
+    );
+    assert_eq!(out, "3|a@0;,@1;b,c@2;");
+}
+
+/// Verifies `preg_split` delimiter capture materializes capture groups beyond the old
+/// fixed 99-capture runtime window.
+#[test]
+fn test_preg_split_delimiter_capture_beyond_ninety_nine() {
+    let out = compile_and_run(
+        r#"<?php
+$pattern = "/";
+$subject = "";
+for ($i = 1; $i <= 105; $i = $i + 1) {
+    $pattern = $pattern . "(.)";
+    $subject = $subject . ($i === 105 ? "z" : "a");
+}
+$pattern = $pattern . "/";
+$parts = preg_split($pattern, $subject, -1, PREG_SPLIT_NO_EMPTY | PREG_SPLIT_DELIM_CAPTURE);
+echo count($parts);
+echo ":";
+echo $parts[104];
+"#,
+    );
+    assert_eq!(out, "105:z");
+}
+
 /// Verifies `preg_replace` with the `i` modifier performs case-insensitive substitution.
 #[test]
 fn test_preg_replace_case_insensitive() {
@@ -1388,6 +1620,25 @@ fn test_preg_replace_dollar_backreferences() {
 fn test_preg_replace_backslash_backreferences() {
     let out = compile_and_run(r#"<?php echo preg_replace("/([0-9]+)-([0-9]+)/", "\\2/\\1", "12-34");"#);
     assert_eq!(out, "34/12");
+}
+
+/// Verifies `preg_replace` expands two-digit replacement backreferences and leaves a
+/// third digit literal, matching PHP's `$99` / `$990` parsing.
+#[test]
+fn test_preg_replace_two_digit_backreferences() {
+    let out = compile_and_run(
+        r#"<?php
+$pattern = "/";
+$subject = "";
+for ($i = 1; $i <= 99; $i = $i + 1) {
+    $pattern = $pattern . "(.)";
+    $subject = $subject . ($i === 99 ? "z" : "a");
+}
+$pattern = $pattern . "/";
+echo preg_replace($pattern, '$99-$990-$100', $subject);
+"#,
+    );
+    assert_eq!(out, "z-z0-a0");
 }
 
 /// Verifies `preg_replace` with a pattern containing an optional capture group renders an

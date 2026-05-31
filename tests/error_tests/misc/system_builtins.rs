@@ -223,7 +223,7 @@ fn test_error_json_last_error_msg_with_args() {
 fn test_error_preg_match_no_args() {
     expect_error(
         "<?php preg_match();",
-        "preg_match() takes exactly 2 arguments",
+        "preg_match() takes 2 or 3 arguments",
     );
 }
 
@@ -232,7 +232,25 @@ fn test_error_preg_match_no_args() {
 fn test_error_preg_match_one_arg() {
     expect_error(
         r#"<?php preg_match("/test/");"#,
-        "preg_match() takes exactly 2 arguments",
+        "preg_match() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that `preg_match()` rejects non-variable output arguments for `$matches`.
+#[test]
+fn test_error_preg_match_matches_must_be_variable() {
+    expect_error(
+        r#"<?php preg_match("/test/", "test", []);"#,
+        "preg_match() parameter $matches must be passed a variable",
+    );
+}
+
+/// Verifies that `preg_match()` rejects arguments beyond the supported `$matches` parameter.
+#[test]
+fn test_error_preg_match_four_args() {
+    expect_error(
+        r#"<?php preg_match("/test/", "test", $matches, 0);"#,
+        "preg_match() takes 2 or 3 arguments",
     );
 }
 
@@ -268,7 +286,7 @@ fn test_error_preg_replace_callback_wrong_args() {
 fn test_error_preg_split_no_args() {
     expect_error(
         "<?php preg_split();",
-        "preg_split() takes exactly 2 arguments",
+        "preg_split() takes between 2 and 4 arguments",
     );
 }
 

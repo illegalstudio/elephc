@@ -145,11 +145,19 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             assignments::emit_ref_assign_stmt(target, source, emitter, ctx);
         }
         StmtKind::TypedAssign {
-            type_expr: _,
+            type_expr,
             name,
             value,
         } => {
             assignments::emit_assign_stmt(name, value, emitter, ctx, data);
+            let static_ty = super::functions::codegen_static_type(type_expr, ctx);
+            let ty = super::functions::codegen_declared_type(type_expr, ctx).codegen_repr();
+            ctx.update_var_type_static_and_ownership(
+                name,
+                ty.clone(),
+                static_ty,
+                helpers::local_slot_ownership_after_store(&ty),
+            );
         }
         StmtKind::If {
             condition,

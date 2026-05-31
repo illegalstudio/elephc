@@ -81,6 +81,7 @@ Things that have a value:
 | `ConstRef(Name)` | `MAX_RETRIES`, `Config\PORT`, `\App\Config\PORT` | Reference to a user-defined constant |
 | `NewObject { class_name, args }` | `new Point(1, 2)`, `new App\Model\User()` | Object instantiation |
 | `NewScopedObject { receiver, args }` | `new self()`, `new static()`, `new parent()` | Object instantiation against a static receiver. Distinct from `NewObject` (which carries a fixed `Name`) so codegen can honour late static binding for `static`. |
+| `NewDynamicObject { class_name, fallback_class, required_parent, args }` | (internal) | Synthetic factory used by compiler-provided methods that construct an object from a runtime class-string while constraining it to a known parent class. Not produced from source syntax. |
 | `PropertyAccess { object, property }` | `$p->x` | Property access via `->` |
 | `DynamicPropertyAccess { object, property }` | `$p->{$name}` | Dynamic property access where the property name is an expression. Dynamic method calls are intentionally rejected. |
 | `NullsafePropertyAccess { object, property }` | `$p?->x` | Nullsafe property access via `?->` |

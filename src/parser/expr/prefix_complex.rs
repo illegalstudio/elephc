@@ -343,6 +343,14 @@ fn collect_arrow_expr_captures(
                 collect_arrow_expr_captures(arg, bound, seen, captures);
             }
         }
+        ExprKind::NewDynamicObject {
+            class_name, args, ..
+        } => {
+            collect_arrow_expr_captures(class_name, bound, seen, captures);
+            for arg in args {
+                collect_arrow_expr_captures(arg, bound, seen, captures);
+            }
+        }
         ExprKind::ClosureCall { var, args } => {
             push_arrow_capture(var, bound, seen, captures);
             for arg in args {
@@ -657,6 +665,10 @@ pub(super) fn parse_named_expr(
                 let member = member.clone();
                 *pos += 1;
                 member
+            }
+            Some(Token::Match) => {
+                *pos += 1;
+                "MATCH".to_string()
             }
             _ => return Err(CompileError::new(span, "Expected member name after '::'")),
         };

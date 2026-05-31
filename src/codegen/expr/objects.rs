@@ -25,6 +25,7 @@ use super::super::emit::Emitter;
 use super::scalars;
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, StaticReceiver};
 use crate::types::PhpType;
 
@@ -37,6 +38,96 @@ pub(crate) fn emit_new_object(
     data: &mut DataSection,
 ) -> PhpType {
     allocation::emit_new_object(class_name, args, emitter, ctx, data)
+}
+
+/// Emits a `new $class(...)`-style internal factory constrained to a parent class.
+pub(crate) fn emit_new_dynamic_object(
+    class_name: &Expr,
+    fallback_class: &str,
+    required_parent: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment(&format!(
+        "new dynamic {} subclass from class-string",
+        required_parent
+    ));
+    let class_ty = super::emit_expr(class_name, emitter, ctx, data).codegen_repr();
+    if !emit_prepare_dynamic_new_class_string(&class_ty, required_parent, emitter, ctx, data) {
+        return PhpType::Object(fallback_class.to_string());
+    }
+
+    abi::emit_call_label(emitter, "__rt_instanceof_lookup");                    // resolve the requested dynamic factory class-string to class metadata
+    let invalid_label = ctx.next_label("dynamic_new_invalid");
+    let unmatched_label = ctx.next_label("dynamic_new_unmatched");
+    let done_label = ctx.next_label("dynamic_new_done");
+    emit_branch_if_dynamic_new_lookup_invalid(&invalid_label, emitter);
+    emit_push_dynamic_new_class_id(emitter);
+
+    let classes = sorted_dynamic_new_classes_by_id(required_parent, ctx);
+    let mut cases = Vec::new();
+    for (_, class_id) in &classes {
+        let label = ctx.next_label("dynamic_new_case");
+        emit_compare_dynamic_new_class_id(*class_id, &label, emitter);
+        cases.push(label);
+    }
+    abi::emit_jump(emitter, &unmatched_label);                                  // report invalid factory classes that are outside the required parent hierarchy
+
+    emitter.label(&unmatched_label);
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the unmatched resolved class id before aborting
+    emit_dynamic_new_fatal(required_parent, emitter, data);
+
+    emitter.label(&invalid_label);
+    emit_dynamic_new_fatal(required_parent, emitter, data);
+
+    for ((class_name, _), label) in classes.into_iter().zip(cases) {
+        emitter.label(&label);
+        abi::emit_release_temporary_stack(emitter, 16);                         // discard the resolved class id before constructing the selected class
+        allocation::emit_new_object(&class_name, args, emitter, ctx, data);
+        abi::emit_jump(emitter, &done_label);                                   // skip the remaining dynamic factory cases after construction
+    }
+
+    emitter.label(&done_label);
+    PhpType::Object(fallback_class.to_string())
+}
+
+/// Normalizes a direct or boxed class-string into the ABI string-result registers.
+fn emit_prepare_dynamic_new_class_string(
+    class_ty: &PhpType,
+    required_parent: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> bool {
+    match class_ty {
+        PhpType::Str => true,
+        PhpType::Mixed | PhpType::Union(_) => {
+            let ok_label = ctx.next_label("dynamic_new_class_string");
+            abi::emit_call_label(emitter, "__rt_mixed_unbox");                  // unwrap nullable/mixed factory class names before class metadata lookup
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("cmp x0, #1");                          // runtime tag 1 means the factory argument is a string
+                    emitter.instruction(&format!("b.eq {}", ok_label));         // continue only when the boxed factory argument is a class-string
+                    emit_dynamic_new_fatal(required_parent, emitter, data);
+                    emitter.label(&ok_label);
+                }
+                Arch::X86_64 => {
+                    emitter.instruction("cmp rax, 1");                          // runtime tag 1 means the factory argument is a string
+                    emitter.instruction(&format!("je {}", ok_label));           // continue only when the boxed factory argument is a class-string
+                    emit_dynamic_new_fatal(required_parent, emitter, data);
+                    emitter.label(&ok_label);
+                    emitter.instruction("mov rax, rdi");                        // move the unboxed string pointer into the lookup input register
+                }
+            }
+            true
+        }
+        _ => {
+            emit_dynamic_new_fatal(required_parent, emitter, data);
+            false
+        }
+    }
 }
 
 /// Emits a dynamic property access where the property name is a runtime expression.
@@ -194,12 +285,88 @@ fn sorted_late_bound_classes_by_id(ctx: &Context) -> Vec<(String, u64)> {
 fn class_is_same_or_descends_from(class_name: &str, base_class: &str, ctx: &Context) -> bool {
     let mut current = Some(class_name);
     while let Some(name) = current {
-        if name == base_class {
+        if class_names_match(name, base_class) {
             return true;
         }
         current = ctx.classes.get(name).and_then(|info| info.parent.as_deref());
     }
     false
+}
+
+/// Compares PHP class names using the same case-insensitive key used by symbol tables.
+fn class_names_match(left: &str, right: &str) -> bool {
+    php_symbol_key(left.trim_start_matches('\\')) == php_symbol_key(right.trim_start_matches('\\'))
+}
+
+/// Collects all concrete dynamic factory targets that satisfy the required parent.
+fn sorted_dynamic_new_classes_by_id(
+    required_parent: &str,
+    ctx: &Context,
+) -> Vec<(String, u64)> {
+    let mut classes: Vec<(String, u64)> = ctx
+        .classes
+        .iter()
+        .filter(|(name, _)| class_is_same_or_descends_from(name, required_parent, ctx))
+        .map(|(name, info)| (name.clone(), info.class_id))
+        .collect();
+    classes.sort_by_key(|(_, class_id)| *class_id);
+    classes
+}
+
+/// Branches when the dynamic factory class-string lookup failed or resolved to an interface.
+fn emit_branch_if_dynamic_new_lookup_invalid(invalid_label: &str, emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #0");                                  // did the dynamic factory class-string resolve to metadata?
+            emitter.instruction(&format!("b.eq {}", invalid_label));            // abort unresolved factory classes before constructor arguments are evaluated
+            emitter.instruction("cmp x2, #0");                                  // target kind 0 means a concrete class, not an interface
+            emitter.instruction(&format!("b.ne {}", invalid_label));            // abort interface targets because factories must instantiate objects
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test rax, rax");                               // did the dynamic factory class-string resolve to metadata?
+            emitter.instruction(&format!("je {}", invalid_label));              // abort unresolved factory classes before constructor arguments are evaluated
+            emitter.instruction("test rdx, rdx");                               // target kind 0 means a concrete class, not an interface
+            emitter.instruction(&format!("jne {}", invalid_label));             // abort interface targets because factories must instantiate objects
+        }
+    }
+}
+
+/// Preserves the resolved dynamic factory class id on the temporary stack.
+fn emit_push_dynamic_new_class_id(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => abi::emit_push_reg(emitter, "x1"),
+        Arch::X86_64 => abi::emit_push_reg(emitter, "rdi"),
+    }
+}
+
+/// Compares the saved dynamic factory class id with a concrete candidate class.
+fn emit_compare_dynamic_new_class_id(
+    class_id: u64,
+    matched_label: &str,
+    emitter: &mut Emitter,
+) {
+    let scratch = abi::temp_int_reg(emitter.target);
+    abi::emit_load_temporary_stack_slot(emitter, scratch, 0);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {}, #{}", scratch, class_id));    // compare the requested factory class with this concrete class id
+            emitter.instruction(&format!("b.eq {}", matched_label));            // branch when the runtime class-string selected this constructor
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {}, {}", scratch, class_id));     // compare the requested factory class with this concrete class id
+            emitter.instruction(&format!("je {}", matched_label));              // branch when the runtime class-string selected this constructor
+        }
+    }
+}
+
+/// Emits a fatal diagnostic for invalid dynamic SPL factory class names.
+fn emit_dynamic_new_fatal(required_parent: &str, emitter: &mut Emitter, data: &mut DataSection) {
+    let message = format!(
+        "Fatal error: Dynamic factory class must extend {}\n",
+        required_parent
+    );
+    let (message_label, message_len) = data.add_string(message.as_bytes());
+    emit_fatal_message(emitter, &message_label, message_len);
 }
 
 /// Unboxes a Mixed value and emits a fatal if it is null instead of an object.

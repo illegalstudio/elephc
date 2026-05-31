@@ -152,35 +152,27 @@ _main:
     }
 
     #[test]
-    /// Linux libc (glibc) and musl differ in struct field widths; Platform methods expose the correct offsets and instructions per target.
-    fn test_linux_libc_layout_offsets() {
+    /// PCRE2 POSIX-wrapper regex structs use one layout across supported targets.
+    fn test_regex_layout_offsets() {
         assert_eq!(Platform::MacOS.dirent_name_offset(), 21);
         assert_eq!(Platform::Linux.dirent_name_offset(), 19);
         assert_eq!(Platform::MacOS.glob_pathv_offset(), 32);
         assert_eq!(Platform::Linux.glob_pathv_offset(), 8);
-        assert_eq!(Platform::MacOS.regex_t_size(), 32);
-        assert_eq!(Platform::Linux.regex_t_size(), 64);
-        assert_eq!(Platform::MacOS.regmatch_t_size(), 16);
-        assert_eq!(
-            Platform::Linux.regmatch_t_size(),
-            if cfg!(target_env = "musl") { 16 } else { 8 }
-        );
-        assert_eq!(Platform::MacOS.regmatch_rm_eo_offset(), 8);
-        assert_eq!(
-            Platform::Linux.regmatch_rm_eo_offset(),
-            if cfg!(target_env = "musl") { 8 } else { 4 }
-        );
+        assert_eq!(Platform::MacOS.regex_t_size(), 48);
+        assert_eq!(Platform::Linux.regex_t_size(), 48);
+        assert_eq!(Platform::MacOS.regex_re_nsub_offset(), 24);
+        assert_eq!(Platform::Linux.regex_re_nsub_offset(), 24);
+        assert_eq!(Platform::MacOS.regmatch_t_size(), 8);
+        assert_eq!(Platform::Linux.regmatch_t_size(), 8);
+        assert_eq!(Platform::MacOS.regmatch_rm_eo_offset(), 4);
+        assert_eq!(Platform::Linux.regmatch_rm_eo_offset(), 4);
         assert_eq!(
             Platform::MacOS.regoff_load_instr("x9", "sp", 32),
-            "ldr x9, [sp, #32]"
+            "ldrsw x9, [sp, #32]"
         );
         assert_eq!(
             Platform::Linux.regoff_load_instr("x9", "sp", 32),
-            if cfg!(target_env = "musl") {
-                "ldr x9, [sp, #32]"
-            } else {
-                "ldrsw x9, [sp, #32]"
-            }
+            "ldrsw x9, [sp, #32]"
         );
     }
 }

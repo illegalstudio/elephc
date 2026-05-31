@@ -188,6 +188,17 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             class_name,
             args: propagate_args(args, None),
         },
+        ExprKind::NewDynamicObject {
+            class_name,
+            fallback_class,
+            required_parent,
+            args,
+        } => ExprKind::NewDynamicObject {
+            class_name: Box::new(propagate_expr(*class_name, env)),
+            fallback_class,
+            required_parent,
+            args: propagate_args(args, None),
+        },
         ExprKind::PropertyAccess { object, property } => ExprKind::PropertyAccess {
             object: Box::new(propagate_expr(*object, env)),
             property,

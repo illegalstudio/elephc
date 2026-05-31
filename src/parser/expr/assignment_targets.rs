@@ -390,6 +390,7 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::PostDecrement(_)
         | ExprKind::ConstRef(_)
         | ExprKind::NewObject { .. }
+        | ExprKind::NewDynamicObject { .. }
         | ExprKind::StaticPropertyAccess { .. }
         | ExprKind::FirstClassCallable(_)
         | ExprKind::This
@@ -519,6 +520,15 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
                 expr_contains_dependency(arg, dependencies)
                     || expr_may_write_dependency(arg, dependencies)
             })
+        }
+        ExprKind::NewDynamicObject {
+            class_name, args, ..
+        } => {
+            expr_may_write_dependency(class_name, dependencies)
+                || args.iter().any(|arg| {
+                    expr_contains_dependency(arg, dependencies)
+                        || expr_may_write_dependency(arg, dependencies)
+                })
         }
         ExprKind::BufferNew { len, .. } => expr_may_write_dependency(len, dependencies),
         ExprKind::Closure { .. }
@@ -669,6 +679,12 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         | ExprKind::NewObject { args, .. }
         | ExprKind::NewScopedObject { args, .. } => {
             args.iter().any(|arg| expr_contains_equivalent(arg, needle))
+        }
+        ExprKind::NewDynamicObject {
+            class_name, args, ..
+        } => {
+            expr_contains_equivalent(class_name, needle)
+                || args.iter().any(|arg| expr_contains_equivalent(arg, needle))
         }
         ExprKind::ExprCall { callee, args } => {
             expr_contains_equivalent(callee, needle)

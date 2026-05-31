@@ -387,6 +387,22 @@ const INTRINSICS: &[IntrinsicSpec] = &[
         method_key: "__elephcassumerecursiveiterator",
         runtime_helper: None,
     },
+    IntrinsicSpec {
+        kind: IntrinsicCallKind::SplRecursiveAssumeIterator,
+        form: IntrinsicCallForm::Instance,
+        class_key: "recursiveregexiterator",
+        class_name: "RecursiveRegexIterator",
+        method_key: "__elephcassumerecursiveiterator",
+        runtime_helper: None,
+    },
+    IntrinsicSpec {
+        kind: IntrinsicCallKind::SplRecursiveAssumeIterator,
+        form: IntrinsicCallForm::Instance,
+        class_key: "recursivecachingiterator",
+        class_name: "RecursiveCachingIterator",
+        method_key: "__elephcassumerecursiveiterator",
+        runtime_helper: None,
+    },
 ];
 
 /// Constructs an instance-method intrinsic spec for a Spl class.

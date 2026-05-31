@@ -26,6 +26,8 @@ mod ffi;
 pub(crate) mod json_constants;
 /// PHP type model and type environment for tracking variable types.
 mod model;
+/// Preg/PCRE flag constants shared by checker and codegen.
+pub(crate) mod preg_constants;
 /// Type checker result types and the `check` entry point.
 mod result;
 /// Class, interface, enum, and FFI schema definitions.

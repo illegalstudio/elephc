@@ -365,6 +365,19 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
                 collect_required_class_names_in_expr(arg, names);
             }
         }
+        ExprKind::NewDynamicObject {
+            class_name,
+            fallback_class,
+            required_parent,
+            args,
+        } => {
+            names.insert(fallback_class.as_str().to_string());
+            names.insert(required_parent.as_str().to_string());
+            collect_required_class_names_in_expr(class_name, names);
+            for arg in args {
+                collect_required_class_names_in_expr(arg, names);
+            }
+        }
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => {
             collect_required_class_names_in_expr(object, names);

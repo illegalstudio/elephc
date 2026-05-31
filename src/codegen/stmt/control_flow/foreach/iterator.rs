@@ -20,6 +20,11 @@ use crate::codegen::stmt::emit_stmt;
 use crate::parser::ast::Stmt;
 use crate::types::PhpType;
 
+/// Tracks setup work that must be undone after the iterator loop exits.
+struct IteratorLoopState {
+    deferred_receiver_release: Option<PhpType>,
+}
+
 /// Foreach over an object implementing the Iterator interface.
 ///
 /// On entry, the target integer result register already holds the iterator
@@ -49,6 +54,7 @@ pub(crate) fn emit_iterator_foreach(
     receiver_var: Option<&str>,
     key_var: &Option<String>,
     value_var: &str,
+    value_storage_override: Option<PhpType>,
     body: &[Stmt],
     loop_start: &str,
     loop_end: &str,
@@ -65,25 +71,50 @@ pub(crate) fn emit_iterator_foreach(
         emitter,
         ctx,
         data,
-        |_, emitter, ctx, _| {
+        |dispatch_target, emitter, ctx, _| {
+            let value_storage_ty =
+                value_storage_override.clone().unwrap_or_else(|| {
+                    iterator_value_storage_type(
+                        &dispatch_target.method_return_type("current", ctx),
+                    )
+                });
+            let value_is_mixed = matches!(value_storage_ty, PhpType::Mixed);
+            let key_is_overwritten_by_value = key_var.as_deref() == Some(value_var);
             let mut deferred_receiver_release = None;
             if let Some(kv) = key_var {
-                deferred_receiver_release =
-                    normalize_iterator_mixed_slot(kv, receiver_var, emitter, ctx);
+                if !key_is_overwritten_by_value || value_is_mixed {
+                    deferred_receiver_release =
+                        normalize_iterator_mixed_slot(kv, receiver_var, emitter, ctx);
+                }
             }
-            if key_var.as_deref() != Some(value_var) {
-                let release = normalize_iterator_mixed_slot(value_var, receiver_var, emitter, ctx);
+            if !key_is_overwritten_by_value || !value_is_mixed {
+                let release = normalize_iterator_slot_for_type(
+                    value_var,
+                    receiver_var,
+                    &value_storage_ty,
+                    emitter,
+                    ctx,
+                );
                 if deferred_receiver_release.is_none() {
                     deferred_receiver_release = release;
                 }
             }
-            deferred_receiver_release
+            IteratorLoopState {
+                deferred_receiver_release,
+            }
         },
         |dispatch_target, emitter, ctx, data| {
+            let current_return_ty = dispatch_target.method_return_type("current", ctx);
+            let value_storage_ty = value_storage_override.clone().unwrap_or_else(|| {
+                iterator_value_storage_type(&current_return_ty)
+            });
             if let Some(kv) = key_var {
                 reload_iterator_receiver(emitter);
                 let key_ty = dispatch_target.dispatch("key", emitter, ctx);
-                if let Some(kvar) = ctx.variables.get(kv) {
+                if kv == value_var && !matches!(value_storage_ty, PhpType::Mixed) {
+                    // The value assignment immediately overwrites the key binding before
+                    // user code can observe it, but key() must still be called for effects.
+                } else if let Some(kvar) = ctx.variables.get(kv) {
                     let k_offset = kvar.stack_offset;
                     store_iterator_mixed_result(kv, k_offset, &key_ty, emitter, ctx);
                 } else {
@@ -92,10 +123,21 @@ pub(crate) fn emit_iterator_foreach(
             }
 
             reload_iterator_receiver(emitter);
-            let current_ty = dispatch_target.dispatch("current", emitter, ctx);
+            let current_ty = if dispatch_target.current_is_saved_receiver() {
+                emit_current_as_saved_iterator_receiver(emitter)
+            } else {
+                dispatch_target.dispatch("current", emitter, ctx)
+            };
             if let Some(vvar) = ctx.variables.get(value_var) {
                 let v_offset = vvar.stack_offset;
-                store_iterator_mixed_result(value_var, v_offset, &current_ty, emitter, ctx);
+                store_iterator_result(
+                    value_var,
+                    v_offset,
+                    &current_ty,
+                    &value_storage_ty,
+                    emitter,
+                    ctx,
+                );
             } else {
                 emitter.comment(&format!("WARNING: undefined foreach value variable ${}", value_var));
             }
@@ -110,8 +152,8 @@ pub(crate) fn emit_iterator_foreach(
             }
             ctx.loop_stack.pop();
         },
-        |deferred_receiver_release, emitter, _, _| {
-            if let Some(release_ty) = deferred_receiver_release.as_ref() {
+        |state, emitter, _, _| {
+            if let Some(release_ty) = state.deferred_receiver_release.as_ref() {
                 release_saved_iterator_receiver(release_ty, emitter);
             }
         },
@@ -171,6 +213,7 @@ pub(crate) fn emit_iterable_object_foreach(
         receiver_var,
         key_var,
         value_var,
+        None,
         body,
         &direct_start,
         &direct_end,
@@ -193,6 +236,7 @@ pub(crate) fn emit_iterable_object_foreach(
         None,
         key_var,
         value_var,
+        None,
         body,
         &aggregate_start,
         &aggregate_end,
@@ -360,6 +404,34 @@ impl IteratorDispatchTarget {
         }
     }
 
+    /// Returns the static return type for an iterator method without emitting a call.
+    fn method_return_type(&self, method: &str, ctx: &Context) -> PhpType {
+        let method_key = crate::names::php_symbol_key(method);
+        match self {
+            IteratorDispatchTarget::Class(class_name) => {
+                if self.current_is_saved_receiver() && method_key == "current" {
+                    return PhpType::Object("DirectoryIterator".to_string());
+                }
+                ctx.classes
+                    .get(class_name)
+                    .and_then(|class_info| class_info.methods.get(&method_key))
+                    .map(|sig| sig.return_type.clone())
+                    .unwrap_or(PhpType::Mixed)
+            }
+            IteratorDispatchTarget::Interface(interface_name) => ctx
+                .interfaces
+                .get(interface_name)
+                .and_then(|interface_info| interface_info.methods.get(&method_key))
+                .map(|sig| sig.return_type.clone())
+                .unwrap_or(PhpType::Mixed),
+        }
+    }
+
+    /// Returns true when `current()` should yield the parked receiver object directly.
+    fn current_is_saved_receiver(&self) -> bool {
+        matches!(self, IteratorDispatchTarget::Class(class_name) if class_name == "DirectoryIterator")
+    }
+
     /// Returns true if the dispatch target implements the Iterator interface.
     /// For classes, checks the class's interface list. For interfaces, checks
     /// the interface's parent hierarchy via BFS.
@@ -436,6 +508,122 @@ fn interface_extends_interface(interface_name: &str, ancestor_name: &str, ctx: &
         }
     }
     false
+}
+
+/// Emits DirectoryIterator::current() as the saved receiver object.
+fn emit_current_as_saved_iterator_receiver(emitter: &mut Emitter) -> PhpType {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x0, [sp]");                                // return the saved DirectoryIterator receiver as current()
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, QWORD PTR [rsp]");                    // return the saved DirectoryIterator receiver as current()
+        }
+    }
+    crate::codegen::abi::emit_incref_if_refcounted(
+        emitter,
+        &PhpType::Object("DirectoryIterator".to_string()),
+    );
+    PhpType::Object("DirectoryIterator".to_string())
+}
+
+/// Returns the stack storage type foreach should use for an iterator result.
+fn iterator_value_storage_type(result_ty: &PhpType) -> PhpType {
+    match result_ty {
+        PhpType::Object(name) => PhpType::Object(name.clone()),
+        _ => PhpType::Mixed,
+    }
+}
+
+/// Normalizes a foreach value slot for the chosen iterator result storage.
+fn normalize_iterator_slot_for_type(
+    var_name: &str,
+    receiver_var: Option<&str>,
+    storage_ty: &PhpType,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) -> Option<PhpType> {
+    if matches!(storage_ty, PhpType::Mixed) {
+        return normalize_iterator_mixed_slot(var_name, receiver_var, emitter, ctx);
+    }
+    if receiver_var == Some(var_name) {
+        retain_saved_iterator_receiver(emitter);
+        return Some(PhpType::Object(String::new()));
+    }
+    None
+}
+
+/// Stores an iterator result into the foreach value variable using the best storage type.
+fn store_iterator_result(
+    var_name: &str,
+    offset: usize,
+    result_ty: &PhpType,
+    storage_ty: &PhpType,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    if matches!(storage_ty, PhpType::Mixed) {
+        store_iterator_mixed_result(var_name, offset, result_ty, emitter, ctx);
+    } else {
+        if matches!(result_ty.codegen_repr(), PhpType::Mixed) {
+            unbox_owned_mixed_object_result(storage_ty, emitter);
+        }
+        store_iterator_typed_result(var_name, offset, storage_ty, emitter, ctx);
+    }
+}
+
+/// Unboxes an owned Mixed result into an owned object result for typed foreach storage.
+fn unbox_owned_mixed_object_result(storage_ty: &PhpType, emitter: &mut Emitter) {
+    let result_reg = abi::int_result_reg(emitter);
+    abi::emit_push_reg(emitter, result_reg);                                    // preserve the owned mixed cell while exposing its object payload
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // unwrap the FilesystemIterator current() mixed result
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, x1");                                  // promote the unboxed object payload into the result register
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, rdi");                                // promote the unboxed object payload into the result register
+        }
+    }
+    abi::emit_incref_if_refcounted(emitter, storage_ty);
+    abi::emit_push_reg(emitter, result_reg);                                    // preserve the retained object while releasing the mixed wrapper
+    abi::emit_load_temporary_stack_slot(emitter, result_reg, 16);
+    abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);
+    abi::emit_pop_reg(emitter, result_reg);                                     // restore the retained object result after wrapper cleanup
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the preserved mixed wrapper slot
+}
+
+/// Stores a concrete object iterator result without boxing it into Mixed.
+fn store_iterator_typed_result(
+    var_name: &str,
+    offset: usize,
+    storage_ty: &PhpType,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    let (old_ty, old_offset, old_ownership) = ctx
+        .variables
+        .get(var_name)
+        .map(|var| (var.ty.codegen_repr(), var.stack_offset, var.ownership))
+        .unwrap_or((storage_ty.clone(), offset, HeapOwnership::NonHeap));
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the freshly returned iterator value across previous-value cleanup
+    cleanup_replaced_iterator_slot(&old_ty, old_offset, old_ownership, emitter);
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the new iterator value after cleanup
+    crate::codegen::abi::store_at_offset_scratch(
+        emitter,
+        abi::int_result_reg(emitter),
+        offset,
+        match emitter.target.arch {
+            Arch::AArch64 => "x10",
+            Arch::X86_64 => "r10",
+        },
+    );
+    ctx.update_var_type_static_and_ownership(
+        var_name,
+        storage_ty.codegen_repr(),
+        storage_ty.clone(),
+        HeapOwnership::Owned,
+    );
 }
 
 /// Stores the result of `key()` or `current()` into the foreach variable's

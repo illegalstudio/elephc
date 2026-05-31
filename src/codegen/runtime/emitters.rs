@@ -24,6 +24,7 @@ use super::system;
 use super::x86_minimal::emit_runtime_linux_x86_64_minimal;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::{Arch, Platform};
+use crate::codegen::RuntimeFeatures;
 
 /// Emits all runtime helper labels in dependency order for non-minimal targets.
 ///
@@ -33,9 +34,9 @@ use crate::codegen::platform::{Arch, Platform};
 ///
 /// Each category is emitted before any code that depends on it, ensuring labels
 /// are available when branches are assembled.
-pub(crate) fn emit_runtime(emitter: &mut Emitter) {
+pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_runtime_linux_x86_64_minimal(emitter);
+        emit_runtime_linux_x86_64_minimal(emitter, features);
         return;
     }
 
@@ -134,13 +135,15 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     system::emit_json_decode_mixed(emitter);
     system::emit_json_last_error_msg(emitter);
     system::emit_json_validate(emitter);
-    system::emit_preg_strip(emitter);
-    system::emit_pcre_to_posix(emitter);
-    system::emit_preg_match(emitter);
-    system::emit_preg_match_all(emitter);
-    system::emit_preg_replace(emitter);
-    system::emit_preg_replace_callback(emitter);
-    system::emit_preg_split(emitter);
+    if features.regex {
+        system::emit_preg_strip(emitter);
+        system::emit_pcre_to_posix(emitter);
+        system::emit_preg_match(emitter);
+        system::emit_preg_match_all(emitter);
+        system::emit_preg_replace(emitter);
+        system::emit_preg_replace_callback(emitter);
+        system::emit_preg_split(emitter);
+    }
     system::emit_match_unhandled(emitter);
 
     // Exception runtime functions
@@ -372,7 +375,7 @@ mod tests {
     #[test]
     fn test_linux_runtime_marks_crypto_symbols_weak() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
-        emit_runtime(&mut emitter);
+        emit_runtime(&mut emitter, RuntimeFeatures::all());
         let asm = emitter.output();
 
         assert!(asm.contains(".weak MD5\n"));
@@ -385,7 +388,7 @@ mod tests {
     #[test]
     fn test_aarch64_runtime_emits_fiber_routines() {
         let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
-        emit_runtime(&mut emitter);
+        emit_runtime(&mut emitter, RuntimeFeatures::all());
         let asm = emitter.output();
 
         for sym in [
@@ -408,5 +411,17 @@ mod tests {
                 sym
             );
         }
+    }
+
+    /// Verifies optional regex helpers are omitted when the program does not reference them.
+    #[test]
+    fn test_runtime_can_omit_regex_helpers() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_runtime(&mut emitter, RuntimeFeatures::none());
+        let asm = emitter.output();
+
+        assert!(!asm.contains("__rt_preg_match:"));
+        assert!(!asm.contains("__rt_preg_replace:"));
+        assert!(!asm.contains("__rt_preg_split:"));
     }
 }

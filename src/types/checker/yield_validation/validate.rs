@@ -300,6 +300,14 @@ fn visit_expr(expr: &Expr, st: &mut State) {
                 visit_expr(a, st);
             }
         }
+        ExprKind::NewDynamicObject {
+            class_name, args, ..
+        } => {
+            visit_expr(class_name, st);
+            for a in args {
+                visit_expr(a, st);
+            }
+        }
         ExprKind::ExprCall { callee, args } => {
             visit_expr(callee, st);
             for a in args {

@@ -19,6 +19,7 @@ use super::expr::{coerce_result_to_type, emit_expr, expr_result_heap_ownership};
 use super::functions;
 use super::platform::{Arch, Target};
 use super::runtime;
+use super::runtime_features::RuntimeFeatures;
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 /// Sentinel value written to typed static properties that have no initializer expression,
@@ -67,10 +68,20 @@ pub(super) fn emit_write_current_string_stderr(emitter: &mut Emitter) {
 }
 
 /// Assembles the complete runtime assembly string for a given heap size and target.
+#[allow(dead_code)]
 pub fn generate_runtime(heap_size: usize, target: Target) -> String {
+    generate_runtime_with_features(heap_size, target, RuntimeFeatures::all())
+}
+
+/// Assembles runtime assembly for the requested optional helper families.
+pub fn generate_runtime_with_features(
+    heap_size: usize,
+    target: Target,
+    features: RuntimeFeatures,
+) -> String {
     let mut emitter = Emitter::new(target);
     emitter.emit_text_prelude();
-    runtime::emit_runtime(&mut emitter);
+    runtime::emit_runtime(&mut emitter, features);
     let mut output = emitter.output();
     output.push('\n');
     output.push_str(&runtime::emit_runtime_data_fixed(heap_size));

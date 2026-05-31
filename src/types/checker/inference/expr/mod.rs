@@ -472,6 +472,22 @@ impl Checker {
             ExprKind::NewObject { class_name, args } => {
                 self.infer_new_object_type(class_name.as_str(), args, expr, env)
             }
+            ExprKind::NewDynamicObject {
+                class_name,
+                fallback_class,
+                args,
+                ..
+            } => {
+                let class_ty = self.infer_type(class_name, env)?;
+                if class_ty != PhpType::Str {
+                    return Err(CompileError::new(
+                        class_name.span,
+                        "Dynamic object factory class must be a string",
+                    ));
+                }
+                self.infer_new_object_type(fallback_class.as_str(), args, expr, env)?;
+                Ok(PhpType::Object(fallback_class.as_str().to_string()))
+            }
             ExprKind::PropertyAccess { object, property } => {
                 self.infer_property_access_type(object, property, expr, env)
             }

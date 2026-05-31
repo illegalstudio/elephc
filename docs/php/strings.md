@@ -139,20 +139,6 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `ctype_digit()` | `ctype_digit($str): bool` | All chars are 0-9 |
 | `ctype_alnum()` | `ctype_alnum($str): bool` | All chars are alphanumeric |
 | `ctype_space()` | `ctype_space($str): bool` | All chars are whitespace |
-| `preg_match()` | `preg_match($pattern, $subject): int` | Test if regex matches (1 or 0). Uses POSIX extended regex. |
-| `preg_match_all()` | `preg_match_all($pattern, $subject): int` | Count all non-overlapping matches |
-| `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string` | Replace all regex matches; supports `$0`..`$9` and `\0`..`\9` replacement backreferences |
-| `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): string` | Replace all regex matches with the callback return value; callback receives `array<string>` matches |
-| `preg_split()` | `preg_split($pattern, $subject): array` | Split string by regex pattern |
 
-When the `$chars` mask is omitted, `trim()`, `ltrim()`, `rtrim()`, and `chop()` strip space, newline, carriage return, tab, vertical tab, form feed, and NUL. Passing an explicit mask strips only the characters in that mask.
-
-### Regex limitations
-
-- Uses POSIX extended regex via libc, with translation of common PCRE shorthands (`\s`, `\d`, `\w`) and common Unicode property shims (`\p{L}`, `\p{N}`, `\p{Lu}`, `\p{Ll}`, and `\P{...}`)
-- `preg_replace()` expands `$0`..`$9` and `\0`..`\9` to captured groups; unmatched optional groups expand to an empty string
-- `preg_replace_callback()` passes `$matches[0]` as the full match and `$matches[1]`..`$matches[9]` as supported capture groups
-- `preg_replace_callback()` preserves descriptor-backed closure captures and first-class-callable receivers when callbacks are stored in variables or passed through `callable` parameters
-- `preg_replace_callback()` can resolve runtime string callback variables for user functions and public static methods, and can also resolve callable-array variables such as `[$object, $method]` and `[$class, $method]` when the public method is selected by runtime strings
-- Lookahead, lookbehind, non-greedy quantifiers are not supported
-- `preg_match()` does not support `$matches` capture parameter
+Regex functions are documented separately in [Regex](regex.md), including the
+PCRE2 build requirements for programs that use `preg_*`.

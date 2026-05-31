@@ -17,6 +17,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install native test dependencies
+        run: brew install pcre2
+
       - name: Set version from tag and commit
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"

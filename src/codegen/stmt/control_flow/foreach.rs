@@ -17,13 +17,27 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
 use crate::codegen::{abi, platform::Arch};
-use crate::parser::ast::{Expr, ExprKind, Stmt};
+use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt};
 use crate::span::Span;
 use crate::types::PhpType;
+
+const FS_CURRENT_AS_SELF: i64 = 16;
+const FS_CURRENT_AS_PATHNAME: i64 = 32;
+const FS_CURRENT_MODE_MASK: i64 = 240;
+const FS_SKIP_DOTS: i64 = 4096;
 
 pub(crate) use iterator::{
     emit_iterable_object_loop, emit_iterator_loop, reload_iterator_receiver, IteratorDispatchTarget,
 };
+
+/// Returns the synthetic constructor default flags for filesystem iterators.
+fn filesystem_iterator_default_flags(class_name: &str) -> Option<i64> {
+    match class_name {
+        "FilesystemIterator" => Some(FS_SKIP_DOTS),
+        "GlobIterator" | "RecursiveDirectoryIterator" => Some(0),
+        _ => None,
+    }
+}
 
 /// Holds the original type of a value variable before it was converted to a by-reference
 /// binding in a foreach loop. Used to restore the correct type after the loop completes.
@@ -116,6 +130,7 @@ pub(super) fn emit_foreach_stmt(
                 receiver_var,
                 key_var,
                 value_var,
+                iterator_value_storage_override(class_name, array, ctx),
                 body,
                 &loop_start,
                 &loop_end,
@@ -344,6 +359,82 @@ pub(super) fn emit_foreach_stmt(
     if value_by_ref {
         ctx.ref_params.insert(value_var.to_string());
     }
+}
+
+/// Returns a narrower value storage type for statically constructed SPL filesystem iterators.
+fn iterator_value_storage_override(
+    class_name: &str,
+    source: &Expr,
+    ctx: &Context,
+) -> Option<PhpType> {
+    if class_name == "DirectoryIterator" {
+        return Some(PhpType::Object("DirectoryIterator".to_string()));
+    }
+    let flags = filesystem_iterator_source_flags(class_name, source, ctx)?;
+    match flags & FS_CURRENT_MODE_MASK {
+        FS_CURRENT_AS_PATHNAME => None,
+        FS_CURRENT_AS_SELF => Some(PhpType::Object(class_name.to_string())),
+        _ => Some(PhpType::Object("SplFileInfo".to_string())),
+    }
+}
+
+/// Returns constructor flags for statically constructed filesystem iterators.
+fn filesystem_iterator_source_flags(class_name: &str, source: &Expr, ctx: &Context) -> Option<i64> {
+    if !matches!(
+        class_name,
+        "FilesystemIterator" | "GlobIterator" | "RecursiveDirectoryIterator"
+    ) {
+        return None;
+    }
+    let ExprKind::NewObject {
+        class_name: source_class,
+        args,
+    } = &source.kind
+    else {
+        return None;
+    };
+    if source_class.as_str() != class_name {
+        return None;
+    }
+    args.get(1)
+        .and_then(|expr| eval_static_int_expr(expr, ctx))
+        .or_else(|| filesystem_iterator_default_flags(class_name))
+}
+
+/// Evaluates a side-effect-free integer expression used for SPL flag constants.
+fn eval_static_int_expr(expr: &Expr, ctx: &Context) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::Negate(inner) => eval_static_int_expr(inner, ctx).map(|value| -value),
+        ExprKind::BitNot(inner) => eval_static_int_expr(inner, ctx).map(|value| !value),
+        ExprKind::BinaryOp { left, op, right } => {
+            let left = eval_static_int_expr(left, ctx)?;
+            let right = eval_static_int_expr(right, ctx)?;
+            match op {
+                BinOp::BitOr => Some(left | right),
+                BinOp::BitAnd => Some(left & right),
+                BinOp::BitXor => Some(left ^ right),
+                BinOp::Add => Some(left + right),
+                BinOp::Sub => Some(left - right),
+                _ => None,
+            }
+        }
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            class_constant_int_value(receiver, name, ctx)
+        }
+        _ => None,
+    }
+}
+
+/// Resolves a class constant integer value from codegen metadata.
+fn class_constant_int_value(receiver: &StaticReceiver, name: &str, ctx: &Context) -> Option<i64> {
+    let StaticReceiver::Named(class_name) = receiver else {
+        return None;
+    };
+    ctx.classes
+        .get(class_name.as_str())
+        .and_then(|class_info| class_info.constants.get(name))
+        .and_then(|expr| eval_static_int_expr(expr, ctx))
 }
 
 /// Updates callable metadata for a foreach value variable before emitting the loop body.

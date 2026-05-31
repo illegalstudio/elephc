@@ -2,7 +2,7 @@
 title: "Classes"
 description: "Classes, interfaces, abstract classes, traits, enums, properties, and inheritance."
 sidebar:
-  order: 8
+  order: 9
 ---
 
 ## Class declaration

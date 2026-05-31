@@ -288,6 +288,7 @@ pub struct VarInfo {
     pub ty: PhpType,
     pub static_ty: PhpType,
     pub stack_offset: usize,
+    pub slot_size: usize,
     pub ownership: HeapOwnership,
     pub epilogue_cleanup_safe: bool,
 }
@@ -413,7 +414,8 @@ impl Context {
         ty: PhpType,
         static_ty: PhpType,
     ) -> usize {
-        self.stack_offset += ty.stack_size();
+        let slot_size = ty.stack_size();
+        self.stack_offset += slot_size;
         let offset = self.stack_offset;
         let ownership = HeapOwnership::for_type(&ty);
         self.variables.insert(
@@ -422,11 +424,30 @@ impl Context {
                 ty,
                 static_ty,
                 stack_offset: offset,
+                slot_size,
                 ownership,
                 epilogue_cleanup_safe: true,
             },
         );
         offset
+    }
+
+    /// Ensures an already-collected local has enough reserved frame space for a type.
+    ///
+    /// This is only safe during pre-emission local collection. When a later write needs a
+    /// wider representation, such as replacing an 8-byte int slot with a 16-byte string
+    /// slot, the variable is moved to a fresh slot and the old slot is left unused.
+    pub fn ensure_var_slot_capacity_for_type(&mut self, name: &str, ty: &PhpType) {
+        let required_size = ty.stack_size();
+        let Some(var) = self.variables.get_mut(name) else {
+            return;
+        };
+        if var.slot_size >= required_size {
+            return;
+        }
+        self.stack_offset += required_size;
+        var.stack_offset = self.stack_offset;
+        var.slot_size = required_size;
     }
 
     /// Allocates a hidden stack slot of the given size.

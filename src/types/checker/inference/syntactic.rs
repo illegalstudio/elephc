@@ -358,6 +358,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             }
         }
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
+        ExprKind::NewDynamicObject { fallback_class, .. } => {
+            PhpType::Object(fallback_class.as_str().to_string())
+        }
         ExprKind::NewScopedObject { .. } => PhpType::Object(String::new()),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => PhpType::Str,
         ExprKind::This => PhpType::Object(String::new()),

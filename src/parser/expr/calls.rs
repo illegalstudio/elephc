@@ -53,6 +53,10 @@ pub(super) fn parse_scoped_static_call(
             *pos += 1;
             method
         }
+        Some(Token::Match) => {
+            *pos += 1;
+            "MATCH".to_string()
+        }
         _ => {
             return Err(CompileError::new(
                 span,

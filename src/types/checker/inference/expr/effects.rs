@@ -9,7 +9,8 @@
 //! - Expression inference shares environments with statement checking, so variable and effect updates must stay synchronized.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{BinOp, Expr, ExprKind};
+use crate::names::php_symbol_key;
+use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::Checker;
@@ -178,9 +179,20 @@ impl Checker {
                     if builtin_name.eq_ignore_ascii_case("preg_replace_callback") && idx == 1 {
                         continue;
                     }
+                    if builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2 {
+                        continue;
+                    }
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
-                self.infer_type(expr, env)
+                let ty = self.infer_type(expr, env)?;
+                if builtin_name.eq_ignore_ascii_case("preg_match") {
+                    if let Some(arg) = expanded_args.get(2) {
+                        if let Some(name) = preg_match_output_var(arg) {
+                            env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Str)));
+                        }
+                    }
+                }
+                Ok(ty)
             }
             ExprKind::NewObject { args, .. } | ExprKind::StaticMethodCall { args, .. } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
@@ -189,9 +201,14 @@ impl Checker {
                 }
                 self.infer_type(expr, env)
             }
-            ExprKind::ClosureCall { args, .. } => {
+            ExprKind::ClosureCall { var, args } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
-                for arg in &expanded_args {
+                let skip_contextual_callback =
+                    self.variable_targets_preg_replace_callback(var.as_str());
+                for (idx, arg) in expanded_args.iter().enumerate() {
+                    if skip_contextual_callback && idx == 1 {
+                        continue;
+                    }
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 self.infer_type(expr, env)
@@ -199,7 +216,12 @@ impl Checker {
             ExprKind::ExprCall { callee, args } => {
                 self.infer_type_with_assignment_effects(callee, env)?;
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
-                for arg in &expanded_args {
+                let skip_contextual_callback = self
+                    .expr_targets_preg_replace_callback(callee);
+                for (idx, arg) in expanded_args.iter().enumerate() {
+                    if skip_contextual_callback && idx == 1 {
+                        continue;
+                    }
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 self.infer_type(expr, env)
@@ -241,5 +263,40 @@ impl Checker {
             }
             _ => self.infer_type(expr, env),
         }
+    }
+
+    /// Returns true when an expression call target is first-class `preg_replace_callback`.
+    fn expr_targets_preg_replace_callback(&self, callee: &Expr) -> bool {
+        match &callee.kind {
+            ExprKind::FirstClassCallable(target) => callable_target_is_preg_replace_callback(target),
+            ExprKind::Variable(var_name) => {
+                self.variable_targets_preg_replace_callback(var_name.as_str())
+            }
+            _ => false,
+        }
+    }
+
+    /// Returns true when a variable stores first-class `preg_replace_callback`.
+    fn variable_targets_preg_replace_callback(&self, var_name: &str) -> bool {
+        self.first_class_callable_targets
+            .get(var_name)
+            .is_some_and(callable_target_is_preg_replace_callback)
+    }
+}
+
+/// Returns true when a first-class callable target is PHP `preg_replace_callback`.
+fn callable_target_is_preg_replace_callback(target: &CallableTarget) -> bool {
+    matches!(
+        target,
+        CallableTarget::Function(name) if php_symbol_key(name.as_str()) == "preg_replace_callback"
+    )
+}
+
+/// Returns the variable name used as `preg_match()`'s output `$matches` argument.
+fn preg_match_output_var(arg: &Expr) -> Option<&String> {
+    match &arg.kind {
+        ExprKind::Variable(name) => Some(name),
+        ExprKind::NamedArg { value, .. } => preg_match_output_var(value),
+        _ => None,
     }
 }

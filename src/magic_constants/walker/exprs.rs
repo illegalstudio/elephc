@@ -173,6 +173,17 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             class_name,
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
+        ExprKind::NewDynamicObject {
+            class_name,
+            fallback_class,
+            required_parent,
+            args,
+        } => ExprKind::NewDynamicObject {
+            class_name: Box::new(walk_expr(*class_name, pass)),
+            fallback_class,
+            required_parent,
+            args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
+        },
         ExprKind::PropertyAccess { object, property } => ExprKind::PropertyAccess {
             object: Box::new(walk_expr(*object, pass)),
             property,

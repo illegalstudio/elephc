@@ -22,6 +22,7 @@ mod append_storage;
 mod caching;
 mod common;
 mod containers;
+mod filesystem;
 mod filters;
 mod forwarding;
 mod heaps;
@@ -32,6 +33,7 @@ mod recursive;
 mod recursive_array;
 mod recursive_iterator_iterator;
 mod recursive_iterator_iterator_traversal;
+mod regex;
 mod registry;
 mod storage;
 
@@ -50,6 +52,8 @@ pub(crate) fn inject_builtin_spl_classes(
     caching::insert_class(class_map);
     recursive::insert_classes(class_map);
     recursive_iterator_iterator::insert_class(class_map);
+    regex::insert_classes(class_map);
+    filesystem::insert_classes(class_map);
     append::insert_classes(class_map);
     multiple::insert_class(class_map);
     heaps::insert_classes(class_map);

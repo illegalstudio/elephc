@@ -307,12 +307,14 @@ impl Platform {
         }
     }
 
-    /// Returns the size of `struct regex_t` in bytes.
+    /// Returns the size of PCRE2 POSIX-wrapper `struct regex_t` in bytes.
     pub fn regex_t_size(&self) -> usize {
-        match self {
-            Platform::MacOS => 32,
-            Platform::Linux => 64,
-        }
+        48
+    }
+
+    /// Returns the byte offset of `re_nsub` within PCRE2 POSIX-wrapper `struct regex_t`.
+    pub fn regex_re_nsub_offset(&self) -> usize {
+        24
     }
 
     /// Returns the value of `LC_CTYPE` for `setlocale()`.
@@ -323,53 +325,21 @@ impl Platform {
         }
     }
 
-    /// Returns the size of `struct regmatch_t` in bytes.
-    ///
-    /// glibc uses 8 bytes (two 32-bit ints) while macOS and musl use 16 bytes.
+    /// Returns the size of PCRE2 POSIX-wrapper `struct regmatch_t` in bytes.
     pub fn regmatch_t_size(&self) -> usize {
-        match self {
-            Platform::MacOS => 16,
-            Platform::Linux => {
-                if cfg!(target_env = "musl") {
-                    16
-                } else {
-                    8
-                }
-            }
-        }
+        8
     }
 
-    /// Returns the byte offset of `rm_eo` within `struct regmatch_t`.
-    ///
-    /// glibc places `rm_eo` at offset 4; macOS and musl place it at offset 8.
+    /// Returns the byte offset of `rm_eo` within PCRE2 POSIX-wrapper `struct regmatch_t`.
     pub fn regmatch_rm_eo_offset(&self) -> usize {
-        match self {
-            Platform::MacOS => 8,
-            Platform::Linux => {
-                if cfg!(target_env = "musl") {
-                    8
-                } else {
-                    4
-                }
-            }
-        }
+        4
     }
 
     /// Returns the ARM64 load instruction for a `regoff_t` field (regex match offset).
     ///
-    /// glibc uses signed 32-bit offsets loaded with `ldrsw`; macOS and musl use
-    /// plain 32-bit offsets loaded with `ldr`.
+    /// PCRE2's POSIX wrapper uses signed 32-bit offsets on all supported targets.
     pub fn regoff_load_instr(&self, dest: &str, base: &str, offset: usize) -> String {
-        match self {
-            Platform::MacOS => format!("ldr {}, [{}, #{}]", dest, base, offset),
-            Platform::Linux => {
-                if cfg!(target_env = "musl") {
-                    format!("ldr {}, [{}, #{}]", dest, base, offset)
-                } else {
-                    format!("ldrsw {}, [{}, #{}]", dest, base, offset)
-                }
-            }
-        }
+        format!("ldrsw {}, [{}, #{}]", dest, base, offset)
     }
 }
 

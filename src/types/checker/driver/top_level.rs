@@ -241,6 +241,12 @@ impl Checker {
             | ExprKind::NewObject { args, .. } => {
                 args.iter().any(Self::expr_contains_method_call)
             }
+            ExprKind::NewDynamicObject {
+                class_name, args, ..
+            } => {
+                Self::expr_contains_method_call(class_name)
+                    || args.iter().any(Self::expr_contains_method_call)
+            }
             ExprKind::Match {
                 subject,
                 arms,
@@ -406,6 +412,12 @@ impl Checker {
             | ExprKind::NewObject { args, .. }
             | ExprKind::NewScopedObject { args, .. } => {
                 args.iter().any(Self::expr_contains_property_access)
+            }
+            ExprKind::NewDynamicObject {
+                class_name, args, ..
+            } => {
+                Self::expr_contains_property_access(class_name)
+                    || args.iter().any(Self::expr_contains_property_access)
             }
             ExprKind::Match {
                 subject,

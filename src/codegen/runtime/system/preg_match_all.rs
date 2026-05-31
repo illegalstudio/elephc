@@ -6,7 +6,7 @@
 //! - `crate::codegen::runtime::emitters::emit_runtime()` via `crate::codegen::runtime::system`.
 //!
 //! Key details:
-//! - Regex helpers translate PHP PCRE-flavored inputs to POSIX/libc calls and must preserve match array construction.
+//! - Regex helpers preserve PHP PCRE-flavored inputs for PCRE2 and must preserve match array construction.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
@@ -52,23 +52,18 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_preg_strip");                                  // → x1, x2, x3=flags
     emitter.instruction(&format!("str x3, [sp, #{}]", flags_off));              // save flags
 
-    // -- convert pattern from PCRE to POSIX and null-terminate --
-    emitter.instruction("bl __rt_pcre_to_posix");                               // → x0=C string with PCRE shorthands converted
+    // -- materialize the PCRE pattern as a C string --
+    emitter.instruction("bl __rt_pcre_to_posix");                               // materialize PCRE pattern as a C string
     emitter.instruction(&format!("str x0, [sp, #{}]", pattern_cstr_off));       // save pattern C string
 
-    // -- prepare locale-sensitive POSIX character classes --
+    // -- prepare locale state for regex helpers --
     super::emit_prepare_regex_locale(emitter);
 
     // -- compile regex --
     emitter.instruction("mov x0, sp");                                          // regex_t at sp
     emitter.instruction(&format!("ldr x1, [sp, #{}]", pattern_cstr_off));       // pattern
-    emitter.instruction("mov x2, #1");                                          // REG_EXTENDED
-    emitter.instruction(&format!("ldr x9, [sp, #{}]", flags_off));              // flags
-    emitter.instruction("tst x9, #1");                                          // test icase
-    emitter.instruction("b.eq __rt_preg_match_all_nc");                         // skip
-    emitter.instruction("orr x2, x2, #2");                                      // REG_ICASE
-    emitter.label("__rt_preg_match_all_nc");
-    emitter.bl_c("regcomp");                                                    // compile
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", flags_off));              // pass PCRE2 POSIX compile flags from delimiter parsing
+    emitter.bl_c("pcre2_regcomp");                                              // compile regex through PCRE2
     emitter.instruction("cbnz x0, __rt_preg_match_all_fail");                   // fail
 
     // -- null-terminate subject --
@@ -90,7 +85,7 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #1");                                          // nmatch = 1
     emitter.instruction(&format!("add x3, sp, #{}", regmatch_off));             // regmatch_t buffer
     emitter.instruction("mov x4, #0");                                          // eflags = 0
-    emitter.bl_c("regexec");                                                    // execute
+    emitter.bl_c("pcre2_regexec");                                                    // execute
     emitter.instruction("cbnz x0, __rt_preg_match_all_done");                   // no more matches
 
     // -- found a match, increment count --
@@ -111,7 +106,7 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
 
     emitter.label("__rt_preg_match_all_done");
     emitter.instruction("mov x0, sp");                                          // regex_t
-    emitter.bl_c("regfree");                                                    // free
+    emitter.bl_c("pcre2_regfree");                                                    // free
     emitter.instruction(&format!("ldr x0, [sp, #{}]", match_count_off));        // return count
     emitter.instruction("b __rt_preg_match_all_ret");                           // return
 
@@ -159,23 +154,18 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, rsi");                                        // move the elephc pattern length into the delimiter-strip helper input register
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and gather supported regex flags from the pattern literal
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", flags_off));  // preserve the delimiter-strip helper flags for the later regcomp() call
-    emitter.instruction("call __rt_pcre_to_posix");                             // translate PCRE shorthands into a POSIX-compatible null-terminated pattern string
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // preserve the converted POSIX pattern C string across compilation and loop setup
+    emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a null-terminated C string
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // preserve the null-terminated PCRE pattern C string across compilation and loop setup
     super::emit_prepare_regex_locale(emitter);
     emitter.instruction("lea rdi, [rsp]");                                      // pass the local regex_t storage as the first regcomp() argument
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass the converted POSIX pattern C string as the second regcomp() argument
-    emitter.instruction("mov edx, 1");                                          // start from REG_EXTENDED when compiling the POSIX regex pattern
-    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", flags_off));  // reload the delimiter-strip helper flags before deciding whether to add REG_ICASE
-    emitter.instruction("test rcx, 1");                                         // detect the supported case-insensitive regex modifier from the pattern literal
-    emitter.instruction("jz __rt_preg_match_all_nocase_linux_x86_64");          // keep the default REG_EXTENDED flags when the pattern does not request case-insensitive matching
-    emitter.instruction("or edx, 2");                                           // add REG_ICASE so regcomp() performs case-insensitive POSIX matching
-    emitter.label("__rt_preg_match_all_nocase_linux_x86_64");
-    emitter.bl_c("regcomp");                                                    // compile the translated POSIX pattern into the local regex_t storage
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass the null-terminated PCRE pattern C string as the second regcomp() argument
+    emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", flags_off));  // pass PCRE2 POSIX compile flags from delimiter parsing
+    emitter.bl_c("pcre2_regcomp");                                              // compile the PCRE pattern into the local regex_t storage
     emitter.instruction("test eax, eax");                                       // did regcomp() succeed and produce a compiled regex object?
     emitter.instruction("jnz __rt_preg_match_all_fail_linux_x86_64");           // failed regex compilation maps to a zero-count result
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload the elephc subject pointer before null-terminating it in the secondary scratch buffer
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // reload the elephc subject length before null-terminating it in the secondary scratch buffer
-    emitter.instruction("call __rt_cstr2");                                     // materialize a null-terminated subject C string for repeated POSIX regexec() probes
+    emitter.instruction("call __rt_cstr2");                                     // materialize a null-terminated subject C string for repeated PCRE2 regex execution probes
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); // preserve the subject C string pointer across the full match-counting loop
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", match_count_off)); // initialize the running non-overlapping match count at zero
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", current_pos_off)); // start the current subject cursor at the beginning of the null-terminated subject C string
@@ -189,7 +179,7 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edx, 1");                                          // request exactly one regmatch_t capture because the loop only needs the overall match extent
     emitter.instruction(&format!("lea rcx, [rsp + {}]", regmatch_off));         // pass the local regmatch_t buffer as the match extent output slot
     emitter.instruction("xor r8d, r8d");                                        // pass eflags = 0 so regexec() matches from the current subject cursor
-    emitter.bl_c("regexec");                                                    // execute the compiled POSIX regex at the current subject cursor
+    emitter.bl_c("pcre2_regexec");                                                    // execute the compiled PCRE2 regex at the current subject cursor
     emitter.instruction("test eax, eax");                                       // did regexec() find another match at or after the current cursor?
     emitter.instruction("jnz __rt_preg_match_all_done_linux_x86_64");           // stop counting when regexec() reports no further matches
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", match_count_off)); // reload the running non-overlapping match count before incrementing it
@@ -207,7 +197,7 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_preg_match_all_done_linux_x86_64");
     emitter.instruction("lea rdi, [rsp]");                                      // reload the compiled regex_t storage before freeing it with regfree()
-    emitter.bl_c("regfree");                                                    // release the compiled POSIX regex resources before returning the match count
+    emitter.bl_c("pcre2_regfree");                                                    // release the compiled PCRE2 regex resources before returning the match count
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", match_count_off)); // return the total number of non-overlapping regex matches discovered in the subject
     emitter.instruction("jmp __rt_preg_match_all_ret_linux_x86_64");            // share the common epilogue after the successful match-count path
 

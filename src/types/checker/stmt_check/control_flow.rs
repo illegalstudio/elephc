@@ -9,10 +9,24 @@
 //! - Branch and loop handling must preserve PHP execution order and conservative type environments.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
+
+const FS_CURRENT_AS_SELF: i64 = 16;
+const FS_CURRENT_AS_PATHNAME: i64 = 32;
+const FS_CURRENT_MODE_MASK: i64 = 240;
+const FS_SKIP_DOTS: i64 = 4096;
+
+/// Returns the synthetic constructor default flags for filesystem iterators.
+fn filesystem_iterator_default_flags(class_name: &str) -> Option<i64> {
+    match class_name {
+        "FilesystemIterator" => Some(FS_SKIP_DOTS),
+        "GlobIterator" | "RecursiveDirectoryIterator" => Some(0),
+        _ => None,
+    }
+}
 
 impl Checker {
     /// Validates control-flow statements and updates the type environment for their assignment effects.
@@ -66,11 +80,13 @@ impl Checker {
                             ),
                         ));
                     }
+                    let (key_ty, value_ty) =
+                        self.foreach_object_key_value_types(class_name, array);
                     if let Some(k) = key_var {
-                        env.insert(k.clone(), PhpType::Mixed);
+                        env.insert(k.clone(), key_ty);
                         self.clear_foreach_callable_metadata(k);
                     }
-                    env.insert(value_var.clone(), PhpType::Mixed);
+                    env.insert(value_var.clone(), value_ty);
                     self.clear_foreach_callable_metadata(value_var);
                 } else if matches!(
                     arr_ty,
@@ -280,6 +296,141 @@ impl Checker {
             }
             _ => unreachable!("non-control-flow statement routed to control-flow checker"),
         }
+    }
+
+    /// Returns the static key and value types exposed by foreach over an object iterator.
+    ///
+    /// Concrete `Iterator` implementations can narrow `key()`/`current()` from the
+    /// interface's `mixed` contract, so foreach should expose those narrower types inside
+    /// the loop. IteratorAggregate sources are resolved through their `getIterator()`
+    /// return type when that type is statically known.
+    fn foreach_object_key_value_types(
+        &self,
+        class_name: &str,
+        source: &Expr,
+    ) -> (PhpType, PhpType) {
+        let value_override = self.foreach_object_value_type_override(class_name, source);
+        if self.class_implements_interface(class_name, "Iterator")
+            || self.interface_extends_interface(class_name, "Iterator")
+        {
+            return (
+                self.iterator_method_return_type(class_name, "key"),
+                value_override.unwrap_or_else(|| {
+                    self.iterator_method_return_type(class_name, "current")
+                }),
+            );
+        }
+
+        let get_iterator_ty = self.iterator_method_return_type(class_name, "getIterator");
+        if let PhpType::Object(iterator_name) = get_iterator_ty {
+            return (
+                self.iterator_method_return_type(&iterator_name, "key"),
+                value_override.unwrap_or_else(|| {
+                    self.iterator_method_return_type(&iterator_name, "current")
+                }),
+            );
+        }
+
+        (PhpType::Mixed, PhpType::Mixed)
+    }
+
+    /// Returns a narrower foreach value type for SPL filesystem iterators when flags are static.
+    fn foreach_object_value_type_override(
+        &self,
+        class_name: &str,
+        source: &Expr,
+    ) -> Option<PhpType> {
+        if class_name == "DirectoryIterator" {
+            return Some(PhpType::Object("DirectoryIterator".to_string()));
+        }
+        let flags = self.filesystem_iterator_source_flags(class_name, source)?;
+        match flags & FS_CURRENT_MODE_MASK {
+            FS_CURRENT_AS_PATHNAME => None,
+            FS_CURRENT_AS_SELF => Some(PhpType::Object(class_name.to_string())),
+            _ => Some(PhpType::Object("SplFileInfo".to_string())),
+        }
+    }
+
+    /// Returns constructor flags for statically constructed filesystem iterators.
+    fn filesystem_iterator_source_flags(&self, class_name: &str, source: &Expr) -> Option<i64> {
+        if !matches!(
+            class_name,
+            "FilesystemIterator" | "GlobIterator" | "RecursiveDirectoryIterator"
+        ) {
+            return None;
+        }
+        let ExprKind::NewObject {
+            class_name: source_class,
+            args,
+        } = &source.kind
+        else {
+            return None;
+        };
+        if source_class.as_str() != class_name {
+            return None;
+        }
+        args.get(1)
+            .and_then(|expr| self.eval_static_int_expr(expr))
+            .or_else(|| filesystem_iterator_default_flags(class_name))
+    }
+
+    /// Evaluates a side-effect-free integer expression used for SPL flag constants.
+    fn eval_static_int_expr(&self, expr: &Expr) -> Option<i64> {
+        match &expr.kind {
+            ExprKind::IntLiteral(value) => Some(*value),
+            ExprKind::Negate(inner) => self.eval_static_int_expr(inner).map(|value| -value),
+            ExprKind::BitNot(inner) => self.eval_static_int_expr(inner).map(|value| !value),
+            ExprKind::BinaryOp { left, op, right } => {
+                let left = self.eval_static_int_expr(left)?;
+                let right = self.eval_static_int_expr(right)?;
+                match op {
+                    BinOp::BitOr => Some(left | right),
+                    BinOp::BitAnd => Some(left & right),
+                    BinOp::BitXor => Some(left ^ right),
+                    BinOp::Add => Some(left + right),
+                    BinOp::Sub => Some(left - right),
+                    _ => None,
+                }
+            }
+            ExprKind::ScopedConstantAccess { receiver, name } => {
+                self.class_constant_int_value(receiver, name)
+            }
+            _ => None,
+        }
+    }
+
+    /// Resolves a class constant integer value from checker metadata.
+    fn class_constant_int_value(&self, receiver: &StaticReceiver, name: &str) -> Option<i64> {
+        let StaticReceiver::Named(class_name) = receiver else {
+            return None;
+        };
+        self.classes
+            .get(class_name.as_str())
+            .and_then(|class_info| class_info.constants.get(name))
+            .and_then(|expr| self.eval_static_int_expr(expr))
+    }
+
+    /// Looks up an iterator-related method return type on either a class or an interface.
+    ///
+    /// Missing metadata falls back to `mixed`, matching PHP's loose iterator contracts and
+    /// preserving the previous conservative behavior for dynamic or unknown iterator shapes.
+    fn iterator_method_return_type(&self, type_name: &str, method: &str) -> PhpType {
+        let method_key = crate::names::php_symbol_key(method);
+        if type_name == "DirectoryIterator" && method_key == "current" {
+            return PhpType::Object("DirectoryIterator".to_string());
+        }
+        if let Some(class_info) = self.classes.get(type_name) {
+            return class_info
+                .methods
+                .get(&method_key)
+                .map(|sig| sig.return_type.clone())
+                .unwrap_or(PhpType::Mixed);
+        }
+        self.interfaces
+            .get(type_name)
+            .and_then(|interface_info| interface_info.methods.get(&method_key))
+            .map(|sig| sig.return_type.clone())
+            .unwrap_or(PhpType::Mixed)
     }
 
     /// Checks a loop body with `break`/`continue` target tracking.

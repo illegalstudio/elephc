@@ -9,14 +9,18 @@
 
 use super::*;
 
-/// Returns the cached default runtime object path, assembling the runtime on first call.
-/// Creates a temp directory, generates 8_388_608-byte heap runtime assembly, assembles it with
-/// `as`, and caches the `.o` path for reuse across all tests.
+/// Returns the cached base runtime object path, assembling the runtime on first call.
+/// Creates a temp directory, generates an 8_388_608-byte heap runtime without optional
+/// feature families, assembles it with `as`, and caches the `.o` path for legacy tests.
 pub(crate) fn get_runtime_obj() -> &'static Path {
     RUNTIME_OBJ.get_or_init(|| {
         let dir = std::env::temp_dir().join(format!("elephc_test_runtime_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let runtime_asm = elephc::codegen::generate_runtime(8_388_608, target());
+        let runtime_asm = elephc::codegen::generate_runtime_with_features(
+            8_388_608,
+            target(),
+            elephc::codegen::RuntimeFeatures::none(),
+        );
         let asm_path = dir.join("runtime.s");
         let obj_path = dir.join("runtime.o");
         fs::write(&asm_path, &runtime_asm).unwrap();
@@ -32,11 +36,55 @@ pub(crate) fn get_runtime_obj() -> &'static Path {
     })
 }
 
-/// Assembles a runtime object with a custom heap size, writing the `.o` to `dir`.
-/// Generates ARM64/x86_64 runtime assembly via `elephc::codegen::generate_runtime`
-/// and assembles it using `assembler_cmd()`. Used by tests that need non-default heap sizes.
+/// Returns a cached runtime object assembled from the exact runtime assembly string.
+///
+/// The cache key is an FNV-1a hash of the full runtime assembly, so feature-gated
+/// runtimes and custom heap sizes get distinct objects while repeated tests can
+/// still share the assembled output.
+pub(crate) fn runtime_obj_for_asm(runtime_asm: &str) -> std::path::PathBuf {
+    let hash = runtime_asm_hash(runtime_asm);
+    let cache = RUNTIME_OBJS_BY_ASM.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let mut cache = cache.lock().expect("runtime asm cache poisoned");
+    if let Some(path) = cache.get(&hash) {
+        return path.clone();
+    }
+
+    let dir = std::env::temp_dir().join(format!("elephc_test_runtime_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let asm_path = dir.join(format!("runtime_{hash:016x}.s"));
+    let obj_path = dir.join(format!("runtime_{hash:016x}.o"));
+    fs::write(&asm_path, runtime_asm).unwrap();
+
+    let mut cmd = Command::new(assembler_cmd());
+    if target().platform == Platform::MacOS {
+        cmd.args(["-arch", target().darwin_arch_name()]);
+    }
+    cmd.arg("-o").arg(&obj_path).arg(&asm_path);
+    let status = cmd.status().expect("failed to assemble feature runtime");
+    assert!(status.success(), "feature runtime assembler failed");
+    cache.insert(hash, obj_path.clone());
+    obj_path
+}
+
+/// Computes a stable FNV-1a hash for runtime assembly cache keys.
+fn runtime_asm_hash(asm: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in asm.bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+/// Assembles a base runtime object with a custom heap size, writing the `.o` to `dir`.
+/// Generates ARM64/x86_64 runtime assembly without optional feature families and assembles
+/// it using `assembler_cmd()`. Used by tests that need non-default heap sizes.
 pub(crate) fn assemble_custom_runtime(heap_size: usize, dir: &Path) -> std::path::PathBuf {
-    let runtime_asm = elephc::codegen::generate_runtime(heap_size, target());
+    let runtime_asm = elephc::codegen::generate_runtime_with_features(
+        heap_size,
+        target(),
+        elephc::codegen::RuntimeFeatures::none(),
+    );
     let asm_path = dir.join("runtime.s");
     let obj_path = dir.join("runtime.o");
     fs::write(&asm_path, &runtime_asm).unwrap();

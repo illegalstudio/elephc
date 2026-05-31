@@ -9,6 +9,22 @@
 
 use super::*;
 
+/// Combines checker-required libraries with libraries required by feature-gated runtime helpers.
+fn required_libraries_for_codegen(
+    program: &elephc::parser::ast::Program,
+    check_result: &elephc::types::CheckResult,
+) -> Vec<String> {
+    let runtime_features =
+        elephc::codegen::runtime_features_for_program_and_classes(program, &check_result.classes);
+    let mut required_libraries = check_result.required_libraries.clone();
+    for lib in elephc::codegen::required_libraries_for_runtime_features(runtime_features) {
+        if !required_libraries.contains(&lib) {
+            required_libraries.push(lib);
+        }
+    }
+    required_libraries
+}
+
 // Creates an isolated temporary directory for CLI tests using a unique prefix,
 // process ID, thread ID, and auto-incrementing counter. Used to avoid file collisions
 // when tests run in parallel.
@@ -60,11 +76,12 @@ pub(crate) fn compile_and_run_with_defines(source: &str, defines: &[&str]) -> St
     fs::create_dir_all(&dir).unwrap();
 
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
-    let (user_asm, _runtime_asm, required_libraries) =
+    let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_defines(source, &dir, &define_set, 8_388_608, false, false);
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let elephc_out = assemble_and_run(
         &user_asm,
-        get_runtime_obj(),
+        &runtime_obj,
         &dir,
         &required_libraries,
         &default_link_paths(),
@@ -120,11 +137,12 @@ pub(crate) fn compile_and_run_expect_failure(source: &str) -> String {
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (user_asm, _runtime_asm, required_libraries) =
+    let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run_expect_failure(
         &user_asm,
-        get_runtime_obj(),
+        &runtime_obj,
         &dir,
         &required_libraries,
         &default_link_paths(),
@@ -187,7 +205,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
-    let (user_asm, _runtime_asm) = elephc::codegen::generate(
+    let (user_asm, runtime_asm) = elephc::codegen::generate(
         &optimized,
         &check_result.global_env,
         &check_result.functions,
@@ -206,12 +224,13 @@ pub(crate) fn compile_and_run_files_expect_failure(
         false,
         target(),
     );
+    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
 
     let elephc_err = assemble_and_run_expect_failure(
         &user_asm,
-        get_runtime_obj(),
+        &runtime_obj_for_asm(&runtime_asm),
         &dir,
-        &check_result.required_libraries,
+        &required_libraries,
         &default_link_paths(),
         &[],
     );
@@ -265,7 +284,7 @@ pub(crate) fn compile_and_run_files_with_defines(
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
-    let (user_asm, _runtime_asm) = elephc::codegen::generate(
+    let (user_asm, runtime_asm) = elephc::codegen::generate(
         &optimized,
         &check_result.global_env,
         &check_result.functions,
@@ -284,13 +303,14 @@ pub(crate) fn compile_and_run_files_with_defines(
         false,
         target(),
     );
+    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let elephc_out = assemble_and_run(
         &user_asm,
-        get_runtime_obj(),
+        &runtime_obj_for_asm(&runtime_asm),
         &dir,
-        &check_result.required_libraries,
+        &required_libraries,
         &default_link_paths(),
         &[],
     );
@@ -376,7 +396,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
-    let (user_asm, _runtime_asm) = elephc::codegen::generate(
+    let (user_asm, runtime_asm) = elephc::codegen::generate(
         &optimized,
         &check_result.global_env,
         &check_result.functions,
@@ -395,6 +415,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
         false,
         target(),
     );
+    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let asm_path = dir.join("test.s");
@@ -413,9 +434,9 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
 
     link_binary(
         &obj_path,
-        get_runtime_obj(),
+        &runtime_obj_for_asm(&runtime_asm),
         &bin_path,
-        &check_result.required_libraries,
+        &required_libraries,
         &default_link_paths(),
         &[],
     );
@@ -482,7 +503,7 @@ pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBu
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
-    let (user_asm, _runtime_asm) = elephc::codegen::generate(
+    let (user_asm, runtime_asm) = elephc::codegen::generate(
         &optimized,
         &check_result.global_env,
         &check_result.functions,
@@ -501,13 +522,14 @@ pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBu
         false,
         target(),
     );
+    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let elephc_out = assemble_and_run(
         &user_asm,
-        get_runtime_obj(),
+        &runtime_obj_for_asm(&runtime_asm),
         &dir,
-        &check_result.required_libraries,
+        &required_libraries,
         &default_link_paths(),
         &[],
     );

@@ -98,6 +98,14 @@ pub(super) fn collect_expr_reads(
                 collect_expr_reads(arg, scope, warnings);
             }
         }
+        ExprKind::NewDynamicObject {
+            class_name, args, ..
+        } => {
+            collect_expr_reads(class_name, scope, warnings);
+            for arg in args {
+                collect_expr_reads(arg, scope, warnings);
+            }
+        }
         ExprKind::ArrayLiteral(items) => {
             for item in items {
                 collect_expr_reads(item, scope, warnings);

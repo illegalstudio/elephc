@@ -124,6 +124,15 @@ pub enum ExprKind {
         class_name: Name,
         args: Vec<Expr>,
     },
+    /// Internal synthetic factory used by compiler-provided methods that must
+    /// construct an object from a runtime class-string while constraining it to
+    /// a known parent class.
+    NewDynamicObject {
+        class_name: Box<Expr>,
+        fallback_class: Name,
+        required_parent: Name,
+        args: Vec<Expr>,
+    },
     PropertyAccess {
         object: Box<Expr>,
         property: String,

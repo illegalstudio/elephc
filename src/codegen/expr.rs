@@ -244,6 +244,20 @@ pub fn emit_expr(
         ExprKind::NewObject { class_name, args } => {
             objects::emit_new_object(class_name.as_str(), args, emitter, ctx, data)
         }
+        ExprKind::NewDynamicObject {
+            class_name,
+            fallback_class,
+            required_parent,
+            args,
+        } => objects::emit_new_dynamic_object(
+            class_name,
+            fallback_class.as_str(),
+            required_parent.as_str(),
+            args,
+            emitter,
+            ctx,
+            data,
+        ),
         ExprKind::PropertyAccess { object, property } => {
             objects::emit_property_access(object, property, emitter, ctx, data)
         }

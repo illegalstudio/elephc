@@ -21,6 +21,17 @@ mod preg_replace_callback;
 
 type BuiltinResult = Result<Option<PhpType>, CompileError>;
 
+/// Type-checks a first-class `preg_replace_callback(...)` invocation with callback context.
+pub(crate) fn check_preg_replace_callback_first_class_call(
+    checker: &mut Checker,
+    args: &[Expr],
+    span: crate::span::Span,
+    env: &TypeEnv,
+) -> Result<PhpType, CompileError> {
+    preg_replace_callback::check(checker, args, span, env)?
+        .ok_or_else(|| CompileError::new(span, "preg_replace_callback() is not available"))
+}
+
 /// Specializes a user callback variadic parameter when runtime associative arrays can
 /// provide named arguments through `call_user_func_array()`.
 pub(super) fn specialize_dynamic_assoc_variadic_user_callback(

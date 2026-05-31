@@ -202,6 +202,17 @@ fn rewrite_expr(
             class_name: class_name.clone(),
             args: rewrite_expr_list(args, class_name, parent_name)?,
         },
+        ExprKind::NewDynamicObject {
+            class_name: target_class,
+            fallback_class,
+            required_parent,
+            args,
+        } => ExprKind::NewDynamicObject {
+            class_name: Box::new(rewrite_expr(target_class, class_name, parent_name)?),
+            fallback_class: fallback_class.clone(),
+            required_parent: required_parent.clone(),
+            args: rewrite_expr_list(args, class_name, parent_name)?,
+        },
         ExprKind::PropertyAccess { object, property } => ExprKind::PropertyAccess {
             object: Box::new(rewrite_expr(object, class_name, parent_name)?),
             property: property.clone(),

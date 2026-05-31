@@ -2,7 +2,7 @@
 title: "Fibers"
 description: "Cooperative coroutines (PHP 8.1+ Fiber): create, start, suspend, resume, with FiberError."
 sidebar:
-  order: 13
+  order: 14
 ---
 
 A `Fiber` is a cooperative coroutine: a callable that owns its own call stack and can suspend execution at arbitrary depth. Control alternates explicitly between the caller and the fiber — there is no preemption.

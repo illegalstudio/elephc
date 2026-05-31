@@ -2,20 +2,25 @@
 title: "SPL"
 description: "Standard PHP Library interfaces, exceptions, and runtime-backed container classes."
 sidebar:
-  order: 9
+  order: 10
 ---
 
 elephc ships the SPL pieces that are needed by supported PHP code today:
 iterator/counting/access interfaces, the SPL exception hierarchy, autoload and
 introspection helpers, the Phase 4 container classes, the Phase 5 storage
-iterator/decorator foundations, and the Phase 6 heap/object-storage classes.
+iterator/decorator foundations, the Phase 6 heap/object-storage classes, and
+the Phase 8 file/directory iterators.
 This includes `EmptyIterator`, `InternalIterator`, `ArrayIterator`,
 `ArrayObject`, `IteratorIterator`, `LimitIterator`, `NoRewindIterator`,
 `InfiniteIterator`, filter/cache decorators `FilterIterator`,
-`CallbackFilterIterator`, and `CachingIterator`, the multi-source decorators
+`CallbackFilterIterator`, `RegexIterator`, and `CachingIterator`, the multi-source decorators
 `AppendIterator` and `MultipleIterator`, the recursive family
 `RecursiveArrayIterator`, `RecursiveFilterIterator`,
-`RecursiveCallbackFilterIterator`, `RecursiveIteratorIterator`, and
+`RecursiveCallbackFilterIterator`, `RecursiveRegexIterator`,
+`RecursiveIteratorIterator`, and `RecursiveCachingIterator`, the filesystem
+classes `SplFileInfo`, `SplFileObject`, `SplTempFileObject`,
+`DirectoryIterator`, `FilesystemIterator`, `GlobIterator`, and
+`RecursiveDirectoryIterator`, and
 `ParentIterator`, plus `SplHeap`, `SplMaxHeap`, `SplMinHeap`,
 `SplPriorityQueue`, and `SplObjectStorage`.
 
@@ -72,6 +77,14 @@ one or more `Iterator` objects:
 | `SplMinHeap` | `SplHeap` | inherited from parent |
 | `SplPriorityQueue` | - | `Iterator`, `Countable` |
 | `SplObjectStorage` | - | `Iterator`, `Countable`, `ArrayAccess` |
+| `SplFileInfo` | - | `Stringable` |
+| `SplFileObject` | `SplFileInfo` | `RecursiveIterator`, `SeekableIterator` |
+| `SplTempFileObject` | `SplFileObject` | inherited from parent |
+| `DirectoryIterator` | `SplFileInfo` | `Iterator`, `SeekableIterator` |
+| `FilesystemIterator` | `DirectoryIterator` | inherited from parent |
+| `GlobIterator` | `FilesystemIterator` | `Countable` |
+| `RecursiveDirectoryIterator` | `FilesystemIterator` | `RecursiveIterator` |
+| `RecursiveCachingIterator` | `CachingIterator` | `RecursiveIterator` |
 | `EmptyIterator` | - | `Iterator` |
 | `InternalIterator` | - | `Iterator` |
 | `ArrayIterator` | - | `Iterator`, `ArrayAccess`, `SeekableIterator`, `Countable` |
@@ -82,10 +95,12 @@ one or more `Iterator` objects:
 | `InfiniteIterator` | `IteratorIterator` | inherited from parent |
 | `FilterIterator` | `IteratorIterator` | inherited from parent |
 | `CallbackFilterIterator` | `FilterIterator` | inherited from parent |
+| `RegexIterator` | `FilterIterator` | inherited from parent |
 | `CachingIterator` | `IteratorIterator` | `ArrayAccess`, `Countable`, `Stringable` |
 | `RecursiveArrayIterator` | `ArrayIterator` | `RecursiveIterator` |
 | `RecursiveFilterIterator` | `FilterIterator` | `RecursiveIterator` |
 | `RecursiveCallbackFilterIterator` | `CallbackFilterIterator` | `RecursiveIterator` |
+| `RecursiveRegexIterator` | `RegexIterator` | `RecursiveIterator` |
 | `RecursiveIteratorIterator` | - | `OuterIterator` |
 | `ParentIterator` | `RecursiveFilterIterator` | inherited from parent |
 | `AppendIterator` | `IteratorIterator` | inherited from parent |
@@ -318,10 +333,20 @@ Supported methods:
 | `InfiniteIterator` | `__construct(Iterator $iterator)`, `next()` cycles to the start when the inner iterator is exhausted, plus inherited forwarding methods |
 | `FilterIterator` | `__construct(Iterator $iterator)`, abstract `accept(): bool`, `rewind()`, `next()`, plus inherited forwarding methods |
 | `CallbackFilterIterator` | `__construct(Iterator $iterator, callable $callback)`, `accept(): bool` calling the callback as `callback(current, key, inner)` |
+| `RegexIterator` | `__construct(Iterator $iterator, string $pattern, int $mode = RegexIterator::MATCH, int $flags = 0, int $pregFlags = 0)`, `accept()`, `current()`, `key()`, `getMode()`, `setMode()`, `getFlags()`, `setFlags()`, `getRegex()`, `getPregFlags()`, `setPregFlags()` |
 | `CachingIterator` | `__construct(Iterator $iterator, int $flags = CachingIterator::CALL_TOSTRING)`, `rewind()`, `valid()`, `next()`, `current()`, `key()`, `hasNext()`, `__toString()`, `getFlags()`, `setFlags(int $flags): void`, `getCache()`, `count()`, `offsetExists()`, `offsetGet()`, `offsetSet()`, `offsetUnset()` |
+| `SplFileInfo` | `__construct(string $filename)`, `__toString()`, `getPath()`, `getFilename()`, `getExtension()`, `getBasename(string $suffix = "")`, `getPathname()`, stat/predicate helpers, `getFileInfo()`, `getPathInfo()`, `openFile()`, `setFileClass()`, `setInfoClass()` |
+| `SplFileObject` | `__construct(string $filename, string $mode = "r", bool $useIncludePath = false, mixed $context = null)`, line iterator methods, `eof()`, `fgets()`, `fgetc()`, `fread()`, `fwrite()`, `fseek()`, `ftell()`, `fstat()`, CSV-control helpers, `hasChildren()`, `getChildren()` |
+| `SplTempFileObject` | `__construct(int $maxMemory = 2097152)`, plus inherited `SplFileObject` methods |
+| `DirectoryIterator` | `__construct(string $directory)`, `current()`, `key()`, `next()`, `rewind()`, `seek(int $offset): void`, `valid()`, `isDot()`, plus inherited `SplFileInfo` methods |
+| `FilesystemIterator` | `__construct(string $directory, int $flags = FilesystemIterator::SKIP_DOTS)`, `current()`, `key()`, `getFlags()`, `setFlags(int $flags): void`, plus inherited directory iteration |
+| `GlobIterator` | `__construct(string $pattern, int $flags = 0)`, `count()`, plus inherited filesystem iteration |
 | `RecursiveArrayIterator` | `__construct(array\|object $array = [], int $flags = 0)`, `hasChildren(): bool`, `getChildren(): ?RecursiveIterator`, plus inherited `ArrayIterator` methods |
 | `RecursiveFilterIterator` | `__construct(RecursiveIterator $iterator)`, `hasChildren(): bool`, `getChildren(): ?RecursiveIterator`, plus inherited `FilterIterator` methods |
 | `RecursiveCallbackFilterIterator` | `__construct(RecursiveIterator $iterator, callable $callback)`, `hasChildren(): bool`, `getChildren(): ?RecursiveIterator`, plus inherited callback filtering |
+| `RecursiveRegexIterator` | `__construct(RecursiveIterator $iterator, string $pattern, int $mode = RecursiveRegexIterator::MATCH, int $flags = 0, int $pregFlags = 0)`, `hasChildren(): bool`, `getChildren(): ?RecursiveIterator`, plus inherited regex filtering |
+| `RecursiveDirectoryIterator` | `__construct(string $directory, int $flags = 0)`, `hasChildren(): bool`, `getChildren(): ?RecursiveIterator`, plus inherited filesystem iteration |
+| `RecursiveCachingIterator` | `__construct(RecursiveIterator $iterator, int $flags = CachingIterator::CALL_TOSTRING)`, `hasChildren(): bool`, `getChildren(): ?RecursiveIterator`, plus inherited caching methods |
 | `RecursiveIteratorIterator` | `__construct(RecursiveIterator $iterator, int $mode = RecursiveIteratorIterator::LEAVES_ONLY, int $flags = 0)`, `rewind()`, `valid()`, `current()`, `key()`, `next()`, `getDepth(): int`, `getInnerIterator(): ?Iterator`, `getSubIterator(int $level = -1): ?RecursiveIterator` |
 | `ParentIterator` | `__construct(RecursiveIterator $iterator)`, `accept(): bool`, `getChildren(): ?RecursiveIterator`, plus inherited recursive filtering |
 | `AppendIterator` | `__construct()`, `append(Iterator $iterator): void`, `rewind()`, `valid()`, `current()`, `key()`, `next()`, `getInnerIterator(): ?Iterator`, `getIteratorIndex(): int\|string\|null`, `getArrayIterator(): ArrayIterator` |
@@ -373,6 +398,17 @@ foreach ($filter as $key => $value) {
     echo $value;
 }
 
+$regex = new RegexIterator(
+    new ArrayIterator(["first" => "item-10", "second" => "skip"]),
+    "/([a-z]+)-([0-9]+)/",
+    RegexIterator::GET_MATCH
+);
+foreach ($regex as $key => $matches) {
+    echo $key;
+    echo $matches[1];
+    echo $matches[2];
+}
+
 $cache = new CachingIterator(
     new ArrayIterator(["a" => "A", "b" => "B"]),
     CachingIterator::FULL_CACHE | CachingIterator::TOSTRING_USE_KEY
@@ -412,6 +448,40 @@ foreach ($tree as $key => $value) {
     echo "=";
     echo gettype($value) === "array" ? "array" : $value;
 }
+
+$regexTree = new RecursiveIteratorIterator(
+    new RecursiveRegexIterator(
+        new RecursiveArrayIterator(["keep" => ["apple" => 1], "drop" => ["pear" => 2]]),
+        "/keep|apple/",
+        RecursiveRegexIterator::MATCH,
+        RecursiveRegexIterator::USE_KEY
+    ),
+    RecursiveIteratorIterator::SELF_FIRST
+);
+foreach ($regexTree as $key => $value) {
+    echo $key;
+}
+
+$info = new SplFileInfo("notes/todo.txt");
+echo $info->getFilename();
+echo $info->getExtension();
+
+$file = $info->openFile();
+foreach ($file as $line => $text) {
+    echo $line;
+    echo trim($text);
+}
+
+$paths = new FilesystemIterator(
+    "notes",
+    FilesystemIterator::KEY_AS_FILENAME |
+    FilesystemIterator::CURRENT_AS_PATHNAME |
+    FilesystemIterator::SKIP_DOTS
+);
+foreach ($paths as $name => $path) {
+    echo $name;
+    echo $path;
+}
 ```
 
 `IteratorIterator` accepts PHP's optional `$class` downcast argument. Direct
@@ -436,10 +506,41 @@ selected receiver/capture environment with the iterator. Callable-array
 variables and literals such as `[$object, $method]` and `[$class, $method]` can
 also be resolved at construction time and stored as persistent descriptor
 callback environments.
+`RegexIterator` filters by applying the stored regex to the current value, or to
+the key when `USE_KEY` is set. It supports `MATCH`, `GET_MATCH`, `ALL_MATCHES`,
+`SPLIT`, and `REPLACE` modes, `INVERT_MATCH`, mutable `replacement`, and the
+accessor/mutator methods listed above. Regex execution uses the same
+PCRE2-backed runtime as the `preg_*` functions documented in
+[Regex](regex.md). `GET_MATCH` supports
+`PREG_OFFSET_CAPTURE`; `ALL_MATCHES` supports `PREG_SET_ORDER` and
+`PREG_OFFSET_CAPTURE`; `SPLIT` supports `PREG_SPLIT_NO_EMPTY`,
+`PREG_SPLIT_DELIM_CAPTURE`, and `PREG_SPLIT_OFFSET_CAPTURE`. Capture
+materialization exposes the full match plus all compiled numbered capture
+groups; unmatched interior captures are empty strings and trailing unmatched
+groups are omitted. `ALL_MATCHES` stores every non-overlapping match collected
+for an element.
 `CachingIterator` implements one-element lookahead through `hasNext()`, supports
 the string mode flags `CALL_TOSTRING`, `TOSTRING_USE_KEY`,
 `TOSTRING_USE_CURRENT`, and `TOSTRING_USE_INNER`, and supports `FULL_CACHE` for
 `getCache()`, `count()`, and `ArrayAccess`.
+`SplFileInfo` delegates path components, stat data, permissions, and type
+predicates to the filesystem builtins documented in [System and IO](system-and-io.md).
+`getFileInfo()`, `getPathInfo()`, and `openFile()` honor explicit class-string
+arguments and `setInfoClass()` / `setFileClass()` overrides when the selected
+class extends `SplFileInfo` or `SplFileObject` as required.
+`SplFileObject` snapshots file contents into line storage with `file()` for
+iteration, uses a live stream for byte-position methods such as `fread()`,
+`fwrite()`, `fseek()`, `ftell()`, and `ftruncate()`, reloads line storage after
+stream writes, supports basic CSV splitting, and exposes
+`SplFileObject::DROP_NEW_LINE`, `READ_AHEAD`, `SKIP_EMPTY`, and `READ_CSV`.
+`SplTempFileObject` exposes PHP-compatible logical stream names: negative
+`maxMemory` values report `php://memory`, while non-negative values report
+`php://temp/maxmemory:N`. Contents stay in memory until the configured
+`maxMemory` threshold is exceeded; after that the object spills to an internal
+temporary file while preserving the current stream position.
+`DirectoryIterator` snapshots `scandir()` results. `FilesystemIterator` applies
+`SKIP_DOTS`, key-mode, and current-mode flags over that snapshot, while
+`GlobIterator` snapshots `glob()` matches and implements `Countable`.
 
 `AppendIterator` skips exhausted appended iterators and exposes the current
 storage key through `getIteratorIndex()`. Its `getArrayIterator()` result is a
@@ -458,7 +559,11 @@ sub-iterators so `getDepth()`, `getInnerIterator()`, and `getSubIterator()`
 track the active cursors. `RecursiveCallbackFilterIterator` preserves closure
 and first-class-callable capture environments, including branch-selected
 descriptor environments and runtime-selected callable-array variables or
-literals, when it wraps child iterators.
+literals, when it wraps child iterators. `RecursiveRegexIterator` wraps child
+iterators with the same pattern, mode, flags, preg flags, and replacement value.
+`RecursiveDirectoryIterator` wraps directory children with the same filesystem
+flags. `RecursiveCachingIterator` checks the cached current value for array or
+`RecursiveIterator` children and wraps children in another caching iterator.
 `ParentIterator` recursively keeps only entries that have children.
 
 ## Autoload and Introspection

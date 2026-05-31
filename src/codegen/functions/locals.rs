@@ -9,12 +9,28 @@
 //! - Any lowering path that introduces storage must be represented here before stack offsets are assigned.
 
 use crate::codegen::context::{Context, HeapOwnership};
-use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, StmtKind};
+use crate::parser::ast::{
+    BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver, StmtKind,
+};
 use crate::types::{
     merge_array_key_types, normalized_array_key_type, static_array_key_forces_hash_storage,
     FunctionSig, PhpType,
 };
 use super::types::{codegen_declared_type, codegen_static_type, infer_local_type};
+
+const FS_CURRENT_AS_SELF: i64 = 16;
+const FS_CURRENT_AS_PATHNAME: i64 = 32;
+const FS_CURRENT_MODE_MASK: i64 = 240;
+const FS_SKIP_DOTS: i64 = 4096;
+
+/// Returns the synthetic constructor default flags for filesystem iterators.
+fn filesystem_iterator_default_flags(class_name: &str) -> Option<i64> {
+    match class_name {
+        "FilesystemIterator" => Some(FS_SKIP_DOTS),
+        "GlobIterator" | "RecursiveDirectoryIterator" => Some(0),
+        _ => None,
+    }
+}
 
 /// Collects all local and hidden frame slots required by a function body before frame sizing.
 pub fn collect_local_vars(
@@ -34,13 +50,15 @@ pub fn collect_local_vars(
             StmtKind::Assign { name, value } => {
                 collect_assignment_expr_vars(value, ctx, sig);
                 let needs_mixed_numeric_slot = runtime_numeric_result_may_widen(value, sig, ctx);
-                if !ctx.variables.contains_key(name) {
-                    let static_ty = infer_local_type(value, sig, Some(ctx));
-                    let slot_ty = if needs_mixed_numeric_slot {
-                        PhpType::Mixed
-                    } else {
-                        static_ty.codegen_repr()
-                    };
+                let static_ty = infer_local_type(value, sig, Some(ctx));
+                let slot_ty = if needs_mixed_numeric_slot {
+                    PhpType::Mixed
+                } else {
+                    static_ty.codegen_repr()
+                };
+                if ctx.variables.contains_key(name) {
+                    ctx.ensure_var_slot_capacity_for_type(name, &slot_ty);
+                } else {
                     ctx.alloc_var_with_static_type(name, slot_ty, static_ty);
                 }
             }
@@ -60,9 +78,11 @@ pub fn collect_local_vars(
                 value,
             } => {
                 collect_assignment_expr_vars(value, ctx, sig);
-                if !ctx.variables.contains_key(name) {
-                    let static_ty = codegen_static_type(type_expr, ctx);
-                    let ty = codegen_declared_type(type_expr, ctx).codegen_repr();
+                let static_ty = codegen_static_type(type_expr, ctx);
+                let ty = codegen_declared_type(type_expr, ctx).codegen_repr();
+                if ctx.variables.contains_key(name) {
+                    ctx.ensure_var_slot_capacity_for_type(name, &ty);
+                } else {
                     ctx.alloc_var_with_static_type(name, ty, static_ty);
                 }
             }
@@ -75,8 +95,11 @@ pub fn collect_local_vars(
             }
             StmtKind::StaticVar { name, init } => {
                 collect_assignment_expr_vars(init, ctx, sig);
-                if !ctx.variables.contains_key(name) {
-                    let static_ty = infer_local_type(init, sig, Some(ctx));
+                let static_ty = infer_local_type(init, sig, Some(ctx));
+                let slot_ty = static_ty.codegen_repr();
+                if ctx.variables.contains_key(name) {
+                    ctx.ensure_var_slot_capacity_for_type(name, &slot_ty);
+                } else {
                     ctx.alloc_var_with_static_type(name, static_ty.codegen_repr(), static_ty);
                 }
             }
@@ -133,29 +156,44 @@ pub fn collect_local_vars(
             } => {
                 let arr_ty = infer_local_type(array, sig, Some(ctx));
                 if let Some(k) = key_var {
-                    if !ctx.variables.contains_key(k) {
+                    if k != value_var {
                         let key_ty = match &arr_ty {
                             PhpType::AssocArray { key, .. } => *key.clone(),
-                            PhpType::Iterable
-                            | PhpType::Object(_)
-                            | PhpType::Mixed
-                            | PhpType::Union(_) => PhpType::Mixed,
+                            PhpType::Object(class_name) => {
+                                iterator_foreach_key_value_types(class_name, array, ctx).0
+                            }
+                            PhpType::Iterable | PhpType::Mixed | PhpType::Union(_) => {
+                                PhpType::Mixed
+                            }
                             _ => PhpType::Int,
                         };
-                        ctx.alloc_var(k, key_ty.codegen_repr());
+                        let slot_ty = if matches!(arr_ty, PhpType::Object(_)) {
+                            PhpType::Mixed
+                        } else {
+                            key_ty.codegen_repr()
+                        };
+                        if ctx.variables.contains_key(k) {
+                            ctx.ensure_var_slot_capacity_for_type(k, &slot_ty);
+                        } else {
+                            ctx.alloc_var_with_static_type(k, slot_ty, key_ty);
+                        }
                     }
                 }
-                if !ctx.variables.contains_key(value_var) {
-                    let elem_ty = match &arr_ty {
-                        PhpType::Array(t) => *t.clone(),
-                        PhpType::AssocArray { value, .. } => *value.clone(),
-                        PhpType::Iterable
-                        | PhpType::Object(_)
-                        | PhpType::Mixed
-                        | PhpType::Union(_) => PhpType::Mixed,
-                        _ => PhpType::Int,
-                    };
-                    if *value_by_ref {
+                let elem_ty = match &arr_ty {
+                    PhpType::Array(t) => *t.clone(),
+                    PhpType::AssocArray { value, .. } => *value.clone(),
+                    PhpType::Object(class_name) => {
+                        iterator_foreach_key_value_types(class_name, array, ctx).1
+                    }
+                    PhpType::Iterable | PhpType::Mixed | PhpType::Union(_) => {
+                        PhpType::Mixed
+                    }
+                    _ => PhpType::Int,
+                };
+                if *value_by_ref {
+                    if ctx.variables.contains_key(value_var) {
+                        ctx.ensure_var_slot_capacity_for_type(value_var, &elem_ty.codegen_repr());
+                    } else {
                         ctx.alloc_var_with_static_type(
                             value_var,
                             elem_ty.codegen_repr(),
@@ -167,8 +205,17 @@ pub fn collect_local_vars(
                             elem_ty.clone(),
                             HeapOwnership::borrowed_alias_for_type(&elem_ty),
                         );
+                    }
+                } else {
+                    let slot_ty = if matches!(arr_ty, PhpType::Object(_)) {
+                        PhpType::Mixed
                     } else {
-                        ctx.alloc_var_with_static_type(value_var, elem_ty.codegen_repr(), elem_ty);
+                        elem_ty.codegen_repr()
+                    };
+                    if ctx.variables.contains_key(value_var) {
+                        ctx.ensure_var_slot_capacity_for_type(value_var, &slot_ty);
+                    } else {
+                        ctx.alloc_var_with_static_type(value_var, slot_ty, elem_ty);
                     }
                 }
                 if *value_by_ref && !ctx.ref_params.contains(value_var) {
@@ -199,8 +246,11 @@ pub fn collect_local_vars(
                     _ => PhpType::Int,
                 };
                 for var in vars {
-                    if !ctx.variables.contains_key(var) {
-                        ctx.alloc_var_with_static_type(var, elem_ty.codegen_repr(), elem_ty.clone());
+                    let slot_ty = elem_ty.codegen_repr();
+                    if ctx.variables.contains_key(var) {
+                        ctx.ensure_var_slot_capacity_for_type(var, &slot_ty);
+                    } else {
+                        ctx.alloc_var_with_static_type(var, slot_ty, elem_ty.clone());
                     }
                 }
             }
@@ -266,6 +316,180 @@ pub fn collect_local_vars(
             _ => {}
         }
     }
+}
+
+/// Returns the static foreach key and value types for a concrete object iterator.
+///
+/// The stack-frame pass must mirror the type checker: concrete Iterator classes can
+/// narrow `key()` and `current()` from the interface-level `mixed` return type, while
+/// IteratorAggregate classes are resolved through a statically known `getIterator()` type.
+fn iterator_foreach_key_value_types(
+    class_name: &str,
+    source: &Expr,
+    ctx: &Context,
+) -> (PhpType, PhpType) {
+    let value_override = iterator_foreach_value_type_override(class_name, source, ctx);
+    if class_implements_interface(class_name, "Iterator", ctx)
+        || interface_extends_interface(class_name, "Iterator", ctx)
+    {
+        return (
+            iterator_method_return_type(class_name, "key", ctx),
+            value_override.unwrap_or_else(|| {
+                iterator_method_return_type(class_name, "current", ctx)
+            }),
+        );
+    }
+
+    let get_iterator_ty = iterator_method_return_type(class_name, "getIterator", ctx);
+    if let PhpType::Object(iterator_name) = get_iterator_ty {
+        return (
+            iterator_method_return_type(&iterator_name, "key", ctx),
+            value_override.unwrap_or_else(|| {
+                iterator_method_return_type(&iterator_name, "current", ctx)
+            }),
+        );
+    }
+
+    (PhpType::Mixed, PhpType::Mixed)
+}
+
+/// Returns a narrower foreach value type for SPL filesystem iterators when flags are static.
+fn iterator_foreach_value_type_override(
+    class_name: &str,
+    source: &Expr,
+    ctx: &Context,
+) -> Option<PhpType> {
+    if class_name == "DirectoryIterator" {
+        return Some(PhpType::Object("DirectoryIterator".to_string()));
+    }
+    let flags = filesystem_iterator_source_flags(class_name, source, ctx)?;
+    match flags & FS_CURRENT_MODE_MASK {
+        FS_CURRENT_AS_PATHNAME => None,
+        FS_CURRENT_AS_SELF => Some(PhpType::Object(class_name.to_string())),
+        _ => Some(PhpType::Object("SplFileInfo".to_string())),
+    }
+}
+
+/// Returns constructor flags for statically constructed filesystem iterators.
+fn filesystem_iterator_source_flags(class_name: &str, source: &Expr, ctx: &Context) -> Option<i64> {
+    if !matches!(
+        class_name,
+        "FilesystemIterator" | "GlobIterator" | "RecursiveDirectoryIterator"
+    ) {
+        return None;
+    }
+    let ExprKind::NewObject {
+        class_name: source_class,
+        args,
+    } = &source.kind
+    else {
+        return None;
+    };
+    if source_class.as_str() != class_name {
+        return None;
+    }
+    args.get(1)
+        .and_then(|expr| eval_static_int_expr(expr, ctx))
+        .or_else(|| filesystem_iterator_default_flags(class_name))
+}
+
+/// Evaluates a side-effect-free integer expression used for SPL flag constants.
+fn eval_static_int_expr(expr: &Expr, ctx: &Context) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::Negate(inner) => eval_static_int_expr(inner, ctx).map(|value| -value),
+        ExprKind::BitNot(inner) => eval_static_int_expr(inner, ctx).map(|value| !value),
+        ExprKind::BinaryOp { left, op, right } => {
+            let left = eval_static_int_expr(left, ctx)?;
+            let right = eval_static_int_expr(right, ctx)?;
+            match op {
+                BinOp::BitOr => Some(left | right),
+                BinOp::BitAnd => Some(left & right),
+                BinOp::BitXor => Some(left ^ right),
+                BinOp::Add => Some(left + right),
+                BinOp::Sub => Some(left - right),
+                _ => None,
+            }
+        }
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            class_constant_int_value(receiver, name, ctx)
+        }
+        _ => None,
+    }
+}
+
+/// Resolves a class constant integer value from codegen metadata.
+fn class_constant_int_value(receiver: &StaticReceiver, name: &str, ctx: &Context) -> Option<i64> {
+    let StaticReceiver::Named(class_name) = receiver else {
+        return None;
+    };
+    ctx.classes
+        .get(class_name.as_str())
+        .and_then(|class_info| class_info.constants.get(name))
+        .and_then(|expr| eval_static_int_expr(expr, ctx))
+}
+
+/// Looks up an iterator method return type on class or interface metadata.
+///
+/// Missing metadata falls back to `mixed` so unknown or dynamic iterator shapes keep
+/// the conservative stack layout used by the older foreach lowering.
+fn iterator_method_return_type(type_name: &str, method: &str, ctx: &Context) -> PhpType {
+    let method_key = crate::names::php_symbol_key(method);
+    if type_name == "DirectoryIterator" && method_key == "current" {
+        return PhpType::Object("DirectoryIterator".to_string());
+    }
+    if let Some(class_info) = ctx.classes.get(type_name) {
+        return class_info
+            .methods
+            .get(&method_key)
+            .map(|sig| sig.return_type.clone())
+            .unwrap_or(PhpType::Mixed);
+    }
+    ctx.interfaces
+        .get(type_name)
+        .and_then(|interface_info| interface_info.methods.get(&method_key))
+        .map(|sig| sig.return_type.clone())
+        .unwrap_or(PhpType::Mixed)
+}
+
+/// Returns true when a class or interface name satisfies a target interface.
+///
+/// The helper accepts interfaces as `type_name` because typed function parameters can
+/// be declared as `Iterator` or an extending interface before local slot allocation.
+fn class_implements_interface(type_name: &str, interface_name: &str, ctx: &Context) -> bool {
+    if ctx.interfaces.contains_key(type_name) {
+        return interface_extends_interface(type_name, interface_name, ctx);
+    }
+    ctx.classes.get(type_name).is_some_and(|class_info| {
+        class_info
+            .interfaces
+            .iter()
+            .any(|name| name == interface_name)
+    })
+}
+
+/// Returns true if an interface extends another interface directly or transitively.
+fn interface_extends_interface(type_name: &str, ancestor_name: &str, ctx: &Context) -> bool {
+    if type_name == ancestor_name {
+        return true;
+    }
+    let mut stack = vec![type_name.to_string()];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(current_name) = stack.pop() {
+        if !seen.insert(current_name.clone()) {
+            continue;
+        }
+        let Some(interface_info) = ctx.interfaces.get(&current_name) else {
+            continue;
+        };
+        for parent_name in &interface_info.parents {
+            if parent_name == ancestor_name {
+                return true;
+            }
+            stack.push(parent_name.clone());
+        }
+    }
+    false
 }
 
 /// Refines the type of a local array variable when assigned with a keyed write.
@@ -337,19 +561,21 @@ fn collect_assignment_expr_vars(expr: &Expr, ctx: &mut Context, sig: &FunctionSi
             collect_local_vars(prelude, ctx, sig);
             collect_assignment_expr_vars(value, ctx, sig);
             if let Some(temp_name) = conditional_value_temp {
-                if !ctx.variables.contains_key(temp_name) {
-                    let static_ty = infer_conditional_assignment_temp_type(value, sig, ctx);
-                    ctx.alloc_var_with_static_type(
-                        temp_name,
-                        static_ty.codegen_repr(),
-                        static_ty,
-                    );
+                let static_ty = infer_conditional_assignment_temp_type(value, sig, ctx);
+                let slot_ty = static_ty.codegen_repr();
+                if ctx.variables.contains_key(temp_name) {
+                    ctx.ensure_var_slot_capacity_for_type(temp_name, &slot_ty);
+                } else {
+                    ctx.alloc_var_with_static_type(temp_name, slot_ty, static_ty);
                 }
             }
             if let ExprKind::Variable(name) = &target.kind {
-                if !ctx.variables.contains_key(name) {
-                    let static_ty = infer_local_type(value, sig, Some(ctx));
-                    ctx.alloc_var_with_static_type(name, static_ty.codegen_repr(), static_ty);
+                let static_ty = infer_local_type(value, sig, Some(ctx));
+                let slot_ty = static_ty.codegen_repr();
+                if ctx.variables.contains_key(name) {
+                    ctx.ensure_var_slot_capacity_for_type(name, &slot_ty);
+                } else {
+                    ctx.alloc_var_with_static_type(name, slot_ty, static_ty);
                 }
             } else {
                 collect_assignment_expr_vars(target, ctx, sig);
@@ -385,9 +611,12 @@ fn collect_assignment_expr_vars(expr: &Expr, ctx: &mut Context, sig: &FunctionSi
             collect_assignment_expr_vars(value, ctx, sig);
             collect_assignment_expr_vars(callable, ctx, sig);
             let temp_name = crate::codegen::expr::calls::pipe_value_temp_name(expr.span);
-            if !ctx.variables.contains_key(&temp_name) {
-                let static_ty = infer_local_type(value, sig, Some(ctx));
-                ctx.alloc_var_with_static_type(&temp_name, static_ty.codegen_repr(), static_ty);
+            let static_ty = infer_local_type(value, sig, Some(ctx));
+            let slot_ty = static_ty.codegen_repr();
+            if ctx.variables.contains_key(&temp_name) {
+                ctx.ensure_var_slot_capacity_for_type(&temp_name, &slot_ty);
+            } else {
+                ctx.alloc_var_with_static_type(&temp_name, slot_ty, static_ty);
             }
         }
         ExprKind::Ternary {
@@ -401,6 +630,7 @@ fn collect_assignment_expr_vars(expr: &Expr, ctx: &mut Context, sig: &FunctionSi
         }
         ExprKind::FunctionCall { name, args } => {
             collect_named_builtin_or_extern_call_temps(name.as_str(), expr.span, args, ctx, sig);
+            collect_preg_match_output_arg(name.as_str(), args, ctx);
             for arg in args {
                 collect_assignment_expr_vars(arg, ctx, sig);
             }
@@ -489,13 +719,12 @@ fn collect_assignment_expr_vars(expr: &Expr, ctx: &mut Context, sig: &FunctionSi
             if !matches!(&object.kind, ExprKind::Variable(_) | ExprKind::This) {
                 let temp_name =
                     crate::codegen::expr::calls::first_class_method_receiver_temp_name(object.span);
-                if !ctx.variables.contains_key(&temp_name) {
-                    let static_ty = infer_local_type(object, sig, Some(ctx));
-                    ctx.alloc_var_with_static_type(
-                        &temp_name,
-                        static_ty.codegen_repr(),
-                        static_ty,
-                    );
+                let static_ty = infer_local_type(object, sig, Some(ctx));
+                let slot_ty = static_ty.codegen_repr();
+                if ctx.variables.contains_key(&temp_name) {
+                    ctx.ensure_var_slot_capacity_for_type(&temp_name, &slot_ty);
+                } else {
+                    ctx.alloc_var_with_static_type(&temp_name, slot_ty, static_ty);
                 }
             }
         }
@@ -552,6 +781,35 @@ fn collect_named_builtin_or_extern_call_temps(
     collect_named_call_temps_for_sig(&call_sig, call_span, args, ctx, current_sig);
 }
 
+/// Allocates the output `$matches` variable for `preg_match(..., $matches)`.
+fn collect_preg_match_output_arg(name: &str, args: &[Expr], ctx: &mut Context) {
+    if !name.trim_start_matches('\\').eq_ignore_ascii_case("preg_match") {
+        return;
+    }
+    let Some(arg) = args.get(2) else {
+        return;
+    };
+    let Some(var_name) = preg_match_output_var(arg) else {
+        return;
+    };
+    let static_ty = PhpType::Array(Box::new(PhpType::Str));
+    let slot_ty = static_ty.codegen_repr();
+    if ctx.variables.contains_key(var_name) {
+        ctx.ensure_var_slot_capacity_for_type(var_name, &slot_ty);
+    } else {
+        ctx.alloc_var_with_static_type(var_name, slot_ty, static_ty);
+    }
+}
+
+/// Returns the variable name used as `preg_match()`'s output `$matches` argument.
+fn preg_match_output_var(arg: &Expr) -> Option<&String> {
+    match &arg.kind {
+        ExprKind::Variable(name) => Some(name),
+        ExprKind::NamedArg { value, .. } => preg_match_output_var(value),
+        _ => None,
+    }
+}
+
 /// Collects named constructor call temps for the surrounding analysis or metadata result.
 fn collect_named_constructor_call_temps(
     class_name: &str,
@@ -602,9 +860,12 @@ fn collect_named_call_temps_for_sig(
             .unwrap_or_else(|| Expr::new(ExprKind::ArrayLiteral(Vec::new()), call_span));
         let prefix_name =
             crate::codegen::expr::calls::args::named_call_prefix_temp_name(call_span);
-        if !ctx.variables.contains_key(&prefix_name) {
-            let static_ty = infer_local_type(&prefix_expr, current_sig, Some(ctx));
-            ctx.alloc_var_with_static_type(&prefix_name, static_ty.codegen_repr(), static_ty);
+        let static_ty = infer_local_type(&prefix_expr, current_sig, Some(ctx));
+        let slot_ty = static_ty.codegen_repr();
+        if ctx.variables.contains_key(&prefix_name) {
+            ctx.ensure_var_slot_capacity_for_type(&prefix_name, &slot_ty);
+        } else {
+            ctx.alloc_var_with_static_type(&prefix_name, slot_ty, static_ty);
         }
         for source in &plan.source_values {
             if source.source_index() >= first_named_pos {
@@ -701,9 +962,12 @@ fn collect_call_arg_temp(
     current_sig: &FunctionSig,
 ) {
     let temp_name = crate::codegen::expr::calls::args::named_call_arg_temp_name(call_span, arg_idx);
-    if !ctx.variables.contains_key(&temp_name) {
-        let static_ty = infer_local_type(value, current_sig, Some(ctx));
-        ctx.alloc_var_with_static_type(&temp_name, static_ty.codegen_repr(), static_ty);
+    let static_ty = infer_local_type(value, current_sig, Some(ctx));
+    let slot_ty = static_ty.codegen_repr();
+    if ctx.variables.contains_key(&temp_name) {
+        ctx.ensure_var_slot_capacity_for_type(&temp_name, &slot_ty);
+    } else {
+        ctx.alloc_var_with_static_type(&temp_name, slot_ty, static_ty);
     }
 }
 

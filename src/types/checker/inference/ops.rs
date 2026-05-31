@@ -373,6 +373,11 @@ impl Checker {
         }
         if let Some(sig) = self.callable_sigs.get(var).cloned() {
             if let Some(target) = self.first_class_callable_targets.get(var).cloned() {
+                if let Some(ret_ty) =
+                    self.infer_contextual_first_class_builtin_call(&target, args, expr.span, env)?
+                {
+                    return Ok(ret_ty);
+                }
                 let specialized_sig =
                     self.specialize_first_class_callable_target(&target, args, expr.span, env)?;
                 self.callable_sigs
@@ -497,6 +502,11 @@ impl Checker {
             ExprKind::Variable(var_name) => {
                 if let Some(sig) = self.callable_sigs.get(var_name).cloned() {
                     if let Some(target) = self.first_class_callable_targets.get(var_name).cloned() {
+                        if let Some(ret_ty) = self.infer_contextual_first_class_builtin_call(
+                            &target, args, expr.span, env,
+                        )? {
+                            return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
+                        }
                         let specialized_sig = self.specialize_first_class_callable_target(
                             &target, args, expr.span, env,
                         )?;
@@ -552,6 +562,11 @@ impl Checker {
                 }
             }
             ExprKind::FirstClassCallable(target) => {
+                if let Some(ret_ty) =
+                    self.infer_contextual_first_class_builtin_call(target, args, expr.span, env)?
+                {
+                    return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
+                }
                 let sig =
                     self.specialize_first_class_callable_target(target, args, expr.span, env)?;
                 let ret_ty = self.check_known_callable_call(
@@ -700,6 +715,25 @@ impl Checker {
                 self.check_function_call(name.as_str(), args, expr.span, env)
             }
         }
+    }
+
+    /// Type-checks first-class builtin invocations that need builtin-specific argument context.
+    fn infer_contextual_first_class_builtin_call(
+        &mut self,
+        target: &CallableTarget,
+        args: &[Expr],
+        span: Span,
+        env: &TypeEnv,
+    ) -> Result<Option<PhpType>, CompileError> {
+        if let CallableTarget::Function(name) = target {
+            if php_symbol_key(name.as_str()) == "preg_replace_callback" {
+                return crate::types::checker::builtins::check_preg_replace_callback_first_class_call(
+                    self, args, span, env,
+                )
+                .map(Some);
+            }
+        }
+        Ok(None)
     }
 
     /// Resolves a callable-array receiver expression to a static class receiver.

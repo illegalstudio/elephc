@@ -403,11 +403,28 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Str))
         }
-        "preg_match" | "preg_match_all" => {
+        "preg_match" => {
+            if !(2..=3).contains(&args.len()) {
+                return Err(CompileError::new(
+                    span,
+                    "preg_match() takes 2 or 3 arguments",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            checker.infer_type(&args[1], env)?;
+            if args.len() == 3 && !matches!(args[2].kind, ExprKind::Variable(_)) {
+                return Err(CompileError::new(
+                    args[2].span,
+                    "preg_match() parameter $matches must be passed a variable",
+                ));
+            }
+            Ok(Some(PhpType::Int))
+        }
+        "preg_match_all" => {
             if args.len() != 2 {
                 return Err(CompileError::new(
                     span,
-                    &format!("{}() takes exactly 2 arguments", name),
+                    "preg_match_all() takes exactly 2 arguments",
                 ));
             }
             for arg in args {
@@ -428,16 +445,21 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Str))
         }
         "preg_split" => {
-            if args.len() != 2 {
+            if !(2..=4).contains(&args.len()) {
                 return Err(CompileError::new(
                     span,
-                    "preg_split() takes exactly 2 arguments",
+                    "preg_split() takes between 2 and 4 arguments",
                 ));
             }
             for arg in args {
                 checker.infer_type(arg, env)?;
             }
-            Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
+            let elem_ty = if args.len() >= 4 {
+                PhpType::Mixed
+            } else {
+                PhpType::Str
+            };
+            Ok(Some(PhpType::Array(Box::new(elem_ty))))
         }
         _ => Ok(None),
     }

@@ -275,6 +275,14 @@ pub(super) fn binary_expr(left: Expr, op: BinOp, right: Expr) -> Expr {
     })
 }
 
+/// Builds the AST expression for null coalescing.
+pub(super) fn null_coalesce_expr(value: Expr, default: Expr) -> Expr {
+    expr(ExprKind::NullCoalesce {
+        value: Box::new(value),
+        default: Box::new(default),
+    })
+}
+
 /// Builds the AST expression for not.
 pub(super) fn not_expr(value: Expr) -> Expr {
     expr(ExprKind::Not(Box::new(value)))
@@ -309,6 +317,21 @@ pub(super) fn function_call(name: &str, args: Vec<Expr>) -> Expr {
 pub(super) fn new_object_expr(class_name: &str, args: Vec<Expr>) -> Expr {
     expr(ExprKind::NewObject {
         class_name: Name::unqualified(class_name),
+        args,
+    })
+}
+
+/// Builds the AST expression for a runtime class-string object factory.
+pub(super) fn new_dynamic_object_expr(
+    class_name: Expr,
+    fallback_class: &str,
+    required_parent: &str,
+    args: Vec<Expr>,
+) -> Expr {
+    expr(ExprKind::NewDynamicObject {
+        class_name: Box::new(class_name),
+        fallback_class: Name::unqualified(fallback_class),
+        required_parent: Name::unqualified(required_parent),
         args,
     })
 }

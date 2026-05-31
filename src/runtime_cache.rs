@@ -16,6 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::codegen;
 use crate::codegen::platform::{Platform, Target};
+use crate::codegen::RuntimeFeatures;
 
 /// Runtime cache hit/miss status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,15 +44,19 @@ pub struct PreparedRuntimeObject {
     pub status: RuntimeCacheStatus,
 }
 
-/// Builds (or retrieves from cache) the runtime object file for the given heap size and target.
+/// Builds (or retrieves from cache) the runtime object file for the given heap size, target, and features.
 /// On cache miss, generates runtime assembly, assembles it to an object file, and caches the result.
 /// The cache key includes compiler version, target, heap size, and a hash of the runtime assembly.
-pub fn prepare_runtime_object(heap_size: usize, target: Target) -> Result<PreparedRuntimeObject, String> {
+pub fn prepare_runtime_object(
+    heap_size: usize,
+    target: Target,
+    features: RuntimeFeatures,
+) -> Result<PreparedRuntimeObject, String> {
     let cache_dir = runtime_cache_dir();
     fs::create_dir_all(&cache_dir)
         .map_err(|err| format!("failed to create runtime cache '{}': {}", cache_dir.display(), err))?;
 
-    let runtime_asm = codegen::generate_runtime(heap_size, target);
+    let runtime_asm = codegen::generate_runtime_with_features(heap_size, target, features);
     let runtime_hash = runtime_asm_hash(&runtime_asm);
     let cache_path = cache_dir.join(runtime_cache_file_name(heap_size, target, runtime_hash));
     if cache_path.exists() {

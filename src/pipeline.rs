@@ -175,8 +175,11 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = optimize::eliminate_dead_code(ast);
     timings.record_since("dce", phase_started);
 
+    let runtime_features =
+        codegen::runtime_features_for_program_and_classes(&ast, &check_result.classes);
+
     let phase_started = Instant::now();
-    let runtime_object = match runtime_cache::prepare_runtime_object(heap_size, target) {
+    let runtime_object = match runtime_cache::prepare_runtime_object(heap_size, target, runtime_features) {
         Ok(runtime_object) => runtime_object,
         Err(err) => {
             eprintln!("Runtime cache error: {}", err);
@@ -211,6 +214,11 @@ pub(crate) fn compile(config: CliConfig) {
     for lib in &check_result.required_libraries {
         if !extra_link_libs.contains(lib) {
             extra_link_libs.push(lib.clone());
+        }
+    }
+    for lib in codegen::required_libraries_for_runtime_features(runtime_features) {
+        if !extra_link_libs.contains(&lib) {
+            extra_link_libs.push(lib);
         }
     }
 

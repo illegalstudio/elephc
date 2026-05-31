@@ -318,10 +318,23 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             1,
             vec![int_lit(512), int_lit(0)],
         )),
-        "preg_match" | "preg_match_all" => Some(fixed(&["pattern", "subject"])),
+        "preg_match" => {
+            let mut sig = optional(
+                &["pattern", "subject", "matches"],
+                2,
+                vec![Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy())],
+            );
+            sig.ref_params[2] = true;
+            Some(sig)
+        }
+        "preg_match_all" => Some(fixed(&["pattern", "subject"])),
         "preg_replace_callback" => Some(fixed(&["pattern", "callback", "subject"])),
         "preg_replace" => Some(fixed(&["pattern", "replacement", "subject"])),
-        "preg_split" => Some(fixed(&["pattern", "subject"])),
+        "preg_split" => Some(optional(
+            &["pattern", "subject", "limit", "flags"],
+            2,
+            vec![int_lit(-1), int_lit(0)],
+        )),
 
         "file_get_contents" | "file" | "file_exists" | "is_file" | "is_dir"
         | "is_readable" | "is_writable" | "is_writeable" | "is_executable"

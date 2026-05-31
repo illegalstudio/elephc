@@ -80,8 +80,16 @@ pub(crate) fn compile_source_to_asm_with_defines(
         heap_debug,
         target(),
     );
+    let runtime_features =
+        elephc::codegen::runtime_features_for_program_and_classes(&optimized, &check_result.classes);
+    let mut required_libraries = check_result.required_libraries;
+    for lib in elephc::codegen::required_libraries_for_runtime_features(runtime_features) {
+        if !required_libraries.contains(&lib) {
+            required_libraries.push(lib);
+        }
+    }
     // user assembly is already platform-correct (emitters handle platform at emit time)
-    (user_asm, runtime_asm, check_result.required_libraries)
+    (user_asm, runtime_asm, required_libraries)
 }
 
 // Injects an exit harness into user assembly before the final `ret` instruction.
@@ -119,9 +127,9 @@ pub(crate) fn compile_harness_expect_failure(source: &str, heap_size: usize, har
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (user_asm, _runtime_asm, required_libraries) =
+    let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, heap_size, false, true);
-    let runtime_obj = assemble_custom_runtime(heap_size, &dir);
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let patched = inject_main_exit_harness(&user_asm, harness);
     let stderr = assemble_and_run_expect_failure(
         &patched,
@@ -147,9 +155,9 @@ pub(crate) fn compile_harness_and_run(source: &str, heap_size: usize, harness: &
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (user_asm, _runtime_asm, required_libraries) =
+    let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, heap_size, false, false);
-    let runtime_obj = assemble_custom_runtime(heap_size, &dir);
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let patched = inject_main_exit_harness(&user_asm, harness);
     let stdout = assemble_and_run(
         &patched,
@@ -178,9 +186,9 @@ pub(crate) fn compile_harness_and_run_with_heap_debug(
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (user_asm, _runtime_asm, required_libraries) =
+    let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, heap_size, false, true);
-    let runtime_obj = assemble_custom_runtime(heap_size, &dir);
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let patched = inject_main_exit_harness(&user_asm, harness);
     let stdout = assemble_and_run(
         &patched,
@@ -206,11 +214,12 @@ pub(crate) fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput {
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (user_asm, _runtime_asm, required_libraries) =
+    let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, true, false);
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run_capture(
         &user_asm,
-        get_runtime_obj(),
+        &runtime_obj,
         &dir,
         &required_libraries,
         &default_link_paths(),
@@ -231,11 +240,12 @@ pub(crate) fn compile_and_run_capture(source: &str) -> ProgramOutput {
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (user_asm, _runtime_asm, required_libraries) =
+    let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run_capture(
         &user_asm,
-        get_runtime_obj(),
+        &runtime_obj,
         &dir,
         &required_libraries,
         &default_link_paths(),
@@ -257,11 +267,12 @@ pub(crate) fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (user_asm, _runtime_asm, required_libraries) =
+    let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, true);
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run_capture(
         &user_asm,
-        get_runtime_obj(),
+        &runtime_obj,
         &dir,
         &required_libraries,
         &default_link_paths(),
@@ -307,20 +318,13 @@ pub(crate) fn compile_and_run_with_heap_size(source: &str, heap_size: usize) -> 
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (user_asm, _runtime_asm, required_libraries) =
+    let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, heap_size, false, false);
-
-    let custom_rt;
-    let runtime_obj: &Path = if heap_size == 8_388_608 {
-        get_runtime_obj()
-    } else {
-        custom_rt = assemble_custom_runtime(heap_size, &dir);
-        &custom_rt
-    };
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
 
     let elephc_out = assemble_and_run(
         &user_asm,
-        runtime_obj,
+        &runtime_obj,
         &dir,
         &required_libraries,
         &default_link_paths(),

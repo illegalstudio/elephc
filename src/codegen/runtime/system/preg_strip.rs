@@ -1,26 +1,27 @@
 //! Purpose:
 //! Emits the `__rt_preg_strip`, `__rt_preg_strip_done` runtime helper assembly for preg strip.
-//! Keeps PHP builtin semantics, libc/syscall boundaries, and target-specific ABI variants in one focused emitter.
+//! Keeps PHP regex delimiter handling and PCRE2 POSIX-wrapper flag extraction in one focused emitter.
 //!
 //! Called from:
 //! - `crate::codegen::runtime::emitters::emit_runtime()` via `crate::codegen::runtime::system`.
 //!
 //! Key details:
-//! - Regex helpers translate PHP PCRE-flavored inputs to POSIX/libc calls and must preserve match array construction.
+//! - Regex helpers preserve PHP PCRE-flavored pattern bytes and pass PCRE2 POSIX-wrapper flags downstream.
 
 use crate::codegen::{emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_preg_strip` runtime helper for stripping PHP regex delimiters.
 ///
 /// Transforms PHP PCRE patterns by removing leading/trailing '/' delimiters and extracting
-/// the 'i' case-insensitive flag. For example, `"/pattern/i"` becomes `("pattern", flags=1)`.
+/// PCRE2 POSIX-wrapper flags. For example, `"/pattern/i"` becomes
+/// `("pattern", REG_ICASE)`.
 ///
 /// Dispatches to `emit_preg_strip_linux_x86_64` on x86_64; ARM64 uses inline scalar
 /// loads/stores in the main emitter. Undelimited patterns (no leading '/') are returned
 /// unchanged with flags=0.
 ///
 /// Input:  x1=pattern ptr, x2=pattern len
-/// Output: x1=stripped pattern ptr, x2=stripped len, x3=flags (bit 0=icase)
+/// Output: x1=stripped pattern ptr, x2=stripped len, x3=PCRE2 POSIX cflags
 pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_preg_strip_linux_x86_64(emitter);
@@ -55,12 +56,34 @@ pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
     emitter.instruction("cmp w9, #47");                                         // check for closing '/'
     emitter.instruction("b.eq __rt_preg_strip_found");                          // found it
 
-    // -- check for 'i' flag --
-    emitter.instruction("cmp w9, #105");                                        // check for 'i'
-    emitter.instruction("b.ne __rt_preg_strip_skip_flag");                      // not 'i'
-    emitter.instruction("ldr x3, [sp, #16]");                                   // load flags
-    emitter.instruction("orr x3, x3, #1");                                      // set icase flag
-    emitter.instruction("str x3, [sp, #16]");                                   // save flags
+    // -- check supported PCRE2 POSIX-wrapper flags --
+    emitter.instruction("ldr x3, [sp, #16]");                                   // load the accumulated PCRE2 POSIX compile flags
+    emitter.instruction("cmp w9, #105");                                        // check for 'i' case-insensitive modifier
+    emitter.instruction("b.ne __rt_preg_strip_flag_m");                         // try the next supported regex modifier
+    emitter.instruction("orr x3, x3, #1");                                      // add REG_ICASE for case-insensitive matching
+    emitter.instruction("b __rt_preg_strip_save_flag");                         // save the updated flag word
+    emitter.label("__rt_preg_strip_flag_m");
+    emitter.instruction("cmp w9, #109");                                        // check for 'm' multiline modifier
+    emitter.instruction("b.ne __rt_preg_strip_flag_s");                         // try the next supported regex modifier
+    emitter.instruction("orr x3, x3, #2");                                      // add REG_NEWLINE so PCRE2 treats anchors as multiline
+    emitter.instruction("b __rt_preg_strip_save_flag");                         // save the updated flag word
+    emitter.label("__rt_preg_strip_flag_s");
+    emitter.instruction("cmp w9, #115");                                        // check for 's' dotall modifier
+    emitter.instruction("b.ne __rt_preg_strip_flag_u");                         // try the next supported regex modifier
+    emitter.instruction("orr x3, x3, #16");                                     // add REG_DOTALL so '.' can match newlines
+    emitter.instruction("b __rt_preg_strip_save_flag");                         // save the updated flag word
+    emitter.label("__rt_preg_strip_flag_u");
+    emitter.instruction("cmp w9, #117");                                        // check for 'u' UTF-8 modifier
+    emitter.instruction("b.ne __rt_preg_strip_flag_U");                         // try the next supported regex modifier
+    emitter.instruction("mov x12, #1088");                                      // materialize REG_UTF | REG_UCP for Unicode-aware PCRE2 matching
+    emitter.instruction("orr x3, x3, x12");                                     // add UTF and Unicode-property matching flags
+    emitter.instruction("b __rt_preg_strip_save_flag");                         // save the updated flag word
+    emitter.label("__rt_preg_strip_flag_U");
+    emitter.instruction("cmp w9, #85");                                         // check for 'U' ungreedy modifier
+    emitter.instruction("b.ne __rt_preg_strip_skip_flag");                      // ignore unsupported trailing modifiers for now
+    emitter.instruction("orr x3, x3, #512");                                    // add REG_UNGREEDY for inverted quantifier greediness
+    emitter.label("__rt_preg_strip_save_flag");
+    emitter.instruction("str x3, [sp, #16]");                                   // save accumulated PCRE2 POSIX flags
     emitter.label("__rt_preg_strip_skip_flag");
     emitter.instruction("sub x10, x10, #1");                                    // move backward
     emitter.instruction("b __rt_preg_strip_scan");                              // continue scanning
@@ -82,7 +105,7 @@ pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
 /// x86_64-specific emitter for `__rt_preg_strip`.
 ///
 /// Uses System V AMD64 ABI: pattern pointer in `rax`, length in `rdx`; returns stripped
-/// pattern pointer in `rax`, stripped length in `rdx`, and `REG_ICASE` flag bit in `rcx`.
+/// pattern pointer in `rax`, stripped length in `rdx`, and PCRE2 POSIX cflags in `rcx`.
 /// Clobbers `r8`, `r9` as temporaries during the reverse scan. Returns patterns unchanged
 /// when they do not begin with '/' (undelimited raw regex payloads).
 fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
@@ -106,8 +129,28 @@ fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r8d, 47");                                         // did the reverse scan find the closing '/' delimiter?
     emitter.instruction("je __rt_preg_strip_found_linux_x86_64");               // stop once the closing slash delimiter is located
     emitter.instruction("cmp r8d, 105");                                        // detect the trailing 'i' case-insensitive modifier while walking backward
-    emitter.instruction("jne __rt_preg_strip_skip_flag_linux_x86_64");          // ignore any trailing byte that is not the supported 'i' regex modifier
-    emitter.instruction("or rcx, 1");                                           // record REG_ICASE in the helper flag word for the later regcomp() call
+    emitter.instruction("jne __rt_preg_strip_flag_m_linux_x86_64");             // try the next supported regex modifier
+    emitter.instruction("or rcx, 1");                                           // record REG_ICASE for PCRE2 POSIX compilation
+    emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // continue scanning toward the opening delimiter
+    emitter.label("__rt_preg_strip_flag_m_linux_x86_64");
+    emitter.instruction("cmp r8d, 109");                                        // detect the trailing 'm' multiline modifier
+    emitter.instruction("jne __rt_preg_strip_flag_s_linux_x86_64");             // try the next supported regex modifier
+    emitter.instruction("or rcx, 2");                                           // record REG_NEWLINE for multiline anchor behavior
+    emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // continue scanning toward the opening delimiter
+    emitter.label("__rt_preg_strip_flag_s_linux_x86_64");
+    emitter.instruction("cmp r8d, 115");                                        // detect the trailing 's' dotall modifier
+    emitter.instruction("jne __rt_preg_strip_flag_u_linux_x86_64");             // try the next supported regex modifier
+    emitter.instruction("or rcx, 16");                                          // record REG_DOTALL so '.' can match newlines
+    emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // continue scanning toward the opening delimiter
+    emitter.label("__rt_preg_strip_flag_u_linux_x86_64");
+    emitter.instruction("cmp r8d, 117");                                        // detect the trailing 'u' UTF-8 modifier
+    emitter.instruction("jne __rt_preg_strip_flag_U_linux_x86_64");             // try the next supported regex modifier
+    emitter.instruction("or rcx, 1088");                                        // record REG_UTF | REG_UCP for Unicode-aware PCRE2 matching
+    emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // continue scanning toward the opening delimiter
+    emitter.label("__rt_preg_strip_flag_U_linux_x86_64");
+    emitter.instruction("cmp r8d, 85");                                         // detect the trailing 'U' ungreedy modifier
+    emitter.instruction("jne __rt_preg_strip_skip_flag_linux_x86_64");          // ignore unsupported trailing modifiers for now
+    emitter.instruction("or rcx, 512");                                         // record REG_UNGREEDY for inverted quantifier greediness
 
     emitter.label("__rt_preg_strip_skip_flag_linux_x86_64");
     emitter.instruction("sub r9, 1");                                           // move the reverse scan cursor one byte closer to the opening delimiter

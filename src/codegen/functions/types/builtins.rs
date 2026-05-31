@@ -42,7 +42,7 @@ pub(super) fn infer_function_call_type(
         | "strstr" | "readline" | "date"
         | "json_last_error_msg" | "php_uname" | "phpversion"
         | "tempnam" | "getcwd" | "shell_exec" | "preg_replace_callback"
-        | "ptr_read_string" => PhpType::Str,
+        | "ptr_read_string" | "fread" | "fgets" => PhpType::Str,
         "json_decode" => PhpType::Mixed,
         "call_user_func" | "call_user_func_array" => {
             infer_dynamic_callback_builtin_type(args, ctx).unwrap_or(PhpType::Mixed)
@@ -141,7 +141,9 @@ pub(super) fn infer_function_call_type(
         | "sscanf"
         | "fgetcsv"
         | "preg_split" => {
-            if name == "explode"
+            if name == "preg_split" && args.len() >= 4 {
+                PhpType::Array(Box::new(PhpType::Mixed))
+            } else if name == "explode"
                 || name == "str_split"
                 || name == "file"
                 || name == "scandir"
@@ -171,11 +173,13 @@ pub(super) fn infer_function_call_type(
         | "str_ends_with" | "ctype_alpha" | "ctype_digit" | "ctype_alnum"
         | "ctype_space" | "function_exists" | "defined" | "chmod" | "chown" | "chgrp"
         | "touch" | "ftruncate" | "fflush" | "fsync" | "fdatasync" | "ptr_is_null"
-        | "json_validate" | "flock" | "symlink" | "link" => {
+        | "json_validate" | "flock" | "symlink" | "link" | "feof" | "rewind"
+        | "fclose" => {
             PhpType::Bool
         }
         "define" => PhpType::Bool,
-        "umask" | "fpassthru" | "linkinfo" => PhpType::Int,
+        "umask" | "fpassthru" | "linkinfo" | "fseek" | "ftell" | "fwrite"
+        | "fputcsv" => PhpType::Int,
         "strpos" | "strrpos" | "array_search" | "file_get_contents" | "json_encode"
         | "grapheme_strrev" | "fileatime" | "filectime" | "fileperms" | "fileowner"
         | "filegroup" | "fileinode" | "filetype" | "stat" | "lstat" | "fstat"

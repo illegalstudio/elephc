@@ -23,12 +23,16 @@ use super::strings;
 use super::system;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Platform;
+use crate::codegen::RuntimeFeatures;
 
 /// Emits an allowlisted subset of runtime helpers for Linux x86_64 targets.
 /// On Linux, declares `MD5`, `SHA1`, and `SHA256` as weak symbols so linking
 /// succeeds when they are not otherwise provided. Calls each category emitter
 /// in the order required by the runtime surface.
-pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
+pub(super) fn emit_runtime_linux_x86_64_minimal(
+    emitter: &mut Emitter,
+    features: RuntimeFeatures,
+) {
     if emitter.target.platform == Platform::Linux {
         emitter.raw(".weak MD5");
         emitter.raw(".weak SHA1");
@@ -312,13 +316,15 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     objects::emit_mixed_array_get(emitter);
     objects::emit_mixed_array_set(emitter);
     objects::emit_json_encode_stdclass(emitter);
-    system::emit_preg_strip(emitter);
-    system::emit_pcre_to_posix(emitter);
-    system::emit_preg_match(emitter);
-    system::emit_preg_match_all(emitter);
-    system::emit_preg_replace(emitter);
-    system::emit_preg_replace_callback(emitter);
-    system::emit_preg_split(emitter);
+    if features.regex {
+        system::emit_preg_strip(emitter);
+        system::emit_pcre_to_posix(emitter);
+        system::emit_preg_match(emitter);
+        system::emit_preg_match_all(emitter);
+        system::emit_preg_replace(emitter);
+        system::emit_preg_replace_callback(emitter);
+        system::emit_preg_split(emitter);
+    }
     system::emit_match_unhandled(emitter);
 }
 
@@ -333,7 +339,7 @@ mod tests {
     #[test]
     fn test_linux_x86_64_runtime_is_minimal_for_now() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
-        emit_runtime_linux_x86_64_minimal(&mut emitter);
+        emit_runtime_linux_x86_64_minimal(&mut emitter, RuntimeFeatures::all());
         let asm = emitter.output();
 
         assert!(asm.contains("__rt_heap_alloc:\n"));

@@ -16,6 +16,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install native test dependencies
+        run: brew install pcre2
+
       - name: Check (no warnings)
         run: cargo build 2>&1 | grep -v "^$" | grep -i warning && exit 1 || true
 
@@ -30,6 +33,9 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native benchmark dependencies
+        run: brew install pcre2
 
       - name: Build release binary
         run: cargo build --release

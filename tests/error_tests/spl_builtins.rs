@@ -266,6 +266,42 @@ fn test_error_recursive_filter_iterator_is_abstract() {
     );
 }
 
+/// Verifies that `RegexIterator` cannot be redeclared as a user class.
+#[test]
+fn test_error_regex_iterator_cannot_be_redeclared() {
+    expect_error(
+        "<?php class RegexIterator {}",
+        "Cannot redeclare built-in SPL class: RegexIterator",
+    );
+}
+
+/// Verifies that `RecursiveRegexIterator` cannot be redeclared as a user class.
+#[test]
+fn test_error_recursive_regex_iterator_cannot_be_redeclared() {
+    expect_error(
+        "<?php class RecursiveRegexIterator {}",
+        "Cannot redeclare built-in SPL class: RecursiveRegexIterator",
+    );
+}
+
+/// Verifies that `RegexIterator` requires an `Iterator` instance.
+#[test]
+fn test_error_regex_iterator_requires_iterator() {
+    expect_error(
+        "<?php $it = new RegexIterator(new ArrayObject([]), \"/a/\");",
+        "Constructor 'RegexIterator::__construct' parameter $iterator expects Object(\"Iterator\"), got Object(\"ArrayObject\")",
+    );
+}
+
+/// Verifies that `RecursiveRegexIterator` requires a recursive iterator instance.
+#[test]
+fn test_error_recursive_regex_iterator_requires_recursive_iterator() {
+    expect_error(
+        "<?php $it = new RecursiveRegexIterator(new ArrayIterator([]), \"/a/\");",
+        "Constructor 'RecursiveRegexIterator::__construct' parameter $iterator expects Object(\"RecursiveIterator\"), got Object(\"ArrayIterator\")",
+    );
+}
+
 /// Verifies that error callback filter iterator requires callable.
 #[test]
 fn test_error_callback_filter_iterator_requires_callable() {
@@ -273,6 +309,88 @@ fn test_error_callback_filter_iterator_requires_callable() {
         "<?php $it = new CallbackFilterIterator(new ArrayIterator([]), 123);",
         "Constructor 'CallbackFilterIterator::__construct' parameter $callback expects Callable, got Int",
     );
+}
+
+/// Verifies that Phase 8 SPL filesystem classes cannot be redeclared.
+#[test]
+fn test_error_filesystem_spl_classes_cannot_be_redeclared() {
+    for (source, expected) in [
+        (
+            "<?php class SplFileInfo {}",
+            "Cannot redeclare built-in SPL class: SplFileInfo",
+        ),
+        (
+            "<?php class SplFileObject {}",
+            "Cannot redeclare built-in SPL class: SplFileObject",
+        ),
+        (
+            "<?php class SplTempFileObject {}",
+            "Cannot redeclare built-in SPL class: SplTempFileObject",
+        ),
+        (
+            "<?php class DirectoryIterator {}",
+            "Cannot redeclare built-in SPL class: DirectoryIterator",
+        ),
+        (
+            "<?php class FilesystemIterator {}",
+            "Cannot redeclare built-in SPL class: FilesystemIterator",
+        ),
+        (
+            "<?php class GlobIterator {}",
+            "Cannot redeclare built-in SPL class: GlobIterator",
+        ),
+        (
+            "<?php class RecursiveDirectoryIterator {}",
+            "Cannot redeclare built-in SPL class: RecursiveDirectoryIterator",
+        ),
+        (
+            "<?php class RecursiveCachingIterator {}",
+            "Cannot redeclare built-in SPL class: RecursiveCachingIterator",
+        ),
+    ] {
+        expect_error(source, expected);
+    }
+}
+
+/// Verifies that Phase 8 SPL filesystem constructors validate argument types.
+#[test]
+fn test_error_filesystem_spl_constructors_validate_types() {
+    for (source, expected) in [
+        (
+            "<?php $info = new SplFileInfo(123);",
+            "Constructor 'SplFileInfo::__construct' parameter $filename expects Str, got Int",
+        ),
+        (
+            "<?php $file = new SplFileObject(123);",
+            "Constructor 'SplFileObject::__construct' parameter $filename expects Str, got Int",
+        ),
+        (
+            "<?php $tmp = new SplTempFileObject(\"bad\");",
+            "Constructor 'SplTempFileObject::__construct' parameter $maxMemory expects Int, got Str",
+        ),
+        (
+            "<?php $it = new DirectoryIterator(123);",
+            "Constructor 'DirectoryIterator::__construct' parameter $directory expects Str, got Int",
+        ),
+        (
+            "<?php $it = new FilesystemIterator(\".\", \"bad\");",
+            "Constructor 'FilesystemIterator::__construct' parameter $flags expects Int, got Str",
+        ),
+        (
+            "<?php $it = new GlobIterator(123);",
+            "Constructor 'GlobIterator::__construct' parameter $pattern expects Str, got Int",
+        ),
+        (
+            "<?php $it = new RecursiveDirectoryIterator(123);",
+            "Constructor 'RecursiveDirectoryIterator::__construct' parameter $directory expects Str, got Int",
+        ),
+        (
+            "<?php $it = new RecursiveCachingIterator(new ArrayIterator([]));",
+            "Constructor 'RecursiveCachingIterator::__construct' parameter $iterator expects Object(\"RecursiveIterator\"), got Object(\"ArrayIterator\")",
+        ),
+    ] {
+        expect_error(source, expected);
+    }
 }
 
 /// Verifies that error recursive callback filter iterator requires callable.

@@ -70,6 +70,22 @@ fn test_parse_static_method_call() {
     }
 }
 
+/// Parses `RegexIterator::MATCH` and verifies keyword-like class constants after `::`.
+#[test]
+fn test_parse_scoped_constant_named_like_keyword() {
+    let stmts = parse_source("<?php echo RegexIterator::MATCH;");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::ScopedConstantAccess { receiver, name } => {
+                assert_eq!(receiver, &StaticReceiver::Named("RegexIterator".into()));
+                assert_eq!(name, "MATCH");
+            }
+            other => panic!("Expected scoped constant access, got {:?}", other),
+        },
+        _ => panic!("Expected Echo"),
+    }
+}
+
 /// Parses `static::make(...)` and verifies `FirstClassCallable(StaticMethod)` AST
 /// with `Static` receiver (not named) and spread args.
 #[test]

@@ -230,7 +230,7 @@ variant into one of the focused lowering paths below:
 | `ArrayLiteral`, `ArrayLiteralAssoc`, `ArrayAccess`, `Spread`, `Match` | Indexed-array, associative-array, unpacking, string-indexing, and match-expression helpers |
 | `FunctionCall`, `NamedArg`, `ClosureCall`, `ExprCall`, `Closure`, `FirstClassCallable` | Shared call-argument planner, closure wrappers, and callable dispatch helpers |
 | `ConstRef`, `ClassConstant`, `ScopedConstantAccess`, `MagicConstant` | Compile-time constant and class-constant loading. `MagicConstant` should already be lowered by the frontend before codegen. |
-| `NewObject`, `NewScopedObject`, `PropertyAccess`, `DynamicPropertyAccess`, `NullsafePropertyAccess`, `NullsafeDynamicPropertyAccess`, `StaticPropertyAccess`, `MethodCall`, `NullsafeMethodCall`, `StaticMethodCall` | Object allocation, property/member access, nullsafe chain lowering, vtable dispatch, and late-static-binding helpers |
+| `NewObject`, `NewScopedObject`, `NewDynamicObject`, `PropertyAccess`, `DynamicPropertyAccess`, `NullsafePropertyAccess`, `NullsafeDynamicPropertyAccess`, `StaticPropertyAccess`, `MethodCall`, `NullsafeMethodCall`, `StaticMethodCall` | Object allocation (including the internal runtime-class-string factory `NewDynamicObject`), property/member access, nullsafe chain lowering, vtable dispatch, and late-static-binding helpers |
 | `PtrCast`, `BufferNew`, `Yield`, `YieldFrom` | Pointer/buffer extensions and generator state-machine lowering |
 
 ### Intrinsic Calls
