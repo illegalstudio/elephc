@@ -89,6 +89,30 @@ foreach (outer() as $v) {
     assert_eq!(out, "1\n42\n");
 }
 
+/// Verifies the delegated return value remains available when the outer
+/// generator uses it in normal code after the `yield from` expression.
+#[test]
+fn test_generator_yield_from_return_value_can_be_echoed_after_delegation() {
+    let out = compile_and_run(
+        r#"<?php
+function inner() {
+    yield 1;
+    return 7;
+}
+
+function outer() {
+    $x = yield from inner();
+    echo $x;
+}
+
+foreach (outer() as $v) {
+    echo $v;
+}
+"#,
+    );
+    assert_eq!(out, "17");
+}
+
 /// Regression test for delegated generator sends: a typed generator may
 /// `return` its terminal value, and `send()` on the outer generator must
 /// deliver the payload into the currently active inner generator.
