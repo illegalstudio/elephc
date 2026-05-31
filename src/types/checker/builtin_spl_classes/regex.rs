@@ -28,7 +28,6 @@ const REGEX_GET_MATCH: i64 = 1;
 const REGEX_ALL_MATCHES: i64 = 2;
 const REGEX_SPLIT: i64 = 3;
 const REGEX_REPLACE: i64 = 4;
-const REGEX_CAPTURE_LIMIT: usize = 100;
 const PREG_SET_ORDER: i64 = 2;
 const PREG_OFFSET_CAPTURE: i64 = 256;
 
@@ -300,7 +299,13 @@ fn regex_replace_expr(subject: Expr) -> Expr {
 }
 
 /// Builds a closure expression used to collect preg_replace_callback match arrays.
-fn regex_capture_closure_expr(capture_refs: Vec<String>, body: Vec<Stmt>) -> Expr {
+fn regex_capture_closure_expr(
+    capture_refs: Vec<String>,
+    capture_values: Vec<String>,
+    body: Vec<Stmt>,
+) -> Expr {
+    let mut captures = capture_refs.clone();
+    captures.extend(capture_values);
     expr(ExprKind::Closure {
         params: vec![param("matches", array_type())],
         variadic: None,
@@ -308,7 +313,7 @@ fn regex_capture_closure_expr(capture_refs: Vec<String>, body: Vec<Stmt>) -> Exp
         body,
         is_arrow: false,
         is_static: false,
-        captures: capture_refs.clone(),
+        captures,
         capture_refs,
     })
 }
@@ -481,6 +486,7 @@ fn regex_first_match_body() -> Vec<Stmt> {
                 "pregFlags".to_string(),
                 "subject".to_string(),
             ],
+            Vec::new(),
             regex_capture_first_match_body(),
         ),
         var_expr("subject"),
@@ -494,7 +500,11 @@ fn regex_all_matches_body() -> Vec<Stmt> {
     let mut body = vec![assign_stmt("pregFlags", regex_preg_flags_expr())];
     body.push(if_stmt(
         preg_flag_enabled_expr("pregFlags", PREG_SET_ORDER),
-        regex_all_matches_set_order_body(),
+        vec![if_stmt(
+            preg_flag_enabled_expr("pregFlags", PREG_OFFSET_CAPTURE),
+            regex_all_matches_set_order_body(true),
+            Some(regex_all_matches_set_order_body(false)),
+        )],
         Some(vec![if_stmt(
             preg_flag_enabled_expr("pregFlags", PREG_OFFSET_CAPTURE),
             regex_all_matches_pattern_order_body(true),
@@ -505,58 +515,245 @@ fn regex_all_matches_body() -> Vec<Stmt> {
 }
 
 /// Builds the ALL_MATCHES branch for PREG_SET_ORDER.
-fn regex_all_matches_set_order_body() -> Vec<Stmt> {
+fn regex_all_matches_set_order_body(offset_capture: bool) -> Vec<Stmt> {
+    let rows_name = if offset_capture {
+        "offsetAllMatches"
+    } else {
+        "stringAllMatches"
+    };
+    let cursor_name = if offset_capture {
+        "offsetSetSearchOffset"
+    } else {
+        "stringSetSearchOffset"
+    };
+    let subject_name = if offset_capture {
+        "offsetSetSubject"
+    } else {
+        "stringSetSubject"
+    };
     let mut body = vec![
-        assign_stmt("allMatches", empty_array_expr()),
-        assign_stmt("searchOffset", int_expr(0)),
+        assign_stmt(subject_name, var_expr("subject")),
+        assign_stmt(rows_name, empty_array_expr()),
+        assign_stmt(cursor_name, int_expr(0)),
     ];
     body.push(expr_stmt(regex_capture_replace_callback_expr(
         regex_capture_closure_expr(
             vec![
-                "allMatches".to_string(),
-                "searchOffset".to_string(),
-                "pregFlags".to_string(),
-                "subject".to_string(),
+                rows_name.to_string(),
+                cursor_name.to_string(),
+                subject_name.to_string(),
             ],
-            regex_capture_all_matches_body(),
+            Vec::new(),
+            regex_capture_set_order_matches_body(
+                offset_capture,
+                rows_name,
+                cursor_name,
+                subject_name,
+            ),
         ),
-        var_expr("subject"),
+        var_expr(subject_name),
     )));
-    body.push(return_stmt(var_expr("allMatches")));
+    body.push(return_stmt(var_expr(rows_name)));
     body
 }
 
 /// Builds the ALL_MATCHES branch for PREG_PATTERN_ORDER.
 fn regex_all_matches_pattern_order_body(offset_capture: bool) -> Vec<Stmt> {
-    let bucket_names = regex_all_match_bucket_names();
-    let mut captures = vec![
-        "allGroupCount".to_string(),
-        "searchOffset".to_string(),
-        "subject".to_string(),
-    ];
-    captures.extend(bucket_names.iter().cloned());
-
+    let seed_rows = if offset_capture {
+        seeded_offset_match_rows_expr()
+    } else {
+        seeded_string_match_rows_expr()
+    };
+    let rows_name = if offset_capture {
+        "offsetPatternRows"
+    } else {
+        "stringPatternRows"
+    };
+    let group_count_name = if offset_capture {
+        "offsetAllGroupCount"
+    } else {
+        "stringAllGroupCount"
+    };
+    let cursor_name = if offset_capture {
+        "offsetPatternSearchOffset"
+    } else {
+        "stringPatternSearchOffset"
+    };
+    let subject_name = if offset_capture {
+        "offsetPatternSubject"
+    } else {
+        "stringPatternSubject"
+    };
+    let out_name = if offset_capture { "offsetOut" } else { "stringOut" };
+    let bucket_name = if offset_capture {
+        "offsetBucket"
+    } else {
+        "stringBucket"
+    };
+    let group_name = if offset_capture {
+        "offsetGroup"
+    } else {
+        "stringGroup"
+    };
+    let occurrence_name = if offset_capture {
+        "offsetOccurrence"
+    } else {
+        "stringOccurrence"
+    };
     let mut body = vec![
-        assign_stmt("allGroupCount", int_expr(0)),
-        assign_stmt("searchOffset", int_expr(0)),
+        assign_stmt(subject_name, var_expr("subject")),
+        assign_stmt(rows_name, seed_rows),
+        assign_stmt(group_count_name, int_expr(0)),
+        assign_stmt(cursor_name, int_expr(0)),
     ];
-    for bucket_name in &bucket_names {
-        let initial_bucket = if offset_capture {
-            empty_array_expr()
-        } else {
-            seeded_string_array_expr()
-        };
-        body.push(assign_stmt(bucket_name, initial_bucket));
-    }
     body.push(expr_stmt(regex_capture_replace_callback_expr(
         regex_capture_closure_expr(
-            captures,
-            regex_capture_pattern_order_matches_body(offset_capture),
+            vec![
+                rows_name.to_string(),
+                group_count_name.to_string(),
+                cursor_name.to_string(),
+                subject_name.to_string(),
+            ],
+            Vec::new(),
+            regex_capture_pattern_order_rows_body(
+                offset_capture,
+                rows_name,
+                group_count_name,
+                cursor_name,
+                subject_name,
+            ),
         ),
-        var_expr("subject"),
+        var_expr(subject_name),
     )));
-    body.extend(regex_build_pattern_order_matches_array_body(offset_capture));
+    body.extend(regex_build_pattern_order_rows_array_body(
+        rows_name,
+        group_count_name,
+        out_name,
+        bucket_name,
+        group_name,
+        occurrence_name,
+    ));
     body
+}
+
+/// Builds the closure body that stores every set-order match row.
+fn regex_capture_set_order_matches_body(
+    offset_capture: bool,
+    rows_name: &str,
+    cursor_name: &str,
+    subject_name: &str,
+) -> Vec<Stmt> {
+    let mut body = regex_prepare_match_row_body(offset_capture, cursor_name, subject_name);
+    body.push(array_push_stmt(rows_name, var_expr("matchRow")));
+    body.extend(regex_advance_search_offset_body(cursor_name));
+    body.push(return_stmt(string_expr("")));
+    body
+}
+
+/// Builds the closure body that stores rows for later pattern-order transposition.
+fn regex_capture_pattern_order_rows_body(
+    offset_capture: bool,
+    rows_name: &str,
+    group_count_name: &str,
+    cursor_name: &str,
+    subject_name: &str,
+) -> Vec<Stmt> {
+    let mut body = vec![assign_stmt(group_count_name, count_expr(var_expr("matches")))];
+    body.extend(regex_prepare_match_row_body(
+        offset_capture,
+        cursor_name,
+        subject_name,
+    ));
+    body.push(array_push_stmt(rows_name, var_expr("matchRow")));
+    body.extend(regex_advance_search_offset_body(cursor_name));
+    body.push(return_stmt(string_expr("")));
+    body
+}
+
+/// Builds statements that derive `$matchRow`, `$fullMatch`, and `$fullOffset` for one callback.
+fn regex_prepare_match_row_body(
+    offset_capture: bool,
+    cursor_name: &str,
+    subject_name: &str,
+) -> Vec<Stmt> {
+    let mut body = vec![
+        assign_stmt(
+            "fullMatch",
+            cast_expr(CastType::String, array_access(var_expr("matches"), int_expr(0))),
+        ),
+        assign_stmt("fullOffset", regex_match_offset_expr(cursor_name, subject_name)),
+    ];
+    if offset_capture {
+        body.extend(regex_build_offset_row_body("matchRow"));
+    } else {
+        body.push(assign_stmt("matchRow", var_expr("matches")));
+    }
+    body
+}
+
+/// Builds statements that transpose collected set-order rows into pattern-order output.
+fn regex_build_pattern_order_rows_array_body(
+    rows_name: &str,
+    group_count_name: &str,
+    out_name: &str,
+    bucket_name: &str,
+    group_name: &str,
+    occurrence_name: &str,
+) -> Vec<Stmt> {
+    vec![
+        assign_stmt(out_name, empty_array_expr()),
+        if_stmt(
+            binary_expr(var_expr(group_count_name), BinOp::StrictEq, int_expr(0)),
+            return_body(var_expr(out_name)),
+            None,
+        ),
+        assign_stmt(group_name, int_expr(0)),
+        while_stmt(
+            binary_expr(
+                var_expr(group_name),
+                BinOp::Lt,
+                var_expr(group_count_name),
+            ),
+            vec![
+                assign_stmt(bucket_name, empty_array_expr()),
+                assign_stmt(occurrence_name, int_expr(1)),
+                while_stmt(
+                    binary_expr(
+                        var_expr(occurrence_name),
+                        BinOp::Lt,
+                        count_expr(var_expr(rows_name)),
+                    ),
+                    vec![
+                        array_push_stmt(
+                            bucket_name,
+                            array_access(
+                                array_access(var_expr(rows_name), var_expr(occurrence_name)),
+                                var_expr(group_name),
+                            ),
+                        ),
+                        increment_stmt(occurrence_name),
+                    ],
+                ),
+                array_push_stmt(out_name, var_expr(bucket_name)),
+                increment_stmt(group_name),
+            ],
+        ),
+        return_stmt(var_expr(out_name)),
+    ]
+}
+
+/// Builds a typed sentinel for non-offset pattern-order transposition rows.
+fn seeded_string_match_rows_expr() -> Expr {
+    expr(ExprKind::ArrayLiteral(vec![expr(ExprKind::ArrayLiteral(vec![
+        string_expr(""),
+    ]))]))
+}
+
+/// Builds a typed sentinel for offset-capture pattern-order transposition rows.
+fn seeded_offset_match_rows_expr() -> Expr {
+    expr(ExprKind::ArrayLiteral(vec![expr(ExprKind::ArrayLiteral(vec![
+        expr(ExprKind::ArrayLiteral(vec![string_expr(""), int_expr(0)])),
+    ]))]))
 }
 
 /// Builds the closure body that stores the first preg_replace_callback match array.
@@ -566,7 +763,7 @@ fn regex_capture_first_match_body() -> Vec<Stmt> {
             "fullMatch",
             cast_expr(CastType::String, array_access(var_expr("matches"), int_expr(0))),
         ),
-        assign_stmt("fullOffset", regex_match_offset_expr("searchOffset")),
+        assign_stmt("fullOffset", regex_match_offset_expr("searchOffset", "subject")),
     ];
     first_body.push(if_stmt(
         preg_flag_enabled_expr("pregFlags", PREG_OFFSET_CAPTURE),
@@ -581,143 +778,8 @@ fn regex_capture_first_match_body() -> Vec<Stmt> {
     body
 }
 
-/// Builds the closure body that transposes match arrays into preg_match_all shape.
-fn regex_capture_all_matches_body() -> Vec<Stmt> {
-    let mut body = vec![
-        assign_stmt(
-            "fullMatch",
-            cast_expr(CastType::String, array_access(var_expr("matches"), int_expr(0))),
-        ),
-        assign_stmt("fullOffset", regex_match_offset_expr("searchOffset")),
-    ];
-    body.push(if_stmt(
-        preg_flag_enabled_expr("pregFlags", PREG_OFFSET_CAPTURE),
-        regex_build_offset_row_body("matchRow"),
-        Some(vec![assign_stmt("matchRow", var_expr("matches"))]),
-    ));
-    body.push(if_stmt(
-        preg_flag_enabled_expr("pregFlags", PREG_SET_ORDER),
-        vec![array_push_stmt("allMatches", var_expr("matchRow"))],
-        Some(Vec::new()),
-    ));
-    body.extend(regex_advance_search_offset_body("searchOffset"));
-    body.push(return_stmt(string_expr("")));
-    body
-}
-
-/// Builds the callback body that stores one match into static pattern-order buckets.
-fn regex_capture_pattern_order_matches_body(offset_capture: bool) -> Vec<Stmt> {
-    let mut body = vec![
-        assign_stmt("allGroupCount", count_expr(var_expr("matches"))),
-        assign_stmt(
-            "fullMatch",
-            cast_expr(CastType::String, array_access(var_expr("matches"), int_expr(0))),
-        ),
-        assign_stmt("fullOffset", regex_match_offset_expr("searchOffset")),
-    ];
-    for group in 0..REGEX_CAPTURE_LIMIT {
-        body.push(if_stmt(
-            binary_expr(count_expr(var_expr("matches")), BinOp::Gt, int_expr(group as i64)),
-            regex_push_pattern_order_group_body(group, offset_capture),
-            None,
-        ));
-    }
-    body.extend(regex_advance_search_offset_body("searchOffset"));
-    body.push(return_stmt(string_expr("")));
-    body
-}
-
-/// Builds statements that push one capture group into its pattern-order bucket.
-fn regex_push_pattern_order_group_body(group: usize, offset_capture: bool) -> Vec<Stmt> {
-    let bucket_name = regex_all_match_bucket_name(group);
-    if !offset_capture {
-        return vec![array_push_stmt(
-            &bucket_name,
-            array_access(var_expr("matches"), int_expr(group as i64)),
-        )];
-    }
-
-    vec![
-        assign_stmt(
-            "capture",
-            cast_expr(
-                CastType::String,
-                array_access(var_expr("matches"), int_expr(group as i64)),
-            ),
-        ),
-        assign_stmt(
-            "captureOffset",
-            binary_expr(
-                var_expr("fullOffset"),
-                BinOp::Add,
-                function_call(
-                    "intval",
-                    vec![function_call(
-                        "strpos",
-                        vec![var_expr("fullMatch"), var_expr("capture")],
-                    )],
-                ),
-            ),
-        ),
-        array_push_stmt(
-            &bucket_name,
-            expr(ExprKind::ArrayLiteral(vec![
-                var_expr("capture"),
-                var_expr("captureOffset"),
-            ])),
-        ),
-    ]
-}
-
-/// Builds one non-empty string array used to keep empty capture buckets typed as strings.
-fn seeded_string_array_expr() -> Expr {
-    expr(ExprKind::ArrayLiteral(vec![string_expr("")]))
-}
-
-/// Builds the names of per-group match bucket arrays.
-fn regex_all_match_bucket_names() -> Vec<String> {
-    (0..REGEX_CAPTURE_LIMIT)
-        .map(regex_all_match_bucket_name)
-        .collect()
-}
-
-/// Builds one per-group match bucket variable name.
-fn regex_all_match_bucket_name(group: usize) -> String {
-    format!("match{group}")
-}
-
-/// Builds statements that reconstruct a pattern-order ALL_MATCHES result array.
-fn regex_build_pattern_order_matches_array_body(offset_capture: bool) -> Vec<Stmt> {
-    let mut body = vec![assign_stmt("out", empty_array_expr())];
-    let first_occurrence = if offset_capture { 0 } else { 1 };
-    for group in 0..REGEX_CAPTURE_LIMIT {
-        let bucket_name = regex_all_match_bucket_name(group);
-        body.push(if_stmt(
-            binary_expr(var_expr("allGroupCount"), BinOp::Gt, int_expr(group as i64)),
-            vec![
-                assign_stmt("bucket", empty_array_expr()),
-                assign_stmt("occurrence", int_expr(first_occurrence)),
-                while_stmt(
-                    binary_expr(var_expr("occurrence"), BinOp::Lt, count_expr(var_expr(&bucket_name))),
-                    vec![
-                        array_push_stmt(
-                            "bucket",
-                            array_access(var_expr(&bucket_name), var_expr("occurrence")),
-                        ),
-                        increment_stmt("occurrence"),
-                    ],
-                ),
-                array_push_stmt("out", var_expr("bucket")),
-            ],
-            None,
-        ));
-    }
-    body.push(return_stmt(var_expr("out")));
-    body
-}
-
 /// Builds an expression for the current full match offset relative to the subject.
-fn regex_match_offset_expr(cursor_name: &str) -> Expr {
+fn regex_match_offset_expr(cursor_name: &str, subject_name: &str) -> Expr {
     binary_expr(
         var_expr(cursor_name),
         BinOp::Add,
@@ -726,7 +788,7 @@ fn regex_match_offset_expr(cursor_name: &str) -> Expr {
             vec![function_call(
                 "strpos",
                 vec![
-                    function_call("substr", vec![var_expr("subject"), var_expr(cursor_name)]),
+                    function_call("substr", vec![var_expr(subject_name), var_expr(cursor_name)]),
                     var_expr("fullMatch"),
                 ],
             )],
