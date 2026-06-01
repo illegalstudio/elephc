@@ -137,6 +137,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 |---|---|---|---|
 | `__rt_strcopy` | Copy string into concat buffer | `x1`/`x2` | `x1`/`x2` |
 | `__rt_str_to_number` | Parse a PHP numeric string for loose comparison and numeric-string casts | `x1`/`x2` | numeric payload + success flag |
+| `__rt_str_to_int` | Parse a PHP numeric-string prefix (via `__rt_str_to_number`) and truncate toward zero like PHP `(int)` casts | `x1`/`x2` | `x0` (integer) |
 | `__rt_str_loose_eq` | Compare two strings using PHP loose-comparison numeric-string rules before falling back to bytes | two strings | `x0` (0 or 1) |
 | `__rt_strtolower` | Lowercase conversion | `x1`/`x2` | `x1`/`x2` |
 | `__rt_strtoupper` | Uppercase conversion | `x1`/`x2` | `x1`/`x2` |
@@ -144,7 +145,8 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_ltrim` / `__rt_rtrim` | Strip left/right whitespace or mask | `x1`/`x2` | `x1`/`x2` |
 | `__rt_trim_mask` | Strip chars in custom mask from both ends | `x1`/`x2` + mask | `x1`/`x2` |
 | `__rt_ltrim_mask` / `__rt_rtrim_mask` | Strip custom mask from left/right | `x1`/`x2` + mask | `x1`/`x2` |
-| `__rt_strrev` | Reverse string | `x1`/`x2` | `x1`/`x2` |
+| `__rt_strrev` | Reverse string (byte-wise) | `x1`/`x2` | `x1`/`x2` |
+| `__rt_grapheme_strrev` | Reverse a UTF-8 string by grapheme cluster for PHP 8.6 `grapheme_strrev()`; returns false on malformed UTF-8 | `x1`/`x2` | `x1`/`x2` |
 | `__rt_strpos` | Find substring | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
 | `__rt_strrpos` | Find last occurrence | `x1`/`x2` + `x3`/`x4` | `x0` |
 | `__rt_str_repeat` | Repeat N times with heap fallback for large results | `x1`/`x2` + count | `x1`/`x2` |
@@ -267,6 +269,7 @@ Common copy-producing array/hash routines now also have dedicated `_refcounted` 
 | `__rt_hash_ensure_unique` | Split a shared hash table before mutation | `x0` = hash | `x0` = unique hash |
 | `__rt_hash_grow` | Double hash table capacity, rehash all entries | `x0` = hash | `x0` = new hash |
 | `__rt_hash_set` | Insert/update (grows at 75% load) | `x0`=hash, `x1`/`x2`=normalized key, `x3`/`x4`=value, `x5`=value_tag | `x0` = hash |
+| `__rt_hash_append` | Append with PHP's next automatic integer key (largest existing int key + 1, or 0), then delegate to `__rt_hash_set` | `x0`=hash, `x3`/`x4`=value, `x5`=value_tag | `x0` = hash |
 | `__rt_hash_insert_owned` | Reinsert an already-owned key/value pair during hash growth | `x0`=hash, `x1`/`x2`=normalized key, `x3`/`x4`=value, `x5`=value_tag | `x0` = hash |
 | `__rt_hash_get` | Look up value by key | `x0`=hash, `x1`/`x2`=normalized key | `x0`=found, `x1`=val_lo, `x2`=val_hi, `x3`=value_tag |
 | `__rt_hash_iter_next` | Iterate to next entry in insertion order | `x0`=hash, `x1`=cursor | `x0`=next cursor, `x1`/`x2`=key, `x3`/`x4`=value, `x5`=value_tag |
@@ -287,6 +290,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | Routine | What it does |
 |---|---|
 | `__rt_array_key_exists` | Check if integer key is in bounds |
+| `__rt_warn_undefined_array_key_int` | Emit PHP's `Undefined array key` warning for a missing integer key (warning-only; caller still supplies the null fallback) |
 | `__rt_array_search` | Linear search for value in indexed array |
 | `__rt_array_reverse` | Reverse element order |
 | `__rt_array_sum` / `__rt_array_product` | Sum/product of all elements |

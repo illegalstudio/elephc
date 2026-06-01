@@ -108,6 +108,7 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 |---|---|
 | `Echo(Expr)` | `echo $x;`; multi-argument `echo $a, $b;` lowers to a `Synthetic` sequence of `Echo` statements |
 | `Assign { name, value }` | `$x = 42;` |
+| `RefAssign { target, source }` | `$y =& $x;` — reference aliasing where both target and source are plain variables |
 | `If { condition, then_body, elseif_clauses, else_body }` | `if (...) { } elseif (...) { } else { }` |
 | `While { condition, body }` | `while (...) { }` |
 | `DoWhile { body, condition }` | `do { } while (...);` |

@@ -16,6 +16,7 @@ This is a reference for the ARM64 instructions elephc uses most often, organized
 | `sub` | `sub x0, x1, x2` | x0 = x1 - x2 |
 | `subs` | `subs x0, x0, #1` | Subtract and set condition flags, often used when decrementing a counter before a conditional branch |
 | `mul` | `mul x0, x1, x2` | x0 = x1 × x2 |
+| `madd` | `madd x0, x1, x2, x3` | x0 = x3 + (x1 × x2). Multiply-add, used for index/stride address math |
 | `smulh` | `smulh x3, x1, x2` | High 64 bits of the signed 128-bit product, used to detect multiplication overflow |
 | `udiv` | `udiv x0, x1, x2` | x0 = x1 ÷ x2 (unsigned) |
 | `sdiv` | `sdiv x0, x1, x2` | x0 = x1 ÷ x2 (signed) |
@@ -86,6 +87,7 @@ These move data between registers and memory. See [Introduction to ARM64 Assembl
 |---|---|---|
 | `adrp` | `adrp x1, _str_0@PAGE` | Load the 4KB page address of a label |
 | `add` | `add x1, x1, _str_0@PAGEOFF` | Add the offset within the page |
+| `adr` | `adr x9, _label` | Load the address of a nearby label directly (PC-relative, no page split) |
 
 These two always appear together — `adrp` gets the page, `add` gets the exact address. Used for loading string literals and float constants from the [data section](arm64-assembly.md#data-section-constants).
 
@@ -125,6 +127,7 @@ See [Memory Model](memory-model.md) for why this specific value is used as the n
 | `cset` | `cset x0, eq` | x0 = 1 if equal flag set, 0 otherwise |
 | `csel` | `csel x0, x1, x2, gt` | x0 = x1 if greater, x2 otherwise |
 | `csinv` | `csinv x0, x0, xzr, ge` | If condition false: x0 = ~xzr = -1, else x0 unchanged. Used for spaceship (`<=>`) |
+| `cinc` | `cinc x0, x0, eq` | Conditionally increment a register by 1 when the condition holds |
 
 ### Floating-point comparison
 
@@ -203,6 +206,7 @@ Used for PHP type casting (`(int)3.14`, `(float)42`) and mixed arithmetic. See [
 | `lsr` | `lsr x0, x0, #4` | Logical shift right |
 | `lsl` | `lsl x0, x0, #3` | Logical shift left |
 | `asr` | `asr x0, x0, #63` | Arithmetic shift right (preserves sign) |
+| `ubfx` | `ubfx x13, x13, #8, #7` | Unsigned bitfield extract: pull out a range of bits, used to read runtime tags |
 
 Used for PHP's bitwise operators (`&`, `|`, `^`, `<<`, `>>`) and in [runtime routines](the-runtime.md) for things like hex conversion, hash algorithms, and base64 encoding.
 

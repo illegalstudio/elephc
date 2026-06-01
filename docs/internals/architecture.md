@@ -293,14 +293,14 @@ src/
 │   │
 │   ├── builtins/              Built-in function codegen (one file per language function)
 │   │   ├── mod.rs             Dispatcher — chains to category modules
-│   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (58 files)
+│   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (59 files)
 │   │   ├── arrays/            count, array_push, buffer_len/free, sort, array_map, usort, ... (64 files)
-│   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, sin, cos, ... (32 files)
+│   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, sin, cos, ... (33 files)
 │   │   ├── types/             is_*, gettype, empty, unset, settype, class introspection, ... (24 files)
 │   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (74 files)
 │   │   ├── pointers/          ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ... (16 files)
 │   │   ├── spl/               iterator_to_array, iterator_count, iterator_apply, iterator_common (5 files)
-│   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, attribute reflection, ... (31 files)
+│   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, attribute reflection, ... (32 files)
 │   │
 │   └── runtime/               Runtime routines and target-specific emission helpers
 │       ├── mod.rs             Emits all runtime functions into assembly
@@ -308,8 +308,8 @@ src/
 │       ├── diagnostics.rs     Suppressible runtime-warning channel used by `@`
 │       ├── emitters.rs        Shared emit helpers used across runtime categories
 │       ├── x86_minimal.rs     Minimal x86_64 runtime slice for the Linux x86_64 target
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (58 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (121 files)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (60 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (124 files)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed plus callable descriptor release (3 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (30 files)
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
