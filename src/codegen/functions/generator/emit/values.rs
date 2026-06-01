@@ -384,15 +384,23 @@ pub(super) fn emit_replace_mixed_slot(
 /// preserving them across evaluation, then emits the appropriate compare and branch
 /// using inverted condition codes. The branch is a no-op when the condition is true.
 pub(super) fn emit_branch_if_false(emitter: &mut Emitter, cond: &BoolExpr, false_label: &str) {
+    if let BoolExpr::MixedSlotNull { slot_idx, is_equal } = cond {
+        emit_branch_if_mixed_slot_null_condition_false(emitter, *slot_idx, *is_equal, false_label);
+        return;
+    }
+
+    let BoolExpr::IntCompare { left, op, right } = cond else {
+        unreachable!("all non-mixed-null generator bool expressions are int comparisons");
+    };
     if emitter.target.arch == Arch::X86_64 {
-        emit_load_int_source_x86_64(emitter, "r10", &cond.left);
+        emit_load_int_source_x86_64(emitter, "r10", left);
         emitter.instruction("sub rsp, 16");                                     // reserve aligned temporary storage for the left comparison value
         emitter.instruction("mov QWORD PTR [rsp], r10");                        // preserve the left comparison value while evaluating the right side
-        emit_load_int_source_x86_64(emitter, "r11", &cond.right);
+        emit_load_int_source_x86_64(emitter, "r11", right);
         emitter.instruction("mov r10, QWORD PTR [rsp]");                        // restore the left comparison value after right-side evaluation
         emitter.instruction("add rsp, 16");                                     // release the temporary comparison storage
         emitter.instruction("cmp r10, r11");                                    // compare the two computed integers
-        let inverse_cc = match cond.op {
+        let inverse_cc = match op {
             CmpOp::Lt => "jge",
             CmpOp::Le => "jg",
             CmpOp::Gt => "jle",
@@ -404,14 +412,14 @@ pub(super) fn emit_branch_if_false(emitter: &mut Emitter, cond: &BoolExpr, false
         return;
     }
 
-    emit_load_int_source(emitter, "x1", &cond.left);
+    emit_load_int_source(emitter, "x1", left);
     emitter.instruction("sub sp, sp, #16");                                     // reserve aligned temporary storage for the left comparison value
     emitter.instruction("str x1, [sp, #0]");                                    // preserve the left comparison value while evaluating the right side
-    emit_load_int_source(emitter, "x2", &cond.right);
+    emit_load_int_source(emitter, "x2", right);
     emitter.instruction("ldr x1, [sp, #0]");                                    // restore the left comparison value after right-side evaluation
     emitter.instruction("add sp, sp, #16");                                     // release the temporary comparison storage
     emitter.instruction("cmp x1, x2");                                          // compare the two computed integers
-    let inverse_cc = match cond.op {
+    let inverse_cc = match op {
         CmpOp::Lt => "ge",
         CmpOp::Le => "gt",
         CmpOp::Gt => "le",
@@ -420,4 +428,45 @@ pub(super) fn emit_branch_if_false(emitter: &mut Emitter, cond: &BoolExpr, false
         CmpOp::Ne => "eq",
     };
     emitter.instruction(&format!("b.{} {}", inverse_cc, false_label));          // branch if the condition is false
+}
+
+/// Emits a false branch for `$mixed_slot === null` or `$mixed_slot !== null`.
+///
+/// A generator Mixed slot may be a null pointer when no value was sent, or a
+/// boxed Mixed null cell. Both forms compare as PHP null.
+fn emit_branch_if_mixed_slot_null_condition_false(
+    emitter: &mut Emitter,
+    slot_idx: usize,
+    is_equal: bool,
+    false_label: &str,
+) {
+    let boxed_null = format!("{}_mixed_null", false_label);
+    let done = format!("{}_mixed_null_done", false_label);
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", slot_offset(slot_idx))); // load the boxed Mixed slot pointer for null comparison
+        emitter.instruction("test rax, rax");                                   // null pointer slots are PHP null
+        emitter.instruction(&format!("jz {}", boxed_null));                     // skip unboxing when the slot has no box
+        emitter.instruction("call __rt_mixed_unbox");                           // rax = Mixed tag for the boxed slot
+        emitter.instruction("cmp rax, 8");                                      // tag 8 is PHP null
+        emitter.instruction(&format!("{} {}", if is_equal { "jne" } else { "je" }, false_label)); // branch when the null predicate is false
+        emitter.instruction(&format!("jmp {}", done));                          // skip the raw-null branch
+        emitter.label(&boxed_null);
+        if !is_equal {
+            emitter.instruction(&format!("jmp {}", false_label));               // raw null makes !== null false
+        }
+        emitter.label(&done);
+        return;
+    }
+
+    emitter.instruction(&format!("ldr x0, [x19, #{}]", slot_offset(slot_idx))); // load the boxed Mixed slot pointer for null comparison
+    emitter.instruction(&format!("cbz x0, {}", boxed_null));                    // null pointer slots are PHP null
+    emitter.instruction("bl __rt_mixed_unbox");                                 // x0 = Mixed tag for the boxed slot
+    emitter.instruction("cmp x0, #8");                                          // tag 8 is PHP null
+    emitter.instruction(&format!("b.{} {}", if is_equal { "ne" } else { "eq" }, false_label)); // branch when the null predicate is false
+    emitter.instruction(&format!("b {}", done));                                // skip the raw-null branch
+    emitter.label(&boxed_null);
+    if !is_equal {
+        emitter.instruction(&format!("b {}", false_label));                     // raw null makes !== null false
+    }
+    emitter.label(&done);
 }

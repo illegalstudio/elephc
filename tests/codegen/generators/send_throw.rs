@@ -165,6 +165,26 @@ var_dump($g->send("p"));
     assert_eq!(out, "int(1)\np\nint(2)\n");
 }
 
+/// Regression for issue #308: a value sent into a plain yield assignment
+/// remains visible to following generator statements even when the next
+/// statement is a ternary echo and the generator then terminates.
+#[test]
+fn test_generator_send_value_reaches_ternary_echo_before_termination() {
+    let out = compile_and_run(
+        r#"<?php
+function g() {
+    $x = yield 1;
+    echo $x === null ? "n" : $x;
+}
+
+$g = g();
+echo $g->current();
+$g->send(5);
+"#,
+    );
+    assert_eq!(out, "15");
+}
+
 /// Verifies `send()` value participates in Mixed arithmetic when used in expressions
 /// on the right side of `yield`. Tests `$a * 2` and `$a + $b` with sent int payloads,
 /// and that `send()` on an already-terminated generator returns `null`.

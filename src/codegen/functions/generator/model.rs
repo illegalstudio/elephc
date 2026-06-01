@@ -223,14 +223,21 @@ pub(super) enum IntBinOp {
     Div,
 }
 
-/// A boolean comparison expression used in generator control-flow nodes
-/// (While, DoWhile, For). Compares two IntSources using a CmpOp and feeds
-/// the resulting bool into the loop condition for branching.
+/// A boolean expression used in generator control-flow and ternary nodes.
+/// Covers integer comparisons and null checks against Mixed slots.
 #[derive(Clone)]
-pub(super) struct BoolExpr {
-    pub left: IntSource,
-    pub op: CmpOp,
-    pub right: IntSource,
+pub(super) enum BoolExpr {
+    /// Compares two int-classifiable values with a comparison operator.
+    IntCompare {
+        left: IntSource,
+        op: CmpOp,
+        right: IntSource,
+    },
+    /// Compares a Mixed-typed slot with PHP null.
+    MixedSlotNull {
+        slot_idx: usize,
+        is_equal: bool,
+    },
 }
 
 #[derive(Clone, Copy)]

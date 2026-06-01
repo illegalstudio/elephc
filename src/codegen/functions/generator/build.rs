@@ -130,15 +130,29 @@ pub(super) fn classify_mixed_expr(
 }
 
 /// Classify a boolean expression for v1 generator conditionals.
-/// Supports six comparison operators (`<`, `<=`, `>`, `>=`, `==`, `!=`)
-/// on int-classifiable operands. Returns `None` for non-comparisons or
-/// non-int operands — the builder turns those into `ResumeNode::Bail`.
+/// Supports integer comparisons and strict/loose null checks against
+/// Mixed-typed slots. Returns `None` for unsupported operands — the
+/// builder turns those into `ResumeNode::Bail`.
 pub(super) fn classify_bool_expr(
     expr: &ExprKind,
     slots: &[String],
     types: &[SlotType],
 ) -> Option<BoolExpr> {
     if let ExprKind::BinaryOp { left, op, right } = expr {
+        if matches!(op, BinOp::Eq | BinOp::StrictEq | BinOp::NotEq | BinOp::StrictNotEq) {
+            if let Some(slot_idx) = mixed_slot_null_cmp(left, right, slots, types) {
+                return Some(BoolExpr::MixedSlotNull {
+                    slot_idx,
+                    is_equal: matches!(op, BinOp::Eq | BinOp::StrictEq),
+                });
+            }
+            if let Some(slot_idx) = mixed_slot_null_cmp(right, left, slots, types) {
+                return Some(BoolExpr::MixedSlotNull {
+                    slot_idx,
+                    is_equal: matches!(op, BinOp::Eq | BinOp::StrictEq),
+                });
+            }
+        }
         let cmp = match op {
             BinOp::Lt => CmpOp::Lt,
             BinOp::LtEq => CmpOp::Le,
@@ -150,9 +164,30 @@ pub(super) fn classify_bool_expr(
         };
         let l = classify_int_expr(&left.kind, slots, types)?;
         let r = classify_int_expr(&right.kind, slots, types)?;
-        return Some(BoolExpr { left: l, op: cmp, right: r });
+        return Some(BoolExpr::IntCompare {
+            left: l,
+            op: cmp,
+            right: r,
+        });
     }
     None
+}
+
+/// Returns the Mixed slot index when `value` is a Mixed variable and
+/// `null_candidate` is the PHP null literal.
+fn mixed_slot_null_cmp(
+    value: &Expr,
+    null_candidate: &Expr,
+    slots: &[String],
+    types: &[SlotType],
+) -> Option<usize> {
+    if !matches!(null_candidate.kind, ExprKind::Null) {
+        return None;
+    }
+    let ExprKind::Variable(name) = &value.kind else {
+        return None;
+    };
+    slot_idx_of_type(name, slots, types, SlotType::Mixed)
 }
 
 /// Collects variable-use hints from the generator body before slot
@@ -181,10 +216,10 @@ fn record_stmt_use_hints(body: &[Stmt], hints: &mut SlotUseHints) {
                 elseif_clauses,
                 else_body,
             } => {
-                record_int_expr_use_hints(&condition.kind, hints);
+                record_bool_expr_use_hints(&condition.kind, hints);
                 record_stmt_use_hints(then_body, hints);
                 for (elseif_cond, elseif_body) in elseif_clauses {
-                    record_int_expr_use_hints(&elseif_cond.kind, hints);
+                    record_bool_expr_use_hints(&elseif_cond.kind, hints);
                     record_stmt_use_hints(elseif_body, hints);
                 }
                 if let Some(body) = else_body {
@@ -192,19 +227,19 @@ fn record_stmt_use_hints(body: &[Stmt], hints: &mut SlotUseHints) {
                 }
             }
             StmtKind::While { condition, body } => {
-                record_int_expr_use_hints(&condition.kind, hints);
+                record_bool_expr_use_hints(&condition.kind, hints);
                 record_stmt_use_hints(body, hints);
             }
             StmtKind::DoWhile { body, condition } => {
                 record_stmt_use_hints(body, hints);
-                record_int_expr_use_hints(&condition.kind, hints);
+                record_bool_expr_use_hints(&condition.kind, hints);
             }
             StmtKind::For { init, condition, update, body } => {
                 if let Some(init_stmt) = init.as_deref() {
                     record_stmt_use_hints(std::slice::from_ref(init_stmt), hints);
                 }
                 if let Some(cond) = condition {
-                    record_int_expr_use_hints(&cond.kind, hints);
+                    record_bool_expr_use_hints(&cond.kind, hints);
                 }
                 if let Some(update_stmt) = update.as_deref() {
                     record_stmt_use_hints(std::slice::from_ref(update_stmt), hints);
@@ -318,6 +353,15 @@ fn record_mixed_expr_use_hints(expr: &ExprKind, hints: &mut SlotUseHints) {
                 record_mixed_expr_use_hints(&item.kind, hints);
             }
         }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            record_bool_expr_use_hints(&condition.kind, hints);
+            record_mixed_expr_use_hints(&then_expr.kind, hints);
+            record_mixed_expr_use_hints(&else_expr.kind, hints);
+        }
         ExprKind::Yield { key, value } => {
             if let Some(k) = key {
                 record_mixed_expr_use_hints(&k.kind, hints);
@@ -337,6 +381,26 @@ fn record_mixed_expr_use_hints(expr: &ExprKind, hints: &mut SlotUseHints) {
             record_mixed_expr_use_hints(&inner.kind, hints);
         }
         _ => {}
+    }
+}
+
+/// Records variable uses inside boolean expressions. Null checks against
+/// variables require Mixed slots; other supported comparisons stay int-typed.
+fn record_bool_expr_use_hints(expr: &ExprKind, hints: &mut SlotUseHints) {
+    match expr {
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(op, BinOp::Eq | BinOp::StrictEq | BinOp::NotEq | BinOp::StrictNotEq)
+                && matches!(right.kind, ExprKind::Null) =>
+        {
+            record_mixed_expr_use_hints(&left.kind, hints);
+        }
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(op, BinOp::Eq | BinOp::StrictEq | BinOp::NotEq | BinOp::StrictNotEq)
+                && matches!(left.kind, ExprKind::Null) =>
+        {
+            record_mixed_expr_use_hints(&right.kind, hints);
+        }
+        _ => record_int_expr_use_hints(expr, hints),
     }
 }
 
@@ -768,9 +832,10 @@ fn build_node(
 
 /// Translates `echo <expr>` into generator IR.
 ///
-/// The narrow generator IR can lower concat echo expressions by emitting each
-/// operand in source order. Non-concat expressions use the normal Mixed boxing
-/// path.
+/// The narrow generator IR lowers concat echo expressions by emitting each
+/// operand in source order, and lowers ternary echo expressions as an `If`
+/// whose branches each emit one echo. Other expressions use the normal Mixed
+/// boxing path.
 fn build_echo_node(
     expr: &Expr,
     slots: &[String],
@@ -788,6 +853,22 @@ fn build_echo_node(
                 build_echo_node(left, slots, types, data)?,
                 build_echo_node(right, slots, types, data)?,
             ],
+        });
+    }
+
+    if let ExprKind::Ternary {
+        condition,
+        then_expr,
+        else_expr,
+    } = &expr.kind
+    {
+        let cond = classify_bool_expr(&condition.kind, slots, types)?;
+        let then_node = build_echo_node(then_expr, slots, types, data)?;
+        let else_node = build_echo_node(else_expr, slots, types, data)?;
+        return Some(ResumeNode::If {
+            cond,
+            then_body: vec![then_node],
+            else_body: vec![else_node],
         });
     }
 
