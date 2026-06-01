@@ -38,6 +38,25 @@ echo label("title") . "|" . label("slug");
     assert_eq!(out, "[title]|[slug]");
 }
 
+/// Verifies that a function returning a builtin-produced string persists it
+/// before the caller starts a new concat expression.
+#[test]
+fn test_function_returned_builtin_string_survives_caller_concat() {
+    let out = compile_and_run(
+        r#"<?php
+function query_name(): string {
+    return urldecode(substr("name=elephc", 5));
+}
+
+$name = query_name();
+echo $name . "\n";
+echo "Hello, " . $name . "!\n";
+echo "Hello, " . query_name() . "!\n";
+"#,
+    );
+    assert_eq!(out, "elephc\nHello, elephc!\nHello, elephc!\n");
+}
+
 /// Compiles a void function that echoes a value and returns early, then verifies
 /// the side effect occurs correctly when the function is called as a statement.
 #[test]

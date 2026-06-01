@@ -8,12 +8,11 @@
 //! Key details:
 //! - Loop exits must jump to the correct depth while preserving cleanup for skipped constructs.
 
-use crate::codegen::context::{Context, HeapOwnership};
+use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::{
-    coerce_result_to_type, emit_expr, expr_result_heap_ownership,
-    string_result_is_owned_call_temp, string_result_uses_transient_concat_buffer,
+    coerce_result_to_type, emit_expr, string_result_is_owned_call_temp,
 };
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
@@ -45,16 +44,9 @@ pub(crate) fn emit_return_stmt(
     if let Some(e) = expr {
         let ty = emit_expr(e, emitter, ctx, data);
         super::super::super::helpers::retain_borrowed_heap_result(emitter, e, &ty);
-        if matches!(ty, PhpType::Str)
-            && (expr_result_heap_ownership(e) != HeapOwnership::Owned
-                || string_result_uses_transient_concat_buffer(e))
-        {
-            persist_string_return_result(
-                emitter,
-                string_result_is_owned_call_temp(e, ctx),
-            );
-        }
         let target_ty = ctx.return_type.clone();
+        let release_string_original = matches!(ty, PhpType::Str)
+            && string_result_is_owned_call_temp(e, ctx);
         if crate::codegen::expr::can_coerce_result_to_type(&ty, &target_ty) {
             let release_mixed_after_coerce = !matches!(target_ty, PhpType::Mixed | PhpType::Union(_))
                 && super::super::super::helpers::should_release_owned_mixed_after_coerce(
@@ -75,6 +67,9 @@ pub(crate) fn emit_return_stmt(
                     &target_ty,
                 );
             }
+        }
+        if matches!(target_ty, PhpType::Str) {
+            persist_string_return_result(emitter, release_string_original);
         }
     }
     if let Some(label) = &ctx.return_label {
