@@ -152,11 +152,17 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `array_keys()` | `array_keys($arr): array` | Returns the array keys |
 | `array_values()` | `array_values($arr): array` | Returns copy of values |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |
+| `array_key_first()` | `array_key_first($arr): int\|string\|null` | First key in insertion order, or `null` if the array is empty |
+| `array_key_last()` | `array_key_last($arr): int\|string\|null` | Last key in insertion order, or `null` if the array is empty |
+| `array_is_list()` | `array_is_list($arr): bool` | `true` if the keys are exactly `0..count-1` in order (the empty array is a list) |
 | `array_search()` | `array_search($needle, $arr): int\|string\|false` | Search for value, returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found |
 | `array_slice()` | `array_slice($arr, $offset [, $length]): array` | Extract a slice |
 | `array_splice()` | `array_splice($arr, $offset [, $length]): array` | Remove a slice in place and return the removed elements |
 | `array_chunk()` | `array_chunk($arr, $size): array` | Split into chunks |
 | `array_merge()` | `array_merge($arr1, $arr2): array` | Merge two arrays |
+| `array_merge_recursive()` | `array_merge_recursive($arr1, $arr2): array` | Recursively merge two arrays: integer keys append (renumbered), string keys that collide recurse when both values are arrays and otherwise combine into a list. Accepts associative arrays or **indexed arrays of scalars** (int/float/bool); nested indexed-array values are treated as opaque. |
+| `array_replace()` | `array_replace($arr, $replacements): array` | Overwrite matching keys in `$arr` (in place, keeping position) and append new keys from `$replacements`; later values win. Accepts associative arrays or **indexed arrays of scalars** (int/float/bool). |
+| `array_replace_recursive()` | `array_replace_recursive($arr, $replacements): array` | Like `array_replace()`, but when both values at a key are associative arrays they are merged recursively instead of overwritten. Accepts associative arrays or **indexed arrays of scalars** (int/float/bool); nested indexed arrays are overwritten, not merged. |
 | `array_combine()` | `array_combine($keys, $values): array` | Create array from keys/values |
 | `array_fill()` | `array_fill($start, $num, $value): array` | Fill with values |
 | `array_fill_keys()` | `array_fill_keys($keys, $value): array` | Fill with values using keys |
@@ -166,6 +172,10 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `array_intersect()` | `array_intersect($arr1, $arr2): array` | Values in both |
 | `array_diff_key()` | `array_diff_key($arr1, $arr2): array` | Keys in $arr1 not in $arr2 |
 | `array_intersect_key()` | `array_intersect_key($arr1, $arr2): array` | Keys in both |
+| `array_udiff()` | `array_udiff($arr1, $arr2, $cmp): array` | Values in $arr1 not in $arr2, equality decided by the two-argument comparator (`$cmp($a, $b) === 0`). Supports string / function / non-capturing closure comparators. |
+| `array_uintersect()` | `array_uintersect($arr1, $arr2, $cmp): array` | Values in both arrays, equality decided by the comparator (`$cmp($a, $b) === 0`). |
+| `array_diff_assoc()` | `array_diff_assoc($arr1, $arr2): array` | Entries of $arr1 whose `(key, value)` pair is absent from $arr2 (values compared as `(string)$a === (string)$b`). Accepts associative arrays or **indexed arrays of scalars** (int/float/bool). |
+| `array_intersect_assoc()` | `array_intersect_assoc($arr1, $arr2): array` | Entries of $arr1 whose `(key, value)` pair is present in $arr2 (values compared as strings). Accepts associative arrays or **indexed arrays of scalars** (int/float/bool). |
 | `array_unique()` | `array_unique($arr): array` | Remove duplicates |
 | `array_reverse()` | `array_reverse($arr): array` | Reverse order |
 | `array_flip()` | `array_flip($arr): array` | Exchange keys and values, normalizing integer and numeric-string result keys |
@@ -185,6 +195,11 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `shuffle()` | `shuffle($arr): void` | Randomly shuffle (in-place) |
 | `array_rand()` | `array_rand($arr): int` | Pick one random key |
 | `array_map()` | `array_map($callback, $arr): array` | Apply callback to each element |
+| `array_walk_recursive()` | `array_walk_recursive($arr, $callback): void` | Apply `$callback` to each non-array leaf value, recursing into nested indexed/associative arrays. Leaf values must share a scalar type (consistent with `array_walk`: leaf passed by value, no key argument). |
+| `array_multisort()` | `array_multisort($arr1, $arr2): bool` | Sort `$arr1` ascending (stable) and reorder `$arr2` in tandem; both are sorted in place (by reference). **Two indexed arrays of scalar elements**; sort flags, descending order, and >2 arrays are follow-ups. |
+| `array_find()` | `array_find($arr, $callback): mixed` | (PHP 8.4) Returns the first element for which `$callback($value)` is truthy, or `null` if none match. |
+| `array_any()` | `array_any($arr, $callback): bool` | (PHP 8.4) `true` if `$callback($value)` is truthy for at least one element. |
+| `array_all()` | `array_all($arr, $callback): bool` | (PHP 8.4) `true` if `$callback($value)` is truthy for every element. |
 | `array_filter()` | `array_filter($arr, $callback): array` | Filter where callback is truthy |
 | `array_reduce()` | `array_reduce($arr, $callback, $init): int` | Reduce to single value |
 | `array_walk()` | `array_walk($arr, $callback): void` | Call callback on each element |

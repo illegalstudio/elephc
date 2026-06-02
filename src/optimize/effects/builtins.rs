@@ -145,6 +145,14 @@ pub(super) fn is_pure_non_throwing_builtin(name: &str) -> bool {
             | "array_intersect"
             | "array_diff_key"
             | "array_intersect_key"
+            | "array_diff_assoc"
+            | "array_intersect_assoc"
+            | "array_merge_recursive"
+            | "array_replace"
+            | "array_replace_recursive"
+            | "array_is_list"
+            | "array_key_first"
+            | "array_key_last"
             | "range"
     )
     // Note: json_encode / json_decode / json_validate / json_last_error /

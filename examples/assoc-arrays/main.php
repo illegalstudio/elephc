@@ -106,3 +106,41 @@ foreach ($profile as $key => $value) {
     echo "\n";
 }
 echo "As JSON: " . json_encode($profile) . "\n";
+
+// First and last keys, and list-shape detection
+$ranking = ["gold" => 1, "silver" => 2, "bronze" => 3];
+echo "\nFirst key: " . array_key_first($ranking) . "\n";
+echo "Last key: " . array_key_last($ranking) . "\n";
+echo "Ranking is a list? " . (array_is_list($ranking) ? "yes" : "no") . "\n";
+echo "[10,20,30] is a list? " . (array_is_list([10, 20, 30]) ? "yes" : "no") . "\n";
+
+// array_replace: later values win, keys keep their position
+$config = ["host" => "localhost", "port" => 8080, "debug" => 0];
+$patched = array_replace($config, ["port" => 9090, "debug" => 1]);
+echo "\nPatched config:\n";
+foreach ($patched as $key => $value) {
+    echo "  " . $key . " = " . $value . "\n";
+}
+
+// array_merge_recursive: nested arrays merge instead of being overwritten
+$a = ["limits" => ["cpu" => 1], "tags" => ["a" => 1]];
+$b = ["limits" => ["mem" => 2], "tags" => ["b" => 2]];
+$merged = array_merge_recursive($a, $b);
+echo "\nRecursively merged limits:\n";
+foreach ($merged["limits"] as $key => $value) {
+    echo "  " . $key . " = " . $value . "\n";
+}
+
+// array_diff_assoc / array_intersect_assoc compare both key and value
+$left = ["a" => 1, "b" => 2, "c" => 3];
+$right = ["a" => 1, "b" => 9];
+echo "\nDiff (kept from left): " . count(array_diff_assoc($left, $right)) . " entries\n";
+echo "Intersect (in both): " . count(array_intersect_assoc($left, $right)) . " entries\n";
+
+// The hash-based functions also accept plain indexed arrays of scalars: the
+// indexed input is treated as an integer-keyed map (key 0, 1, 2, ...).
+$levels = array_replace([10, 20, 30], [1 => 99]);
+echo "\nPatched levels:\n";
+foreach ($levels as $index => $level) {
+    echo "  [" . $index . "] = " . $level . "\n";
+}

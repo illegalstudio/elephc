@@ -114,10 +114,29 @@ pub(super) fn infer_function_call_type(
                 },
             }
         }
-        "array_diff_key" | "array_intersect_key" => args
-            .first()
-            .map(|arg| infer_local_type(arg, sig, ctx))
-            .unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Int))),
+        "array_diff_key" | "array_intersect_key" | "array_replace" | "array_replace_recursive"
+        | "array_diff_assoc" | "array_intersect_assoc" => match (args.first(), args.get(1)) {
+            (Some(a0), Some(a1)) => PhpType::two_input_hash_result(
+                &infer_local_type(a0, sig, ctx),
+                &infer_local_type(a1, sig, ctx),
+            ),
+            (Some(a0), None) => infer_local_type(a0, sig, ctx).as_hash(),
+            _ => PhpType::Array(Box::new(PhpType::Int)),
+        },
+        "array_merge_recursive" => {
+            let key = match (args.first(), args.get(1)) {
+                (Some(a0), Some(a1)) => PhpType::widen(
+                    infer_local_type(a0, sig, ctx).hash_key_type(),
+                    infer_local_type(a1, sig, ctx).hash_key_type(),
+                ),
+                (Some(a0), None) => infer_local_type(a0, sig, ctx).hash_key_type(),
+                _ => PhpType::Int,
+            };
+            PhpType::AssocArray {
+                key: Box::new(key),
+                value: Box::new(PhpType::Mixed),
+            }
+        }
         "explode"
         | "str_split"
         | "file"
@@ -132,6 +151,8 @@ pub(super) fn infer_function_call_type(
         | "array_fill"
         | "array_diff"
         | "array_intersect"
+        | "array_udiff"
+        | "array_uintersect"
         | "array_splice"
         | "array_column"
         | "array_map"
@@ -169,7 +190,8 @@ pub(super) fn infer_function_call_type(
         "is_callable" | "is_int" | "is_float" | "is_string" | "is_bool" | "is_null" | "is_numeric"
         | "is_nan" | "is_finite" | "is_infinite" | "is_array" | "empty" | "isset"
         | "is_file" | "is_dir" | "is_readable" | "is_writable" | "file_exists"
-        | "in_array" | "array_key_exists" | "str_contains" | "str_starts_with"
+        | "in_array" | "array_key_exists" | "array_is_list" | "array_any" | "array_all"
+        | "array_multisort" | "str_contains" | "str_starts_with"
         | "str_ends_with" | "ctype_alpha" | "ctype_digit" | "ctype_alnum"
         | "ctype_space" | "function_exists" | "chmod" | "chown" | "chgrp"
         | "touch" | "ftruncate" | "fflush" | "fsync" | "fdatasync" | "ptr_is_null"
@@ -182,7 +204,8 @@ pub(super) fn infer_function_call_type(
         | "fputcsv" => PhpType::Int,
         "strpos" | "strrpos" | "array_search" | "file_get_contents" | "json_encode" | "fileatime"
         | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
-        | "filetype" | "stat" | "lstat" | "fstat" | "fgetc" | "readfile" | "readlink" => PhpType::Mixed,
+        | "filetype" | "stat" | "lstat" | "fstat" | "fgetc" | "readfile" | "readlink"
+        | "array_key_first" | "array_key_last" | "array_find" => PhpType::Mixed,
         "fopen" | "tmpfile" => merge_union_members(vec![PhpType::stream_resource(), PhpType::Bool]),
         "pathinfo" => infer_pathinfo_type(args),
         "abs" => {

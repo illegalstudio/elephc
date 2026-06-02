@@ -303,6 +303,204 @@ array_walk($a, "show");
     assert_eq!(out, "102030");
 }
 
+/// Verifies array_walk_recursive() visits the leaf values of a nested indexed array
+/// depth-first, invoking the callback on each scalar leaf.
+/// Fixture: [[1,2],[3,4]] → leaves 1,2,3,4 in order.
+#[test]
+fn test_array_walk_recursive_indexed() {
+    let out = compile_and_run(
+        r#"<?php
+function show($x) { echo $x; echo ","; }
+$a = [[1, 2], [3, 4]];
+array_walk_recursive($a, "show");
+"#,
+    );
+    assert_eq!(out, "1,2,3,4,");
+}
+
+/// Verifies array_walk_recursive() descends into nested associative arrays and visits
+/// the leaf values in insertion order.
+/// Fixture: {g1:{a:1,b:2}, g2:{c:3}} → leaves 1,2,3.
+#[test]
+fn test_array_walk_recursive_assoc() {
+    let out = compile_and_run(
+        r#"<?php
+function p($x) { echo $x; echo ";"; }
+$a = ["g1" => ["a" => 1, "b" => 2], "g2" => ["c" => 3]];
+array_walk_recursive($a, "p");
+"#,
+    );
+    assert_eq!(out, "1;2;3;");
+}
+
+/// Verifies array_walk_recursive() recurses through three levels of nesting.
+/// Fixture: [[[1,2]],[[3]]] → leaves 1,2,3.
+#[test]
+fn test_array_walk_recursive_deep() {
+    let out = compile_and_run(
+        r#"<?php
+function q($x) { echo $x; }
+$a = [[[1, 2]], [[3]]];
+array_walk_recursive($a, "q");
+"#,
+    );
+    assert_eq!(out, "123");
+}
+
+/// Verifies array_walk_recursive() is callable case-insensitively, matching PHP builtin name rules.
+/// Fixture: mixed-case spelling over a nested indexed array.
+#[test]
+fn test_array_walk_recursive_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+function r($x) { echo $x; }
+$a = [[1], [2]];
+Array_Walk_Recursive($a, "r");
+"#,
+    );
+    assert_eq!(out, "12");
+}
+
+/// Verifies array_find() (PHP 8.4) returns the first element satisfying the predicate.
+/// Fixture: first element > 2 in [1,2,3,4] is 3.
+#[test]
+fn test_array_find_returns_first_match() {
+    let out = compile_and_run(
+        r#"<?php
+function gt2($x) { return $x > 2; }
+echo array_find([1, 2, 3, 4], "gt2");
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// Verifies array_find() returns null when no element satisfies the predicate.
+/// Fixture: no element > 2 in [1,2]; the boxed null compares equal to null.
+#[test]
+fn test_array_find_returns_null_when_absent() {
+    let out = compile_and_run(
+        r#"<?php
+function gt2($x) { return $x > 2; }
+$r = array_find([1, 2], "gt2");
+echo ($r === null) ? "null" : "value";
+"#,
+    );
+    assert_eq!(out, "null");
+}
+
+/// Verifies array_find() works with a closure predicate.
+/// Fixture: first element >= 10 in [5,10,15] is 10.
+#[test]
+fn test_array_find_closure() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_find([5, 10, 15], fn($x) => $x >= 10);
+echo $r;
+"#,
+    );
+    assert_eq!(out, "10");
+}
+
+/// Verifies array_any() (PHP 8.4) returns true iff some element satisfies the predicate.
+/// Fixture: [1,2,3] has an element > 2 (true); [1,2] does not (false).
+#[test]
+fn test_array_any() {
+    let out = compile_and_run(
+        r#"<?php
+function gt2($x) { return $x > 2; }
+echo array_any([1, 2, 3], "gt2") ? "y" : "n";
+echo array_any([1, 2], "gt2") ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "yn");
+}
+
+/// Verifies array_all() (PHP 8.4) returns true iff every element satisfies the predicate.
+/// Fixture: all of [1,2,3] are positive (true); [1,-2,3] is not all positive (false).
+#[test]
+fn test_array_all() {
+    let out = compile_and_run(
+        r#"<?php
+function pos($x) { return $x > 0; }
+echo array_all([1, 2, 3], "pos") ? "y" : "n";
+echo array_all([1, -2, 3], "pos") ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "yn");
+}
+
+/// Verifies array_find / array_any / array_all are callable case-insensitively.
+/// Fixture: mixed-case spellings over a small numeric array.
+#[test]
+fn test_array_find_any_all_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+function pos($x) { return $x > 0; }
+echo Array_Find([3, 6], "pos");
+echo Array_Any([0, 0], "pos") ? "y" : "n";
+echo Array_All([1, 2], "pos") ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "3ny");
+}
+
+/// Verifies array_udiff() keeps elements of the first array whose comparator never returns 0
+/// against any element of the second array.
+/// Fixture: udiff([1,2,3,4], [2,4]) with a numeric comparator keeps 1 and 3.
+#[test]
+fn test_array_udiff_string_comparator() {
+    let out = compile_and_run(
+        r#"<?php
+function cmp($a, $b) { return $a - $b; }
+$r = array_udiff([1, 2, 3, 4], [2, 4], "cmp");
+foreach ($r as $v) { echo $v; }
+"#,
+    );
+    assert_eq!(out, "13");
+}
+
+/// Verifies array_uintersect() keeps elements of the first array that compare equal to some
+/// element of the second array.
+/// Fixture: uintersect([1,2,3,4], [2,4]) keeps 2 and 4.
+#[test]
+fn test_array_uintersect_string_comparator() {
+    let out = compile_and_run(
+        r#"<?php
+function cmp($a, $b) { return $a - $b; }
+$r = array_uintersect([1, 2, 3, 4], [2, 4], "cmp");
+foreach ($r as $v) { echo $v; }
+"#,
+    );
+    assert_eq!(out, "24");
+}
+
+/// Verifies array_udiff() works with a non-capturing closure (spaceship) comparator.
+/// Fixture: udiff([5,10,15], [10]) keeps 5 and 15.
+#[test]
+fn test_array_udiff_closure_comparator() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_udiff([5, 10, 15], [10], fn($a, $b) => $a <=> $b);
+foreach ($r as $v) { echo $v; echo ","; }
+"#,
+    );
+    assert_eq!(out, "5,15,");
+}
+
+/// Verifies array_udiff() / array_uintersect() result sizes and case-insensitive calls.
+/// Fixture: udiff keeps 2 of 4; uintersect keeps 2 of 4.
+#[test]
+fn test_array_udiff_uintersect_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+function cmp($a, $b) { return $a - $b; }
+echo count(Array_Udiff([1, 2, 3, 4], [2, 4], "cmp"));
+echo count(Array_Uintersect([1, 2, 3, 4], [2, 4], "cmp"));
+"#,
+    );
+    assert_eq!(out, "22");
+}
+
 // Tests `usort` with a comparison callback that sorts an unsorted array in ascending
 // order, verifying both value ordering and that the array is modified in place.
 /// Verifies that usort.

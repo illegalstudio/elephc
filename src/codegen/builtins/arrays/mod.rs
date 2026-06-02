@@ -19,12 +19,20 @@ mod array_filter;
 mod array_flip;
 mod array_intersect;
 mod array_intersect_key;
+mod array_is_list;
+mod array_find_any_all;
+mod array_udiff_uintersect;
+mod assoc_diff_intersect;
+mod array_key_edge;
 mod array_key_exists;
 pub(crate) mod array_keys;
 mod array_map;
 mod array_map_callback_returns_str;
 mod array_map_expr_is_str;
 mod array_merge;
+mod array_merge_recursive;
+mod array_multisort;
+mod array_replace;
 mod array_pad;
 mod array_pop;
 mod array_product;
@@ -53,6 +61,7 @@ mod count;
 pub(crate) mod descriptor_arg_builder;
 mod ensure_unique_arg;
 mod function_exists;
+mod hash_arg_call;
 mod in_array;
 mod isset;
 mod krsort;
@@ -105,10 +114,21 @@ pub fn emit(
         "array_shift" => array_shift::emit(name, args, emitter, ctx, data),
         "array_unshift" => array_unshift::emit(name, args, emitter, ctx, data),
         "array_merge" => array_merge::emit(name, args, emitter, ctx, data),
+        "array_replace" | "array_replace_recursive" => {
+            array_replace::emit(name, args, emitter, ctx, data)
+        }
+        "array_merge_recursive" => {
+            array_merge_recursive::emit(name, args, emitter, ctx, data)
+        }
+        "array_multisort" => array_multisort::emit(name, args, emitter, ctx, data),
         "array_slice" => array_slice::emit(name, args, emitter, ctx, data),
         "array_splice" => array_splice::emit(name, args, emitter, ctx, data),
         "array_combine" => array_combine::emit(name, args, emitter, ctx, data),
         "array_flip" => array_flip::emit(name, args, emitter, ctx, data),
+        "array_is_list" => array_is_list::emit(name, args, emitter, ctx, data),
+        "array_key_first" | "array_key_last" => {
+            array_key_edge::emit(name, args, emitter, ctx, data)
+        }
         "array_chunk" => array_chunk::emit(name, args, emitter, ctx, data),
         "array_column" => array_column::emit(name, args, emitter, ctx, data),
         "array_pad" => array_pad::emit(name, args, emitter, ctx, data),
@@ -117,6 +137,9 @@ pub fn emit(
         "array_diff" => array_diff::emit(name, args, emitter, ctx, data),
         "array_intersect" => array_intersect::emit(name, args, emitter, ctx, data),
         "array_diff_key" => array_diff_key::emit(name, args, emitter, ctx, data),
+        "array_diff_assoc" | "array_intersect_assoc" => {
+            assoc_diff_intersect::emit(name, args, emitter, ctx, data)
+        }
         "array_intersect_key" => array_intersect_key::emit(name, args, emitter, ctx, data),
         "array_rand" => array_rand::emit(name, args, emitter, ctx, data),
         "shuffle" => shuffle_fn::emit(name, args, emitter, ctx, data),
@@ -129,8 +152,16 @@ pub fn emit(
         "natcasesort" => natcasesort::emit(name, args, emitter, ctx, data),
         "array_map" => array_map::emit(name, args, emitter, ctx, data),
         "array_filter" => array_filter::emit(name, args, emitter, ctx, data),
+        "array_find" | "array_any" | "array_all" => {
+            array_find_any_all::emit(name, args, emitter, ctx, data)
+        }
+        "array_udiff" | "array_uintersect" => {
+            array_udiff_uintersect::emit(name, args, emitter, ctx, data)
+        }
         "array_reduce" => array_reduce::emit(name, args, emitter, ctx, data),
-        "array_walk" => array_walk::emit(name, args, emitter, ctx, data),
+        "array_walk" | "array_walk_recursive" => {
+            array_walk::emit(name, args, emitter, ctx, data)
+        }
         "buffer_free" => buffer_free::emit(name, args, emitter, ctx, data),
         "buffer_len" => buffer_len::emit(name, args, emitter, ctx, data),
         "usort" => usort::emit(name, args, emitter, ctx, data),

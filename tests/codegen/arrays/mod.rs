@@ -10,5 +10,7 @@
 mod assoc;
 mod indexed;
 mod assoc_helpers;
+mod assoc_set_ops;
+mod list_and_keys;
 mod nested;
 mod callbacks;

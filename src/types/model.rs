@@ -44,6 +44,76 @@ impl PhpType {
         PhpType::Resource(Some("stream".to_string()))
     }
 
+    /// Returns this array type viewed as a hash (associative array).
+    ///
+    /// Indexed arrays (`Array(elem)`) become `AssocArray { key: Int, value: elem }`: the
+    /// hash-based builtins (`array_replace`, `array_diff_assoc`, ...) always produce an
+    /// integer-keyed hash from an indexed input. Associative arrays and every other type are
+    /// returned unchanged.
+    pub fn as_hash(&self) -> PhpType {
+        match self {
+            PhpType::Array(elem) => PhpType::AssocArray {
+                key: Box::new(PhpType::Int),
+                value: elem.clone(),
+            },
+            other => other.clone(),
+        }
+    }
+
+    /// Returns true if this is an indexed array of a scalar (int/float/bool) element type.
+    ///
+    /// The hash-based builtins accept such indexed inputs by converting them to integer-keyed
+    /// hashes; scalar elements are copied by value, so the converted temporaries are safe to
+    /// free. String/heap element indexed inputs are a follow-up (they hit x86-specific converter
+    /// and clone-shallow issues), so the checker restricts indexed inputs to scalar elements.
+    pub fn is_scalar_indexed_array(&self) -> bool {
+        matches!(
+            self,
+            PhpType::Array(elem)
+                if matches!(**elem, PhpType::Int | PhpType::Float | PhpType::Bool)
+        )
+    }
+
+    /// Returns the hash key type this array type contributes: `Int` for an indexed array,
+    /// the declared key for an associative array, `Int` otherwise.
+    pub fn hash_key_type(&self) -> PhpType {
+        match self {
+            PhpType::Array(_) => PhpType::Int,
+            PhpType::AssocArray { key, .. } => (**key).clone(),
+            _ => PhpType::Int,
+        }
+    }
+
+    /// Returns the hash value type this array type contributes: the element type for an indexed
+    /// array, the declared value for an associative array, `Mixed` otherwise.
+    pub fn hash_value_type(&self) -> PhpType {
+        match self {
+            PhpType::Array(elem) => (**elem).clone(),
+            PhpType::AssocArray { value, .. } => (**value).clone(),
+            _ => PhpType::Mixed,
+        }
+    }
+
+    /// Widens two types to a common type: the type itself when both agree, else `Mixed`.
+    pub fn widen(a: PhpType, b: PhpType) -> PhpType {
+        if a == b {
+            a
+        } else {
+            PhpType::Mixed
+        }
+    }
+
+    /// Computes the result hash type for a two-input hash builtin (the `array_replace` /
+    /// `array_diff_assoc` family). The key and value each widen to `Mixed` when the two inputs
+    /// disagree, so a `foreach` over the result performs the correct runtime key/value dispatch
+    /// when an indexed input is mixed with a string-keyed associative input.
+    pub fn two_input_hash_result(t1: &PhpType, t2: &PhpType) -> PhpType {
+        PhpType::AssocArray {
+            key: Box::new(PhpType::widen(t1.hash_key_type(), t2.hash_key_type())),
+            value: Box::new(PhpType::widen(t1.hash_value_type(), t2.hash_value_type())),
+        }
+    }
+
     /// Returns true if `expected` is compatible with `actual` for resource type matching.
     /// A typed resource (Some) is compatible with a generic resource (None), and two typed
     /// resources are compatible when their kind strings match.

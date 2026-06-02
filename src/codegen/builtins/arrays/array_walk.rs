@@ -27,13 +27,23 @@ use super::runtime_string_callback;
 /// expressions use descriptor-backed environments so receiver/capture metadata survives
 /// runtime selection. Returns `PhpType::Void` on success.
 pub fn emit(
-    _name: &str,
+    name: &str,
     args: &[Expr],
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> Option<PhpType> {
-    emitter.comment("array_walk()");
+    let recursive = name == "array_walk_recursive";
+    emitter.comment(if recursive {
+        "array_walk_recursive()"
+    } else {
+        "array_walk()"
+    });
+    let walk_label = if recursive {
+        "__rt_array_walk_recursive"
+    } else {
+        "__rt_array_walk"
+    };
     let call_reg = abi::nested_call_reg(emitter);
     let result_reg = abi::int_result_reg(emitter);
     let callback_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
@@ -42,9 +52,15 @@ pub fn emit(
 
     // -- evaluate the array argument (first arg) --
     let arr_ty = emit_expr(&args[0], emitter, ctx, data);
-    let source_elem_ty = match &arr_ty {
-        PhpType::Array(elem_ty) => elem_ty.codegen_repr(),
-        _ => PhpType::Int,
+    // array_walk_recursive invokes the callback on leaf (non-array) values, so the
+    // callback wrapper is built for the recursively-unwrapped leaf element type.
+    let source_elem_ty = if recursive {
+        leaf_element_type(&arr_ty)
+    } else {
+        match &arr_ty {
+            PhpType::Array(elem_ty) => elem_ty.codegen_repr(),
+            _ => PhpType::Int,
+        }
     };
 
     // -- save array pointer --
@@ -63,7 +79,7 @@ pub fn emit(
             callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
             abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
             callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
-            abi::emit_call_label(emitter, "__rt_array_walk");                   // call the callback-driven walk runtime helper with a runtime string descriptor
+            abi::emit_call_label(emitter, walk_label);                   // call the callback-driven walk runtime helper with a runtime string descriptor
         },
     ) {
         return Some(PhpType::Void);
@@ -82,7 +98,7 @@ pub fn emit(
         callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
         abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
         callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
-        abi::emit_call_label(emitter, "__rt_array_walk");                       // call the callback-driven walk runtime helper with a callable-array descriptor environment
+        abi::emit_call_label(emitter, walk_label);                       // call the callback-driven walk runtime helper with a callable-array descriptor environment
         callback_env::release_descriptor_callback_env(&wrapper, emitter);
         return Some(PhpType::Void);
     }
@@ -99,7 +115,7 @@ pub fn emit(
             callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
             abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
             callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
-            abi::emit_call_label(emitter, "__rt_array_walk");                   // call the callback-driven walk runtime helper with a runtime callable-array descriptor
+            abi::emit_call_label(emitter, walk_label);                   // call the callback-driven walk runtime helper with a runtime callable-array descriptor
         },
     ) {
         return Some(PhpType::Void);
@@ -124,7 +140,7 @@ pub fn emit(
         callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
         abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
         callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
-        abi::emit_call_label(emitter, "__rt_array_walk");                       // call the callback-driven walk runtime helper with a descriptor environment
+        abi::emit_call_label(emitter, walk_label);                       // call the callback-driven walk runtime helper with a descriptor environment
         callback_env::release_descriptor_callback_env(&wrapper, emitter);
         return Some(PhpType::Void);
     }
@@ -147,7 +163,7 @@ pub fn emit(
         callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
         abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
         callback_env::load_env_pointer_to_reg(emitter, env_arg_reg);
-        abi::emit_call_label(emitter, "__rt_array_walk");                       // call the callback-driven walk runtime helper with a capture environment
+        abi::emit_call_label(emitter, walk_label);                       // call the callback-driven walk runtime helper with a capture environment
         abi::emit_release_temporary_stack(emitter, wrapper.env_bytes);
         return Some(PhpType::Void);
     } else {
@@ -155,7 +171,21 @@ pub fn emit(
         emitter.instruction(&format!("mov {}, {}", callback_arg_reg, call_reg)); // move the callback function address into the first runtime argument register
     }
     abi::emit_load_int_immediate(emitter, env_arg_reg, 0);
-    abi::emit_call_label(emitter, "__rt_array_walk");                           // call the callback-driven walk runtime helper
+    abi::emit_call_label(emitter, walk_label);                           // call the callback-driven walk runtime helper
 
     Some(PhpType::Void)
+}
+
+/// Recursively unwraps a nested array type to its scalar leaf element type.
+///
+/// `array_walk_recursive` invokes the callback on the deepest non-array values, so the
+/// callback wrapper must be built for the leaf type rather than the immediate element type.
+/// Walks through `Array` element types and `AssocArray` value types until a non-array type
+/// is reached, returning its codegen representation.
+fn leaf_element_type(ty: &PhpType) -> PhpType {
+    match ty {
+        PhpType::Array(inner) => leaf_element_type(inner),
+        PhpType::AssocArray { value, .. } => leaf_element_type(value),
+        other => other.codegen_repr(),
+    }
 }

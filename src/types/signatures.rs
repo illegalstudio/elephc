@@ -232,7 +232,8 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
 
         "array_pop" | "array_shift" => Some(first_param_ref(fixed(&["array"]))),
         "array_keys" | "array_values" | "array_reverse" | "array_unique" | "array_flip"
-        | "array_sum" | "array_product" | "array_rand" => Some(fixed(&["array"])),
+        | "array_sum" | "array_product" | "array_rand" | "array_is_list"
+        | "array_key_first" | "array_key_last" => Some(fixed(&["array"])),
         "sort" | "rsort" | "shuffle" | "natsort" | "natcasesort" | "asort"
         | "arsort" | "ksort" | "krsort" => Some(first_param_ref(fixed(&["array"]))),
         "in_array" => Some(optional(&["needle", "haystack", "strict"], 2, vec![bool_lit(false)])),
@@ -241,9 +242,13 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             Some(optional(&["needle", "haystack", "strict"], 2, vec![bool_lit(false)]))
         }
         "array_push" | "array_unshift" => Some(first_param_ref(variadic(&["array"], "values"))),
-        "array_merge" => Some(variadic(&[], "arrays")),
-        "array_diff" | "array_intersect" | "array_diff_key" | "array_intersect_key" => {
+        "array_merge" | "array_merge_recursive" => Some(variadic(&[], "arrays")),
+        "array_diff" | "array_intersect" | "array_diff_key" | "array_intersect_key"
+        | "array_diff_assoc" | "array_intersect_assoc" => {
             Some(variadic(&["array"], "arrays"))
+        }
+        "array_replace" | "array_replace_recursive" => {
+            Some(fixed(&["array", "replacements"]))
         }
         "array_combine" => Some(fixed(&["keys", "values"])),
         "array_fill_keys" => Some(fixed(&["keys", "value"])),
@@ -268,12 +273,21 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             1,
             vec![null_lit(), int_lit(0)],
         )),
+        "array_find" | "array_any" | "array_all" => Some(fixed(&["array", "callback"])),
+        "array_udiff" | "array_uintersect" => {
+            Some(fixed(&["array1", "array2", "callback"]))
+        }
+        "array_multisort" => {
+            let mut sig = fixed(&["array1", "array2"]);
+            sig.ref_params = vec![true, true];
+            Some(sig)
+        }
         "array_reduce" => Some(optional(
             &["array", "callback", "initial"],
             2,
             vec![null_lit()],
         )),
-        "array_walk" | "usort" | "uksort" | "uasort" => {
+        "array_walk" | "array_walk_recursive" | "usort" | "uksort" | "uasort" => {
             Some(first_param_ref(fixed(&["array", "callback"])))
         }
         "call_user_func" => Some(variadic(&["callback"], "args")),

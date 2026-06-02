@@ -513,6 +513,25 @@ gaps that must be fixed first.
 - [x] Phase 7 — `RegexIterator`, `RecursiveRegexIterator`
 - [x] Phase 8 — file/directory iterators: `SplFileInfo`, `SplFileObject`, `SplTempFileObject`, `DirectoryIterator`, `FilesystemIterator`, `GlobIterator`, `RecursiveDirectoryIterator`, `RecursiveCachingIterator`
 
+### Array builtin parity (key/list helpers, associative set-ops, recursive merge/walk)
+
+Well-bounded PHP-visible array builtins added before the backend migration. All dual-target (ARM64 + x86_64), with codegen and error tests, runtime-GC verified.
+
+- [x] `array_key_first()` / `array_key_last()` (PHP 7.3) — first/last key in insertion order, boxed as `Mixed`, `null` for empty arrays
+- [x] `array_is_list()` (PHP 8.1) — sequential `0..n-1` key check (indexed arrays are lists by construction; associative arrays walk the insertion-order chain)
+- [x] `array_replace()` — right-wins key merge over associative arrays (clone + `__rt_hash_set` overwrite)
+- [x] `array_replace_recursive()` — recursive right-wins merge, recursing when both values at a key are associative arrays
+- [x] `array_diff_assoc()` / `array_intersect_assoc()` — key + string-cast-value comparison via a unified `__rt_assoc_diff_intersect` helper
+- [x] `array_merge_recursive()` — integer-key renumbering, string-key collisions recurse (both arrays) or combine into a list (scalars)
+- [x] `array_walk_recursive()` — invokes the callback on each non-array leaf, recursing through nested indexed/associative arrays
+- [x] `array_find()` / `array_any()` / `array_all()` (PHP 8.4) — predicate callbacks; find returns the first match or `null`, any/all return booleans
+- [x] `array_udiff()` / `array_uintersect()` — difference/intersection with a user comparator (`$cmp($a, $b) === 0`)
+- [x] `array_multisort()` — sort the first indexed array ascending (stable) and reorder a second array in tandem, both by reference (two scalar-element arrays; flags/descending/multi-key are follow-ups)
+- [x] Scalar indexed-array inputs for the hash-based functions (`array_replace`, `array_replace_recursive`, `array_diff_assoc`, `array_intersect_assoc`, `array_merge_recursive`) — converted to integer-keyed hashes via `__rt_array_to_hash`; result key/value widen to `Mixed` for heterogeneous (indexed + string-keyed) inputs so `foreach` dispatches keys correctly (string/heap element indexed inputs are a follow-up — they hit x86-specific converter/clone-shallow issues)
+- [x] Hash-based builtins persist string values (instead of incref-sharing) when building results, so results own their string payloads independently of the source/temporary inputs (fixes a latent use-after-free when an input is freed before the result)
+- [x] `array_merge_recursive()` string-scalar combine fix — combined-list string values are persisted (independent copies) instead of incref-shared, so the temporary wrappers can be released without corrupting the result
+- Hash-based functions accept associative arrays and scalar-element indexed arrays; string/heap-element indexed inputs and the callback/sort functions' element-type limits are documented in `docs/php/arrays.md`
+
 ## v0.24.x — EIR introduction and register allocation
 
 Introduce a domain-specific intermediate representation (EIR) between the

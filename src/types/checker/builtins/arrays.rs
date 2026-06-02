@@ -195,6 +195,49 @@ pub(super) fn check_builtin(
                 _ => Err(CompileError::new(span, "array_flip() argument must be array")),
             }
         }
+        "array_is_list" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "array_is_list() takes exactly 1 argument"));
+            }
+            let ty = checker.infer_type(&args[0], env)?;
+            if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed) {
+                return Err(CompileError::new(span, "array_is_list() argument must be array"));
+            }
+            Ok(Some(PhpType::Bool))
+        }
+        "array_key_first" | "array_key_last" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 1 argument", name),
+                ));
+            }
+            let ty = checker.infer_type(&args[0], env)?;
+            if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed) {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() argument must be array", name),
+                ));
+            }
+            Ok(Some(PhpType::Mixed))
+        }
+        "array_multisort" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    "array_multisort() takes exactly 2 arguments",
+                ));
+            }
+            let ty1 = checker.infer_type(&args[0], env)?;
+            let ty2 = checker.infer_type(&args[1], env)?;
+            if !matches!(ty1, PhpType::Array(_)) || !matches!(ty2, PhpType::Array(_)) {
+                return Err(CompileError::new(
+                    span,
+                    "array_multisort() arguments must be indexed arrays",
+                ));
+            }
+            Ok(Some(PhpType::Bool))
+        }
         "array_shift" => {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "array_shift() takes exactly 1 argument"));
@@ -295,6 +338,77 @@ pub(super) fn check_builtin(
                 ));
             }
             Ok(Some(ty1))
+        }
+        "array_replace" | "array_replace_recursive" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 2 arguments", name),
+                ));
+            }
+            let ty1 = checker.infer_type(&args[0], env)?;
+            let ty2 = checker.infer_type(&args[1], env)?;
+            let accepted = |t: &PhpType| {
+                matches!(t, PhpType::AssocArray { .. }) || t.is_scalar_indexed_array()
+            };
+            if !accepted(&ty1) || !accepted(&ty2) {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "{}() arguments must be associative arrays or indexed arrays of scalars",
+                        name
+                    ),
+                ));
+            }
+            Ok(Some(PhpType::two_input_hash_result(&ty1, &ty2)))
+        }
+        "array_diff_assoc" | "array_intersect_assoc" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 2 arguments", name),
+                ));
+            }
+            let ty1 = checker.infer_type(&args[0], env)?;
+            let ty2 = checker.infer_type(&args[1], env)?;
+            let accepted = |t: &PhpType| {
+                matches!(t, PhpType::AssocArray { .. }) || t.is_scalar_indexed_array()
+            };
+            if !accepted(&ty1) || !accepted(&ty2) {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "{}() arguments must be associative arrays or indexed arrays of scalars",
+                        name
+                    ),
+                ));
+            }
+            Ok(Some(PhpType::two_input_hash_result(&ty1, &ty2)))
+        }
+        "array_merge_recursive" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    "array_merge_recursive() takes exactly 2 arguments",
+                ));
+            }
+            let ty1 = checker.infer_type(&args[0], env)?;
+            let ty2 = checker.infer_type(&args[1], env)?;
+            let accepted = |t: &PhpType| {
+                matches!(t, PhpType::AssocArray { .. }) || t.is_scalar_indexed_array()
+            };
+            if !accepted(&ty1) || !accepted(&ty2) {
+                return Err(CompileError::new(
+                    span,
+                    "array_merge_recursive() arguments must be associative arrays or indexed arrays of scalars",
+                ));
+            }
+            // Scalar collisions combine into lists, so the result value type is always Mixed; the
+            // key widens to Mixed when the two inputs disagree.
+            Ok(Some(PhpType::AssocArray {
+                key: Box::new(PhpType::widen(ty1.hash_key_type(), ty2.hash_key_type())),
+                value: Box::new(PhpType::Mixed),
+            }))
         }
         "array_unshift" => {
             if args.len() != 2 {

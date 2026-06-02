@@ -142,6 +142,11 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(
     arrays::emit_array_intersect_refcounted(emitter);
     arrays::emit_array_merge(emitter);
     arrays::emit_array_merge_refcounted(emitter);
+    arrays::emit_array_replace(emitter);
+    arrays::emit_array_replace_recursive(emitter);
+    arrays::emit_amr_box_value(emitter);
+    arrays::emit_array_merge_recursive(emitter);
+    arrays::emit_array_to_hash(emitter);
     arrays::emit_array_pad(emitter);
     arrays::emit_array_pad_refcounted(emitter);
     arrays::emit_array_product(emitter);
@@ -154,6 +159,8 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(
     arrays::emit_array_splice(emitter);
     arrays::emit_array_splice_refcounted(emitter);
     arrays::emit_array_sum(emitter);
+    arrays::emit_array_is_list(emitter);
+    arrays::emit_array_edge_key(emitter);
     arrays::emit_array_chunk(emitter);
     arrays::emit_array_chunk_refcounted(emitter);
     arrays::emit_array_combine(emitter);
@@ -168,9 +175,13 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(
     arrays::emit_array_map_str(emitter);
     arrays::emit_array_map_str_owned(emitter);
     arrays::emit_array_filter(emitter);
+    arrays::emit_array_find_any_all(emitter);
+    arrays::emit_array_udiff_uintersect(emitter);
+    arrays::emit_array_multisort(emitter);
     arrays::emit_array_filter_refcounted(emitter);
     arrays::emit_array_reduce(emitter);
     arrays::emit_array_walk(emitter);
+    arrays::emit_array_walk_recursive(emitter);
     arrays::emit_usort(emitter);
     arrays::emit_hash_fnv1a(emitter);
     arrays::emit_hash_key_hash(emitter);
@@ -199,6 +210,7 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(
     arrays::emit_mixed_is_empty(emitter);
     arrays::emit_array_diff_key(emitter);
     arrays::emit_array_intersect_key(emitter);
+    arrays::emit_assoc_diff_intersect(emitter);
     arrays::emit_decref_hash(emitter);
     arrays::emit_hash_free_deep(emitter);
     arrays::emit_decref_any(emitter);
@@ -412,6 +424,16 @@ mod tests {
         assert!(asm.contains("__rt_array_diff:\n"));
         assert!(asm.contains("__rt_array_intersect:\n"));
         assert!(asm.contains("__rt_array_merge:\n"));
+        assert!(asm.contains("__rt_array_replace:\n"));
+        assert!(asm.contains("__rt_assoc_diff_intersect:\n"));
+        assert!(asm.contains("__rt_array_replace_recursive:\n"));
+        assert!(asm.contains("__rt_array_walk_recursive:\n"));
+        assert!(asm.contains("__rt_array_merge_recursive:\n"));
+        assert!(asm.contains("__rt_amr_box_value:\n"));
+        assert!(asm.contains("__rt_array_to_hash:\n"));
+        assert!(asm.contains("__rt_array_find_any_all:\n"));
+        assert!(asm.contains("__rt_array_udiff_uintersect:\n"));
+        assert!(asm.contains("__rt_array_multisort:\n"));
         assert!(asm.contains("__rt_array_pad:\n"));
         assert!(asm.contains("__rt_array_product:\n"));
         assert!(asm.contains("__rt_array_rand:\n"));
@@ -420,6 +442,8 @@ mod tests {
         assert!(asm.contains("__rt_array_slice:\n"));
         assert!(asm.contains("__rt_array_splice:\n"));
         assert!(asm.contains("__rt_array_sum:\n"));
+        assert!(asm.contains("__rt_array_is_list:\n"));
+        assert!(asm.contains("__rt_array_edge_key:\n"));
         assert!(asm.contains("__rt_array_chunk:\n"));
         assert!(asm.contains("__rt_array_combine:\n"));
         assert!(asm.contains("__rt_array_flip:\n"));
