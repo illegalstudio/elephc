@@ -52,7 +52,7 @@ if [ ${#TEST_ARGS[@]} -eq 0 ]; then
         -v "$TARGET_VOLUME:/cargo-target" \
         -w /app \
         "$IMAGE" \
-        cargo test
+        sh -c 'cargo build -p elephc-tls && cargo test'
 else
     echo "Running tests matching '${TEST_ARGS[*]}' on Linux ARM64 with RUST_TEST_THREADS=$TEST_THREADS..."
     docker run \
@@ -66,5 +66,5 @@ else
         -v "$TARGET_VOLUME:/cargo-target" \
         -w /app \
         "$IMAGE" \
-        cargo test "${TEST_ARGS[@]}"
+        sh -c "cargo build -p elephc-tls && cargo test ${TEST_ARGS[*]@Q}"
 fi

@@ -116,15 +116,22 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `number_format()` | `number_format($n [, $dec [, $dec_point, $thou_sep]]): string` | Format number |
 | `sprintf()` | `sprintf($fmt, ...): string` | Format string (%s, %d, %f, %x, %e, %g, %o, %c, %%) |
 | `printf()` | `printf($fmt, ...): int` | Format and print |
-| `sscanf()` | `sscanf($str, $fmt): array` | Parse string with format (%d, %s) |
+| `vsprintf()` | `vsprintf($fmt, array $values): string` | Like `sprintf()`, with the arguments supplied as an array. Each element becomes one format argument — int/float/bool/string, including the elements of a mixed array. |
+| `vprintf()` | `vprintf($fmt, array $values): int` | Like `printf()`, with the arguments supplied as an array; prints the result and returns the byte count. |
+| `sscanf()` | `sscanf($str, $fmt): array` | Parse string with format (%d, %f, %s, %%). Matched fields are returned as substrings (e.g. `%f` yields `"3.14"`), mirroring the existing `%d` behavior. |
 | `addslashes()` | `addslashes($str): string` | Escape quotes and backslashes |
 | `stripslashes()` | `stripslashes($str): string` | Remove escape backslashes |
 | `nl2br()` | `nl2br($str): string` | Insert `<br />` before newlines |
 | `wordwrap()` | `wordwrap($str [, $width [, $break [, $cut]]]): string` | Wrap text at width |
 | `bin2hex()` | `bin2hex($str): string` | Convert binary to hex |
 | `hex2bin()` | `hex2bin($str): string` | Convert hex to binary |
+| `long2ip()` | `long2ip($ip): string` | Format a 32-bit integer as a dotted-quad IPv4 address |
+| `ip2long()` | `ip2long($ip): int\|false` | Parse a decimal dotted-quad IPv4 string into an integer, or `false` if invalid |
+| `inet_pton()` | `inet_pton($ip): string\|false` | Pack a dotted-quad IPv4 address into a 4-byte binary string, or `false` if invalid |
+| `inet_ntop()` | `inet_ntop($binary): string\|false` | Render a 4-byte IPv4 binary string as a dotted-quad address, or `false` if the length is not 4 |
 | `md5()` | `md5($str): string` | MD5 hash (32-char hex) |
 | `sha1()` | `sha1($str): string` | SHA1 hash (40-char hex) |
+| `crc32()` | `crc32($str): int` | CRC-32 checksum (standard zlib/PHP polynomial), returned as a non-negative 32-bit integer |
 | `hash()` | `hash($algo, $data): string` | Hash with algorithm (md5, sha1, sha256) |
 | `htmlspecialchars()` | `htmlspecialchars($str): string` | Escape HTML special chars |
 | `htmlentities()` | `htmlentities($str): string` | Alias for htmlspecialchars |
@@ -135,6 +142,10 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `rawurldecode()` | `rawurldecode($str): string` | URL-decode (RFC 3986) |
 | `base64_encode()` | `base64_encode($str): string` | Base64 encode |
 | `base64_decode()` | `base64_decode($str): string` | Base64 decode |
+| `gzcompress()` | `gzcompress(string $data, int $level = -1): string` | Compress a string with zlib (system `libz`); `$level` is `-1` (default) or `0`–`9` |
+| `gzuncompress()` | `gzuncompress(string $data): string\|false` | Decompress a `gzcompress()`-produced string; `false` on a zlib error |
+| `gzdeflate()` | `gzdeflate(string $data, int $level = -1): string` | Compress a string into raw DEFLATE — no zlib header or trailer; `$level` is `-1` (default) or `0`–`9` |
+| `gzinflate()` | `gzinflate(string $data): string\|false` | Decompress a raw DEFLATE string from `gzdeflate()` or the `zlib.deflate` stream filter; `false` on a zlib error |
 | `ctype_alpha()` | `ctype_alpha($str): bool` | All chars are A-Z/a-z |
 | `ctype_digit()` | `ctype_digit($str): bool` | All chars are 0-9 |
 | `ctype_alnum()` | `ctype_alnum($str): bool` | All chars are alphanumeric |
