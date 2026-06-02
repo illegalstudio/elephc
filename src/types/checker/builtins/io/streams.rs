@@ -9,6 +9,7 @@
 //! - Return types and diagnostics must stay aligned with `crate::types::signatures` and builtin codegen emitters.
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
@@ -429,8 +430,7 @@ pub(super) fn check_builtin(
         }
         "stream_wrapper_register" => {
             // stream_wrapper_register(protocol, class[, flags]) records a
-            // user-defined wrapper class for `$protocol://...`. v1 stores the
-            // registration but the wrapper class is not yet invoked by fopen.
+            // user-defined wrapper class for `$protocol://...` paths.
             if args.len() < 2 || args.len() > 3 {
                 return Err(CompileError::new(
                     span,
@@ -440,6 +440,7 @@ pub(super) fn check_builtin(
             for arg in args {
                 checker.infer_type(arg, env)?;
             }
+            validate_registered_stream_class(checker, "stream_wrapper_register", &args[1], span)?;
             Ok(Some(PhpType::Bool))
         }
         "stream_wrapper_unregister" => {
@@ -563,8 +564,8 @@ pub(super) fn check_builtin(
             }))
         }
         "stream_filter_register" => {
-            // v1 accepts the registration and returns true; the user-defined
-            // filter class is not yet invoked on read/write.
+            // stream_filter_register(filter_name, class) records a
+            // user-defined filter class for stream_filter_append/prepend.
             if args.len() != 2 {
                 return Err(CompileError::new(
                     span,
@@ -574,6 +575,7 @@ pub(super) fn check_builtin(
             for arg in args {
                 checker.infer_type(arg, env)?;
             }
+            validate_registered_stream_class(checker, "stream_filter_register", &args[1], span)?;
             Ok(Some(PhpType::Bool))
         }
         "stream_bucket_make_writeable" => {
@@ -997,4 +999,32 @@ fn is_empty_static_array_spread(args: &[Expr]) -> bool {
         return false;
     };
     matches!(&inner.kind, ExprKind::ArrayLiteral(items) if items.is_empty())
+}
+
+/// Validates a literal stream wrapper/filter class name against declared classes.
+fn validate_registered_stream_class(
+    checker: &Checker,
+    builtin: &str,
+    class_arg: &Expr,
+    span: crate::span::Span,
+) -> Result<(), CompileError> {
+    let ExprKind::StringLiteral(class_name) = &class_arg.kind else {
+        return Ok(());
+    };
+    if stream_registered_class_exists(checker, class_name) {
+        return Ok(());
+    }
+    Err(CompileError::new(
+        span,
+        &format!("{}(): undefined class '{}'", builtin, class_name),
+    ))
+}
+
+/// Returns true when `class_name` exists under PHP's case-insensitive class lookup.
+fn stream_registered_class_exists(checker: &Checker, class_name: &str) -> bool {
+    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+    checker
+        .classes
+        .keys()
+        .any(|existing| php_symbol_key(existing) == class_key)
 }

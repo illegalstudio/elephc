@@ -3389,6 +3389,26 @@ echo fread($f, 64);
 }
 
 #[test]
+fn test_user_stream_filter_registered_class_is_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+class CaseFilter {
+    public function filter(string $data): string {
+        return strtoupper($data);
+    }
+}
+stream_filter_register("case.upper", "casefilter");
+$f = fopen("php://memory", "r+");
+stream_filter_append($f, "case.upper", STREAM_FILTER_WRITE);
+fwrite($f, "hello");
+rewind($f);
+echo fread($f, 64);
+"#,
+    );
+    assert_eq!(out, "HELLO");
+}
+
+#[test]
 fn test_user_stream_filter_read_transforms_payload() {
     // Phase 10 tier 3: a user-registered filter class attached in read
     // direction transforms bytes returned by fread. The raw on-stream
@@ -3609,6 +3629,23 @@ class MyW {
 }
 stream_wrapper_register("my", "MyW");
 $f = fopen("my://anywhere", "r");
+echo is_resource($f) ? "ok" : "fail";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_fopen_user_wrapper_registered_class_is_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+class CaseWrapper {
+    public function stream_open($path, $mode, $options, &$opened): bool {
+        return true;
+    }
+}
+stream_wrapper_register("casew", "casewrapper");
+$f = fopen("casew://anywhere", "r");
 echo is_resource($f) ? "ok" : "fail";
 "#,
     );

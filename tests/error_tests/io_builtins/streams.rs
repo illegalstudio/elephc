@@ -347,6 +347,14 @@ fn test_error_stream_wrapper_register_wrong_args() {
 }
 
 #[test]
+fn test_error_stream_wrapper_register_unknown_class() {
+    expect_error(
+        r#"<?php stream_wrapper_register("missing", "MissingWrapper");"#,
+        "stream_wrapper_register(): undefined class 'MissingWrapper'",
+    );
+}
+
+#[test]
 fn test_error_stream_wrapper_unregister_wrong_args() {
     expect_error(
         "<?php stream_wrapper_unregister();",
@@ -375,6 +383,14 @@ fn test_error_stream_filter_register_wrong_args() {
     expect_error(
         "<?php stream_filter_register();",
         "stream_filter_register() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_stream_filter_register_unknown_class() {
+    expect_error(
+        r#"<?php stream_filter_register("missing.filter", "MissingFilter");"#,
+        "stream_filter_register(): undefined class 'MissingFilter'",
     );
 }
 

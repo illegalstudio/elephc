@@ -13,7 +13,7 @@
 //! Key details:
 //! - Each `_classes_by_name` entry is 32 bytes: name_ptr (8) + name_len
 //!   (8) + class_id (8) + obj_size (8). A linear scan compares lengths
-//!   first, then byte-by-byte until a full match.
+//!   first, then delegates to `__rt_strcasecmp` for PHP-style class lookup.
 //! - On match: allocates obj_size bytes through `__rt_heap_alloc`, stamps
 //!   the uniform heap-kind word (heap kind 4 = object) ahead of the
 //!   payload, writes the class id at offset 0, and zeroes the property
@@ -40,7 +40,8 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
     emitter.label_global("__rt_new_by_name");
 
     // Frame (64 bytes): [0..16) saved x29/x30, [16) name_ptr, [24) name_len,
-    //   [32) matched class_id, [40) matched obj_size, [48) entry cursor.
+    //   [32) matched class_id, [40) matched obj_size, [48) entry cursor,
+    //   [56) entry index saved across __rt_strcasecmp.
     emitter.instruction("sub sp, sp, #64");                                     // helper frame
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
@@ -62,20 +63,17 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
     emitter.instruction("ldr x13, [x10, #8]");                                  // stored name length
     emitter.instruction("ldr x2, [sp, #24]");                                   // reload the input name length
     emitter.instruction("cmp x13, x2");                                         // length mismatch → skip
-    emitter.instruction("b.ne __rt_nbn_skip");
-    emitter.instruction("ldr x12, [x10]");                                      // stored name pointer
+    emitter.instruction("b.ne __rt_nbn_skip");                                  // skip this class when the name lengths differ
+    emitter.instruction("str x11, [sp, #56]");                                  // save the entry index across the string helper
     emitter.instruction("ldr x1, [sp, #16]");                                   // reload the input name pointer
-    emitter.instruction("mov x14, #0");                                         // byte compare index
-
-    emitter.label("__rt_nbn_bytecmp");
-    emitter.instruction("cmp x14, x2");                                         // every byte compared?
-    emitter.instruction("b.ge __rt_nbn_match");                                 // full match: allocate the object
-    emitter.instruction("ldrb w15, [x12, x14]");                                // stored byte
-    emitter.instruction("ldrb w16, [x1, x14]");                                 // input byte
-    emitter.instruction("cmp w15, w16");                                        // do they differ?
-    emitter.instruction("b.ne __rt_nbn_skip");                                  // mismatch: try the next entry
-    emitter.instruction("add x14, x14, #1");                                    // advance the byte cursor
-    emitter.instruction("b __rt_nbn_bytecmp");                                  // continue comparing
+    emitter.instruction("ldr x2, [sp, #24]");                                   // reload the input name length
+    emitter.instruction("ldr x3, [x10]");                                       // stored class-name pointer
+    emitter.instruction("mov x4, x13");                                         // stored class-name length
+    emitter.instruction("bl __rt_strcasecmp");                                  // compare class names case-insensitively
+    emitter.instruction("ldr x11, [sp, #56]");                                  // restore the entry index after the string helper
+    emitter.instruction("cmp x0, #0");                                          // did the class names match case-insensitively?
+    emitter.instruction("b.eq __rt_nbn_match");                                 // full match: allocate the object
+    emitter.instruction("b __rt_nbn_skip");                                     // mismatch: try the next entry
 
     emitter.label("__rt_nbn_skip");
     emitter.instruction("ldr x10, [sp, #48]");                                  // reload the entry cursor
@@ -138,7 +136,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_new_by_name");
 
     // Frame (rbp-relative): [-8) name_ptr [-16) name_len [-24) entry cursor
-    //   [-32) class_id stash [-40) obj_size stash.
+    //   [-32) class_id stash [-40) obj_size stash [-48) entry index stash.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 48");                                         // helper frame
@@ -161,19 +159,15 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the input name length
     emitter.instruction("cmp rcx, rdx");                                        // length mismatch?
     emitter.instruction("jne __rt_nbn_skip_x86");                               // skip on length mismatch
-    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // stored name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // save the entry index across the string helper
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the input name pointer
-    emitter.instruction("xor rcx, rcx");                                        // byte compare index
-
-    emitter.label("__rt_nbn_bytecmp_x86");
-    emitter.instruction("cmp rcx, rdx");                                        // every byte compared?
-    emitter.instruction("jge __rt_nbn_match_x86");                              // full match: allocate the object
-    emitter.instruction("movzx eax, BYTE PTR [rsi + rcx]");                     // stored byte
-    emitter.instruction("movzx r8d, BYTE PTR [rdi + rcx]");                     // input byte
-    emitter.instruction("cmp eax, r8d");                                        // do they differ?
-    emitter.instruction("jne __rt_nbn_skip_x86");                               // mismatch: try the next entry
-    emitter.instruction("inc rcx");                                             // advance the byte cursor
-    emitter.instruction("jmp __rt_nbn_bytecmp_x86");                            // continue comparing
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the input name length
+    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // stored class-name pointer
+    emitter.instruction("call __rt_strcasecmp");                                // compare class names case-insensitively
+    emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // restore the entry index after the string helper
+    emitter.instruction("test rax, rax");                                       // did the class names match case-insensitively?
+    emitter.instruction("je __rt_nbn_match_x86");                               // full match: allocate the object
+    emitter.instruction("jmp __rt_nbn_skip_x86");                               // mismatch: try the next entry
 
     emitter.label("__rt_nbn_skip_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the entry cursor
@@ -193,10 +187,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     // -- allocate the object payload --
     emitter.instruction("mov rax, rdx");                                        // allocation size
     emitter.instruction("call __rt_heap_alloc");                                // rax = object pointer
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        (X86_64_HEAP_MAGIC_HI32 << 32) | 4
-    ));                                                                         // object heap-kind word with the x86_64 marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // object heap-kind word with the x86_64 marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform heap header
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload class_id
     emitter.instruction("mov QWORD PTR [rax], rcx");                            // class_id at offset 0
