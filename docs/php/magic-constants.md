@@ -2,7 +2,7 @@
 title: "Magic Constants"
 description: "PHP magic constants (__DIR__, __FILE__, __LINE__, __FUNCTION__, __CLASS__, __METHOD__, __NAMESPACE__, __TRAIT__) resolved at compile time to plain string or integer literals."
 sidebar:
-  order: 13
+  order: 14
 ---
 
 PHP defines a set of *magic constants* that change value depending on where they appear in the source. elephc supports all eight, lowering each to a plain string or integer literal at compile time. They behave identically to PHP for every common case.

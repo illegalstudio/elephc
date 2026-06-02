@@ -34,7 +34,8 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties, static property redeclarations, constructor promotion, methods, traits, enums, magic methods
 - [SPL](php/spl.md) — SPL interfaces, exceptions, autoload/introspection helpers, and runtime-backed containers
 - [Namespaces](php/namespaces.md) — namespace, use, include/require/include_once/require_once, Composer/SPL autoloading, class introspection, constants, superglobals
-- [System & I/O](php/system-and-io.md) — file I/O, date/time, JSON, exec, debugging
+- [System & I/O](php/system-and-io.md) — system functions, date/time, JSON, filesystem, exec, debugging
+- [Streams](php/streams.md) — stream resources, wrappers, contexts, filters, sockets, TLS, process pipes
 - [Magic Constants](php/magic-constants.md) — `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__`
 - [Fibers](php/fibers.md) — cooperative coroutines (PHP 8.1+ Fiber): start, suspend, resume, FiberError
 - [Generators](php/generators.md) — `yield`, `yield from`, `Generator::send` / `throw` / `getReturn`, state-machine codegen
