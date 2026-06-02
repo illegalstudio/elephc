@@ -59,6 +59,11 @@ jobs:
           git commit -m "chore: bump version to ${VERSION}" || true
           git push origin HEAD:main
 
+      - name: Build TLS staticlib
+        # The codegen test runner links compiled TLS programs against
+        # libelephc_tls.a, which `cargo test` does not build on its own.
+        run: cargo build -p elephc-tls
+
       - name: Run tests
         run: cargo test
 

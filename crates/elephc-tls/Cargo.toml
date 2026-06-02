@@ -1,0 +1,24 @@
+[package]
+name = "elephc-tls"
+version = "0.1.0"
+edition = "2021"
+description = "Phase 4b rustls-backed staticlib for the elephc https:// wrapper."
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# rustls 0.23 with the ring crypto backend keeps the dependency footprint
+# musl-compatible (used by the Docker test images) and avoids the heavier
+# aws-lc-rs prerequisites.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+webpki-roots = "0.26"
+# Pure-Rust PEM parser for the ssl.cafile stream-context option (a custom CA
+# bundle). musl-friendly (no C deps), so the Docker test images stay happy.
+rustls-pemfile = "2"
+# `libc::dup` is needed by `elephc_tls_attach_fd` to take a duplicated
+# copy of the caller-owned TCP file descriptor without invalidating the
+# original. Keeps the crate musl-friendly (default features only).
+libc = "0.2"
