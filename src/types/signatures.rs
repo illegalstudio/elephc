@@ -434,9 +434,9 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "stream_wrapper_unregister" => Some(fixed(&["protocol"])),
         "stream_wrapper_restore" => Some(fixed(&["protocol"])),
         "stream_socket_enable_crypto" => Some(optional(
-            &["stream", "enable", "crypto_method"],
+            &["stream", "enable", "crypto_method", "session_stream"],
             2,
-            vec![null_lit()],
+            vec![null_lit(), null_lit()],
         )),
         "stream_context_create" => Some(optional(
             &["options", "params"],

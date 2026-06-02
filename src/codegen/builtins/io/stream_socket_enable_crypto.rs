@@ -54,13 +54,21 @@ pub fn emit(
     let enable_label = ctx.next_label("ssec_enable");
     let done_label = ctx.next_label("ssec_done");
     emit_expr(&args[1], emitter, ctx, data);
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve $enable while ignored optional args are evaluated
+    for arg in &args[2..] {
+        emit_expr(arg, emitter, ctx, data);                                     // side effects only
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => abi::emit_pop_reg(emitter, "x0"),
+        Arch::X86_64 => abi::emit_pop_reg(emitter, "rax"),
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cbnz x0, {}", enable_label));
+            emitter.instruction(&format!("cbnz x0, {}", enable_label));         // enable=true enters the TLS attach path
         }
         Arch::X86_64 => {
-            emitter.instruction("test rax, rax");
-            emitter.instruction(&format!("jnz {}", enable_label));
+            emitter.instruction("test rax, rax");                               // did the caller request TLS enablement?
+            emitter.instruction(&format!("jnz {}", enable_label));              // enable=true enters the TLS attach path
         }
     }
     // -- disable path: v1 stub. Drop the stashed fd, report success. --
@@ -77,9 +85,6 @@ pub fn emit(
     // -- enable path: publish tls fn pointers, attach the fd, record session --
     emitter.label(&enable_label);
     publish_tls_function_pointers(emitter);
-    for arg in &args[2..] {
-        emit_expr(arg, emitter, ctx, data);                                     // side effects only
-    }
     let fail_label = ctx.next_label("ssec_attach_fail");
     match emitter.target.arch {
         Arch::AArch64 => {

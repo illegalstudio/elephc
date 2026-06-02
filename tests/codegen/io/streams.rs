@@ -3196,6 +3196,24 @@ fclose($m);
     assert_eq!(out, "bool");
 }
 
+/// Verifies that the shared signature accepts the fourth named `session_stream` arg.
+#[test]
+fn test_stream_socket_enable_crypto_accepts_named_session_stream() {
+    let out = compile_and_run(
+        r#"<?php
+function session_arg($stream) {
+    echo "S";
+    return $stream;
+}
+$m = fopen("php://memory", "r+");
+$r = stream_socket_enable_crypto(stream: $m, enable: false, session_stream: session_arg($m));
+echo $r ? "T" : "F";
+fclose($m);
+"#,
+    );
+    assert_eq!(out, "ST");
+}
+
 /// `ssl.local_cert` + `ssl.local_pk` select the mutual-TLS (client-certificate)
 /// attach variant. A bogus cert/key path fails the client-auth config load
 /// before any network I/O, so enable_crypto returns `false` — unlike the plain
