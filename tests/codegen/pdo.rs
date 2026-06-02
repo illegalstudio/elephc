@@ -186,6 +186,79 @@ try {
     assert_eq!(out, "caught");
 }
 
+/// `bindValue()` with positional `?` placeholders binds typed values, which
+/// survive `execute()` (reset keeps bindings; bindValue is applied at execute).
+#[test]
+fn test_pdo_bind_value_positional() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$ins = $db->prepare("INSERT INTO t (id, name) VALUES (?, ?)");
+$ins->bindValue(1, 7, PDO::PARAM_INT);
+$ins->bindValue(2, "seven");
+$ins->execute();
+$row = $db->query("SELECT id, name FROM t")->fetch(PDO::FETCH_ASSOC);
+echo $row["id"] . ":" . $row["name"];
+"#,
+    );
+    assert_eq!(out, "7:seven");
+}
+
+/// `bindValue()` with named `:name` placeholders binds by parameter name.
+#[test]
+fn test_pdo_bind_value_named() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$ins = $db->prepare("INSERT INTO t (id, name) VALUES (:id, :name)");
+$ins->bindValue(":id", 3, PDO::PARAM_INT);
+$ins->bindValue(":name", "Cyd");
+$ins->execute();
+$row = $db->query("SELECT id, name FROM t")->fetch(PDO::FETCH_ASSOC);
+echo $row["id"] . ":" . $row["name"];
+"#,
+    );
+    assert_eq!(out, "3:Cyd");
+}
+
+/// `bindParam()` binds the current value of the passed variable.
+#[test]
+fn test_pdo_bind_param() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (n INTEGER)");
+$n = 42;
+$ins = $db->prepare("INSERT INTO t (n) VALUES (?)");
+$ins->bindParam(1, $n, PDO::PARAM_INT);
+$ins->execute();
+echo $db->query("SELECT n FROM t")->fetchColumn();
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// `setFetchMode()` sets the default mode used by an argument-less `fetch()` /
+/// `fetchAll()`.
+#[test]
+fn test_pdo_set_fetch_mode() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO t VALUES (1, 'a'), (2, 'b')");
+$stmt = $db->query("SELECT id, name FROM t ORDER BY id");
+$stmt->setFetchMode(PDO::FETCH_NUM);
+$out = "";
+foreach ($stmt->fetchAll() as $r) { $out .= $r[0] . $r[1] . " "; }
+echo trim($out);
+"#,
+    );
+    assert_eq!(out, "1a 2b");
+}
+
 /// A SQL NULL column fetches as PHP null, and `rowCount()` reports rows affected
 /// by a DML statement.
 #[test]

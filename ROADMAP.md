@@ -614,9 +614,10 @@ program references PDO, so non-PDO binaries never link the bridge.
 - [x] `crates/elephc-sqlite` bridge staticlib over bundled SQLite (`libsqlite3-sys`), C-ABI handle tables for connections/statements, `-1` sentinels, unit-tested in-memory round-trips
 - [x] `PDO::__construct` (`sqlite:` / `sqlite::memory:` DSN, `PDOException` on failure), `exec`, `query`, `prepare`, `lastInsertId`, `beginTransaction` / `commit` / `rollBack`, `errorCode`, `errorInfo`
 - [x] `PDOStatement::execute` (positional `?` and named `:name` binds with int/float/string/null/bool typing), `fetch`, `fetchAll`, `fetchColumn`, `rowCount`, `columnCount`
+- [x] `PDOStatement::bindValue` / `bindParam` (binds the current value; one placeholder style per statement) and `setFetchMode` with a stored default fetch mode; `reset` keeps bindings while a fresh `execute($params)` rebinds
 - [x] Fetch modes `FETCH_ASSOC`, `FETCH_NUM`, `FETCH_BOTH`, `FETCH_OBJ`; `PARAM_*` / `ATTR_ERRMODE` / `ERRMODE_*` constants; `ERRMODE_EXCEPTION` default
 - [ ] MySQL (`pdo_mysql`) and PostgreSQL (`pdo_pgsql`) drivers — additional bridge entry points behind the same prelude
-- [ ] `bindParam` / `bindValue`, `FETCH_CLASS` / `FETCH_INTO` / `setFetchMode`, `quote`, full `getAttribute` / `setAttribute`, persistent connections
+- [ ] `FETCH_CLASS` / `FETCH_INTO`, `quote`, full `getAttribute` / `setAttribute`, persistent connections, and mixing positional/named placeholders in one bound statement
 - [ ] Dynamic property assignment so `FETCH_OBJ` materializes a stdClass directly instead of via a JSON round-trip
 - [ ] Binary/BLOB values with embedded NUL bytes (the text bridge path is NUL-terminated)
 

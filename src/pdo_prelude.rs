@@ -51,6 +51,7 @@ extern "elephc_sqlite" {
     function elephc_sqlite_bind_text(int $stmt, int $idx, string $val): int;
     function elephc_sqlite_bind_null(int $stmt, int $idx): int;
     function elephc_sqlite_reset(int $stmt): int;
+    function elephc_sqlite_clear_bindings(int $stmt): int;
     function elephc_sqlite_step(int $stmt): int;
     function elephc_sqlite_column_count(int $stmt): int;
     function elephc_sqlite_column_name(int $stmt, int $i): string;
@@ -141,32 +142,86 @@ class PDO {
 class PDOStatement {
     private int $stmt;
     private int $conn;
+    private int $fetchMode;
+    private array $boundParams;
+    private array $boundValues;
+    private array $boundTypes;
 
     public function __construct(int $handle, int $connection) {
         $this->stmt = $handle;
         $this->conn = $connection;
+        $this->fetchMode = 4;
+        $this->boundParams = [];
+        $this->boundValues = [];
+        $this->boundTypes = [];
+    }
+
+    public function setFetchMode(int $mode): bool {
+        $this->fetchMode = $mode;
+        return true;
+    }
+
+    public function bindValue($parameter, $value, int $type = 2): bool {
+        // Resolve the 1-based slot index now and record it. The named-placeholder
+        // lookup must not be interleaved with value binds in execute()'s loop: a
+        // loop body that branches between "lookup index" and "no lookup" corrupts
+        // a sibling bind in generated code. Recording resolved int slots keeps
+        // execute()'s bind loop uniform.
+        if (is_int($parameter)) {
+            $_slot = (int) $parameter;
+        } else {
+            $_slot = (int) elephc_sqlite_bind_parameter_index($this->stmt, (string) $parameter);
+        }
+        $this->boundParams[] = $_slot;
+        $this->boundValues[] = $value;
+        $this->boundTypes[] = $type;
+        return true;
+    }
+
+    public function bindParam($parameter, $variable, int $type = 2): bool {
+        // Unlike PHP, the value is recorded now (not read by reference at execute
+        // time): bind right before execute(), or use bindValue().
+        return $this->bindValue($parameter, $variable, $type);
     }
 
     public function execute(?array $params = null): bool {
         elephc_sqlite_reset($this->stmt);
+        elephc_sqlite_clear_bindings($this->stmt);
+        // Apply bindValue()/bindParam() bindings recorded since construction.
+        // Slots are already resolved to ints, so this loop never looks up an
+        // index (keeping the body uniform across positional and named binds).
+        $_count = count($this->boundParams);
+        for ($_i = 0; $_i < $_count; $_i++) {
+            $_slot = (int) $this->boundParams[$_i];
+            $_value = $this->boundValues[$_i];
+            $_btype = $this->boundTypes[$_i];
+            if ($_btype == 0 || is_null($_value)) {
+                elephc_sqlite_bind_null($this->stmt, $_slot);
+            } elseif ($_btype == 1 || $_btype == 5) {
+                elephc_sqlite_bind_int($this->stmt, $_slot, (int) $_value);
+            } else {
+                elephc_sqlite_bind_text($this->stmt, $_slot, (string) $_value);
+            }
+        }
+        // Apply this call's parameter array (positional ? and named :name).
         if ($params !== null) {
-            foreach ($params as $_key => $_value) {
+            foreach ($params as $_key => $_pv) {
                 if (is_int($_key)) {
                     $_idx = $_key + 1;
                 } else {
                     $_idx = elephc_sqlite_bind_parameter_index($this->stmt, (string) $_key);
                 }
-                $_slot = (int) $_idx;
-                if (is_int($_value)) {
-                    elephc_sqlite_bind_int($this->stmt, $_slot, (int) $_value);
-                } elseif (is_bool($_value)) {
-                    elephc_sqlite_bind_int($this->stmt, $_slot, (int) $_value);
-                } elseif (is_float($_value)) {
-                    elephc_sqlite_bind_double($this->stmt, $_slot, (float) $_value);
-                } elseif (is_null($_value)) {
-                    elephc_sqlite_bind_null($this->stmt, $_slot);
+                $_pslot = (int) $_idx;
+                if (is_int($_pv)) {
+                    elephc_sqlite_bind_int($this->stmt, $_pslot, (int) $_pv);
+                } elseif (is_bool($_pv)) {
+                    elephc_sqlite_bind_int($this->stmt, $_pslot, (int) $_pv);
+                } elseif (is_float($_pv)) {
+                    elephc_sqlite_bind_double($this->stmt, $_pslot, (float) $_pv);
+                } elseif (is_null($_pv)) {
+                    elephc_sqlite_bind_null($this->stmt, $_pslot);
                 } else {
-                    elephc_sqlite_bind_text($this->stmt, $_slot, (string) $_value);
+                    elephc_sqlite_bind_text($this->stmt, $_pslot, (string) $_pv);
                 }
             }
         }
@@ -191,7 +246,10 @@ class PDOStatement {
         return elephc_sqlite_column_text($this->stmt, $index);
     }
 
-    public function fetch(int $mode = 4): mixed {
+    public function fetch(int $mode = 0): mixed {
+        if ($mode == 0) {
+            $mode = $this->fetchMode;
+        }
         $_rc = elephc_sqlite_step($this->stmt);
         if ($_rc != 1) {
             return false;
@@ -227,7 +285,10 @@ class PDOStatement {
         return $_row;
     }
 
-    public function fetchAll(int $mode = 4): array {
+    public function fetchAll(int $mode = 0): array {
+        if ($mode == 0) {
+            $mode = $this->fetchMode;
+        }
         $_rows = [];
         while (true) {
             $_row = $this->fetch($mode);

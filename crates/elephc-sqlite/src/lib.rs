@@ -448,17 +448,29 @@ pub extern "C" fn elephc_sqlite_bind_null(stmt_id: i64, idx: i64) -> i64 {
     }
 }
 
-/// Resets a statement so it can be re-executed (`PDOStatement::execute` on an
-/// already-stepped statement). Returns `1`/`0`.
+/// Resets a statement so it can be re-executed, *keeping* its current parameter
+/// bindings (so values set via `bindValue` / `bindParam` survive a no-argument
+/// `PDOStatement::execute`). Returns `1`/`0`.
 #[no_mangle]
 pub extern "C" fn elephc_sqlite_reset(stmt_id: i64) -> i64 {
     let guard = stmts().lock().unwrap();
     match guard.get(&stmt_id) {
         Some(s) => {
-            unsafe {
-                ffi::sqlite3_reset(s.ptr);
-                ffi::sqlite3_clear_bindings(s.ptr);
-            }
+            unsafe { ffi::sqlite3_reset(s.ptr) };
+            1
+        }
+        None => 0,
+    }
+}
+
+/// Clears all parameter bindings on a statement (`PDOStatement::execute` with a
+/// fresh parameter array rebinds from scratch). Returns `1`/`0`.
+#[no_mangle]
+pub extern "C" fn elephc_sqlite_clear_bindings(stmt_id: i64) -> i64 {
+    let guard = stmts().lock().unwrap();
+    match guard.get(&stmt_id) {
+        Some(s) => {
+            unsafe { ffi::sqlite3_clear_bindings(s.ptr) };
             1
         }
         None => 0,
@@ -687,6 +699,76 @@ mod tests {
 
         let bad = cs("SELECT FROM WHERE bogus");
         assert_eq!(unsafe { elephc_sqlite_prepare(conn, bad.as_ptr()) }, -1);
+
+        elephc_sqlite_close(conn);
+    }
+
+    /// A positional bind (slot 1) survives a `bind_parameter_index` lookup for a
+    /// sibling named parameter — i.e. mixing `?` and `:name` in one statement
+    /// binds both. (Isolates the bridge from compiler codegen.)
+    #[test]
+    fn mixed_positional_and_named_bind() {
+        let dsn = cs("sqlite::memory:");
+        let conn = unsafe { elephc_sqlite_open(dsn.as_ptr()) };
+        let ddl = cs("CREATE TABLE t (id INTEGER, name TEXT)");
+        unsafe { elephc_sqlite_exec(conn, ddl.as_ptr()) };
+
+        let ins = cs("INSERT INTO t (id, name) VALUES (?, :name)");
+        let stmt = unsafe { elephc_sqlite_prepare(conn, ins.as_ptr()) };
+        assert_eq!(elephc_sqlite_bind_int(stmt, 1, 10), 1);
+        let nm = cs(":name");
+        let idx = unsafe { elephc_sqlite_bind_parameter_index(stmt, nm.as_ptr()) };
+        assert_eq!(idx, 2);
+        let ada = cs("Ada");
+        assert_eq!(unsafe { elephc_sqlite_bind_text(stmt, idx, ada.as_ptr()) }, 1);
+        assert_eq!(elephc_sqlite_step(stmt), 0);
+        elephc_sqlite_finalize(stmt);
+
+        let sel = cs("SELECT id, name FROM t");
+        let q = unsafe { elephc_sqlite_prepare(conn, sel.as_ptr()) };
+        assert_eq!(elephc_sqlite_step(q), 1);
+        assert_eq!(elephc_sqlite_column_int(q, 0), 10);
+        assert_eq!(unsafe { read(elephc_sqlite_column_text(q, 1)) }, "Ada");
+        elephc_sqlite_finalize(q);
+        elephc_sqlite_close(conn);
+    }
+
+    /// `reset` keeps parameter bindings (so a re-step reuses them), while
+    /// `clear_bindings` drops them (a later step binds SQL NULL).
+    #[test]
+    fn reset_keeps_bindings_clear_removes() {
+        let dsn = cs("sqlite::memory:");
+        let conn = unsafe { elephc_sqlite_open(dsn.as_ptr()) };
+        let ddl = cs("CREATE TABLE t (a INTEGER)");
+        unsafe { elephc_sqlite_exec(conn, ddl.as_ptr()) };
+
+        let ins = cs("INSERT INTO t (a) VALUES (?)");
+        let stmt = unsafe { elephc_sqlite_prepare(conn, ins.as_ptr()) };
+        assert_eq!(elephc_sqlite_bind_int(stmt, 1, 5), 1);
+        assert_eq!(elephc_sqlite_step(stmt), 0);
+        // reset keeps the binding, so the second insert is also a = 5.
+        assert_eq!(elephc_sqlite_reset(stmt), 1);
+        assert_eq!(elephc_sqlite_step(stmt), 0);
+        elephc_sqlite_finalize(stmt);
+
+        let count_fives = cs("SELECT COUNT(*) FROM t WHERE a = 5");
+        let q = unsafe { elephc_sqlite_prepare(conn, count_fives.as_ptr()) };
+        assert_eq!(elephc_sqlite_step(q), 1);
+        assert_eq!(elephc_sqlite_column_int(q, 0), 2);
+        elephc_sqlite_finalize(q);
+
+        // clear_bindings drops the binding, so the next insert stores NULL.
+        let stmt2 = unsafe { elephc_sqlite_prepare(conn, ins.as_ptr()) };
+        assert_eq!(elephc_sqlite_bind_int(stmt2, 1, 9), 1);
+        assert_eq!(elephc_sqlite_clear_bindings(stmt2), 1);
+        assert_eq!(elephc_sqlite_step(stmt2), 0);
+        elephc_sqlite_finalize(stmt2);
+
+        let count_nulls = cs("SELECT COUNT(*) FROM t WHERE a IS NULL");
+        let q2 = unsafe { elephc_sqlite_prepare(conn, count_nulls.as_ptr()) };
+        assert_eq!(elephc_sqlite_step(q2), 1);
+        assert_eq!(elephc_sqlite_column_int(q2, 0), 1);
+        elephc_sqlite_finalize(q2);
 
         elephc_sqlite_close(conn);
     }

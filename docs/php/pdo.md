@@ -58,6 +58,22 @@ $ins->execute(["name" => "Cyd", "score" => 3.0]);  // colon optional
 `query()` prepares and immediately executes a statement, returning the
 `PDOStatement` ready to fetch.
 
+Parameters can also be bound individually with `bindValue()` (and `bindParam()`),
+then applied by an argument-less `execute()`:
+
+```php
+<?php
+$stmt = $db->prepare("INSERT INTO users (name, score) VALUES (:name, :score)");
+$stmt->bindValue(":name", "Dee");
+$stmt->bindValue(":score", 5, PDO::PARAM_INT);
+$stmt->execute();
+```
+
+Do **not** mix positional `?` and named `:name` placeholders in the same
+statement when binding — use one style per statement (PHP discourages mixing
+anyway). `bindParam()` binds the variable's *current* value (it does not defer a
+by-reference read to `execute()` time), so bind immediately before `execute()`.
+
 ## Fetching results
 
 ```php
@@ -111,8 +127,8 @@ try {
 
 - **PDO**: `__construct`, `exec`, `query`, `prepare`, `lastInsertId`,
   `beginTransaction`, `commit`, `rollBack`, `errorCode`, `errorInfo`.
-- **PDOStatement**: `execute`, `fetch`, `fetchAll`, `fetchColumn`, `rowCount`,
-  `columnCount`.
+- **PDOStatement**: `execute`, `bindValue`, `bindParam`, `setFetchMode`, `fetch`,
+  `fetchAll`, `fetchColumn`, `rowCount`, `columnCount`.
 - **Fetch modes**: `FETCH_ASSOC`, `FETCH_NUM`, `FETCH_BOTH`, `FETCH_OBJ`.
 - **Parameters**: positional `?` and named `:name`; `PARAM_INT` / `PARAM_STR` /
   `PARAM_NULL` / `PARAM_BOOL` constants.
@@ -123,9 +139,10 @@ try {
 
 - **SQLite only.** MySQL and PostgreSQL drivers are not yet implemented (the
   bridge is structured to add them later).
-- **`bindParam` / `bindValue`** are not implemented; pass parameters through
-  `execute([...])`.
-- **`FETCH_CLASS` / `FETCH_INTO`** and `setFetchMode()` are not implemented.
+- **Mixing `?` and `:name`** placeholders in one statement is not supported when
+  binding — use a single placeholder style per statement.
+- **`bindParam()`** binds the current value, not a deferred by-reference read.
+- **`FETCH_CLASS` / `FETCH_INTO`** are not implemented.
 - **`FETCH_OBJ`** materializes the stdClass via a JSON round-trip, so a result
   set whose column names are `0, 1, 2, …` degrades to an array.
 - **Binary / BLOB values with embedded NUL bytes** are not round-tripped through
