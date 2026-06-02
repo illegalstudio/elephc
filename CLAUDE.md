@@ -4,6 +4,14 @@
 
 A PHP-to-native compiler written in Rust. Compiles a static subset of PHP to native assembly for the supported target matrix, producing standalone binaries. No interpreter, no VM, no runtime dependencies.
 
+## Supported target policy
+
+All supported targets are first-class targets. The supported target matrix is currently `macos-aarch64`, `linux-aarch64`, and `linux-x86_64`.
+
+Do not design or land codegen/runtime features as ARM64-first with x86_64 treated as a later port. New features, builtins, runtime helpers, optimizer assumptions that affect emitted code, ABI behavior, and ownership/GC paths must either support every supported target in the same change or clearly isolate an intentionally unsupported path with diagnostics, tests, and documentation. A feature is not considered done while any supported target has a missing runtime symbol, reduced semantics, stale documentation, or an untested target-specific lowering path.
+
+When examples or internals docs use ARM64 snippets for readability, treat them as examples only. Implementation work must keep the target-aware ABI/runtime boundaries authoritative.
+
 ## Build & run
 
 ```bash
@@ -61,7 +69,7 @@ cargo test -- --include-ignored
 git diff --check
 ```
 
-For codegen changes, also verify assembly-comment coverage/alignment for any files you touched. For target-specific codegen, run the relevant Docker Linux target script when the change can affect Linux x86_64 or Linux ARM64.
+For codegen changes, also verify assembly-comment coverage/alignment for any files you touched. If the change can affect generated assembly, runtime helpers, ABI behavior, linking, ownership/GC, or target-specific libraries, run focused tests for each affected supported target. Use the Docker Linux scripts for Linux x86_64 and Linux ARM64 coverage; keep macOS ARM64 covered with local `cargo test` or focused local codegen tests as appropriate.
 
 ### Test structure
 
@@ -308,9 +316,10 @@ Adding or updating function docblocks must not change code behavior. Do not alte
 ### Codegen conventions (target-aware)
 
 - Prefer helpers from `src/codegen/abi/` for registers, stack slots, frame layout, argument materialization, symbol addresses, and calls.
-- New feature emitters should either support every active target through `emitter.target` or clearly isolate target-specific code behind existing target helpers.
+- New feature emitters must support every supported target through `emitter.target` or clearly isolate target-specific code behind existing target helpers with explicit tests and diagnostics.
 - Avoid hardcoding ARM64 register names, x86_64 register names, syscall numbers, object formats, or stack alignment rules in shared lowering code.
-- Test target-sensitive changes on the relevant target. Use the Docker Linux scripts when the change can affect Linux x86_64 or Linux ARM64.
+- Do not add an ARM64-only runtime helper, builtin emitter, ABI path, or ownership cleanup path unless the feature is intentionally target-gated and documented as unsupported elsewhere.
+- Test target-sensitive changes on every supported target they can affect. Use the Docker Linux scripts when the change can affect Linux x86_64 or Linux ARM64.
 
 ### ARM64 quick reference
 

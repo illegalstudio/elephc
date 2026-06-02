@@ -2,12 +2,12 @@
 name = "elephc"
 version = "0.23.2"
 edition = "2021"
-description = "A PHP-to-native compiler targeting macOS ARM64"
+description = "A PHP-to-native AOT compiler"
 license = "MIT"
 repository = "https://github.com/illegalstudio/elephc"
 homepage = "https://github.com/illegalstudio/elephc"
 readme = "README.md"
-keywords = ["php", "compiler", "arm64", "native", "macos"]
+keywords = ["php", "compiler", "aot", "native", "codegen"]
 categories = ["compilers", "command-line-utilities"]
 
 [[bin]]
