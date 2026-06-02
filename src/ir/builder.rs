@@ -10,7 +10,7 @@
 
 use crate::ir::block::{BasicBlock, BlockId, Terminator};
 use crate::ir::effects::Effects;
-use crate::ir::function::Function;
+use crate::ir::function::{Function, LocalKind, LocalSlotId};
 use crate::ir::instr::{Immediate, InstId, Instruction, Op};
 use crate::ir::types::IrType;
 use crate::ir::value::{Ownership, Value, ValueDef, ValueId};
@@ -80,6 +80,39 @@ impl<'f> Builder<'f> {
     /// Returns one block parameter value by index.
     pub fn block_param(&self, block: BlockId, index: usize) -> ValueId {
         self.func.blocks[block.as_raw() as usize].params[index]
+    }
+
+    /// Adds a local slot to the function being built.
+    pub fn add_local(
+        &mut self,
+        name: Option<String>,
+        ir_type: IrType,
+        php_type: PhpType,
+        kind: LocalKind,
+    ) -> LocalSlotId {
+        self.func.add_local(name, ir_type, php_type, kind)
+    }
+
+    /// Returns the storage type for a value already emitted in this function.
+    pub fn value_type(&self, value: ValueId) -> IrType {
+        self.func.values[value.as_raw() as usize].ir_type
+    }
+
+    /// Returns the PHP type metadata for a value already emitted in this function.
+    pub fn value_php_type(&self, value: ValueId) -> PhpType {
+        self.func.values[value.as_raw() as usize].php_type.clone()
+    }
+
+    /// Returns the current insertion block when one is selected.
+    pub fn insertion_block(&self) -> Option<BlockId> {
+        self.current
+    }
+
+    /// Returns true when the selected block already has a terminator.
+    pub fn insertion_block_is_terminated(&self) -> bool {
+        self.current
+            .map(|block| self.func.blocks[block.as_raw() as usize].terminator.is_some())
+            .unwrap_or(false)
     }
 
     /// Writes the terminator for the current block.
