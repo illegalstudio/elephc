@@ -70,6 +70,9 @@ jobs:
       - name: Build release binary
         run: cargo build --release
 
+      - name: Build release TLS staticlib
+        run: cargo build --release -p elephc-tls
+
       - name: Strip binary
         run: strip target/release/elephc
 
@@ -80,7 +83,7 @@ jobs:
       - name: Create tarball
         run: |
           cd target/release
-          tar czf elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz elephc
+          tar czf elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz elephc libelephc_tls.a
           shasum -a 256 elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz > elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz.sha256
 
       - name: Create GitHub Release
@@ -120,6 +123,7 @@ jobs:
 
             def install
               bin.install "elephc"
+              lib.install "libelephc_tls.a"
             end
 
             test do

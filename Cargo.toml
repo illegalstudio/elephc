@@ -35,10 +35,9 @@ elephc-tls = { path = "crates/elephc-tls" }
 flate2 = "1"
 
 # Phase 4b: the elephc-tls staticlib carries the rustls-backed TLS surface
-# for the https:// wrapper. Kept as a separate workspace member with
-# default-members focused on the main crate so `cargo test` does not rebuild
-# rustls every time; build elephc-tls explicitly with `cargo build -p elephc-tls`.
+# for the https:// wrapper. It is a default workspace member so `cargo build`
+# materializes libelephc_tls.a for normal dev builds and packaging.
 [workspace]
 members = [".", "crates/elephc-tls"]
-default-members = ["."]
+default-members = [".", "crates/elephc-tls"]
 resolver = "2"
