@@ -3289,6 +3289,20 @@ fclose($m);
     assert_eq!(out, "ok");
 }
 
+/// Verifies that fopen() exposes its optional PHP parameter names to call planning.
+#[test]
+fn test_fopen_accepts_named_optional_args() {
+    let out = compile_and_run(
+        r#"<?php
+$ctx = stream_context_create(["http" => ["method" => "GET"]]);
+$m = fopen(filename: "php://memory", mode: "r+", use_include_path: false, context: $ctx);
+echo is_resource($m) ? "ok" : "fail";
+fclose($m);
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies that literal fopen wrappers evaluate ignored optional args before opening.
 #[test]
 fn test_fopen_literal_wrapper_evaluates_optional_args_in_source_order() {

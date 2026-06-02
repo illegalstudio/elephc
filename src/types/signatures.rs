@@ -372,7 +372,11 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
         "fnmatch" => Some(optional(&["pattern", "filename", "flags"], 2, vec![int_lit(0)])),
         "realpath" => Some(fixed(&["path"])),
         "pathinfo" => Some(optional(&["path", "flags"], 1, vec![int_lit(15)])),
-        "fopen" => Some(fixed(&["filename", "mode"])),
+        "fopen" => Some(optional(
+            &["filename", "mode", "use_include_path", "context"],
+            2,
+            vec![bool_lit(false), null_lit()],
+        )),
         "fclose" | "fgets" | "fgetc" | "fpassthru" | "feof" | "ftell" | "rewind"
         | "fstat" | "fsync" | "fflush" | "fdatasync" => Some(fixed(&["stream"])),
         "flock" => {
