@@ -26,7 +26,6 @@ mod strings;
 /// Standard PHP library constants, functions, and classes.
 pub(crate) mod spl;
 mod system;
-mod x86_minimal;
 
 pub(crate) use data::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (symbols, constants, type metadata).

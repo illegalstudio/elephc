@@ -4,7 +4,6 @@
 //!
 //! Called from:
 //! - `crate::codegen::runtime::emitters::emit_runtime()` via `crate::codegen::runtime::fibers`.
-//! - `crate::codegen::runtime::x86_minimal::emit_runtime_linux_x86_64_minimal()`.
 //!
 //! Key details:
 //! - Stack regions must be unmapped when Fiber objects are freed, and guard-page sizing must match supported targets.

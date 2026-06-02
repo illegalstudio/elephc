@@ -129,7 +129,7 @@ fn emit_glob_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub rsp, {}", frame_size));                   // reserve an aligned stack frame large enough for the Linux glob_t plus local bookkeeping
     emitter.instruction("call __rt_cstr");                                      // convert the elephc glob pattern in rax/rdx into a null-terminated C pattern in rax
     emitter.instruction("mov rdi, rax");                                        // pass the C pattern pointer as the first libc glob() argument
-    emitter.instruction("xor esi, esi");                                        // use glob() flags = 0 for the current minimal runtime slice
+    emitter.instruction("xor esi, esi");                                        // use glob() flags = 0 for PHP-compatible default matching
     emitter.instruction("xor edx, edx");                                        // pass errfunc = NULL to the libc glob() helper
     emitter.instruction("lea rcx, [rsp]");                                      // pass the stack-resident glob_t storage as the final libc glob() argument
     emitter.instruction("call glob");                                           // expand the pattern through libc glob() into the temporary stack glob_t

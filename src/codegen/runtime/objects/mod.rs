@@ -3,7 +3,7 @@
 //! Keeps object helper emitters re-exported for the top-level runtime emitter.
 //!
 //! Called from:
-//! - `crate::codegen::runtime::emitters` and the Linux x86_64 minimal runtime emitter.
+//! - `crate::codegen::runtime::emitters::emit_runtime()`.
 //!
 //! Key details:
 //! - Helper names are consumed directly by codegen paths for `stdClass` and JSON-decoded `Mixed` values.

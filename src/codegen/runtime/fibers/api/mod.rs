@@ -4,7 +4,6 @@
 //!
 //! Called from:
 //! - `crate::codegen::runtime::emitters::emit_runtime()` via `crate::codegen::runtime::fibers`.
-//! - `crate::codegen::runtime::x86_minimal::emit_runtime_linux_x86_64_minimal()`.
 //!
 //! Key details:
 //! - API helpers must preserve Fiber state transitions and delegate target-specific assembly to focused emitters.

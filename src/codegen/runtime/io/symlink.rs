@@ -3,8 +3,7 @@
 //! `__rt_readlink`, `__rt_linkinfo`).
 //!
 //! Called from:
-//! - `crate::codegen::runtime::emitters::emit_runtime()` and
-//!   `crate::codegen::runtime::x86_minimal::emit_runtime_linux_x86_64_minimal()`.
+//! - `crate::codegen::runtime::emitters::emit_runtime()`.
 //!
 //! Key details:
 //! - All helpers route through libc to avoid per-syscall remapping work.

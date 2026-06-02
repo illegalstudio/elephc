@@ -4,7 +4,6 @@
 //!
 //! Called from:
 //! - `crate::codegen::runtime::emitters::emit_runtime()` via `crate::codegen::runtime::fibers`.
-//! - `crate::codegen::runtime::x86_minimal::emit_runtime_linux_x86_64_minimal()`.
 //!
 //! Key details:
 //! - Saved register sets and stack alignment must match each target ABI exactly or Fiber resumes corrupt execution state.

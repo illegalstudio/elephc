@@ -5,7 +5,7 @@ sidebar:
   order: 8
 ---
 
-**Source:** `src/codegen/runtime/` — `mod.rs`, `emitters.rs`, `data/`, `x86_minimal.rs`, `strings/`, `arrays/`, `buffers/`, `callables/`, `exceptions.rs`, `exceptions/`, `io/`, `objects/`, `spl/`, `system/`, `pointers/`, `fibers/`, `generators/`
+**Source:** `src/codegen/runtime/` — `mod.rs`, `emitters.rs`, `data/`, `strings/`, `arrays/`, `buffers/`, `callables/`, `exceptions.rs`, `exceptions/`, `io/`, `objects/`, `spl/`, `system/`, `pointers/`, `fibers/`, `generators/`
 
 The runtime is a collection of **hand-written assembly routines** that handle operations too complex for inline code generation. When the [code generator](the-codegen.md) needs to convert an integer to a string or concatenate two strings, it emits a `bl __rt_itoa` or `bl __rt_concat` — a call to a runtime routine.
 
@@ -613,7 +613,7 @@ Generator frames are stamped as object heap blocks because `Generator` is a buil
 
 **Source:** `src/codegen/runtime/fibers/` (4 files plus the `api/` subdirectory)
 
-These helpers implement PHP 8.1-style cooperative coroutines. They are emitted on AArch64 and in the Linux x86_64 runtime slice.
+These helpers implement PHP 8.1-style cooperative coroutines. They are emitted by the shared runtime on every supported target.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
@@ -635,7 +635,7 @@ These helpers implement PHP 8.1-style cooperative coroutines. They are emitted o
 
 **File:** `src/codegen/runtime/emitters.rs`
 
-The `emit_runtime()` function calls every AArch64 routine emitter in a fixed order. For Linux `x86_64`, it delegates to `x86_minimal.rs`, which emits the supported runtime slice for that backend.
+The `emit_runtime()` function calls the target-aware routine emitters in a fixed order. Each runtime module owns the shared helper surface and dispatches internally when AArch64 and Linux `x86_64` need different instruction sequences or ABI setup.
 
 ```rust
 pub fn emit_runtime(emitter: &mut Emitter) {

@@ -1,5 +1,5 @@
 //! Purpose:
-//! Coordinates emission of all runtime helper labels for non-minimal targets.
+//! Coordinates emission of all runtime helper labels for supported targets.
 //! Orders strings, system helpers, exceptions, arrays, buffers, I/O, pointers, and fibers so dependencies are available.
 //!
 //! Called from:
@@ -21,25 +21,18 @@ use super::pointers;
 use super::spl;
 use super::strings;
 use super::system;
-use super::x86_minimal::emit_runtime_linux_x86_64_minimal;
 use crate::codegen::emit::Emitter;
-use crate::codegen::platform::{Arch, Platform};
+use crate::codegen::platform::Platform;
 use crate::codegen::RuntimeFeatures;
 
-/// Emits all runtime helper labels in dependency order for non-minimal targets.
+/// Emits all runtime helper labels in dependency order for supported targets.
 ///
-/// For x86_64 Linux, delegates to the minimal runtime emitter and returns early.
-/// For all other targets, emits in order: diagnostics, strings, callables, system,
-/// exceptions, generators, arrays, SPL, objects, buffers, I/O, pointers, fibers.
+/// Emits in order: diagnostics, strings, callables, system, exceptions, generators,
+/// arrays, SPL, objects, buffers, I/O, pointers, fibers.
 ///
 /// Each category is emitted before any code that depends on it, ensuring labels
 /// are available when branches are assembled.
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_runtime_linux_x86_64_minimal(emitter, features);
-        return;
-    }
-
     emit_optional_linux_crypto_decls(emitter);
     diagnostics::emit_diagnostics(emitter);
 
@@ -369,7 +362,7 @@ fn emit_optional_linux_crypto_decls(emitter: &mut Emitter) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::platform::Target;
+    use crate::codegen::platform::{Arch, Target};
 
     /// Verifies that linux runtime marks crypto symbols weak.
     #[test]
@@ -423,5 +416,30 @@ mod tests {
         assert!(!asm.contains("__rt_preg_match:"));
         assert!(!asm.contains("__rt_preg_replace:"));
         assert!(!asm.contains("__rt_preg_split:"));
+    }
+
+    /// Verifies that Linux x86_64 uses the shared runtime surface.
+    #[test]
+    fn test_linux_x86_64_runtime_uses_shared_surface() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_runtime(&mut emitter, RuntimeFeatures::all());
+        let asm = emitter.output();
+
+        for sym in [
+            "__rt_hash_count",
+            "__rt_gc_note_child_ref",
+            "__rt_incref",
+            "__rt_decref_array",
+            "__rt_json_encode_assoc",
+            "__rt_preg_match",
+            "__rt_fiber_alloc_stack",
+        ] {
+            assert!(
+                asm.contains(&format!(".globl {}\n", sym)),
+                "linux x86_64 shared runtime missing global symbol {}",
+                sym
+            );
+        }
+        assert!(asm.contains(".weak MD5\n"));
     }
 }

@@ -9,6 +9,7 @@
 //! - GC helpers must honor cycle-collection suppression, mark bits, and parent/child references without double-releasing values.
 
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// Emits `__rt_gc_note_child_ref`, which records one heap-to-heap incoming edge for
 /// cycle-aware GC. Skips null pointers, out-of-range pointers, freed blocks, and
@@ -25,6 +26,11 @@ use crate::codegen::emit::Emitter;
 /// # ABI
 /// - AAPCS64: caller-saved registers `x0`–`x17` may be clobbered
 pub fn emit_gc_note_child_ref(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_gc_note_child_ref_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: gc_note_child_ref ---");
     emitter.label_global("__rt_gc_note_child_ref");
@@ -58,4 +64,17 @@ pub fn emit_gc_note_child_ref(emitter: &mut Emitter) {
 
     emitter.label("__rt_gc_note_child_ref_done");
     emitter.instruction("ret");                                                 // return to the caller
+}
+
+/// Emits the Linux x86_64 compatibility entry for `__rt_gc_note_child_ref`.
+///
+/// The x86_64 cycle collector recounts incoming heap edges during root scanning
+/// instead of storing transient counters in heap headers, so this entry does not
+/// mutate any runtime state.
+fn emit_gc_note_child_ref_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: gc_note_child_ref ---");
+    emitter.label_global("__rt_gc_note_child_ref");
+
+    emitter.instruction("ret");                                                 // x86_64 collector recounts incoming heap edges on demand
 }

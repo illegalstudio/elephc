@@ -257,14 +257,8 @@ pub use asort::emit_asort;
 /// Emit associative sort helper.
 pub use decref_any::emit_decref_any;
 /// Emit generic reference decrement helper.
-pub use decref_array::emit_decref_array;
-/// Emit array reference decrement helper.
-pub use decref_hash::emit_decref_hash;
-/// Emit hash reference decrement helper.
 pub use decref_mixed::emit_decref_mixed;
 /// Emit Mixed reference decrement helper.
-pub use decref_object::emit_decref_object;
-/// Emit object reference decrement helper.
 pub use hash_count::emit_hash_count;
 /// Emit hash count helper.
 pub use hash_append::emit_hash_append;
@@ -323,8 +317,6 @@ pub use heap_kind::emit_heap_kind;
 /// Emit heap kind check helper.
 pub use heap_free::emit_heap_free;
 /// Emit heap free helper.
-pub use incref::emit_incref;
-/// Emit reference increment helper.
 pub use iterable_unsupported_kind::emit_iterable_unsupported_kind;
 /// Emit unsupported iterable kind error helper.
 pub use iterable_write_stdout::emit_iterable_write_stdout;

@@ -307,7 +307,6 @@ src/
 │       ├── data/              Fixed, user-program, and instanceof runtime data tables (4 files)
 │       ├── diagnostics.rs     Suppressible runtime-warning channel used by `@`
 │       ├── emitters.rs        Shared emit helpers used across runtime categories
-│       ├── x86_minimal.rs     Minimal x86_64 runtime slice for the Linux x86_64 target
 │       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (60 files)
 │       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (124 files)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed plus callable descriptor release (3 files)

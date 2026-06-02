@@ -5,8 +5,7 @@
 //! and Linux x86_64.
 //!
 //! Called from:
-//! - `crate::codegen::runtime::emitters::emit_runtime()` and
-//!   `crate::codegen::runtime::x86_minimal::emit_runtime_linux_x86_64_minimal()`.
+//! - `crate::codegen::runtime::emitters::emit_runtime()`.
 //!
 //! Key details:
 //! - `__rt_fgetc` tail-calls `__rt_fread` with length = 1.
