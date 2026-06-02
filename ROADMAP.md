@@ -526,7 +526,7 @@ imposed. See `docs/internals/the-ir.md`.
 
 - [x] EIR design specification (`docs/internals/the-ir.md`) — types, instructions, terminators, effects, ownership, textual format
 - [x] `src/ir/` module — types, instructions, builder, validator, printer
-- [ ] AST → EIR lowering pass — every `ExprKind`/`StmtKind` variant
+- [x] AST → EIR lowering pass — every `ExprKind`/`StmtKind` variant
 - [x] `--emit-ir` CLI flag for diagnostics and snapshot testing
 - [ ] EIR → ASM backend producing semantically equivalent output to the legacy backend (no optimizations yet)
 - [ ] `--ir-backend` CLI flag (opt-in stable; `--ast-backend` remains default during the soak period)
