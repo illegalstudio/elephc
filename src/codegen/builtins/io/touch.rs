@@ -21,6 +21,11 @@ const TOUCH_ATIME_NOW: u8 = 1;
 const TOUCH_MTIME_NOW: u8 = 2;
 const TOUCH_BOTH_NOW: u8 = TOUCH_ATIME_NOW | TOUCH_MTIME_NOW;
 
+/// `stream_metadata` vtable slot index in the per-class user-wrapper vtable.
+const STREAM_METADATA_SLOT: usize = 14;
+/// PHP `STREAM_META_TOUCH` option value (`touch`-style metadata change).
+const STREAM_META_TOUCH: usize = 1;
+
 /// Emits code for the PHP `touch()` builtin.
 ///
 /// # Arguments
@@ -48,11 +53,115 @@ pub fn emit(
     emitter.comment("touch()");
     emit_expr(&args[0], emitter, ctx, data);
     match emitter.target.arch {
-        Arch::AArch64 => emit_touch_args_aarch64(args, emitter, ctx, data),
-        Arch::X86_64 => emit_touch_args_x86_64(args, emitter, ctx, data),
+        Arch::AArch64 => {
+            emit_touch_args_aarch64(args, emitter, ctx, data);
+            emit_touch_tail_aarch64(emitter, ctx);
+        }
+        Arch::X86_64 => {
+            emit_touch_args_x86_64(args, emitter, ctx, data);
+            emit_touch_tail_x86_64(emitter, ctx);
+        }
     }
-    abi::emit_call_label(emitter, "__rt_touch");                                // call the target-aware runtime helper
     Some(PhpType::Bool)
+}
+
+/// Emits the wrapper-vs-libc dispatch tail for `touch()` on AArch64.
+///
+/// On entry the path occupies `x1`/`x2`, the mtime `x3`, the atime `x4`, and the
+/// current-time flags `x5` (as left by `emit_touch_args_aarch64`). A registered
+/// `scheme://` path builds the `[mtime, atime]` value array via
+/// `__rt_touch_meta_array` and dispatches to the wrapper's
+/// `stream_metadata($path, STREAM_META_TOUCH, $value)` (vtable slot 14),
+/// releasing the boxed value afterwards; any other path calls libc `__rt_touch`.
+/// The bool result is left in `x0`.
+fn emit_touch_tail_aarch64(emitter: &mut Emitter, ctx: &mut Context) {
+    let wrapper = ctx.next_label("touch_wrapper");
+    let after = ctx.next_label("touch_after");
+    emitter.instruction("sub sp, sp, #48");                                     // scratch: path ptr/len, mtime, atime, flags, result
+    emitter.instruction("str x1, [sp, #0]");                                    // save the path pointer
+    emitter.instruction("str x2, [sp, #8]");                                    // save the path length
+    emitter.instruction("str x3, [sp, #16]");                                   // save the mtime seconds
+    emitter.instruction("str x4, [sp, #24]");                                   // save the atime seconds
+    emitter.instruction("str x5, [sp, #32]");                                   // save the current-time flags
+    emitter.instruction("mov x0, x1");                                          // path_is_wrapper arg0 = path ptr
+    emitter.instruction("mov x1, x2");                                          // path_is_wrapper arg1 = path len
+    abi::emit_call_label(emitter, "__rt_path_is_wrapper");                      // x0 = 1 when the scheme matches a registered wrapper
+    emitter.instruction(&format!("cbnz x0, {}", wrapper));                      // registered wrapper scheme → stream_metadata
+    emitter.instruction("ldr x1, [sp, #0]");                                    // libc path ptr → x1
+    emitter.instruction("ldr x2, [sp, #8]");                                    // libc path len → x2
+    emitter.instruction("ldr x3, [sp, #16]");                                   // libc mtime → x3
+    emitter.instruction("ldr x4, [sp, #24]");                                   // libc atime → x4
+    emitter.instruction("ldr x5, [sp, #32]");                                   // libc current-time flags → x5
+    emitter.instruction("add sp, sp, #48");                                     // release the scratch frame before the libc call
+    abi::emit_call_label(emitter, "__rt_touch");                                // normal path: libc touch(path, mtime, atime, flags)
+    emitter.instruction(&format!("b {}", after));                               // skip the wrapper path
+    emitter.label(&wrapper);
+    emitter.instruction("ldr x0, [sp, #16]");                                   // mtime → touch_meta_array arg0
+    emitter.instruction("ldr x1, [sp, #24]");                                   // atime → touch_meta_array arg1
+    emitter.instruction("ldr x2, [sp, #32]");                                   // flags → touch_meta_array arg2
+    abi::emit_call_label(emitter, "__rt_touch_meta_array");                     // x0 = boxed Mixed([mtime, atime])
+    emitter.instruction("str x0, [sp, #16]");                                   // stash the boxed value pointer (mtime slot reused)
+    emitter.instruction("ldr x0, [sp, #0]");                                    // wrapper path ptr → x0
+    emitter.instruction("ldr x1, [sp, #8]");                                    // wrapper path len → x1
+    emitter.instruction(&format!("mov x2, #{}", STREAM_METADATA_SLOT));         // stream_metadata vtable slot
+    emitter.instruction(&format!("mov x3, #{}", STREAM_META_TOUCH));            // option = STREAM_META_TOUCH
+    emitter.instruction("ldr x4, [sp, #16]");                                   // value = boxed mixed pointer
+    abi::emit_call_label(emitter, "__rt_user_wrapper_path_op");                 // dispatch into the wrapper's stream_metadata
+    emitter.instruction("str x0, [sp, #0]");                                    // stash the bool result across the value release
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the boxed value pointer
+    abi::emit_call_label(emitter, "__rt_decref_mixed");                         // release the boxed $value (caller owns; the method borrowed it)
+    emitter.instruction("ldr x0, [sp, #0]");                                    // restore the bool result
+    emitter.instruction("add sp, sp, #48");                                     // release the scratch frame
+    emitter.label(&after);
+}
+
+/// Emits the wrapper-vs-libc dispatch tail for `touch()` on x86_64.
+///
+/// On entry the path occupies `rax`/`rdx`, the mtime `rdi`, the atime `rsi`, and
+/// the current-time flags `rcx` (as left by `emit_touch_args_x86_64`). Mirrors
+/// `emit_touch_tail_aarch64`: a registered wrapper builds the value array and
+/// dispatches to `stream_metadata`; any other path calls libc `__rt_touch`. The
+/// bool result is left in `rax`.
+fn emit_touch_tail_x86_64(emitter: &mut Emitter, ctx: &mut Context) {
+    let wrapper = ctx.next_label("touch_wrapper");
+    let after = ctx.next_label("touch_after");
+    emitter.instruction("sub rsp, 48");                                         // scratch: path ptr/len, mtime, atime, flags, result
+    emitter.instruction("mov QWORD PTR [rsp + 0], rax");                        // save the path pointer
+    emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                        // save the path length
+    emitter.instruction("mov QWORD PTR [rsp + 16], rdi");                       // save the mtime seconds
+    emitter.instruction("mov QWORD PTR [rsp + 24], rsi");                       // save the atime seconds
+    emitter.instruction("mov QWORD PTR [rsp + 32], rcx");                       // save the current-time flags
+    emitter.instruction("mov rdi, rax");                                        // path_is_wrapper arg0 = path ptr
+    emitter.instruction("mov rsi, rdx");                                        // path_is_wrapper arg1 = path len
+    abi::emit_call_label(emitter, "__rt_path_is_wrapper");                      // rax = 1 when the scheme matches a registered wrapper
+    emitter.instruction("test rax, rax");                                       // matched a registered wrapper scheme?
+    emitter.instruction(&format!("jnz {}", wrapper));                           // registered wrapper scheme → stream_metadata
+    emitter.instruction("mov rax, QWORD PTR [rsp + 0]");                        // libc path ptr → rax
+    emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                        // libc path len → rdx
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");                       // libc mtime → rdi
+    emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");                       // libc atime → rsi
+    emitter.instruction("mov rcx, QWORD PTR [rsp + 32]");                       // libc current-time flags → rcx
+    emitter.instruction("add rsp, 48");                                         // release the scratch frame before the libc call
+    abi::emit_call_label(emitter, "__rt_touch");                                // normal path: libc touch(path, mtime, atime, flags)
+    emitter.instruction(&format!("jmp {}", after));                             // skip the wrapper path
+    emitter.label(&wrapper);
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");                       // mtime → touch_meta_array arg0
+    emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");                       // atime → touch_meta_array arg1
+    emitter.instruction("mov rdx, QWORD PTR [rsp + 32]");                       // flags → touch_meta_array arg2
+    abi::emit_call_label(emitter, "__rt_touch_meta_array");                     // rax = boxed Mixed([mtime, atime])
+    emitter.instruction("mov QWORD PTR [rsp + 16], rax");                       // stash the boxed value pointer (mtime slot reused)
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                        // wrapper path ptr → rdi
+    emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                        // wrapper path len → rsi
+    emitter.instruction(&format!("mov rdx, {}", STREAM_METADATA_SLOT));         // stream_metadata vtable slot
+    emitter.instruction(&format!("mov rcx, {}", STREAM_META_TOUCH));            // option = STREAM_META_TOUCH
+    emitter.instruction("mov r8, QWORD PTR [rsp + 16]");                        // value = boxed mixed pointer
+    abi::emit_call_label(emitter, "__rt_user_wrapper_path_op");                 // dispatch into the wrapper's stream_metadata
+    emitter.instruction("mov QWORD PTR [rsp + 0], rax");                        // stash the bool result across the value release
+    emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                       // reload the boxed value pointer
+    abi::emit_call_label(emitter, "__rt_decref_mixed");                         // release the boxed $value (caller owns; the method borrowed it)
+    emitter.instruction("mov rax, QWORD PTR [rsp + 0]");                        // restore the bool result
+    emitter.instruction("add rsp, 48");                                         // release the scratch frame
+    emitter.label(&after);
 }
 
 /// Materializes timestamp arguments for the `touch()` call on ARM64.

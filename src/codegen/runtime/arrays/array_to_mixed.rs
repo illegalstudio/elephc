@@ -39,8 +39,10 @@ pub fn emit_array_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x0]");                                        // load the logical array length before the conversion loop
     emitter.instruction("str x9, [sp, #16]");                                   // save the logical length across mixed-box allocations
     emitter.instruction("str xzr, [sp, #24]");                                  // initialize the element index to zero
-    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the source value_type tag
-    emitter.instruction("cmp x10, #7");                                         // is the source already boxed Mixed?
+    emitter.instruction("ldr x10, [x0, #-8]");                                  // load the destination array's packed kind word
+    emitter.instruction("lsr x10, x10, #8");                                    // shift the runtime value_type tag into the low byte
+    emitter.instruction("and x10, x10, #0x7f");                                 // isolate the runtime value_type tag, dropping the COW bit
+    emitter.instruction("cmp x10, #7");                                         // is the array already a boxed Mixed array at runtime?
     emitter.instruction("b.eq __rt_array_to_mixed_stamp");                      // already-mixed arrays only need metadata normalization
 
     emitter.label("__rt_array_to_mixed_loop");
@@ -128,7 +130,11 @@ fn emit_array_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the logical array length before the conversion loop
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the logical length across mixed-box allocations
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize the element index to zero
-    emitter.instruction("cmp QWORD PTR [rbp - 8], 7");                          // is the source already boxed Mixed?
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the unique destination array pointer
+    emitter.instruction("mov r10, QWORD PTR [r10 - 8]");                        // load the destination array's packed kind word
+    emitter.instruction("shr r10, 8");                                          // shift the runtime value_type tag into the low byte
+    emitter.instruction("and r10, 0x7f");                                       // isolate the runtime value_type tag, dropping the COW bit
+    emitter.instruction("cmp r10, 7");                                          // is the array already a boxed Mixed array at runtime?
     emitter.instruction("je __rt_array_to_mixed_x86_stamp");                    // already-mixed arrays only need metadata normalization
 
     emitter.label("__rt_array_to_mixed_x86_loop");

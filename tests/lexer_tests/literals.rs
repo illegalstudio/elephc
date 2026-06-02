@@ -78,6 +78,17 @@ fn test_double_quoted_escape_digit_bounds_and_fallbacks() {
 
 /// Verifies bare decimal integer `42` tokenizes as `IntLiteral(42)`, not float.
 #[test]
+fn test_string_control_escape_sequences() {
+    // \r, \v, \e, \f map to the matching ASCII control characters, matching
+    // PHP double-quoted string semantics.
+    let t = tokens("<?php \"\\r\\v\\e\\f\"");
+    assert_eq!(
+        t[1],
+        Token::StringLiteral("\r\u{0B}\u{1B}\u{0C}".into()),
+    );
+}
+
+#[test]
 fn test_integer_literal() {
     let t = tokens("<?php 42");
     assert_eq!(t[1], Token::IntLiteral(42));

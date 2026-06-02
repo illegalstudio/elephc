@@ -32,8 +32,38 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("file_get_contents()");
+    // A literal phar:// URL is read and decoded at compile time (uncompressed,
+    // gzip, or bzip2) and the entry's bytes are embedded as the string result —
+    // the same compile-time model as fopen("phar://...","r"). A missing archive
+    // or entry yields PHP false. (A non-literal phar:// path is read at run time
+    // through fopen + stream_get_contents instead.)
+    if let crate::parser::ast::ExprKind::StringLiteral(url) = &args[0].kind {
+        if url.starts_with("phar://") {
+            match super::phar_stream::extract_phar_entry(url) {
+                Some(bytes) => {
+                    let (sym, len) = data.add_string(&bytes);
+                    match emitter.target.arch {
+                        Arch::AArch64 => {
+                            abi::emit_symbol_address(emitter, "x1", &sym);
+                            emitter.instruction(&format!("mov x2, #{}", len)); // embedded entry length → string-result length register
+                        }
+                        Arch::X86_64 => {
+                            abi::emit_symbol_address(emitter, "rax", &sym);
+                            emitter.instruction(&format!("mov rdx, {}", len)); // embedded entry length → string-result length register
+                        }
+                    }
+                }
+                None => match emitter.target.arch {
+                    Arch::AArch64 => emitter.instruction("mov x1, #0"),         // missing archive/entry → null string ptr → boxed false
+                    Arch::X86_64 => emitter.instruction("xor eax, eax"),        // missing archive/entry → null string ptr → boxed false
+                },
+            }
+            box_file_get_contents_result(emitter, ctx);
+            return Some(PhpType::Mixed);
+        }
+    }
     emit_expr(&args[0], emitter, ctx, data);
-    abi::emit_call_label(emitter, "__rt_file_get_contents");                    // call the target-aware runtime helper that reads the whole file into an owned string
+    abi::emit_call_label(emitter, "__rt_file_get_contents_maybe_phar");         // reads the file (routes a non-literal phar:// URL to the runtime phar reader, else __rt_file_get_contents)
     box_file_get_contents_result(emitter, ctx);
     Some(PhpType::Mixed)
 }

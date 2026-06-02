@@ -173,6 +173,10 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             class_name,
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
+        ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
+            name_expr: Box::new(walk_expr(*name_expr, pass)),
+            args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
+        },
         ExprKind::NewDynamicObject {
             class_name,
             fallback_class,

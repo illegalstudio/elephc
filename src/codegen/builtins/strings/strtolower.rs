@@ -11,7 +11,6 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
 use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
@@ -36,7 +35,11 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("strtolower()");
-    emit_expr(&args[0], emitter, ctx, data);
+    // Coerce the operand to a string in x1/x2 (rdi/rsi) via emit_string_arg, so a
+    // Mixed argument (a `mixed` property/return value or an assoc-array element)
+    // is cast through __rt_mixed_cast_string rather than left as a boxed cell in
+    // x0 with stale string registers (which produced an empty result).
+    super::args::emit_string_arg(&args[0], emitter, ctx, data);
     abi::emit_call_label(emitter, "__rt_strtolower");                           // lowercase the input string through the target-aware runtime helper and return an owned result slice
 
     Some(PhpType::Str)

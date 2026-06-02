@@ -355,6 +355,9 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
             key.as_deref().is_some_and(expr_has_regex_call)
                 || value.as_deref().is_some_and(expr_has_regex_call)
         }
+        ExprKind::NewDynamic { name_expr, args } => {
+            expr_has_regex_call(name_expr) || args.iter().any(expr_has_regex_call)
+        }
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

@@ -46,6 +46,16 @@ pub(super) fn check_builtin(
                     "file_put_contents() takes exactly 2 arguments",
                 ));
             }
+            // file_put_contents("phar://...") writes a signed entry; the SHA1
+            // signature computed in __rt_phar_write_finalize needs libcrypto on
+            // Linux (CommonCrypto is in libSystem on macOS).
+            if let Some(crate::parser::ast::ExprKind::StringLiteral(url)) =
+                args.first().map(|a| &a.kind)
+            {
+                if url.starts_with("phar://") {
+                    checker.require_linux_builtin_library("crypto");
+                }
+            }
             for arg in args {
                 checker.infer_type(arg, env)?;
             }

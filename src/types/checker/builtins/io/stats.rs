@@ -63,6 +63,16 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Int))
         }
+        "disk_free_space" | "disk_total_space" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 1 argument", name),
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Float))
+        }
         "fileatime" | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode" => {
             if args.len() != 1 {
                 return Err(CompileError::new(

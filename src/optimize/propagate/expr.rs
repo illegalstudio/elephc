@@ -188,6 +188,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             class_name,
             args: propagate_args(args, None),
         },
+        ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
+            name_expr: Box::new(propagate_expr(*name_expr, env)),
+            args: propagate_args(args, None),
+        },
         ExprKind::NewDynamicObject {
             class_name,
             fallback_class,

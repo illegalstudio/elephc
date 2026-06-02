@@ -89,8 +89,8 @@ pub(crate) fn emit_array_literal(
             emit_array_value_type_stamp(emitter, "x9", &ty);
         }
         match &ty {
-            PhpType::Int | PhpType::Bool | PhpType::Callable => {
-                emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); // store int/bool/callable element at data offset
+            PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Resource(_) => {
+                emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); // store int/bool/callable/resource element at data offset
             }
             PhpType::Float => {
                 emitter.instruction(&format!("str d0, [x9, #{}]", 24 + i * 8)); // store float element at data offset
@@ -157,7 +157,7 @@ fn emit_array_literal_linux_x86_64(
             emit_array_value_type_stamp(emitter, "r11", &ty);                   // stamp the packed x86_64 array value_type tag once the first literal element fixes the runtime family
         }
         match &ty {
-            PhpType::Int | PhpType::Bool | PhpType::Callable => {
+            PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Resource(_) => {
                 abi::emit_store_to_address(
                     emitter,
                     abi::int_result_reg(emitter),

@@ -70,11 +70,19 @@ pub fn emit(
             }
         }
     }
+    let user_wrapper_label = ctx.next_label("fseek_user_wrapper");
+    let after_dispatch = ctx.next_label("fseek_after_dispatch");
+
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x2, x0");                                  // move the whence selector into the third lseek syscall argument register
             abi::emit_pop_reg(emitter, "x1");                                   // restore the seek offset into the second lseek syscall argument register
             abi::emit_pop_reg(emitter, "x0");                                   // restore the file descriptor into the first lseek syscall argument register
+            // -- user-wrapper synthetic fd path (Phase 10 step 4) --
+            emitter.instruction("mov w9, #0x4000");                             // load the high half of USER_WRAPPER_FD_BASE = 0x40000000
+            emitter.instruction("lsl w9, w9, #16");                             // shift into bits 30..16 to form 0x40000000
+            emitter.instruction("cmp x0, x9");                                  // is this a synthetic user-wrapper fd?
+            emitter.instruction(&format!("b.ge {}", user_wrapper_label));       // dispatch into the wrapper's stream_seek instead of lseek
             abi::emit_push_reg(emitter, "x0");                                  // preserve fd so successful fseek() can clear its EOF flag
             emitter.syscall(199);                                               // reposition the file offset through the platform syscall path
             if emitter.platform.needs_cmp_before_error_branch() {
@@ -90,11 +98,19 @@ pub fn emit(
             emitter.instruction("strb wzr, [x10, x9]");                         // clear EOF because fseek() repositioned the stream
             emitter.instruction("mov x0, #0");                                  // fseek() returns 0 on success
             emitter.label(&done_label);
+            emitter.instruction(&format!("b {}", after_dispatch));              // skip the user-wrapper path on the normal-fd success/failure
+            emitter.label(&user_wrapper_label);
+            abi::emit_call_label(emitter, "__rt_user_wrapper_fseek");           // dispatch into the wrapper's stream_seek
+            emitter.label(&after_dispatch);
         }
         Arch::X86_64 => {
             emitter.instruction("mov rdx, rax");                                // move the whence selector into the third SysV lseek() argument register
             abi::emit_pop_reg(emitter, "rsi");                                  // restore the seek offset into the second SysV lseek() argument register
             abi::emit_pop_reg(emitter, "rdi");                                  // restore the file descriptor into the first SysV lseek() argument register
+            // -- user-wrapper synthetic fd path (Phase 10 step 4) --
+            emitter.instruction("mov r9d, 0x40000000");                         // USER_WRAPPER_FD_BASE
+            emitter.instruction("cmp rdi, r9");                                 // is this a synthetic user-wrapper fd?
+            emitter.instruction(&format!("jge {}", user_wrapper_label));        // dispatch into the wrapper's stream_seek instead of lseek
             abi::emit_push_reg(emitter, "rdi");                                 // preserve fd so successful fseek() can clear its EOF flag
             emitter.instruction("call lseek");                                  // reposition the file offset through libc lseek() on linux-x86_64
             emitter.instruction("cmp rax, 0");                                  // did libc lseek() succeed with a non-negative resulting file offset?
@@ -108,6 +124,10 @@ pub fn emit(
             emitter.instruction("mov BYTE PTR [r11 + r10], 0");                 // clear EOF because fseek() repositioned the stream
             emitter.instruction("xor eax, eax");                                // fseek() returns 0 on success
             emitter.label(&done_label);
+            emitter.instruction(&format!("jmp {}", after_dispatch));            // skip the user-wrapper path on the normal-fd success/failure
+            emitter.label(&user_wrapper_label);
+            abi::emit_call_label(emitter, "__rt_user_wrapper_fseek");           // dispatch into the wrapper's stream_seek
+            emitter.label(&after_dispatch);
         }
     }
     Some(PhpType::Int)

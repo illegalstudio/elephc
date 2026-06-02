@@ -239,3 +239,19 @@ fn test_error_sys_get_temp_dir_wrong_args() {
         "sys_get_temp_dir() takes no arguments",
     );
 }
+
+#[test]
+fn test_error_disk_free_space_wrong_args() {
+    expect_error(
+        "<?php disk_free_space();",
+        "disk_free_space() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_disk_total_space_wrong_args() {
+    expect_error(
+        "<?php disk_total_space();",
+        "disk_total_space() takes exactly 1 argument",
+    );
+}

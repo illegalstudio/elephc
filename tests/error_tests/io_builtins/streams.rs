@@ -26,7 +26,7 @@ fn test_error_print_r_wrong_args() {
 fn test_error_fopen_wrong_args() {
     expect_error(
         r#"<?php fopen("file");"#,
-        "fopen() takes exactly 2 arguments",
+        "fopen() takes 2 to 4 arguments",
     );
 }
 
@@ -196,4 +196,478 @@ fn test_error_stream_modify_builtins_require_resource_handle() {
     ] {
         expect_error(source, message);
     }
+}
+
+#[test]
+fn test_error_is_resource_wrong_args() {
+    expect_error(
+        "<?php is_resource();",
+        "is_resource() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_get_resource_type_wrong_args() {
+    expect_error(
+        "<?php get_resource_type();",
+        "get_resource_type() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_get_resource_id_wrong_args() {
+    expect_error(
+        "<?php get_resource_id(STDIN, STDOUT);",
+        "get_resource_id() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_stream_isatty_wrong_args() {
+    expect_error(
+        "<?php stream_isatty();",
+        "stream_isatty() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_stream_isatty_requires_resource_handle() {
+    expect_error(
+        "<?php stream_isatty(1);",
+        "stream_isatty() expects resource, got int",
+    );
+}
+
+#[test]
+fn test_error_stream_supports_lock_requires_resource_handle() {
+    expect_error(
+        "<?php stream_supports_lock(1);",
+        "stream_supports_lock() expects resource, got int",
+    );
+}
+
+#[test]
+fn test_error_stream_is_local_wrong_args() {
+    expect_error(
+        "<?php stream_is_local();",
+        "stream_is_local() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_stream_get_contents_wrong_args() {
+    expect_error(
+        "<?php stream_get_contents();",
+        "stream_get_contents() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_stream_get_contents_requires_resource_handle() {
+    expect_error(
+        "<?php stream_get_contents(1);",
+        "stream_get_contents() expects resource, got int",
+    );
+}
+
+#[test]
+fn test_error_stream_copy_to_stream_wrong_args() {
+    expect_error(
+        "<?php stream_copy_to_stream(STDIN);",
+        "stream_copy_to_stream() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_stream_copy_to_stream_requires_resource_handles() {
+    expect_error(
+        "<?php stream_copy_to_stream(STDIN, 1);",
+        "stream_copy_to_stream() expects resource, got int",
+    );
+}
+
+#[test]
+fn test_error_stream_introspection_lists_take_no_args() {
+    for (source, message) in [
+        (
+            "<?php stream_get_wrappers(1);",
+            "stream_get_wrappers() takes no arguments",
+        ),
+        (
+            "<?php stream_get_transports(1);",
+            "stream_get_transports() takes no arguments",
+        ),
+        (
+            "<?php stream_get_filters(1);",
+            "stream_get_filters() takes no arguments",
+        ),
+    ] {
+        expect_error(source, message);
+    }
+}
+
+#[test]
+fn test_error_stream_socket_server_wrong_args() {
+    expect_error(
+        "<?php stream_socket_server();",
+        "stream_socket_server() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_stream_socket_client_wrong_args() {
+    expect_error(
+        "<?php stream_socket_client();",
+        "stream_socket_client() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_fsockopen_wrong_args() {
+    expect_error(
+        "<?php fsockopen();",
+        "fsockopen() takes 2 to 5 arguments",
+    );
+}
+
+#[test]
+fn test_error_fsockopen_error_code_not_variable() {
+    expect_error(
+        r#"<?php fsockopen("127.0.0.1", 80, 0);"#,
+        "fsockopen() parameter $error_code must be passed a variable",
+    );
+}
+
+#[test]
+fn test_error_stream_wrapper_register_wrong_args() {
+    expect_error(
+        "<?php stream_wrapper_register();",
+        "stream_wrapper_register() takes 2 or 3 arguments",
+    );
+}
+
+#[test]
+fn test_error_stream_wrapper_unregister_wrong_args() {
+    expect_error(
+        "<?php stream_wrapper_unregister();",
+        "stream_wrapper_unregister() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_stream_wrapper_restore_wrong_args() {
+    expect_error(
+        "<?php stream_wrapper_restore();",
+        "stream_wrapper_restore() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_stream_socket_enable_crypto_wrong_args() {
+    expect_error(
+        "<?php stream_socket_enable_crypto();",
+        "stream_socket_enable_crypto() takes 2 to 4 arguments",
+    );
+}
+
+#[test]
+fn test_error_stream_filter_register_wrong_args() {
+    expect_error(
+        "<?php stream_filter_register();",
+        "stream_filter_register() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_stream_socket_accept_wrong_args() {
+    expect_error(
+        "<?php stream_socket_accept();",
+        "stream_socket_accept() takes 1 to 3 arguments",
+    );
+}
+
+#[test]
+fn test_error_stream_socket_accept_requires_resource() {
+    expect_error(
+        "<?php stream_socket_accept(1);",
+        "stream_socket_accept() expects resource, got int",
+    );
+}
+
+#[test]
+fn test_error_stream_get_line_wrong_args() {
+    expect_error(
+        "<?php stream_get_line(STDIN);",
+        "stream_get_line() takes 2 or 3 arguments",
+    );
+}
+
+#[test]
+fn test_error_stream_get_line_requires_resource() {
+    expect_error(
+        "<?php stream_get_line(1, 80);",
+        "stream_get_line() expects resource, got int",
+    );
+}
+
+#[test]
+fn test_error_stream_set_blocking_wrong_args() {
+    expect_error(
+        "<?php stream_set_blocking(STDIN);",
+        "stream_set_blocking() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_stream_set_blocking_requires_resource() {
+    expect_error(
+        "<?php stream_set_blocking(1, true);",
+        "stream_set_blocking() expects resource, got int",
+    );
+}
+
+#[test]
+fn test_error_stream_socket_shutdown_wrong_args() {
+    expect_error(
+        "<?php stream_socket_shutdown(STDIN);",
+        "stream_socket_shutdown() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_gethostname_wrong_args() {
+    expect_error(
+        "<?php gethostname(1);",
+        "gethostname() takes no arguments",
+    );
+}
+
+#[test]
+fn test_error_gethostbyname_wrong_args() {
+    expect_error(
+        "<?php gethostbyname();",
+        "gethostbyname() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_gethostbyaddr_wrong_args() {
+    expect_error(
+        "<?php gethostbyaddr();",
+        "gethostbyaddr() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_stream_filter_append_wrong_args() {
+    // Too few (1) and too many (5) arguments both fail; the optional 4th
+    // `$params` argument is accepted (2..=4 args are valid).
+    expect_error(
+        "<?php stream_filter_append(STDIN);",
+        "stream_filter_append() takes 2 to 4 arguments",
+    );
+    expect_error(
+        "<?php stream_filter_append(STDIN, \"string.rot13\", STREAM_FILTER_ALL, 6, 7);",
+        "stream_filter_append() takes 2 to 4 arguments",
+    );
+}
+
+// stream_filter_append() with an unknown filter name no longer fails at
+// compile time: unknown built-in names are routed through the user-filter
+// registry (Phase 10 tier 3), and an unregistered name resolves to PHP
+// false at runtime. The "unknown stream filter" compile-time error is
+// retired; runtime behavior is verified in the codegen test
+// `test_user_stream_filter_unknown_name_returns_false`.
+
+#[test]
+fn test_error_stream_filter_remove_wrong_args() {
+    expect_error(
+        "<?php stream_filter_remove();",
+        "stream_filter_remove() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_getprotobyname_wrong_args() {
+    expect_error(
+        "<?php getprotobyname();",
+        "getprotobyname() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_getprotobynumber_wrong_args() {
+    expect_error(
+        "<?php getprotobynumber();",
+        "getprotobynumber() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_getservbyname_wrong_args() {
+    expect_error(
+        r#"<?php getservbyname("http");"#,
+        "getservbyname() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_getservbyport_wrong_args() {
+    expect_error(
+        "<?php getservbyport(80);",
+        "getservbyport() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_stream_set_timeout_wrong_args() {
+    expect_error(
+        "<?php stream_set_timeout(STDIN);",
+        "stream_set_timeout() takes 2 or 3 arguments",
+    );
+}
+
+#[test]
+fn test_error_stream_set_timeout_requires_resource() {
+    expect_error(
+        "<?php stream_set_timeout(1, 5);",
+        "stream_set_timeout() expects resource, got int",
+    );
+}
+
+#[test]
+fn test_error_stream_socket_sendto_wrong_args() {
+    expect_error(
+        "<?php stream_socket_sendto(STDIN);",
+        "stream_socket_sendto() takes 2 to 4 arguments",
+    );
+}
+
+#[test]
+fn test_error_stream_socket_sendto_requires_resource() {
+    expect_error(
+        r#"<?php stream_socket_sendto(1, "x");"#,
+        "stream_socket_sendto() expects resource, got int",
+    );
+}
+
+#[test]
+fn test_error_stream_socket_recvfrom_wrong_args() {
+    expect_error(
+        "<?php stream_socket_recvfrom(STDIN);",
+        "stream_socket_recvfrom() takes 2 to 4 arguments",
+    );
+}
+
+#[test]
+fn test_error_stream_socket_recvfrom_requires_resource() {
+    expect_error(
+        "<?php stream_socket_recvfrom(1, 64);",
+        "stream_socket_recvfrom() expects resource, got int",
+    );
+}
+
+#[test]
+fn test_error_stream_socket_recvfrom_address_not_variable() {
+    expect_error(
+        "<?php stream_socket_recvfrom(STDIN, 32, 0, \"literal\");",
+        "stream_socket_recvfrom() parameter $address must be passed a variable",
+    );
+}
+
+#[test]
+fn test_error_stream_socket_recvfrom_address_not_string() {
+    expect_error(
+        "<?php $n = 1; stream_socket_recvfrom(STDIN, 32, 0, $n);",
+        "stream_socket_recvfrom() parameter $address must be a string",
+    );
+}
+
+#[test]
+fn test_error_stream_socket_get_name_wrong_args() {
+    expect_error(
+        "<?php stream_socket_get_name(STDIN);",
+        "stream_socket_get_name() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_stream_socket_get_name_requires_resource() {
+    expect_error(
+        "<?php stream_socket_get_name(1, true);",
+        "stream_socket_get_name() expects resource, got int",
+    );
+}
+
+#[test]
+fn test_error_stream_socket_pair_wrong_args() {
+    expect_error(
+        "<?php stream_socket_pair(1, 1);",
+        "stream_socket_pair() takes exactly 3 arguments",
+    );
+}
+
+#[test]
+fn test_error_popen_wrong_args() {
+    expect_error(
+        r#"<?php popen("ls");"#,
+        "popen() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_pclose_requires_resource() {
+    expect_error(
+        "<?php pclose(1);",
+        "pclose() expects resource, got int",
+    );
+}
+
+#[test]
+fn test_error_opendir_wrong_args() {
+    expect_error("<?php opendir();", "opendir() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_readdir_wrong_args() {
+    expect_error("<?php readdir();", "readdir() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_readdir_requires_resource() {
+    expect_error("<?php readdir(1);", "readdir() expects resource, got int");
+}
+
+#[test]
+fn test_error_closedir_requires_resource() {
+    expect_error("<?php closedir(1);", "closedir() expects resource, got int");
+}
+
+#[test]
+fn test_error_rewinddir_wrong_args() {
+    expect_error("<?php rewinddir();", "rewinddir() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_stream_select_wrong_args() {
+    expect_error(
+        "<?php $a = []; stream_select($a);",
+        "stream_select() takes 4 or 5 arguments",
+    );
+}
+
+#[test]
+fn test_error_stream_get_meta_data_wrong_args() {
+    expect_error(
+        "<?php stream_get_meta_data();",
+        "stream_get_meta_data() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_stream_get_meta_data_requires_resource() {
+    expect_error(
+        "<?php stream_get_meta_data(1);",
+        "stream_get_meta_data() expects resource, got int",
+    );
 }

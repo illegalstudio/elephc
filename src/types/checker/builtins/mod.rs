@@ -44,6 +44,26 @@ impl Checker {
         }
     }
 
+    /// Records an external link library required on every target (unlike
+    /// [`Self::require_linux_builtin_library`], which is Linux-only).
+    fn require_builtin_library(&mut self, library: &str) {
+        if !self.required_libraries.iter().any(|lib| lib == library) {
+            self.required_libraries.push(library.to_string());
+        }
+    }
+
+    /// Records that a macOS target requires the given shared library.
+    ///
+    /// No-op on non-macOS targets. Used for libraries that live in libc on
+    /// Linux (glibc/musl) but need explicit linkage on macOS — e.g. `iconv`.
+    fn require_macos_builtin_library(&mut self, library: &str) {
+        if self.target_platform == crate::codegen::platform::Platform::MacOS
+            && !self.required_libraries.iter().any(|lib| lib == library)
+        {
+            self.required_libraries.push(library.to_string());
+        }
+    }
+
     /// Type-checks a PHP builtin function call, returning the inferred return type or `None` if unhandled.
     pub fn check_builtin(
         &mut self,

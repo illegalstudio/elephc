@@ -48,10 +48,47 @@ pub fn emit(
             abi::emit_pop_reg(emitter, "rax");                                  // restore the file descriptor into the primary integer register
         }
     }
+    // -- user-wrapper synthetic fd path (G1): dispatch into stream_lock --
+    //    A descriptor >= USER_WRAPPER_FD_BASE is a userspace wrapper handle, so
+    //    flock() must call the wrapper's stream_lock() rather than the libc
+    //    flock() wrapper. PHP does not populate $would_block for userspace
+    //    wrappers, so the wrapper path skips the by-ref store entirely.
+    let wrapper_label = ctx.next_label("flock_user_wrapper");
+    let done_label = ctx.next_label("flock_done");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov w9, #0x4000");                             // load the high half of USER_WRAPPER_FD_BASE = 0x40000000
+            emitter.instruction("lsl w9, w9, #16");                             // shift into bits 30..16 to form 0x40000000
+            emitter.instruction("cmp x0, x9");                                  // is this a synthetic user-wrapper fd?
+            emitter.instruction(&format!("b.ge {}", wrapper_label));            // dispatch into the wrapper's stream_lock
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r9d, 0x40000000");                         // USER_WRAPPER_FD_BASE
+            emitter.instruction("cmp rax, r9");                                 // is this a synthetic user-wrapper fd?
+            emitter.instruction(&format!("jge {}", wrapper_label));             // dispatch into the wrapper's stream_lock
+        }
+    }
     abi::emit_call_label(emitter, "__rt_flock");                                // call the runtime libc flock(fd, op) wrapper that translates LOCK_UN
     if let Some(would_block_arg) = args.get(2) {
         emit_store_would_block(would_block_arg, emitter, ctx);
     }
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("b {}", done_label)),     // skip the wrapper path on the normal-fd result
+        Arch::X86_64 => emitter.instruction(&format!("jmp {}", done_label)),    // skip the wrapper path on the normal-fd result
+    }
+    emitter.label(&wrapper_label);
+    // `__rt_user_wrapper_flock` resolves the wrapper object from the synthetic
+    // fd and calls stream_lock($operation). Its lookup expects the fd in the
+    // SysV first-arg register (x0 / rdi) and the operation in the second (x1 /
+    // rsi). ARM64 already holds fd in x0 and operation in x1; x86_64 left fd in
+    // rax and operation in rdx (the libc `__rt_flock` convention), so move both
+    // into the wrapper-call registers first.
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("mov rdi, rax");                                   // synthetic fd → wrapper-lookup first-arg register
+        emitter.instruction("mov rsi, rdx");                                   // lock operation → wrapper-call second-arg register
+    }
+    abi::emit_call_label(emitter, "__rt_user_wrapper_flock");                   // call the wrapper's stream_lock($operation)
+    emitter.label(&done_label);
     Some(PhpType::Bool)
 }
 

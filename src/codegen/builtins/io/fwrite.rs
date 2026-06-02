@@ -50,15 +50,15 @@ pub fn emit(
         Arch::AArch64 => {
             emitter.instruction("str x0, [sp, #-16]!");                         // push the file descriptor while the data expression is evaluated
             emit_expr(&args[1], emitter, ctx, data);
-            emitter.instruction("ldr x0, [sp], #16");                           // restore the file descriptor into the write syscall register
-            emitter.syscall(4);                                                 // write the elephc string payload to the requested file descriptor through the platform syscall path
+            emitter.instruction("ldr x0, [sp], #16");                           // restore the file descriptor into the first __rt_fwrite argument register
+            abi::emit_call_label(emitter, "__rt_fwrite");                       // write the payload, applying any attached write filter
         }
         Arch::X86_64 => {
             abi::emit_push_reg(emitter, "rax");                                 // preserve the file descriptor while the data expression is evaluated
             emit_expr(&args[1], emitter, ctx, data);
-            abi::emit_pop_reg(emitter, "rdi");                                  // restore the file descriptor into the first SysV libc write() argument register
-            emitter.instruction("mov rsi, rax");                                // move the elephc string pointer into the second SysV libc write() argument register
-            emitter.instruction("call write");                                  // write the requested elephc string payload through libc write()
+            abi::emit_pop_reg(emitter, "rdi");                                  // restore the file descriptor into the first __rt_fwrite argument register
+            emitter.instruction("mov rsi, rax");                                // move the elephc string pointer into the second __rt_fwrite argument register
+            abi::emit_call_label(emitter, "__rt_fwrite");                       // write the payload, applying any attached write filter
         }
     }
     Some(PhpType::Int)

@@ -472,6 +472,18 @@ impl Checker {
             ExprKind::NewObject { class_name, args } => {
                 self.infer_new_object_type(class_name.as_str(), args, expr, env)
             }
+            ExprKind::NewDynamic { name_expr, args } => {
+                // The class is named at runtime; without a literal class
+                // we can't typecheck constructor args or the resulting
+                // object's type. Infer the name expression for its side
+                // effects + warnings, type-check the args generically, and
+                // return Mixed.
+                self.infer_type(name_expr, env)?;
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                Ok(PhpType::Mixed)
+            }
             ExprKind::NewDynamicObject {
                 class_name,
                 fallback_class,

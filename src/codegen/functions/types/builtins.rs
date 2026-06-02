@@ -35,14 +35,19 @@ pub(super) fn infer_function_call_type(
         "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "ucwords" | "trim"
         | "ltrim" | "rtrim" | "chop" | "substr" | "str_repeat" | "strrev" | "str_replace"
         | "str_ireplace" | "substr_replace" | "str_pad" | "chr" | "implode" | "join"
-        | "sprintf" | "number_format" | "nl2br" | "wordwrap" | "addslashes"
+        | "sprintf" | "vsprintf" | "number_format" | "nl2br" | "wordwrap" | "addslashes"
         | "stripslashes" | "htmlspecialchars" | "html_entity_decode" | "htmlentities"
         | "urlencode" | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode"
         | "base64_decode" | "bin2hex" | "hex2bin" | "md5" | "sha1" | "hash" | "gettype"
         | "strstr" | "readline" | "date"
         | "json_last_error_msg" | "php_uname" | "phpversion"
         | "tempnam" | "getcwd" | "shell_exec" | "preg_replace_callback"
-        | "ptr_read_string" | "fread" | "fgets" => PhpType::Str,
+        | "ptr_read_string"
+        | "fread" | "fgets" | "stream_get_contents" | "stream_get_line"
+        | "gethostname" | "gethostbyname"
+        | "basename" | "sys_get_temp_dir"
+        | "get_class" | "get_parent_class" | "get_resource_type"
+        | "exec" | "system" | "preg_replace" => PhpType::Str,
         "json_decode" => PhpType::Mixed,
         "call_user_func" | "call_user_func_array" => {
             infer_dynamic_callback_builtin_type(args, ctx).unwrap_or(PhpType::Mixed)
@@ -139,6 +144,7 @@ pub(super) fn infer_function_call_type(
         | "range"
         | "array_rand"
         | "sscanf"
+        | "fscanf"
         | "fgetcsv"
         | "preg_split" => {
             if name == "preg_split" && args.len() >= 4 {
@@ -149,6 +155,7 @@ pub(super) fn infer_function_call_type(
                 || name == "scandir"
                 || name == "glob"
                 || name == "fgetcsv"
+                || name == "fscanf"
                 || name == "preg_split"
             {
                 PhpType::Array(Box::new(PhpType::Str))
@@ -178,8 +185,8 @@ pub(super) fn infer_function_call_type(
             PhpType::Bool
         }
         "define" => PhpType::Bool,
-        "umask" | "fpassthru" | "linkinfo" | "fseek" | "ftell" | "fwrite"
-        | "fputcsv" => PhpType::Int,
+        "umask" | "fpassthru" | "linkinfo" | "fprintf" | "vprintf" | "vfprintf"
+        | "fseek" | "ftell" | "fwrite" | "fputcsv" => PhpType::Int,
         "strpos" | "strrpos" | "array_search" | "file_get_contents" | "json_encode"
         | "grapheme_strrev" | "fileatime" | "filectime" | "fileperms" | "fileowner"
         | "filegroup" | "fileinode" | "filetype" | "stat" | "lstat" | "fstat"
@@ -284,6 +291,8 @@ pub(super) fn infer_function_call_type(
                 ])
             }
         }
+        "stream_bucket_new" | "stream_bucket_make_writeable" => PhpType::Mixed,
+        "stream_resolve_include_path" => PhpType::Mixed,
         _ => {
             if let Some(c) = ctx {
                 if let Some(fn_sig) = c.functions.get(name) {

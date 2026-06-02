@@ -71,6 +71,123 @@ impl Platform {
         }
     }
 
+    /// `ioctl` request that reads terminal attributes — `TIOCGETA` on macOS,
+    /// `TCGETS` on Linux. `stream_isatty()` issues it to detect a terminal.
+    pub fn tty_get_request(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x4048_7413,
+            Platform::Linux => 0x5401,
+        }
+    }
+
+    /// `O_NONBLOCK` open/`fcntl` flag bit — the value differs between macOS
+    /// and Linux. `stream_set_blocking()` toggles it through `fcntl`.
+    pub fn o_nonblock(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0004,
+            Platform::Linux => 0x0800,
+        }
+    }
+
+    /// `SOL_SOCKET` level for `setsockopt` — the value differs between macOS
+    /// and Linux. `stream_set_timeout()` uses it to set a socket option.
+    pub fn sol_socket(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0xffff,
+            Platform::Linux => 1,
+        }
+    }
+
+    /// `SO_RCVTIMEO` receive-timeout `setsockopt` option name — the value
+    /// differs between macOS and Linux. `stream_set_timeout()` sets it.
+    pub fn so_rcvtimeo(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x1006,
+            Platform::Linux => 20,
+        }
+    }
+
+    /// `IPPROTO_TCP` setsockopt level for TCP_NODELAY. Same value (6) on both
+    /// macOS and Linux — kept here so socket option emitters never name the
+    /// protocol number directly.
+    pub fn ipproto_tcp(&self) -> u32 {
+        6
+    }
+
+    /// `TCP_NODELAY` setsockopt option name. Same value (1) on both macOS and
+    /// Linux.
+    pub fn tcp_nodelay(&self) -> u32 {
+        1
+    }
+
+    /// `SO_REUSEPORT` setsockopt option name. Differs between BSD (macOS) and
+    /// Linux: macOS uses 0x0200, Linux uses 15.
+    pub fn so_reuseport(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0200,
+            Platform::Linux => 15,
+        }
+    }
+
+    /// `SO_BROADCAST` setsockopt option name. Differs between BSD (macOS) and
+    /// Linux: macOS uses 0x0020, Linux uses 6. Enables sending to broadcast
+    /// addresses on a UDP socket.
+    pub fn so_broadcast(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0020,
+            Platform::Linux => 6,
+        }
+    }
+
+    /// `IPPROTO_IPV6` setsockopt level for IPV6_V6ONLY. Same value (41) on
+    /// both macOS and Linux. Consumed by the IPv6 server/client option emitter.
+    #[allow(dead_code)]
+    pub fn ipproto_ipv6(&self) -> u32 {
+        41
+    }
+
+    /// `IPV6_V6ONLY` setsockopt option name. macOS = 27, Linux = 26. Consumed
+    /// by the IPv6 server/client option emitter.
+    #[allow(dead_code)]
+    pub fn ipv6_v6only(&self) -> u32 {
+        match self {
+            Platform::MacOS => 27,
+            Platform::Linux => 26,
+        }
+    }
+
+    /// `ECONNREFUSED` error number — 61 on macOS, 111 on Linux. `fsockopen()`
+    /// reports it generically when a connection cannot be established.
+    pub fn econnrefused(&self) -> i64 {
+        match self {
+            Platform::MacOS => 61,
+            Platform::Linux => 111,
+        }
+    }
+
+    /// `AF_INET6` family value — 30 on macOS (BSD), 10 on Linux. Passed to
+    /// `socket()` for IPv6 sockets and stored as the family byte in
+    /// `sockaddr_in6` before `bind()` / `connect()`.
+    pub fn af_inet6(&self) -> i64 {
+        match self {
+            Platform::MacOS => 30,
+            Platform::Linux => 10,
+        }
+    }
+
+    /// Byte offset of `ai_addr` inside `struct addrinfo`. macOS / BSD orders
+    /// the fields as `..., ai_canonname (ptr), ai_addr (ptr), ai_next (ptr)`
+    /// — putting `ai_addr` at offset 32. Linux (glibc) swaps the canonname
+    /// and addr fields, so `ai_addr` lives at offset 24. The earlier fields
+    /// (ai_flags/family/socktype/protocol/addrlen + pad) are identical at
+    /// 24 bytes total on both LP64 platforms.
+    pub fn addrinfo_addr_offset(&self) -> i64 {
+        match self {
+            Platform::MacOS => 32,
+            Platform::Linux => 24,
+        }
+    }
+
     /// Returns the `O_WRONLY | O_CREAT` flag combination for `open()`.
     ///
     /// Opens an existing file for writing or creates a new file; does not truncate.
@@ -144,6 +261,38 @@ impl Platform {
         match self {
             Platform::MacOS => 96,
             Platform::Linux => 48,
+        }
+    }
+
+    /// Byte size of the platform `struct statfs` buffer that `statfs` fills in.
+    pub fn statfs_buf_size(&self) -> usize {
+        match self {
+            Platform::MacOS => 2168,
+            Platform::Linux => 128,
+        }
+    }
+
+    /// Offset of the `f_bsize` (fundamental block size) field in `struct statfs`.
+    pub fn statfs_bsize_offset(&self) -> usize {
+        match self {
+            Platform::MacOS => 0,
+            Platform::Linux => 8,
+        }
+    }
+
+    /// Offset of the `f_blocks` (total block count) field in `struct statfs`.
+    pub fn statfs_blocks_offset(&self) -> usize {
+        match self {
+            Platform::MacOS => 8,
+            Platform::Linux => 16,
+        }
+    }
+
+    /// Offset of the `f_bavail` (available block count) field in `struct statfs`.
+    pub fn statfs_bavail_offset(&self) -> usize {
+        match self {
+            Platform::MacOS => 24,
+            Platform::Linux => 32,
         }
     }
 

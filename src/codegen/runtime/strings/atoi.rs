@@ -18,7 +18,8 @@ use crate::codegen::{emit::Emitter, platform::Arch};
     ///
     /// # Input registers
     /// - AArch64: x1 = string pointer, x2 = byte length
-    /// - x86_64: rdi = string pointer, rsi = byte length (System V AMD64 ABI)
+    /// - x86_64: rax = string pointer, rdx = byte length (elephc string-value
+    ///   convention — NOT the SysV rdi/rsi pair)
     ///
     /// # Output registers
     /// - AArch64: x0 = parsed integer

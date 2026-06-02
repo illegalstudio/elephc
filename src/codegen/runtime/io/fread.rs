@@ -38,6 +38,12 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fread ---");
     emitter.label_global("__rt_fread");
 
+    // -- user-wrapper synthetic fd path (Phase 10 step 4) --
+    emitter.instruction("mov w9, #0x4000");                                     // load the high half of USER_WRAPPER_FD_BASE = 0x40000000
+    emitter.instruction("lsl w9, w9, #16");                                     // shift into bits 30..16 to form 0x40000000
+    emitter.instruction("cmp x0, x9");                                          // is this a synthetic user-wrapper fd?
+    emitter.instruction("b.ge __rt_user_wrapper_fread");                        // dispatch into the wrapper's stream_read instead of issuing a read syscall
+
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
@@ -54,6 +60,24 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("add x12, x11, x10");                                   // compute write pointer: buf + offset
     emitter.instruction("str x12, [sp, #16]");                                  // save start pointer for return value
 
+    // -- TLS dispatch: route through elephc_tls_read when fd has an
+    //    attached session (Phase 11 B3). --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd for the TLS check
+    crate::codegen::abi::emit_symbol_address(emitter, "x13", "_tls_sessions");
+    emitter.instruction("ldr x14, [x13, x0, lsl #3]");                          // _tls_sessions[fd] handle (0 = plain TCP)
+    emitter.instruction("cbz x14, __rt_fread_do_syscall");                      // no TLS attached → fall through to read syscall
+    emitter.instruction("mov x0, x14");                                         // handle as first arg
+    emitter.instruction("mov x1, x12");                                         // buf ptr
+    emitter.instruction("ldr x2, [sp, #8]");                                    // len
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_elephc_tls_read_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // load elephc_tls_read entry pointer
+    emitter.instruction("blr x9");                                              // x0 = bytes read (>=0) or -1
+    emitter.instruction("cmp x0, #0");                                          // value-based check after the TLS call
+    emitter.instruction("b.ge __rt_fread_read_ok");                             // continue when TLS read returned >= 0
+    emitter.instruction("str xzr, [sp, #24]");                                  // TLS error: zero-length result
+    emitter.instruction("b __rt_fread_mark_eof");                               // mark the stream exhausted
+
+    emitter.label("__rt_fread_do_syscall");
     // -- perform read syscall --
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd for read syscall
     emitter.instruction("mov x1, x12");                                         // buffer pointer for read
@@ -88,7 +112,21 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #16]");                                   // return string start pointer
     emitter.instruction("ldr x2, [sp, #24]");                                   // return actual bytes read as length
 
+    // -- apply an attached read filter to the bytes just read --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the file descriptor
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_stream_read_filters");
+    emitter.instruction("ldrb w3, [x9, x0]");                                   // read filter id for this descriptor
+    emitter.instruction("cbz w3, __rt_fread_ret");                              // skip when no read filter is attached
+    emitter.instruction("cmp w3, #128");                                        // user-filter id range (>= USER_FILTER_ID_BASE)?
+    emitter.instruction("b.lt __rt_fread_builtin_filter");                      // built-in filter: in-place transform
+    emitter.instruction("mov x3, #0");                                          // direction = 0 (read) for the user-filter dispatch
+    emitter.instruction("bl __rt_apply_user_stream_filter");                    // x1/x2 ← user filter's transformed string
+    emitter.instruction("b __rt_fread_ret");                                    // common epilogue
+    emitter.label("__rt_fread_builtin_filter");
+    emitter.instruction("bl __rt_apply_stream_filter");                         // transform the read bytes in place; x2 = (possibly compacted) length on return
+
     // -- restore frame and return --
+    emitter.label("__rt_fread_ret");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
@@ -99,6 +137,11 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fread ---");
     emitter.label_global("__rt_fread");
+
+    // -- user-wrapper synthetic fd path (Phase 10 step 4) --
+    emitter.instruction("mov r9d, 0x40000000");                                 // USER_WRAPPER_FD_BASE
+    emitter.instruction("cmp rdi, r9");                                         // is this a synthetic user-wrapper fd?
+    emitter.instruction("jge __rt_user_wrapper_fread");                         // dispatch into the wrapper's stream_read instead of issuing a read syscall
 
     emitter.instruction("cmp rdi, 0");                                          // does fread() have a valid non-negative file descriptor to read from?
     emitter.instruction("jge __rt_fread_fd_ok_x86");                            // continue to the normal read path when the file descriptor is valid
@@ -118,11 +161,26 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rax, [r11 + r10]");                                // compute the start pointer for the bytes that libc read() will append
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the concat-buffer start pointer for the final elephc string result
 
+    // -- TLS dispatch: route through elephc_tls_read when fd has an
+    //    attached session (Phase 11 B3). --
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload fd for the TLS table lookup
+    emitter.instruction("lea r11, [rip + _tls_sessions]");
+    emitter.instruction("mov r12, QWORD PTR [r11 + r10 * 8]");                  // _tls_sessions[fd] handle (0 = plain TCP)
+    emitter.instruction("test r12, r12");
+    emitter.instruction("jz __rt_fread_do_syscall_x86");                        // no TLS attached → use libc read
+    emitter.instruction("mov rdi, r12");                                        // handle as first arg
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // buf ptr
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // len
+    emitter.instruction("mov r9, QWORD PTR [rip + _elephc_tls_read_fn]");
+    emitter.instruction("call r9");                                             // rax = bytes read (>=0) or -1
+    emitter.instruction("jmp __rt_fread_after_io_x86");
+    emitter.label("__rt_fread_do_syscall_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the file descriptor as the first libc read() argument
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the concat-buffer write pointer as the second libc read() argument
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // pass the requested byte count as the third libc read() argument
     emitter.instruction("call read");                                           // read the requested bytes into the concat-buffer append window through libc read()
-    emitter.instruction("cmp rax, 0");                                          // did libc read() append at least one byte into the concat buffer?
+    emitter.label("__rt_fread_after_io_x86");
+    emitter.instruction("cmp rax, 0");                                          // unified non-negative check (covers both libc read and elephc_tls_read)
     emitter.instruction("jle __rt_fread_eof_x86");                              // treat EOF or read failure as an empty result and mark the stream as exhausted
 
     emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // reload the previous concat-buffer absolute offset before publishing the fread() append
@@ -130,6 +188,22 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rip + _concat_off], r10");              // publish the updated concat-buffer offset for later string appenders
     emitter.instruction("mov rdx, rax");                                        // return the successful byte count in the x86_64 elephc string-length result register
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the concat-buffer start pointer in the x86_64 elephc string-pointer result register
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor for the read-filter lookup
+    emitter.instruction("lea r11, [rip + _stream_read_filters]");               // materialize the read-filter table base
+    emitter.instruction("movzx ecx, BYTE PTR [r11 + r10]");                     // read filter id for this descriptor
+    emitter.instruction("test rcx, rcx");                                       // is a read filter attached to this stream?
+    emitter.instruction("jz __rt_fread_ret_x86");                               // skip when no read filter is attached
+    emitter.instruction("cmp rcx, 128");                                        // user-filter id range (>= USER_FILTER_ID_BASE)?
+    emitter.instruction("jl __rt_fread_builtin_filter_x86");                    // built-in filter: in-place transform
+    emitter.instruction("mov rdi, r10");                                        // fd into the user-filter dispatcher's first arg
+    emitter.instruction("mov rsi, rax");                                        // buf ptr into the dispatcher's second arg
+    // rdx already holds the byte count
+    emitter.instruction("xor ecx, ecx");                                        // direction = 0 (read) for the user-filter dispatch
+    emitter.instruction("call __rt_apply_user_stream_filter");                  // rax/rdx ← user filter's transformed string
+    emitter.instruction("jmp __rt_fread_ret_x86");                              // common epilogue
+    emitter.label("__rt_fread_builtin_filter_x86");
+    emitter.instruction("call __rt_apply_stream_filter");                       // transform the read bytes in place; rdx = (possibly compacted) length on return
+    emitter.label("__rt_fread_ret_x86");
     emitter.instruction("add rsp, 32");                                         // release the fread() spill slots before returning the successful string slice
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the successful fread() path
     emitter.instruction("ret");                                                 // return the borrowed concat-buffer string slice to the caller

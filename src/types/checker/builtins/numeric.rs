@@ -67,7 +67,8 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Void))
         }
         "is_bool" | "boolval" | "is_callable" | "is_null" | "is_float" | "is_int"
-        | "is_iterable" | "is_string" | "is_numeric" | "is_nan" | "is_finite" | "is_infinite" => {
+        | "is_iterable" | "is_string" | "is_numeric" | "is_nan" | "is_finite"
+        | "is_infinite" | "is_resource" => {
             if args.len() != 1 {
                 return Err(CompileError::new(
                     span,
@@ -76,6 +77,26 @@ pub(super) fn check_builtin(
             }
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Bool))
+        }
+        "get_resource_type" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "get_resource_type() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
+        }
+        "get_resource_id" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "get_resource_id() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Int))
         }
         "floatval" => {
             if args.len() != 1 {

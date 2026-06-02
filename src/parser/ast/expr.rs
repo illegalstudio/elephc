@@ -124,6 +124,13 @@ pub enum ExprKind {
         class_name: Name,
         args: Vec<Expr>,
     },
+    /// PHP `new $var()` / `new $var(args)` — the class is named at runtime
+    /// by a string expression. Resolved through the runtime class table at
+    /// codegen time (`__rt_new_by_name`).
+    NewDynamic {
+        name_expr: Box<Expr>,
+        args: Vec<Expr>,
+    },
     /// Internal synthetic factory used by compiler-provided methods that must
     /// construct an object from a runtime class-string while constraining it to
     /// a known parent class.

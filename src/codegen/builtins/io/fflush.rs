@@ -11,7 +11,7 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::abi;
+use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -41,6 +41,32 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("fflush()");
     emit_stream_fd_arg("fflush", &args[0], emitter, ctx, data);
+    let user_wrapper_label = ctx.next_label("fflush_user_wrapper");
+    let after_dispatch = ctx.next_label("fflush_after_dispatch");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            // -- user-wrapper synthetic fd path (Phase 10 step 4) --
+            emitter.instruction("mov w9, #0x4000");                             // load the high half of USER_WRAPPER_FD_BASE = 0x40000000
+            emitter.instruction("lsl w9, w9, #16");                             // shift into bits 30..16 to form 0x40000000
+            emitter.instruction("cmp x0, x9");                                  // is this a synthetic user-wrapper fd?
+            emitter.instruction(&format!("b.ge {}", user_wrapper_label));       // dispatch into the wrapper's stream_flush instead of fsync
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r9d, 0x40000000");                         // USER_WRAPPER_FD_BASE
+            emitter.instruction("cmp rax, r9");                                 // is this a synthetic user-wrapper fd?
+            emitter.instruction(&format!("jge {}", user_wrapper_label));        // dispatch into the wrapper's stream_flush instead of fsync
+        }
+    }
     abi::emit_call_label(emitter, "__rt_fflush");                               // libc fsync(fd) wrapper (PHP-side fflush semantics)
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("b {}", after_dispatch)), // skip the user-wrapper path on the normal-fd result
+        Arch::X86_64 => emitter.instruction(&format!("jmp {}", after_dispatch)),// skip the user-wrapper path on the normal-fd result
+    }
+    emitter.label(&user_wrapper_label);
+    if matches!(emitter.target.arch, Arch::X86_64) {
+        emitter.instruction("mov rdi, rax");                                    // move the synthetic fd into the first SysV arg register for the wrapper helper
+    }
+    abi::emit_call_label(emitter, "__rt_user_wrapper_fflush");                  // dispatch into the wrapper's stream_flush
+    emitter.label(&after_dispatch);
     Some(PhpType::Bool)
 }

@@ -46,6 +46,12 @@ fn test_error_grapheme_strrev_non_string_argument() {
 }
 
 expect_builtin_arity_error!(
+    test_error_crc32_wrong_args,
+    "<?php crc32();",
+    "crc32() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
     test_error_ctype_digit_wrong_args,
     "<?php ctype_digit();",
     "ctype_digit() takes exactly 1 argument"
@@ -210,5 +216,61 @@ fn test_error_ptr_set_requires_word_value() {
     expect_error(
         "<?php $p = ptr_null(); ptr_set($p, \"hello\");",
         "ptr_set() value must be int, bool, null, or pointer",
+    );
+}
+
+#[test]
+fn test_error_long2ip_wrong_args() {
+    expect_error("<?php long2ip();", "long2ip() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_ip2long_wrong_args() {
+    expect_error("<?php ip2long();", "ip2long() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_inet_ntop_wrong_args() {
+    expect_error("<?php inet_ntop();", "inet_ntop() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_inet_pton_wrong_args() {
+    expect_error("<?php inet_pton();", "inet_pton() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_gzcompress_wrong_args() {
+    expect_error("<?php gzcompress();", "gzcompress() expects 1 or 2 arguments");
+}
+
+#[test]
+fn test_error_gzuncompress_wrong_args() {
+    expect_error("<?php gzuncompress();", "gzuncompress() expects 1 or 2 arguments");
+}
+
+#[test]
+fn test_error_gzdeflate_wrong_args() {
+    expect_error("<?php gzdeflate();", "gzdeflate() expects 1 or 2 arguments");
+}
+
+#[test]
+fn test_error_gzinflate_wrong_args() {
+    expect_error("<?php gzinflate();", "gzinflate() expects 1 or 2 arguments");
+}
+
+#[test]
+fn test_error_vsprintf_wrong_args() {
+    expect_error(
+        "<?php vsprintf(\"%d\");",
+        "vsprintf() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_vprintf_wrong_args() {
+    expect_error(
+        "<?php vprintf(\"%d\", [1], 3);",
+        "vprintf() takes exactly 2 arguments",
     );
 }

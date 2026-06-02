@@ -51,8 +51,15 @@ pub fn emit(
     emit_stream_fd_arg("rewind", &args[0], emitter, ctx, data);
     let success_label = ctx.next_label("rewind_success");
     let done_label = ctx.next_label("rewind_done");
+    let user_wrapper_label = ctx.next_label("rewind_user_wrapper");
+    let after_dispatch = ctx.next_label("rewind_after_dispatch");
     match emitter.target.arch {
         Arch::AArch64 => {
+            // -- user-wrapper synthetic fd path: rewind via stream_seek(0, SEEK_SET) --
+            emitter.instruction("mov w9, #0x4000");                             // high half of USER_WRAPPER_FD_BASE
+            emitter.instruction("lsl w9, w9, #16");                             // form 0x40000000 in w9
+            emitter.instruction("cmp x0, x9");                                  // is this a synthetic user-wrapper fd?
+            emitter.instruction(&format!("b.ge {}", user_wrapper_label));       // dispatch into the wrapper's stream_seek
             abi::emit_push_reg(emitter, "x0");                                  // preserve fd so successful rewind() can clear its EOF flag
             emitter.instruction("mov x1, #0");                                  // offset = 0 for the AArch64 rewind() lseek syscall
             emitter.instruction("mov x2, #0");                                  // whence = SEEK_SET for the AArch64 rewind() lseek syscall
@@ -70,9 +77,21 @@ pub fn emit(
             emitter.instruction("strb wzr, [x10, x9]");                         // clear EOF because rewind() moved the stream back to the start
             emitter.instruction("mov x0, #1");                                  // rewind() returns true after a successful seek
             emitter.label(&done_label);
+            emitter.instruction(&format!("b {}", after_dispatch));              // skip the wrapper path on the normal-fd outcome
+            emitter.label(&user_wrapper_label);
+            emitter.instruction("mov x1, #0");                                  // offset = 0 (seek to the start of the stream)
+            emitter.instruction("mov x2, #0");                                  // whence = SEEK_SET
+            abi::emit_call_label(emitter, "__rt_user_wrapper_fseek");           // dispatch into stream_seek (x0 = 0 ok / -1 fail)
+            emitter.instruction("cmp x0, #0");                                  // did the wrapper's stream_seek report success?
+            emitter.instruction("cset x0, eq");                                 // rewind() returns true on success, false otherwise
+            emitter.label(&after_dispatch);
         }
         Arch::X86_64 => {
             emitter.instruction("mov rdi, rax");                                // move the file descriptor into the first SysV lseek() argument register
+            // -- user-wrapper synthetic fd path: rewind via stream_seek(0, SEEK_SET) --
+            emitter.instruction("mov r9d, 0x40000000");                         // USER_WRAPPER_FD_BASE
+            emitter.instruction("cmp rdi, r9");                                 // is this a synthetic user-wrapper fd?
+            emitter.instruction(&format!("jge {}", user_wrapper_label));        // dispatch into the wrapper's stream_seek
             abi::emit_push_reg(emitter, "rdi");                                 // preserve fd so successful rewind() can clear its EOF flag
             emitter.instruction("xor esi, esi");                                // offset = 0 for the linux-x86_64 rewind() lseek() call
             emitter.instruction("xor edx, edx");                                // whence = SEEK_SET for the linux-x86_64 rewind() lseek() call
@@ -88,6 +107,15 @@ pub fn emit(
             emitter.instruction("mov BYTE PTR [r11 + r10], 0");                 // clear EOF because rewind() moved the stream back to the start
             emitter.instruction("mov rax, 1");                                  // rewind() returns true after a successful seek
             emitter.label(&done_label);
+            emitter.instruction(&format!("jmp {}", after_dispatch));            // skip the wrapper path on the normal-fd outcome
+            emitter.label(&user_wrapper_label);
+            emitter.instruction("xor esi, esi");                                // offset = 0 (seek to the start of the stream)
+            emitter.instruction("xor edx, edx");                                // whence = SEEK_SET
+            abi::emit_call_label(emitter, "__rt_user_wrapper_fseek");           // dispatch into stream_seek (rax = 0 ok / -1 fail)
+            emitter.instruction("cmp rax, 0");                                  // did the wrapper's stream_seek report success?
+            emitter.instruction("sete al");                                     // al = 1 when stream_seek succeeded
+            emitter.instruction("movzx eax, al");                               // rewind() returns true on success, false otherwise
+            emitter.label(&after_dispatch);
         }
     }
     Some(PhpType::Bool)

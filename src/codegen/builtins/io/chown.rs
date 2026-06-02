@@ -16,16 +16,23 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
+use super::path_op_wrapper::{
+    emit_owner_group_name_wrapper_dispatch, emit_owner_group_wrapper_dispatch, STREAM_META_OWNER,
+    STREAM_META_OWNER_NAME,
+};
+
 /// Emits the `chown($path, $owner)` builtin call.
 ///
 /// `args[0]` is the path (string expression) and `args[1]` is the owner principal,
-/// which may be a string (user name) or integer (UID). GID is unconditionally set to
-/// `-1` to leave the group unchanged.
+/// which may be a string (user name) or integer (UID).
 ///
-/// On AArch64: path pointer/length in `x1`/`x2`, owner in `x3`/`x4` (string) or `x3` (int).
-/// On x86_64: path pointer/length in `rax`/`rdx`, owner in `rdi`/`rsi` (string) or `rdi` (int).
+/// On a registered `scheme://` path the call dispatches to the wrapper's
+/// `stream_metadata($path, $option, $value)` (vtable slot 14): an integer uid uses
+/// `STREAM_META_OWNER` with the uid boxed as `mixed`, a string name uses
+/// `STREAM_META_OWNER_NAME` with the name boxed as `mixed`. A non-wrapper path uses
+/// libc `__rt_chown(path, uid, -1)` (integer) or `__rt_chown_user(path, name)`
+/// (string), leaving the group unchanged.
 ///
-/// Calls `__rt_chown` for numeric UID or `__rt_chown_user` for string user name.
 /// Returns `PhpType::Bool` (true = success, false = failure from runtime).
 pub fn emit(
     _name: &str,
@@ -38,33 +45,31 @@ pub fn emit(
     emit_expr(&args[0], emitter, ctx, data);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve path ptr/len while uid is evaluated
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve path ptr/len while the owner is evaluated
             let principal_ty = emit_expr(&args[1], emitter, ctx, data);
             if principal_ty == PhpType::Str {
-                emitter.instruction("mov x3, x1");                              // user-name pointer → runtime string slot
-                emitter.instruction("mov x4, x2");                              // user-name length → runtime string slot
-                emitter.instruction("ldp x1, x2, [sp], #16");                   // restore path ptr/len
-                abi::emit_call_label(emitter, "__rt_chown_user");               // resolve user name and call libc chown()
+                emit_owner_group_name_wrapper_dispatch(
+                    emitter,
+                    ctx,
+                    STREAM_META_OWNER_NAME,
+                    "__rt_chown_user",
+                ); // wrapper stream_metadata(OWNER_NAME) or libc chown_user
             } else {
-                emitter.instruction("mov x3, x0");                              // uid → runtime uid register
-                emitter.instruction("mov x4, #-1");                             // gid = -1 (leave group unchanged)
-                emitter.instruction("ldp x1, x2, [sp], #16");                   // restore path ptr/len
-                abi::emit_call_label(emitter, "__rt_chown");                    // call libc chown(path, uid, -1)
+                emit_owner_group_wrapper_dispatch(emitter, ctx, STREAM_META_OWNER); // wrapper stream_metadata(OWNER) or libc chown
             }
         }
         Arch::X86_64 => {
-            abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // preserve path ptr/len
+            abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // preserve path ptr/len while the owner is evaluated
             let principal_ty = emit_expr(&args[1], emitter, ctx, data);
             if principal_ty == PhpType::Str {
-                emitter.instruction("mov rdi, rax");                            // user-name pointer → runtime string slot
-                emitter.instruction("mov rsi, rdx");                            // user-name length → runtime string slot
-                abi::emit_pop_reg_pair(emitter, "rax", "rdx");                  // restore path ptr/len
-                abi::emit_call_label(emitter, "__rt_chown_user");               // resolve user name and call libc chown()
+                emit_owner_group_name_wrapper_dispatch(
+                    emitter,
+                    ctx,
+                    STREAM_META_OWNER_NAME,
+                    "__rt_chown_user",
+                ); // wrapper stream_metadata(OWNER_NAME) or libc chown_user
             } else {
-                emitter.instruction("mov rdi, rax");                            // uid → secondary integer arg slot
-                emitter.instruction("mov rsi, -1");                             // gid = -1 (leave group unchanged)
-                abi::emit_pop_reg_pair(emitter, "rax", "rdx");                  // restore path ptr/len
-                abi::emit_call_label(emitter, "__rt_chown");                    // call libc chown(path, uid, -1)
+                emit_owner_group_wrapper_dispatch(emitter, ctx, STREAM_META_OWNER); // wrapper stream_metadata(OWNER) or libc chown
             }
         }
     }

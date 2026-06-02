@@ -14,6 +14,7 @@ use crate::codegen::platform::Platform;
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
+use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::{PhpType, TypeEnv};
 
@@ -113,6 +114,12 @@ pub(super) fn collect_constants(
         );
     }
     for (name, value) in JSON_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in STREAM_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
             (ExprKind::IntLiteral(*value), PhpType::Int),

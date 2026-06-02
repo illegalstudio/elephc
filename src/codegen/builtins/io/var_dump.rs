@@ -257,21 +257,62 @@ fn emit_var_dump_null(emitter: &mut Emitter, data: &mut DataSection) {
 /// * `emitter` - Target-aware instruction emitter
 /// * `data` - Data section for literal strings
 fn emit_var_dump_array(emitter: &mut Emitter, data: &mut DataSection) {
+    emit_var_dump_array_with_elem(emitter, data, &PhpType::Mixed);
+}
+
+/// Emit the var_dump body for an array/hash. The element type drives which
+/// runtime walker is invoked: int arrays get \`__rt_var_dump_array_int\`,
+/// string arrays \`__rt_var_dump_array_str\`. For other element shapes
+/// (Hash, Mixed values) v1 prints just the header — the contents fall back
+/// to the empty-body output. v2 will add a Mixed-aware walker that
+/// dispatches per element tag.
+fn emit_var_dump_array_with_elem(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    elem_ty: &PhpType,
+) {
     let result_reg = abi::int_result_reg(emitter);
-    abi::emit_push_reg(emitter, result_reg);                                    // preserve the array/hash pointer across literal writes
+    abi::emit_push_reg(emitter, result_reg);                                    // preserve the array pointer across the header write
     emit_write_literal(emitter, data, b"array(");
-    abi::emit_pop_reg(emitter, result_reg);                                     // restore the saved array/hash pointer after the prefix write
+    abi::emit_pop_reg(emitter, result_reg);                                     // restore the array pointer after the prefix write
+    abi::emit_push_reg(emitter, result_reg);                                    // preserve it again for the per-element walker below
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("ldr x0, [x0]");                                // load the container element count from the array/hash header
+            emitter.instruction("ldr x0, [x0]");                                // load the container element count from the array header
         }
         Arch::X86_64 => {
-            emitter.instruction("mov rax, QWORD PTR [rax]");                    // load the container element count from the array/hash header
+            emitter.instruction("mov rax, QWORD PTR [rax]");                    // load the container element count from the array header
         }
     }
-    abi::emit_call_label(emitter, "__rt_itoa");                                 // convert the element count to decimal text through the target-aware runtime helper
-    emit_write_current_string(emitter);                                         // write the converted container element count to stdout
-    emit_write_literal(emitter, data, b") {\n}\n");
+    abi::emit_call_label(emitter, "__rt_itoa");                                 // convert the count to decimal text
+    emit_write_current_string(emitter);                                         // write the count
+    emit_write_literal(emitter, data, b") {\n");
+    abi::emit_pop_reg(emitter, result_reg);                                     // restore the array pointer for the per-element walker
+    // Dispatch to a specialised walker when the element type is known to
+    // be homogeneous and one of the v1-supported scalar shapes.
+    let walker = match elem_ty {
+        PhpType::Int => Some("__rt_var_dump_array_int"),
+        PhpType::Str => Some("__rt_var_dump_array_str"),
+        PhpType::Bool => Some("__rt_var_dump_array_bool"),
+        PhpType::Float => Some("__rt_var_dump_array_float"),
+        // Mixed-element arrays need a per-element tag dispatch at runtime,
+        // but the static type `Array(Mixed)` reaches here both for arrays
+        // that were actually boxed as Mixed cells AND for arrays whose
+        // concrete element type was simply erased at the call site. The
+        // distinction is only visible through the array's value_type
+        // stamp at runtime, and conflating the two paths in the static
+        // dispatcher would corrupt the latter. Falling back to the
+        // header-only fallback keeps both cases printable, at the cost
+        // of empty bodies for genuine mixed-cell literals.
+        _ => None,
+    };
+    if let Some(label) = walker {
+        if matches!(emitter.target.arch, Arch::X86_64) {
+            emitter.instruction("mov rdi, rax");                                // move the array pointer into the SysV first-arg register
+        }
+        abi::emit_call_label(emitter, label);                                   // walk the elements and emit per-element var_dump output
+    }
+    emit_write_literal(emitter, data, b"}\n");
 }
 
 /// Emits var_dump output for a callable payload.
@@ -586,9 +627,14 @@ pub fn emit(
             emit_var_dump_null(emitter, data);                                  // print NULL for null/unknown mixed payloads
             emitter.label(&done);
         }
-        PhpType::Array(elem_ty) | PhpType::AssocArray { value: elem_ty, .. } => {
+        PhpType::Array(elem_ty) => {
+            emit_var_dump_array_with_elem(emitter, data, elem_ty);
+        }
+        PhpType::AssocArray { .. } => {
+            // Assoc-array layout differs (hash table, not contiguous
+            // 8-byte slots) — the v1 indexed-element walkers do not
+            // apply. Print just the `array(N) {\n}\n` shell.
             emit_var_dump_array(emitter, data);
-            let _ = elem_ty;
         }
         PhpType::Callable => emit_var_dump_callable(emitter, data),
         PhpType::Object(class_name) => emit_var_dump_object_name(emitter, data, class_name),

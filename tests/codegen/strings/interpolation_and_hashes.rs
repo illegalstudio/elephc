@@ -78,6 +78,27 @@ fn test_sha1_hello() {
     assert_eq!(out, "f7ff9e8b7bb2e09b70935a5d785e0cc5d9d0abf0");
 }
 
+// --- crc32() ---
+
+// Verifies crc32() against PHP reference vectors, including the empty string (0)
+// and the canonical "123456789" CRC-32 test vector. The result is a non-negative
+// 64-bit int (the unsigned 32-bit checksum), matching 64-bit PHP.
+#[test]
+fn test_crc32_known_vectors() {
+    let out = compile_and_run(
+        r#"<?php echo crc32("") . "|" . crc32("123456789") . "|" . crc32("The quick brown fox");"#,
+    );
+    assert_eq!(out, "0|3421780262|3074782430");
+}
+
+// Verifies crc32() resolves through PHP's case-insensitive builtin lookup and
+// that its result feeds arithmetic as a plain int.
+#[test]
+fn test_crc32_case_insensitive_and_int() {
+    let out = compile_and_run(r#"<?php echo CRC32("abc") + 1;"#);
+    assert_eq!(out, "891568579"); // crc32("abc") = 891568578
+}
+
 // --- hash() ---
 
 /// Verifies `hash("md5", ...)` produces the correct hash for "Hello".

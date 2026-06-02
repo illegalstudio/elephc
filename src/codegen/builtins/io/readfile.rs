@@ -32,6 +32,12 @@ use crate::types::PhpType;
 /// Returns:
 /// - Always returns `Some(PhpType::Mixed)` since readfile always produces a
 ///   boxed value regardless of success or failure.
+///
+/// A `scheme://...` path whose scheme matches a registered userspace wrapper is
+/// routed through `__rt_readfile_wrapper` (fopen + fpassthru + close); any other
+/// path uses `__rt_readfile` (raw open + stream, which preserves the read-error
+/// `-1` semantics for e.g. directories). Both return the count / `-2` convention
+/// that `box_readfile_result` boxes into `int` / `false`.
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -41,7 +47,47 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("readfile()");
     emit_expr(&args[0], emitter, ctx, data);
-    abi::emit_call_label(emitter, "__rt_readfile");                             // call the runtime helper that opens path + streams contents to stdout
+    let wrapper = ctx.next_label("readfile_wrapper");
+    let after = ctx.next_label("readfile_after");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            // -- path string: x1 = ptr, x2 = len --
+            emitter.instruction("sub sp, sp, #16");                             // scratch: [sp,#0] path ptr, [sp,#8] path len
+            emitter.instruction("str x1, [sp, #0]");                            // preserve path ptr across the wrapper-scheme probe
+            emitter.instruction("str x2, [sp, #8]");                            // preserve path len across the wrapper-scheme probe
+            emitter.instruction("mov x0, x1");                                  // path_is_wrapper arg0 = path ptr
+            emitter.instruction("mov x1, x2");                                  // path_is_wrapper arg1 = path len
+            abi::emit_call_label(emitter, "__rt_path_is_wrapper");              // x0 = 1 when the scheme matches a registered wrapper
+            emitter.instruction("ldr x1, [sp, #0]");                            // restore path ptr for the chosen readfile helper
+            emitter.instruction("ldr x2, [sp, #8]");                            // restore path len for the chosen readfile helper
+            emitter.instruction(&format!("cbnz x0, {}", wrapper));              // registered wrapper scheme → wrapper readfile path
+            abi::emit_call_label(emitter, "__rt_readfile");                     // normal path: raw open + stream to stdout
+            emitter.instruction(&format!("b {}", after));                       // skip the wrapper path
+            emitter.label(&wrapper);
+            abi::emit_call_label(emitter, "__rt_readfile_wrapper");             // wrapper path: fopen + fpassthru + close
+            emitter.label(&after);
+            emitter.instruction("add sp, sp, #16");                             // release the scratch frame
+        }
+        Arch::X86_64 => {
+            // -- path string: rax = ptr, rdx = len --
+            emitter.instruction("sub rsp, 16");                                 // scratch: [rsp+0] path ptr, [rsp+8] path len
+            emitter.instruction("mov QWORD PTR [rsp + 0], rax");                // preserve path ptr across the wrapper-scheme probe
+            emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                // preserve path len across the wrapper-scheme probe
+            emitter.instruction("mov rdi, rax");                                // path_is_wrapper arg0 = path ptr
+            emitter.instruction("mov rsi, rdx");                                // path_is_wrapper arg1 = path len
+            abi::emit_call_label(emitter, "__rt_path_is_wrapper");              // rax = 1 when the scheme matches a registered wrapper
+            emitter.instruction("test rax, rax");                               // matched a registered wrapper scheme?
+            emitter.instruction("mov rax, QWORD PTR [rsp + 0]");                // restore path ptr for the chosen readfile helper
+            emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                // restore path len for the chosen readfile helper
+            emitter.instruction(&format!("jnz {}", wrapper));                   // registered wrapper scheme → wrapper readfile path
+            abi::emit_call_label(emitter, "__rt_readfile");                     // normal path: raw open + stream to stdout
+            emitter.instruction(&format!("jmp {}", after));                     // skip the wrapper path
+            emitter.label(&wrapper);
+            abi::emit_call_label(emitter, "__rt_readfile_wrapper");             // wrapper path: fopen + fpassthru + close
+            emitter.label(&after);
+            emitter.instruction("add rsp, 16");                                 // release the scratch frame
+        }
+    }
     box_readfile_result(emitter, ctx);
     Some(PhpType::Mixed)
 }

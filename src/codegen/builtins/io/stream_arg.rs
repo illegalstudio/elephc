@@ -33,7 +33,7 @@ use crate::types::PhpType;
 ///
 /// # Returns
 /// The `PhpType` of the emitted argument expression.
-pub(super) fn emit_stream_fd_arg(
+pub(crate) fn emit_stream_fd_arg(
     function_name: &str,
     arg: &Expr,
     emitter: &mut Emitter,

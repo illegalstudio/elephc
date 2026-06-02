@@ -16,6 +16,8 @@ mod empty;
 mod floatval;
 mod get_class;
 mod get_declared;
+mod get_resource_id;
+mod get_resource_type;
 mod gettype;
 mod is_a;
 mod is_bool;
@@ -28,6 +30,7 @@ mod is_iterable;
 mod is_nan;
 mod is_null;
 mod is_numeric;
+mod is_resource;
 mod is_string;
 mod settype;
 mod unset;
@@ -75,6 +78,9 @@ pub fn emit(
         "is_infinite" => is_infinite::emit(name, args, emitter, ctx, data),
         "is_finite" => is_finite::emit(name, args, emitter, ctx, data),
         "gettype" => gettype::emit(name, args, emitter, ctx, data),
+        "is_resource" => is_resource::emit(name, args, emitter, ctx, data),
+        "get_resource_type" => get_resource_type::emit(name, args, emitter, ctx, data),
+        "get_resource_id" => get_resource_id::emit(name, args, emitter, ctx, data),
         "empty" => empty::emit(name, args, emitter, ctx, data),
         "unset" => unset::emit(name, args, emitter, ctx, data),
         "settype" => settype::emit(name, args, emitter, ctx, data),

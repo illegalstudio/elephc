@@ -25,4 +25,14 @@ fn test_multibyte_string_literal_before_ascii_digits_round_trips() {
     assert_eq!(out, "日本語123");
 }
 
+#[test]
+fn test_string_control_escape_sequences() {
+    // \r, \v, \e, \f process to their ASCII control bytes (regression for
+    // the lexer previously emitting a literal backslash for these escapes).
+    let out = compile_and_run(
+        r#"<?php echo strlen("a\r\nb") . "|" . ord("\r") . "|" . ord("\v") . "|" . ord("\e") . "|" . ord("\f");"#,
+    );
+    assert_eq!(out, "4|13|11|27|12");
+}
+
 // --- md5 / sha1 ---

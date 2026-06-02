@@ -202,6 +202,10 @@ fn rewrite_expr(
             class_name: class_name.clone(),
             args: rewrite_expr_list(args, class_name, parent_name)?,
         },
+        ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
+            name_expr: Box::new(rewrite_expr(name_expr, class_name, parent_name)?),
+            args: rewrite_expr_list(args, class_name, parent_name)?,
+        },
         ExprKind::NewDynamicObject {
             class_name: target_class,
             fallback_class,

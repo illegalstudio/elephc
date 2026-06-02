@@ -365,6 +365,15 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
                 collect_required_class_names_in_expr(arg, names);
             }
         }
+        ExprKind::NewDynamic { name_expr, args } => {
+            // The class is named at runtime; don't add a literal entry here.
+            // Recurse into the name expression and args so any nested
+            // `new Foo()` literals still get picked up.
+            collect_required_class_names_in_expr(name_expr, names);
+            for arg in args {
+                collect_required_class_names_in_expr(arg, names);
+            }
+        }
         ExprKind::NewDynamicObject {
             class_name,
             fallback_class,

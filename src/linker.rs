@@ -46,6 +46,9 @@ pub(crate) fn link(
     extra_link_paths: &[String],
     extra_frameworks: &[String],
 ) {
+    let needs_elephc_tls = extra_link_libs.iter().any(|l| l == "elephc_tls");
+    let elephc_tls_dir = needs_elephc_tls.then(elephc_tls_lib_dir).flatten();
+
     let mut ld_cmd = match target.platform {
         Platform::MacOS => {
             let sdk_path = macos_sdk_path();
@@ -70,9 +73,15 @@ pub(crate) fn link(
                 cmd.arg("-Wl,--no-as-needed");
             }
             cmd.args(["-lm", "-lpthread"]);
+            if needs_elephc_tls {
+                cmd.arg("-ldl");
+            }
             cmd
         }
     };
+    if let Some(dir) = elephc_tls_dir.as_deref() {
+        ld_cmd.arg(format!("-L{}", dir));
+    }
     if target.platform == Platform::MacOS && !extra_link_libs.is_empty() {
         for path in default_macos_library_paths() {
             ld_cmd.arg(format!("-L{}", path));
@@ -113,6 +122,31 @@ fn run_tool(name: &str, cmd: &mut Command) {
             process::exit(1);
         }
     }
+}
+
+/// Locate `libelephc_tls.a` for programs that use the `https://` wrapper.
+/// Honours `$ELEPHC_TLS_LIB_DIR` first, then falls back to the directory
+/// holding the running `elephc` binary (matches `target/debug/elephc` and the
+/// staticlib living next to it in the same directory).
+fn elephc_tls_lib_dir() -> Option<String> {
+    if let Ok(env_dir) = std::env::var("ELEPHC_TLS_LIB_DIR") {
+        if !env_dir.is_empty() {
+            return Some(env_dir);
+        }
+    }
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let candidate = dir.join("libelephc_tls.a");
+    if candidate.exists() {
+        return Some(dir.display().to_string());
+    }
+    // Fallback for `cargo run` from a workspace root: target/debug holds the
+    // staticlib even when the running binary is elsewhere (e.g. cached run).
+    let workspace_candidate = std::path::Path::new("target/debug/libelephc_tls.a");
+    if workspace_candidate.exists() {
+        return Some("target/debug".to_string());
+    }
+    None
 }
 
 /// Returns the macOS SDK path by running `xcrun --show-sdk-path`.

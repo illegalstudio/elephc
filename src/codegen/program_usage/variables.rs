@@ -229,6 +229,10 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         | ExprKind::StaticMethodCall { args, .. } => {
             args.iter().any(|arg| expr_uses_variable(arg, needle))
         }
+        ExprKind::NewDynamic { name_expr, args } => {
+            expr_uses_variable(name_expr, needle)
+                || args.iter().any(|arg| expr_uses_variable(arg, needle))
+        }
         ExprKind::NewDynamicObject {
             class_name, args, ..
         } => {

@@ -38,6 +38,19 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("file_put_contents()");
+    // file_put_contents("phar://archive/entry", $data) assembles a signed
+    // single-entry phar (same runtime as fopen+fwrite+fclose). A literal phar://
+    // URL that resolves to a write target is handled here; anything else (or an
+    // unresolvable URL) falls through to the normal file write below.
+    if let crate::parser::ast::ExprKind::StringLiteral(url) = &args[0].kind {
+        if url.starts_with("phar://") && args.len() >= 2 {
+            if let Some(ty) =
+                super::phar_stream::emit_file_put_contents_write(url, &args[1], emitter, ctx, data)
+            {
+                return Some(ty);
+            }
+        }
+    }
     emit_expr(&args[0], emitter, ctx, data);
     match emitter.target.arch {
         Arch::AArch64 => {

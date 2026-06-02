@@ -98,6 +98,12 @@ pub(super) fn collect_expr_reads(
                 collect_expr_reads(arg, scope, warnings);
             }
         }
+        ExprKind::NewDynamic { name_expr, args } => {
+            collect_expr_reads(name_expr, scope, warnings);
+            for arg in args {
+                collect_expr_reads(arg, scope, warnings);
+            }
+        }
         ExprKind::NewDynamicObject {
             class_name, args, ..
         } => {

@@ -204,6 +204,80 @@ fn test_base64_roundtrip() {
 
 /// Verifies `ctype_alpha()` returns `"1"` (truthy) for an all-alphabetic string "Hello".
 #[test]
+fn test_gzcompress_roundtrip() {
+    // gzcompress() / gzuncompress() round-trip a string through system zlib.
+    let out = compile_and_run(
+        r#"<?php
+$data = "repeat repeat repeat repeat repeat repeat";
+$packed = gzcompress($data);
+echo (strlen($packed) < strlen($data) ? "smaller" : "bigger");
+echo "|";
+echo (gzuncompress($packed) === $data ? "roundtrip-ok" : "roundtrip-fail");
+"#,
+    );
+    assert_eq!(out, "smaller|roundtrip-ok");
+}
+
+#[test]
+fn test_gzuncompress_invalid_is_false() {
+    // gzuncompress() of non-zlib data returns false.
+    let out = compile_and_run(
+        r#"<?php echo gzuncompress("this is not zlib data") === false ? "false" : "ok";"#,
+    );
+    assert_eq!(out, "false");
+}
+
+#[test]
+fn test_gzdeflate_gzinflate_roundtrip() {
+    // gzdeflate() / gzinflate() round-trip a string through raw DEFLATE.
+    let out = compile_and_run(
+        r#"<?php
+$data = str_repeat("raw deflate raw deflate ", 16);
+$packed = gzdeflate($data);
+echo (strlen($packed) < strlen($data) ? "smaller" : "bigger");
+echo "|";
+echo (gzinflate($packed) === $data ? "roundtrip-ok" : "roundtrip-fail");
+"#,
+    );
+    assert_eq!(out, "smaller|roundtrip-ok");
+}
+
+#[test]
+fn test_gzinflate_invalid_is_false() {
+    // gzinflate() of data that is not raw DEFLATE returns false.
+    let out = compile_and_run(
+        r#"<?php echo gzinflate("this is not deflate data") === false ? "false" : "ok";"#,
+    );
+    assert_eq!(out, "false");
+}
+
+#[test]
+fn test_gzinflate_decodes_zlib_deflate_filter() {
+    // gzinflate() decodes the raw DEFLATE produced by the zlib.deflate stream
+    // filter — the two zlib features agree on the wire format.
+    let out = compile_and_run(
+        r#"<?php
+$data = str_repeat("filter and builtin agree. ", 20);
+$w = fopen("filtered.bin", "w");
+stream_filter_append($w, "zlib.deflate", STREAM_FILTER_WRITE);
+fwrite($w, $data);
+fclose($w);
+echo (gzinflate(file_get_contents("filtered.bin")) === $data ? "decoded-ok" : "FAIL");
+"#,
+    );
+    assert_eq!(out, "decoded-ok");
+}
+
+#[test]
+fn test_gz_builtins_case_insensitive() {
+    // PHP builtin names are case-insensitive.
+    let out = compile_and_run(
+        r#"<?php $s = "case test case test"; echo GZINFLATE(GzDeflate($s)) === $s ? "ci-ok" : "FAIL";"#,
+    );
+    assert_eq!(out, "ci-ok");
+}
+
+#[test]
 fn test_ctype_alpha_true() {
     let out = compile_and_run(r#"<?php echo ctype_alpha("Hello");"#);
     assert_eq!(out, "1");
@@ -265,4 +339,78 @@ fn test_ctype_space_false() {
 fn test_sprintf_hex() {
     let out = compile_and_run(r#"<?php echo sprintf("%x", 255);"#);
     assert_eq!(out, "ff");
+}
+
+// --- long2ip ---
+
+#[test]
+fn test_long2ip_private_address() {
+    let out = compile_and_run(r#"<?php echo long2ip(3232235777);"#);
+    assert_eq!(out, "192.168.1.1");
+}
+
+#[test]
+fn test_long2ip_loopback() {
+    let out = compile_and_run(r#"<?php echo long2ip(2130706433);"#);
+    assert_eq!(out, "127.0.0.1");
+}
+
+#[test]
+fn test_long2ip_zero_and_broadcast() {
+    let out = compile_and_run(r#"<?php echo long2ip(0) . "|" . long2ip(4294967295);"#);
+    assert_eq!(out, "0.0.0.0|255.255.255.255");
+}
+
+// --- ip2long ---
+
+#[test]
+fn test_ip2long_valid_addresses() {
+    let out = compile_and_run(
+        r#"<?php echo ip2long("192.168.1.1") . "|" . ip2long("0.0.0.0") . "|" . ip2long("255.255.255.255");"#,
+    );
+    assert_eq!(out, "3232235777|0|4294967295");
+}
+
+#[test]
+fn test_ip2long_rejects_invalid() {
+    let out = compile_and_run(
+        r#"<?php
+echo ip2long("not.an.ip") === false ? "a" : "A";
+echo ip2long("1.2.3") === false ? "b" : "B";
+echo ip2long("256.0.0.1") === false ? "c" : "C";
+echo ip2long("1.2.3.4.5") === false ? "d" : "D";
+"#,
+    );
+    assert_eq!(out, "abcd");
+}
+
+// --- inet_ntop / inet_pton ---
+
+#[test]
+fn test_inet_ntop_ipv4() {
+    let out = compile_and_run(r#"<?php echo inet_ntop(chr(192) . chr(168) . chr(0) . chr(1));"#);
+    assert_eq!(out, "192.168.0.1");
+}
+
+#[test]
+fn test_inet_ntop_loopback() {
+    let out = compile_and_run(r#"<?php echo inet_ntop(chr(127) . chr(0) . chr(0) . chr(1));"#);
+    assert_eq!(out, "127.0.0.1");
+}
+
+#[test]
+fn test_inet_ntop_rejects_wrong_length() {
+    let out = compile_and_run(r#"<?php var_dump(inet_ntop("xx"));"#);
+    assert_eq!(out, "bool(false)\n");
+}
+
+#[test]
+fn test_inet_pton_valid_and_invalid() {
+    let out = compile_and_run(
+        r#"<?php
+echo inet_pton("1.2.3.4") === false ? "F" : "S";
+echo inet_pton("nonsense") === false ? "F" : "S";
+"#,
+    );
+    assert_eq!(out, "SF");
 }

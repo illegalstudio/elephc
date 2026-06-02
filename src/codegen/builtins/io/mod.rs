@@ -15,6 +15,7 @@ mod chmod;
 mod chown;
 mod clearstatcache;
 mod copy;
+mod disk_space;
 mod dirname;
 mod fclose;
 mod fdatasync;
@@ -36,12 +37,32 @@ mod fileinode;
 mod filemtime;
 mod fileowner;
 mod fileperms;
+mod data_stream;
+mod compress_bzip2_stream;
+mod compress_zlib_stream;
+mod ftp_stream;
+mod ftps_stream;
+mod http_stream;
+mod https_stream;
+mod phar_stream;
+mod php_filter_stream;
 mod filesize;
 mod filetype;
 mod fopen;
+mod fsockopen;
+mod gethostname;
+mod gethostbyname;
+mod gethostbyaddr;
+mod getprotobyname;
+mod getprotobynumber;
+mod getservbyname;
+mod getservbyport;
 mod fpassthru;
+mod fprintf;
+mod vfprintf;
 mod fputcsv;
 mod fread;
+mod fscanf;
 mod readfile;
 mod readlink;
 mod fseek;
@@ -61,6 +82,13 @@ mod link;
 mod linkinfo;
 mod mkdir;
 mod pathinfo;
+mod path_op_wrapper;
+mod pclose;
+mod popen;
+mod opendir;
+mod readdir;
+mod closedir;
+mod rewinddir;
 mod print_r;
 mod readline;
 mod realpath;
@@ -72,7 +100,46 @@ mod lstat;
 mod scandir;
 mod stat;
 mod stat_result;
-mod stream_arg;
+pub(crate) mod stream_arg;
+mod stream_copy_to_stream;
+mod stream_get_line;
+mod stream_socket_accept;
+mod stream_socket_client;
+mod stream_socket_get_name;
+mod stream_socket_pair;
+mod stream_socket_recvfrom;
+mod stream_socket_sendto;
+mod stream_socket_server;
+mod stream_socket_shutdown;
+mod stream_context_create;
+mod stream_context_get_default;
+mod stream_context_get_options;
+mod stream_context_get_params;
+mod stream_context_set_default;
+mod stream_context_set_option;
+mod stream_context_set_params;
+mod stream_notification;
+mod stream_resolve_include_path;
+mod stream_bucket;
+mod stream_filter_register;
+mod stream_set_buffer;
+mod stream_socket_enable_crypto;
+mod stream_wrapper_register;
+mod stream_wrapper_restore;
+mod stream_wrapper_unregister;
+mod stream_get_contents;
+mod stream_get_meta_data;
+mod stream_introspection;
+mod stream_filter;
+pub(crate) mod stream_filter_bzip2;
+pub(crate) mod stream_filter_iconv;
+pub(crate) mod stream_filter_iconv_write;
+pub(crate) mod stream_filter_inflate;
+pub(crate) mod stream_filter_zlib;
+mod stream_isatty;
+mod stream_select;
+mod stream_set_blocking;
+mod stream_set_timeout;
 mod symlink;
 mod sys_get_temp_dir;
 mod tempnam;
@@ -119,6 +186,9 @@ pub fn emit(
         "fwrite" => fwrite::emit(name, args, emitter, ctx, data),
         "fgets" => fgets::emit(name, args, emitter, ctx, data),
         "fgetc" => fgetc::emit(name, args, emitter, ctx, data),
+        "fprintf" => fprintf::emit(name, args, emitter, ctx, data),
+        "vfprintf" => vfprintf::emit(name, args, emitter, ctx, data),
+        "fscanf" => fscanf::emit(name, args, emitter, ctx, data),
         "fpassthru" => fpassthru::emit(name, args, emitter, ctx, data),
         "flock" => flock::emit(name, args, emitter, ctx, data),
         "tmpfile" => tmpfile::emit(name, args, emitter, ctx, data),
@@ -143,6 +213,9 @@ pub fn emit(
         "filesize" => filesize::emit(name, args, emitter, ctx, data),
         "filemtime" => filemtime::emit(name, args, emitter, ctx, data),
         "copy" => copy::emit(name, args, emitter, ctx, data),
+        "disk_free_space" | "disk_total_space" => {
+            disk_space::emit(name, args, emitter, ctx, data)
+        }
         "rename" => rename::emit(name, args, emitter, ctx, data),
         "unlink" => unlink::emit(name, args, emitter, ctx, data),
         "mkdir" => mkdir::emit(name, args, emitter, ctx, data),
@@ -184,6 +257,109 @@ pub fn emit(
         "fflush" => fflush::emit(name, args, emitter, ctx, data),
         "fdatasync" => fdatasync::emit(name, args, emitter, ctx, data),
         "touch" => touch::emit(name, args, emitter, ctx, data),
+        "gethostname" => gethostname::emit(name, args, emitter, ctx, data),
+        "gethostbyname" => gethostbyname::emit(name, args, emitter, ctx, data),
+        "gethostbyaddr" => gethostbyaddr::emit(name, args, emitter, ctx, data),
+        "getprotobyname" => getprotobyname::emit(name, args, emitter, ctx, data),
+        "getprotobynumber" => getprotobynumber::emit(name, args, emitter, ctx, data),
+        "getservbyname" => getservbyname::emit(name, args, emitter, ctx, data),
+        "getservbyport" => getservbyport::emit(name, args, emitter, ctx, data),
+        "stream_copy_to_stream" => {
+            stream_copy_to_stream::emit(name, args, emitter, ctx, data)
+        }
+        "stream_get_contents" => stream_get_contents::emit(name, args, emitter, ctx, data),
+        "stream_get_meta_data" => {
+            stream_get_meta_data::emit(name, args, emitter, ctx, data)
+        }
+        "stream_get_line" => stream_get_line::emit(name, args, emitter, ctx, data),
+        "stream_isatty" => stream_isatty::emit(name, args, emitter, ctx, data),
+        "stream_select" => stream_select::emit(name, args, emitter, ctx, data),
+        "stream_set_blocking" => stream_set_blocking::emit(name, args, emitter, ctx, data),
+        "stream_set_timeout" => stream_set_timeout::emit(name, args, emitter, ctx, data),
+        "stream_socket_server" => stream_socket_server::emit(name, args, emitter, ctx, data),
+        "stream_socket_client" => stream_socket_client::emit(name, args, emitter, ctx, data),
+        "fsockopen" | "pfsockopen" => fsockopen::emit(name, args, emitter, ctx, data),
+        "stream_wrapper_register" => {
+            stream_wrapper_register::emit(name, args, emitter, ctx, data)
+        }
+        "stream_wrapper_unregister" => {
+            stream_wrapper_unregister::emit(name, args, emitter, ctx, data)
+        }
+        "stream_wrapper_restore" => {
+            stream_wrapper_restore::emit(name, args, emitter, ctx, data)
+        }
+        "stream_socket_enable_crypto" => {
+            stream_socket_enable_crypto::emit(name, args, emitter, ctx, data)
+        }
+        "stream_context_create" => {
+            stream_context_create::emit(name, args, emitter, ctx, data)
+        }
+        "stream_context_get_default" => {
+            stream_context_get_default::emit(name, args, emitter, ctx, data)
+        }
+        "stream_context_set_default" => {
+            stream_context_set_default::emit(name, args, emitter, ctx, data)
+        }
+        "stream_context_set_option" => {
+            stream_context_set_option::emit(name, args, emitter, ctx, data)
+        }
+        "stream_context_set_params" => {
+            stream_context_set_params::emit(name, args, emitter, ctx, data)
+        }
+        "stream_context_get_options" => {
+            stream_context_get_options::emit(name, args, emitter, ctx, data)
+        }
+        "stream_context_get_params" => {
+            stream_context_get_params::emit(name, args, emitter, ctx, data)
+        }
+        "stream_resolve_include_path" => {
+            stream_resolve_include_path::emit(name, args, emitter, ctx, data)
+        }
+        "stream_filter_register" => {
+            stream_filter_register::emit(name, args, emitter, ctx, data)
+        }
+        "stream_bucket_new" => stream_bucket::emit_new(name, args, emitter, ctx, data),
+        "stream_bucket_make_writeable" => {
+            stream_bucket::emit_make_writeable(name, args, emitter, ctx, data)
+        }
+        "stream_bucket_append" | "stream_bucket_prepend" => {
+            stream_bucket::emit_append_or_prepend(name, args, emitter, ctx, data)
+        }
+        "stream_set_chunk_size"
+        | "stream_set_read_buffer"
+        | "stream_set_write_buffer" => {
+            stream_set_buffer::emit(name, args, emitter, ctx, data)
+        }
+        "stream_socket_accept" => stream_socket_accept::emit(name, args, emitter, ctx, data),
+        "stream_socket_shutdown" => {
+            stream_socket_shutdown::emit(name, args, emitter, ctx, data)
+        }
+        "stream_socket_sendto" => {
+            stream_socket_sendto::emit(name, args, emitter, ctx, data)
+        }
+        "stream_socket_recvfrom" => {
+            stream_socket_recvfrom::emit(name, args, emitter, ctx, data)
+        }
+        "stream_socket_get_name" => {
+            stream_socket_get_name::emit(name, args, emitter, ctx, data)
+        }
+        "stream_socket_pair" => {
+            stream_socket_pair::emit(name, args, emitter, ctx, data)
+        }
+        "popen" => popen::emit(name, args, emitter, ctx, data),
+        "pclose" => pclose::emit(name, args, emitter, ctx, data),
+        "opendir" => opendir::emit(name, args, emitter, ctx, data),
+        "readdir" => readdir::emit(name, args, emitter, ctx, data),
+        "closedir" => closedir::emit(name, args, emitter, ctx, data),
+        "rewinddir" => rewinddir::emit(name, args, emitter, ctx, data),
+        "stream_is_local" | "stream_supports_lock" | "stream_get_wrappers"
+        | "stream_get_transports" | "stream_get_filters" => {
+            stream_introspection::emit(name, args, emitter, ctx, data)
+        }
+        "stream_filter_append" | "stream_filter_prepend" => {
+            stream_filter::emit_attach(name, args, emitter, ctx, data)
+        }
+        "stream_filter_remove" => stream_filter::emit_remove(name, args, emitter, ctx, data),
         _ => None,
     }
 }

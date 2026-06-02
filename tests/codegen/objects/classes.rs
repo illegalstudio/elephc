@@ -26,6 +26,69 @@ echo "ok";
 /// Verifies that assigning an object to a second variable shares the same instance.
 /// Both variables reference the same heap object, so mutating via one is visible via the other.
 #[test]
+fn test_class_dynamic_instantiation() {
+    // Phase 10: `new $variable()` consults the runtime class registry
+    // emitted by `emit_classes_by_name_table` and allocates via
+    // `__rt_new_by_name`. A known name yields an object Mixed cell; an
+    // unknown name lowers to PHP null.
+    let out = compile_and_run(
+        r#"<?php
+class Foo {}
+class Bar {}
+$cls = "Foo";
+$obj = new $cls();
+$cls2 = "Bar";
+$obj2 = new $cls2();
+$missing = "NoSuchClass";
+$bad = new $missing();
+echo gettype($obj) . "|" . gettype($obj2) . "|" . gettype($bad);
+"#,
+    );
+    assert_eq!(out, "object|object|NULL");
+}
+
+#[test]
+fn test_class_dynamic_instantiation_runs_property_defaults() {
+    // `new $var()` must apply declared property defaults (via the per-class
+    // _class_propinit_<id> thunk invoked by __rt_new_by_name), matching the
+    // normal `new ClassName()` path. Previously these read back as 0/null.
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $n = 7;
+    public string $s = "hi";
+    public float $f = 1.5;
+    public bool $b = true;
+    public array $a = [1, 2, 3];
+}
+$cls = "C";
+$o = new $cls();
+echo $o->n . "|" . $o->s . "|" . $o->f . "|" . ($o->b ? "T" : "F") . "|" . count($o->a);
+"#,
+    );
+    assert_eq!(out, "7|hi|1.5|T|3");
+}
+
+#[test]
+fn test_dynamic_instantiation_missing_class_skips_propinit() {
+    // An unknown class name must still return null and must NOT dispatch a
+    // property-init thunk for a missing class_id (regression for the
+    // _class_propinit_ptrs miss path).
+    let out = compile_and_run(
+        r#"<?php
+class Has { public int $x = 9; }
+$missing = "Nope";
+$bad = new $missing();
+echo gettype($bad);
+$ok = "Has";
+$o = new $ok();
+echo "|" . $o->x;
+"#,
+    );
+    assert_eq!(out, "NULL|9");
+}
+
+#[test]
 fn test_class_object_aliasing() {
     let out = compile_and_run(
         r#"<?php

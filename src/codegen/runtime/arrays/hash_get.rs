@@ -153,6 +153,8 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_key_hash");                             // compute the 64-bit hash for the normalized lookup key
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the hash helper returns
     emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load the table capacity for the modulo operation and linear-probe loop
+    emitter.instruction("test r11, r11");                                       // empty / uninitialised hashes have capacity 0 — `div r11` would SIGFPE
+    emitter.instruction("jz __rt_hash_get_not_found");                          // treat capacity-0 hashes as misses without probing
     emitter.instruction("xor edx, edx");                                        // clear the high dividend half before dividing the 64-bit hash by the capacity
     emitter.instruction("div r11");                                             // compute hash % capacity using the SysV integer divide remainder register
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save the initial probe index so the loop can survive helper calls

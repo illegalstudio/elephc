@@ -335,7 +335,7 @@ pub(super) fn resolve_constant_name(
 /// Returns true if `name` is a builtin global constant that should bypass symbol-table
 /// resolution (e.g., PHP_OS, STDIN, STDOUT, STDERR, FNM_* pathinfo flags).
 fn is_builtin_global_constant(name: &str) -> bool {
-    matches!(
+    if matches!(
         name,
         "PHP_OS"
             | "PATHINFO_DIRNAME"
@@ -353,5 +353,12 @@ fn is_builtin_global_constant(name: &str) -> bool {
             | "STDIN"
             | "STDOUT"
             | "STDERR"
-    )
+    ) {
+        return true;
+    }
+    // Shared source-of-truth slices for JSON and stream/socket constants.
+    crate::types::json_constants::JSON_INT_CONSTANTS
+        .iter()
+        .chain(crate::types::stream_constants::STREAM_INT_CONSTANTS.iter())
+        .any(|(constant_name, _)| *constant_name == name)
 }

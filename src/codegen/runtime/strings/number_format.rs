@@ -188,7 +188,7 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // preserve the concat-buffer destination cursor across the local formatting and copy loops
     emitter.instruction("push r12");                                            // preserve the concat-buffer start pointer for the final x86_64 string return pair
     emitter.instruction("push r13");                                            // preserve the concat-offset symbol address across the local formatting and copy loops
-    emitter.instruction("sub rsp, 96");                                         // reserve local storage for the raw snprintf buffer, mini format string, and scalar formatting metadata
+    emitter.instruction("sub rsp, 104");                                        // reserve local storage; bumped 96→104 so the four 8-byte saves above + this sub leave rsp 0-mod-16 before the SysV snprintf call below
     emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                       // preserve the requested decimal count across the intermediate formatting and copy loops
     emitter.instruction("mov QWORD PTR [rbp - 48], rsi");                       // preserve the decimal-separator byte across the intermediate formatting and copy loops
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // preserve the thousands-separator byte across the intermediate formatting and copy loops
@@ -291,7 +291,7 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [r13]");                             // reload the old concat-buffer write cursor before publishing the formatted-string append
     emitter.instruction("add r8, rdx");                                         // advance the concat-buffer write cursor by the emitted formatted-string length
     emitter.instruction("mov QWORD PTR [r13], r8");                             // publish the updated concat-buffer write cursor after appending the formatted number
-    emitter.instruction("add rsp, 96");                                         // release the local raw-buffer and mini-format scratch space before restoring callee-saved registers
+    emitter.instruction("add rsp, 104");// release the local raw-buffer and mini-format scratch space before restoring callee-saved registers
     emitter.instruction("pop r13");                                             // restore the saved concat-offset symbol register after the x86_64 number_format() helper finishes
     emitter.instruction("pop r12");                                             // restore the saved concat-buffer start register after the x86_64 number_format() helper finishes
     emitter.instruction("pop rbx");                                             // restore the saved concat-buffer destination cursor register after the x86_64 number_format() helper finishes

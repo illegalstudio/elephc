@@ -241,6 +241,10 @@ impl Checker {
             | ExprKind::NewObject { args, .. } => {
                 args.iter().any(Self::expr_contains_method_call)
             }
+            ExprKind::NewDynamic { name_expr, args } => {
+                Self::expr_contains_method_call(name_expr)
+                    || args.iter().any(Self::expr_contains_method_call)
+            }
             ExprKind::NewDynamicObject {
                 class_name, args, ..
             } => {
@@ -412,6 +416,10 @@ impl Checker {
             | ExprKind::NewObject { args, .. }
             | ExprKind::NewScopedObject { args, .. } => {
                 args.iter().any(Self::expr_contains_property_access)
+            }
+            ExprKind::NewDynamic { name_expr, args } => {
+                Self::expr_contains_property_access(name_expr)
+                    || args.iter().any(Self::expr_contains_property_access)
             }
             ExprKind::NewDynamicObject {
                 class_name, args, ..

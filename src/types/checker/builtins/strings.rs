@@ -137,6 +137,36 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Str))
         }
+        "long2ip" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "long2ip() takes exactly 1 argument"));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
+        }
+        "ip2long" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "ip2long() takes exactly 1 argument"));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Int,
+                PhpType::Bool,
+            ])))
+        }
+        "inet_ntop" | "inet_pton" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 1 argument", name),
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(checker.normalize_union_type(vec![
+                PhpType::Str,
+                PhpType::Bool,
+            ])))
+        }
         "hex2bin" => {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "hex2bin() takes exactly 1 argument"));
@@ -250,6 +280,24 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Int))
         }
+        "vsprintf" | "vprintf" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 2 arguments (format, values)", name),
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            // vsprintf returns the formatted string; vprintf prints it and
+            // returns the number of bytes written.
+            Ok(Some(if name == "vsprintf" {
+                PhpType::Str
+            } else {
+                PhpType::Int
+            }))
+        }
         "hash" => {
             if args.len() != 2 {
                 return Err(CompileError::new(span, "hash() takes exactly 2 arguments"));
@@ -280,6 +328,18 @@ pub(super) fn check_builtin(
             checker.require_linux_builtin_library("crypto");
             Ok(Some(PhpType::Str))
         }
+        "crc32" => {
+            // crc32() is a pure table-free computation in __rt_crc32; unlike the
+            // md5/sha1 digests it needs no system crypto library and returns int.
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "crc32() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Int))
+        }
         "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode"
         | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode"
         | "base64_decode" => {
@@ -291,6 +351,25 @@ pub(super) fn check_builtin(
             }
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Str))
+        }
+        "gzcompress" | "gzuncompress" | "gzdeflate" | "gzinflate" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() expects 1 or 2 arguments", name),
+                ));
+            }
+            for arg in args {
+                checker.infer_type(arg, env)?;
+            }
+            checker.require_builtin_library("z");
+            // gzcompress/gzdeflate always produce a string; the decompressors
+            // return false on a zlib error.
+            if name == "gzcompress" || name == "gzdeflate" {
+                Ok(Some(PhpType::Str))
+            } else {
+                Ok(Some(checker.normalize_union_type(vec![PhpType::Str, PhpType::Bool])))
+            }
         }
         "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
             if args.len() != 1 {

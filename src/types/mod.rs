@@ -34,6 +34,7 @@ mod result;
 mod schema;
 /// Function signature representation and builtin signature helpers.
 mod signatures;
+pub(crate) mod stream_constants;
 /// Type checker diagnostics and warnings.
 mod warnings;
 

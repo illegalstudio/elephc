@@ -49,6 +49,10 @@ mod nl2br;
 mod wordwrap;
 mod bin2hex;
 mod hex2bin;
+mod inet_ntop;
+mod inet_pton;
+mod ip2long;
+mod long2ip;
 mod htmlspecialchars;
 mod html_entity_decode;
 mod urlencode;
@@ -58,8 +62,10 @@ mod base64_encode;
 mod base64_decode;
 mod sprintf;
 mod sprintf_x86_64;
+mod vsprintf;
 mod md5;
 mod sha1;
+mod crc32;
 mod hash;
 mod sscanf;
 mod rtrim_mask;
@@ -150,6 +156,14 @@ pub use bin2hex::emit_bin2hex;
 /// Emit binary-to-hexadecimal encoding.
 pub use hex2bin::emit_hex2bin;
 /// Emit hexadecimal-to-binary decoding.
+pub use inet_ntop::emit_inet_ntop;
+/// Emit inet_ntop (network address to string) conversion.
+pub use inet_pton::emit_inet_pton;
+/// Emit inet_pton (string to network address) conversion.
+pub use ip2long::emit_ip2long;
+/// Emit IP-to-long address conversion.
+pub use long2ip::emit_long2ip;
+/// Emit long-to-IP address conversion.
 pub use htmlspecialchars::emit_htmlspecialchars;
 /// Emit HTML special characters escaping.
 pub use html_entity_decode::emit_html_entity_decode;
@@ -165,10 +179,13 @@ pub use base64_encode::emit_base64_encode;
 pub use base64_decode::emit_base64_decode;
 /// Emit Base64 decoding helper.
 pub use sprintf::emit_sprintf;
+pub use vsprintf::emit_vsprintf;
 /// Emit sprintf formatting helper.
 pub use md5::emit_md5;
 /// Emit MD5 hash helper.
 pub use sha1::emit_sha1;
+/// Emit CRC-32 checksum helper.
+pub use crc32::emit_crc32;
 /// Emit SHA1 hash helper.
 pub use hash::emit_hash;
 /// Emit generic hash helper.

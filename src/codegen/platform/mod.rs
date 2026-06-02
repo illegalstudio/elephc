@@ -84,8 +84,25 @@ mod tests {
         assert_eq!(map_syscall(1), 93);
         assert_eq!(map_syscall(4), 64);
         assert_eq!(map_syscall(5), 56);
+        assert_eq!(map_syscall(29), 207);
+        assert_eq!(map_syscall(30), 202);
+        assert_eq!(map_syscall(31), 205);
+        assert_eq!(map_syscall(32), 204);
+        assert_eq!(map_syscall(54), 29);
+        assert_eq!(map_syscall(92), 25);
+        assert_eq!(map_syscall(93), 72);
+        assert_eq!(map_syscall(97), 198);
+        assert_eq!(map_syscall(98), 203);
+        assert_eq!(map_syscall(104), 200);
+        assert_eq!(map_syscall(105), 208);
+        assert_eq!(map_syscall(106), 201);
         assert_eq!(map_syscall(128), 38);
+        assert_eq!(map_syscall(133), 206);
+        assert_eq!(map_syscall(134), 210);
+        assert_eq!(map_syscall(135), 199);
+        assert_eq!(map_syscall(160), 160);
         assert_eq!(map_syscall(338), 79);
+        assert_eq!(map_syscall(345), 43);
     }
 
     #[test]

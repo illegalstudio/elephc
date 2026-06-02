@@ -16,7 +16,7 @@ use crate::codegen::platform::Arch;
 /// dispatches to the x86_64 Linux variant; for ARM64 emits the scan loop inline.
 /// Input: x1/x2 = input string (ptr, len), x3/x4 = format string (ptr, len)
 /// Output: x0 = array pointer containing matched string slices
-/// Supports: %d (optional sign + digits), %s (non-whitespace word), %% (literal percent)
+/// Supports: %d (optional sign + digits), %f (sign, int digits, '.', fraction, exponent), %s (non-whitespace word), %% (literal percent)
 /// Literal characters in the format must match the input exactly; mismatches terminate parsing early.
 pub fn emit_sscanf(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -75,7 +75,7 @@ pub fn emit_sscanf(emitter: &mut Emitter) {
     // -- %d: extract digits --
     emitter.label("__rt_sscanf_check_d");
     emitter.instruction("cmp w9, #100");                                        // 'd'?
-    emitter.instruction("b.ne __rt_sscanf_check_s");                            // no → check %s
+    emitter.instruction("b.ne __rt_sscanf_check_f");                            // no → check %f
     // Save state
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save format state
     // Mark start of digits
@@ -108,6 +108,96 @@ pub fn emit_sscanf(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x5");                                          // matched start
     emitter.instruction("mov x2, x6");                                          // matched length
     emitter.instruction("bl __rt_array_push_str");                              // push to array
+    emitter.instruction("str x0, [sp, #32]");                                   // update array pointer after possible realloc
+    emitter.instruction("ldp x1, x2, [sp]");                                    // restore input state
+    emitter.instruction("ldp x3, x4, [sp, #16]");                               // restore format state
+    emitter.instruction("b __rt_sscanf_loop");                                  // continue
+
+    // -- %f: extract a float slice (sign, int digits, '.', fraction, exponent) --
+    emitter.label("__rt_sscanf_check_f");
+    emitter.instruction("cmp w9, #102");                                        // 'f'?
+    emitter.instruction("b.ne __rt_sscanf_check_s");                            // no → check %s
+    emitter.instruction("stp x3, x4, [sp, #16]");                               // save format state
+    emitter.instruction("mov x5, x1");                                          // start of match
+    emitter.instruction("mov x6, #0");                                          // matched length
+    emitter.instruction("cbz x2, __rt_sscanf_f_end");                           // no input → empty match
+    emitter.instruction("ldrb w10, [x1]");                                      // peek for an optional sign
+    emitter.instruction("cmp w10, #45");                                        // '-'?
+    emitter.instruction("b.eq __rt_sscanf_f_sign");                             // consume the leading sign
+    emitter.instruction("cmp w10, #43");                                        // '+'?
+    emitter.instruction("b.ne __rt_sscanf_f_int");                              // no sign → integer digits
+    emitter.label("__rt_sscanf_f_sign");
+    emitter.instruction("add x1, x1, #1");                                      // consume the leading sign
+    emitter.instruction("sub x2, x2, #1");                                      // decrement input remaining
+    emitter.instruction("add x6, x6, #1");                                      // count the sign
+    emitter.label("__rt_sscanf_f_int");
+    emitter.instruction("cbz x2, __rt_sscanf_f_end");                           // input exhausted
+    emitter.instruction("ldrb w10, [x1]");                                      // peek at the next integer digit
+    emitter.instruction("cmp w10, #48");                                        // < '0'?
+    emitter.instruction("b.lt __rt_sscanf_f_dot");                              // not a digit → fraction
+    emitter.instruction("cmp w10, #57");                                        // > '9'?
+    emitter.instruction("b.gt __rt_sscanf_f_dot");                              // not a digit → fraction
+    emitter.instruction("add x1, x1, #1");                                      // consume the integer digit
+    emitter.instruction("sub x2, x2, #1");                                      // decrement input remaining
+    emitter.instruction("add x6, x6, #1");                                      // count the digit
+    emitter.instruction("b __rt_sscanf_f_int");                                 // scan more integer digits
+    emitter.label("__rt_sscanf_f_dot");
+    emitter.instruction("cbz x2, __rt_sscanf_f_end");                           // input exhausted
+    emitter.instruction("ldrb w10, [x1]");                                      // peek for the decimal point
+    emitter.instruction("cmp w10, #46");                                        // '.'?
+    emitter.instruction("b.ne __rt_sscanf_f_exp");                              // no '.' → exponent
+    emitter.instruction("add x1, x1, #1");                                      // consume the '.'
+    emitter.instruction("sub x2, x2, #1");                                      // decrement input remaining
+    emitter.instruction("add x6, x6, #1");                                      // count the '.'
+    emitter.label("__rt_sscanf_f_frac");
+    emitter.instruction("cbz x2, __rt_sscanf_f_end");                           // input exhausted
+    emitter.instruction("ldrb w10, [x1]");                                      // peek at the next fraction digit
+    emitter.instruction("cmp w10, #48");                                        // < '0'?
+    emitter.instruction("b.lt __rt_sscanf_f_exp");                              // not a digit → exponent
+    emitter.instruction("cmp w10, #57");                                        // > '9'?
+    emitter.instruction("b.gt __rt_sscanf_f_exp");                              // not a digit → exponent
+    emitter.instruction("add x1, x1, #1");                                      // consume the fraction digit
+    emitter.instruction("sub x2, x2, #1");                                      // decrement input remaining
+    emitter.instruction("add x6, x6, #1");                                      // count the digit
+    emitter.instruction("b __rt_sscanf_f_frac");                                // scan more fraction digits
+    emitter.label("__rt_sscanf_f_exp");
+    emitter.instruction("cbz x2, __rt_sscanf_f_end");                           // input exhausted
+    emitter.instruction("ldrb w10, [x1]");                                      // peek for an exponent marker
+    emitter.instruction("cmp w10, #101");                                       // 'e'?
+    emitter.instruction("b.eq __rt_sscanf_f_exp_go");                           // exponent present
+    emitter.instruction("cmp w10, #69");                                        // 'E'?
+    emitter.instruction("b.ne __rt_sscanf_f_end");                              // no exponent → done
+    emitter.label("__rt_sscanf_f_exp_go");
+    emitter.instruction("add x1, x1, #1");                                      // consume the exponent marker
+    emitter.instruction("sub x2, x2, #1");                                      // decrement input remaining
+    emitter.instruction("add x6, x6, #1");                                      // count the marker
+    emitter.instruction("cbz x2, __rt_sscanf_f_end");                           // input exhausted
+    emitter.instruction("ldrb w10, [x1]");                                      // peek for an optional exponent sign
+    emitter.instruction("cmp w10, #45");                                        // '-'?
+    emitter.instruction("b.eq __rt_sscanf_f_exp_sign");                         // consume the exponent sign
+    emitter.instruction("cmp w10, #43");                                        // '+'?
+    emitter.instruction("b.ne __rt_sscanf_f_exp_digits");                       // no sign → exponent digits
+    emitter.label("__rt_sscanf_f_exp_sign");
+    emitter.instruction("add x1, x1, #1");                                      // consume the exponent sign
+    emitter.instruction("sub x2, x2, #1");                                      // decrement input remaining
+    emitter.instruction("add x6, x6, #1");                                      // count the sign
+    emitter.label("__rt_sscanf_f_exp_digits");
+    emitter.instruction("cbz x2, __rt_sscanf_f_end");                           // input exhausted
+    emitter.instruction("ldrb w10, [x1]");                                      // peek at the next exponent digit
+    emitter.instruction("cmp w10, #48");                                        // < '0'?
+    emitter.instruction("b.lt __rt_sscanf_f_end");                              // not a digit → done
+    emitter.instruction("cmp w10, #57");                                        // > '9'?
+    emitter.instruction("b.gt __rt_sscanf_f_end");                              // not a digit → done
+    emitter.instruction("add x1, x1, #1");                                      // consume the exponent digit
+    emitter.instruction("sub x2, x2, #1");                                      // decrement input remaining
+    emitter.instruction("add x6, x6, #1");                                      // count the digit
+    emitter.instruction("b __rt_sscanf_f_exp_digits");                          // scan more exponent digits
+    emitter.label("__rt_sscanf_f_end");
+    emitter.instruction("stp x1, x2, [sp]");                                    // save input state
+    emitter.instruction("ldr x0, [sp, #32]");                                   // array ptr
+    emitter.instruction("mov x1, x5");                                          // matched start
+    emitter.instruction("mov x2, x6");                                          // matched length
+    emitter.instruction("bl __rt_array_push_str");                              // push the matched float slice
     emitter.instruction("str x0, [sp, #32]");                                   // update array pointer after possible realloc
     emitter.instruction("ldp x1, x2, [sp]");                                    // restore input state
     emitter.instruction("ldp x3, x4, [sp, #16]");                               // restore format state
@@ -156,7 +246,7 @@ pub fn emit_sscanf(emitter: &mut Emitter) {
 ///
 /// Uses System V AMD64 ABI: input (rdi, rsi), format (rdx, rcx), result array pointer returned in rax.
 /// Frame spill slots at [rbp-8..rbp-40] preserve pointer/length state across helper calls.
-/// Supports: %d (optional leading minus + ASCII digit run), %s (non-whitespace byte run), %% (literal percent).
+/// Supports: %d (optional leading minus + ASCII digit run), %f (sign, int digits, '.', fraction, exponent), %s (non-whitespace byte run), %% (literal percent).
 /// Unknown specifiers are skipped without aborting; literal mismatches terminate the scan loop early.
 fn emit_sscanf_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -211,7 +301,7 @@ fn emit_sscanf_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_sscanf_check_d_linux_x86_64");
     emitter.instruction("cmp r8b, 100");                                        // is the current format specifier '%d'?
-    emitter.instruction("jne __rt_sscanf_check_s_linux_x86_64");                // fall through to '%s' handling when the current specifier is not '%d'
+    emitter.instruction("jne __rt_sscanf_check_f_linux_x86_64");                // fall through to '%f' handling when the current specifier is not '%d'
     emitter.instruction("mov r10, rax");                                        // mark the start of the matched integer slice before scanning optional sign and digits
     emitter.instruction("xor r11d, r11d");                                      // start the matched integer-slice length at zero bytes
     emitter.instruction("test rdx, rdx");                                       // is there at least one input byte available for an optional leading minus sign?
@@ -251,6 +341,107 @@ fn emit_sscanf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // restore the current format-string pointer after appending the matched integer slice
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // restore the current format-string length after appending the matched integer slice
     emitter.instruction("jmp __rt_sscanf_loop_linux_x86_64");                   // continue scanning the remaining format string after pushing the integer slice
+
+    emitter.label("__rt_sscanf_check_f_linux_x86_64");
+    emitter.instruction("cmp r8b, 102");                                        // is the current format specifier '%f'?
+    emitter.instruction("jne __rt_sscanf_check_s_linux_x86_64");                // fall through to '%s' handling when the current specifier is not '%f'
+    emitter.instruction("mov r10, rax");                                        // mark the start of the matched float slice
+    emitter.instruction("xor r11d, r11d");                                      // start the matched float-slice length at zero bytes
+    emitter.instruction("test rdx, rdx");                                       // any input for an optional leading sign?
+    emitter.instruction("jz __rt_sscanf_push_f_linux_x86_64");                  // push the empty match when the input is exhausted
+    emitter.instruction("movzx r9d, BYTE PTR [rax]");                           // peek at the next input character for a sign
+    emitter.instruction("cmp r9b, 45");                                         // is it a leading minus sign?
+    emitter.instruction("je __rt_sscanf_f_sign_linux_x86_64");                  // consume the leading sign
+    emitter.instruction("cmp r9b, 43");                                         // is it a leading plus sign?
+    emitter.instruction("jne __rt_sscanf_f_int_linux_x86_64");                  // no sign → integer digits
+    emitter.label("__rt_sscanf_f_sign_linux_x86_64");
+    emitter.instruction("add rax, 1");                                          // consume the leading sign
+    emitter.instruction("sub rdx, 1");                                          // decrement the remaining input length
+    emitter.instruction("add r11, 1");                                          // count the sign in the matched slice
+    emitter.label("__rt_sscanf_f_int_linux_x86_64");
+    emitter.instruction("test rdx, rdx");                                       // input exhausted before an integer digit?
+    emitter.instruction("jz __rt_sscanf_push_f_linux_x86_64");                  // push the slice when the input is exhausted
+    emitter.instruction("movzx r9d, BYTE PTR [rax]");                           // peek at the next integer digit
+    emitter.instruction("cmp r9b, 48");                                         // below ASCII '0'?
+    emitter.instruction("jl __rt_sscanf_f_dot_linux_x86_64");                   // not a digit → fraction
+    emitter.instruction("cmp r9b, 57");                                         // above ASCII '9'?
+    emitter.instruction("jg __rt_sscanf_f_dot_linux_x86_64");                   // not a digit → fraction
+    emitter.instruction("add rax, 1");                                          // consume the integer digit
+    emitter.instruction("sub rdx, 1");                                          // decrement the remaining input length
+    emitter.instruction("add r11, 1");                                          // count the integer digit
+    emitter.instruction("jmp __rt_sscanf_f_int_linux_x86_64");                  // scan more integer digits
+    emitter.label("__rt_sscanf_f_dot_linux_x86_64");
+    emitter.instruction("test rdx, rdx");                                       // input exhausted before the decimal point?
+    emitter.instruction("jz __rt_sscanf_push_f_linux_x86_64");                  // push the slice when the input is exhausted
+    emitter.instruction("movzx r9d, BYTE PTR [rax]");                           // peek for the decimal point
+    emitter.instruction("cmp r9b, 46");                                         // is it a '.'?
+    emitter.instruction("jne __rt_sscanf_f_exp_linux_x86_64");                  // no '.' → exponent
+    emitter.instruction("add rax, 1");                                          // consume the '.'
+    emitter.instruction("sub rdx, 1");                                          // decrement the remaining input length
+    emitter.instruction("add r11, 1");                                          // count the '.'
+    emitter.label("__rt_sscanf_f_frac_linux_x86_64");
+    emitter.instruction("test rdx, rdx");                                       // input exhausted before a fraction digit?
+    emitter.instruction("jz __rt_sscanf_push_f_linux_x86_64");                  // push the slice when the input is exhausted
+    emitter.instruction("movzx r9d, BYTE PTR [rax]");                           // peek at the next fraction digit
+    emitter.instruction("cmp r9b, 48");                                         // below ASCII '0'?
+    emitter.instruction("jl __rt_sscanf_f_exp_linux_x86_64");                   // not a digit → exponent
+    emitter.instruction("cmp r9b, 57");                                         // above ASCII '9'?
+    emitter.instruction("jg __rt_sscanf_f_exp_linux_x86_64");                   // not a digit → exponent
+    emitter.instruction("add rax, 1");                                          // consume the fraction digit
+    emitter.instruction("sub rdx, 1");                                          // decrement the remaining input length
+    emitter.instruction("add r11, 1");                                          // count the fraction digit
+    emitter.instruction("jmp __rt_sscanf_f_frac_linux_x86_64");                 // scan more fraction digits
+    emitter.label("__rt_sscanf_f_exp_linux_x86_64");
+    emitter.instruction("test rdx, rdx");                                       // input exhausted before an exponent marker?
+    emitter.instruction("jz __rt_sscanf_push_f_linux_x86_64");                  // push the slice when the input is exhausted
+    emitter.instruction("movzx r9d, BYTE PTR [rax]");                           // peek for an exponent marker
+    emitter.instruction("cmp r9b, 101");                                        // is it 'e'?
+    emitter.instruction("je __rt_sscanf_f_exp_go_linux_x86_64");                // exponent present
+    emitter.instruction("cmp r9b, 69");                                         // is it 'E'?
+    emitter.instruction("jne __rt_sscanf_push_f_linux_x86_64");                 // no exponent → push the slice
+    emitter.label("__rt_sscanf_f_exp_go_linux_x86_64");
+    emitter.instruction("add rax, 1");                                          // consume the exponent marker
+    emitter.instruction("sub rdx, 1");                                          // decrement the remaining input length
+    emitter.instruction("add r11, 1");                                          // count the marker
+    emitter.instruction("test rdx, rdx");                                       // input exhausted before an exponent sign?
+    emitter.instruction("jz __rt_sscanf_push_f_linux_x86_64");                  // push the slice when the input is exhausted
+    emitter.instruction("movzx r9d, BYTE PTR [rax]");                           // peek for an optional exponent sign
+    emitter.instruction("cmp r9b, 45");                                         // is it a minus sign?
+    emitter.instruction("je __rt_sscanf_f_exp_sign_linux_x86_64");              // consume the exponent sign
+    emitter.instruction("cmp r9b, 43");                                         // is it a plus sign?
+    emitter.instruction("jne __rt_sscanf_f_exp_digits_linux_x86_64");           // no sign → exponent digits
+    emitter.label("__rt_sscanf_f_exp_sign_linux_x86_64");
+    emitter.instruction("add rax, 1");                                          // consume the exponent sign
+    emitter.instruction("sub rdx, 1");                                          // decrement the remaining input length
+    emitter.instruction("add r11, 1");                                          // count the exponent sign
+    emitter.label("__rt_sscanf_f_exp_digits_linux_x86_64");
+    emitter.instruction("test rdx, rdx");                                       // input exhausted before an exponent digit?
+    emitter.instruction("jz __rt_sscanf_push_f_linux_x86_64");                  // push the slice when the input is exhausted
+    emitter.instruction("movzx r9d, BYTE PTR [rax]");                           // peek at the next exponent digit
+    emitter.instruction("cmp r9b, 48");                                         // below ASCII '0'?
+    emitter.instruction("jl __rt_sscanf_push_f_linux_x86_64");                  // not a digit → push the slice
+    emitter.instruction("cmp r9b, 57");                                         // above ASCII '9'?
+    emitter.instruction("jg __rt_sscanf_push_f_linux_x86_64");                  // not a digit → push the slice
+    emitter.instruction("add rax, 1");                                          // consume the exponent digit
+    emitter.instruction("sub rdx, 1");                                          // decrement the remaining input length
+    emitter.instruction("add r11, 1");                                          // count the exponent digit
+    emitter.instruction("jmp __rt_sscanf_f_exp_digits_linux_x86_64");           // scan more exponent digits
+
+    emitter.label("__rt_sscanf_push_f_linux_x86_64");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the input-string pointer before appending the float slice
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the input-string length before appending the float slice
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // preserve the format-string pointer before appending the float slice
+    emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // preserve the format-string length before appending the float slice
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the result indexed-array pointer
+    emitter.instruction("mov rsi, r10");                                        // pass the matched float-slice pointer to the append helper
+    emitter.instruction("mov rdx, r11");                                        // pass the matched float-slice length to the append helper
+    emitter.instruction("call __rt_array_push_str");                            // append the matched float slice into the result array
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the possibly-grown result-array pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the input-string pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the input-string length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // restore the format-string pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // restore the format-string length
+    emitter.instruction("jmp __rt_sscanf_loop_linux_x86_64");                   // continue scanning after pushing the float slice
 
     emitter.label("__rt_sscanf_check_s_linux_x86_64");
     emitter.instruction("cmp r8b, 115");                                        // is the current format specifier '%s'?

@@ -255,6 +255,10 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::NewObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()
             .with_may_throw(),
+        ExprKind::NewDynamic { name_expr, args } => expr_effect(name_expr)
+            .combine(combine_effects(args.iter().map(expr_effect)))
+            .with_side_effects()
+            .with_may_throw(),
         ExprKind::NewDynamicObject {
             class_name, args, ..
         } => expr_effect(class_name)

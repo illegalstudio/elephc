@@ -351,6 +351,12 @@ fn collect_arrow_expr_captures(
                 collect_arrow_expr_captures(arg, bound, seen, captures);
             }
         }
+        ExprKind::NewDynamic { name_expr, args } => {
+            collect_arrow_expr_captures(name_expr, bound, seen, captures);
+            for arg in args {
+                collect_arrow_expr_captures(arg, bound, seen, captures);
+            }
+        }
         ExprKind::ClosureCall { var, args } => {
             push_arrow_capture(var, bound, seen, captures);
             for arg in args {
@@ -741,6 +747,28 @@ pub(super) fn parse_new_object(
         let args = parse_args(tokens, pos, span)?;
         return Ok(Expr::new(
             ExprKind::NewScopedObject { receiver, args },
+            span,
+        ));
+    }
+
+    // `new $variable(args)` — the class name is held in a variable; we'll
+    // resolve it through the runtime class table at codegen time.
+    if let Some((Token::Variable(name), _)) = tokens.get(*pos) {
+        let var_name = name.clone();
+        *pos += 1;
+        if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
+            return Err(CompileError::new(
+                span,
+                "Expected '(' after class-name variable in 'new $var('",
+            ));
+        }
+        *pos += 1;
+        let args = parse_args(tokens, pos, span)?;
+        return Ok(Expr::new(
+            ExprKind::NewDynamic {
+                name_expr: Box::new(Expr::new(ExprKind::Variable(var_name), span)),
+                args,
+            },
             span,
         ));
     }

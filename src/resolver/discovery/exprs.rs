@@ -99,6 +99,10 @@ pub(super) fn discover_expr(
         | ExprKind::NewScopedObject { args, .. } => {
             discover_exprs(args, base_dir, loaded_paths, include_chain, state, output)?;
         }
+        ExprKind::NewDynamic { name_expr, args } => {
+            discover_expr(name_expr, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_exprs(args, base_dir, loaded_paths, include_chain, state, output)?;
+        }
         ExprKind::NewDynamicObject {
             class_name, args, ..
         } => {

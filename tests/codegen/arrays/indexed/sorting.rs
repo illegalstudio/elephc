@@ -92,3 +92,27 @@ echo $a[0];
     );
     assert_eq!(out, "1");
 }
+
+#[test]
+fn test_sort_string_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["banana", "apple", "cherry", "date"];
+sort($a);
+echo $a[0] . "," . $a[1] . "," . $a[2] . "," . $a[3];
+"#,
+    );
+    assert_eq!(out, "apple,banana,cherry,date");
+}
+
+#[test]
+fn test_rsort_string_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["banana", "apple", "cherry", "date"];
+rsort($a);
+echo $a[0] . "," . $a[1] . "," . $a[2] . "," . $a[3];
+"#,
+    );
+    assert_eq!(out, "date,cherry,banana,apple");
+}

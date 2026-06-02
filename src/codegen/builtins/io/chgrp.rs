@@ -16,19 +16,24 @@ use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
-/// Emits the `chgrp` builtin call for both string group names and integer GIDs.
+use super::path_op_wrapper::{
+    emit_owner_group_name_wrapper_dispatch, emit_owner_group_wrapper_dispatch, STREAM_META_GROUP,
+    STREAM_META_GROUP_NAME,
+};
+
+/// Emits the `chgrp($path, $group)` builtin call.
 ///
-/// # Arguments
-/// - `args[0]`: path (string) — pointer in x1/rax, length in x2/rdx
-/// - `args[1]`: group — string → `__rt_chgrp_group` (resolves name via libc); int → `__rt_chown` with uid=-1
+/// `args[0]` is the path (string expression) and `args[1]` is the group principal,
+/// which may be a string (group name) or integer (GID).
 ///
-/// # ABI details
-/// The path pointer/length (x1/x2 or rax/rdx) are preserved on the stack while the group
-/// argument is evaluated, then restored before the runtime call. Integer GIDs pass through
-/// the tertiary register (x4/rsi) with uid set to -1 to affect only the group ownership.
+/// On a registered `scheme://` path the call dispatches to the wrapper's
+/// `stream_metadata($path, $option, $value)` (vtable slot 14): an integer gid uses
+/// `STREAM_META_GROUP` with the gid boxed as `mixed`, a string name uses
+/// `STREAM_META_GROUP_NAME` with the name boxed as `mixed`. A non-wrapper path uses
+/// libc `__rt_chown(path, -1, gid)` (integer) or `__rt_chgrp_group(path, name)`
+/// (string), leaving the owner unchanged.
 ///
-/// # Returns
-/// `PhpType::Bool` — true on success, false on failure (matching PHP semantics).
+/// Returns `PhpType::Bool` (true = success, false = failure from runtime).
 pub fn emit(
     _name: &str,
     args: &[Expr],
@@ -40,33 +45,31 @@ pub fn emit(
     emit_expr(&args[0], emitter, ctx, data);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve path ptr/len while gid is evaluated
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve path ptr/len while the group is evaluated
             let principal_ty = emit_expr(&args[1], emitter, ctx, data);
             if principal_ty == PhpType::Str {
-                emitter.instruction("mov x3, x1");                              // group-name pointer → runtime string slot
-                emitter.instruction("mov x4, x2");                              // group-name length → runtime string slot
-                emitter.instruction("ldp x1, x2, [sp], #16");                   // restore path ptr/len
-                abi::emit_call_label(emitter, "__rt_chgrp_group");              // resolve group name and call libc chown()
+                emit_owner_group_name_wrapper_dispatch(
+                    emitter,
+                    ctx,
+                    STREAM_META_GROUP_NAME,
+                    "__rt_chgrp_group",
+                ); // wrapper stream_metadata(GROUP_NAME) or libc chgrp_group
             } else {
-                emitter.instruction("mov x4, x0");                              // gid → runtime gid register
-                emitter.instruction("mov x3, #-1");                             // uid = -1 (leave owner unchanged)
-                emitter.instruction("ldp x1, x2, [sp], #16");                   // restore path ptr/len
-                abi::emit_call_label(emitter, "__rt_chown");                    // call libc chown(path, -1, gid)
+                emit_owner_group_wrapper_dispatch(emitter, ctx, STREAM_META_GROUP); // wrapper stream_metadata(GROUP) or libc chown
             }
         }
         Arch::X86_64 => {
-            abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // preserve path ptr/len
+            abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // preserve path ptr/len while the group is evaluated
             let principal_ty = emit_expr(&args[1], emitter, ctx, data);
             if principal_ty == PhpType::Str {
-                emitter.instruction("mov rdi, rax");                            // group-name pointer → runtime string slot
-                emitter.instruction("mov rsi, rdx");                            // group-name length → runtime string slot
-                abi::emit_pop_reg_pair(emitter, "rax", "rdx");                  // restore path ptr/len
-                abi::emit_call_label(emitter, "__rt_chgrp_group");              // resolve group name and call libc chown()
+                emit_owner_group_name_wrapper_dispatch(
+                    emitter,
+                    ctx,
+                    STREAM_META_GROUP_NAME,
+                    "__rt_chgrp_group",
+                ); // wrapper stream_metadata(GROUP_NAME) or libc chgrp_group
             } else {
-                emitter.instruction("mov rsi, rax");                            // gid → tertiary integer arg slot
-                emitter.instruction("mov rdi, -1");                             // uid = -1 (leave owner unchanged)
-                abi::emit_pop_reg_pair(emitter, "rax", "rdx");                  // restore path ptr/len
-                abi::emit_call_label(emitter, "__rt_chown");                    // call libc chown(path, -1, gid)
+                emit_owner_group_wrapper_dispatch(emitter, ctx, STREAM_META_GROUP); // wrapper stream_metadata(GROUP) or libc chown
             }
         }
     }

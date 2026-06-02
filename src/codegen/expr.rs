@@ -244,6 +244,9 @@ pub fn emit_expr(
         ExprKind::NewObject { class_name, args } => {
             objects::emit_new_object(class_name.as_str(), args, emitter, ctx, data)
         }
+        ExprKind::NewDynamic { name_expr, args } => {
+            objects::emit_new_dynamic(name_expr, args, emitter, ctx, data)
+        }
         ExprKind::NewDynamicObject {
             class_name,
             fallback_class,

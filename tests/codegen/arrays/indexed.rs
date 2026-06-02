@@ -23,3 +23,5 @@ mod set_ops;
 mod shape_transforms;
 #[path = "indexed/sorting.rs"]
 mod sorting;
+#[path = "indexed/oob_reads.rs"]
+mod oob_reads;

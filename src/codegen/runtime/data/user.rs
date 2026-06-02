@@ -253,6 +253,23 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // _class_propinit_ptrs: dense class_id-indexed table of property-default
+    // init thunks. Entry = _class_propinit_<id> when the class has any property
+    // default, else 0 (null = nothing to init). __rt_new_by_name indexes this
+    // by class_id and calls the thunk (when non-zero) after zeroing the object.
+    // The has-default predicate MUST match property_init_thunks::class_needs_property_init.
+    out.push_str(".globl _class_propinit_ptrs\n_class_propinit_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            match class_info_by_id.get(&class_id) {
+                Some(class_info) if class_info.defaults.iter().any(|d| d.is_some()) => {
+                    out.push_str(&format!("    .quad _class_propinit_{}\n", class_id));
+                }
+                _ => out.push_str("    .quad 0\n"),
+            }
+        }
+    }
+
     out.push_str(".globl _class_static_vtable_ptrs\n_class_static_vtable_ptrs:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
@@ -271,6 +288,36 @@ pub(crate) fn emit_runtime_data_user(
                 out.push_str(&format!("    .quad _class_callable_methods_{}\n", class_id));
             } else {
                 out.push_str("    .quad _class_callable_methods_missing\n");
+            }
+        }
+    }
+
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _user_wrapper_vtable_ptrs\n_user_wrapper_vtable_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let class_publishes_wrapper_method = class_info_by_id
+                .get(&class_id)
+                .is_some_and(|class_info| class_has_user_wrapper_method(class_info));
+            if class_publishes_wrapper_method {
+                out.push_str(&format!("    .quad _user_wrapper_vtable_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _user_wrapper_vtable_missing\n");
+            }
+        }
+    }
+
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _user_filter_vtable_ptrs\n_user_filter_vtable_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let class_publishes_filter_method = class_info_by_id
+                .get(&class_id)
+                .is_some_and(|class_info| class_has_user_filter_method(class_info));
+            if class_publishes_filter_method {
+                out.push_str(&format!("    .quad _user_filter_vtable_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _user_filter_vtable_missing\n");
             }
         }
     }
@@ -296,8 +343,20 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_callable_methods_missing\n_class_callable_methods_missing:\n");
     out.push_str("    .quad 0\n");
+    out.push_str("    .p2align 3\n");
+    out.push_str(".globl _user_wrapper_vtable_missing\n_user_wrapper_vtable_missing:\n");
+    for _ in 0..USER_WRAPPER_VTABLE_SLOTS {
+        out.push_str("    .quad 0\n");
+    }
+    out.push_str("    .p2align 3\n");
+    out.push_str(".globl _user_filter_vtable_missing\n_user_filter_vtable_missing:\n");
+    for _ in 0..USER_FILTER_VTABLE_SLOTS {
+        out.push_str("    .quad 0\n");
+    }
     out.push_str(".p2align 3\n");
     emit_static_callable_method_data(&mut out, &sorted_classes);
+    out.push_str(".p2align 3\n");
+    emit_classes_by_name_table(&mut out, &sorted_classes);
 
     // -- class-level PHP 8 attribute metadata table --
     // Per-class layout: count followed by (name_ptr, name_len) pairs.
@@ -627,6 +686,8 @@ pub(crate) fn emit_runtime_data_user(
         }
 
         emit_class_callable_methods(&mut out, class_info);
+        emit_user_wrapper_vtable(&mut out, class_info);
+        emit_user_filter_vtable(&mut out, class_info);
     }
 
     let stdclass_id = classes
@@ -713,6 +774,207 @@ fn emit_callable_function_data(
             out.push_str(&format!(
                 "    .quad {}\n",
                 function_variant_active_symbol(name)
+            ));
+        } else {
+            out.push_str("    .quad 0\n");
+        }
+    }
+}
+
+/// Emits the `_classes_by_name` lookup table used by `__rt_new_by_name`
+/// for `new $variable()` dynamic instantiation (Phase 10 user-wrapper
+/// dispatch). Each registered class contributes a 32-byte entry:
+///
+///   [0..8)   name_ptr   — pointer to the class-name ASCII bytes
+///   [8..16)  name_len   — count of name bytes
+///   [16..24) class_id   — runtime class id (matches the static
+///                         `class_info.class_id` stamped by
+///                         `__rt_heap_alloc` callers)
+///   [24..32) obj_size   — `8 + num_props*16 + dyn_props_slot`, the same
+///                         allocation size emit_new_object_core uses
+///
+/// The accompanying `_classes_by_name_count` symbol holds the entry count
+/// so the runtime helper can bound its linear scan.
+fn emit_classes_by_name_table(
+    out: &mut String,
+    sorted_classes: &[(&String, &ClassInfo)],
+) {
+    for (class_name, class_info) in sorted_classes {
+        out.push_str(&format!(
+            ".globl _class_by_name_str_{0}\n_class_by_name_str_{0}:\n    .ascii \"{1}\"\n",
+            class_info.class_id,
+            escaped_ascii(class_name)
+        ));
+    }
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _classes_by_name_count\n_classes_by_name_count:\n");
+    out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
+    out.push_str(".globl _classes_by_name\n_classes_by_name:\n");
+    for (class_name, class_info) in sorted_classes {
+        let num_props = class_info.properties.len();
+        let dyn_props_slot = if class_info.allow_dynamic_properties {
+            8
+        } else {
+            0
+        };
+        let obj_size = 8 + num_props * 16 + dyn_props_slot;
+        out.push_str(&format!(
+            "    .quad _class_by_name_str_{}\n",
+            class_info.class_id
+        ));
+        out.push_str(&format!("    .quad {}\n", class_name.len()));
+        out.push_str(&format!("    .quad {}\n", class_info.class_id));
+        out.push_str(&format!("    .quad {}\n", obj_size));
+    }
+}
+
+/// The number of fixed-slot stream-wrapper methods recorded per class in
+/// `_user_wrapper_vtable_<class_id>`. Slot order matches the runtime fopen
+/// dispatch (Phase 10): 0 stream_open, 1 stream_close, 2 stream_read,
+/// 3 stream_write, 4 stream_eof, 5 stream_tell, 6 stream_seek, 7 stream_flush,
+/// 8 stream_stat (fd-based `fstat()` on an open wrapper stream), 9 url_stat
+/// (path-based `file_exists()`/`is_file()`/`filesize()` on a `scheme://` URL).
+/// G1 reserves the full PHP `StreamWrapper` surface so slot indices stay stable
+/// as the dispatch is filled in: 10 stream_cast, 11 stream_lock (`flock()`),
+/// 12 stream_truncate (`ftruncate()`), 13 stream_set_option, 14 stream_metadata,
+/// 15 unlink, 16 rename, 17 mkdir, 18 rmdir, 19 dir_opendir, 20 dir_readdir,
+/// 21 dir_closedir, 22 dir_rewinddir. Slots whose dispatch is not yet wired are
+/// still emitted (zero when the class does not declare the method); the runtime
+/// only reaches a slot when the corresponding builtin routes to it.
+/// Each slot is either a method-symbol pointer (when the class declares the
+/// method publicly) or zero. The stat methods must be declared WITHOUT a
+/// return type (or `: mixed`) so their associative stat array round-trips as a
+/// boxed Mixed cell — a `: array` return is integer-keyed and rejects the
+/// string keys (`size`, `mode`, ...) PHP stat arrays use.
+pub(crate) const USER_WRAPPER_VTABLE_SLOTS: usize = 23;
+
+/// The number of fixed-slot stream-filter methods recorded per class in
+/// `_user_filter_vtable_<class_id>` (Phase 10 tier 3). Slot order:
+/// 0 filter, 1 onCreate, 2 onClose. Slot 3 is a non-method "arity" flag:
+/// 0 = elephc-simplified `filter(string $data): string`, 1 = PHP-canonical
+/// `filter($in, $out, &$consumed, $closing): int` with bucket brigades.
+/// The flag is read by the runtime dispatcher to choose which code path
+/// to invoke. Adding the flag inline in the vtable lets the dispatcher
+/// branch with a single load + cmp.
+pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 4;
+
+const USER_FILTER_METHOD_NAMES: [&str; 3] = [
+    "filter",
+    "oncreate",
+    "onclose",
+];
+
+const USER_WRAPPER_METHOD_NAMES: [&str; USER_WRAPPER_VTABLE_SLOTS] = [
+    "stream_open",
+    "stream_close",
+    "stream_read",
+    "stream_write",
+    "stream_eof",
+    "stream_tell",
+    "stream_seek",
+    "stream_flush",
+    "stream_stat",
+    "url_stat",
+    "stream_cast",
+    "stream_lock",
+    "stream_truncate",
+    "stream_set_option",
+    "stream_metadata",
+    "unlink",
+    "rename",
+    "mkdir",
+    "rmdir",
+    "dir_opendir",
+    "dir_readdir",
+    "dir_closedir",
+    "dir_rewinddir",
+];
+
+/// Returns true when a class publishes at least one of the eight
+/// stream-wrapper methods publicly — i.e. when it is plausibly a stream
+/// wrapper. Classes that miss this filter share `_user_wrapper_vtable_missing`
+/// (all zeros) instead of emitting their own all-zero table.
+fn class_has_user_wrapper_method(class_info: &ClassInfo) -> bool {
+    USER_WRAPPER_METHOD_NAMES.iter().any(|method_name| {
+        let is_public = class_info
+            .method_visibilities
+            .get(*method_name)
+            .is_some_and(|visibility| matches!(visibility, Visibility::Public));
+        let has_impl = class_info.method_impl_classes.contains_key(*method_name);
+        is_public && has_impl
+    })
+}
+
+/// Returns true when a class publishes at least one of the three
+/// stream-filter methods publicly (filter / onCreate / onClose). Classes
+/// that miss this filter share `_user_filter_vtable_missing` instead of
+/// emitting their own all-zero table.
+fn class_has_user_filter_method(class_info: &ClassInfo) -> bool {
+    USER_FILTER_METHOD_NAMES.iter().any(|method_name| {
+        let is_public = class_info
+            .method_visibilities
+            .get(*method_name)
+            .is_some_and(|visibility| matches!(visibility, Visibility::Public));
+        let has_impl = class_info.method_impl_classes.contains_key(*method_name);
+        is_public && has_impl
+    })
+}
+
+fn emit_user_filter_vtable(out: &mut String, class_info: &ClassInfo) {
+    if !class_has_user_filter_method(class_info) {
+        return;
+    }
+    out.push_str("    .p2align 3\n");
+    out.push_str(&format!(
+        ".globl _user_filter_vtable_{0}\n_user_filter_vtable_{0}:\n",
+        class_info.class_id
+    ));
+    for method_name in &USER_FILTER_METHOD_NAMES {
+        let is_public = class_info
+            .method_visibilities
+            .get(*method_name)
+            .is_some_and(|visibility| matches!(visibility, Visibility::Public));
+        let impl_class = class_info.method_impl_classes.get(*method_name);
+        if is_public && impl_class.is_some() {
+            out.push_str(&format!(
+                "    .quad {}\n",
+                method_symbol(impl_class.unwrap(), method_name)
+            ));
+        } else {
+            out.push_str("    .quad 0\n");
+        }
+    }
+    // -- slot 3: filter()-arity flag (0 = 1-arg string contract, 1 = 4-arg brigade)
+    // The arity is detected by counting the visible parameters of filter() when
+    // it lives on this class. 4 params → PHP-canonical
+    // filter($in, $out, &$consumed, $closing): int. Anything else → 1-arg.
+    let brigade_arity = class_info
+        .methods
+        .get("filter")
+        .map(|sig| sig.params.len() == 4)
+        .unwrap_or(false);
+    out.push_str(&format!("    .quad {}\n", if brigade_arity { 1 } else { 0 }));
+}
+
+fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
+    if !class_has_user_wrapper_method(class_info) {
+        return;
+    }
+    out.push_str("    .p2align 3\n");
+    out.push_str(&format!(
+        ".globl _user_wrapper_vtable_{0}\n_user_wrapper_vtable_{0}:\n",
+        class_info.class_id
+    ));
+    for method_name in &USER_WRAPPER_METHOD_NAMES {
+        let is_public = class_info
+            .method_visibilities
+            .get(*method_name)
+            .is_some_and(|visibility| matches!(visibility, Visibility::Public));
+        let impl_class = class_info.method_impl_classes.get(*method_name);
+        if is_public && impl_class.is_some() {
+            out.push_str(&format!(
+                "    .quad {}\n",
+                method_symbol(impl_class.unwrap(), method_name)
             ));
         } else {
             out.push_str("    .quad 0\n");

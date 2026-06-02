@@ -40,6 +40,62 @@ pub(crate) fn emit_new_object(
     allocation::emit_new_object(class_name, args, emitter, ctx, data)
 }
 
+/// Emits `new $variable()` — the class name is held in a runtime string
+/// expression. The class registry table (`_classes_by_name`) is scanned by
+/// `__rt_new_by_name`, which allocates the object, stamps its class id, and
+/// (via the `_class_propinit_<id>` thunk indexed through `_class_propinit_ptrs`)
+/// applies the class's declared property default values. `__construct`
+/// invocation is still deferred — the typical stream-wrapper / filter use case
+/// has no required-arg constructor and relies on property defaults, which now
+/// run. The raw object pointer / null sentinel is then boxed into a Mixed cell
+/// (tag 6 = object on success, tag 8 = null on miss) so callers can carry the
+/// value through Mixed pipelines uniformly.
+pub(crate) fn emit_new_dynamic(
+    name_expr: &Expr,
+    _args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment("new $variable()");
+    crate::codegen::expr::emit_expr(name_expr, emitter, ctx, data);
+    abi::emit_call_label(emitter, "__rt_new_by_name");
+    let null_label = ctx.next_label("new_dynamic_null");
+    let done_label = ctx.next_label("new_dynamic_done");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cbz x0, {}", null_label));            // null pointer → box PHP null
+            emitter.instruction("mov x1, x0");                                  // payload_lo = object pointer
+            emitter.instruction("mov x2, #0");                                  // object Mixed cells have no high payload
+            emitter.instruction("mov x0, #6");                                  // runtime tag 6 = object
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");
+            emitter.instruction(&format!("b {}", done_label));                  // skip the null-boxing path
+            emitter.label(&null_label);
+            emitter.instruction("mov x1, #0");                                  // null payload_lo
+            emitter.instruction("mov x2, #0");                                  // null payload_hi
+            emitter.instruction("mov x0, #8");                                  // runtime tag 8 = null
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");
+            emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test rax, rax");                               // null pointer?
+            emitter.instruction(&format!("jz {}", null_label));                 // box PHP null on miss
+            emitter.instruction("mov rdi, rax");                                // payload_lo = object pointer
+            emitter.instruction("xor esi, esi");                                // object Mixed cells have no high payload
+            emitter.instruction("mov eax, 6");                                  // runtime tag 6 = object
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");
+            emitter.instruction(&format!("jmp {}", done_label));                // skip the null-boxing path
+            emitter.label(&null_label);
+            emitter.instruction("xor edi, edi");                                // null payload_lo
+            emitter.instruction("xor esi, esi");                                // null payload_hi
+            emitter.instruction("mov eax, 8");                                  // runtime tag 8 = null
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");
+            emitter.label(&done_label);
+        }
+    }
+    PhpType::Mixed
+}
+
 /// Emits a `new $class(...)`-style internal factory constrained to a parent class.
 pub(crate) fn emit_new_dynamic_object(
     class_name: &Expr,

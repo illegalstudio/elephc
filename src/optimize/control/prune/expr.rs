@@ -152,6 +152,10 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             class_name,
             args: args.into_iter().map(prune_expr).collect(),
         },
+        ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
+            name_expr: Box::new(prune_expr(*name_expr)),
+            args: args.into_iter().map(prune_expr).collect(),
+        },
         ExprKind::NewDynamicObject {
             class_name,
             fallback_class,

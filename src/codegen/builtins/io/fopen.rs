@@ -13,7 +13,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
 use crate::codegen::{abi, platform::Arch};
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 /// Emits the `fopen` builtin call, evaluating filename (arg[0]) and mode (arg[1]) in
@@ -28,6 +28,78 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("fopen()");
+    // The php:// wrapper exposes the standard streams. A statically-known
+    // php://stdin|stdout|stderr|input|output path resolves to its descriptor
+    // without touching the filesystem; the mode is still evaluated for effects.
+    if let ExprKind::StringLiteral(path) = &args[0].kind {
+        if let Some(fd) = php_standard_stream_fd(path) {
+            emit_expr(&args[1], emitter, ctx, data);
+            emit_standard_stream_resource(fd, emitter);
+            return Some(PhpType::Mixed);
+        }
+        if let Some(fd) = php_fd_stream(path) {
+            // php://fd/N opens descriptor N directly. Useful for forwarding
+            // pre-opened descriptors into the PHP stream layer.
+            emit_expr(&args[1], emitter, ctx, data);
+            emit_standard_stream_resource(fd, emitter);
+            return Some(PhpType::Mixed);
+        }
+        if is_php_memory_stream(path) {
+            // php://memory and php://temp are backed by an anonymous temp
+            // file: a real descriptor, so every fd-based stream builtin
+            // operates on them unchanged. The mode is evaluated for effects.
+            emit_expr(&args[1], emitter, ctx, data);
+            abi::emit_call_label(emitter, "__rt_tmpfile");                      // create the anonymous backing descriptor
+            box_fopen_result(emitter, ctx);
+            return Some(PhpType::Mixed);
+        }
+        if path.starts_with("php://filter/") {
+            // php://filter/[read=|write=]<filter>/resource=<path> opens the
+            // underlying resource and attaches a built-in filter to it.
+            return super::php_filter_stream::emit(_name, args, emitter, ctx, data);
+        }
+        if path.starts_with("data://") {
+            // A data:// URI is decoded at compile time and lowered to a
+            // readable stream over its payload.
+            return super::data_stream::emit(args, emitter, ctx, data);
+        }
+        if path.starts_with("phar://") {
+            // A phar:// entry is read from the archive at compile time and
+            // lowered to a readable stream over its (uncompressed) bytes,
+            // like data://. Milestone-1: read-only, uncompressed entries.
+            return super::phar_stream::emit(args, emitter, ctx, data);
+        }
+        if path.starts_with("ftp://") {
+            // An ftp:// URL is opened through the FTP handshake runtime.
+            return super::ftp_stream::emit(args, emitter, ctx, data);
+        }
+        if path.starts_with("ftps://") {
+            // ftps:// (RFC 4217 explicit FTP-over-TLS) reuses __rt_ftp_open
+            // with the _ftp_use_tls flag set; needs elephc-tls at link time.
+            return super::ftps_stream::emit(args, emitter, ctx, data);
+        }
+        if path.starts_with("http://") {
+            // An http:// URL is opened through the HTTP request runtime.
+            return super::http_stream::emit(args, emitter, ctx, data);
+        }
+        if path.starts_with("https://") {
+            // An https:// URL is opened through the TLS-secured HTTP runtime;
+            // the checker has already flagged the program as needing
+            // -lelephc_tls so the elephc-tls staticlib is linked in.
+            return super::https_stream::emit(args, emitter, ctx, data);
+        }
+        if path.starts_with("compress.zlib://") {
+            // compress.zlib:// wraps the underlying file with the zlib.inflate
+            // read filter so reads see decompressed bytes.
+            return super::compress_zlib_stream::emit(args, emitter, ctx, data);
+        }
+        if path.starts_with("compress.bzip2://") {
+            // compress.bzip2:// slurps + bz2-decompresses the underlying file
+            // through libbz2's BZ2_bzBuffToBuffDecompress, then dup2's a temp
+            // fd carrying the decompressed bytes onto the original fd.
+            return super::compress_bzip2_stream::emit(args, emitter, ctx, data);
+        }
+    }
     emit_expr(&args[0], emitter, ctx, data);
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -36,7 +108,7 @@ pub fn emit(
             emitter.instruction("mov x3, x1");                                  // move the mode pointer into the secondary runtime string-argument pair
             emitter.instruction("mov x4, x2");                                  // move the mode length into the secondary runtime string-argument pair
             emitter.instruction("ldp x1, x2, [sp], #16");                       // restore the filename ptr/len after evaluating the mode expression
-            abi::emit_call_label(emitter, "__rt_fopen");                        // open the file through the target-aware runtime helper
+            abi::emit_call_label(emitter, "__rt_fopen_maybe_phar");             // open the file (routes a non-literal phar:// read URL to the runtime phar reader, else __rt_fopen)
         }
         Arch::X86_64 => {
             abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // preserve the filename ptr/len while the mode expression is evaluated
@@ -44,17 +116,81 @@ pub fn emit(
             emitter.instruction("mov rdi, rax");                                // move the mode pointer into the x86_64 secondary runtime string-argument slot
             emitter.instruction("mov rsi, rdx");                                // move the mode length into the x86_64 secondary runtime string-argument slot
             abi::emit_pop_reg_pair(emitter, "rax", "rdx");                      // restore the filename ptr/len after evaluating the mode expression
-            abi::emit_call_label(emitter, "__rt_fopen");                        // open the file through the target-aware runtime helper
+            abi::emit_call_label(emitter, "__rt_fopen_maybe_phar");             // open the file (routes a non-literal phar:// read URL to the runtime phar reader, else __rt_fopen)
+        }
+    }
+    // The 3rd ($use_include_path) and 4th ($context) args are accepted
+    // for source compatibility but not yet honored. Evaluate them after
+    // the open so any side effects (e.g. argument expressions with
+    // function calls) are observed — saving x0 across the evaluations.
+    if args.len() >= 3 {
+        match emitter.target.arch {
+            Arch::AArch64 => abi::emit_push_reg(emitter, "x0"),
+            Arch::X86_64 => abi::emit_push_reg(emitter, "rax"),
+        }
+        for arg in &args[2..] {
+            emit_expr(arg, emitter, ctx, data);
+        }
+        match emitter.target.arch {
+            Arch::AArch64 => abi::emit_pop_reg(emitter, "x0"),
+            Arch::X86_64 => abi::emit_pop_reg(emitter, "rax"),
         }
     }
     box_fopen_result(emitter, ctx);
     Some(PhpType::Mixed)
 }
 
+/// Maps a `php://` standard-stream URL to its file descriptor. The `php://memory`
+/// and `php://temp` streams are handled by [`is_php_memory_stream`]; `php://filter`
+/// is handled elsewhere.
+fn php_standard_stream_fd(path: &str) -> Option<i64> {
+    match path {
+        "php://stdin" | "php://input" => Some(0),
+        "php://stdout" | "php://output" => Some(1),
+        "php://stderr" => Some(2),
+        _ => None,
+    }
+}
+
+/// Recognizes the `php://memory` and `php://temp` in-memory stream URLs.
+/// `php://temp` accepts an optional `/maxmemory:N` suffix, which elephc ignores
+/// because the stream is always backed by an anonymous temp file.
+fn is_php_memory_stream(path: &str) -> bool {
+    path == "php://memory" || path == "php://temp" || path.starts_with("php://temp/")
+}
+
+/// Recognizes `php://fd/N` URLs and returns the embedded descriptor N.
+/// The descriptor is treated as already open — elephc trusts the caller
+/// to have prepared it through whatever side channel (e.g. an inherited
+/// file descriptor from a parent process or a previously-opened
+/// `dup`/`pipe` pair).
+fn php_fd_stream(path: &str) -> Option<i64> {
+    let suffix = path.strip_prefix("php://fd/")?;
+    suffix.parse::<i64>().ok()
+}
+
+/// Boxes a well-known descriptor as a PHP stream `resource`.
+fn emit_standard_stream_resource(fd: i64, emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov x1, #{}", fd));                   // payload = the standard-stream descriptor
+            emitter.instruction("mov x2, #0");                                  // resource mixed payloads have no high word
+            emitter.instruction("mov x0, #9");                                  // runtime tag 9 = resource
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov edi, {}", fd));                   // payload = the standard-stream descriptor
+            emitter.instruction("xor esi, esi");                                // resource mixed payloads have no high word
+            emitter.instruction("mov eax, 9");                                  // runtime tag 9 = resource
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");
+        }
+    }
+}
+
 /// Boxes the fopen result: if `x0`/`rax` is negative, emits PHP false (tag 3, payload 0);
 /// otherwise emits a PHP resource (tag 9, descriptor in low word). Uses `__rt_mixed_from_value`
 /// via ABI calling convention.
-fn box_fopen_result(emitter: &mut Emitter, ctx: &mut Context) {
+pub(super) fn box_fopen_result(emitter: &mut Emitter, ctx: &mut Context) {
     let false_label = ctx.next_label("fopen_false");
     let done_label = ctx.next_label("fopen_done");
 

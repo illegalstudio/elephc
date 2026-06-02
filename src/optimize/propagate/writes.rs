@@ -393,6 +393,7 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
         | ExprKind::ClosureCall { .. }
         | ExprKind::ExprCall { .. }
         | ExprKind::NewObject { .. }
+        | ExprKind::NewDynamic { .. }
         | ExprKind::NewDynamicObject { .. }
         | ExprKind::NewScopedObject { .. }
         | ExprKind::MethodCall { .. }

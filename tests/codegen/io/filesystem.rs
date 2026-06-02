@@ -12,6 +12,32 @@ use super::*;
 /// Verifies mkdir, rmdir, and is_dir by creating a directory, confirming it
 /// exists, removing it, and confirming it no longer exists.
 #[test]
+fn test_fread_inside_user_function_does_not_overwrite_other_locals() {
+    // Regression for a frame-layout bug: when fread() was used inside a user
+    // function and its result was assigned to a local variable, the codegen
+    // inference fell back to PhpType::Mixed (8-byte slot) instead of Str
+    // (16-byte). The store path still wrote the string as a 16-byte (ptr+len)
+    // pair, so the second 8 bytes clobbered the adjacent local — typically
+    // the just-opened $f resource — and the next fclose($f) crashed because
+    // it tried to mixed-unbox an integer length.
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("readfn.txt", "elephc");
+function read_back() {
+    $f = fopen("readfn.txt", "r");
+    $r = fread($f, 64);
+    fclose($f);
+    return $r;
+}
+echo read_back();
+unlink("readfn.txt");
+"#,
+    );
+    assert_eq!(out, "elephc");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_mkdir_rmdir() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -161,6 +187,34 @@ rmdir("gd");
 /// Verifies tempnam creates a unique file in the given directory and that it
 /// exists immediately, then cleans up the temporary file.
 #[test]
+fn test_glob_stream_wrapper_iterates_matches() {
+    // Phase 6: opendir("glob://pattern") returns a synthetic directory
+    // resource backed by libc glob; readdir iterates the matches, closedir
+    // releases the gl_pathv, rewinddir restarts the iteration. libc glob
+    // returns the matches in sorted order on every target we support.
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("gw");
+file_put_contents("gw/a.txt", "1");
+file_put_contents("gw/b.txt", "2");
+$h = opendir("glob://gw/*.txt");
+$first = readdir($h);
+$second = readdir($h);
+$end = readdir($h);
+rewinddir($h);
+$first_again = readdir($h);
+closedir($h);
+echo $first . "|" . $second . "|" . ($end === false ? "end" : "x") . "|" . $first_again;
+unlink("gw/a.txt");
+unlink("gw/b.txt");
+rmdir("gw");
+"#,
+    );
+    assert_eq!(out, "gw/a.txt|gw/b.txt|end|gw/a.txt");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_tempnam() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -171,4 +225,24 @@ unlink($tmp);
     );
     assert_eq!(out, "ok");
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_disk_space_positive_and_ordered() {
+    let out = compile_and_run(
+        r#"<?php
+$free = disk_free_space("/");
+$total = disk_total_space("/");
+echo $free > 0 ? "f" : "F";
+echo $total > 0 ? "t" : "T";
+echo $total >= $free ? "o" : "O";
+"#,
+    );
+    assert_eq!(out, "fto");
+}
+
+#[test]
+fn test_disk_free_space_invalid_path_returns_zero() {
+    let out = compile_and_run(r#"<?php var_dump(disk_free_space("/no/such/path/xyz123"));"#);
+    assert_eq!(out, "float(0)\n");
 }

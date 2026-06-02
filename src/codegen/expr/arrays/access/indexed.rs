@@ -360,7 +360,7 @@ pub(crate) fn emit_array_access_with_loaded_base(
         if boxed_assoc_fallback {
             objects_boxed_null_for_array_access(emitter);
         } else {
-            abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), i64::MAX - 1); // materialize the shared null sentinel for associative-array misses
+            emit_typed_null_fallback(emitter, &val_ty); // type-aware null: empty Str / 0.0 Float / int sentinel (no stale ptr/len/fp regs)
         }
         emitter.label(&done);
         return if box_assoc_result { PhpType::Mixed } else { val_ty };
@@ -426,16 +426,18 @@ pub(crate) fn emit_array_access_with_loaded_base(
     }
 
     match &elem_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable => match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip 24-byte array header to reach data
-                emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, result_reg)); // load element at array + index*8
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Resource(_) => {
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip 24-byte array header to reach data
+                    emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, result_reg)); // load element at array + index*8
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip 24-byte array header to reach data
+                    emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, result_reg)); // load element at array + index*8
+                }
             }
-            Arch::X86_64 => {
-                emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip 24-byte array header to reach data
-                emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, result_reg)); // load element at array + index*8
-            }
-        },
+        }
         PhpType::Float => match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip 24-byte array header to reach the contiguous float payload
@@ -492,7 +494,7 @@ pub(crate) fn emit_array_access_with_loaded_base(
     if boxed_indexed_base || matches!(elem_ty, PhpType::Mixed | PhpType::Union(_)) {
         objects_boxed_null_for_array_access(emitter);
     } else {
-        abi::emit_load_int_immediate(emitter, result_reg, 0x7fff_ffff_ffff_fffe); // materialize the runtime null sentinel for out-of-bounds access
+        emit_typed_null_fallback(emitter, &elem_ty); // type-aware null: empty Str / 0.0 Float / int sentinel (no stale ptr/len/fp regs)
     }
     emitter.label(&ok_label);
 
@@ -530,6 +532,38 @@ fn indexed_array_element_type(arr_ty: &PhpType, box_nullable_base: bool) -> (Php
 /// (i64::MAX - 1) into the integer result register and boxes it as a Mixed value using
 /// `emit_box_current_value_as_mixed`. Used for out-of-bounds indexed access and nullable
 /// associative array misses when the result must be a Mixed cell.
+/// Materializes a type-appropriate "null" for an out-of-bounds indexed read or
+/// an associative-array miss when the element type is a concrete scalar (not a
+/// boxed Mixed/Union). Without this, only the integer result register is set on
+/// the miss path, leaving the string (ptr/len) or float result registers
+/// holding STALE values from a prior expression — manifesting as duplicated
+/// output (Str) or a wrong value (Float). For `Str`: a valid empty string
+/// (`_empty_str` pointer, length 0) so any echo/strlen path is safe regardless
+/// of which registers are live at the call site. For `Float`: 0.0. Otherwise:
+/// the existing integer null sentinel. Does not allocate or alias array
+/// storage, so it is COW/ownership-safe on every release path.
+fn emit_typed_null_fallback(emitter: &mut Emitter, ty: &PhpType) {
+    match ty {
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            abi::emit_symbol_address(emitter, ptr_reg, "_empty_str"); // valid readable pointer for a 0-length string
+            match emitter.target.arch {
+                Arch::AArch64 => emitter.instruction(&format!("mov {}, #0", len_reg)), // string length = 0
+                Arch::X86_64 => emitter.instruction(&format!("xor {}, {}", len_reg, len_reg)), // string length = 0
+            }
+        }
+        PhpType::Float => match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction("fmov d0, xzr"),               // float null → 0.0
+            Arch::X86_64 => emitter.instruction("xorps xmm0, xmm0"),            // float null → 0.0
+        },
+        _ => abi::emit_load_int_immediate(
+            emitter,
+            abi::int_result_reg(emitter),
+            0x7fff_ffff_ffff_fffe,
+        ), // integer/bool/resource/callable null sentinel
+    }
+}
+
 fn objects_boxed_null_for_array_access(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(
         emitter,
