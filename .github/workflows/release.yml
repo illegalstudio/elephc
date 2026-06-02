@@ -130,6 +130,10 @@ jobs:
               (testpath/"hello.php").write('<?php echo "hello";')
               system bin/"elephc", "hello.php"
               assert_equal "hello", shell_output("#{testpath}/hello")
+
+              (testpath/"https.php").write('<?php $h = fopen("https://example.com/", "r"); echo is_resource($h);')
+              system bin/"elephc", "https.php"
+              assert_predicate testpath/"https", :exist?
             end
           end
           EOF
