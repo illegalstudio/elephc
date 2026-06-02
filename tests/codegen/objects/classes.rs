@@ -49,9 +49,9 @@ echo gettype($obj) . "|" . gettype($obj2) . "|" . gettype($bad);
 
 #[test]
 fn test_class_dynamic_instantiation_runs_property_defaults() {
-    // `new $var()` must apply declared property defaults (via the per-class
-    // _class_propinit_<id> thunk invoked by __rt_new_by_name), matching the
-    // normal `new ClassName()` path. Previously these read back as 0/null.
+    // `new $var()` must apply declared property defaults through the same
+    // allocation path as `new ClassName()`. Previously these read back as
+    // 0/null.
     let out = compile_and_run(
         r#"<?php
 class C {
@@ -98,6 +98,26 @@ echo count($a) . ":" . $a[0];
 "#,
     );
     assert_eq!(out, "2:x");
+}
+
+/// Verifies that dynamic class-string lookup follows PHP's case-insensitive class rules.
+#[test]
+fn test_class_dynamic_instantiation_is_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+function pick_class(): string {
+    return "mixedcase";
+}
+class MixedCase {
+    public int $x = 0;
+    public function __construct(int $x) { $this->x = $x; }
+}
+$cls = pick_class();
+$o = new $cls(12);
+echo gettype($o) . ":" . $o->x;
+"#,
+    );
+    assert_eq!(out, "object:12");
 }
 
 #[test]

@@ -9,6 +9,7 @@
 //! - These helpers must stay consistent with type checker signatures and runtime value layouts.
 
 use crate::codegen::context::Context;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{merge_array_key_types, normalized_array_key_type, FunctionSig, PhpType};
 
@@ -395,10 +396,11 @@ fn literal_dynamic_new_object_type(name_expr: &Expr, ctx: Option<&Context>) -> O
         return None;
     };
     let ctx = ctx?;
-    let normalized = class_name.trim_start_matches('\\');
+    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
     ctx.classes
-        .get_key_value(normalized)
-        .map(|(class_name, _)| PhpType::Object(class_name.clone()))
+        .keys()
+        .find(|existing| php_symbol_key(existing) == class_key)
+        .map(|class_name| PhpType::Object(class_name.clone()))
 }
 
 /// Infers the return type of a pipe (`|>`) expression given the callable at the pipe's RHS.

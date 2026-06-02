@@ -448,7 +448,7 @@ $bad = new $missing();                   // PHP null
 echo gettype($bad);                      // "NULL"
 ```
 
-elephc resolves the class name against compile-time class metadata. A match dispatches through the same allocation path as `new ClassName()`, including constructor calls, declared property defaults, and supported built-in/SPL runtime storage initialization. An unknown name currently yields PHP `null`; the missing-class fatal path is not yet tightened.
+elephc resolves the class name case-insensitively against compile-time class metadata, matching PHP class lookup. A match dispatches through the same allocation path as `new ClassName()`, including constructor calls, declared property defaults, and supported built-in/SPL runtime storage initialization. An unknown name currently yields PHP `null`; the missing-class fatal path is not yet tightened.
 
 ## Override rules
 Same parameter count, same pass-by-reference positions, same default layout, same variadic shape.

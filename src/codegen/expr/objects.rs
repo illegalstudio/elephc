@@ -92,10 +92,11 @@ fn resolve_literal_dynamic_new_class_name(name_expr: &Expr, ctx: &Context) -> Op
     let ExprKind::StringLiteral(class_name) = &name_expr.kind else {
         return None;
     };
-    let normalized = class_name.trim_start_matches('\\');
+    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
     ctx.classes
-        .get_key_value(normalized)
-        .map(|(class_name, _)| class_name.clone())
+        .keys()
+        .find(|existing| php_symbol_key(existing) == class_key)
+        .cloned()
 }
 
 /// Returns class names in stable class-id order for deterministic dynamic-new dispatch.
@@ -229,7 +230,7 @@ fn known_dynamic_new_builtin_class_names() -> &'static [&'static str] {
     ]
 }
 
-/// Emits a branch to `matched_label` when the saved dynamic class-string equals `class_name`.
+/// Emits a branch to `matched_label` when the saved dynamic class-string matches `class_name`.
 fn emit_branch_if_dynamic_new_class_name_matches(
     class_name: &str,
     matched_label: &str,
@@ -243,18 +244,18 @@ fn emit_branch_if_dynamic_new_class_name_matches(
             abi::emit_load_temporary_stack_slot(emitter, "x2", 8);
             abi::emit_symbol_address(emitter, "x3", &candidate_label);
             abi::emit_load_int_immediate(emitter, "x4", candidate_len as i64);
-            abi::emit_call_label(emitter, "__rt_str_eq");
-            emitter.instruction("cmp x0, #0");                                  // did the dynamic class-string match this exact AOT class name?
-            emitter.instruction(&format!("b.ne {}", matched_label));            // select this class allocation path when the class-string matches
+            abi::emit_call_label(emitter, "__rt_strcasecmp");
+            emitter.instruction("cmp x0, #0");                                  // did the dynamic class-string match this AOT class name case-insensitively?
+            emitter.instruction(&format!("b.eq {}", matched_label));            // select this class allocation path when the class-string matches
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(emitter, "rdi", 0);
             abi::emit_load_temporary_stack_slot(emitter, "rsi", 8);
             abi::emit_symbol_address(emitter, "rdx", &candidate_label);
             abi::emit_load_int_immediate(emitter, "rcx", candidate_len as i64);
-            abi::emit_call_label(emitter, "__rt_str_eq");
-            emitter.instruction("test rax, rax");                               // did the dynamic class-string match this exact AOT class name?
-            emitter.instruction(&format!("jne {}", matched_label));             // select this class allocation path when the class-string matches
+            abi::emit_call_label(emitter, "__rt_strcasecmp");
+            emitter.instruction("test rax, rax");                               // did the dynamic class-string match this AOT class name case-insensitively?
+            emitter.instruction(&format!("je {}", matched_label));              // select this class allocation path when the class-string matches
         }
     }
 }
