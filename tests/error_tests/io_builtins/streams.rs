@@ -261,12 +261,18 @@ fn test_error_stream_is_local_wrong_args() {
     );
 }
 
-/// Verifies the invalid-call diagnostic for error stream get contents wrong args.
+/// Verifies the invalid-call diagnostic for error stream get contents wrong args:
+/// both zero args and more than three args are rejected (the optional `$length`
+/// and `$offset` widened the arity to 1–3).
 #[test]
 fn test_error_stream_get_contents_wrong_args() {
     expect_error(
         "<?php stream_get_contents();",
-        "stream_get_contents() takes exactly 1 argument",
+        "stream_get_contents() takes 1 to 3 arguments",
+    );
+    expect_error(
+        "<?php stream_get_contents(STDIN, 1, 2, 3);",
+        "stream_get_contents() takes 1 to 3 arguments",
     );
 }
 

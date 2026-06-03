@@ -42,7 +42,7 @@ code should guard failed opens before using the handle.
 | `readline()` | `readline([$prompt]): string` | Read a line from standard input. |
 | `readfile()` | `readfile($filename): int\|false` | Open a path or wrapper URL, stream it to stdout, and return copied bytes; returns `false` when open fails. |
 | `fpassthru()` | `fpassthru(resource $handle): int` | Stream the remaining bytes of an open handle to stdout, returning `-1` on read failure. |
-| `stream_get_contents()` | `stream_get_contents(resource $handle): string` | Read all remaining bytes from the current position. The optional `$length` and `$offset` parameters are not yet supported. |
+| `stream_get_contents()` | `stream_get_contents(resource $handle, ?int $length = null, int $offset = -1): string` | Read remaining bytes from the stream. `$offset >= 0` seeks there first (seekable streams / user wrappers via `stream_seek()`); a finite `$length` reads at most that many bytes (a `null`/negative `$length` reads to EOF). On a non-seekable stream (e.g. a socket) a finite `$length` performs a single bounded read, so it may return fewer bytes than the requested length in one call. |
 | `stream_copy_to_stream()` | `stream_copy_to_stream(resource $from, resource $to): int` | Copy all remaining bytes from one stream to another. The optional `$length` and `$offset` parameters are not yet supported. |
 | `stream_get_line()` | `stream_get_line(resource $handle, int $length [, string $ending]): string` | Read up to `$length` bytes, stopping at and consuming `$ending` when supplied. |
 | `flock()` | `flock(resource $handle, int $op, &$would_block = null): bool` | Advisory locking. `LOCK_SH`, `LOCK_EX`, `LOCK_UN`, and `LOCK_NB` are supported; user wrappers route through `stream_lock(int $operation)`. |

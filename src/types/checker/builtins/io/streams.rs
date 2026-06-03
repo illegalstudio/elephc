@@ -369,13 +369,16 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Bool))
         }
         "stream_get_contents" => {
-            if args.len() != 1 {
+            if args.is_empty() || args.len() > 3 {
                 return Err(CompileError::new(
                     span,
-                    "stream_get_contents() takes exactly 1 argument",
+                    "stream_get_contents() takes 1 to 3 arguments",
                 ));
             }
             ensure_stream_resource(checker, name, &args[0], env)?;
+            for arg in &args[1..] {
+                checker.infer_type(arg, env)?;
+            }
             Ok(Some(PhpType::Str))
         }
         "stream_get_meta_data" => {

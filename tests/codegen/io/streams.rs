@@ -1255,6 +1255,35 @@ unlink("sgc_eof.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the optional `$length` and `$offset` arguments of
+/// `stream_get_contents()`: a finite `$length` caps the read (`Hello`); an
+/// `$offset >= 0` seeks before reading (`World` for length 5 from offset 7,
+/// `World!` for read-all from offset 7); a negative/omitted `$length` reads to
+/// EOF; and a capped read honors the current position after a prior `fread`
+/// (`llo`). Output matches PHP 8.5 byte-for-byte (verified via `php -r`).
+#[test]
+fn test_stream_get_contents_length_and_offset() {
+    let out = compile_and_run(
+        r#"<?php
+$m = fopen("php://memory", "r+");
+fwrite($m, "Hello, World!");
+rewind($m);
+echo "[" . stream_get_contents($m, 5) . "]";
+rewind($m);
+echo "[" . stream_get_contents($m, 5, 7) . "]";
+rewind($m);
+echo "[" . stream_get_contents($m, -1, 7) . "]";
+rewind($m);
+echo "[" . stream_get_contents($m) . "]";
+rewind($m);
+fread($m, 2);
+echo "[" . stream_get_contents($m, 3) . "]";
+fclose($m);
+"#,
+    );
+    assert_eq!(out, "[Hello][World][World!][Hello, World!][llo]");
+}
+
 /// Verifies compiled PHP output for stream copy to stream copies all bytes.
 #[test]
 fn test_stream_copy_to_stream_copies_all_bytes() {

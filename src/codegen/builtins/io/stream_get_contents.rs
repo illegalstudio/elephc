@@ -1,32 +1,49 @@
 //! Purpose:
 //! Emits PHP `stream_get_contents` calls.
-//! Reads all remaining bytes from a stream resource into an elephc string.
+//! Reads bytes from a stream resource into an elephc string, honoring the
+//! optional `$length` (maximum bytes) and `$offset` (seek-before-read) args.
 //!
 //! Called from:
 //! - `crate::codegen::builtins::io::emit()`.
 //!
 //! Key details:
-//! - Normal descriptors delegate to the efficient `__rt_stream_get_contents`
-//!   runtime helper (syscall loop into `_concat_buf`).
-//! - Synthetic user-wrapper descriptors (`>= 0x40000000`) are drained by a
-//!   COMPILED, **feof-gated** loop emitted here: each iteration calls
-//!   `__rt_feof` first and stops at EOF, then `__rt_fread`s one chunk and
-//!   copies it into `_user_wrapper_drain_buf`. Checking feof FIRST is what
-//!   makes this safe — it mirrors `while(!feof($f)) $b .= fread($f,N)`, the one
-//!   draining form that works. A read-then-check-empty loop instead forces an
-//!   extra read AT EOF; the wrapper's `stream_read` then returns an empty
-//!   `substr` heap value whose handling frees the caller's resource cell
-//!   (a core heap/refcount bug). Each owned chunk is released via
-//!   `__rt_decref_any` (range-checked, no-ops on non-heap).
+//! - With no finite `$length`, a normal descriptor delegates to the
+//!   `__rt_stream_get_contents` read-all helper, while a synthetic user-wrapper
+//!   descriptor (`>= 0x40000000`) is drained by a feof-gated compiled loop
+//!   (see `emit_read_all_from_fd`). Checking feof FIRST avoids the corrupting
+//!   empty read at EOF that frees the caller's resource cell.
+//! - A finite `$length` routes through the wrapper-aware `__rt_fread`, which
+//!   reads up to `$length` bytes. This is a single bounded read: on a
+//!   non-seekable stream (e.g. a socket) it may return fewer bytes than PHP's
+//!   fill-to-`$length` loop — a documented v1 limitation; on a regular file it
+//!   matches PHP exactly.
+//! - `$offset >= 0` seeks the descriptor before reading (lseek for a normal fd,
+//!   the wrapper's `stream_seek` for a synthetic fd); a literal `null`/negative
+//!   `$length` means "read to EOF" and `$offset < 0`/omitted means "do not seek".
 
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::expr::emit_expr;
 use crate::codegen::{abi, platform::Arch};
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 use super::stream_arg::emit_stream_fd_arg;
+
+/// Returns true when a `$length`/`$offset` argument is a compile-time literal
+/// meaning "read to EOF" / "do not seek" — i.e. `null` or a negative integer
+/// literal (`-1`, the PHP default; the parser models `-1` as `Negate(IntLiteral)`).
+/// Such literals have no side effects, so the caller can skip evaluating them and
+/// treat the parameter as absent.
+fn is_read_all_or_no_seek(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Null => true,
+        ExprKind::IntLiteral(n) => *n < 0,
+        ExprKind::Negate(inner) => matches!(inner.kind, ExprKind::IntLiteral(_)),
+        _ => false,
+    }
+}
 
 /// Emits codegen for PHP `stream_get_contents()` stream and I/O builtin calls.
 pub fn emit(
@@ -38,6 +55,117 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("stream_get_contents()");
     emit_stream_fd_arg("stream_get_contents", &args[0], emitter, ctx, data);
+
+    let has_len = args.len() >= 2 && !is_read_all_or_no_seek(&args[1]);
+    let has_off = args.len() >= 3 && !is_read_all_or_no_seek(&args[2]);
+
+    if !has_len && !has_off {
+        // Fast path: read every remaining byte from the current position.
+        emit_read_all_from_fd(emitter, ctx);
+        return Some(PhpType::Str);
+    }
+
+    // General path: stash the fd, evaluate $length then $offset (PHP source
+    // order), optionally seek, then read. The 32-byte frame stays 16-aligned
+    // so the x86_64 `call lseek` below lands on an aligned stack.
+    let skip_seek = ctx.next_label("sgc_skip_seek");
+    let wrap_seek = ctx.next_label("sgc_wrap_seek");
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("sub sp, sp, #32"),                // frame: [sp,#0]=fd, [sp,#8]=max_len (16-aligned)
+        Arch::X86_64 => emitter.instruction("sub rsp, 32"),                     // frame: [rsp+0]=fd, [rsp+8]=max_len (16-aligned)
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("str x0, [sp, #0]"),               // save the stream fd
+        Arch::X86_64 => emitter.instruction("mov QWORD PTR [rsp + 0], rax"),    // save the stream fd
+    }
+    if has_len {
+        emit_expr(&args[1], emitter, ctx, data); // evaluate $length first (source order)
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction("str x0, [sp, #8]"),           // save the requested max byte count
+            Arch::X86_64 => emitter.instruction("mov QWORD PTR [rsp + 8], rax"), // save the requested max byte count
+        }
+    }
+    if has_off {
+        emit_expr(&args[2], emitter, ctx, data); // evaluate $offset after $length
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("cmp x0, #0");                              // a negative offset means "do not seek"
+                emitter.instruction(&format!("b.lt {}", skip_seek));            // skip the seek on a negative offset
+                emitter.instruction("mov x1, x0");                              // offset → seek arg1
+                emitter.instruction("mov x2, #0");                              // whence = SEEK_SET
+                emitter.instruction("ldr x0, [sp, #0]");                        // reload the fd → seek arg0
+                emitter.instruction("mov w9, #0x4000");                         // high half of USER_WRAPPER_FD_BASE
+                emitter.instruction("lsl w9, w9, #16");                         // form 0x40000000
+                emitter.instruction("cmp x0, x9");                              // synthetic user-wrapper fd?
+                emitter.instruction(&format!("b.ge {}", wrap_seek));            // wrapper: dispatch stream_seek
+                emitter.syscall(199);                                           // lseek(fd, offset, SEEK_SET); result ignored (best effort)
+                emitter.instruction(&format!("b {}", skip_seek));               // normal fd seeked
+                emitter.label(&wrap_seek);
+                abi::emit_call_label(emitter, "__rt_user_wrapper_fseek");       // wrapper stream_seek(offset, SEEK_SET)
+                emitter.label(&skip_seek);
+            }
+            Arch::X86_64 => {
+                emitter.instruction("cmp rax, 0");                              // a negative offset means "do not seek"
+                emitter.instruction(&format!("jl {}", skip_seek));              // skip the seek on a negative offset
+                emitter.instruction("mov rsi, rax");                            // offset → seek arg1
+                emitter.instruction("mov rdx, 0");                              // whence = SEEK_SET
+                emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the fd → seek arg0
+                emitter.instruction("mov r9d, 0x40000000");                     // USER_WRAPPER_FD_BASE
+                emitter.instruction("cmp rdi, r9");                             // synthetic user-wrapper fd?
+                emitter.instruction(&format!("jge {}", wrap_seek));             // wrapper: dispatch stream_seek
+                emitter.instruction("call lseek");                              // lseek(fd, offset, SEEK_SET); result ignored (best effort)
+                emitter.instruction(&format!("jmp {}", skip_seek));             // normal fd seeked
+                emitter.label(&wrap_seek);
+                abi::emit_call_label(emitter, "__rt_user_wrapper_fseek");       // wrapper stream_seek(offset, SEEK_SET)
+                emitter.label(&skip_seek);
+            }
+        }
+    }
+    if has_len {
+        // Bounded read of up to $length bytes via the wrapper-aware helper.
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("ldr x0, [sp, #0]");                        // reload the fd → fread arg0
+                emitter.instruction("ldr x1, [sp, #8]");                        // reload max_len → fread arg1
+                emitter.instruction("add sp, sp, #32");                         // release the frame before the read call
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the fd → fread arg0
+                emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // reload max_len → fread arg1
+                emitter.instruction("add rsp, 32");                             // release the frame before the read call
+            }
+        }
+        abi::emit_call_label(emitter, "__rt_fread"); // up-to-$length read (x1=ptr,x2=len / rax,rdx)
+    } else {
+        // $offset only: reload the fd and read every remaining byte.
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("ldr x0, [sp, #0]");                        // reload the fd for the read-all path
+                emitter.instruction("add sp, sp, #32");                         // release the frame
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // reload the fd for the read-all path
+                emitter.instruction("add rsp, 32");                             // release the frame
+            }
+        }
+        emit_read_all_from_fd(emitter, ctx);
+    }
+    Some(PhpType::Str)
+}
+
+/// Reads every remaining byte from the descriptor in the int-result register
+/// (`x0`/`rax`) into an elephc string, returning the pointer/length in the
+/// standard string registers (`x1`/`x2` on AArch64, `rax`/`rdx` on x86_64).
+///
+/// A normal fd delegates to the efficient `__rt_stream_get_contents` syscall
+/// loop. A synthetic user-wrapper fd (`>= 0x40000000`) is drained by a
+/// **feof-gated** compiled loop: each iteration checks `__rt_feof` first and
+/// stops at EOF, then `__rt_fread`s one chunk and copies it into
+/// `_user_wrapper_drain_buf`. Checking feof first mirrors the only safe drain
+/// form (`while(!feof($f)) $b .= fread($f,N)`); a read-then-check-empty loop
+/// forces an extra read at EOF whose empty `substr` result frees the caller's
+/// resource cell. Each owned chunk is released via `__rt_decref_any`.
+fn emit_read_all_from_fd(emitter: &mut Emitter, ctx: &mut Context) {
     let wrapper_label = ctx.next_label("sgc_wrapper");
     let loop_label = ctx.next_label("sgc_wrap_loop");
     let copy_label = ctx.next_label("sgc_wrap_copy");
@@ -149,5 +277,4 @@ pub fn emit(
             emitter.label(&done_label);
         }
     }
-    Some(PhpType::Str)
 }
