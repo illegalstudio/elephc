@@ -42,7 +42,7 @@ pub(super) fn check_builtin(
             if let Some(crate::parser::ast::ExprKind::StringLiteral(url)) =
                 args.first().map(|a| &a.kind)
             {
-                if url.starts_with("https://") {
+                if url.starts_with("https://") || url.starts_with("ftps://") {
                     checker.require_builtin_library("elephc_tls");
                 }
             }

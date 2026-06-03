@@ -74,6 +74,11 @@ pub fn emit(
             emit_url_slurp_and_box(emitter, ctx);
             return Some(PhpType::Mixed);
         }
+        if url.starts_with("ftps://") {
+            super::ftps_stream::emit_open_fd(args, emitter, data);
+            emit_url_slurp_and_box(emitter, ctx);
+            return Some(PhpType::Mixed);
+        }
         if url.starts_with("ftp://") {
             super::ftp_stream::emit_open_fd(args, emitter, data);
             emit_url_slurp_and_box(emitter, ctx);

@@ -3087,6 +3087,28 @@ fn test_fopen_ftps_unreachable_host_is_false() {
     assert_eq!(out, "false");
 }
 
+/// `file_get_contents("ftps://...")` reuses the ftps:// wrapper open plus the
+/// shared slurp path; an unreachable host fails the open so the result is PHP
+/// false. Also exercises the elephc-tls linkage the checker requires for ftps.
+#[test]
+fn test_file_get_contents_over_ftps_unreachable_is_false() {
+    let out = compile_and_run(
+        r#"<?php $r = @file_get_contents("ftps://127.0.0.1:1/x"); echo $r === false ? "false" : "got";"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// `file_get_contents("ftp://...")` over an unreachable host returns PHP false
+/// (the ftp:// wrapper open fails), completing the URL-scheme coverage next to
+/// the http:// success test.
+#[test]
+fn test_file_get_contents_over_ftp_unreachable_is_false() {
+    let out = compile_and_run(
+        r#"<?php $r = @file_get_contents("ftp://127.0.0.1:1/x"); echo $r === false ? "false" : "got";"#,
+    );
+    assert_eq!(out, "false");
+}
+
 /// Verifies compiled PHP output for fopen http invalid url is false.
 #[test]
 fn test_fopen_http_invalid_url_is_false() {
