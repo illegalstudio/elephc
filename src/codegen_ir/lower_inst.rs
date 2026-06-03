@@ -83,6 +83,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StrCharAt => strings::lower_str_char_at(ctx, &inst),
         Op::ArrayNew => arrays::lower_array_new(ctx, &inst),
         Op::ArrayLen => arrays::lower_array_len(ctx, &inst),
+        Op::ArrayGet => arrays::lower_array_get(ctx, &inst),
         Op::ArrayPush => arrays::lower_array_push(ctx, &inst),
         Op::Call => lower_direct_call(ctx, &inst),
         Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),

@@ -247,6 +247,9 @@ fn ir_backend_handles_string_ownership_ops() {
 fn ir_backend_handles_basic_indexed_arrays() {
     for (name, source, expected) in [
         ("array_count_ints", "<?php $a = [1, 2, 3]; echo count($a);", "3"),
+        ("array_get_int", "<?php $a = [10, 20]; echo $a[1];", "20"),
+        ("array_get_oob_null", "<?php $a = [10]; echo $a[9];", ""),
+        ("array_get_negative_null", "<?php $a = [10]; echo $a[-1];", ""),
         ("array_count_strings", "<?php $a = [\"a\", \"b\"]; echo count($a);", "2"),
         (
             "array_push_grows_local",
@@ -256,6 +259,13 @@ fn ir_backend_handles_basic_indexed_arrays() {
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);
     }
+
+    let dynamic_source = "<?php $a = [10, 20, 30]; echo $a[$argc];";
+    assert_eq!(compile_and_run_ir_backend("array_get_dynamic_one", dynamic_source), "20");
+    assert_eq!(
+        compile_and_run_ir_backend_with_args("array_get_dynamic_two", dynamic_source, &["extra"]),
+        "30"
+    );
 }
 
 /// Compiles `source` with `--ir-backend`, runs the output binary, and returns stdout.

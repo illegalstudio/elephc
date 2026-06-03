@@ -45,6 +45,18 @@ pub(super) fn lower_array_len(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     store_if_result(ctx, inst)
 }
 
+/// Lowers an indexed-array element read with PHP null-sentinel fallback on misses.
+pub(super) fn lower_array_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let index = expect_operand(inst, 1)?;
+    let elem_ty = indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
+    require_single_word_array_get_result(&elem_ty, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_array_get_aarch64(ctx, inst, array, index),
+        Arch::X86_64 => lower_array_get_x86_64(ctx, inst, array, index),
+    }
+}
+
 /// Lowers an indexed-array append through the runtime helper for the value type.
 pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
@@ -60,6 +72,64 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
         ctx.store_value_to_local(slot, array)?;
     }
     Ok(())
+}
+
+/// Lowers an indexed-array element read for AArch64 targets.
+fn lower_array_get_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    index: ValueId,
+) -> Result<()> {
+    let array_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let len_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(array, array_reg)?;
+    ctx.load_value_to_reg(index, result_reg)?;
+    let null_label = ctx.next_label("array_get_null");
+    let done_label = ctx.next_label("array_get_done");
+
+    ctx.emitter.instruction(&format!("cmp {}, #0", result_reg));                // check whether the indexed-array offset is negative
+    ctx.emitter.instruction(&format!("b.lt {}", null_label));                   // negative indexed-array offsets read as null
+    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
+    ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg));       // compare the requested offset against the indexed-array length
+    ctx.emitter.instruction(&format!("b.ge {}", null_label));                   // out-of-range indexed-array offsets read as null
+    ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
+    ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, result_reg)); // load the selected pointer-sized indexed-array element
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the null fallback after a successful indexed-array read
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0x7fff_ffff_ffff_fffe);
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers an indexed-array element read for x86_64 targets.
+fn lower_array_get_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    index: ValueId,
+) -> Result<()> {
+    let array_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let len_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(array, array_reg)?;
+    ctx.load_value_to_reg(index, result_reg)?;
+    let null_label = ctx.next_label("array_get_null");
+    let done_label = ctx.next_label("array_get_done");
+
+    ctx.emitter.instruction(&format!("cmp {}, 0", result_reg));                 // check whether the indexed-array offset is negative
+    ctx.emitter.instruction(&format!("jl {}", null_label));                     // negative indexed-array offsets read as null
+    abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
+    ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg));       // compare the requested offset against the indexed-array length
+    ctx.emitter.instruction(&format!("jge {}", null_label));                    // out-of-range indexed-array offsets read as null
+    ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
+    ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, result_reg)); // load the selected pointer-sized indexed-array element
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the null fallback after a successful indexed-array read
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0x7fff_ffff_ffff_fffe);
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
 }
 
 /// Lowers an indexed-array append for AArch64 targets.
@@ -144,6 +214,31 @@ fn lower_array_push_x86_64(
         }
     }
     Ok(())
+}
+
+/// Returns the PHP element type for an indexed-array operand.
+fn indexed_array_element_type(array_ty: &PhpType, inst: &Instruction) -> Result<PhpType> {
+    match array_ty {
+        PhpType::Array(elem_ty) => Ok(elem_ty.codegen_repr()),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for PHP type {:?}",
+            inst.op.name(),
+            other
+        ))),
+    }
+}
+
+/// Rejects array-get result shapes that the current EIR metadata cannot carry safely yet.
+fn require_single_word_array_get_result(elem_ty: &PhpType, inst: &Instruction) -> Result<()> {
+    if matches!(elem_ty, PhpType::Int | PhpType::Bool | PhpType::Callable)
+        && matches!(inst.result_php_type.codegen_repr(), PhpType::Int | PhpType::Bool | PhpType::Callable)
+    {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "array_get element PHP type {:?} with result PHP type {:?}",
+        elem_ty, inst.result_php_type
+    )))
 }
 
 /// Returns the stack/local slot loaded by an array operand when it came from `load_local`.
