@@ -94,6 +94,14 @@ impl<'a> FunctionContext<'a> {
         Ok(ty)
     }
 
+    /// Loads a single-register SSA value into a caller-selected register.
+    pub(super) fn load_value_to_reg(&mut self, value: ValueId, reg: &str) -> Result<PhpType> {
+        let ty = self.value_php_type(value)?;
+        let offset = self.value_offset(value)?;
+        abi::load_at_offset(self.emitter, reg, offset);
+        Ok(ty)
+    }
+
     /// Loads a local slot into the target's canonical result register(s).
     pub(super) fn load_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
         let ty = self.local_php_type(slot)?;

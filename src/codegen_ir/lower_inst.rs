@@ -32,6 +32,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ConstStr => lower_const_str(ctx, &inst),
         Op::LoadLocal => lower_load_local(ctx, &inst),
         Op::StoreLocal => lower_store_local(ctx, &inst),
+        Op::IAdd => lower_int_binop(ctx, &inst, "add", "add"),
+        Op::ISub => lower_int_binop(ctx, &inst, "sub", "sub"),
+        Op::IMul => lower_int_binop(ctx, &inst, "mul", "imul"),
         Op::EchoValue => lower_echo_value(ctx, &inst),
         _ => Err(CodegenIrError::unsupported(format!("opcode {}", inst.op.name()))),
     }
@@ -49,6 +52,30 @@ fn lower_const_f64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("movsd {}, QWORD PTR [{}]", abi::float_result_reg(ctx.emitter), scratch)); // load the 64-bit float literal through the symbol scratch register
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a two-operand integer arithmetic instruction.
+fn lower_int_binop(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    aarch64_mnemonic: &str,
+    x86_64_mnemonic: &str,
+) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
+    require_integer_like(ctx.load_value_to_reg(lhs, result_reg)?, inst)?;
+    require_integer_like(ctx.load_value_to_reg(rhs, rhs_reg)?, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("{} {}, {}, {}", aarch64_mnemonic, result_reg, result_reg, rhs_reg)); // compute the integer arithmetic result from both SSA operands
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("{} {}, {}", x86_64_mnemonic, result_reg, rhs_reg)); // update the integer result register with the arithmetic operand
         }
     }
     store_if_result(ctx, inst)
@@ -146,6 +173,18 @@ fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> R
         }
         _ => Err(CodegenIrError::unsupported(format!("echo for PHP type {:?}", ty))),
     }
+}
+
+/// Verifies that an arithmetic operand has a single-register integer-like representation.
+fn require_integer_like(ty: PhpType, inst: &Instruction) -> Result<()> {
+    if matches!(ty, PhpType::Int | PhpType::Bool) {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "{} for PHP type {:?}",
+        inst.op.name(),
+        ty
+    )))
 }
 
 /// Stores the current result registers when an instruction has an SSA result.
