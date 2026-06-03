@@ -12,7 +12,7 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::ir::{CmpPredicate, Immediate, InstId, Instruction, LocalSlotId, Op, ValueId};
-use crate::names::function_symbol;
+use crate::names::{function_symbol, ir_global_symbol};
 use crate::types::PhpType;
 
 use super::context::FunctionContext;
@@ -45,6 +45,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ConstStr => strings::lower_const_str(ctx, &inst),
         Op::LoadLocal => lower_load_local(ctx, &inst),
         Op::StoreLocal => lower_store_local(ctx, &inst),
+        Op::LoadGlobal => lower_load_global(ctx, &inst),
+        Op::StoreGlobal => lower_store_global(ctx, &inst),
         Op::IAdd => arithmetic::lower_int_binop(ctx, &inst, "add", "add"),
         Op::ISub => arithmetic::lower_int_binop(ctx, &inst, "sub", "sub"),
         Op::IMul => arithmetic::lower_int_binop(ctx, &inst, "mul", "imul"),
@@ -266,6 +268,32 @@ fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
     ctx.store_value_to_local(slot, value)
+}
+
+/// Lowers a global storage load into the result register and SSA destination slot.
+fn lower_load_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let data = expect_global_name(inst)?;
+    let name = ctx.global_name_data(data)?;
+    let symbol = ir_global_symbol(name);
+    let result = inst.result.ok_or_else(|| {
+        CodegenIrError::invalid_module("load_global missing result value")
+    })?;
+    let ty = ctx.value_php_type(result)?;
+    ctx.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
+    abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &ty);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a global storage store from one SSA operand.
+fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let data = expect_global_name(inst)?;
+    let name = ctx.global_name_data(data)?;
+    let symbol = ir_global_symbol(name);
+    let value = expect_operand(inst, 0)?;
+    let ty = ctx.load_value_to_result(value)?;
+    ctx.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &ty, false);
+    Ok(())
 }
 
 /// Lowers an integer constant into the canonical integer result register and slot.
@@ -500,6 +528,17 @@ fn expect_local_slot(inst: &Instruction) -> Result<LocalSlotId> {
         Some(Immediate::LocalSlot(slot)) => Ok(slot),
         _ => Err(CodegenIrError::invalid_module(format!(
             "{} missing local slot immediate",
+            inst.op.name()
+        ))),
+    }
+}
+
+/// Returns the global-name immediate attached to a global access instruction.
+fn expect_global_name(inst: &Instruction) -> Result<crate::ir::DataId> {
+    match inst.immediate {
+        Some(Immediate::GlobalName(value)) => Ok(value),
+        _ => Err(CodegenIrError::invalid_module(format!(
+            "{} missing global-name immediate",
             inst.op.name()
         ))),
     }

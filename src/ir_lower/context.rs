@@ -17,7 +17,7 @@ use crate::ir::{
     BlockId, Builder, DataId, DataPool, Effects, Immediate, IrType, LocalKind, LocalSlotId, Op,
     Ownership, ValueId,
 };
-use crate::parser::ast::TypeExpr;
+use crate::parser::ast::{ExprKind, TypeExpr};
 use crate::span::Span;
 use crate::types::{ExternFunctionSig, FunctionSig, PhpType, TypeEnv};
 
@@ -45,6 +45,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     initialized_slots: HashSet<LocalSlotId>,
     pub functions: &'m HashMap<String, FunctionSig>,
     pub extern_functions: &'m HashMap<String, ExternFunctionSig>,
+    pub constants: &'m HashMap<String, (ExprKind, PhpType)>,
     pub loop_stack: Vec<LoopFrame>,
     pub return_type: IrType,
     pub return_php_type: PhpType,
@@ -59,6 +60,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         env: TypeEnv,
         functions: &'m HashMap<String, FunctionSig>,
         extern_functions: &'m HashMap<String, ExternFunctionSig>,
+        constants: &'m HashMap<String, (ExprKind, PhpType)>,
         return_php_type: PhpType,
     ) -> Self {
         let return_type = return_ir_type(&return_php_type);
@@ -71,6 +73,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             initialized_slots: HashSet::new(),
             functions,
             extern_functions,
+            constants,
             loop_stack: Vec::new(),
             return_type,
             return_php_type,
@@ -101,6 +104,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Returns the current known PHP type for a local or `Mixed` when unknown.
     pub(crate) fn local_type(&self, name: &str) -> PhpType {
         self.local_types.get(name).cloned().unwrap_or(PhpType::Mixed)
+    }
+
+    /// Returns the prescanned value and PHP type for a global constant name.
+    pub(crate) fn constant_value(&self, name: &str) -> Option<(ExprKind, PhpType)> {
+        self.constants
+            .get(name)
+            .or_else(|| self.constants.get(name.trim_start_matches('\\')))
+            .cloned()
     }
 
     /// Updates the current known PHP type for a local.

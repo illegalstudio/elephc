@@ -423,6 +423,42 @@ fn ir_backend_handles_static_function_exists_checks() {
     );
 }
 
+/// Verifies global constant declarations, references, and `defined()` lowering.
+#[test]
+fn ir_backend_handles_global_constants_and_defined() {
+    for (name, source, expected) in [
+        (
+            "constant_int",
+            "<?php const ANSWER = 42; echo ANSWER;",
+            "42",
+        ),
+        (
+            "constant_string",
+            "<?php const NAME = \"elephc\"; echo NAME;",
+            "elephc",
+        ),
+        (
+            "constant_bool_null",
+            "<?php const FLAG = true; const NOTHING = null; echo FLAG; echo ':'; echo NOTHING;",
+            "1:",
+        ),
+        (
+            "defined_user_constant",
+            "<?php const FOO = 1; echo defined('FOO') ? 'yes' : 'no'; echo ':'; echo defined('MISSING') ? 'yes' : 'no';",
+            "yes:no",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+
+    let php_os = if cfg!(target_os = "macos") { "Darwin" } else { "Linux" };
+    let source = "<?php echo PHP_OS; echo ':'; echo PATHINFO_DIRNAME; echo ':'; echo defined('PHP_OS') ? 'yes' : 'no';";
+    assert_eq!(
+        compile_and_run_ir_backend("predefined_constants", source),
+        format!("{php_os}:1:yes")
+    );
+}
+
 /// Verifies is_callable() static string and scalar decisions match the legacy backend.
 #[test]
 fn ir_backend_handles_static_is_callable_checks() {

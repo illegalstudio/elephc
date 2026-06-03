@@ -34,6 +34,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "intval" => lower_intval(ctx, inst),
         "floatval" => lower_floatval(ctx, inst),
         "boolval" => lower_boolval(ctx, inst),
+        "defined" => lower_defined(ctx, inst),
         "function_exists" => lower_function_exists(ctx, inst),
         "is_callable" => lower_is_callable(ctx, inst),
         "is_int" => lower_static_type_predicate(ctx, inst, "is_int", PhpType::Int),
@@ -69,6 +70,15 @@ fn lower_phpversion(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `defined("NAME")` for compile-time string constant names.
+fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "defined", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let constant_name = const_string_operand(ctx, value)?;
+    emit_static_bool(ctx, ctx.has_global_name(&constant_name));
     store_if_result(ctx, inst)
 }
 

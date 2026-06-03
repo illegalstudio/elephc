@@ -17,14 +17,19 @@ use crate::ir_lower::context::{
     return_ir_type, type_expr_to_php_type, value_ir_type, LoweringContext,
 };
 use crate::ir_lower::effects_lookup;
-use crate::parser::ast::{Program, Stmt, TypeExpr};
+use crate::parser::ast::{ExprKind, Program, Stmt, TypeExpr};
 use crate::types::{CheckResult, FunctionSig, PhpType, TypeEnv};
 
 /// AST parameter tuple shape used by function, method, and closure declarations.
 type AstParams = [(String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool)];
 
 /// Lowers the top-level statement list as the synthetic `main` EIR function.
-pub(crate) fn lower_main(program: &Program, module: &mut Module, check_result: &CheckResult) {
+pub(crate) fn lower_main(
+    program: &Program,
+    module: &mut Module,
+    check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+) {
     let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
     function.flags.is_main = true;
     lower_body_into_function(
@@ -34,6 +39,7 @@ pub(crate) fn lower_main(program: &Program, module: &mut Module, check_result: &
         check_result.global_env.clone(),
         &check_result.functions,
         &check_result.extern_functions,
+        constants,
         PhpType::Void,
         &[],
     );
@@ -48,6 +54,7 @@ pub(crate) fn lower_user_function(
     body: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
 ) {
     let fallback = signature_from_ast(params, return_type);
     let signature = check_result.functions.get(name).unwrap_or(&fallback);
@@ -65,6 +72,7 @@ pub(crate) fn lower_user_function(
         env_from_signature(signature),
         &check_result.functions,
         &check_result.extern_functions,
+        constants,
         signature.return_type.clone(),
         &signature.params,
     );
@@ -81,6 +89,7 @@ pub(crate) fn lower_class_method(
     body: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
 ) {
     let fallback = signature_from_ast(params, return_type);
     let signature = check_result
@@ -112,6 +121,7 @@ pub(crate) fn lower_class_method(
         env,
         &check_result.functions,
         &check_result.extern_functions,
+        constants,
         signature.return_type.clone(),
         &signature.params,
     );
@@ -126,6 +136,7 @@ fn lower_body_into_function(
     env: TypeEnv,
     functions: &std::collections::HashMap<String, FunctionSig>,
     extern_functions: &std::collections::HashMap<String, crate::types::ExternFunctionSig>,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     return_php_type: PhpType,
     params: &[(String, PhpType)],
 ) {
@@ -139,6 +150,7 @@ fn lower_body_into_function(
         env,
         functions,
         extern_functions,
+        constants,
         return_php_type,
     );
     for (name, php_type) in params {

@@ -14,7 +14,7 @@ use crate::ir::{
     validate_module, ExternDecl, ExternParamDecl, IrType, Module,
 };
 use crate::ir_lower::{function, LoweringError};
-use crate::parser::ast::{ClassMethod, Program, Stmt, StmtKind};
+use crate::parser::ast::{ClassMethod, ExprKind, Program, Stmt, StmtKind};
 use crate::types::{CheckResult, PhpType};
 
 /// Lowers an optimized typed AST program into a validated EIR module.
@@ -24,10 +24,11 @@ pub(crate) fn lower(
     target: Target,
 ) -> Result<Module, LoweringError> {
     let mut module = Module::new(target);
+    let constants = crate::codegen::collect_constants(program, target.platform);
     populate_metadata(&mut module, program, check_result);
-    lower_function_declarations(program, &mut module, check_result);
-    lower_class_like_methods(program, &mut module, check_result);
-    function::lower_main(program, &mut module, check_result);
+    lower_function_declarations(program, &mut module, check_result, &constants);
+    lower_class_like_methods(program, &mut module, check_result, &constants);
+    function::lower_main(program, &mut module, check_result, &constants);
     validate_module(&module)?;
     Ok(module)
 }
@@ -81,6 +82,7 @@ fn lower_function_declarations(
     statements: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
 ) {
     for stmt in statements {
         match &stmt.kind {
@@ -97,11 +99,12 @@ fn lower_function_declarations(
                 body,
                 module,
                 check_result,
+                constants,
             ),
             StmtKind::NamespaceBlock { body, .. }
             | StmtKind::Synthetic(body)
             | StmtKind::IncludeOnceGuard { body, .. } => {
-                lower_function_declarations(body, module, check_result);
+                lower_function_declarations(body, module, check_result, constants);
             }
             StmtKind::If {
                 then_body,
@@ -109,12 +112,12 @@ fn lower_function_declarations(
                 else_body,
                 ..
             } => {
-                lower_function_declarations(then_body, module, check_result);
+                lower_function_declarations(then_body, module, check_result, constants);
                 for (_, body) in elseif_clauses {
-                    lower_function_declarations(body, module, check_result);
+                    lower_function_declarations(body, module, check_result, constants);
                 }
                 if let Some(body) = else_body {
-                    lower_function_declarations(body, module, check_result);
+                    lower_function_declarations(body, module, check_result, constants);
                 }
             }
             StmtKind::IfDef {
@@ -122,23 +125,23 @@ fn lower_function_declarations(
                 else_body,
                 ..
             } => {
-                lower_function_declarations(then_body, module, check_result);
+                lower_function_declarations(then_body, module, check_result, constants);
                 if let Some(body) = else_body {
-                    lower_function_declarations(body, module, check_result);
+                    lower_function_declarations(body, module, check_result, constants);
                 }
             }
             StmtKind::While { body, .. }
             | StmtKind::DoWhile { body, .. }
             | StmtKind::For { body, .. }
             | StmtKind::Foreach { body, .. } => {
-                lower_function_declarations(body, module, check_result);
+                lower_function_declarations(body, module, check_result, constants);
             }
             StmtKind::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    lower_function_declarations(body, module, check_result);
+                    lower_function_declarations(body, module, check_result, constants);
                 }
                 if let Some(body) = default {
-                    lower_function_declarations(body, module, check_result);
+                    lower_function_declarations(body, module, check_result, constants);
                 }
             }
             StmtKind::Try {
@@ -146,12 +149,12 @@ fn lower_function_declarations(
                 catches,
                 finally_body,
             } => {
-                lower_function_declarations(try_body, module, check_result);
+                lower_function_declarations(try_body, module, check_result, constants);
                 for catch in catches {
-                    lower_function_declarations(&catch.body, module, check_result);
+                    lower_function_declarations(&catch.body, module, check_result, constants);
                 }
                 if let Some(body) = finally_body {
-                    lower_function_declarations(body, module, check_result);
+                    lower_function_declarations(body, module, check_result, constants);
                 }
             }
             _ => {}
@@ -164,19 +167,20 @@ fn lower_class_like_methods(
     statements: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
 ) {
     for stmt in statements {
         match &stmt.kind {
             StmtKind::ClassDecl { name, methods, .. } | StmtKind::TraitDecl { name, methods, .. } => {
-                lower_methods_for_class_like(name, methods, module, check_result);
+                lower_methods_for_class_like(name, methods, module, check_result, constants);
             }
             StmtKind::InterfaceDecl { name, methods, .. } => {
-                lower_methods_for_class_like(name, methods, module, check_result);
+                lower_methods_for_class_like(name, methods, module, check_result, constants);
             }
             StmtKind::NamespaceBlock { body, .. }
             | StmtKind::Synthetic(body)
             | StmtKind::IncludeOnceGuard { body, .. } => {
-                lower_class_like_methods(body, module, check_result);
+                lower_class_like_methods(body, module, check_result, constants);
             }
             StmtKind::If {
                 then_body,
@@ -184,12 +188,12 @@ fn lower_class_like_methods(
                 else_body,
                 ..
             } => {
-                lower_class_like_methods(then_body, module, check_result);
+                lower_class_like_methods(then_body, module, check_result, constants);
                 for (_, body) in elseif_clauses {
-                    lower_class_like_methods(body, module, check_result);
+                    lower_class_like_methods(body, module, check_result, constants);
                 }
                 if let Some(body) = else_body {
-                    lower_class_like_methods(body, module, check_result);
+                    lower_class_like_methods(body, module, check_result, constants);
                 }
             }
             StmtKind::IfDef {
@@ -197,23 +201,23 @@ fn lower_class_like_methods(
                 else_body,
                 ..
             } => {
-                lower_class_like_methods(then_body, module, check_result);
+                lower_class_like_methods(then_body, module, check_result, constants);
                 if let Some(body) = else_body {
-                    lower_class_like_methods(body, module, check_result);
+                    lower_class_like_methods(body, module, check_result, constants);
                 }
             }
             StmtKind::While { body, .. }
             | StmtKind::DoWhile { body, .. }
             | StmtKind::For { body, .. }
             | StmtKind::Foreach { body, .. } => {
-                lower_class_like_methods(body, module, check_result);
+                lower_class_like_methods(body, module, check_result, constants);
             }
             StmtKind::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    lower_class_like_methods(body, module, check_result);
+                    lower_class_like_methods(body, module, check_result, constants);
                 }
                 if let Some(body) = default {
-                    lower_class_like_methods(body, module, check_result);
+                    lower_class_like_methods(body, module, check_result, constants);
                 }
             }
             StmtKind::Try {
@@ -221,12 +225,12 @@ fn lower_class_like_methods(
                 catches,
                 finally_body,
             } => {
-                lower_class_like_methods(try_body, module, check_result);
+                lower_class_like_methods(try_body, module, check_result, constants);
                 for catch in catches {
-                    lower_class_like_methods(&catch.body, module, check_result);
+                    lower_class_like_methods(&catch.body, module, check_result, constants);
                 }
                 if let Some(body) = finally_body {
-                    lower_class_like_methods(body, module, check_result);
+                    lower_class_like_methods(body, module, check_result, constants);
                 }
             }
             _ => {}
@@ -240,6 +244,7 @@ fn lower_methods_for_class_like(
     methods: &[ClassMethod],
     module: &mut Module,
     check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
 ) {
     for method in methods {
         if !method.has_body {
@@ -254,6 +259,7 @@ fn lower_methods_for_class_like(
             &method.body,
             module,
             check_result,
+            constants,
         );
     }
 }

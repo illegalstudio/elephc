@@ -26,7 +26,7 @@ use super::context::{Context, TRY_HANDLER_SLOT_SIZE};
 /// `LOCK_*` values, array callback-mode constants, `JSON_*` integer constants, and
 /// `PREG_*` integer constants. User constants come from `const` declarations and
 /// `define()` calls discovered by `collect_constant_decls`.
-pub(super) fn collect_constants(
+pub(crate) fn collect_constants(
     program: &Program,
     target_platform: Platform,
 ) -> HashMap<String, (ExprKind, PhpType)> {

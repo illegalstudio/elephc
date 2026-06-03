@@ -127,7 +127,8 @@ pub use runtime_features::{
 };
 pub use runtime_features::RuntimeFeatures;
 use platform::Target;
-use prescan::{collect_constants, collect_global_var_names, collect_static_vars};
+pub(crate) use prescan::collect_constants;
+use prescan::{collect_global_var_names, collect_static_vars};
 use program_usage::{
     collect_required_class_names, collect_required_class_names_in_stmts,
     program_has_dynamic_instanceof,

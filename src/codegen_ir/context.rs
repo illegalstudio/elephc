@@ -242,6 +242,26 @@ impl<'a> FunctionContext<'a> {
             .ok_or_else(|| CodegenIrError::missing_entry("function data", data_id.as_raw()))
     }
 
+    /// Returns a module data-pool global name.
+    pub(super) fn global_name_data(&self, data_id: DataId) -> Result<&str> {
+        self.module
+            .data
+            .global_names
+            .get(data_id.as_raw() as usize)
+            .map(String::as_str)
+            .ok_or_else(|| CodegenIrError::missing_entry("global data", data_id.as_raw()))
+    }
+
+    /// Returns true when the EIR module has interned a matching global name.
+    pub(super) fn has_global_name(&self, name: &str) -> bool {
+        let normalized = name.trim_start_matches('\\');
+        self.module
+            .data
+            .global_names
+            .iter()
+            .any(|candidate| candidate.trim_start_matches('\\') == normalized)
+    }
+
     /// Returns the frame offset assigned to a value by Phase 04 placement.
     fn value_offset(&self, value: ValueId) -> Result<usize> {
         self.placement
