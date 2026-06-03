@@ -210,6 +210,11 @@ fn ir_backend_handles_scalar_builtins() {
             "<?php echo is_int(1); echo is_float(1.5); echo is_bool(false); echo is_null(null); echo is_string(\"x\");",
             "11111",
         ),
+        (
+            "is_numeric_scalars",
+            "<?php echo is_numeric(1) ? '1' : '0'; echo is_numeric(1.5) ? '1' : '0'; echo is_numeric(true) ? '1' : '0'; echo is_numeric('42') ? '1' : '0'; echo is_numeric('-1.5') ? '1' : '0'; echo is_numeric('.') ? '1' : '0'; echo is_numeric('x') ? '1' : '0';",
+            "1101100",
+        ),
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);
     }

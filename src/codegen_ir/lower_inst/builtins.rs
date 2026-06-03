@@ -20,6 +20,8 @@ use super::super::context::FunctionContext;
 use super::{expect_data, expect_operand, predicates, store_if_result};
 use crate::codegen_ir::{CodegenIrError, Result};
 
+mod is_numeric;
+
 /// Lowers a scalar builtin call by matching the canonical PHP function name.
 pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let name = ctx.function_name_data(expect_data(inst)?)?;
@@ -39,6 +41,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "is_bool" => lower_static_type_predicate(ctx, inst, "is_bool", PhpType::Bool),
         "is_null" => lower_is_null_builtin(ctx, inst),
         "is_string" => lower_static_type_predicate(ctx, inst, "is_string", PhpType::Str),
+        "is_numeric" => is_numeric::lower_is_numeric(ctx, inst),
         _ => Err(CodegenIrError::unsupported(format!("builtin call {}", name))),
     }
 }

@@ -684,7 +684,7 @@ fn call_return_type(ctx: &LoweringContext<'_, '_>, name: &str) -> PhpType {
 /// Returns precise builtin return types needed by EIR value materialization.
 fn builtin_return_type_override(name: &str) -> Option<PhpType> {
     match php_symbol_key(name.trim_start_matches('\\')).as_str() {
-        "function_exists" | "is_callable" => Some(PhpType::Bool),
+        "function_exists" | "is_callable" | "is_numeric" => Some(PhpType::Bool),
         _ => None,
     }
 }
