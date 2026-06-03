@@ -524,6 +524,9 @@ fn lower_boolval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()
         PhpType::Str => {
             predicates::emit_string_truthiness(ctx, value)?;
         }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            predicates::emit_array_truthiness(ctx, value)?;
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "boolval for PHP type {:?}",

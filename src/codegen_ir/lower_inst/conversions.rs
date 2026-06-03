@@ -79,6 +79,9 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
         }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            predicates::emit_array_truthiness(ctx, value)?;
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "int cast for PHP type {:?}",
@@ -107,6 +110,10 @@ fn lower_cast_to_float(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
         PhpType::Str => {
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_str_to_number");
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            predicates::emit_array_truthiness(ctx, value)?;
+            abi::emit_int_result_to_float_result(ctx.emitter);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(

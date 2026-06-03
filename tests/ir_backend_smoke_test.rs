@@ -546,6 +546,16 @@ fn ir_backend_handles_array_truthiness() {
             "<?php $h = [\"a\" => 1]; echo $h ? \"T\" : \"F\"; echo \":\"; echo !$h ? \"T\" : \"F\";",
             "T:F",
         ),
+        (
+            "array_boolval",
+            "<?php $empty = []; $full = [1]; echo boolval($empty) ? \"T\" : \"F\"; echo \":\"; echo boolval($full) ? \"T\" : \"F\";",
+            "F:T",
+        ),
+        (
+            "iterable_numeric_casts",
+            "<?php function as_int(iterable $items): int { return (int)$items; } function as_float(iterable $items): float { return (float)$items; } echo as_int([]); echo '|'; echo as_int([10, 20]); echo '|'; echo as_int(['a' => 1]); echo '|'; echo as_float([]); echo '|'; echo as_float([10, 20]);",
+            "0|1|1|0|1",
+        ),
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);
     }
