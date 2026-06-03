@@ -149,6 +149,16 @@ fn ir_backend_calls_user_functions() {
             "<?php function twice($x) { echo $x; echo $x; } twice(7);",
             "77",
         ),
+        (
+            "fn_stack_int_arg",
+            "<?php function pick($a, $b, $c, $d, $e, $f, $g, $h, $i) { echo $i; } pick(1, 2, 3, 4, 5, 6, 7, 8, 9);",
+            "9",
+        ),
+        (
+            "fn_stack_string_arg",
+            "<?php function tail($a, $b, $c, $d, $e, $f, $g, $s) { echo $s; } tail(1, 2, 3, 4, 5, 6, 7, \"tail\");",
+            "tail",
+        ),
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);
     }

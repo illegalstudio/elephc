@@ -117,8 +117,12 @@ fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             callee.params.len()
         )));
     }
-    materialize_direct_call_args(ctx, &inst.operands)?;
+    let overflow_bytes = materialize_direct_call_args(ctx, &inst.operands)?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_call_label(ctx.emitter, &function_symbol(&function_name));
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
     if let Some(result) = inst.result {
         if ctx.value_php_type(result)? == PhpType::Void {
             abi::emit_load_int_immediate(
@@ -132,41 +136,27 @@ fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     Ok(())
 }
 
-/// Loads SSA operands into ABI argument registers for a direct call.
-fn materialize_direct_call_args(ctx: &mut FunctionContext<'_>, args: &[ValueId]) -> Result<()> {
+/// Loads SSA operands into ABI argument registers and caller-stack slots for a direct call.
+fn materialize_direct_call_args(ctx: &mut FunctionContext<'_>, args: &[ValueId]) -> Result<usize> {
     let arg_types = args
         .iter()
         .map(|value| ctx.value_php_type(*value))
         .collect::<Result<Vec<_>>>()?;
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &arg_types, 0);
-    for assignment in &assignments {
-        if !assignment.in_register() {
-            return Err(CodegenIrError::unsupported(
-                "direct-call arguments passed on the caller stack",
-            ));
-        }
+    for (value, ty) in args.iter().zip(arg_types.iter()) {
+        ctx.load_value_to_result(*value)?;
+        abi::emit_push_result_value(ctx.emitter, ty);
     }
+    Ok(abi::materialize_outgoing_args(ctx.emitter, &assignments))
+}
 
-    for ((value, ty), assignment) in args.iter().zip(arg_types.iter()).zip(assignments.iter()) {
-        match ty {
-            PhpType::Float => {
-                let reg = abi::float_arg_reg_name(ctx.emitter.target, assignment.start_reg);
-                ctx.load_value_to_reg(*value, reg)?;
-            }
-            PhpType::Str => {
-                let ptr_reg = abi::int_arg_reg_name(ctx.emitter.target, assignment.start_reg);
-                let len_reg = abi::int_arg_reg_name(ctx.emitter.target, assignment.start_reg + 1);
-                ctx.load_string_value_to_regs(*value, ptr_reg, len_reg)?;
-            }
-            PhpType::Void | PhpType::Never => {}
-            _ => {
-                let reg = abi::int_arg_reg_name(ctx.emitter.target, assignment.start_reg);
-                ctx.load_value_to_reg(*value, reg)?;
-            }
-        }
+/// Returns the temporary caller-stack pad needed to match incoming stack-arg offsets.
+fn direct_call_stack_pad_bytes(ctx: &FunctionContext<'_>, overflow_bytes: usize) -> usize {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 if overflow_bytes > 0 => 16,
+        _ => 0,
     }
-    Ok(())
 }
 
 /// Lowers a signed integer comparison into a boolean result value.
