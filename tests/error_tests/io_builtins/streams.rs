@@ -290,7 +290,7 @@ fn test_error_stream_get_contents_requires_resource_handle() {
 fn test_error_stream_copy_to_stream_wrong_args() {
     expect_error(
         "<?php stream_copy_to_stream(STDIN);",
-        "stream_copy_to_stream() takes exactly 2 arguments",
+        "stream_copy_to_stream() takes 2 to 4 arguments",
     );
 }
 

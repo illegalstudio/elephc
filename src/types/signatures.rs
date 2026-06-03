@@ -415,7 +415,11 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             vec![null_lit(), int_lit(-1)],
         )),
         "stream_get_meta_data" => Some(fixed(&["stream"])),
-        "stream_copy_to_stream" => Some(fixed(&["from", "to"])),
+        "stream_copy_to_stream" => Some(optional(
+            &["from", "to", "length", "offset"],
+            2,
+            vec![null_lit(), int_lit(-1)],
+        )),
         "stream_socket_server" => Some(fixed(&["address"])),
         "stream_socket_client" => Some(fixed(&["address"])),
         "stream_socket_accept" => {

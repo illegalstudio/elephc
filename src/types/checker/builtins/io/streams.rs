@@ -395,14 +395,17 @@ pub(super) fn check_builtin(
             }))
         }
         "stream_copy_to_stream" => {
-            if args.len() != 2 {
+            if args.len() < 2 || args.len() > 4 {
                 return Err(CompileError::new(
                     span,
-                    "stream_copy_to_stream() takes exactly 2 arguments",
+                    "stream_copy_to_stream() takes 2 to 4 arguments",
                 ));
             }
             ensure_stream_resource(checker, name, &args[0], env)?;
             ensure_stream_resource(checker, name, &args[1], env)?;
+            for arg in &args[2..] {
+                checker.infer_type(arg, env)?;
+            }
             Ok(Some(PhpType::Int))
         }
         "stream_socket_server" => {

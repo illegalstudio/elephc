@@ -1344,6 +1344,37 @@ unlink("scts_e_dst.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the optional `$length` and `$offset` arguments of
+/// `stream_copy_to_stream()`: a finite `$length` caps the copy (`Hello`, 5
+/// bytes); an `$offset >= 0` seeks the source first (`World` for length 5 from
+/// offset 7); and a negative `$length` from an offset copies to EOF (`World!`,
+/// 6 bytes). Byte counts and contents match PHP 8.5 (verified via `php -r`).
+#[test]
+fn test_stream_copy_to_stream_length_and_offset() {
+    let out = compile_and_run(
+        r#"<?php
+$s = fopen("php://memory", "r+"); fwrite($s, "Hello, World!"); rewind($s);
+$d = fopen("php://memory", "r+");
+$n = stream_copy_to_stream($s, $d, 5);
+rewind($d);
+echo "[" . $n . ":" . stream_get_contents($d) . "]";
+
+$s2 = fopen("php://memory", "r+"); fwrite($s2, "Hello, World!"); rewind($s2);
+$d2 = fopen("php://memory", "r+");
+$n2 = stream_copy_to_stream($s2, $d2, 5, 7);
+rewind($d2);
+echo "[" . $n2 . ":" . stream_get_contents($d2) . "]";
+
+$s3 = fopen("php://memory", "r+"); fwrite($s3, "Hello, World!"); rewind($s3);
+$d3 = fopen("php://memory", "r+");
+$n3 = stream_copy_to_stream($s3, $d3, -1, 7);
+rewind($d3);
+echo "[" . $n3 . ":" . stream_get_contents($d3) . "]";
+"#,
+    );
+    assert_eq!(out, "[5:Hello][5:World][6:World!]");
+}
+
 /// Verifies compiled PHP output for fopen php stdout writes to stdout.
 #[test]
 fn test_fopen_php_stdout_writes_to_stdout() {

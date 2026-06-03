@@ -35,8 +35,8 @@ use super::stream_arg::emit_stream_fd_arg;
 /// meaning "read to EOF" / "do not seek" — i.e. `null` or a negative integer
 /// literal (`-1`, the PHP default; the parser models `-1` as `Negate(IntLiteral)`).
 /// Such literals have no side effects, so the caller can skip evaluating them and
-/// treat the parameter as absent.
-fn is_read_all_or_no_seek(expr: &Expr) -> bool {
+/// treat the parameter as absent. Shared with `stream_copy_to_stream`.
+pub(super) fn is_read_all_or_no_seek(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Null => true,
         ExprKind::IntLiteral(n) => *n < 0,
