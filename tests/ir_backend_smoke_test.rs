@@ -597,6 +597,40 @@ fn ir_backend_handles_indexed_array_key_exists() {
     }
 }
 
+/// Verifies indexed-array membership for scalar and string payloads.
+#[test]
+fn ir_backend_handles_indexed_in_array() {
+    for (name, source, expected) in [
+        (
+            "in_array_int_found",
+            "<?php $a = [10, 20, 30]; echo in_array(20, $a);",
+            "1",
+        ),
+        (
+            "in_array_int_missing",
+            "<?php $a = [10, 20, 30]; echo in_array(99, $a);",
+            "",
+        ),
+        (
+            "in_array_string_found",
+            "<?php $a = [\"a\", \"b\", \"c\"]; echo in_array(\"b\", $a);",
+            "1",
+        ),
+        (
+            "in_array_string_missing",
+            "<?php $a = [\"a\", \"b\", \"c\"]; echo in_array(\"x\", $a);",
+            "",
+        ),
+        (
+            "in_array_empty",
+            "<?php $a = []; echo in_array(1, $a) ? \"bad\" : \"ok\";",
+            "ok",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies array truthiness follows PHP length rules for empty and non-empty containers.
 #[test]
 fn ir_backend_handles_array_truthiness() {
