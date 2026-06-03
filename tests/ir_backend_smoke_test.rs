@@ -240,9 +240,33 @@ fn ir_backend_handles_scalar_builtins() {
             "<?php echo sqrt(16.0); echo ':'; echo sqrt(2.0);",
             "4:1.4142135623731",
         ),
+        (
+            "binary_numeric_math",
+            "<?php echo intdiv(7, 2); echo ':'; echo fdiv(10, 4); echo ':'; echo fmod(10.5, 3.2); echo ':'; echo pow(2.0, 10.0);",
+            "3:2.5:0.9:1024",
+        ),
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);
     }
+}
+
+/// Verifies `intdiv()` division-by-zero follows the legacy fatal diagnostic.
+#[test]
+fn ir_backend_handles_intdiv_division_by_zero() {
+    let run = compile_ir_backend_and_run("intdiv_zero", "<?php echo intdiv(1, 0);", &[]);
+    assert!(
+        !run.status.success(),
+        "IR backend intdiv zero fixture unexpectedly succeeded"
+    );
+    assert_eq!(
+        String::from_utf8(run.stdout).expect("intdiv stdout should be utf8"),
+        ""
+    );
+    let stderr = String::from_utf8(run.stderr).expect("intdiv stderr should be utf8");
+    assert!(
+        stderr.contains("Fatal error: division by zero"),
+        "unexpected intdiv stderr: {stderr}"
+    );
 }
 
 /// Verifies scalar casts and string indexing lowered by the EIR backend.

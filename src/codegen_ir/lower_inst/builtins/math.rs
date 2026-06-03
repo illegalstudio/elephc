@@ -19,6 +19,10 @@ use crate::codegen_ir::{CodegenIrError, Result};
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
 
+mod binary;
+
+pub(super) use binary::{lower_fdiv, lower_fmod, lower_intdiv, lower_pow};
+
 /// Lowers `abs()` for concrete integer-like and floating operands.
 pub(super) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "abs", 1)?;
@@ -222,6 +226,7 @@ fn emit_int_abs(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Loads a numeric operand and normalizes values into the integer result register.
 /// Loads a `round()` precision operand as an integer in the result register.
 fn load_precision_as_int(
     ctx: &mut FunctionContext<'_>,
