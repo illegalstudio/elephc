@@ -265,6 +265,11 @@ fn ir_backend_handles_scalar_builtins() {
             "<?php echo round(deg2rad(180.0), 4); echo ':'; echo round(rad2deg(pi()), 1); echo ':'; echo log(1000, 10);",
             "3.1416:180:3",
         ),
+        (
+            "random_integer_math",
+            "<?php echo rand(1, 1); echo ':'; echo mt_rand(5, 5); echo ':'; echo random_int(42, 42); echo ':'; $r = rand(); echo $r >= 0 ? 'ok' : 'bad';",
+            "1:5:42:ok",
+        ),
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);
     }

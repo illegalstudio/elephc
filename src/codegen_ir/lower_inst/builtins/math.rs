@@ -21,11 +21,13 @@ use super::{expect_operand, store_if_result};
 
 mod binary;
 mod libm;
+mod random;
 
 pub(super) use binary::{lower_fdiv, lower_fmod, lower_intdiv, lower_pow};
 pub(super) use libm::{
     lower_atan2, lower_deg2rad, lower_hypot, lower_log, lower_rad2deg, lower_unary_libm,
 };
+pub(super) use random::{lower_rand, lower_random_int};
 
 /// Lowers `abs()` for concrete integer-like and floating operands.
 pub(super) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
