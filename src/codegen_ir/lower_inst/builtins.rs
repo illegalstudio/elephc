@@ -25,6 +25,8 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let name = ctx.function_name_data(expect_data(inst)?)?;
     let key = php_symbol_key(name.trim_start_matches('\\'));
     match key.as_str() {
+        "pi" => lower_pi(ctx, inst),
+        "phpversion" => lower_phpversion(ctx, inst),
         "strlen" => lower_strlen(ctx, inst),
         "count" => lower_count(ctx, inst),
         "intval" => lower_intval(ctx, inst),
@@ -39,6 +41,32 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "is_string" => lower_static_type_predicate(ctx, inst, "is_string", PhpType::Str),
         _ => Err(CodegenIrError::unsupported(format!("builtin call {}", name))),
     }
+}
+
+/// Lowers `pi()` as the same data-section float constant used by the legacy backend.
+fn lower_pi(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "pi", 0)?;
+    let label = ctx.data.add_float(std::f64::consts::PI);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.adrp("x9", &label);                                     // load the page address that contains the M_PI floating constant
+            ctx.emitter.ldr_lo12("d0", "x9", &label);                          // load the M_PI floating constant into the floating result register
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("movsd xmm0, QWORD PTR [rip + {}]", label)); // load the M_PI floating constant into the floating result register
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `phpversion()` as the compiler package version string.
+fn lower_phpversion(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "phpversion", 0)?;
+    let (label, len) = ctx.data.add_string(env!("CARGO_PKG_VERSION").as_bytes());
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `function_exists("name")` for compile-time string names.

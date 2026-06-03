@@ -194,6 +194,11 @@ fn ir_backend_handles_fatal_never_implicit_return() {
 fn ir_backend_handles_scalar_builtins() {
     for (name, source, expected) in [
         ("strlen", "<?php echo strlen(\"hello\");", "5"),
+        (
+            "pi_and_phpversion",
+            "<?php echo pi() > 3 ? \"pi\" : \"bad\"; echo \":\"; echo phpversion();",
+            concat!("pi:", env!("CARGO_PKG_VERSION")),
+        ),
         ("intval_float", "<?php echo intval(3.9);", "3"),
         ("intval_str", "<?php echo intval(\"42xyz\");", "42"),
         ("floatval_int", "<?php echo floatval(2) + 0.5;", "2.5"),
