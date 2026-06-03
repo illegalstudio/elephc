@@ -337,9 +337,10 @@ impl Op {
             StoreLocal | StoreRefCell | ListUnpack | TryPushHandler | TryPopHandler
             | CatchBind | FinallyEnter | FinallyExit => E::WRITES_LOCAL,
             LoadGlobal | LoadStaticProperty | ScopedConstantGet | ClassAttrNames
-            | ClassAttrArgs | ClassGetAttributes | IncludeOnceGuard => E::READS_GLOBAL,
+            | ClassAttrArgs | ClassGetAttributes => E::READS_GLOBAL,
             StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal | IncludeOnceMark
             | FunctionVariantMark => E::WRITES_GLOBAL,
+            IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
             IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
             Cast => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL,

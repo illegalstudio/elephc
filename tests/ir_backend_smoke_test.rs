@@ -9,6 +9,7 @@
 //!   testing library helpers.
 
 use std::fs;
+use std::path::Path;
 use std::process::{Command, Output};
 
 /// Returns the path to the cargo-built `elephc` binary.
@@ -327,6 +328,24 @@ fn ir_backend_handles_basic_associative_arrays() {
     }
 }
 
+/// Verifies include-once guard lowering skips an already loaded include body.
+#[test]
+fn ir_backend_handles_include_once_guard() {
+    let out = compile_and_run_ir_backend_files(
+        "include_once_guard",
+        &[
+            (
+                "main.php",
+                "<?php include_once 'piece.php'; include_once 'piece.php';",
+            ),
+            ("piece.php", "<?php echo \"piece\";"),
+        ],
+        "main.php",
+        &[],
+    );
+    assert_eq!(out, "piece");
+}
+
 /// Compiles `source` with `--ir-backend`, runs the output binary, and returns stdout.
 fn compile_and_run_ir_backend(name: &str, source: &str) -> String {
     compile_and_run_ir_backend_with_args(name, source, &[])
@@ -372,6 +391,70 @@ fn compile_ir_backend_and_run(name: &str, source: &str, args: &[&str]) -> Output
 
     let _ = fs::remove_dir_all(&dir);
     run
+}
+
+/// Compiles multiple PHP files with `--ir-backend`, runs the entry binary, and returns stdout.
+fn compile_and_run_ir_backend_files(
+    name: &str,
+    files: &[(&str, &str)],
+    entry: &str,
+    args: &[&str],
+) -> String {
+    let run = compile_ir_backend_files_and_run(name, files, entry, args);
+    assert!(run.status.success(), "IR backend binary failed for {name}");
+    String::from_utf8(run.stdout).unwrap()
+}
+
+/// Compiles a multi-file `--ir-backend` fixture and returns raw process output.
+fn compile_ir_backend_files_and_run(
+    name: &str,
+    files: &[(&str, &str)],
+    entry: &str,
+    args: &[&str],
+) -> Output {
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_ir_backend_{}_{}_{}",
+        name,
+        std::process::id(),
+        unique_test_id()
+    ));
+    fs::create_dir_all(&dir).expect("failed to create IR backend files directory");
+    for (path, contents) in files {
+        let path = dir.join(path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("failed to create IR backend fixture parent");
+        }
+        fs::write(path, contents).expect("failed to write IR backend PHP fixture");
+    }
+    let entry_path = dir.join(entry);
+
+    let compile = Command::new(elephc_cli_bin())
+        .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .current_dir(&dir)
+        .arg("--ir-backend")
+        .arg(&entry_path)
+        .output()
+        .expect("failed to run elephc CLI with --ir-backend");
+    assert!(
+        compile.status.success(),
+        "elephc --ir-backend failed for {name}: stderr={}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let binary_path = entry_binary_path(&entry_path);
+    let run = Command::new(binary_path)
+        .current_dir(&dir)
+        .args(args)
+        .output()
+        .expect("failed to run IR backend binary");
+
+    let _ = fs::remove_dir_all(&dir);
+    run
+}
+
+/// Returns the binary path produced next to a PHP entry file.
+fn entry_binary_path(entry_path: &Path) -> std::path::PathBuf {
+    entry_path.with_extension("")
 }
 
 /// Returns a coarse unique suffix for temporary test directories.

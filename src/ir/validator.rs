@@ -272,7 +272,8 @@ fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result
         ConstI64 => require_immediate(inst_id, inst, "i64", |imm| matches!(imm, Imm::I64(_))),
         ConstF64 => require_immediate(inst_id, inst, "f64", |imm| matches!(imm, Imm::F64(_))),
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
-        ConstStr | ConstClassName | DataAddr | Warn => {
+        ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
+        | FunctionVariantMark => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
         LoadLocal | StoreLocal | LoadRefCell | StoreRefCell | LoadStaticLocal

@@ -576,14 +576,32 @@ fn lower_include_once_mark(ctx: &mut LoweringContext<'_, '_>, label: &str, span:
 /// Lowers an include-once guarded body.
 fn lower_include_once_guard(ctx: &mut LoweringContext<'_, '_>, label: &str, body: &[Stmt], span: Span) {
     let data = ctx.intern_string(label);
-    ctx.emit_void(
-        Op::IncludeOnceGuard,
-        Vec::new(),
-        Some(Immediate::Data(data)),
-        Op::IncludeOnceGuard.default_effects(),
-        Some(span),
-    );
+    let should_run = ctx
+        .builder
+        .emit_with_effects(
+            Op::IncludeOnceGuard,
+            Vec::new(),
+            Some(Immediate::Data(data)),
+            IrType::I64,
+            PhpType::Bool,
+            Ownership::NonHeap,
+            Op::IncludeOnceGuard.default_effects(),
+            Some(span),
+        )
+        .expect("include_once_guard produces a branch condition");
+    let body_block = ctx.builder.create_named_block("include_once_body", Vec::new());
+    let after_block = ctx.builder.create_named_block("include_once_after", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: should_run,
+        then_target: body_block,
+        then_args: Vec::new(),
+        else_target: after_block,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(body_block);
     lower_block(ctx, body);
+    branch_to(ctx, after_block);
+    ctx.builder.position_at_end(after_block);
 }
 
 /// Lowers a throwing statement into a terminator.

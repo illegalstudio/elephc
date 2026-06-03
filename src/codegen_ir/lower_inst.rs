@@ -101,9 +101,49 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ThrowException => lower_throw_exception(ctx, &inst),
         Op::ErrorSuppressBegin => lower_runtime_void_call(ctx, "__rt_diag_push_suppression"),
         Op::ErrorSuppressEnd => lower_runtime_void_call(ctx, "__rt_diag_pop_suppression"),
+        Op::IncludeOnceMark => lower_include_once_mark(ctx, &inst),
+        Op::IncludeOnceGuard => lower_include_once_guard(ctx, &inst),
         Op::Nop => Ok(()),
         _ => Err(CodegenIrError::unsupported(format!("opcode {}", inst.op.name()))),
     }
+}
+
+/// Lowers an include-once marker by setting its module-global guard symbol.
+fn lower_include_once_mark(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let label = include_once_label(ctx, inst)?;
+    ctx.data.add_comm(label.clone(), 8);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &label, 0);
+    Ok(())
+}
+
+/// Lowers an include-once guard to a boolean branch condition and marks first entry.
+fn lower_include_once_guard(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let label = include_once_label(ctx, inst)?;
+    ctx.data.add_comm(label.clone(), 8);
+    let already_label = ctx.next_label("include_once_already");
+    let done_label = ctx.next_label("include_once_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, &label, 0);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &already_label);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 1);
+    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, &label, 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&already_label);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
+/// Returns the include-once guard symbol stored in the module data pool.
+fn include_once_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<String> {
+    let data = expect_data(inst)?;
+    ctx.module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .cloned()
+        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
 }
 
 /// Lowers a void EIR opcode that maps directly to one runtime helper call.
