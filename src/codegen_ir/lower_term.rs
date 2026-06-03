@@ -1,15 +1,15 @@
 //! Purpose:
-//! Lowers EIR block terminators into jumps, returns, exits, and future control-flow edges.
+//! Lowers EIR block terminators into jumps, returns, exits, and fatal termination paths.
 //!
 //! Called from:
 //! - `crate::codegen_ir::block_emit`.
 //!
 //! Key details:
-//! - The current increment supports process-entry `return` and explicit unsupported
-//!   diagnostics for branch/switch/throw paths that still need Phase 04 lowering.
+//! - Fatal terminators write their data-pool diagnostic to stderr and exit.
+//! - Throw and generator suspension remain explicit unsupported Phase 04 paths.
 
 use crate::codegen::platform::Arch;
-use crate::ir::{SwitchCase, Terminator, ValueId};
+use crate::ir::{DataId, SwitchCase, Terminator, ValueId};
 
 use crate::codegen::abi;
 
@@ -66,11 +66,36 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             lower_switch(ctx, *scrutinee, cases, *default)
         }
         Terminator::Throw { .. } => Err(CodegenIrError::unsupported("throw terminator")),
-        Terminator::Fatal { .. } => Err(CodegenIrError::unsupported("fatal terminator")),
+        Terminator::Fatal { message } => lower_fatal(ctx, *message),
         Terminator::GeneratorSuspend { .. } => {
             Err(CodegenIrError::unsupported("generator_suspend terminator"))
         }
     }
+}
+
+/// Lowers an unrecoverable fatal diagnostic and process exit.
+fn lower_fatal(ctx: &mut FunctionContext<'_>, message: DataId) -> Result<()> {
+    let (message_label, message_len) = ctx.intern_string_data(message)?;
+    ctx.emitter.blank();
+    ctx.emitter.comment("fatal");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #2");                              // fd = stderr for the EIR fatal diagnostic
+            ctx.emitter.adrp("x1", &message_label);
+            ctx.emitter.add_lo12("x1", "x1", &message_label);
+            ctx.emitter.instruction(&format!("mov x2, #{}", message_len));      // pass the EIR fatal diagnostic byte length to write
+            ctx.emitter.syscall(4);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov edi, 2");                              // fd = stderr for the EIR fatal diagnostic
+            abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
+            ctx.emitter.instruction(&format!("mov edx, {}", message_len));      // pass the EIR fatal diagnostic byte length to write
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the EIR fatal diagnostic before exiting
+        }
+    }
+    abi::emit_exit(ctx.emitter, 1);
+    Ok(())
 }
 
 /// Lowers an integer switch by comparing the scrutinee against each case value in source order.

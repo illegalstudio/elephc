@@ -9,7 +9,7 @@
 //!   testing library helpers.
 
 use std::fs;
-use std::process::Command;
+use std::process::{Command, Output};
 
 /// Returns the path to the cargo-built `elephc` binary.
 fn elephc_cli_bin() -> String {
@@ -164,6 +164,29 @@ fn ir_backend_calls_user_functions() {
     }
 }
 
+/// Verifies fatal terminators emitted for implicit `never` returns write the legacy diagnostic.
+#[test]
+fn ir_backend_handles_fatal_never_implicit_return() {
+    let run = compile_ir_backend_and_run(
+        "fatal_never_implicit_return",
+        "<?php function fail(): never { } fail(); echo \"unreachable\";",
+        &[],
+    );
+    assert!(
+        !run.status.success(),
+        "IR backend fatal fixture unexpectedly succeeded"
+    );
+    assert_eq!(
+        String::from_utf8(run.stdout).expect("fatal stdout should be utf8"),
+        ""
+    );
+    let stderr = String::from_utf8(run.stderr).expect("fatal stderr should be utf8");
+    assert!(
+        stderr.contains("Fatal error: A never-returning function must not implicitly return"),
+        "unexpected fatal stderr: {stderr}"
+    );
+}
+
 /// Verifies scalar builtin calls lowered by the EIR backend.
 #[test]
 fn ir_backend_handles_scalar_builtins() {
@@ -310,6 +333,13 @@ fn compile_and_run_ir_backend(name: &str, source: &str) -> String {
 
 /// Compiles `source`, runs the output binary with extra args, and returns stdout.
 fn compile_and_run_ir_backend_with_args(name: &str, source: &str, args: &[&str]) -> String {
+    let run = compile_ir_backend_and_run(name, source, args);
+    assert!(run.status.success(), "IR backend binary failed for {name}");
+    String::from_utf8(run.stdout).unwrap()
+}
+
+/// Compiles `source` with `--ir-backend`, runs the binary, and returns raw process output.
+fn compile_ir_backend_and_run(name: &str, source: &str, args: &[&str]) -> Output {
     let dir = std::env::temp_dir().join(format!(
         "elephc_ir_backend_{}_{}_{}",
         name,
@@ -338,11 +368,9 @@ fn compile_and_run_ir_backend_with_args(name: &str, source: &str, args: &[&str])
         .args(args)
         .output()
         .expect("failed to run IR backend binary");
-    assert!(run.status.success(), "IR backend binary failed for {name}");
-    let stdout = String::from_utf8(run.stdout).unwrap();
 
     let _ = fs::remove_dir_all(&dir);
-    stdout
+    run
 }
 
 /// Returns a coarse unique suffix for temporary test directories.

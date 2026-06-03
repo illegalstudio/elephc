@@ -157,7 +157,8 @@ fn terminate_open_block(ctx: &mut LoweringContext<'_, '_>) {
         return;
     }
     if matches!(ctx.return_php_type, PhpType::Never) {
-        let message = ctx.intern_string("never function reached implicit return");
+        let message =
+            ctx.intern_string("Fatal error: A never-returning function must not implicitly return\n");
         ctx.builder.terminate(Terminator::Fatal { message });
         return;
     }
