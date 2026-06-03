@@ -44,8 +44,24 @@ fn ir_backend_echoes_scalar_literals() {
     }
 }
 
+/// Verifies integer comparisons and conditional branches on both branch directions.
+#[test]
+fn ir_backend_branches_on_integer_comparison() {
+    let source = "<?php if ($argc > 1) { echo 9; } else { echo 4; }";
+    assert_eq!(compile_and_run_ir_backend("if_false", source), "4");
+    assert_eq!(
+        compile_and_run_ir_backend_with_args("if_true", source, &["extra"]),
+        "9"
+    );
+}
+
 /// Compiles `source` with `--ir-backend`, runs the output binary, and returns stdout.
 fn compile_and_run_ir_backend(name: &str, source: &str) -> String {
+    compile_and_run_ir_backend_with_args(name, source, &[])
+}
+
+/// Compiles `source`, runs the output binary with extra args, and returns stdout.
+fn compile_and_run_ir_backend_with_args(name: &str, source: &str, args: &[&str]) -> String {
     let dir = std::env::temp_dir().join(format!(
         "elephc_ir_backend_{}_{}_{}",
         name,
@@ -71,6 +87,7 @@ fn compile_and_run_ir_backend(name: &str, source: &str) -> String {
 
     let run = Command::new(dir.join("main"))
         .current_dir(&dir)
+        .args(args)
         .output()
         .expect("failed to run IR backend binary");
     assert!(run.status.success(), "IR backend binary failed");

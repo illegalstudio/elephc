@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use crate::codegen::abi;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::ir::{DataId, Function, LocalSlotId, Module, ValueId};
+use crate::ir::{BlockId, DataId, Function, LocalSlotId, Module, ValueId};
 use crate::types::PhpType;
 
 use super::frame::FrameLayout;
@@ -67,6 +67,15 @@ impl<'a> FunctionContext<'a> {
     /// Returns the assembly label for a non-entry EIR block.
     pub(super) fn block_label(&self, block_name: &str, raw: u32) -> String {
         format!("_eir_{}_{}_{}", label_fragment(&self.function.name), label_fragment(block_name), raw)
+    }
+
+    /// Returns the assembly label for a block id.
+    pub(super) fn block_label_for_id(&self, block: BlockId) -> Result<String> {
+        let block = self
+            .function
+            .block(block)
+            .ok_or_else(|| CodegenIrError::missing_entry("block", block.as_raw()))?;
+        Ok(self.block_label(&block.name, block.id.as_raw()))
     }
 
     /// Returns a function value or a structured backend error.

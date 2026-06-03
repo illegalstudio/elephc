@@ -11,7 +11,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Immediate, InstId, Instruction, LocalSlotId, Op, ValueId};
+use crate::ir::{CmpPredicate, Immediate, InstId, Instruction, LocalSlotId, Op, ValueId};
 use crate::types::PhpType;
 
 use super::context::FunctionContext;
@@ -35,6 +35,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::IAdd => lower_int_binop(ctx, &inst, "add", "add"),
         Op::ISub => lower_int_binop(ctx, &inst, "sub", "sub"),
         Op::IMul => lower_int_binop(ctx, &inst, "mul", "imul"),
+        Op::ICmp => lower_int_compare(ctx, &inst),
         Op::EchoValue => lower_echo_value(ctx, &inst),
         _ => Err(CodegenIrError::unsupported(format!("opcode {}", inst.op.name()))),
     }
@@ -52,6 +53,29 @@ fn lower_const_f64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("movsd {}, QWORD PTR [{}]", abi::float_result_reg(ctx.emitter), scratch)); // load the 64-bit float literal through the symbol scratch register
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a signed integer comparison into a boolean result value.
+fn lower_int_compare(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    let predicate = expect_cmp_predicate(inst)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
+    require_integer_like(ctx.load_value_to_reg(lhs, result_reg)?, inst)?;
+    require_integer_like(ctx.load_value_to_reg(rhs, rhs_reg)?, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, rhs_reg)); // compare signed integer operands for the EIR predicate
+            ctx.emitter.instruction(&format!("cset {}, {}", result_reg, aarch64_condition(predicate)?)); // materialize the predicate result as 0 or 1
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, rhs_reg)); // compare signed integer operands for the EIR predicate
+            ctx.emitter.instruction(&format!("set{} al", x86_64_condition(predicate)?)); // materialize the predicate result in the low byte
+            ctx.emitter.instruction(&format!("movzx {}, al", result_reg));      // widen the predicate byte into the integer result register
         }
     }
     store_if_result(ctx, inst)
@@ -175,6 +199,38 @@ fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> R
     }
 }
 
+/// Returns the AArch64 condition-code suffix for an EIR comparison predicate.
+fn aarch64_condition(predicate: CmpPredicate) -> Result<&'static str> {
+    match predicate {
+        CmpPredicate::Eq => Ok("eq"),
+        CmpPredicate::Ne => Ok("ne"),
+        CmpPredicate::Slt => Ok("lt"),
+        CmpPredicate::Sle => Ok("le"),
+        CmpPredicate::Sgt => Ok("gt"),
+        CmpPredicate::Sge => Ok("ge"),
+        other => Err(CodegenIrError::unsupported(format!(
+            "integer comparison predicate {:?}",
+            other
+        ))),
+    }
+}
+
+/// Returns the x86_64 setcc suffix for an EIR comparison predicate.
+fn x86_64_condition(predicate: CmpPredicate) -> Result<&'static str> {
+    match predicate {
+        CmpPredicate::Eq => Ok("e"),
+        CmpPredicate::Ne => Ok("ne"),
+        CmpPredicate::Slt => Ok("l"),
+        CmpPredicate::Sle => Ok("le"),
+        CmpPredicate::Sgt => Ok("g"),
+        CmpPredicate::Sge => Ok("ge"),
+        other => Err(CodegenIrError::unsupported(format!(
+            "integer comparison predicate {:?}",
+            other
+        ))),
+    }
+}
+
 /// Verifies that an arithmetic operand has a single-register integer-like representation.
 fn require_integer_like(ty: PhpType, inst: &Instruction) -> Result<()> {
     if matches!(ty, PhpType::Int | PhpType::Bool) {
@@ -234,6 +290,17 @@ fn expect_data(inst: &Instruction) -> Result<crate::ir::DataId> {
         Some(Immediate::Data(value)) => Ok(value),
         _ => Err(CodegenIrError::invalid_module(format!(
             "{} missing data immediate",
+            inst.op.name()
+        ))),
+    }
+}
+
+/// Returns the comparison predicate attached to a compare instruction.
+fn expect_cmp_predicate(inst: &Instruction) -> Result<CmpPredicate> {
+    match inst.immediate {
+        Some(Immediate::CmpPredicate(predicate)) => Ok(predicate),
+        _ => Err(CodegenIrError::invalid_module(format!(
+            "{} missing comparison predicate immediate",
             inst.op.name()
         ))),
     }

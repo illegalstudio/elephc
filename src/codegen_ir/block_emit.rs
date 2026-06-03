@@ -47,9 +47,7 @@ fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
 
 /// Emits one EIR basic block.
 fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
-    if block.id != ctx.function.entry {
-        ctx.emitter.label(&ctx.block_label(&block.name, block.id.as_raw()));
-    }
+    ctx.emitter.label(&ctx.block_label(&block.name, block.id.as_raw()));
     for inst_id in &block.instructions {
         lower_inst::lower_instruction(ctx, *inst_id)?;
     }
