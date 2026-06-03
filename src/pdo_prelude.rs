@@ -139,13 +139,15 @@ class PDO {
     }
 }
 
-class PDOStatement {
+class PDOStatement implements Iterator {
     private int $stmt;
     private int $conn;
     private int $fetchMode;
     private array $boundParams;
     private array $boundValues;
     private array $boundTypes;
+    private $iterRow;
+    private int $iterKey;
 
     public function __construct(int $handle, int $connection) {
         $this->stmt = $handle;
@@ -154,6 +156,12 @@ class PDOStatement {
         $this->boundParams = [];
         $this->boundValues = [];
         $this->boundTypes = [];
+        // Initialized to null (not false) so the inferred property type widens to
+        // Mixed when rewind()/next() assign a fetched row; a bool initializer would
+        // pin the type to bool and coerce stored rows away. rewind() always runs
+        // before the first valid() check, so the initial value is never observed.
+        $this->iterRow = null;
+        $this->iterKey = 0;
     }
 
     public function setFetchMode(int $mode): bool {
@@ -314,6 +322,33 @@ class PDOStatement {
 
     public function columnCount(): int {
         return elephc_sqlite_column_count($this->stmt);
+    }
+
+    // Iterator: `foreach ($stmt as $key => $row)` walks the result set forward
+    // using the statement's current fetch mode, with sequential integer keys —
+    // matching PHP's PDOStatement Traversable behavior. The cursor is
+    // forward-only, so rewind() only fetches the first row (it cannot seek back
+    // to an already-consumed row).
+    public function rewind(): void {
+        $this->iterRow = $this->fetch($this->fetchMode);
+        $this->iterKey = 0;
+    }
+
+    public function valid(): bool {
+        return $this->iterRow !== false;
+    }
+
+    public function current(): mixed {
+        return $this->iterRow;
+    }
+
+    public function key(): mixed {
+        return $this->iterKey;
+    }
+
+    public function next(): void {
+        $this->iterRow = $this->fetch($this->fetchMode);
+        $this->iterKey = $this->iterKey + 1;
     }
 }
 "#;

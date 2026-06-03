@@ -91,6 +91,24 @@ $one = $db->query("SELECT name FROM users")->fetchColumn();  // first column of 
 returned with their SQLite type: INTEGER → int, REAL → float, TEXT → string,
 NULL → null. `FETCH_BOTH` is the default mode.
 
+## Iterating a statement
+
+A `PDOStatement` is Traversable, so `foreach` walks the result set forward with
+sequential integer keys, yielding each row in the statement's current fetch mode:
+
+```php
+<?php
+$stmt = $db->query("SELECT id, name FROM users");
+$stmt->setFetchMode(PDO::FETCH_ASSOC);
+
+foreach ($stmt as $i => $row) {
+    echo $i, ": ", $row["name"], "\n";
+}
+```
+
+The cursor is forward-only: each row is consumed as it is yielded, so a statement
+can be iterated once.
+
 ## Transactions
 
 ```php
@@ -126,7 +144,8 @@ try {
 - **PDO**: `__construct`, `exec`, `query`, `prepare`, `lastInsertId`,
   `beginTransaction`, `commit`, `rollBack`, `errorCode`, `errorInfo`.
 - **PDOStatement**: `execute`, `bindValue`, `bindParam`, `setFetchMode`, `fetch`,
-  `fetchAll`, `fetchColumn`, `rowCount`, `columnCount`.
+  `fetchAll`, `fetchColumn`, `rowCount`, `columnCount`; Traversable, so a statement
+  can be walked with `foreach`.
 - **Fetch modes**: `FETCH_ASSOC`, `FETCH_NUM`, `FETCH_BOTH`, `FETCH_OBJ`.
 - **Parameters**: positional `?` and named `:name`; `PARAM_INT` / `PARAM_STR` /
   `PARAM_NULL` / `PARAM_BOOL` constants.

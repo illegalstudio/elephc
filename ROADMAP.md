@@ -616,6 +616,7 @@ program references PDO, so non-PDO binaries never link the bridge.
 - [x] `PDOStatement::execute` (positional `?` and named `:name` binds with int/float/string/null/bool typing), `fetch`, `fetchAll`, `fetchColumn`, `rowCount`, `columnCount`
 - [x] `PDOStatement::bindValue` / `bindParam` (binds the current value) and `setFetchMode` with a stored default fetch mode; `reset` keeps bindings while a fresh `execute($params)` rebinds; positional `?` and named `:name` placeholders may be mixed in one statement
 - [x] Fetch modes `FETCH_ASSOC`, `FETCH_NUM`, `FETCH_BOTH`, `FETCH_OBJ`; `PARAM_*` / `ATTR_ERRMODE` / `ERRMODE_*` constants; `ERRMODE_EXCEPTION` default
+- [x] `PDOStatement` is Traversable — `foreach ($stmt as $key => $row)` walks the result set forward in the current fetch mode with sequential integer keys
 - [ ] MySQL (`pdo_mysql`) and PostgreSQL (`pdo_pgsql`) drivers — additional bridge entry points behind the same prelude
 - [ ] `FETCH_CLASS` / `FETCH_INTO`, `quote`, full `getAttribute` / `setAttribute`, and persistent connections
 - [ ] Dynamic property assignment so `FETCH_OBJ` materializes a stdClass directly instead of via a JSON round-trip

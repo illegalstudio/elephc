@@ -29,11 +29,13 @@ $one->execute([2]);
 $row = $one->fetch(PDO::FETCH_ASSOC);
 echo "Contact #2: " . $row["name"] . " (" . $row["score"] . ")\n\n";
 
-// Fetch every row as an object, ordered by score.
+// A PDOStatement is Traversable: foreach walks the result set directly,
+// streaming one row at a time in the statement's fetch mode.
 echo "Leaderboard:\n";
 $stmt = $db->query("SELECT name, score FROM contacts ORDER BY score DESC");
-foreach ($stmt->fetchAll(PDO::FETCH_OBJ) as $contact) {
-    echo "  " . $contact->name . " — " . $contact->score . "\n";
+$stmt->setFetchMode(PDO::FETCH_ASSOC);
+foreach ($stmt as $rank => $contact) {
+    echo "  " . ($rank + 1) . ". " . $contact["name"] . " — " . $contact["score"] . "\n";
 }
 echo "\n";
 

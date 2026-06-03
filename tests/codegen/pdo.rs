@@ -297,3 +297,78 @@ echo ":" . $stmt->rowCount();
     );
     assert_eq!(out, "null:1");
 }
+
+/// `foreach` over a `PDOStatement` (it is Traversable) walks the result set with
+/// sequential integer keys, yielding each row in the statement's fetch mode.
+#[test]
+fn test_pdo_foreach_assoc_with_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO t VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')");
+$stmt = $db->query("SELECT id, name FROM t ORDER BY id");
+$stmt->setFetchMode(PDO::FETCH_ASSOC);
+foreach ($stmt as $k => $row) {
+    echo $k . ":" . $row["id"] . "=" . $row["name"] . ";";
+}
+"#,
+    );
+    assert_eq!(out, "0:1=alice;1:2=bob;2:3=carol;");
+}
+
+/// `foreach` honors `FETCH_NUM`, yielding positionally-keyed rows.
+#[test]
+fn test_pdo_foreach_num_mode() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO t VALUES (1, 'one'), (2, 'two')");
+$stmt = $db->query("SELECT id, name FROM t ORDER BY id");
+$stmt->setFetchMode(PDO::FETCH_NUM);
+foreach ($stmt as $row) {
+    echo $row[0] . "/" . $row[1] . ";";
+}
+"#,
+    );
+    assert_eq!(out, "1/one;2/two;");
+}
+
+/// `foreach` over a prepared statement walks the rows produced by `execute()`.
+#[test]
+fn test_pdo_foreach_prepared_statement() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER, name TEXT)");
+$db->exec("INSERT INTO t VALUES (1, 'alice'), (2, 'bob'), (3, 'carol')");
+$stmt = $db->prepare("SELECT name FROM t WHERE id >= ? ORDER BY id");
+$stmt->execute([2]);
+$stmt->setFetchMode(PDO::FETCH_ASSOC);
+foreach ($stmt as $row) {
+    echo $row["name"] . ";";
+}
+"#,
+    );
+    assert_eq!(out, "bob;carol;");
+}
+
+/// `foreach` over an empty result set runs zero iterations.
+#[test]
+fn test_pdo_foreach_empty_result() {
+    let out = compile_and_run(
+        r#"<?php
+$db = new PDO("sqlite::memory:");
+$db->exec("CREATE TABLE t (id INTEGER)");
+$stmt = $db->query("SELECT id FROM t");
+$stmt->setFetchMode(PDO::FETCH_ASSOC);
+$n = 0;
+foreach ($stmt as $row) {
+    $n = $n + 1;
+}
+echo "rows=" . $n;
+"#,
+    );
+    assert_eq!(out, "rows=0");
+}
