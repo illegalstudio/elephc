@@ -296,6 +296,11 @@ fn ir_backend_handles_scalar_builtins() {
             "[0]:6:[]:4:[]",
         ),
         (
+            "strstr_strings",
+            "<?php echo strstr('Hello World', 'World'); echo ':'; echo '['; echo strstr('Hello', 'xyz'); echo ']'; echo ':'; echo strstr('abcabc', 'bc');",
+            "World:[]:bcabc",
+        ),
+        (
             "substr_strings",
             "<?php echo substr('Hello World', 6); echo ':'; echo substr('Hello World', 0, 5); echo ':'; echo substr('Hello World', -5); echo ':'; echo '['; echo substr('Hello', 50); echo ']'; echo ':'; echo '['; echo substr('Hello', 1, -2); echo ']';",
             "World:Hello:World:[]:[]",

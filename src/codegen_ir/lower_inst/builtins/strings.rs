@@ -149,6 +149,24 @@ pub(super) fn lower_str_repeat(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_if_result(ctx, inst)
 }
 
+/// Lowers `strstr(haystack, needle)` by searching and returning the matching suffix.
+pub(super) fn lower_strstr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 2 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "strstr expected 2 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    let found_label = ctx.next_label("strstr_found");
+    let end_label = ctx.next_label("strstr_end");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_strstr_aarch64(ctx, inst, &found_label, &end_label)?,
+        Arch::X86_64 => lower_strstr_x86_64(ctx, inst, &found_label, &end_label)?,
+    }
+    ctx.emitter.label(&end_label);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `ord()` by returning the first byte of a string or zero for empty input.
 pub(super) fn lower_ord(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_single_string_arg(ctx, inst, "ord")?;
@@ -477,6 +495,69 @@ fn lower_str_repeat_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     load_as_int(ctx, times, "str_repeat times")?;
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the repeat count as the extra x86_64 runtime argument
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+    Ok(())
+}
+
+/// Emits AArch64 `strstr()` search and suffix reconstruction.
+fn lower_strstr_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    found_label: &str,
+    end_label: &str,
+) -> Result<()> {
+    let haystack = expect_string_operand(ctx, inst, 0, "strstr")?;
+    let needle = expect_string_operand(ctx, inst, 1, "strstr")?;
+    ctx.load_string_value_to_regs(haystack, "x1", "x2")?;
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the haystack while materializing the needle string
+    ctx.load_string_value_to_regs(needle, "x1", "x2")?;
+    ctx.emitter.instruction("mov x3, x1");                                      // pass the needle pointer as the secondary string argument
+    ctx.emitter.instruction("mov x4, x2");                                      // pass the needle length as the secondary string argument
+    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the haystack into primary string argument registers
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the haystack while strpos() returns the match offset
+    abi::emit_call_label(ctx.emitter, "__rt_strpos");
+    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the haystack for suffix reconstruction
+    ctx.emitter.instruction("cmp x0, #0");                                      // check whether strpos() returned a valid match offset
+    ctx.emitter.instruction(&format!("b.ge {}", found_label));                  // build the matching suffix when the needle was found
+    ctx.emitter.instruction("mov x1, #0");                                      // return a null pointer for the empty not-found string
+    ctx.emitter.instruction("mov x2, #0");                                      // return zero length for the empty not-found string
+    ctx.emitter.instruction(&format!("b {}", end_label));                       // skip suffix pointer adjustment for a miss
+    ctx.emitter.label(found_label);
+    ctx.emitter.instruction("add x1, x1, x0");                                  // advance the haystack pointer to the matching suffix
+    ctx.emitter.instruction("sub x2, x2, x0");                                  // shrink the haystack length to the matching suffix length
+    Ok(())
+}
+
+/// Emits x86_64 `strstr()` search and suffix reconstruction.
+fn lower_strstr_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    found_label: &str,
+    end_label: &str,
+) -> Result<()> {
+    let haystack = expect_string_operand(ctx, inst, 0, "strstr")?;
+    let needle = expect_string_operand(ctx, inst, 1, "strstr")?;
+    ctx.load_string_value_to_regs(haystack, "rax", "rdx")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    ctx.load_string_value_to_regs(needle, "rax", "rdx")?;
+    ctx.emitter.instruction("mov r8, rax");                                     // preserve the needle pointer while restoring the haystack
+    ctx.emitter.instruction("mov r9, rdx");                                     // preserve the needle length while restoring the haystack
+    abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    ctx.emitter.instruction("mov rdi, rax");                                    // pass the haystack pointer as the first SysV string argument
+    ctx.emitter.instruction("mov rsi, rdx");                                    // pass the haystack length as the second SysV string argument
+    ctx.emitter.instruction("mov rdx, r8");                                     // pass the needle pointer as the third SysV string argument
+    ctx.emitter.instruction("mov rcx, r9");                                     // pass the needle length as the fourth SysV string argument
+    abi::emit_call_label(ctx.emitter, "__rt_strpos");
+    ctx.emitter.instruction("mov r8, rax");                                     // preserve the signed match offset while restoring the haystack
+    abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+    ctx.emitter.instruction("cmp r8, 0");                                       // check whether strpos() returned a valid match offset
+    ctx.emitter.instruction(&format!("jge {}", found_label));                   // build the matching suffix when the needle was found
+    ctx.emitter.instruction("xor eax, eax");                                    // return a null pointer for the empty not-found string
+    ctx.emitter.instruction("xor edx, edx");                                    // return zero length for the empty not-found string
+    ctx.emitter.instruction(&format!("jmp {}", end_label));                     // skip suffix pointer adjustment for a miss
+    ctx.emitter.label(found_label);
+    ctx.emitter.instruction("add rax, r8");                                     // advance the haystack pointer to the matching suffix
+    ctx.emitter.instruction("sub rdx, r8");                                     // shrink the haystack length to the matching suffix length
     Ok(())
 }
 
