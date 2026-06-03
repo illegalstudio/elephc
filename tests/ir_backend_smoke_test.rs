@@ -276,6 +276,23 @@ fn ir_backend_handles_basic_indexed_arrays() {
     );
 }
 
+/// Verifies basic associative-array allocation, lookup, update, and count lowering.
+#[test]
+fn ir_backend_handles_basic_associative_arrays() {
+    for (name, source, expected) in [
+        ("hash_count", "<?php $h = [\"a\" => 1, \"b\" => 2]; echo count($h);", "2"),
+        ("hash_get_int", "<?php $h = [\"a\" => 1]; echo $h[\"a\"];", "1"),
+        ("hash_get_string", "<?php $h = [\"a\" => \"z\"]; echo $h[\"a\"];", "z"),
+        ("hash_get_float", "<?php $h = [\"a\" => 1.5]; echo $h[\"a\"];", "1.5"),
+        ("hash_get_miss", "<?php $h = [\"a\" => 1]; echo $h[\"missing\"];", ""),
+        ("hash_int_key", "<?php $h = [1 => \"one\"]; echo $h[1];", "one"),
+        ("hash_set_updates_local", "<?php $h = [\"a\" => 1]; $h[\"a\"] = 7; echo $h[\"a\"];", "7"),
+        ("hash_set_string_value", "<?php $h = [\"a\" => \"x\"]; $h[\"a\"] = \"y\"; echo $h[\"a\"];", "y"),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Compiles `source` with `--ir-backend`, runs the output binary, and returns stdout.
 fn compile_and_run_ir_backend(name: &str, source: &str) -> String {
     compile_and_run_ir_backend_with_args(name, source, &[])

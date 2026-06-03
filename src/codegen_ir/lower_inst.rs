@@ -24,6 +24,7 @@ mod builtins;
 mod comparisons;
 mod conversions;
 mod floats;
+mod hashes;
 mod ownership;
 mod predicates;
 mod strings;
@@ -86,6 +87,10 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArrayGet => arrays::lower_array_get(ctx, &inst),
         Op::ArraySet => arrays::lower_array_set(ctx, &inst),
         Op::ArrayPush => arrays::lower_array_push(ctx, &inst),
+        Op::HashNew => hashes::lower_hash_new(ctx, &inst),
+        Op::HashLen => hashes::lower_hash_len(ctx, &inst),
+        Op::HashGet => hashes::lower_hash_get(ctx, &inst),
+        Op::HashSet => hashes::lower_hash_set(ctx, &inst),
         Op::Call => lower_direct_call(ctx, &inst),
         Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),
         Op::Acquire => ownership::lower_acquire(ctx, &inst),
