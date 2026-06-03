@@ -609,6 +609,26 @@ fn ir_backend_handles_indexed_array_unique() {
     );
 }
 
+/// Verifies indexed-array merge concatenates operands without mutating either source.
+#[test]
+fn ir_backend_handles_indexed_array_merge() {
+    let source = "<?php $a = [1, 2]; $b = [3, 4]; $c = array_merge($a, $b); echo count($c); echo ':'; echo $c[0] . $c[1] . $c[2] . $c[3]; echo ':'; echo count($a); echo ':'; echo $a[0] . $a[1]; echo ':'; echo $b[0] . $b[1];";
+    assert_eq!(
+        compile_and_run_ir_backend("array_merge_indexed", source),
+        "4:1234:2:12:34"
+    );
+}
+
+/// Verifies indexed-array merge keeps the right element type when the left side is empty.
+#[test]
+fn ir_backend_handles_indexed_array_merge_empty_left() {
+    let source = "<?php $a = []; $b = [3, 4]; $c = array_merge($a, $b); echo count($c); echo ':'; echo $c[0] . $c[1];";
+    assert_eq!(
+        compile_and_run_ir_backend("array_merge_indexed_empty_left", source),
+        "2:34"
+    );
+}
+
 /// Verifies indexed-array key existence delegates to the runtime bounds helper.
 #[test]
 fn ir_backend_handles_indexed_array_key_exists() {

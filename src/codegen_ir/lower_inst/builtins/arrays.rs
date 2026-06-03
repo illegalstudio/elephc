@@ -55,6 +55,30 @@ pub(super) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instructi
     store_if_result(ctx, inst)
 }
 
+/// Lowers `array_merge()` for two compatible indexed arrays with 8-byte payload slots.
+pub(super) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "array_merge", 2)?;
+    let first = expect_operand(inst, 0)?;
+    let second = expect_operand(inst, 1)?;
+    require_compatible_eight_byte_indexed_arrays(
+        ctx.value_php_type(first)?,
+        ctx.value_php_type(second)?,
+        "array_merge",
+    )?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(first, "x0")?;
+            ctx.load_value_to_reg(second, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(first, "rdi")?;
+            ctx.load_value_to_reg(second, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_merge");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `array_rand()` for indexed arrays.
 pub(super) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_rand", 1)?;
@@ -151,6 +175,34 @@ fn require_supported_indexed_array(ty: PhpType, name: &str) -> Result<()> {
 
 /// Verifies a builtin can use scalar indexed-array helpers with 8-byte slots.
 fn require_eight_byte_indexed_array(ty: PhpType, name: &str) -> Result<()> {
+    let _ = eight_byte_indexed_array_element_type(ty, name)?;
+    Ok(())
+}
+
+/// Verifies two indexed arrays can share an 8-byte scalar runtime helper.
+fn require_compatible_eight_byte_indexed_arrays(
+    first: PhpType,
+    second: PhpType,
+    name: &str,
+) -> Result<()> {
+    let first = eight_byte_indexed_array_element_type(first, name)?;
+    let second = eight_byte_indexed_array_element_type(second, name)?;
+    if first == second
+        || matches!(first, PhpType::Never | PhpType::Void)
+        || matches!(second, PhpType::Never | PhpType::Void)
+    {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "{} for incompatible indexed-array element PHP types {:?} and {:?}",
+        name,
+        first,
+        second
+    )))
+}
+
+/// Returns the element type for indexed arrays supported by scalar 8-byte helpers.
+fn eight_byte_indexed_array_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
@@ -163,7 +215,7 @@ fn require_eight_byte_indexed_array(ty: PhpType, name: &str) -> Result<()> {
                     | PhpType::Void
                     | PhpType::Never
             ) {
-                return Ok(());
+                return Ok(elem);
             }
             Err(CodegenIrError::unsupported(format!(
                 "{} for indexed-array element PHP type {:?}",
@@ -171,11 +223,7 @@ fn require_eight_byte_indexed_array(ty: PhpType, name: &str) -> Result<()> {
                 elem
             )))
         }
-        other => Err(CodegenIrError::unsupported(format!(
-            "{} for PHP type {:?}",
-            name,
-            other
-        ))),
+        other => Err(CodegenIrError::unsupported(format!("{} for PHP type {:?}", name, other))),
     }
 }
 

@@ -788,6 +788,7 @@ fn array_builtin_return_type(
     operands: &[crate::ir::ValueId],
 ) -> Option<PhpType> {
     match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        "array_merge" => array_merge_builtin_return_type(ctx, operands),
         "array_reverse" | "array_unique" => {
             let array = operands.first()?;
             match ctx.builder.value_php_type(*array).codegen_repr() {
@@ -797,6 +798,45 @@ fn array_builtin_return_type(
         }
         _ => None,
     }
+}
+
+/// Returns precise return metadata for `array_merge()`.
+///
+/// Empty indexed arrays lower as `Array<Void>`; when that is the first operand, the merged
+/// array inherits the second operand's element metadata so later indexed reads materialize
+/// real payload values instead of void sentinels.
+fn array_merge_builtin_return_type(
+    ctx: &LoweringContext<'_, '_>,
+    operands: &[crate::ir::ValueId],
+) -> Option<PhpType> {
+    let first = operands.first()?;
+    let first_ty = ctx.builder.value_php_type(*first).codegen_repr();
+    let second_ty = operands
+        .get(1)
+        .map(|value| ctx.builder.value_php_type(*value).codegen_repr());
+    match first_ty {
+        PhpType::Array(elem) if is_empty_array_element_type(elem.as_ref()) => match second_ty {
+            Some(PhpType::Array(right)) if is_scalar_merge_element_type(right.as_ref()) => {
+                Some(PhpType::Array(right))
+            }
+            _ => Some(PhpType::Array(elem)),
+        },
+        PhpType::Array(elem) => Some(PhpType::Array(elem)),
+        other => Some(other),
+    }
+}
+
+/// Returns true for the element sentinel used by statically empty indexed arrays.
+fn is_empty_array_element_type(ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Void)
+}
+
+/// Returns true for element types copied safely by the scalar merge runtime helper.
+fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable | PhpType::Void
+    )
 }
 
 /// Returns precise builtin return types needed by EIR value materialization.

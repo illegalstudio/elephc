@@ -287,14 +287,18 @@ pub(super) fn check_builtin(
                 ));
             }
             let ty1 = checker.infer_type(&args[0], env)?;
-            checker.infer_type(&args[1], env)?;
+            let ty2 = checker.infer_type(&args[1], env)?;
             if !matches!(ty1, PhpType::Array(_) | PhpType::AssocArray { .. }) {
                 return Err(CompileError::new(
                     span,
                     &format!("{}() first argument must be array", name),
                 ));
             }
-            Ok(Some(ty1))
+            if name == "array_merge" {
+                Ok(Some(array_merge_return_type(ty1, ty2)))
+            } else {
+                Ok(Some(ty1))
+            }
         }
         "array_unshift" => {
             if args.len() != 2 {
@@ -467,6 +471,36 @@ pub(super) fn check_builtin(
         }
         _ => Ok(None),
     }
+}
+
+/// Infers the static return type for `array_merge()`.
+///
+/// Empty indexed arrays carry `Array<Void>` in the checker; when the left operand is empty,
+/// the merged result should use the right operand's element shape instead of preserving
+/// the left operand's void element type.
+fn array_merge_return_type(first: PhpType, second: PhpType) -> PhpType {
+    match first {
+        PhpType::Array(elem) if is_empty_array_element_type(elem.as_ref()) => match second {
+            PhpType::Array(right) if is_scalar_merge_element_type(right.as_ref()) => {
+                PhpType::Array(right)
+            }
+            _ => PhpType::Array(elem),
+        },
+        other => other,
+    }
+}
+
+/// Returns true for the element sentinel used by statically empty indexed arrays.
+fn is_empty_array_element_type(ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Void)
+}
+
+/// Returns true for element types copied safely by the scalar merge runtime helper.
+fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable | PhpType::Void
+    )
 }
 
 /// Provides the Union member is countable array helper used by the arrays module.

@@ -88,6 +88,22 @@ echo $c[0] . $c[1] . $c[2] . $c[3];
     assert_eq!(out, "41234");
 }
 
+/// Verifies `array_merge` uses the right operand element type when the left array is empty.
+#[test]
+fn test_array_merge_empty_left_uses_right_element_type() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$b = [3, 4];
+$c = array_merge($a, $b);
+echo count($c);
+echo ":";
+echo $c[0] . $c[1];
+"#,
+    );
+    assert_eq!(out, "2:34");
+}
+
 /// Verifies the `+` operator keeps the left operand's values when both arrays
 /// have the same numeric key (left wins semantics).
 #[test]

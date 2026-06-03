@@ -118,12 +118,12 @@ pub(super) fn infer_function_call_type(
             .first()
             .map(|arg| infer_local_type(arg, sig, ctx))
             .unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Int))),
+        "array_merge" => infer_array_merge_type(args, sig, ctx),
         "explode"
         | "str_split"
         | "file"
         | "scandir"
         | "glob"
-        | "array_merge"
         | "array_slice"
         | "array_reverse"
         | "array_unique"
@@ -293,6 +293,45 @@ pub(super) fn infer_function_call_type(
             PhpType::Int
         }
     }
+}
+
+/// Infers the result type for `array_merge()` during legacy codegen.
+///
+/// A statically empty left operand has `Array<Void>` and should not force later indexed
+/// reads of the merged result to materialize null/void values when the right operand
+/// supplies concrete elements.
+fn infer_array_merge_type(args: &[Expr], sig: &FunctionSig, ctx: Option<&Context>) -> PhpType {
+    let first = args
+        .first()
+        .map(|arg| infer_local_type(arg, sig, ctx))
+        .unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Int)));
+    match first {
+        PhpType::Array(elem) if is_empty_array_element_type(elem.as_ref()) => args
+            .get(1)
+            .map(|arg| infer_local_type(arg, sig, ctx))
+            .and_then(|ty| match ty {
+                PhpType::Array(elem) if is_scalar_merge_element_type(elem.as_ref()) => {
+                    Some(PhpType::Array(elem))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| PhpType::Array(elem)),
+        PhpType::Array(elem) => PhpType::Array(elem),
+        _ => PhpType::Array(Box::new(PhpType::Int)),
+    }
+}
+
+/// Returns true for the element sentinel used by statically empty indexed arrays.
+fn is_empty_array_element_type(ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Void)
+}
+
+/// Returns true for element types copied safely by the scalar merge runtime helper.
+fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable | PhpType::Void
+    )
 }
 
 /// Infers the result type for dynamic callback builtins when the callback has static metadata.
