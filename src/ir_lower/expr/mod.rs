@@ -630,7 +630,7 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     }
     let operands = lower_args(ctx, args);
     let canonical = name.as_str();
-    let php_type = call_return_type(ctx, canonical);
+    let php_type = call_return_type(ctx, canonical, &operands);
     if ctx.extern_functions.contains_key(canonical) {
         let data = ctx.intern_function_name(canonical);
         return ctx.emit_value(
@@ -670,8 +670,14 @@ fn lower_args(ctx: &mut LoweringContext<'_, '_>, args: &[Expr]) -> Vec<crate::ir
 }
 
 /// Returns the best available return type for a function-like call.
-fn call_return_type(ctx: &LoweringContext<'_, '_>, name: &str) -> PhpType {
+fn call_return_type(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    operands: &[crate::ir::ValueId],
+) -> PhpType {
     let php_type = if let Some(php_type) = builtin_return_type_override(name) {
+        php_type
+    } else if let Some(php_type) = numeric_builtin_return_type(ctx, name, operands) {
         php_type
     } else if let Some(sig) = ctx.functions.get(name) {
         sig.return_type.clone()
@@ -685,6 +691,41 @@ fn call_return_type(ctx: &LoweringContext<'_, '_>, name: &str) -> PhpType {
         PhpType::Mixed
     };
     normalize_value_php_type(php_type)
+}
+
+/// Returns precise return metadata for numeric builtins whose result depends on operands.
+fn numeric_builtin_return_type(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    operands: &[crate::ir::ValueId],
+) -> Option<PhpType> {
+    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        "abs" => {
+            let value = operands.first()?;
+            let ty = ctx.builder.value_php_type(*value).codegen_repr();
+            Some(if ty == PhpType::Float {
+                PhpType::Float
+            } else {
+                PhpType::Int
+            })
+        }
+        "min" | "max" => {
+            let mut saw_float = false;
+            for value in operands {
+                match ctx.builder.value_php_type(*value).codegen_repr() {
+                    PhpType::Float => saw_float = true,
+                    PhpType::Int | PhpType::Bool => {}
+                    _ => return Some(PhpType::Mixed),
+                }
+            }
+            Some(if saw_float {
+                PhpType::Float
+            } else {
+                PhpType::Int
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Returns precise builtin return types needed by EIR value materialization.

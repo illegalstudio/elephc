@@ -215,6 +215,21 @@ fn ir_backend_handles_scalar_builtins() {
             "<?php echo is_numeric(1) ? '1' : '0'; echo is_numeric(1.5) ? '1' : '0'; echo is_numeric(true) ? '1' : '0'; echo is_numeric('42') ? '1' : '0'; echo is_numeric('-1.5') ? '1' : '0'; echo is_numeric('.') ? '1' : '0'; echo is_numeric('x') ? '1' : '0';",
             "1101100",
         ),
+        (
+            "abs_scalars",
+            "<?php echo abs(-42); echo ':'; echo abs(-3.5);",
+            "42:3.5",
+        ),
+        (
+            "min_max_ints",
+            "<?php echo min(3, 7); echo ':'; echo max(3, 7); echo ':'; echo min(3, 1, 2); echo ':'; echo max(1, 3, 2);",
+            "3:7:1:3",
+        ),
+        (
+            "min_max_floats",
+            "<?php echo min(1.5, 2.5); echo ':'; echo max(1.5, 2.5);",
+            "1.5:2.5",
+        ),
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);
     }
