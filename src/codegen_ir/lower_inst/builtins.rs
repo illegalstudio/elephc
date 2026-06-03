@@ -73,6 +73,9 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "is_null" => lower_is_null_builtin(ctx, inst),
         "is_string" => lower_static_type_predicate(ctx, inst, "is_string", PhpType::Str),
         "is_numeric" => is_numeric::lower_is_numeric(ctx, inst),
+        "is_nan" => math::lower_is_nan(ctx, inst),
+        "is_infinite" => math::lower_is_infinite(ctx, inst),
+        "is_finite" => math::lower_is_finite(ctx, inst),
         "number_format" => strings::lower_number_format(ctx, inst),
         "strtolower" => strings::lower_unary_string_runtime(
             ctx,

@@ -306,6 +306,11 @@ line2:4142:AB"#,
             "<?php echo gettype(42); echo ':'; echo gettype(1.5); echo ':'; echo gettype('hi'); echo ':'; echo gettype(false); echo ':'; echo gettype(null);",
             "integer:double:string:boolean:NULL",
         ),
+        (
+            "float_type_predicates",
+            "<?php echo is_nan(fdiv(0.0, 0.0)) ? '1' : '0'; echo is_nan(0) ? '1' : '0'; echo is_infinite(fdiv(1.0, 0.0)) ? '1' : '0'; echo is_infinite(fdiv(-1.0, 0.0)) ? '1' : '0'; echo is_infinite(42.0) ? '1' : '0'; echo is_finite(42.0) ? '1' : '0'; echo is_finite(fdiv(1.0, 0.0)) ? '1' : '0'; echo is_finite(fdiv(0.0, 0.0)) ? '1' : '0';",
+            "10110100",
+        ),
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);
     }

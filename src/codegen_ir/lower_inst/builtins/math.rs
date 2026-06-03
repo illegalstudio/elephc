@@ -75,6 +75,71 @@ pub(super) fn lower_sqrt(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     store_if_result(ctx, inst)
 }
 
+/// Lowers `is_nan()` by checking whether the normalized float is unordered with itself.
+pub(super) fn lower_is_nan(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "is_nan", 1)?;
+    let value = expect_operand(inst, 0)?;
+    load_numeric_as_float(ctx, value, "is_nan")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("fcmp d0, d0");                             // compare the value against itself so NaN sets the unordered flag
+            ctx.emitter.instruction("cset x0, vs");                             // materialize true only for unordered NaN comparisons
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("ucomisd xmm0, xmm0");                      // compare the value against itself so NaN sets the parity flag
+            ctx.emitter.instruction("setp al");                                 // materialize true only for unordered NaN comparisons
+            ctx.emitter.instruction("movzx rax, al");                           // widen the predicate byte into the integer result register
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `is_infinite()` by comparing the normalized float against +/- infinity.
+pub(super) fn lower_is_infinite(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count(inst, "is_infinite", 1)?;
+    let value = expect_operand(inst, 0)?;
+    load_numeric_as_float(ctx, value, "is_infinite")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("fabs d0, d0");                             // make +INF and -INF compare against the same positive infinity constant
+            load_float_literal_to_reg(ctx, "d1", f64::INFINITY);
+            ctx.emitter.instruction("fcmp d0, d1");                             // compare the absolute value against positive infinity
+            ctx.emitter.instruction("cset x0, eq");                             // materialize true only when the value is infinite
+        }
+        Arch::X86_64 => {
+            load_float_literal_to_reg(ctx, "xmm1", f64::INFINITY);
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare the value against positive infinity
+            ctx.emitter.instruction("sete al");                                 // remember whether the value equals positive infinity
+            load_float_literal_to_reg(ctx, "xmm1", f64::NEG_INFINITY);
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare the value against negative infinity
+            ctx.emitter.instruction("sete cl");                                 // remember whether the value equals negative infinity
+            ctx.emitter.instruction("or al, cl");                               // combine the positive and negative infinity checks
+            ctx.emitter.instruction("movzx rax, al");                           // widen the infinity boolean into the integer result register
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `is_finite()` by rejecting NaN and both infinities.
+pub(super) fn lower_is_finite(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "is_finite", 1)?;
+    let value = expect_operand(inst, 0)?;
+    load_numeric_as_float(ctx, value, "is_finite")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("fabs d0, d0");                             // make +INF and -INF compare against the same positive infinity constant
+            load_float_literal_to_reg(ctx, "d1", f64::INFINITY);
+            ctx.emitter.instruction("fcmp d0, d1");                             // finite values compare strictly below positive infinity
+            ctx.emitter.instruction("cset x0, mi");                             // materialize true only for non-NaN values below infinity
+        }
+        Arch::X86_64 => emit_x86_64_is_finite(ctx),
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `round()` for concrete integer-like and floating operands.
 pub(super) fn lower_round(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
@@ -123,6 +188,40 @@ pub(super) fn lower_min_max(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Emits the x86_64 finite check, including explicit NaN and +/- infinity branches.
+fn emit_x86_64_is_finite(ctx: &mut FunctionContext<'_>) {
+    let not_finite_label = ctx.next_label("is_finite_false");
+    let done_label = ctx.next_label("is_finite_done");
+    ctx.emitter.instruction("ucomisd xmm0, xmm0");                              // compare the value against itself so NaN sets the parity flag
+    ctx.emitter.instruction(&format!("jp {}", not_finite_label));               // NaN values are not finite
+    load_float_literal_to_reg(ctx, "xmm1", f64::INFINITY);
+    ctx.emitter.instruction("ucomisd xmm0, xmm1");                              // compare the value against positive infinity
+    ctx.emitter.instruction(&format!("je {}", not_finite_label));               // positive infinity is not finite
+    load_float_literal_to_reg(ctx, "xmm1", f64::NEG_INFINITY);
+    ctx.emitter.instruction("ucomisd xmm0, xmm1");                              // compare the value against negative infinity
+    ctx.emitter.instruction(&format!("je {}", not_finite_label));               // negative infinity is not finite
+    ctx.emitter.instruction("mov rax, 1");                                      // any remaining non-NaN and non-infinite value is finite
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the false materialization path after confirming finiteness
+    ctx.emitter.label(&not_finite_label);
+    ctx.emitter.instruction("mov rax, 0");                                      // NaN and infinities return false for is_finite()
+    ctx.emitter.label(&done_label);
+}
+
+/// Loads a floating-point literal into `reg` through the data section.
+fn load_float_literal_to_reg(ctx: &mut FunctionContext<'_>, reg: &str, value: f64) {
+    let label = ctx.data.add_float(value);
+    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, scratch, &label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr {}, [{}]", reg, scratch));    // load the floating-point comparison constant through the symbol scratch register
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("movsd {}, QWORD PTR [{}]", reg, scratch)); // load the floating-point comparison constant through the symbol scratch register
+        }
+    }
 }
 
 /// Lowers a one-argument float rounding builtin with target-native instructions.
