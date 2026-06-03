@@ -92,6 +92,22 @@ fn ir_backend_handles_scalar_ops_and_string_coercions() {
     }
 }
 
+/// Verifies PHP logical xor evaluates both operands and compares canonical truthiness.
+#[test]
+fn ir_backend_handles_logical_xor() {
+    assert_eq!(
+        compile_and_run_ir_backend("logical_xor_truthy_ints", "<?php echo ($argc xor 2) ? \"T\" : \"F\"; echo \":\"; echo ($argc xor 0) ? \"T\" : \"F\";"),
+        "F:T"
+    );
+    assert_eq!(
+        compile_and_run_ir_backend(
+            "logical_xor_evaluates_rhs",
+            "<?php function mark() { echo \"rhs\"; return false; } $r = (true xor mark()); echo $r ? \"T\" : \"F\";",
+        ),
+        "rhsT"
+    );
+}
+
 /// Verifies scalar equality opcodes generated for loose comparisons, strict comparisons, and match.
 #[test]
 fn ir_backend_handles_scalar_equality() {

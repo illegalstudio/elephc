@@ -222,7 +222,7 @@ fn lower_binary(
         }
         BinOp::And | BinOp::Or => lower_logical_binary(ctx, left, op, right, expr),
         BinOp::NullCoalesce => lower_null_coalesce(ctx, left, right, expr),
-        BinOp::Xor => lower_runtime_pair(ctx, Op::RuntimeCall, left, right, expr),
+        BinOp::Xor => lower_logical_xor(ctx, left, right, expr),
     }
 }
 
@@ -437,19 +437,6 @@ fn lower_print(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> 
     lower_int_literal(ctx, 1, expr)
 }
 
-/// Lowers a two-expression runtime-shaped operation.
-fn lower_runtime_pair(
-    ctx: &mut LoweringContext<'_, '_>,
-    op: Op,
-    left: &Expr,
-    right: &Expr,
-    expr: &Expr,
-) -> LoweredValue {
-    let lhs = lower_expr(ctx, left);
-    let rhs = lower_expr(ctx, right);
-    ctx.emit_value(op, vec![lhs.value, rhs.value], None, fallback_expr_type(expr), op.default_effects(), Some(expr.span))
-}
-
 /// Lowers short-circuiting logical `&&` and `||`.
 fn lower_logical_binary(
     ctx: &mut LoweringContext<'_, '_>,
@@ -490,6 +477,70 @@ fn lower_logical_binary(
 
     ctx.builder.position_at_end(merge);
     ctx.load_local(&temp_name, Some(expr.span))
+}
+
+/// Lowers non-short-circuiting PHP logical `xor`.
+fn lower_logical_xor(
+    ctx: &mut LoweringContext<'_, '_>,
+    left: &Expr,
+    right: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let lhs = lower_expr(ctx, left);
+    let lhs = lower_truthy_bool(ctx, lhs, Some(left.span));
+    let rhs = lower_expr(ctx, right);
+    let rhs = lower_truthy_bool(ctx, rhs, Some(right.span));
+    ctx.emit_value(
+        Op::ICmp,
+        vec![lhs.value, rhs.value],
+        Some(Immediate::CmpPredicate(CmpPredicate::Ne)),
+        PhpType::Bool,
+        Op::ICmp.default_effects(),
+        Some(expr.span),
+    )
+}
+
+/// Converts a lowered PHP value into a canonical boolean value for value-level logical ops.
+fn lower_truthy_bool(
+    ctx: &mut LoweringContext<'_, '_>,
+    input: LoweredValue,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    match ctx.builder.value_php_type(input.value).codegen_repr() {
+        PhpType::Bool => input,
+        PhpType::Int => {
+            let zero = ctx
+                .builder
+                .emit_with_effects(
+                    Op::ConstI64,
+                    Vec::new(),
+                    Some(Immediate::I64(0)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                    Op::ConstI64.default_effects(),
+                    span,
+                )
+                .expect("const_i64 produces a value");
+            ctx.emit_value(
+                Op::ICmp,
+                vec![input.value, zero],
+                Some(Immediate::CmpPredicate(CmpPredicate::Ne)),
+                PhpType::Bool,
+                Op::ICmp.default_effects(),
+                span,
+            )
+        }
+        PhpType::Void | PhpType::Never => emit_bool_literal(ctx, false, span),
+        _ => ctx.emit_value(
+            Op::IsTruthy,
+            vec![input.value],
+            None,
+            PhpType::Bool,
+            Op::IsTruthy.default_effects(),
+            span,
+        ),
+    }
 }
 
 /// Lowers null coalesce so the default expression is evaluated only for null values.
