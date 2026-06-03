@@ -363,7 +363,13 @@ fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> R
             ctx.emitter.label(&skip_label);
             Ok(())
         }
-        PhpType::Float | PhpType::Str | PhpType::Mixed | PhpType::Union(_) => {
+        PhpType::Float
+        | PhpType::Str
+        | PhpType::Mixed
+        | PhpType::Union(_)
+        | PhpType::Iterable
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. } => {
             abi::emit_write_stdout(ctx.emitter, ty);
             Ok(())
         }

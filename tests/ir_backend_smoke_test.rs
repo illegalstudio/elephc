@@ -561,6 +561,27 @@ fn ir_backend_handles_array_truthiness() {
     }
 }
 
+/// Verifies iterable echo uses the legacy array literal output while concrete array echo is silent.
+#[test]
+fn ir_backend_handles_iterable_echo() {
+    let source = r#"<?php
+function show(iterable $items): void {
+    echo $items;
+}
+show(["a" => 1, "b" => 2]);
+echo "|";
+show([10, 20, 30]);
+echo "|";
+$direct = [1];
+echo $direct;
+echo "done";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("iterable_echo", source),
+        "Array|Array|done"
+    );
+}
+
 /// Verifies string builtins that produce or consume indexed arrays through runtime helpers.
 #[test]
 fn ir_backend_handles_string_array_builtins() {
