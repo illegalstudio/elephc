@@ -654,6 +654,8 @@ fn call_return_type(ctx: &LoweringContext<'_, '_>, name: &str) -> PhpType {
         sig.return_type.clone()
     } else if let Some(sig) = ctx.extern_functions.get(name) {
         sig.return_type.clone()
+    } else if let Some(sig) = crate::types::first_class_callable_builtin_sig(name) {
+        sig.return_type
     } else if let Some(sig) = crate::types::builtin_call_sig(name) {
         sig.return_type
     } else {

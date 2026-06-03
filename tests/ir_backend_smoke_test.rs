@@ -154,6 +154,27 @@ fn ir_backend_calls_user_functions() {
     }
 }
 
+/// Verifies scalar builtin calls lowered by the EIR backend.
+#[test]
+fn ir_backend_handles_scalar_builtins() {
+    for (name, source, expected) in [
+        ("strlen", "<?php echo strlen(\"hello\");", "5"),
+        ("intval_float", "<?php echo intval(3.9);", "3"),
+        ("intval_str", "<?php echo intval(\"42xyz\");", "42"),
+        ("floatval_int", "<?php echo floatval(2) + 0.5;", "2.5"),
+        ("floatval_str", "<?php echo floatval(\"2.5x\");", "2.5"),
+        ("boolval_false", "<?php echo boolval(\"0\");", ""),
+        ("boolval_true", "<?php echo boolval(\"hi\");", "1"),
+        (
+            "type_predicates",
+            "<?php echo is_int(1); echo is_float(1.5); echo is_bool(false); echo is_null(null); echo is_string(\"x\");",
+            "11111",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Compiles `source` with `--ir-backend`, runs the output binary, and returns stdout.
 fn compile_and_run_ir_backend(name: &str, source: &str) -> String {
     compile_and_run_ir_backend_with_args(name, source, &[])
@@ -180,7 +201,7 @@ fn compile_and_run_ir_backend_with_args(name: &str, source: &str, args: &[&str])
         .expect("failed to run elephc CLI with --ir-backend");
     assert!(
         compile.status.success(),
-        "elephc --ir-backend failed: stderr={}",
+        "elephc --ir-backend failed for {name}: stderr={}",
         String::from_utf8_lossy(&compile.stderr)
     );
 
@@ -189,7 +210,7 @@ fn compile_and_run_ir_backend_with_args(name: &str, source: &str, args: &[&str])
         .args(args)
         .output()
         .expect("failed to run IR backend binary");
-    assert!(run.status.success(), "IR backend binary failed");
+    assert!(run.status.success(), "IR backend binary failed for {name}");
     let stdout = String::from_utf8(run.stdout).unwrap();
 
     let _ = fs::remove_dir_all(&dir);

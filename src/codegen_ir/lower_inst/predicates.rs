@@ -52,7 +52,7 @@ pub(super) fn lower_is_null(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Emits an integer nonzero check into the canonical integer result register.
-fn emit_int_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
+pub(super) fn emit_int_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #0");                              // compare the integer truthiness operand against zero
@@ -67,7 +67,7 @@ fn emit_int_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits a float nonzero check into the canonical integer result register.
-fn emit_float_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
+pub(super) fn emit_float_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("fcmp d0, #0.0");                           // compare the float truthiness operand against zero
@@ -83,7 +83,7 @@ fn emit_float_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits PHP string truthiness, where `""` and `"0"` are false.
-fn emit_string_truthiness(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+pub(super) fn emit_string_truthiness(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let true_label = ctx.next_label("str_truthy_true");
     let done_label = ctx.next_label("str_truthy_done");
     match ctx.emitter.target.arch {
