@@ -13,7 +13,7 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
-use crate::ir::Instruction;
+use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
@@ -50,6 +50,18 @@ pub(super) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instr
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_key_exists");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `array_search()` for indexed arrays with integer-like payloads.
+pub(super) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "array_search", 2)?;
+    let needle = expect_operand(inst, 0)?;
+    let array = expect_operand(inst, 1)?;
+    match supported_array_search_case(ctx.value_php_type(needle)?, ctx.value_php_type(array)?)? {
+        ArraySearchCase::Empty => box_array_search_miss(ctx),
+        ArraySearchCase::Scalar => lower_array_search_scalar(ctx, needle, array)?,
+    }
     store_if_result(ctx, inst)
 }
 
@@ -95,6 +107,105 @@ fn require_supported_indexed_array(ty: PhpType, name: &str) -> Result<()> {
             name,
             other
         ))),
+    }
+}
+
+/// Describes which indexed-array `array_search()` lowering path applies.
+enum ArraySearchCase {
+    Empty,
+    Scalar,
+}
+
+/// Verifies that an indexed-array `array_search()` call can use the scalar search helper.
+fn supported_array_search_case(needle_ty: PhpType, array_ty: PhpType) -> Result<ArraySearchCase> {
+    let needle_ty = needle_ty.codegen_repr();
+    match array_ty.codegen_repr() {
+        PhpType::Array(elem) => match elem.codegen_repr() {
+            PhpType::Never | PhpType::Void => Ok(ArraySearchCase::Empty),
+            PhpType::Int | PhpType::Bool if matches!(needle_ty, PhpType::Int | PhpType::Bool) => {
+                Ok(ArraySearchCase::Scalar)
+            }
+            elem_ty => Err(CodegenIrError::unsupported(format!(
+                "array_search needle PHP type {:?} for indexed-array element PHP type {:?}",
+                needle_ty,
+                elem_ty
+            ))),
+        },
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_search for PHP array type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Lowers integer-like indexed-array search and boxes the PHP `int|false` result.
+fn lower_array_search_scalar(
+    ctx: &mut FunctionContext<'_>,
+    needle: ValueId,
+    array: ValueId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(needle, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(needle, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_search");
+    box_array_search_result(ctx);
+    Ok(())
+}
+
+/// Boxes a raw array-search helper result into PHP `int|false` Mixed form.
+fn box_array_search_result(ctx: &mut FunctionContext<'_>) {
+    let found_label = ctx.next_label("array_search_found");
+    let end_label = ctx.next_label("array_search_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // distinguish a found index from the array_search() not-found sentinel
+            ctx.emitter.instruction(&format!("b.ge {}", found_label));          // box a found index as an integer mixed result
+            box_array_search_miss(ctx);
+            ctx.emitter.instruction(&format!("b {}", end_label));               // skip integer boxing after producing false for a miss
+            ctx.emitter.label(&found_label);
+            ctx.emitter.instruction("mov x1, x0");                              // move the found index into the mixed helper payload register
+            ctx.emitter.instruction("mov x2, #0");                              // integer mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #0");                              // runtime tag 0 = integer
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&end_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 0");                              // distinguish a found index from the array_search() not-found sentinel
+            ctx.emitter.instruction(&format!("jge {}", found_label));           // box a found index as an integer mixed result
+            box_array_search_miss(ctx);
+            ctx.emitter.instruction(&format!("jmp {}", end_label));             // skip integer boxing after producing false for a miss
+            ctx.emitter.label(&found_label);
+            ctx.emitter.instruction("mov rdi, rax");                            // move the found index into the mixed helper payload register
+            ctx.emitter.instruction("xor esi, esi");                            // integer mixed payloads do not use a high word
+            ctx.emitter.instruction("xor eax, eax");                            // runtime tag 0 = integer
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&end_label);
+        }
+    }
+}
+
+/// Boxes `false` for an array-search miss.
+fn box_array_search_miss(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, #0");                              // false mixed payload is zero
+            ctx.emitter.instruction("mov x2, #0");                              // bool mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = bool
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xor edi, edi");                            // false mixed payload is zero
+            ctx.emitter.instruction("xor esi, esi");                            // bool mixed payloads do not use a high word
+            ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 = bool
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        }
     }
 }
 

@@ -631,6 +631,40 @@ fn ir_backend_handles_indexed_in_array() {
     }
 }
 
+/// Verifies indexed-array search returns `int|false` as boxed Mixed.
+#[test]
+fn ir_backend_handles_indexed_array_search() {
+    for (name, source, expected) in [
+        (
+            "array_search_found",
+            "<?php $a = [10, 20, 30]; echo array_search(20, $a);",
+            "1",
+        ),
+        (
+            "array_search_missing_strict_false",
+            "<?php $a = [10, 20, 30]; echo array_search(99, $a) === false ? \"miss\" : \"hit\";",
+            "miss",
+        ),
+        (
+            "array_search_assigned_missing_strict_false",
+            "<?php $a = [10, 20, 30]; $r = array_search(99, $a); echo $r === false ? \"miss\" : \"hit\";",
+            "miss",
+        ),
+        (
+            "array_search_zero_index_is_not_false",
+            "<?php $a = [10, 20, 30]; echo array_search(10, $a) === false ? \"miss\" : \"zero\";",
+            "zero",
+        ),
+        (
+            "array_search_empty",
+            "<?php $a = []; echo array_search(1, $a) === false ? \"miss\" : \"hit\";",
+            "miss",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies array truthiness follows PHP length rules for empty and non-empty containers.
 #[test]
 fn ir_backend_handles_array_truthiness() {

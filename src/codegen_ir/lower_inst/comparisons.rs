@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Strict equality respects static PHP type identity before comparing payloads.
+//! - Mixed strict equality boxes concrete operands and delegates tag/payload comparison
+//!   to the shared runtime helper.
 //! - Loose equality is intentionally limited to scalar int/bool/null and
 //!   string-vs-string cases until mixed numeric/string coercions are lowered.
 
@@ -28,6 +30,10 @@ pub(super) fn lower_strict_eq(
     let rhs = expect_operand(inst, 1)?;
     let lhs_ty = ctx.value_php_type(lhs)?;
     let rhs_ty = ctx.value_php_type(rhs)?;
+    if is_mixed_like(&lhs_ty) || is_mixed_like(&rhs_ty) {
+        emit_mixed_strict_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
+        return store_if_result(ctx, inst);
+    }
     if lhs_ty != rhs_ty {
         emit_bool_literal(ctx, !is_equal);
         return store_if_result(ctx, inst);
@@ -51,6 +57,92 @@ pub(super) fn lower_strict_eq(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Returns true for boxed runtime payloads that need mixed-aware comparison.
+fn is_mixed_like(ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Mixed)
+}
+
+/// Compares a mixed operand against another mixed or concrete operand using runtime tags.
+fn emit_mixed_strict_compare(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    lhs_ty: &PhpType,
+    rhs: ValueId,
+    rhs_ty: &PhpType,
+    is_equal: bool,
+) -> Result<()> {
+    let left_box_temp = !is_mixed_like(lhs_ty);
+    let right_box_temp = !is_mixed_like(rhs_ty);
+    materialize_value_as_mixed(ctx, lhs, lhs_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    materialize_value_as_mixed(ctx, rhs, rhs_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_strict_eq");
+            if !is_equal {
+                ctx.emitter.instruction("eor x0, x0, #1");                      // invert the mixed strict-equality result for !==
+            }
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_strict_eq");
+            if !is_equal {
+                ctx.emitter.instruction("xor rax, 1");                          // invert the mixed strict-equality result for !==
+            }
+        }
+    }
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    if left_box_temp {
+        decref_mixed_temp_at(ctx, 32);
+    }
+    if right_box_temp {
+        decref_mixed_temp_at(ctx, 16);
+    }
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    Ok(())
+}
+
+/// Loads an SSA value as a boxed Mixed pointer in the integer result register.
+fn materialize_value_as_mixed(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    ty: &PhpType,
+) -> Result<()> {
+    let ty = ty.codegen_repr();
+    if is_mixed_like(&ty) {
+        ctx.load_value_to_result(value)?;
+        return Ok(());
+    }
+    match ty {
+        PhpType::Void | PhpType::Never => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
+        _ => {
+            ctx.load_value_to_result(value)?;
+        }
+    }
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &ty);
+    Ok(())
+}
+
+/// Releases a temporary Mixed box saved on the temporary stack.
+fn decref_mixed_temp_at(ctx: &mut FunctionContext<'_>, offset: usize) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", offset);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", offset);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
 }
 
 /// Lowers loose equality or inequality for scalar int/bool/null and string pairs.
