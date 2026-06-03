@@ -40,6 +40,15 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "fdiv" => math::lower_fdiv(ctx, inst),
         "fmod" => math::lower_fmod(ctx, inst),
         "pow" => math::lower_pow(ctx, inst),
+        "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh"
+        | "tanh" | "log2" | "log10" | "exp" => {
+            math::lower_unary_libm(ctx, inst, key.as_str())
+        }
+        "log" => math::lower_log(ctx, inst),
+        "atan2" => math::lower_atan2(ctx, inst),
+        "hypot" => math::lower_hypot(ctx, inst),
+        "deg2rad" => math::lower_deg2rad(ctx, inst),
+        "rad2deg" => math::lower_rad2deg(ctx, inst),
         "min" => math::lower_min_max(ctx, inst, false),
         "max" => math::lower_min_max(ctx, inst, true),
         "pi" => lower_pi(ctx, inst),

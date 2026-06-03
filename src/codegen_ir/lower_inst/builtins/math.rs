@@ -20,8 +20,12 @@ use super::super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
 
 mod binary;
+mod libm;
 
 pub(super) use binary::{lower_fdiv, lower_fmod, lower_intdiv, lower_pow};
+pub(super) use libm::{
+    lower_atan2, lower_deg2rad, lower_hypot, lower_log, lower_rad2deg, lower_unary_libm,
+};
 
 /// Lowers `abs()` for concrete integer-like and floating operands.
 pub(super) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -226,7 +230,6 @@ fn emit_int_abs(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Loads a numeric operand and normalizes values into the integer result register.
 /// Loads a `round()` precision operand as an integer in the result register.
 fn load_precision_as_int(
     ctx: &mut FunctionContext<'_>,

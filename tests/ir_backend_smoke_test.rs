@@ -245,6 +245,26 @@ fn ir_backend_handles_scalar_builtins() {
             "<?php echo intdiv(7, 2); echo ':'; echo fdiv(10, 4); echo ':'; echo fmod(10.5, 3.2); echo ':'; echo pow(2.0, 10.0);",
             "3:2.5:0.9:1024",
         ),
+        (
+            "trig_math",
+            "<?php echo round(sin(0.0), 4); echo ':'; echo round(cos(0.0), 4); echo ':'; echo round(tan(0.0), 4);",
+            "0:1:0",
+        ),
+        (
+            "inverse_and_hyperbolic_math",
+            "<?php echo round(asin(1.0), 4); echo ':'; echo round(acos(0.0), 4); echo ':'; echo round(atan(1.0), 4); echo ':'; echo round(sinh(0.0), 4); echo ':'; echo round(cosh(0.0), 4); echo ':'; echo round(tanh(0.0), 4);",
+            "1.5708:1.5708:0.7854:0:1:0",
+        ),
+        (
+            "log_exp_and_distance_math",
+            "<?php echo round(log(exp(1.0)), 4); echo ':'; echo log2(8.0); echo ':'; echo log10(1000.0); echo ':'; echo exp(0.0); echo ':'; echo hypot(3.0, 4.0); echo ':'; echo round(atan2(1.0, 0.0), 4);",
+            "1:3:3:1:5:1.5708",
+        ),
+        (
+            "angle_and_log_base_math",
+            "<?php echo round(deg2rad(180.0), 4); echo ':'; echo round(rad2deg(pi()), 1); echo ':'; echo log(1000, 10);",
+            "3.1416:180:3",
+        ),
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);
     }
