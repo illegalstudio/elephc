@@ -72,6 +72,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "is_bool" => lower_static_type_predicate(ctx, inst, "is_bool", PhpType::Bool),
         "is_null" => lower_is_null_builtin(ctx, inst),
         "is_string" => lower_static_type_predicate(ctx, inst, "is_string", PhpType::Str),
+        "is_iterable" => lower_is_iterable(ctx, inst),
         "is_numeric" => is_numeric::lower_is_numeric(ctx, inst),
         "is_nan" => math::lower_is_nan(ctx, inst),
         "is_infinite" => math::lower_is_infinite(ctx, inst),
@@ -547,6 +548,35 @@ fn lower_static_type_predicate(
         return Err(CodegenIrError::unsupported(format!("{} for PHP type Mixed", name)));
     }
     emit_static_bool(ctx, ty == expected);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `is_iterable()` for concrete non-Mixed values.
+fn lower_is_iterable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "is_iterable", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let ty = ctx.value_php_type(value)?;
+    let result = match ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => true,
+        PhpType::Int
+        | PhpType::Float
+        | PhpType::Str
+        | PhpType::Bool
+        | PhpType::Void
+        | PhpType::Never
+        | PhpType::Callable
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_)
+        | PhpType::Packed(_)
+        | PhpType::Resource(_) => false,
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_) => {
+            return Err(CodegenIrError::unsupported(format!(
+                "is_iterable for PHP type {:?}",
+                ty
+            )))
+        }
+    };
+    emit_static_bool(ctx, result);
     store_if_result(ctx, inst)
 }
 

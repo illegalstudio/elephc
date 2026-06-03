@@ -555,6 +555,22 @@ fn ir_backend_handles_string_array_builtins() {
     }
 }
 
+/// Verifies `is_iterable()` static decisions for concrete arrays, hashes, and scalars.
+#[test]
+fn ir_backend_handles_is_iterable_predicates() {
+    let source = r#"<?php
+$indexed = [1, 2, 3];
+$hash = ["a" => 1];
+echo is_iterable($indexed) ? "y" : "n";
+echo is_iterable($hash) ? "y" : "n";
+echo is_iterable(42) ? "y" : "n";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("is_iterable_static_predicates", source),
+        "yyn"
+    );
+}
+
 /// Verifies basic associative-array allocation, lookup, update, and count lowering.
 #[test]
 fn ir_backend_handles_basic_associative_arrays() {
