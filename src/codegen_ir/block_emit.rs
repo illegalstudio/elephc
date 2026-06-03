@@ -17,7 +17,6 @@ use super::context::FunctionContext;
 use super::frame;
 use super::lower_inst;
 use super::lower_term;
-use super::value_placement;
 use super::{CodegenIrError, Result};
 
 /// Emits the EIR main function as the process entry point.
@@ -27,9 +26,8 @@ pub(super) fn emit_main_function(
     emitter: &mut Emitter,
     data: &mut DataSection,
 ) -> Result<()> {
-    let placement = value_placement::allocate(function);
-    let frame_size = frame::frame_size_for_placement(&placement);
-    let mut ctx = FunctionContext::new(module, function, emitter, data, placement, frame_size);
+    let layout = frame::layout_for_function(function);
+    let mut ctx = FunctionContext::new(module, function, emitter, data, layout);
     frame::emit_main_prologue(&mut ctx);
     emit_blocks(&mut ctx)?;
     if !ctx.epilogue_emitted {

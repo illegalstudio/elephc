@@ -11,7 +11,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Immediate, InstId, Instruction, Op, ValueId};
+use crate::ir::{Immediate, InstId, Instruction, LocalSlotId, Op, ValueId};
 use crate::types::PhpType;
 
 use super::context::FunctionContext;
@@ -30,6 +30,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ConstBool => lower_const_bool(ctx, &inst),
         Op::ConstNull => lower_const_null(ctx, &inst),
         Op::ConstStr => lower_const_str(ctx, &inst),
+        Op::LoadLocal => lower_load_local(ctx, &inst),
+        Op::StoreLocal => lower_store_local(ctx, &inst),
         Op::EchoValue => lower_echo_value(ctx, &inst),
         _ => Err(CodegenIrError::unsupported(format!("opcode {}", inst.op.name()))),
     }
@@ -50,6 +52,20 @@ fn lower_const_f64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Lowers an addressable local load into the result register and SSA destination slot.
+fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    ctx.load_local_to_result(slot)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers an addressable local store from one SSA operand.
+fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    let value = expect_operand(inst, 0)?;
+    ctx.store_value_to_local(slot, value)
 }
 
 /// Lowers an integer constant into the canonical integer result register and slot.
@@ -179,6 +195,17 @@ fn expect_data(inst: &Instruction) -> Result<crate::ir::DataId> {
         Some(Immediate::Data(value)) => Ok(value),
         _ => Err(CodegenIrError::invalid_module(format!(
             "{} missing data immediate",
+            inst.op.name()
+        ))),
+    }
+}
+
+/// Returns the local-slot immediate attached to a local access instruction.
+fn expect_local_slot(inst: &Instruction) -> Result<LocalSlotId> {
+    match inst.immediate {
+        Some(Immediate::LocalSlot(slot)) => Ok(slot),
+        _ => Err(CodegenIrError::invalid_module(format!(
+            "{} missing local slot immediate",
             inst.op.name()
         ))),
     }

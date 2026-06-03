@@ -33,6 +33,8 @@ fn ir_backend_echoes_scalar_literals() {
         ("bool_false", "<?php echo false;", ""),
         ("null", "<?php echo null;", ""),
         ("float", "<?php echo 1.5;", "1.5"),
+        ("local_store", "<?php $x = 40; echo $x;", "40"),
+        ("argc_load", "<?php echo $argc;", "1"),
     ] {
         let output = compile_and_run_ir_backend(name, source);
         assert_eq!(output, expected, "unexpected stdout for {name}");
