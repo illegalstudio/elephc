@@ -99,3 +99,12 @@ echo $counter->value();
     );
     assert!(text.contains("flags(method)"), "missing method flag: {text}");
 }
+
+/// Verifies mixed float/integer comparisons coerce both operands before `fcmp`.
+#[test]
+fn float_comparison_coerces_integer_operand() {
+    let module = lower_source("<?php $t = microtime(true); if ($t > 1000000000) { echo \"ok\"; }");
+    let text = print_module(&module);
+    assert!(text.contains("i_to_f"), "missing integer-to-float coercion in {text}");
+    assert!(text.contains("fcmp"), "missing float comparison in {text}");
+}

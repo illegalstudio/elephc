@@ -326,8 +326,8 @@ fn lower_compare(
     right: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    let lhs = lower_expr(ctx, left);
-    let rhs = lower_expr(ctx, right);
+    let mut lhs = lower_expr(ctx, left);
+    let mut rhs = lower_expr(ctx, right);
     let opcode = match op {
         BinOp::StrictEq => Op::StrictEq,
         BinOp::StrictNotEq => Op::StrictNotEq,
@@ -339,6 +339,10 @@ fn lower_compare(
         _ if lhs.ir_type == IrType::Str && rhs.ir_type == IrType::Str => Op::StrCmp,
         _ => Op::LooseEq,
     };
+    if matches!(opcode, Op::FCmp) {
+        lhs = coerce_to_float(ctx, lhs, left);
+        rhs = coerce_to_float(ctx, rhs, right);
+    }
     let immediate = if matches!(opcode, Op::ICmp | Op::FCmp) {
         Some(Immediate::CmpPredicate(cmp_predicate(op)))
     } else {
