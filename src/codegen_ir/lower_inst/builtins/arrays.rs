@@ -29,6 +29,19 @@ pub(super) fn lower_array_product(ctx: &mut FunctionContext<'_>, inst: &Instruct
     lower_indexed_array_aggregate(ctx, inst, "array_product", "__rt_array_product")
 }
 
+/// Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.
+pub(super) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "array_reverse", 1)?;
+    let array = expect_operand(inst, 0)?;
+    require_eight_byte_indexed_array(ctx.value_php_type(array)?, "array_reverse")?;
+    ctx.load_value_to_result(array)?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the reverse helper argument
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_reverse");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `array_rand()` for indexed arrays.
 pub(super) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_rand", 1)?;
@@ -115,6 +128,31 @@ fn lower_indexed_array_aggregate(
 fn require_supported_indexed_array(ty: PhpType, name: &str) -> Result<()> {
     match ty.codegen_repr() {
         PhpType::Array(elem) if matches!(*elem, PhpType::Int | PhpType::Bool | PhpType::Never) => Ok(()),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for PHP type {:?}",
+            name,
+            other
+        ))),
+    }
+}
+
+/// Verifies a builtin can use scalar indexed-array helpers with 8-byte slots.
+fn require_eight_byte_indexed_array(ty: PhpType, name: &str) -> Result<()> {
+    match ty.codegen_repr() {
+        PhpType::Array(elem) => {
+            let elem = elem.codegen_repr();
+            if matches!(
+                elem,
+                PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable | PhpType::Void
+            ) {
+                return Ok(());
+            }
+            Err(CodegenIrError::unsupported(format!(
+                "{} for indexed-array element PHP type {:?}",
+                name,
+                elem
+            )))
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name,

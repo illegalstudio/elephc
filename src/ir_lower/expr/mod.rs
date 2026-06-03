@@ -730,6 +730,8 @@ fn call_return_type(
         php_type
     } else if let Some(php_type) = numeric_builtin_return_type(ctx, name, operands) {
         php_type
+    } else if let Some(php_type) = array_builtin_return_type(ctx, name, operands) {
+        php_type
     } else if let Some(sig) = ctx.functions.get(name) {
         sig.return_type.clone()
     } else if let Some(sig) = ctx.extern_functions.get(name) {
@@ -774,6 +776,24 @@ fn numeric_builtin_return_type(
             } else {
                 PhpType::Int
             })
+        }
+        _ => None,
+    }
+}
+
+/// Returns precise return metadata for array builtins that preserve operand element type.
+fn array_builtin_return_type(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    operands: &[crate::ir::ValueId],
+) -> Option<PhpType> {
+    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        "array_reverse" => {
+            let array = operands.first()?;
+            match ctx.builder.value_php_type(*array).codegen_repr() {
+                PhpType::Array(elem) => Some(PhpType::Array(elem)),
+                other => Some(other),
+            }
         }
         _ => None,
     }

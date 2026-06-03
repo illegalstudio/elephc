@@ -62,6 +62,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "count" => lower_count(ctx, inst),
         "array_sum" => arrays::lower_array_sum(ctx, inst),
         "array_product" => arrays::lower_array_product(ctx, inst),
+        "array_reverse" => arrays::lower_array_reverse(ctx, inst),
         "array_rand" => arrays::lower_array_rand(ctx, inst),
         "array_key_exists" => arrays::lower_array_key_exists(ctx, inst),
         "array_search" => arrays::lower_array_search(ctx, inst),

@@ -551,6 +551,30 @@ fn ir_backend_handles_basic_indexed_arrays() {
     );
 }
 
+/// Verifies AArch64 far-slot materialization does not clobber indexed-array receiver registers.
+#[test]
+fn ir_backend_keeps_indexed_array_receiver_across_far_slot_loads() {
+    let mut get_source = String::from("<?php $a = [10, 20, 30]; $x = $argc;");
+    for _ in 0..40 {
+        get_source.push_str(" $x = $x + 1;");
+    }
+    get_source.push_str(" echo $a[2]; echo ':'; echo $x;");
+    assert_eq!(
+        compile_and_run_ir_backend("array_get_far_slot_receiver", &get_source),
+        "30:41"
+    );
+
+    let mut push_source = String::from("<?php $a = [0]; $x = $argc;");
+    for _ in 0..40 {
+        push_source.push_str(" $x = $x + 1;");
+    }
+    push_source.push_str(" $a[] = $x; echo $a[1];");
+    assert_eq!(
+        compile_and_run_ir_backend("array_push_far_slot_receiver", &push_source),
+        "41"
+    );
+}
+
 /// Verifies indexed-array aggregate builtins that delegate to runtime helpers.
 #[test]
 fn ir_backend_handles_indexed_array_aggregates() {
@@ -566,6 +590,13 @@ fn ir_backend_handles_indexed_array_aggregates() {
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);
     }
+}
+
+/// Verifies indexed-array reversal returns a reversed copy without mutating the source.
+#[test]
+fn ir_backend_handles_indexed_array_reverse() {
+    let source = "<?php $a = [3, 1, 2]; $b = array_reverse($a); echo $b[0] . $b[1] . $b[2]; echo ':'; echo $a[0] . $a[1] . $a[2];";
+    assert_eq!(compile_and_run_ir_backend("array_reverse_indexed", source), "213:312");
 }
 
 /// Verifies indexed-array key existence delegates to the runtime bounds helper.

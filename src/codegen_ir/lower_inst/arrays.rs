@@ -105,8 +105,8 @@ fn lower_array_get_aarch64(
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     let len_reg = abi::secondary_scratch_reg(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
-    ctx.load_value_to_reg(array, array_reg)?;
     ctx.load_value_to_reg(index, result_reg)?;
+    ctx.load_value_to_reg(array, array_reg)?;
     let null_label = ctx.next_label("array_get_null");
     let done_label = ctx.next_label("array_get_done");
 
@@ -310,28 +310,29 @@ fn lower_array_push_aarch64(
     array: ValueId,
     value: ValueId,
 ) -> Result<()> {
-    ctx.load_value_to_reg(array, "x9")?;
     match ctx.value_php_type(value)? {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.load_value_to_reg(value, "x1")?;
+            ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
         }
         PhpType::Float => {
             ctx.load_value_to_reg(value, "x1")?;
+            ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "x1", "x2")?;
+            ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the string append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
         }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(value, "x0")?;
-            abi::emit_push_reg(ctx.emitter, "x9");
             abi::emit_incref_if_refcounted(ctx.emitter, &other);
-            abi::emit_pop_reg(ctx.emitter, "x9");
+            ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x1, x0");                              // pass the retained heap payload to the refcounted append helper
             ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the refcounted append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
