@@ -30,13 +30,22 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("fopen() ftp:// stream");
+    // The mode and optional fopen args are evaluated for side effects;
+    // ftp:// streams are read-only.
+    super::fopen::emit_mode_and_ignored_optional_args(args, emitter, ctx, data);
+    emit_open_fd(args, emitter, data);
+    super::fopen::box_fopen_result(emitter, ctx);
+    Some(PhpType::Mixed)
+}
+
+/// Emits the `ftp://` open, leaving the data-connection fd (or -1 on an
+/// unparseable URL) in the int-result register. Does NOT evaluate a mode
+/// argument or box the result — shared by `fopen()` and `file_get_contents()`.
+pub(super) fn emit_open_fd(args: &[Expr], emitter: &mut Emitter, data: &mut DataSection) {
     let parsed = match &args[0].kind {
         ExprKind::StringLiteral(url) => parse_ftp_url(url),
         _ => None,
     };
-    // The mode and optional fopen args are evaluated for side effects;
-    // ftp:// streams are read-only.
-    super::fopen::emit_mode_and_ignored_optional_args(args, emitter, ctx, data);
     match parsed {
         Some((ctrl_addr, retr_cmd)) => {
             let (ctrl_sym, ctrl_len) = data.add_string(ctrl_addr.as_bytes());
@@ -62,8 +71,6 @@ pub fn emit(
             Arch::X86_64 => emitter.instruction("mov rax, -1"),                 // unparseable ftp:// URL lowers to PHP false
         },
     }
-    super::fopen::box_fopen_result(emitter, ctx);
-    Some(PhpType::Mixed)
 }
 
 /// Parses an `ftp://[user[:pass]@]host[:port]/path` URL into the control

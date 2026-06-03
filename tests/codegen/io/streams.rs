@@ -2963,6 +2963,34 @@ fclose($f);
     assert_eq!(out, "body delivered over http");
 }
 
+/// `file_get_contents("http://...")` opens the `http://` wrapper, slurps the
+/// whole response body (headers stripped) into an owned string, and returns it
+/// — equivalent to `fopen()` + `stream_get_contents()` + `fclose()` on the URL.
+/// The owned-heap copy (via `__rt_str_persist`) survives the concat below.
+#[test]
+fn test_file_get_contents_over_http() {
+    let _server = spawn_http_server(54973, b"fgc over http body");
+    let out = compile_and_run(
+        r#"<?php
+echo "[" . file_get_contents("http://127.0.0.1:54973/page.txt") . "]";
+"#,
+    );
+    assert_eq!(out, "[fgc over http body]");
+}
+
+/// `file_get_contents()` of an unreachable `http://` URL returns PHP `false`
+/// (the wrapper open fails, so the result boxes bool false).
+#[test]
+fn test_file_get_contents_over_http_failure_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+$r = file_get_contents("http://127.0.0.1:1/nope");
+echo $r === false ? "false" : "got";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
 /// Verifies compiled PHP output for fopen http follow location relative path.
 #[test]
 fn test_fopen_http_follow_location_relative_path() {

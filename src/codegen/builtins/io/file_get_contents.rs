@@ -61,6 +61,24 @@ pub fn emit(
             box_file_get_contents_result(emitter, ctx);
             return Some(PhpType::Mixed);
         }
+        // Literal http/https/ftp URLs open the wrapper, slurp the whole body
+        // into an owned string, and box it — the fopen() + stream_get_contents()
+        // + fclose() model. A failed open boxes PHP false.
+        if url.starts_with("http://") {
+            super::http_stream::emit_open_fd(args, emitter, data);
+            emit_url_slurp_and_box(emitter, ctx);
+            return Some(PhpType::Mixed);
+        }
+        if url.starts_with("https://") {
+            super::https_stream::emit_open_fd(args, emitter, data);
+            emit_url_slurp_and_box(emitter, ctx);
+            return Some(PhpType::Mixed);
+        }
+        if url.starts_with("ftp://") {
+            super::ftp_stream::emit_open_fd(args, emitter, data);
+            emit_url_slurp_and_box(emitter, ctx);
+            return Some(PhpType::Mixed);
+        }
     }
     emit_expr(&args[0], emitter, ctx, data);
     abi::emit_call_label(emitter, "__rt_file_get_contents_maybe_phar");         // reads the file (routes a non-literal phar:// URL to the runtime phar reader, else __rt_file_get_contents)
@@ -120,4 +138,55 @@ fn box_file_get_contents_result(emitter: &mut Emitter, ctx: &mut Context) {
             emitter.label(&done_label);
         }
     }
+}
+
+/// Given an open stream fd in the int-result register (`x0`/`rax`), or `-1` on a
+/// failed open, slurps the whole stream into an **owned** string, closes the fd,
+/// and boxes the result as `file_get_contents()`'s `PhpType::Mixed` (string on
+/// success, bool `false` on a failed open). The slurp uses `__rt_stream_get_contents`
+/// (a borrowed `_concat_buf` slice) and then `__rt_str_persist` so the boxed
+/// string owns its bytes and survives later `_concat_buf` reuse.
+fn emit_url_slurp_and_box(emitter: &mut Emitter, ctx: &mut Context) {
+    let fail_label = ctx.next_label("fgc_url_fail");
+    let done_label = ctx.next_label("fgc_url_done");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #0");                                  // a failed wrapper open returns -1
+            emitter.instruction(&format!("b.lt {}", fail_label));               // box false when the open failed
+            emitter.instruction("sub sp, sp, #32");                             // [sp,#0]=fd, [sp,#8]=ptr, [sp,#16]=len
+            emitter.instruction("str x0, [sp, #0]");                            // save the fd for the close below
+            abi::emit_call_label(emitter, "__rt_stream_get_contents");          // (x0=fd) → x1=ptr, x2=len (concat_buf slice)
+            emitter.instruction("stp x1, x2, [sp, #8]");                        // save the slurped ptr/len across the close
+            emitter.instruction("ldr x0, [sp, #0]");                            // reload the fd
+            emitter.syscall(6);                                                 // close(fd)
+            emitter.instruction("ldp x1, x2, [sp, #8]");                        // restore the slurped ptr/len
+            abi::emit_call_label(emitter, "__rt_str_persist");                  // copy to owned heap → x1=ptr, x2=len
+            emitter.instruction("add sp, sp, #32");                             // release the slurp frame
+            emitter.instruction(&format!("b {}", done_label));                  // boxed string payload is ready
+            emitter.label(&fail_label);
+            emitter.instruction("mov x1, #0");                                  // null string ptr → boxed false
+            emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 0");                                  // a failed wrapper open returns -1
+            emitter.instruction(&format!("jl {}", fail_label));                 // box false when the open failed
+            emitter.instruction("sub rsp, 32");                                 // [rsp+0]=fd, [rsp+8]=ptr, [rsp+16]=len
+            emitter.instruction("mov QWORD PTR [rsp + 0], rax");                // save the fd for the close below
+            emitter.instruction("mov rdi, rax");                                // __rt_stream_get_contents takes the fd in rdi
+            abi::emit_call_label(emitter, "__rt_stream_get_contents");          // rax=ptr, rdx=len (concat_buf slice)
+            emitter.instruction("mov QWORD PTR [rsp + 8], rax");                // save the slurped ptr across the close
+            emitter.instruction("mov QWORD PTR [rsp + 16], rdx");               // save the slurped len across the close
+            emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                // reload the fd
+            emitter.instruction("call close");                                  // close(fd) via libc
+            emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                // restore the slurped ptr
+            emitter.instruction("mov rdx, QWORD PTR [rsp + 16]");               // restore the slurped len
+            abi::emit_call_label(emitter, "__rt_str_persist");                  // copy to owned heap → rax=ptr, rdx=len
+            emitter.instruction("add rsp, 32");                                 // release the slurp frame
+            emitter.instruction(&format!("jmp {}", done_label));                // boxed string payload is ready
+            emitter.label(&fail_label);
+            emitter.instruction("xor eax, eax");                                // null string ptr → boxed false
+            emitter.label(&done_label);
+        }
+    }
+    box_file_get_contents_result(emitter, ctx);
 }

@@ -35,14 +35,23 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("fopen() https:// stream");
+    // The mode and optional fopen args are evaluated for side effects;
+    // https:// streams are read-only.
+    super::fopen::emit_mode_and_ignored_optional_args(args, emitter, ctx, data);
+    emit_open_fd(args, emitter, data);
+    super::fopen::box_fopen_result(emitter, ctx);
+    Some(PhpType::Mixed)
+}
+
+/// Emits the `https://` open (publishing the TLS fn-pointers), leaving the
+/// response-body fd (or -1 on an unparseable URL) in the int-result register.
+/// Does NOT evaluate a mode argument or box the result — shared by `fopen()`
+/// and `file_get_contents()`.
+pub(super) fn emit_open_fd(args: &[Expr], emitter: &mut Emitter, data: &mut DataSection) {
     let parsed = match &args[0].kind {
         ExprKind::StringLiteral(url) => parse_https_url(url),
         _ => None,
     };
-    // The mode and optional fopen args are evaluated for side effects;
-    // https:// streams are read-only.
-    super::fopen::emit_mode_and_ignored_optional_args(args, emitter, ctx, data);
-
     match parsed {
         Some(parts) => {
             let (host_sym, host_len) = data.add_string(parts.host.as_bytes());
@@ -71,8 +80,6 @@ pub fn emit(
             Arch::X86_64 => emitter.instruction("mov rax, -1"),                 // unparseable https:// URL lowers to PHP false
         },
     }
-    super::fopen::box_fopen_result(emitter, ctx);
-    Some(PhpType::Mixed)
 }
 
 /// Stores the addresses of the elephc-tls C entry points into the
