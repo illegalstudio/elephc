@@ -199,6 +199,22 @@ pub(super) fn lower_wordwrap(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     store_if_result(ctx, inst)
 }
 
+/// Lowers `str_pad(string, length, pad_string?, pad_type?)` through the shared runtime helper.
+pub(super) fn lower_str_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() < 2 || inst.operands.len() > 4 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "str_pad expected 2 to 4 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_str_pad_aarch64(ctx, inst)?,
+        Arch::X86_64 => lower_str_pad_x86_64(ctx, inst)?,
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_pad");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `ord()` by returning the first byte of a string or zero for empty input.
 pub(super) fn lower_ord(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_single_string_arg(ctx, inst, "ord")?;
@@ -616,6 +632,102 @@ fn lower_hash_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the data string pointer as the secondary hash argument
     ctx.emitter.instruction("mov rsi, rdx");                                    // pass the data string length as the secondary hash argument
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+    Ok(())
+}
+
+/// Materializes AArch64 `str_pad()` runtime arguments.
+fn lower_str_pad_aarch64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let input = expect_string_operand(ctx, inst, 0, "str_pad")?;
+    let target_length = expect_operand(inst, 1)?;
+    ctx.load_string_value_to_regs(input, "x1", "x2")?;
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the input string while materializing length and pad arguments
+    load_as_int(ctx, target_length, "str_pad length")?;
+    abi::emit_push_reg(ctx.emitter, "x0");
+    materialize_str_pad_pad_string_aarch64(ctx, inst)?;
+    materialize_str_pad_type_aarch64(ctx, inst)?;
+    ctx.emitter.instruction("ldp x3, x4, [sp], #16");                           // restore the pad string into secondary runtime argument registers
+    abi::emit_pop_reg(ctx.emitter, "x5");
+    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the input string into primary runtime argument registers
+    Ok(())
+}
+
+/// Materializes the AArch64 `str_pad()` pad-string argument.
+fn materialize_str_pad_pad_string_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() >= 3 {
+        let pad_string = expect_string_operand(ctx, inst, 2, "str_pad")?;
+        ctx.load_string_value_to_regs(pad_string, "x1", "x2")?;
+    } else {
+        let (label, len) = ctx.data.add_string(b" ");
+        abi::emit_symbol_address(ctx.emitter, "x1", &label);
+        abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+    }
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the pad string while materializing the optional pad type
+    Ok(())
+}
+
+/// Materializes the AArch64 `str_pad()` pad-type argument.
+fn materialize_str_pad_type_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() >= 4 {
+        let pad_type = expect_operand(inst, 3)?;
+        load_as_int(ctx, pad_type, "str_pad pad_type")?;
+        ctx.emitter.instruction("mov x7, x0");                                  // pass the requested STR_PAD mode to the runtime helper
+    } else {
+        ctx.emitter.instruction("mov x7, #1");                                  // default to STR_PAD_RIGHT when pad_type is omitted
+    }
+    Ok(())
+}
+
+/// Materializes x86_64 `str_pad()` runtime arguments.
+fn lower_str_pad_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let input = expect_string_operand(ctx, inst, 0, "str_pad")?;
+    let target_length = expect_operand(inst, 1)?;
+    ctx.load_string_value_to_regs(input, "rax", "rdx")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    load_as_int(ctx, target_length, "str_pad length")?;
+    abi::emit_push_reg(ctx.emitter, "rax");
+    materialize_str_pad_pad_string_x86_64(ctx, inst)?;
+    materialize_str_pad_type_x86_64(ctx, inst)?;
+    abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+    abi::emit_pop_reg(ctx.emitter, "rcx");
+    abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+    Ok(())
+}
+
+/// Materializes the x86_64 `str_pad()` pad-string argument.
+fn materialize_str_pad_pad_string_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() >= 3 {
+        let pad_string = expect_string_operand(ctx, inst, 2, "str_pad")?;
+        ctx.load_string_value_to_regs(pad_string, "rax", "rdx")?;
+    } else {
+        let (label, len) = ctx.data.add_string(b" ");
+        abi::emit_symbol_address(ctx.emitter, "rax", &label);
+        abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+    }
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    Ok(())
+}
+
+/// Materializes the x86_64 `str_pad()` pad-type argument.
+fn materialize_str_pad_type_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() >= 4 {
+        let pad_type = expect_operand(inst, 3)?;
+        load_as_int(ctx, pad_type, "str_pad pad_type")?;
+        ctx.emitter.instruction("mov r8, rax");                                 // pass the requested STR_PAD mode to the runtime helper
+    } else {
+        ctx.emitter.instruction("mov r8, 1");                                   // default to STR_PAD_RIGHT when pad_type is omitted
+    }
     Ok(())
 }
 

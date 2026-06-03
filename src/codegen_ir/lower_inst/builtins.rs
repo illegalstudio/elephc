@@ -195,6 +195,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "md5" => strings::lower_unary_string_runtime(ctx, inst, "md5", "__rt_md5"),
         "sha1" => strings::lower_unary_string_runtime(ctx, inst, "sha1", "__rt_sha1"),
         "hash" => strings::lower_hash(ctx, inst),
+        "str_pad" => strings::lower_str_pad(ctx, inst),
         "ctype_alpha" => ctype::lower_ctype_alpha(ctx, inst),
         "ctype_digit" => ctype::lower_ctype_digit(ctx, inst),
         "ctype_alnum" => ctype::lower_ctype_alnum(ctx, inst),
