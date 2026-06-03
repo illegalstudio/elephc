@@ -291,6 +291,11 @@ fn ir_backend_handles_scalar_builtins() {
             r#"He said \"hi\" and it\'s ok:He said "hi":line1<br />
 line2:4142:AB"#,
         ),
+        (
+            "url_and_base64_strings",
+            r#"<?php echo urlencode("hello world&foo=bar"); echo ':'; echo urldecode("hello+world%26foo%3Dbar"); echo ':'; echo rawurlencode("hello world"); echo ':'; echo rawurldecode("hello%20world"); echo ':'; echo base64_encode("Hello"); echo ':'; echo base64_decode("SGVsbG8=");"#,
+            "hello+world%26foo%3Dbar:hello world&foo=bar:hello%20world:hello world:SGVsbG8=:Hello",
+        ),
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);
     }

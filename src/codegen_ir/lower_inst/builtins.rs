@@ -104,6 +104,42 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "nl2br" => strings::lower_unary_string_runtime(ctx, inst, "nl2br", "__rt_nl2br"),
         "bin2hex" => strings::lower_unary_string_runtime(ctx, inst, "bin2hex", "__rt_bin2hex"),
         "hex2bin" => strings::lower_unary_string_runtime(ctx, inst, "hex2bin", "__rt_hex2bin"),
+        "urlencode" => strings::lower_unary_string_runtime(
+            ctx,
+            inst,
+            "urlencode",
+            "__rt_urlencode",
+        ),
+        "urldecode" => strings::lower_unary_string_runtime(
+            ctx,
+            inst,
+            "urldecode",
+            "__rt_urldecode",
+        ),
+        "rawurlencode" => strings::lower_unary_string_runtime(
+            ctx,
+            inst,
+            "rawurlencode",
+            "__rt_rawurlencode",
+        ),
+        "rawurldecode" => strings::lower_unary_string_runtime(
+            ctx,
+            inst,
+            "rawurldecode",
+            "__rt_urldecode",
+        ),
+        "base64_encode" => strings::lower_unary_string_runtime(
+            ctx,
+            inst,
+            "base64_encode",
+            "__rt_base64_encode",
+        ),
+        "base64_decode" => strings::lower_unary_string_runtime(
+            ctx,
+            inst,
+            "base64_decode",
+            "__rt_base64_decode",
+        ),
         _ => Err(CodegenIrError::unsupported(format!("builtin call {}", name))),
     }
 }
