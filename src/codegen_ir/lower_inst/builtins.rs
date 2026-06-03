@@ -62,6 +62,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "intval" => lower_intval(ctx, inst),
         "floatval" => lower_floatval(ctx, inst),
         "boolval" => lower_boolval(ctx, inst),
+        "gettype" => lower_gettype(ctx, inst),
         "define" => lower_define(ctx, inst),
         "defined" => lower_defined(ctx, inst),
         "function_exists" => lower_function_exists(ctx, inst),
@@ -210,6 +211,48 @@ fn lower_pi(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Lowers `gettype(value)` for statically concrete PHP types.
+fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "gettype", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let ty = ctx.value_php_type(value)?;
+    let Some(type_name) = static_gettype_name(&ty) else {
+        return Err(CodegenIrError::unsupported(format!(
+            "gettype for PHP type {:?}",
+            ty
+        )));
+    };
+    emit_type_name_result(ctx, type_name);
+    store_if_result(ctx, inst)
+}
+
+/// Returns PHP's `gettype()` spelling for concrete statically known types.
+fn static_gettype_name(ty: &PhpType) -> Option<&'static [u8]> {
+    match ty {
+        PhpType::Int => Some(b"integer".as_slice()),
+        PhpType::Float => Some(b"double".as_slice()),
+        PhpType::Str => Some(b"string".as_slice()),
+        PhpType::Bool => Some(b"boolean".as_slice()),
+        PhpType::Void | PhpType::Never => Some(b"NULL".as_slice()),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Some(b"array".as_slice()),
+        PhpType::Callable => Some(b"callable".as_slice()),
+        PhpType::Object(_) => Some(b"object".as_slice()),
+        PhpType::Pointer(_) => Some(b"pointer".as_slice()),
+        PhpType::Buffer(_) => Some(b"buffer".as_slice()),
+        PhpType::Packed(_) => Some(b"packed".as_slice()),
+        PhpType::Resource(_) => Some(b"resource".as_slice()),
+        PhpType::Iterable | PhpType::Mixed | PhpType::Union(_) => None,
+    }
+}
+
+/// Emits a static PHP type-name string into the target string result registers.
+fn emit_type_name_result(ctx: &mut FunctionContext<'_>, type_name: &[u8]) {
+    let (label, len) = ctx.data.add_string(type_name);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
 }
 
 /// Lowers `phpversion()` as the compiler package version string.

@@ -301,6 +301,11 @@ line2:4142:AB"#,
             "<?php echo ctype_alpha('Hello') ? '1' : '0'; echo ctype_alpha('Hello123') ? '1' : '0'; echo ctype_digit('12345') ? '1' : '0'; echo ctype_digit('123abc') ? '1' : '0'; echo ctype_alnum('Hello123') ? '1' : '0'; echo ctype_alnum('Hello 123') ? '1' : '0'; echo ctype_space(\" \\t\\n\") ? '1' : '0'; echo ctype_space('hello') ? '1' : '0';",
             "10101010",
         ),
+        (
+            "gettype_scalars",
+            "<?php echo gettype(42); echo ':'; echo gettype(1.5); echo ':'; echo gettype('hi'); echo ':'; echo gettype(false); echo ':'; echo gettype(null);",
+            "integer:double:string:boolean:NULL",
+        ),
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);
     }
