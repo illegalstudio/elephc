@@ -62,6 +62,26 @@ fn ir_backend_runs_simple_while_loop() {
     assert_eq!(compile_and_run_ir_backend("while_loop", source), "012");
 }
 
+/// Verifies direct user-defined function calls with scalar params and returns.
+#[test]
+fn ir_backend_calls_user_functions() {
+    for (name, source, expected) in [
+        ("fn_return", "<?php function f() { return 42; } echo f();", "42"),
+        (
+            "fn_add",
+            "<?php function add($a, $b) { return $a + $b; } echo add(2, 3);",
+            "5",
+        ),
+        (
+            "fn_void",
+            "<?php function twice($x) { echo $x; echo $x; } twice(7);",
+            "77",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Compiles `source` with `--ir-backend`, runs the output binary, and returns stdout.
 fn compile_and_run_ir_backend(name: &str, source: &str) -> String {
     compile_and_run_ir_backend_with_args(name, source, &[])

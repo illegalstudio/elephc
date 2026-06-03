@@ -32,6 +32,8 @@ pub(super) struct FunctionContext<'a> {
     local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) frame_size: usize,
     pub(super) epilogue_emitted: bool,
+    pub(super) is_main: bool,
+    pub(super) epilogue_label: Option<String>,
     label_counter: usize,
 }
 
@@ -43,6 +45,8 @@ impl<'a> FunctionContext<'a> {
         emitter: &'a mut Emitter,
         data: &'a mut DataSection,
         layout: FrameLayout,
+        is_main: bool,
+        epilogue_label: Option<String>,
     ) -> Self {
         Self {
             module,
@@ -53,6 +57,8 @@ impl<'a> FunctionContext<'a> {
             local_offsets: layout.local_offsets,
             frame_size: layout.frame_size,
             epilogue_emitted: false,
+            is_main,
+            epilogue_label,
             label_counter: 0,
         }
     }
@@ -76,6 +82,14 @@ impl<'a> FunctionContext<'a> {
             .block(block)
             .ok_or_else(|| CodegenIrError::missing_entry("block", block.as_raw()))?;
         Ok(self.block_label(&block.name, block.id.as_raw()))
+    }
+
+    /// Returns a module function by PHP name using PHP's case-insensitive lookup.
+    pub(super) fn function_by_name(&self, name: &str) -> Option<&'a Function> {
+        let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+        self.module.functions.iter().find(|function| {
+            crate::names::php_symbol_key(function.name.trim_start_matches('\\')) == key
+        })
     }
 
     /// Returns a function value or a structured backend error.
@@ -109,6 +123,26 @@ impl<'a> FunctionContext<'a> {
         let offset = self.value_offset(value)?;
         abi::load_at_offset(self.emitter, reg, offset);
         Ok(ty)
+    }
+
+    /// Loads a string SSA value into a caller-selected register pair.
+    pub(super) fn load_string_value_to_regs(
+        &mut self,
+        value: ValueId,
+        ptr_reg: &str,
+        len_reg: &str,
+    ) -> Result<()> {
+        let ty = self.value_php_type(value)?;
+        if ty != PhpType::Str {
+            return Err(CodegenIrError::unsupported(format!(
+                "string register materialization for PHP type {:?}",
+                ty
+            )));
+        }
+        let offset = self.value_offset(value)?;
+        abi::load_at_offset(self.emitter, ptr_reg, offset);
+        abi::load_at_offset(self.emitter, len_reg, offset - 8);
+        Ok(())
     }
 
     /// Loads a local slot into the target's canonical result register(s).
@@ -146,7 +180,10 @@ impl<'a> FunctionContext<'a> {
             PhpType::Float => {
                 abi::store_at_offset(self.emitter, abi::float_result_reg(self.emitter), offset);
             }
-            PhpType::Void | PhpType::Never => {}
+            PhpType::Void => {
+                abi::store_at_offset(self.emitter, abi::int_result_reg(self.emitter), offset);
+            }
+            PhpType::Never => {}
             _ => {
                 abi::store_at_offset(self.emitter, abi::int_result_reg(self.emitter), offset);
             }
@@ -162,6 +199,16 @@ impl<'a> FunctionContext<'a> {
             .get(data_id.as_raw() as usize)
             .ok_or_else(|| CodegenIrError::missing_entry("data string", data_id.as_raw()))?;
         Ok(self.data.add_string(value.as_bytes()))
+    }
+
+    /// Returns a module data-pool function name.
+    pub(super) fn function_name_data(&self, data_id: DataId) -> Result<&str> {
+        self.module
+            .data
+            .function_names
+            .get(data_id.as_raw() as usize)
+            .map(String::as_str)
+            .ok_or_else(|| CodegenIrError::missing_entry("function data", data_id.as_raw()))
     }
 
     /// Returns the frame offset assigned to a value by Phase 04 placement.

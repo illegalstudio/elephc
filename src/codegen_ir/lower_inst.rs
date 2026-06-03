@@ -12,6 +12,7 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::ir::{CmpPredicate, Immediate, InstId, Instruction, LocalSlotId, Op, ValueId};
+use crate::names::function_symbol;
 use crate::types::PhpType;
 
 use super::context::FunctionContext;
@@ -36,9 +37,77 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ISub => lower_int_binop(ctx, &inst, "sub", "sub"),
         Op::IMul => lower_int_binop(ctx, &inst, "mul", "imul"),
         Op::ICmp => lower_int_compare(ctx, &inst),
+        Op::Call => lower_direct_call(ctx, &inst),
         Op::EchoValue => lower_echo_value(ctx, &inst),
+        Op::Nop => Ok(()),
         _ => Err(CodegenIrError::unsupported(format!("opcode {}", inst.op.name()))),
     }
+}
+
+/// Lowers a direct call to a module-local user function.
+fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let function_name = ctx.function_name_data(expect_data(inst)?)?.to_string();
+    let callee = ctx
+        .function_by_name(&function_name)
+        .ok_or_else(|| CodegenIrError::unsupported(format!("call to unknown function {}", function_name)))?;
+    if inst.operands.len() != callee.params.len() {
+        return Err(CodegenIrError::unsupported(format!(
+            "call to {} with {} args for {} params",
+            function_name,
+            inst.operands.len(),
+            callee.params.len()
+        )));
+    }
+    materialize_direct_call_args(ctx, &inst.operands)?;
+    abi::emit_call_label(ctx.emitter, &function_symbol(&function_name));
+    if let Some(result) = inst.result {
+        if ctx.value_php_type(result)? == PhpType::Void {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                0x7fff_ffff_ffff_fffe,
+            );
+        }
+        ctx.store_result_value(result)?;
+    }
+    Ok(())
+}
+
+/// Loads SSA operands into ABI argument registers for a direct call.
+fn materialize_direct_call_args(ctx: &mut FunctionContext<'_>, args: &[ValueId]) -> Result<()> {
+    let arg_types = args
+        .iter()
+        .map(|value| ctx.value_php_type(*value))
+        .collect::<Result<Vec<_>>>()?;
+    let assignments =
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &arg_types, 0);
+    for assignment in &assignments {
+        if !assignment.in_register() {
+            return Err(CodegenIrError::unsupported(
+                "direct-call arguments passed on the caller stack",
+            ));
+        }
+    }
+
+    for ((value, ty), assignment) in args.iter().zip(arg_types.iter()).zip(assignments.iter()) {
+        match ty {
+            PhpType::Float => {
+                let reg = abi::float_arg_reg_name(ctx.emitter.target, assignment.start_reg);
+                ctx.load_value_to_reg(*value, reg)?;
+            }
+            PhpType::Str => {
+                let ptr_reg = abi::int_arg_reg_name(ctx.emitter.target, assignment.start_reg);
+                let len_reg = abi::int_arg_reg_name(ctx.emitter.target, assignment.start_reg + 1);
+                ctx.load_string_value_to_regs(*value, ptr_reg, len_reg)?;
+            }
+            PhpType::Void | PhpType::Never => {}
+            _ => {
+                let reg = abi::int_arg_reg_name(ctx.emitter.target, assignment.start_reg);
+                ctx.load_value_to_reg(*value, reg)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Lowers a floating-point constant into the canonical float result register and slot.

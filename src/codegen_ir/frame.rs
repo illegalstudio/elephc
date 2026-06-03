@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::ir::{Function, LocalSlotId};
+use crate::names::function_symbol;
 
 use super::context::FunctionContext;
 use super::value_placement::{self, ValuePlacement};
@@ -62,6 +63,30 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     store_argc_local_if_present(ctx);
 }
 
+/// Emits a direct-callable user function prologue and stores incoming params.
+pub(super) fn emit_function_prologue(ctx: &mut FunctionContext<'_>) -> crate::codegen_ir::Result<()> {
+    if ctx.emitter.target.arch == Arch::AArch64 {
+        ctx.emitter.raw(".align 2");
+    }
+    ctx.emitter.blank();
+    ctx.emitter.label_global(&function_symbol(&ctx.function.name));
+    abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
+    let mut incoming_args = abi::IncomingArgCursor::for_target(ctx.emitter.target, 0);
+    for (index, param) in ctx.function.params.iter().enumerate() {
+        let slot = LocalSlotId::from_raw(index as u32);
+        let offset = ctx.local_offset(slot)?;
+        abi::emit_store_incoming_param(
+            ctx.emitter,
+            &param.name,
+            &param.php_type,
+            offset,
+            param.by_ref,
+            &mut incoming_args,
+        );
+    }
+    Ok(())
+}
+
 /// Emits frame teardown and exits the process with status 0.
 pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     if ctx.epilogue_emitted {
@@ -71,6 +96,21 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.comment("epilogue + exit(0)");
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_exit(ctx.emitter, 0);
+    ctx.epilogue_emitted = true;
+}
+
+/// Emits the shared epilogue for a direct-callable user function.
+pub(super) fn emit_function_epilogue(ctx: &mut FunctionContext<'_>) {
+    if ctx.epilogue_emitted {
+        return;
+    }
+    let label = ctx
+        .epilogue_label
+        .clone()
+        .expect("codegen_ir bug: user function has no epilogue label");
+    ctx.emitter.label(&label);
+    abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
+    abi::emit_return(ctx.emitter);
     ctx.epilogue_emitted = true;
 }
 

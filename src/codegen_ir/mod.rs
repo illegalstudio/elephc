@@ -85,23 +85,13 @@ pub fn generate_user_asm_from_ir(
         return Err(CodegenIrError::unsupported("--heap-debug on the EIR backend"));
     }
 
-    let main = find_main_function(module)?;
     let mut emitter = Emitter::new(module.target);
     if module.target.arch == Arch::X86_64 {
         emitter.emit_text_prelude();
     }
     let mut data = DataSection::new();
-    block_emit::emit_main_function(module, main, &mut emitter, &mut data)?;
+    block_emit::emit_module(module, &mut emitter, &mut data)?;
     Ok(finalize_user_asm(emitter, data))
-}
-
-/// Finds the EIR function that represents the process entry point.
-fn find_main_function(module: &Module) -> Result<&crate::ir::Function> {
-    module
-        .functions
-        .iter()
-        .find(|function| function.flags.is_main || function.name == "main")
-        .ok_or_else(|| CodegenIrError::invalid_module("EIR module has no main function"))
 }
 
 /// Appends literal data and the minimal user-runtime metadata needed by linked helpers.

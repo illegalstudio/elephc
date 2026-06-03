@@ -20,12 +20,18 @@ use super::{CodegenIrError, Result};
 pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator) -> Result<()> {
     match term {
         Terminator::Return { value: None } => {
-            frame::emit_main_epilogue(ctx);
+            if ctx.is_main {
+                frame::emit_main_epilogue(ctx);
+            } else {
+                jump_to_function_epilogue(ctx)?;
+            }
             Ok(())
         }
-        Terminator::Return { value: Some(_) } => Err(CodegenIrError::unsupported(
-            "return values on the EIR backend entry function",
-        )),
+        Terminator::Return { value: Some(value) } => {
+            ctx.load_value_to_result(*value)?;
+            jump_to_function_epilogue(ctx)?;
+            Ok(())
+        }
         Terminator::Unreachable => Ok(()),
         Terminator::Br { target, args } => {
             ensure_no_block_args(args, "br")?;
@@ -56,6 +62,17 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             Err(CodegenIrError::unsupported("generator_suspend terminator"))
         }
     }
+}
+
+/// Emits a jump to the current user function's shared epilogue.
+fn jump_to_function_epilogue(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let Some(label) = ctx.epilogue_label.clone() else {
+        return Err(CodegenIrError::unsupported(
+            "return values on the EIR backend entry function",
+        ));
+    };
+    abi::emit_jump(ctx.emitter, &label);
+    Ok(())
 }
 
 /// Rejects block arguments until Phase 04 implements block parameter movement.
