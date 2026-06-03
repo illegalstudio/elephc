@@ -281,6 +281,11 @@ fn ir_backend_handles_scalar_builtins() {
             "hello world:HELLO WORLD:Hello:hello:olleH",
         ),
         (
+            "trim_strings",
+            "<?php echo trim('  hello  '); echo ':'; echo ltrim('  left'); echo ':'; echo rtrim('right  '); echo ':'; echo chop('tailxx', 'x'); echo ':'; echo trim('xyhelloxy', 'xy'); echo ':'; echo ltrim('..left', '.'); echo ':'; echo rtrim('right..', '.');",
+            "hello:left:right:tail:hello:left:right",
+        ),
+        (
             "ord_chr_strings",
             "<?php echo ord('A'); echo ':'; echo ord(''); echo ':'; echo chr(65);",
             "65:0:A",

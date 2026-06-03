@@ -45,6 +45,34 @@ pub(super) fn lower_lcfirst(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
+/// Lowers `trim()`/`ltrim()`/`rtrim()`/`chop()` for default and explicit masks.
+pub(super) fn lower_trim_like(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    default_runtime_label: &str,
+    mask_runtime_label: &str,
+) -> Result<()> {
+    if inst.operands.is_empty() || inst.operands.len() > 2 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expected 1 or 2 args, got {}",
+            name,
+            inst.operands.len()
+        )));
+    }
+    let source = expect_operand(inst, 0)?;
+    let ptr_reg = string_ptr_reg(ctx);
+    let len_reg = string_len_reg(ctx);
+    ctx.load_string_value_to_regs(source, ptr_reg, len_reg)?;
+    if inst.operands.len() == 1 {
+        abi::emit_call_label(ctx.emitter, default_runtime_label);
+    } else {
+        lower_trim_mask_arg(ctx, inst, name)?;
+        abi::emit_call_label(ctx.emitter, mask_runtime_label);
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `ord()` by returning the first byte of a string or zero for empty input.
 pub(super) fn lower_ord(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_single_string_arg(ctx, inst, "ord")?;
@@ -116,6 +144,22 @@ enum FirstCharAdjust {
     Lowercase,
 }
 
+/// Returns the target register holding string-result pointers.
+fn string_ptr_reg(ctx: &FunctionContext<'_>) -> &'static str {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rax",
+    }
+}
+
+/// Returns the target register holding string-result lengths.
+fn string_len_reg(ctx: &FunctionContext<'_>) -> &'static str {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => "x2",
+        Arch::X86_64 => "rdx",
+    }
+}
+
 /// Loads the sole argument for a string-transform builtin into string result registers.
 fn load_single_string_arg(
     ctx: &mut FunctionContext<'_>,
@@ -137,6 +181,41 @@ fn load_single_string_arg(
             name, other
         ))),
     }
+}
+
+/// Preserves the trim source string while loading the explicit character mask.
+fn lower_trim_mask_arg(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<()> {
+    let mask = expect_operand(inst, 1)?;
+    if ctx.value_php_type(mask)? != PhpType::Str {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} mask for PHP type {:?}",
+            name,
+            ctx.value_php_type(mask)?
+        )));
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x1, [sp, #-16]!");                     // preserve the source string pointer while loading the trim mask
+            ctx.emitter.instruction("str x2, [sp, #-16]!");                     // preserve the source string length while loading the trim mask
+            ctx.load_string_value_to_regs(mask, "x1", "x2")?;
+            ctx.emitter.instruction("mov x3, x1");                              // pass the trim-mask pointer as the secondary string argument
+            ctx.emitter.instruction("mov x4, x2");                              // pass the trim-mask length as the secondary string argument
+            ctx.emitter.instruction("ldr x2, [sp], #16");                       // restore the source string length after loading the mask
+            ctx.emitter.instruction("ldr x1, [sp], #16");                       // restore the source string pointer after loading the mask
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            ctx.load_string_value_to_regs(mask, "rax", "rdx")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the trim-mask pointer as the secondary string argument
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the trim-mask length as the secondary string argument
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+        }
+    }
+    Ok(())
 }
 
 /// Emits target-aware first-byte ASCII case adjustment for `ucfirst()` and `lcfirst()`.
