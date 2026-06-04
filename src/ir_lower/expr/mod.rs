@@ -1190,6 +1190,7 @@ fn lower_array_access(ctx: &mut LoweringContext<'_, '_>, array: &Expr, index: &E
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => Op::ArrayGet,
         IrType::Heap(IrHeapKind::Hash) => Op::HashGet,
+        IrType::Heap(IrHeapKind::Buffer) => Op::BufferGet,
         IrType::Str if index_value.ir_type == IrType::I64 => Op::StrCharAt,
         _ => Op::RuntimeCall,
     };
@@ -1219,6 +1220,10 @@ fn array_access_result_type(
         },
         Op::HashGet => match ctx.builder.value_php_type(array).codegen_repr() {
             PhpType::AssocArray { value, .. } => normalize_value_php_type(*value),
+            _ => fallback_expr_type(expr),
+        },
+        Op::BufferGet => match ctx.builder.value_php_type(array).codegen_repr() {
+            PhpType::Buffer(elem_ty) => normalize_value_php_type(*elem_ty),
             _ => fallback_expr_type(expr),
         },
         _ => fallback_expr_type(expr),

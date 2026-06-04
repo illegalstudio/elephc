@@ -978,6 +978,7 @@ fn array_set_op(ir_type: IrType) -> Op {
     match ir_type {
         IrType::Heap(crate::ir::IrHeapKind::Array) => Op::ArraySet,
         IrType::Heap(crate::ir::IrHeapKind::Hash) => Op::HashSet,
+        IrType::Heap(crate::ir::IrHeapKind::Buffer) => Op::BufferSet,
         _ => Op::RuntimeCall,
     }
 }

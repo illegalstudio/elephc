@@ -669,6 +669,26 @@ echo buffer_len($values);
     assert_eq!(compile_and_run_ir_backend("buffer_new_len", source), "7");
 }
 
+/// Verifies scalar buffer element reads and writes for integer and floating-point elements.
+#[test]
+fn ir_backend_handles_buffer_scalar_get_set() {
+    let int_source = r#"<?php
+buffer<int> $values = buffer_new<int>(3);
+$values[0] = 4;
+$values[1] = 5;
+echo $values[0] + $values[1] + buffer_len($values);
+"#;
+    assert_eq!(compile_and_run_ir_backend("buffer_int_get_set", int_source), "12");
+
+    let float_source = r#"<?php
+buffer<float> $values = buffer_new<float>(2);
+$values[0] = 1.25;
+$values[1] = 2.75;
+echo (int) ($values[0] + $values[1]);
+"#;
+    assert_eq!(compile_and_run_ir_backend("buffer_float_get_set", float_source), "4");
+}
+
 /// Verifies selected type predicates inspect boxed Mixed payloads in the EIR backend.
 #[test]
 fn ir_backend_handles_mixed_type_predicates() {

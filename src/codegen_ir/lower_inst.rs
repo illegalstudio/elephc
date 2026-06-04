@@ -106,6 +106,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::IterEnd => iterators::lower_iter_end(ctx, &inst),
         Op::PtrCast => pointers::lower_ptr_cast(ctx, &inst),
         Op::BufferNew => buffers::lower_buffer_new(ctx, &inst),
+        Op::BufferGet => buffers::lower_buffer_get(ctx, &inst),
+        Op::BufferSet => buffers::lower_buffer_set(ctx, &inst),
         Op::Call => lower_direct_call(ctx, &inst),
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),
