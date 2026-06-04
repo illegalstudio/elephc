@@ -12,7 +12,9 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::ir::{CmpPredicate, Immediate, InstId, Instruction, LocalSlotId, Op, ValueId};
-use crate::names::{function_symbol, ir_global_symbol, method_symbol, php_symbol_key};
+use crate::names::{
+    function_symbol, ir_global_symbol, method_symbol, php_symbol_key, static_method_symbol,
+};
 use crate::types::PhpType;
 
 use super::context::FunctionContext;
@@ -120,6 +122,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StoreStaticProperty => static_properties::lower_store_static_property(ctx, &inst),
         Op::Call => lower_direct_call(ctx, &inst),
         Op::MethodCall => lower_method_call(ctx, &inst),
+        Op::StaticMethodCall => lower_static_method_call(ctx, &inst),
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),
         Op::Acquire => ownership::lower_acquire(ctx, &inst),
@@ -268,6 +271,66 @@ fn method_name_data<'a>(ctx: &'a FunctionContext<'_>, inst: &Instruction) -> Res
         .get(data.as_raw() as usize)
         .map(String::as_str)
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
+}
+
+/// Lowers a direct static-method call on a named class receiver.
+fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let target = method_name_data(ctx, inst)?.to_string();
+    let (receiver, method_name) = parse_static_method_target(&target)?;
+    let receiver = receiver.trim_start_matches('\\');
+    if matches!(receiver, "self" | "static" | "parent") {
+        return Err(CodegenIrError::unsupported(format!(
+            "static method call with late-bound receiver {}",
+            receiver
+        )));
+    }
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(receiver)
+        .ok_or_else(|| CodegenIrError::unsupported(format!("static method call on unknown class {}", receiver)))?;
+    let method_key = php_symbol_key(method_name);
+    let callee_sig = class_info
+        .static_methods
+        .get(&method_key)
+        .ok_or_else(|| CodegenIrError::unsupported(format!("static method call to unknown method {}", target)))?;
+    if inst.operands.len() != callee_sig.params.len() {
+        return Err(CodegenIrError::unsupported(format!(
+            "static method call to {} with {} operands for {} params",
+            target,
+            inst.operands.len(),
+            callee_sig.params.len()
+        )));
+    }
+    let impl_class = class_info
+        .static_method_impl_classes
+        .get(&method_key)
+        .map(String::as_str)
+        .unwrap_or(receiver);
+    let overflow_bytes = materialize_direct_call_args(ctx, &inst.operands)?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, &method_key));
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
+    if let Some(result) = inst.result {
+        if ctx.value_php_type(result)? == PhpType::Void {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                0x7fff_ffff_ffff_fffe,
+            );
+        }
+        ctx.store_result_value(result)?;
+    }
+    Ok(())
+}
+
+/// Splits an EIR static-method call label into class receiver and method name.
+fn parse_static_method_target(target: &str) -> Result<(&str, &str)> {
+    target.rsplit_once("::").ok_or_else(|| {
+        CodegenIrError::invalid_module(format!("invalid static method target '{}'", target))
+    })
 }
 
 /// Lowers a direct call to a module-local user function.

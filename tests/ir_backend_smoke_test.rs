@@ -1013,6 +1013,23 @@ echo $box->value();
     );
 }
 
+/// Verifies direct static-method calls lower through the EIR method-symbol ABI.
+#[test]
+fn ir_backend_calls_simple_static_method() {
+    let source = r#"<?php
+class MathBox {
+    public static function add(int $a, int $b): int {
+        return $a + $b;
+    }
+}
+echo MathBox::add(2, 3);
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("simple_static_method_call", source),
+        "5"
+    );
+}
+
 /// Verifies typed declared properties still fatal when read before initialization.
 #[test]
 fn ir_backend_fatals_on_uninitialized_typed_object_property() {
