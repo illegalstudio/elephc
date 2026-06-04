@@ -814,6 +814,35 @@ fn ir_backend_handles_indexed_array_chunk() {
     }
 }
 
+/// Verifies `array_pad()` copies indexed arrays and pads on either side.
+#[test]
+fn ir_backend_handles_indexed_array_pad() {
+    for (name, source, expected) in [
+        (
+            "array_pad_right_int",
+            "<?php $a = [1, 2]; $b = array_pad($a, 5, 0); echo count($b); echo ':'; echo $b[0] . $b[1] . $b[2] . $b[4];",
+            "5:1200",
+        ),
+        (
+            "array_pad_left_int",
+            "<?php $a = [1, 2]; $b = array_pad($a, -4, 9); echo count($b); echo ':'; echo $b[0] . $b[1] . $b[2] . $b[3];",
+            "4:9912",
+        ),
+        (
+            "array_pad_no_growth_copies_source",
+            "<?php $a = [7, 8]; $b = array_pad($a, 1, 0); echo count($b); echo ':'; echo $b[0] . $b[1];",
+            "2:78",
+        ),
+        (
+            "array_pad_nested_array_counts",
+            "<?php $inner = [5]; $rows = [[1]]; $padded = array_pad($rows, 3, $inner); echo count($padded); echo ':'; echo count($padded[0]); echo ':'; echo count($padded[2]);",
+            "3:1:1",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies indexed-array reversal returns a reversed copy without mutating the source.
 #[test]
 fn ir_backend_handles_indexed_array_reverse() {

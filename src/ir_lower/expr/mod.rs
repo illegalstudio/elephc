@@ -797,7 +797,7 @@ fn array_builtin_return_type(
                 other => Some(other),
             }
         }
-        "array_reverse" | "array_unique" => {
+        "array_reverse" | "array_unique" | "array_pad" => {
             let array = operands.first()?;
             match ctx.builder.value_php_type(*array).codegen_repr() {
                 PhpType::Array(elem) => Some(PhpType::Array(elem)),

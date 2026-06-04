@@ -65,6 +65,22 @@ pub(super) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_if_result(ctx, inst)
 }
 
+/// Lowers `array_pad()` by copying an indexed array and filling missing slots.
+pub(super) fn lower_array_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "array_pad", 3)?;
+    let array = expect_operand(inst, 0)?;
+    let target_size = expect_operand(inst, 1)?;
+    let pad_value = expect_operand(inst, 2)?;
+    let source_elem_ty = array_pad_source_element_type(ctx.value_php_type(array)?)?;
+    let pad_value_ty = ctx.value_php_type(pad_value)?.codegen_repr();
+    let result_elem_ty = result_array_element_type("array_pad", &inst.result_php_type.codegen_repr())?;
+    require_array_pad_value_type(&source_elem_ty, &pad_value_ty)?;
+    require_array_pad_result_type(&source_elem_ty, &result_elem_ty)?;
+    lower_array_pad_call(ctx, array, target_size, pad_value, &source_elem_ty)?;
+    normalize_indexed_array_result(ctx, "array_pad", &source_elem_ty, &result_elem_ty)?;
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `array_fill()` for pointer-sized scalar and refcounted payloads.
 pub(super) fn lower_array_fill(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_fill", 3)?;
@@ -423,6 +439,21 @@ fn array_chunk_source_element_type(ty: PhpType) -> Result<PhpType> {
     }
 }
 
+/// Returns the copied element type when `array_pad()` can use legacy pointer-sized helpers.
+fn array_pad_source_element_type(ty: PhpType) -> Result<PhpType> {
+    match ty.codegen_repr() {
+        PhpType::Array(elem) => {
+            let elem = elem.codegen_repr();
+            require_array_pad_element_layout(&elem)?;
+            Ok(elem)
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_pad for PHP type {:?}",
+            other
+        ))),
+    }
+}
+
 /// Returns the result element type declared by the lowered builtin instruction.
 fn result_array_element_type(name: &str, ty: &PhpType) -> Result<PhpType> {
     match ty {
@@ -485,6 +516,25 @@ fn require_array_chunk_element_layout(elem: &PhpType) -> Result<()> {
     )))
 }
 
+/// Verifies that the runtime pad helper can copy this element representation.
+fn require_array_pad_element_layout(elem: &PhpType) -> Result<()> {
+    if matches!(
+        elem,
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Callable
+            | PhpType::Void
+    ) || elem.is_refcounted()
+    {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "array_pad indexed-array element PHP type {:?}",
+        elem
+    )))
+}
+
 /// Verifies the destination element type matches the copied layout or is a Mixed widening.
 fn require_array_slice_result_type(source_elem_ty: &PhpType, result_elem_ty: &PhpType) -> Result<()> {
     if source_elem_ty == result_elem_ty || result_elem_ty == &PhpType::Mixed {
@@ -492,6 +542,30 @@ fn require_array_slice_result_type(source_elem_ty: &PhpType, result_elem_ty: &Ph
     }
     Err(CodegenIrError::unsupported(format!(
         "array_slice result element PHP type {:?} for source element PHP type {:?}",
+        result_elem_ty,
+        source_elem_ty
+    )))
+}
+
+/// Verifies the pad value can be copied into the source array's slot layout.
+fn require_array_pad_value_type(source_elem_ty: &PhpType, pad_value_ty: &PhpType) -> Result<()> {
+    if source_elem_ty == pad_value_ty {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "array_pad value PHP type {:?} for source element PHP type {:?}",
+        pad_value_ty,
+        source_elem_ty
+    )))
+}
+
+/// Verifies the produced padded array retains the source element type.
+fn require_array_pad_result_type(source_elem_ty: &PhpType, result_elem_ty: &PhpType) -> Result<()> {
+    if source_elem_ty == result_elem_ty || result_elem_ty == &PhpType::Mixed {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "array_pad result element PHP type {:?} for source element PHP type {:?}",
         result_elem_ty,
         source_elem_ty
     )))
@@ -554,6 +628,30 @@ fn lower_array_chunk_call(
     Ok(())
 }
 
+/// Calls the appropriate legacy runtime helper after materializing pad arguments.
+fn lower_array_pad_call(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    target_size: ValueId,
+    pad_value: ValueId,
+    source_elem_ty: &PhpType,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(target_size, "x1")?;
+            ctx.load_value_to_reg(pad_value, "x2")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(target_size, "rsi")?;
+            ctx.load_value_to_reg(pad_value, "rdx")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, array_pad_runtime_helper(source_elem_ty));
+    Ok(())
+}
+
 /// Loads the optional slice length or the runtime until-end sentinel into `reg`.
 fn load_array_slice_length(
     ctx: &mut FunctionContext<'_>,
@@ -597,6 +695,15 @@ fn array_chunk_runtime_helper(source_elem_ty: &PhpType) -> &'static str {
         "__rt_array_chunk_refcounted"
     } else {
         "__rt_array_chunk"
+    }
+}
+
+/// Returns the helper that matches the pad source element ownership representation.
+fn array_pad_runtime_helper(source_elem_ty: &PhpType) -> &'static str {
+    if source_elem_ty.is_refcounted() {
+        "__rt_array_pad_refcounted"
+    } else {
+        "__rt_array_pad"
     }
 }
 
