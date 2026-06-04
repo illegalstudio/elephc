@@ -453,6 +453,33 @@ var_dump(["a" => 1, "b" => 2]);
     );
 }
 
+/// Verifies diagnostic output builtins inspect boxed Mixed payloads from lowered helpers.
+#[test]
+fn ir_backend_handles_debug_output_for_mixed_values() {
+    let source = r#"<?php
+$ints = array_fill(0, 1, 42);
+$floats = array_fill(0, 1, 1.5);
+$bools = array_fill(0, 1, true);
+$nulls = array_fill(0, 1, null);
+$arrays = array_fill(0, 1, [1, 2]);
+var_dump($ints[0]);
+var_dump(grapheme_strrev("abc"));
+var_dump($floats[0]);
+var_dump($bools[0]);
+var_dump($nulls[0]);
+var_dump($arrays[0]);
+echo "[";
+print_r($ints[0]);
+echo "|";
+print_r(strpos("abc", "z"));
+echo "]";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("debug_output_mixed_values", source),
+        "int(42)\nstring(3) \"cba\"\nfloat(1.5)\nbool(true)\nNULL\narray(2) {\n}\n[42|]"
+    );
+}
+
 /// Verifies selected type predicates inspect boxed Mixed payloads in the EIR backend.
 #[test]
 fn ir_backend_handles_mixed_type_predicates() {

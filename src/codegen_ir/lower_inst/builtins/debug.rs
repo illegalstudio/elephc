@@ -7,7 +7,8 @@
 //!
 //! Key details:
 //! - Output must match the legacy backend for the supported concrete types.
-//! - Mixed, iterable, and object runtime dispatch stay explicit unsupported work.
+//! - Mixed dispatch follows the runtime tag/payload contract from `__rt_mixed_unbox`.
+//! - Iterable and full object class-name dispatch stay explicit unsupported work.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -47,6 +48,7 @@ pub(super) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             Ok(())
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => emit_var_dump_array(ctx),
+        PhpType::Mixed | PhpType::Union(_) => emit_var_dump_mixed(ctx),
         other => Err(CodegenIrError::unsupported(format!(
             "var_dump for PHP type {:?}",
             other
@@ -73,6 +75,8 @@ fn emit_print_r_loaded_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Res
         PhpType::Int
         | PhpType::Float
         | PhpType::Str
+        | PhpType::Mixed
+        | PhpType::Union(_)
         | PhpType::Resource(_)
         | PhpType::Pointer(_)
         | PhpType::Buffer(_)
@@ -85,6 +89,68 @@ fn emit_print_r_loaded_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Res
             other
         ))),
     }
+}
+
+/// Emits `var_dump` output for a boxed Mixed payload in the integer result register.
+fn emit_var_dump_mixed(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let int_case = ctx.next_label("var_dump_mixed_int");
+    let string_case = ctx.next_label("var_dump_mixed_string");
+    let float_case = ctx.next_label("var_dump_mixed_float");
+    let bool_case = ctx.next_label("var_dump_mixed_bool");
+    let resource_case = ctx.next_label("var_dump_mixed_resource");
+    let array_case = ctx.next_label("var_dump_mixed_array");
+    let object_case = ctx.next_label("var_dump_mixed_object");
+    let null_case = ctx.next_label("var_dump_mixed_null");
+    let done = ctx.next_label("var_dump_mixed_done");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_on_mixed_tag(ctx, 0, &int_case);
+    emit_branch_on_mixed_tag(ctx, 1, &string_case);
+    emit_branch_on_mixed_tag(ctx, 2, &float_case);
+    emit_branch_on_mixed_tag(ctx, 3, &bool_case);
+    emit_branch_on_mixed_tag(ctx, 9, &resource_case);
+    emit_branch_on_mixed_tag(ctx, 4, &array_case);
+    emit_branch_on_mixed_tag(ctx, 5, &array_case);
+    emit_branch_on_mixed_tag(ctx, 6, &object_case);
+    abi::emit_jump(ctx.emitter, &null_case);
+
+    ctx.emitter.label(&int_case);
+    move_mixed_payload_to_int_result(ctx);
+    emit_var_dump_int(ctx)?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&string_case);
+    move_mixed_payload_to_string_result(ctx);
+    emit_var_dump_string(ctx)?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&float_case);
+    move_mixed_payload_to_float_result(ctx);
+    emit_var_dump_float(ctx)?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&bool_case);
+    move_mixed_payload_to_int_result(ctx);
+    emit_var_dump_bool(ctx)?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&resource_case);
+    move_mixed_payload_to_int_result(ctx);
+    emit_var_dump_resource(ctx)?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&array_case);
+    move_mixed_payload_to_int_result(ctx);
+    emit_var_dump_array(ctx)?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&object_case);
+    emit_write_literal(ctx, b"object\n");
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&null_case);
+    emit_var_dump_null(ctx);
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Emits `var_dump` output for an integer payload in the integer result register.
@@ -215,6 +281,54 @@ fn emit_write_literal(ctx: &mut FunctionContext<'_>, bytes: &[u8]) {
 /// Writes the current string result register pair to stdout.
 fn emit_write_current_string(ctx: &mut FunctionContext<'_>) {
     abi::emit_write_stdout(ctx.emitter, &PhpType::Str);
+}
+
+/// Branches to `label` when the unboxed Mixed tag equals `tag`.
+fn emit_branch_on_mixed_tag(ctx: &mut FunctionContext<'_>, tag: u8, label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp x0, #{}", tag));              // compare the unboxed Mixed runtime tag against this formatter case
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // branch to the matching Mixed formatter case
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp rax, {}", tag));              // compare the unboxed Mixed runtime tag against this formatter case
+            ctx.emitter.instruction(&format!("je {}", label));                  // branch to the matching Mixed formatter case
+        }
+    }
+}
+
+/// Moves the unboxed Mixed low payload word into the integer result register.
+fn move_mixed_payload_to_int_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // move the unboxed Mixed low payload into the integer result register
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed Mixed low payload into the integer result register
+        }
+    }
+}
+
+/// Moves the unboxed Mixed string payload words into the string result register pair.
+fn move_mixed_payload_to_string_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {}
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed Mixed string pointer into the string result register
+        }
+    }
+}
+
+/// Moves the unboxed Mixed float bits into the floating-point result register.
+fn move_mixed_payload_to_float_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("fmov d0, x1");                             // reinterpret the unboxed Mixed payload bits as the float result
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("movq xmm0, rdi");                          // reinterpret the unboxed Mixed payload bits as the float result
+        }
+    }
 }
 
 /// Emits a comparison between two general-purpose registers.
