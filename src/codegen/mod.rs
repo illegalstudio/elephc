@@ -120,6 +120,7 @@ pub(crate) use driver_support::{
     emit_normalized_hash_key, emit_release_pushed_refcounted_temp_after_array_push,
     runtime_value_tag, UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
 };
+pub(crate) use expr::arrays::emit_array_value_type_stamp;
 #[allow(unused_imports)]
 pub use driver_support::{generate_runtime, generate_runtime_with_features};
 pub use runtime_features::{

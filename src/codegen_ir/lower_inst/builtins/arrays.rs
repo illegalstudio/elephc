@@ -20,6 +20,7 @@ use super::super::super::context::FunctionContext;
 use super::super::{expect_operand, store_if_result};
 
 mod key_exists;
+mod keys;
 mod values;
 
 /// Lowers `array_sum()` over supported indexed-array payloads.
@@ -85,6 +86,11 @@ pub(super) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// Lowers `array_values()` through the dedicated values-array builtin emitter.
 pub(super) fn lower_array_values(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     values::lower_array_values(ctx, inst)
+}
+
+/// Lowers `array_keys()` through the dedicated keys-array builtin emitter.
+pub(super) fn lower_array_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    keys::lower_array_keys(ctx, inst)
 }
 
 /// Lowers `array_rand()` for indexed arrays.

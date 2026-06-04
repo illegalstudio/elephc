@@ -764,6 +764,30 @@ fn ir_backend_handles_assoc_array_key_exists() {
     }
 }
 
+/// Verifies `array_keys()` returns Mixed-boxed keys in insertion order for indexed and assoc arrays.
+#[test]
+fn ir_backend_handles_array_keys() {
+    for (name, source, expected) in [
+        (
+            "array_keys_indexed",
+            "<?php $a = [10, 20, 30]; $k = array_keys($a); echo count($k); echo ':'; echo $k[0]; echo $k[1]; echo $k[2];",
+            "3:012",
+        ),
+        (
+            "array_keys_assoc_string",
+            "<?php $m = ['x' => 1, 'y' => 2]; $keys = array_keys($m); echo count($keys); echo ':'; echo $keys[0]; echo ' '; echo $keys[1];",
+            "2:x y",
+        ),
+        (
+            "array_keys_assoc_mixed",
+            "<?php $m = [1 => 'one', '02' => 'two']; $keys = array_keys($m); echo $keys[0]; echo '|'; echo $keys[1];",
+            "1|02",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies indexed-array membership for scalar and string payloads.
 #[test]
 fn ir_backend_handles_indexed_in_array() {
