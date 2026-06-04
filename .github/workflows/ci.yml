@@ -7,14 +7,20 @@ on:
     branches: [main]
 
 jobs:
-  test:
-    name: Build & Test
+  non-codegen-tests:
+    name: Build & Non-Codegen Tests
     runs-on: macos-14  # Apple Silicon runner
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-nextest
+        run: |
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
+          curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+          cargo nextest --version
 
       - name: Install native test dependencies
         run: brew install pcre2
@@ -29,8 +35,56 @@ jobs:
         # external linker needs). Build it explicitly first.
         run: cargo build -p elephc-tls
 
-      - name: Run tests
-        run: cargo test
+      - name: Run non-codegen tests
+        run: cargo nextest run --workspace -E 'not binary(codegen_tests)' --no-fail-fast -j 8
+
+      - name: Run doctests
+        run: cargo test --workspace --doc
+
+  codegen-tests:
+    name: Codegen Tests (${{ matrix.shard }}/16)
+    runs-on: macos-14  # Apple Silicon runner
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-nextest
+        run: |
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
+          curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+          cargo nextest --version
+
+      - name: Install native test dependencies
+        run: brew install pcre2
+
+      - name: Build TLS staticlib
+        # The codegen test runner links compiled https:// / TLS programs against
+        # libelephc_tls.a, which `cargo test` does not produce on its own (the
+        # crate is pulled in as an rlib dev-dependency, not the staticlib the
+        # external linker needs). Build it explicitly first.
+        run: cargo build -p elephc-tls
+
+      - name: Run codegen test shard
+        run: cargo nextest run --test codegen_tests --partition hash:${{ matrix.shard }}/16 --no-fail-fast -j 8
+
+  test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    needs:
+      - non-codegen-tests
+      - codegen-tests
+    if: always()
+    steps:
+      - name: Verify test jobs
+        run: |
+          test "${{ needs.non-codegen-tests.result }}" = "success"
+          test "${{ needs.codegen-tests.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite
