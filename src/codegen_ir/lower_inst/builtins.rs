@@ -67,6 +67,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "array_pad" => arrays::lower_array_pad(ctx, inst),
         "array_combine" => arrays::lower_array_combine(ctx, inst),
         "array_fill" => arrays::lower_array_fill(ctx, inst),
+        "array_fill_keys" => arrays::lower_array_fill_keys(ctx, inst),
         "array_reverse" => arrays::lower_array_reverse(ctx, inst),
         "array_unique" => arrays::lower_array_unique(ctx, inst),
         "array_merge" => arrays::lower_array_merge(ctx, inst),

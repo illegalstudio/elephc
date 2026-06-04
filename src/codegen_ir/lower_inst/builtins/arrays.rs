@@ -14,7 +14,7 @@ use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
-use crate::types::PhpType;
+use crate::types::{array_key_type_from_value_type, PhpType};
 
 use super::super::super::context::FunctionContext;
 use super::super::{expect_operand, store_if_result};
@@ -93,6 +93,20 @@ pub(super) fn lower_array_fill(ctx: &mut FunctionContext<'_>, inst: &Instruction
     require_array_fill_result_type(&value_ty, &result_elem_ty)?;
     lower_array_fill_call(ctx, start, count, value, &value_ty)?;
     normalize_indexed_array_result(ctx, "array_fill", &value_ty, &result_elem_ty)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `array_fill_keys()` through the legacy hash-building runtime helpers.
+pub(super) fn lower_array_fill_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "array_fill_keys", 2)?;
+    let keys = expect_operand(inst, 0)?;
+    let value = expect_operand(inst, 1)?;
+    let key_elem_ty = array_fill_keys_key_element_type(ctx.value_php_type(keys)?)?;
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    require_array_fill_keys_key_layout(&key_elem_ty)?;
+    require_array_fill_keys_value_type(&value_ty)?;
+    require_array_fill_keys_result_type(&key_elem_ty, &value_ty, &inst.result_php_type.codegen_repr())?;
+    lower_array_fill_keys_call(ctx, keys, value, &value_ty)?;
     store_if_result(ctx, inst)
 }
 
@@ -352,6 +366,17 @@ fn require_array_fill_value_type(value_ty: &PhpType) -> Result<()> {
     )))
 }
 
+/// Returns the key element type accepted by `array_fill_keys()`.
+fn array_fill_keys_key_element_type(ty: PhpType) -> Result<PhpType> {
+    match ty.codegen_repr() {
+        PhpType::Array(elem) => Ok(elem.codegen_repr()),
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_fill_keys keys PHP type {:?}",
+            other
+        ))),
+    }
+}
+
 /// Returns the key element type accepted by `array_combine()`.
 fn array_combine_key_element_type(ty: PhpType) -> Result<PhpType> {
     match ty.codegen_repr() {
@@ -372,6 +397,41 @@ fn array_combine_value_element_type(ty: PhpType) -> Result<PhpType> {
             other
         ))),
     }
+}
+
+/// Verifies the key array uses the string-slot layout expected by the runtime helper.
+fn require_array_fill_keys_key_layout(key_elem_ty: &PhpType) -> Result<()> {
+    if matches!(key_elem_ty, PhpType::Str | PhpType::Void | PhpType::Never) {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "array_fill_keys key element PHP type {:?}",
+        key_elem_ty
+    )))
+}
+
+/// Verifies the fill payload can be passed through the current runtime helper ABI.
+///
+/// String values are deliberately excluded because the helper accepts only one value word;
+/// preserving string payloads requires a value_hi register/slot path.
+fn require_array_fill_keys_value_type(value_ty: &PhpType) -> Result<()> {
+    if matches!(
+        value_ty,
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Void
+            | PhpType::Mixed
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_)
+    ) {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "array_fill_keys value PHP type {:?}",
+        value_ty
+    )))
 }
 
 /// Verifies the key array uses the string-slot layout expected by the runtime helper.
@@ -406,6 +466,28 @@ fn require_array_combine_value_layout(value_elem_ty: &PhpType) -> Result<()> {
         "array_combine value element PHP type {:?}",
         value_elem_ty
     )))
+}
+
+/// Verifies `array_fill_keys()` produces a hash matching the selected key/value metadata.
+fn require_array_fill_keys_result_type(
+    key_elem_ty: &PhpType,
+    value_ty: &PhpType,
+    result_ty: &PhpType,
+) -> Result<()> {
+    let expected_key_ty = array_key_type_from_value_type(key_elem_ty.clone()).codegen_repr();
+    match result_ty {
+        PhpType::AssocArray { key, value }
+            if key.codegen_repr() == expected_key_ty && value.codegen_repr() == *value_ty =>
+        {
+            Ok(())
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_fill_keys result PHP type {:?} for key element PHP type {:?} and value PHP type {:?}",
+            other,
+            key_elem_ty,
+            value_ty
+        ))),
+    }
 }
 
 /// Verifies `array_combine()` produces a hash with the selected value element metadata.
@@ -456,6 +538,30 @@ fn lower_array_fill_call(
     Ok(())
 }
 
+/// Calls the legacy runtime helper after materializing `array_fill_keys()` arguments.
+fn lower_array_fill_keys_call(
+    ctx: &mut FunctionContext<'_>,
+    keys: ValueId,
+    value: ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    let value_tag = runtime_value_tag("array_fill_keys", value_ty)? as i64;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(keys, "x0")?;
+            ctx.load_value_to_reg(value, "x1")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x2", value_tag);
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(keys, "rdi")?;
+            ctx.load_value_to_reg(value, "rsi")?;
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", value_tag);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, array_fill_keys_runtime_helper(value_ty));
+    Ok(())
+}
+
 /// Calls the legacy runtime helper after materializing `array_combine()` arguments.
 fn lower_array_combine_call(
     ctx: &mut FunctionContext<'_>,
@@ -478,6 +584,15 @@ fn lower_array_combine_call(
     }
     abi::emit_call_label(ctx.emitter, array_combine_runtime_helper(value_elem_ty));
     Ok(())
+}
+
+/// Returns the helper matching the fill-keys value ownership representation.
+fn array_fill_keys_runtime_helper(value_ty: &PhpType) -> &'static str {
+    if value_ty.is_refcounted() {
+        "__rt_array_fill_keys_refcounted"
+    } else {
+        "__rt_array_fill_keys"
+    }
 }
 
 /// Returns the helper matching the fill value's ownership representation.

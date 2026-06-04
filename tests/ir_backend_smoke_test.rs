@@ -785,6 +785,35 @@ fn ir_backend_handles_indexed_array_fill() {
     }
 }
 
+/// Verifies `array_fill_keys()` builds associative arrays from string-key indexed arrays.
+#[test]
+fn ir_backend_handles_indexed_array_fill_keys() {
+    for (name, source, expected) in [
+        (
+            "array_fill_keys_int_lookup",
+            "<?php $keys = ['x', 'y']; $m = array_fill_keys($keys, 7); echo count($m); echo ':'; echo $m['y'];",
+            "2:7",
+        ),
+        (
+            "array_fill_keys_numeric_key_normalization",
+            "<?php $m = array_fill_keys(['1', '02'], 8); echo $m[1]; echo ':'; echo $m['02'];",
+            "8:8",
+        ),
+        (
+            "array_fill_keys_float_lookup",
+            "<?php $m = array_fill_keys(['x'], 1.5); echo $m['x'];",
+            "1.5",
+        ),
+        (
+            "array_fill_keys_refcounted_array_values",
+            "<?php $inner = [14]; $m = array_fill_keys(['a', 'b'], $inner); $v = array_values($m); echo count($m); echo ':'; echo count($v[0]); echo ':'; echo $v[1][0];",
+            "2:1:14",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies `array_chunk()` returns nested indexed arrays with the expected chunk boundaries.
 #[test]
 fn ir_backend_handles_indexed_array_chunk() {
