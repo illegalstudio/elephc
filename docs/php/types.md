@@ -159,6 +159,22 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `settype()`     | `settype($var, $type): bool` | Changes variable type in place |
 
 
+### Type narrowing
+
+Inside an `if` guarded by a type predicate on a variable, that variable is narrowed to the tested type within the branch, so it can be used as that type without an explicit cast. `is_int()`, `is_float()`, `is_string()`, and `is_bool()` (and their aliases) narrow to the matching scalar, and `$x instanceof SomeClass` narrows to that class — including calling its methods. The `else` branch — and the statements after a guard whose body always `return`s or `throw`s — sees the complementary type; a leading `!` flips the branches.
+
+```php
+function describe($x): string {        // $x may be int or a Point across call sites
+    if (is_int($x)) {
+        return "int " . ($x + 1);      // $x is int here
+    }
+    return "point " . $x->label();     // $x is the object here
+}
+```
+
+Narrowing is not tracked across a reassignment of the variable inside the branch.
+
+
 ### Known incompatibilities with PHP
 
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.

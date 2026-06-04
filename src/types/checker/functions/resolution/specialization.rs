@@ -193,7 +193,7 @@ impl Checker {
     /// accumulated union — including any previously seen `Int`/`Bool`, e.g. `int|string` — is
     /// returned so codegen boxes the parameter as a `Mixed` runtime value and each argument keeps
     /// its own runtime type instead of being coerced to the last-seen type.
-    fn record_observed_param_type(
+    pub(crate) fn record_observed_param_type(
         &mut self,
         name: &str,
         idx: usize,

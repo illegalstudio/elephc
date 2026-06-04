@@ -19,6 +19,20 @@ const FS_CURRENT_AS_PATHNAME: i64 = 32;
 const FS_CURRENT_MODE_MASK: i64 = 240;
 const FS_SKIP_DOTS: i64 = 4096;
 
+/// Restores a narrowed variable in the environment to its previously saved type after a guarded
+/// branch, removing it when it had no prior type. Used to keep `if`/`else` type narrowing scoped
+/// to its branch.
+fn restore_narrowed_var(env: &mut TypeEnv, var: &str, saved: &Option<PhpType>) {
+    match saved {
+        Some(ty) => {
+            env.insert(var.to_string(), ty.clone());
+        }
+        None => {
+            env.remove(var);
+        }
+    }
+}
+
 /// Returns the synthetic constructor default flags for filesystem iterators.
 fn filesystem_iterator_default_flags(class_name: &str) -> Option<i64> {
     match class_name {
@@ -151,26 +165,65 @@ impl Checker {
             } => {
                 self.infer_type_with_assignment_effects(condition, env)?;
                 let mut errors = Vec::new();
-                for s in then_body {
-                    if let Err(error) = self.check_stmt(s, env) {
-                        errors.extend(error.flatten());
-                    }
-                }
-                for (cond, body) in elseif_clauses {
-                    self.infer_type_with_assignment_effects(cond, env)?;
-                    for s in body {
+
+                // Flow-sensitive type narrowing applies only to the simple `if` / `if`-`else`
+                // shape (no `elseif`), where the then/else complement is unambiguous.
+                let guard = if elseif_clauses.is_empty() {
+                    self.type_guard_narrowing(condition, env)
+                } else {
+                    None
+                };
+
+                if let Some(guard) = &guard {
+                    // -- then-branch sees the guarded type --
+                    let saved = env.get(&guard.var).cloned();
+                    env.insert(guard.var.clone(), guard.then_ty.clone());
+                    for s in then_body {
                         if let Err(error) = self.check_stmt(s, env) {
                             errors.extend(error.flatten());
                         }
                     }
-                }
-                if let Some(body) = else_body {
-                    for s in body {
+                    restore_narrowed_var(env, &guard.var, &saved);
+
+                    // -- else-branch sees the complement type --
+                    env.insert(guard.var.clone(), guard.else_ty.clone());
+                    if let Some(body) = else_body {
+                        for s in body {
+                            if let Err(error) = self.check_stmt(s, env) {
+                                errors.extend(error.flatten());
+                            }
+                        }
+                    }
+                    restore_narrowed_var(env, &guard.var, &saved);
+
+                    // -- early-return idiom: `if (guard) { ...; return; }` with no `else` narrows
+                    //    the statements after the `if` to the complement type --
+                    if else_body.is_none() && super::narrowing::body_always_diverges(then_body) {
+                        env.insert(guard.var.clone(), guard.else_ty.clone());
+                    }
+                } else {
+                    for s in then_body {
                         if let Err(error) = self.check_stmt(s, env) {
                             errors.extend(error.flatten());
                         }
                     }
+                    for (cond, body) in elseif_clauses {
+                        self.infer_type_with_assignment_effects(cond, env)?;
+                        for s in body {
+                            if let Err(error) = self.check_stmt(s, env) {
+                                errors.extend(error.flatten());
+                            }
+                        }
+                    }
+                    if let Some(body) = else_body {
+                        for s in body {
+                            if let Err(error) = self.check_stmt(s, env) {
+                                errors.extend(error.flatten());
+                            }
+                        }
+                    }
                 }
+
                 if errors.is_empty() {
                     Ok(())
                 } else {
