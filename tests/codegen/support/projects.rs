@@ -205,6 +205,10 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
+    let requires_elephc_tls = check_result
+        .required_libraries
+        .iter()
+        .any(|lib| lib == "elephc_tls");
     let (user_asm, runtime_asm) = elephc::codegen::generate(
         &optimized,
         &check_result.global_env,
@@ -223,6 +227,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
         false,
         false,
         target(),
+        requires_elephc_tls,
     );
     let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
 
@@ -284,6 +289,10 @@ pub(crate) fn compile_and_run_files_with_defines(
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
+    let requires_elephc_tls = check_result
+        .required_libraries
+        .iter()
+        .any(|lib| lib == "elephc_tls");
     let (user_asm, runtime_asm) = elephc::codegen::generate(
         &optimized,
         &check_result.global_env,
@@ -302,6 +311,7 @@ pub(crate) fn compile_and_run_files_with_defines(
         false,
         false,
         target(),
+        requires_elephc_tls,
     );
     let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
     // user assembly is already platform-correct (emitters handle platform at emit time)
@@ -396,6 +406,10 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
+    let requires_elephc_tls = check_result
+        .required_libraries
+        .iter()
+        .any(|lib| lib == "elephc_tls");
     let (user_asm, runtime_asm) = elephc::codegen::generate(
         &optimized,
         &check_result.global_env,
@@ -414,6 +428,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
         false,
         false,
         target(),
+        requires_elephc_tls,
     );
     let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
     // user assembly is already platform-correct (emitters handle platform at emit time)
@@ -503,6 +518,10 @@ pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBu
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
+    let requires_elephc_tls = check_result
+        .required_libraries
+        .iter()
+        .any(|lib| lib == "elephc_tls");
     let (user_asm, runtime_asm) = elephc::codegen::generate(
         &optimized,
         &check_result.global_env,
@@ -521,6 +540,7 @@ pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBu
         false,
         false,
         target(),
+        requires_elephc_tls,
     );
     let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
     // user assembly is already platform-correct (emitters handle platform at emit time)

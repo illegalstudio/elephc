@@ -92,6 +92,22 @@ pub(crate) fn link(
     }
     for lib in extra_link_libs {
         if lib != "System" {
+            if lib == "elephc_tls" {
+                if let Some(dir) = elephc_tls_dir.as_deref() {
+                    match target.platform {
+                        Platform::MacOS => {
+                            let path = Path::new(dir).join("libelephc_tls.a");
+                            ld_cmd.arg("-force_load").arg(path);
+                        }
+                        Platform::Linux => {
+                            ld_cmd.arg("-Wl,--whole-archive");
+                            ld_cmd.arg("-lelephc_tls");
+                            ld_cmd.arg("-Wl,--no-whole-archive");
+                        }
+                    }
+                    continue;
+                }
+            }
             ld_cmd.arg(format!("-l{}", lib));
         }
     }

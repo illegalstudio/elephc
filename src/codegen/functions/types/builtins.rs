@@ -43,7 +43,7 @@ pub(super) fn infer_function_call_type(
         | "json_last_error_msg" | "php_uname" | "phpversion"
         | "tempnam" | "getcwd" | "shell_exec" | "preg_replace_callback"
         | "ptr_read_string"
-        | "fread" | "fgets" | "stream_get_contents" | "stream_get_line"
+        | "fread" | "fgets" | "stream_get_line"
         | "gethostname" | "gethostbyname"
         | "basename" | "sys_get_temp_dir"
         | "get_class" | "get_parent_class" | "get_resource_type"
@@ -190,7 +190,8 @@ pub(super) fn infer_function_call_type(
         "strpos" | "strrpos" | "array_search" | "file_get_contents" | "json_encode"
         | "grapheme_strrev" | "fileatime" | "filectime" | "fileperms" | "fileowner"
         | "filegroup" | "fileinode" | "filetype" | "stat" | "lstat" | "fstat"
-        | "fgetc" | "readfile" | "readlink" => PhpType::Mixed,
+        | "fgetc" | "readfile" | "readlink" | "stream_get_contents"
+        | "stream_copy_to_stream" => PhpType::Mixed,
         "fopen" | "tmpfile" => merge_union_members(vec![PhpType::stream_resource(), PhpType::Bool]),
         "pathinfo" => infer_pathinfo_type(args),
         "abs" => {

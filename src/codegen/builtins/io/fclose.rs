@@ -73,7 +73,7 @@ pub fn emit(
     emit_zlib_flush_on_close(emitter, ctx);
     emit_bz2_flush_on_close(emitter, ctx);
     emit_iconv_flush_on_close(emitter, ctx);
-    emit_tls_close_on_close(emitter, ctx);
+    emit_tls_session_teardown(emitter, ctx);
     emit_user_filter_on_close(emitter, ctx);
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -150,12 +150,13 @@ fn emit_user_filter_on_close(emitter: &mut Emitter, _ctx: &mut Context) {
     abi::emit_call_label(emitter, "__rt_user_filter_release_fd");
 }
 
-/// Closes the TLS session attached to this fd (if any) before the
-/// underlying socket is closed. Phase 11 B3: stream_socket_enable_crypto
-/// installs a non-zero handle in `_tls_sessions[fd]`; here we send the
-/// close_notify via `_elephc_tls_close_fn` and zero the slot so the
-/// descriptor can be reused for a plain TCP connection.
-fn emit_tls_close_on_close(emitter: &mut Emitter, ctx: &mut Context) {
+/// Closes the TLS session attached to `fd` (if any), sending `close_notify`
+/// via `_elephc_tls_close_fn` and zeroing `_tls_sessions[fd]` so the descriptor
+/// can be reused for a plain TCP connection. `fd` must already be in the
+/// int-result register; the helper is a no-op when no session is attached.
+/// Shared by `fclose()` and `stream_socket_enable_crypto($s, false)` (the
+/// mid-stream crypto-shutdown path).
+pub(super) fn emit_tls_session_teardown(emitter: &mut Emitter, ctx: &mut Context) {
     let skip = ctx.next_label("fclose_tls_skip");
     match emitter.target.arch {
         Arch::AArch64 => {

@@ -19,4 +19,11 @@ echo "head: " . $head . "\n";
 echo "tail: " . $tail;
 fclose($handle);
 
+// The optional $length caps how many bytes are read, and $offset (>= 0) seeks
+// the stream first — so you can pull a slice without a manual fseek().
+$handle = fopen("poem.txt", "r");
+echo "first 5 bytes: " . stream_get_contents($handle, 5) . "\n";
+echo "7 bytes from offset 14: " . stream_get_contents($handle, 7, 14) . "\n";
+fclose($handle);
+
 unlink("poem.txt");

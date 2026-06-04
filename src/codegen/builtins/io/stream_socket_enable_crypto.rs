@@ -23,9 +23,11 @@
 //! - The 3rd ($crypto_method) and 4th ($session_stream) PHP args are
 //!   evaluated for side effects but otherwise ignored — elephc relies on
 //!   rustls's default TLS protocol negotiation.
-//! - $enable=false (TLS shutdown on a live socket) is not yet supported;
-//!   the helper reports `true` so callers' close-then-reopen paths keep
-//!   working, but no TLS state is actually unwound.
+//! - $enable=false (mid-stream TLS shutdown) reloads the fd and calls the
+//!   shared `fclose::emit_tls_session_teardown`, which sends `close_notify`
+//!   via `_elephc_tls_close_fn` and clears `_tls_sessions[fd]` (a no-op when
+//!   no session is attached), leaving the fd as a plain TCP socket; it then
+//!   reports `true`.
 
 use crate::codegen::abi;
 use crate::codegen::context::Context;
@@ -72,11 +74,19 @@ pub fn emit(
             emitter.instruction(&format!("jnz {}", enable_label));              // enable=true enters the TLS attach path
         }
     }
-    // -- disable path: v1 stub. Drop the stashed fd, report success. --
+    // -- disable path: unwind any live TLS session on the fd, then report
+    //    success. The fd is reloaded from the stashed slot; the teardown sends
+    //    close_notify and clears _tls_sessions[fd], and is a no-op when no TLS
+    //    session is attached. After this the fd is a plain TCP socket again. --
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("ldr x0, [sp]"),                   // reload the stashed fd for the teardown
+        Arch::X86_64 => emitter.instruction("mov rax, QWORD PTR [rsp]"),        // reload the stashed fd for the teardown
+    }
+    super::fclose::emit_tls_session_teardown(emitter, ctx);
     abi::emit_release_temporary_stack(emitter, 16);                             // drop the stashed fd
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("mov x0, #1"),                     // disable stub reports success
-        Arch::X86_64 => emitter.instruction("mov eax, 1"),                      // disable stub reports success
+        Arch::AArch64 => emitter.instruction("mov x0, #1"),                     // mid-stream crypto disable succeeded
+        Arch::X86_64 => emitter.instruction("mov eax, 1"),                      // mid-stream crypto disable succeeded
     }
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("b {}", done_label)),     // return without attaching TLS
@@ -87,6 +97,9 @@ pub fn emit(
     emitter.label(&enable_label);
     publish_tls_function_pointers(emitter);
     let fail_label = ctx.next_label("ssec_attach_fail");
+    // Uniquified per call so a program may invoke stream_socket_enable_crypto
+    // more than once (e.g. enable then disable) without a duplicate label.
+    let peer_ok = ctx.next_label("ssec_peer_ok");
     match emitter.target.arch {
         Arch::AArch64 => {
             // -- look up the SSL peer-name from the stream context. Stack
@@ -101,7 +114,7 @@ pub fn emit(
             emitter.instruction("add x0, sp, #0");                              // out_ptr address
             emitter.instruction("add x1, sp, #8");                              // out_len address
             emitter.instruction("bl __rt_get_ssl_peer_name");                   // x0 = 1 hit / 0 miss
-            emitter.instruction("cbnz x0, __rt_ssec_peer_ok_aarch64");          // hit: use the loaded (ptr, len)
+            emitter.instruction(&format!("cbnz x0, {}", peer_ok));              // hit: use the loaded (ptr, len)
             // -- miss: default the SNI to the connection host recorded by
             //    stream_socket_client (_stream_connect_host[fd]) before falling
             //    back to the hardcoded "localhost". The fd sits at [sp+64]
@@ -115,13 +128,13 @@ pub fn emit(
             emitter.instruction("ldr x12, [x9, #0]");                           // stashed host pointer
             emitter.instruction("str x12, [sp, #0]");                           // peer_name ptr = connection host
             emitter.instruction("str x11, [sp, #8]");                           // peer_name len = connection host length
-            emitter.instruction("b __rt_ssec_peer_ok_aarch64");                 // host defaulted from the connection — skip localhost
+            emitter.instruction(&format!("b {}", peer_ok));                     // host defaulted from the connection — skip localhost
             emitter.label(&host_default);
             abi::emit_symbol_address(emitter, "x9", "_tls_peer_name_default");
             emitter.instruction("str x9, [sp, #0]");                            // fall back to "localhost" ptr
             emitter.instruction("mov x9, #9");                                  // strlen("localhost")
             emitter.instruction("str x9, [sp, #8]");                            // fall back to "localhost" len
-            emitter.label("__rt_ssec_peer_ok_aarch64");
+            emitter.label(&peer_ok);
             // -- look up ssl.local_cert / ssl.local_pk for mutual-TLS client
             //    auth. The getter leaves the out slots untouched on a miss, so
             //    pre-zero the length slots: a zero length selects the plain
@@ -192,7 +205,7 @@ pub fn emit(
             emitter.instruction("lea rsi, [rsp + 8]");                          // out_len address
             emitter.instruction("call __rt_get_ssl_peer_name");                 // rax = 1 hit / 0 miss
             emitter.instruction("test rax, rax");                               // did the context provide ssl.peer_name?
-            emitter.instruction("jnz __rt_ssec_peer_ok_x86");                   // use the loaded peer-name when present
+            emitter.instruction(&format!("jnz {}", peer_ok));                   // use the loaded peer-name when present
             // -- miss: default the SNI to the connection host recorded by
             //    stream_socket_client (_stream_connect_host[fd]) before falling
             //    back to the hardcoded "localhost". The fd sits at [rsp+64]. --
@@ -207,13 +220,13 @@ pub fn emit(
             emitter.instruction("mov r10, QWORD PTR [r9 + 0]");                 // stashed host pointer
             emitter.instruction("mov QWORD PTR [rsp + 0], r10");                // peer_name ptr = connection host
             emitter.instruction("mov QWORD PTR [rsp + 8], r11");                // peer_name len = connection host length
-            emitter.instruction("jmp __rt_ssec_peer_ok_x86");                   // host defaulted from the connection — skip localhost
+            emitter.instruction(&format!("jmp {}", peer_ok));                   // host defaulted from the connection — skip localhost
             emitter.label(&host_default);
             emitter.instruction("lea r9, [rip + _tls_peer_name_default]");      // fallback peer-name literal
             emitter.instruction("mov QWORD PTR [rsp + 0], r9");                 // peer_name ptr = "localhost"
             emitter.instruction("mov r9, 9");                                   // route the immediate through a register so the assembler always emits a 64-bit store
             emitter.instruction("mov QWORD PTR [rsp + 8], r9");                 // peer_name len = strlen("localhost")
-            emitter.label("__rt_ssec_peer_ok_x86");
+            emitter.label(&peer_ok);
             // -- look up ssl.local_cert / ssl.local_pk for mutual-TLS client
             //    auth; pre-zero the length slots so a miss selects plain attach. --
             let plain_attach = ctx.next_label("ssec_plain_attach_x");

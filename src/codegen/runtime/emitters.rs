@@ -429,6 +429,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_fd_write(emitter);
     io::emit_phar_write(emitter);
     io::emit_phar_read(emitter);
+    io::emit_file_get_contents_url(emitter);
     io::emit_fputcsv(emitter);
     io::emit_basename(emitter);
     io::emit_dirname(emitter);

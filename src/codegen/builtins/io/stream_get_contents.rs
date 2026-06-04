@@ -1,32 +1,79 @@
 //! Purpose:
 //! Emits PHP `stream_get_contents` calls.
-//! Reads all remaining bytes from a stream resource into an elephc string.
+//! Reads bytes from a stream resource into an elephc string, honoring the
+//! optional `$length` (maximum bytes) and `$offset` (seek-before-read) args.
 //!
 //! Called from:
 //! - `crate::codegen::builtins::io::emit()`.
 //!
 //! Key details:
-//! - Normal descriptors delegate to the efficient `__rt_stream_get_contents`
-//!   runtime helper (syscall loop into `_concat_buf`).
-//! - Synthetic user-wrapper descriptors (`>= 0x40000000`) are drained by a
-//!   COMPILED, **feof-gated** loop emitted here: each iteration calls
-//!   `__rt_feof` first and stops at EOF, then `__rt_fread`s one chunk and
-//!   copies it into `_user_wrapper_drain_buf`. Checking feof FIRST is what
-//!   makes this safe — it mirrors `while(!feof($f)) $b .= fread($f,N)`, the one
-//!   draining form that works. A read-then-check-empty loop instead forces an
-//!   extra read AT EOF; the wrapper's `stream_read` then returns an empty
-//!   `substr` heap value whose handling frees the caller's resource cell
-//!   (a core heap/refcount bug). Each owned chunk is released via
-//!   `__rt_decref_any` (range-checked, no-ops on non-heap).
+//! - With no finite `$length`, a normal descriptor delegates to the TLS-aware
+//!   `__rt_stream_get_contents` read-all helper, while a synthetic user-wrapper
+//!   descriptor (`>= 0x40000000`) is drained by a feof-gated compiled loop
+//!   (see `emit_read_all_from_fd`). Checking feof FIRST avoids the corrupting
+//!   empty read at EOF that frees the caller's resource cell.
+//! - A finite positive `$length` delegates to `__rt_stream_get_contents_bounded`,
+//!   which loops through `__rt_fread` until the requested byte count is filled,
+//!   EOF is reached, or an empty read is produced. Dynamic `null` / negative
+//!   lengths are checked at run time and fall back to the read-all path,
+//!   matching PHP's default `-1` contract.
+//! - `$offset >= 0` seeks the descriptor before reading (lseek for a normal fd,
+//!   the wrapper's `stream_seek` for a synthetic fd); a failed seek boxes PHP
+//!   `false`. Successful reads are also boxed so `string|false` keeps one
+//!   runtime representation. A literal `null`/negative `$length` means "read to
+//!   EOF" and `$offset < 0`/omitted means "do not seek".
 
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
+use crate::codegen::driver_support::emit_box_current_value_as_mixed;
 use crate::codegen::emit::Emitter;
+use crate::codegen::expr::emit_expr;
 use crate::codegen::{abi, platform::Arch};
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 use super::stream_arg::emit_stream_fd_arg;
+
+const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
+
+/// Returns true when a `$length`/`$offset` argument is a compile-time literal
+/// meaning "read to EOF" / "do not seek" — i.e. `null` or a negative integer
+/// literal (`-1`, the PHP default; the parser models `-1` as `Negate(IntLiteral)`).
+/// Such literals have no side effects, so the caller can skip evaluating them and
+/// treat the parameter as absent. Shared with `stream_copy_to_stream`.
+pub(super) fn is_read_all_or_no_seek(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Null => true,
+        ExprKind::IntLiteral(n) => *n < 0,
+        ExprKind::Negate(inner) => matches!(inner.kind, ExprKind::IntLiteral(n) if n > 0),
+        _ => false,
+    }
+}
+
+/// Branches to `target_label` when a runtime length register means "unlimited":
+/// PHP `null` (elephc's null sentinel) or a negative integer such as `-1`.
+pub(super) fn emit_branch_if_unlimited_length(
+    emitter: &mut Emitter,
+    length_reg: &str,
+    scratch_reg: &str,
+    target_label: &str,
+) {
+    abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {}, {}", length_reg, scratch_reg)); // is the requested length PHP null?
+            emitter.instruction(&format!("b.eq {}", target_label));             // null length means read/copy until EOF
+            emitter.instruction(&format!("cmp {}, #0", length_reg));            // is the requested length negative?
+            emitter.instruction(&format!("b.lt {}", target_label));             // negative length means read/copy until EOF
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {}, {}", length_reg, scratch_reg)); // is the requested length PHP null?
+            emitter.instruction(&format!("je {}", target_label));               // null length means read/copy until EOF
+            emitter.instruction(&format!("cmp {}, 0", length_reg));             // is the requested length negative?
+            emitter.instruction(&format!("jl {}", target_label));               // negative length means read/copy until EOF
+        }
+    }
+}
 
 /// Emits codegen for PHP `stream_get_contents()` stream and I/O builtin calls.
 pub fn emit(
@@ -38,6 +85,182 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("stream_get_contents()");
     emit_stream_fd_arg("stream_get_contents", &args[0], emitter, ctx, data);
+
+    let has_len = args.len() >= 2 && !is_read_all_or_no_seek(&args[1]);
+    let has_off = args.len() >= 3 && !is_read_all_or_no_seek(&args[2]);
+
+    if !has_len && !has_off {
+        // Fast path: read every remaining byte from the current position.
+        emit_read_all_from_fd(emitter, ctx);
+        emit_box_current_value_as_mixed(emitter, &PhpType::Str);
+        return Some(PhpType::Mixed);
+    }
+
+    // General path: stash the fd, evaluate $length then $offset (PHP source
+    // order), optionally seek, then read. The 32-byte frame stays 16-aligned
+    // so the x86_64 `call lseek` below lands on an aligned stack.
+    let skip_seek = ctx.next_label("sgc_skip_seek");
+    let wrap_seek = ctx.next_label("sgc_wrap_seek");
+    let seek_failed = ctx.next_label("sgc_seek_failed");
+    let read_all = ctx.next_label("sgc_read_all");
+    let done = ctx.next_label("sgc_general_done");
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("sub sp, sp, #32"),                // frame: [sp,#0]=fd, [sp,#8]=max_len (16-aligned)
+        Arch::X86_64 => emitter.instruction("sub rsp, 32"),                     // frame: [rsp+0]=fd, [rsp+8]=max_len (16-aligned)
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("str x0, [sp, #0]"),               // save the stream fd
+        Arch::X86_64 => emitter.instruction("mov QWORD PTR [rsp + 0], rax"),    // save the stream fd
+    }
+    if has_len {
+        emit_expr(&args[1], emitter, ctx, data); // evaluate $length first (source order)
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction("str x0, [sp, #8]"),           // save the requested max byte count
+            Arch::X86_64 => emitter.instruction("mov QWORD PTR [rsp + 8], rax"), // save the requested max byte count
+        }
+    }
+    if has_off {
+        emit_expr(&args[2], emitter, ctx, data); // evaluate $offset after $length
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("cmp x0, #0");                              // a negative offset means "do not seek"
+                emitter.instruction(&format!("b.lt {}", skip_seek));            // skip the seek on a negative offset
+                emitter.instruction("mov x1, x0");                              // offset → seek arg1
+                emitter.instruction("mov x2, #0");                              // whence = SEEK_SET
+                emitter.instruction("ldr x0, [sp, #0]");                        // reload the fd → seek arg0
+                emitter.instruction("mov w9, #0x4000");                         // high half of USER_WRAPPER_FD_BASE
+                emitter.instruction("lsl w9, w9, #16");                         // form 0x40000000
+                emitter.instruction("cmp x0, x9");                              // synthetic user-wrapper fd?
+                emitter.instruction(&format!("b.ge {}", wrap_seek));            // wrapper: dispatch stream_seek
+                emitter.syscall(199);                                           // lseek(fd, offset, SEEK_SET)
+                if emitter.platform.needs_cmp_before_error_branch() {
+                    emitter.instruction("cmp x0, #0");                          // Linux reports lseek failure as a negative result
+                }
+                emitter.instruction(&emitter.platform.branch_on_syscall_success(&skip_seek)); // continue only when lseek succeeded
+                emitter.instruction(&format!("b {}", seek_failed));             // seek failure makes stream_get_contents() return false
+                emitter.label(&wrap_seek);
+                abi::emit_call_label(emitter, "__rt_user_wrapper_fseek");       // wrapper stream_seek(offset, SEEK_SET)
+                emitter.instruction("cmp x0, #0");                              // did the wrapper stream_seek report success?
+                emitter.instruction(&format!("b.ne {}", seek_failed));          // wrapper seek failure returns PHP false
+                emitter.label(&skip_seek);
+            }
+            Arch::X86_64 => {
+                emitter.instruction("cmp rax, 0");                              // a negative offset means "do not seek"
+                emitter.instruction(&format!("jl {}", skip_seek));              // skip the seek on a negative offset
+                emitter.instruction("mov rsi, rax");                            // offset → seek arg1
+                emitter.instruction("mov rdx, 0");                              // whence = SEEK_SET
+                emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the fd → seek arg0
+                emitter.instruction("mov r9d, 0x40000000");                     // USER_WRAPPER_FD_BASE
+                emitter.instruction("cmp rdi, r9");                             // synthetic user-wrapper fd?
+                emitter.instruction(&format!("jge {}", wrap_seek));             // wrapper: dispatch stream_seek
+                emitter.instruction("call lseek");                              // lseek(fd, offset, SEEK_SET)
+                emitter.instruction("cmp rax, 0");                              // did libc lseek return a non-negative offset?
+                emitter.instruction(&format!("jl {}", seek_failed));            // seek failure makes stream_get_contents() return false
+                emitter.instruction(&format!("jmp {}", skip_seek));             // normal fd seeked successfully
+                emitter.label(&wrap_seek);
+                abi::emit_call_label(emitter, "__rt_user_wrapper_fseek");       // wrapper stream_seek(offset, SEEK_SET)
+                emitter.instruction("cmp rax, 0");                              // did the wrapper stream_seek report success?
+                emitter.instruction(&format!("jne {}", seek_failed));           // wrapper seek failure returns PHP false
+                emitter.label(&skip_seek);
+            }
+        }
+    }
+    if has_len {
+        // Positive finite length: fill up to $length bytes. Dynamic null/negative
+        // lengths take the read-all path below, matching PHP's default `-1`.
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("ldr x9, [sp, #8]");                        // reload max_len for the runtime unlimited check
+                emit_branch_if_unlimited_length(emitter, "x9", "x10", &read_all);
+                emitter.instruction("ldr x0, [sp, #0]");                        // reload the fd for the bounded read
+                emitter.instruction("mov x1, x9");                              // finite byte count for the bounded read
+                emitter.instruction("add sp, sp, #32");                         // release the argument-evaluation frame
+                abi::emit_call_label(emitter, "__rt_stream_get_contents_bounded"); // loop through fread until the cap is filled or EOF
+                emit_box_current_value_as_mixed(emitter, &PhpType::Str);
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov r9, QWORD PTR [rsp + 8]");             // reload max_len for the runtime unlimited check
+                emit_branch_if_unlimited_length(emitter, "r9", "r10", &read_all);
+                emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // reload the fd for the bounded read
+                emitter.instruction("mov rdi, rax");                            // fd argument for the bounded helper
+                emitter.instruction("mov rsi, r9");                             // finite byte count for the bounded read
+                emitter.instruction("add rsp, 32");                             // release the argument-evaluation frame
+                abi::emit_call_label(emitter, "__rt_stream_get_contents_bounded"); // loop through fread until the cap is filled or EOF
+                emit_box_current_value_as_mixed(emitter, &PhpType::Str);
+            }
+        }
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction(&format!("b {}", done)),       // bounded positive length is complete
+            Arch::X86_64 => emitter.instruction(&format!("jmp {}", done)),      // bounded positive length is complete
+        }
+    } else {
+        // $offset only: reload the fd and read every remaining byte.
+        emitter.label(&read_all);
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("ldr x0, [sp, #0]");                        // reload the fd for the read-all path
+                emitter.instruction("add sp, sp, #32");                         // release the frame
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // reload the fd for the read-all path
+                emitter.instruction("add rsp, 32");                             // release the frame
+            }
+        }
+        emit_read_all_from_fd(emitter, ctx);
+        emit_box_current_value_as_mixed(emitter, &PhpType::Str);
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction(&format!("b {}", done)),       // successful read skips the seek-failure boxing path
+            Arch::X86_64 => emitter.instruction(&format!("jmp {}", done)),      // successful read skips the seek-failure boxing path
+        }
+    }
+    if has_len {
+        emitter.label(&read_all);
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("ldr x0, [sp, #0]");                        // reload the fd for unlimited-length reads
+                emitter.instruction("add sp, sp, #32");                         // release the frame before the read-all path
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // reload the fd for unlimited-length reads
+                emitter.instruction("add rsp, 32");                             // release the frame before the read-all path
+            }
+        }
+        emit_read_all_from_fd(emitter, ctx);
+        emit_box_current_value_as_mixed(emitter, &PhpType::Str);
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction(&format!("b {}", done)),       // successful read skips the seek-failure boxing path
+            Arch::X86_64 => emitter.instruction(&format!("jmp {}", done)),      // successful read skips the seek-failure boxing path
+        }
+    }
+    emitter.label(&seek_failed);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("add sp, sp, #32");                             // release the argument-evaluation frame after a failed seek
+            emitter.instruction("mov x0, #0");                                  // false payload = 0
+        }
+        Arch::X86_64 => {
+            emitter.instruction("add rsp, 32");                                 // release the argument-evaluation frame after a failed seek
+            emitter.instruction("xor eax, eax");                                // false payload = 0
+        }
+    }
+    emit_box_current_value_as_mixed(emitter, &PhpType::Bool);
+    emitter.label(&done);
+    Some(PhpType::Mixed)
+}
+
+/// Reads every remaining byte from the descriptor in the int-result register
+/// (`x0`/`rax`) into an elephc string, returning the pointer/length in the
+/// standard string registers (`x1`/`x2` on AArch64, `rax`/`rdx` on x86_64).
+///
+/// A normal fd delegates to the TLS-aware `__rt_stream_get_contents` read-all
+/// loop. A synthetic user-wrapper fd (`>= 0x40000000`) is drained by a
+/// **feof-gated** compiled loop: each iteration checks `__rt_feof` first and
+/// stops at EOF, then `__rt_fread`s one chunk and copies it into
+/// `_user_wrapper_drain_buf`. Checking feof first mirrors the only safe drain
+/// form (`while(!feof($f)) $b .= fread($f,N)`); a read-then-check-empty loop
+/// forces an extra read at EOF whose empty `substr` result frees the caller's
+/// resource cell. Each owned chunk is released via `__rt_decref_any`.
+fn emit_read_all_from_fd(emitter: &mut Emitter, ctx: &mut Context) {
     let wrapper_label = ctx.next_label("sgc_wrapper");
     let loop_label = ctx.next_label("sgc_wrap_loop");
     let copy_label = ctx.next_label("sgc_wrap_copy");
@@ -51,7 +274,7 @@ pub fn emit(
             emitter.instruction("lsl w9, w9, #16");                             // form 0x40000000 in w9
             emitter.instruction("cmp x0, x9");                                  // is this a synthetic user-wrapper fd?
             emitter.instruction(&format!("b.ge {}", wrapper_label));            // wrappers drain via the feof-gated fread loop below
-            abi::emit_call_label(emitter, "__rt_stream_get_contents");          // normal fd: efficient syscall-loop helper (x1=ptr, x2=len)
+            abi::emit_call_label(emitter, "__rt_stream_get_contents");          // normal fd: TLS-aware read-all helper (x1=ptr, x2=len)
             emitter.instruction(&format!("b {}", done_label));                  // skip the wrapper loop on the normal path
 
             emitter.label(&wrapper_label);
@@ -102,7 +325,7 @@ pub fn emit(
             emitter.instruction("cmp rax, r9");                                 // is this a synthetic user-wrapper fd?
             emitter.instruction(&format!("jge {}", wrapper_label));             // wrappers drain via the feof-gated fread loop below
             emitter.instruction("mov rdi, rax");                                // normal fd: pass the descriptor to the helper
-            abi::emit_call_label(emitter, "__rt_stream_get_contents");          // efficient syscall-loop helper (rax=ptr, rdx=len)
+            abi::emit_call_label(emitter, "__rt_stream_get_contents");          // TLS-aware read-all helper (rax=ptr, rdx=len)
             emitter.instruction(&format!("jmp {}", done_label));                // skip the wrapper loop on the normal path
 
             emitter.label(&wrapper_label);
@@ -149,5 +372,4 @@ pub fn emit(
             emitter.label(&done_label);
         }
     }
-    Some(PhpType::Str)
 }

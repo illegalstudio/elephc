@@ -190,6 +190,11 @@ pub(crate) fn compile(config: CliConfig) {
     timings.note(format!("runtime-cache {}", runtime_object.status.as_str()));
 
     let phase_started = Instant::now();
+    let requires_elephc_tls = extra_link_libs.iter().any(|lib| lib == "elephc_tls")
+        || check_result
+            .required_libraries
+            .iter()
+            .any(|lib| lib == "elephc_tls");
     let user_asm = codegen::generate_user_asm(
         &ast,
         &check_result.global_env,
@@ -208,6 +213,7 @@ pub(crate) fn compile(config: CliConfig) {
         gc_stats,
         heap_debug,
         target,
+        requires_elephc_tls,
     );
     timings.record_since("codegen", phase_started);
 

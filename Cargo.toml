@@ -33,6 +33,10 @@ elephc-tls = { path = "crates/elephc-tls" }
 # with the same encoder the compiler decodes, guaranteeing a version-stable
 # round-trip without shelling out to php.
 flate2 = "1"
+# The streams codegen tests host a local HTTPS fixture so https:// wrapper
+# success coverage does not depend on outbound network access.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+rustls-pemfile = "2"
 
 # Phase 4b: the elephc-tls staticlib carries the rustls-backed TLS surface
 # for the https:// wrapper. It is a default workspace member so `cargo build`

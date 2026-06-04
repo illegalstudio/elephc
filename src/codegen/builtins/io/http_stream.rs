@@ -36,13 +36,22 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("fopen() http:// stream");
+    // The mode and optional fopen args are evaluated for side effects;
+    // http:// streams are read-only.
+    super::fopen::emit_mode_and_ignored_optional_args(args, emitter, ctx, data);
+    emit_open_fd(args, emitter, data);
+    super::fopen::box_fopen_result(emitter, ctx);
+    Some(PhpType::Mixed)
+}
+
+/// Emits the `http://` open, leaving the response-body fd (or -1 on an
+/// unparseable URL) in the int-result register. Does NOT evaluate a mode
+/// argument or box the result — shared by `fopen()` and `file_get_contents()`.
+pub(super) fn emit_open_fd(args: &[Expr], emitter: &mut Emitter, data: &mut DataSection) {
     let parsed = match &args[0].kind {
         ExprKind::StringLiteral(url) => parse_http_url(url),
         _ => None,
     };
-    // The mode and optional fopen args are evaluated for side effects;
-    // http:// streams are read-only.
-    super::fopen::emit_mode_and_ignored_optional_args(args, emitter, ctx, data);
     match parsed {
         Some(parsed) => {
             let (addr_sym, addr_len) = data.add_string(parsed.addr.as_bytes());
@@ -84,8 +93,6 @@ pub fn emit(
             Arch::X86_64 => emitter.instruction("mov rax, -1"),                 // unparseable http:// URL lowers to PHP false
         },
     }
-    super::fopen::box_fopen_result(emitter, ctx);
-    Some(PhpType::Mixed)
 }
 
 struct ParsedHttpUrl {

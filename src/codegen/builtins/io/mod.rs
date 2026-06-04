@@ -149,6 +149,8 @@ mod umask;
 mod unlink;
 mod var_dump;
 
+pub(crate) use https_stream::publish_tls_function_pointers;
+
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;

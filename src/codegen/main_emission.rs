@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::{abi, functions, runtime, stmt};
+use crate::codegen::{abi, builtins, functions, runtime, stmt};
 use crate::parser::ast::{ExprKind, Program, StmtKind};
 use crate::types::{
     ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
@@ -32,6 +32,7 @@ use super::program_usage::program_uses_variable;
 /// - Builds the main `Context` with all program metadata (functions, classes, enums, etc.).
 /// - Allocates main-frame locals and hidden slots (activation record, cleanup, concat offsets).
 /// - Emits the frame prologue (stack alignment, process args, heap-debug flag).
+/// - Publishes optional TLS runtime entry points when the checked program requires them.
 /// - Zero-initializes refcounted locals to prevent stale-pointer frees.
 /// - Pushes the main activation record and emits enum singleton / static property initializers.
 /// - Lowers top-level statements in source order.
@@ -66,6 +67,7 @@ pub(super) fn emit_main_and_finalize(
     emitted_class_names: Option<&HashSet<String>>,
     gc_stats: bool,
     heap_debug: bool,
+    requires_elephc_tls: bool,
 ) -> String {
     let mut ctx = build_main_context(
         functions,
@@ -106,6 +108,9 @@ pub(super) fn emit_main_and_finalize(
     let main_cleanup_label = allocate_main_hidden_slots(&mut ctx);
     let frame_size = align16(ctx.stack_offset + 16);
     emit_main_prologue(&mut emitter, &mut ctx, frame_size, heap_debug, uses_argc, uses_argv);
+    if requires_elephc_tls {
+        builtins::publish_tls_function_pointers(&mut emitter);
+    }
     zero_initialize_main_locals(&mut emitter, &ctx, uses_argc, uses_argv);
     functions::emit_local_ref_cell_flag_zero_init(&mut emitter, &ctx);
     emit_main_activation_record_push(&mut emitter, &ctx, &main_cleanup_label);

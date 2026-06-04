@@ -50,6 +50,8 @@ dependencies = [
  "bzip2-rs",
  "elephc-tls",
  "flate2",
+ "rustls",
+ "rustls-pemfile",
  "serde_json",
 ]
 
