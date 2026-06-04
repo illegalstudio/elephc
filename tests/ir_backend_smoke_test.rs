@@ -422,6 +422,37 @@ line2:The quick |brown fox:4142:AB"#,
     }
 }
 
+/// Verifies diagnostic output builtins lowered by the EIR backend for concrete values.
+#[test]
+fn ir_backend_handles_debug_output_builtins() {
+    let source = r#"<?php
+print_r(42);
+echo "|";
+print_r("hi");
+echo "|";
+print_r(true);
+echo "|";
+print_r(false);
+echo "|";
+print_r([1, 2]);
+echo "---\n";
+var_dump(42);
+var_dump("hi");
+var_dump(true);
+var_dump(false);
+var_dump(null);
+var_dump(3.14);
+var_dump([1, 2, 3]);
+var_dump(["a" => 1, "b" => 2]);
+"#;
+    let expected =
+        "42|hi|1||Array\n---\nint(42)\nstring(2) \"hi\"\nbool(true)\nbool(false)\nNULL\nfloat(3.14)\narray(3) {\n}\narray(2) {\n}\n";
+    assert_eq!(
+        compile_and_run_ir_backend("debug_output_builtins", source),
+        expected
+    );
+}
+
 /// Verifies selected type predicates inspect boxed Mixed payloads in the EIR backend.
 #[test]
 fn ir_backend_handles_mixed_type_predicates() {

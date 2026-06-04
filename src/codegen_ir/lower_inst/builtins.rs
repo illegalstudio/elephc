@@ -23,6 +23,7 @@ use crate::codegen_ir::{CodegenIrError, Result};
 mod is_numeric;
 mod arrays;
 mod ctype;
+mod debug;
 mod math;
 mod strings;
 
@@ -104,6 +105,8 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "defined" => lower_defined(ctx, inst),
         "function_exists" => lower_function_exists(ctx, inst),
         "is_callable" => lower_is_callable(ctx, inst),
+        "print_r" => debug::lower_print_r(ctx, inst),
+        "var_dump" => debug::lower_var_dump(ctx, inst),
         "is_int" => lower_static_type_predicate(ctx, inst, "is_int", PhpType::Int),
         "is_float" => lower_static_type_predicate(ctx, inst, "is_float", PhpType::Float),
         "is_bool" => lower_static_type_predicate(ctx, inst, "is_bool", PhpType::Bool),
