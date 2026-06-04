@@ -13,7 +13,7 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
-use crate::ir::Instruction;
+use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -44,6 +44,21 @@ pub(super) fn lower_buffer_len(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let buffer = expect_operand(inst, 0)?;
     require_buffer(ctx.load_value_to_result(buffer)?, "buffer_len")?;
     abi::emit_call_label(ctx.emitter, "__rt_buffer_len");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `buffer_free(buffer)` by freeing the header and nulling the source local slot.
+pub(super) fn lower_buffer_free(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "buffer_free", 1)?;
+    let buffer = expect_operand(inst, 0)?;
+    let slot = source_load_local_slot(ctx, buffer)?.ok_or_else(|| {
+        CodegenIrError::unsupported("buffer_free argument that is not a local load")
+    })?;
+    require_buffer(ctx.load_value_to_result(buffer)?, "buffer_free")?;
+    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    let offset = ctx.local_offset(slot)?;
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    emit_void_result(ctx);
     store_if_result(ctx, inst)
 }
 
@@ -125,6 +140,25 @@ fn require_buffer(ty: PhpType, name: &str) -> Result<PhpType> {
             other
         ))),
     }
+}
+
+/// Returns the local slot loaded by a buffer operand when it came from `load_local`.
+fn source_load_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<LocalSlotId>> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+    };
+    if inst_ref.op == Op::LoadLocal {
+        if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
+            return Ok(Some(slot));
+        }
+    }
+    Ok(None)
 }
 
 /// Materializes a checked payload address for a buffer read.
@@ -266,6 +300,15 @@ fn store_element_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType, address
             other
         ))),
     }
+}
+
+/// Materializes the EIR void/null sentinel for a `buffer_free()` result.
+fn emit_void_result(ctx: &mut FunctionContext<'_>) {
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        0x7fff_ffff_ffff_fffe,
+    );
 }
 
 /// Verifies a value is a concrete integer.

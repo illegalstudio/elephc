@@ -65,6 +65,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "strlen" => lower_strlen(ctx, inst),
         "count" => lower_count(ctx, inst),
         "buffer_len" => buffers::lower_buffer_len(ctx, inst),
+        "buffer_free" => buffers::lower_buffer_free(ctx, inst),
         "ptr_null" => pointers::lower_ptr_null(ctx, inst),
         "ptr_is_null" => pointers::lower_ptr_is_null(ctx, inst),
         "ptr_offset" => pointers::lower_ptr_offset(ctx, inst),

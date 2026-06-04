@@ -19,3 +19,8 @@ use super::super::super::context::FunctionContext;
 pub(super) fn lower_buffer_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     buffers::lower_buffer_len(ctx, inst)
 }
+
+/// Lowers `buffer_free()` through the direct buffer opcode helper.
+pub(super) fn lower_buffer_free(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    buffers::lower_buffer_free(ctx, inst)
+}

@@ -689,6 +689,37 @@ echo (int) ($values[0] + $values[1]);
     assert_eq!(compile_and_run_ir_backend("buffer_float_get_set", float_source), "4");
 }
 
+/// Verifies `buffer_free()` releases the buffer and nulls the source local.
+#[test]
+fn ir_backend_handles_buffer_free() {
+    let source = r#"<?php
+buffer<int> $values = buffer_new<int>(2);
+$values[0] = 9;
+buffer_free($values);
+echo "ok";
+"#;
+    assert_eq!(compile_and_run_ir_backend("buffer_free", source), "ok");
+
+    let run = compile_ir_backend_and_run(
+        "buffer_free_uaf",
+        r#"<?php
+buffer<int> $values = buffer_new<int>(1);
+buffer_free($values);
+echo buffer_len($values);
+"#,
+        &[],
+    );
+    assert!(
+        !run.status.success(),
+        "IR backend buffer use-after-free fixture unexpectedly succeeded"
+    );
+    let stderr = String::from_utf8(run.stderr).expect("fatal stderr should be utf8");
+    assert!(
+        stderr.contains("Fatal error: use of buffer after buffer_free()"),
+        "unexpected fatal stderr: {stderr}"
+    );
+}
+
 /// Verifies selected type predicates inspect boxed Mixed payloads in the EIR backend.
 #[test]
 fn ir_backend_handles_mixed_type_predicates() {
