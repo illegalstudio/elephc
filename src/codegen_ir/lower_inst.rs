@@ -377,6 +377,7 @@ fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> R
         | PhpType::Mixed
         | PhpType::Union(_)
         | PhpType::Iterable
+        | PhpType::Pointer(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. } => {
             abi::emit_write_stdout(ctx.emitter, ty);

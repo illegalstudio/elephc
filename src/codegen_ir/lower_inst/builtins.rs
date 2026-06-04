@@ -25,6 +25,7 @@ mod arrays;
 mod ctype;
 mod debug;
 mod math;
+mod pointers;
 mod strings;
 
 const DEFINE_ALREADY_DEFINED_WARNING: &str =
@@ -62,6 +63,9 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "phpversion" => lower_phpversion(ctx, inst),
         "strlen" => lower_strlen(ctx, inst),
         "count" => lower_count(ctx, inst),
+        "ptr_null" => pointers::lower_ptr_null(ctx, inst),
+        "ptr_is_null" => pointers::lower_ptr_is_null(ctx, inst),
+        "ptr_offset" => pointers::lower_ptr_offset(ctx, inst),
         "array_sum" => arrays::lower_array_sum(ctx, inst),
         "array_product" => arrays::lower_array_product(ctx, inst),
         "array_push" => arrays::lower_array_push(ctx, inst),

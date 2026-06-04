@@ -568,6 +568,31 @@ echo strlen($path) > 0 ? "env" : "empty";
     );
 }
 
+/// Verifies pointer extension builtins and pointer extern calls use raw-address ABI values.
+#[test]
+fn ir_backend_handles_basic_pointer_builtins() {
+    let source = r#"<?php
+extern function malloc(int $size): ptr;
+extern function free(ptr $ptr): void;
+$null = ptr_null();
+echo ptr_is_null($null) ? "null" : "bad";
+echo ":";
+echo $null;
+echo ":";
+echo ptr_is_null(ptr_offset($null, 0)) ? "offset-null" : "bad";
+echo ":";
+$mem = malloc(1);
+echo ptr_is_null($mem) ? "bad" : "allocated";
+echo ":";
+echo ptr_is_null(ptr_offset($mem, 0)) ? "bad" : "offset";
+free($mem);
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("basic_pointer_builtins", source),
+        "null:0x0:offset-null:allocated:offset"
+    );
+}
+
 /// Verifies selected type predicates inspect boxed Mixed payloads in the EIR backend.
 #[test]
 fn ir_backend_handles_mixed_type_predicates() {

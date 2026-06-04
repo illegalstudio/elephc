@@ -774,6 +774,8 @@ fn call_return_type(
 ) -> PhpType {
     let php_type = if let Some(php_type) = builtin_return_type_override(name) {
         php_type
+    } else if let Some(php_type) = pointer_builtin_return_type(ctx, name, operands) {
+        php_type
     } else if let Some(php_type) = numeric_builtin_return_type(ctx, name, operands) {
         php_type
     } else if let Some(php_type) = array_builtin_return_type(ctx, name, operands) {
@@ -790,6 +792,26 @@ fn call_return_type(
         PhpType::Mixed
     };
     normalize_value_php_type(php_type)
+}
+
+/// Returns precise return metadata for pointer-extension builtins.
+fn pointer_builtin_return_type(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    operands: &[crate::ir::ValueId],
+) -> Option<PhpType> {
+    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        "ptr_null" => Some(PhpType::Pointer(None)),
+        "ptr_is_null" => Some(PhpType::Bool),
+        "ptr_offset" => {
+            let pointer = operands.first()?;
+            match ctx.builder.value_php_type(*pointer).codegen_repr() {
+                PhpType::Pointer(tag) => Some(PhpType::Pointer(tag)),
+                _ => Some(PhpType::Pointer(None)),
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Returns precise return metadata for numeric builtins whose result depends on operands.
