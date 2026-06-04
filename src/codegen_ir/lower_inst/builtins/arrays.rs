@@ -13,7 +13,7 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
-use crate::ir::{Instruction, ValueId};
+use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
@@ -136,6 +136,24 @@ pub(super) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction
         ctx.emitter.instruction("mov rdi, rax");                                // pass the indexed-array pointer as the random-key helper argument
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_rand");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `array_pop()` for indexed arrays by mutating length and boxing `T|null` as Mixed.
+pub(super) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "array_pop", 1)?;
+    let array = expect_operand(inst, 0)?;
+    let elem_ty = array_pop_element_type(ctx.value_php_type(array)?)?;
+    require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
+    let source_local = source_load_local_slot(ctx, array)?;
+    ensure_unique_array_pop_source(ctx, array)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, array)?;
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_array_pop_aarch64(ctx, array, &elem_ty)?,
+        Arch::X86_64 => lower_array_pop_x86_64(ctx, array, &elem_ty)?,
+    }
     store_if_result(ctx, inst)
 }
 
@@ -520,6 +538,202 @@ fn require_indexed_array_builtin(ty: PhpType, name: &str) -> Result<()> {
             other
         ))),
     }
+}
+
+/// Returns the supported element payload type for an indexed-array `array_pop()`.
+fn array_pop_element_type(ty: PhpType) -> Result<PhpType> {
+    match ty.codegen_repr() {
+        PhpType::Array(elem) => {
+            let elem = elem.codegen_repr();
+            if matches!(
+                elem,
+                PhpType::Int
+                    | PhpType::Bool
+                    | PhpType::Float
+                    | PhpType::Str
+                    | PhpType::Callable
+                    | PhpType::Mixed
+                    | PhpType::Void
+                    | PhpType::Never
+            ) || elem.is_refcounted()
+            {
+                return Ok(elem);
+            }
+            Err(CodegenIrError::unsupported(format!(
+                "array_pop indexed-array element PHP type {:?}",
+                elem
+            )))
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_pop for PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Verifies the lowered `array_pop()` result uses PHP's `mixed` shape.
+fn require_array_pop_result_type(result_ty: &PhpType) -> Result<()> {
+    if result_ty == &PhpType::Mixed {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "array_pop result PHP type {:?}",
+        result_ty
+    )))
+}
+
+/// Splits a shared indexed array before `array_pop()` mutates its header.
+fn ensure_unique_array_pop_source(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
+    ctx.store_result_value(array)
+}
+
+/// Emits the AArch64 `array_pop()` sequence for indexed arrays.
+fn lower_array_pop_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    elem_ty: &PhpType,
+) -> Result<()> {
+    let empty_label = ctx.next_label("array_pop_empty");
+    let done_label = ctx.next_label("array_pop_done");
+    ctx.load_value_to_reg(array, "x0")?;
+    ctx.emitter.instruction("ldr x9, [x0]");                                    // load the indexed-array length before deciding whether pop is empty
+    ctx.emitter.instruction(&format!("cbz x9, {}", empty_label));               // return boxed null when array_pop() runs on an empty array
+    ctx.emitter.instruction("sub x9, x9, #1");                                  // convert the old length into the removed last-element index
+    ctx.emitter.instruction("str x9, [x0]");                                    // persist the shortened indexed-array length in the header
+    emit_array_pop_value_aarch64(ctx, elem_ty)?;
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, elem_ty);
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the empty-array boxed-null path after loading the removed value
+    ctx.emitter.label(&empty_label);
+    emit_array_pop_null(ctx);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits the x86_64 `array_pop()` sequence for indexed arrays.
+fn lower_array_pop_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    elem_ty: &PhpType,
+) -> Result<()> {
+    let empty_label = ctx.next_label("array_pop_empty");
+    let done_label = ctx.next_label("array_pop_done");
+    ctx.load_value_to_reg(array, "rax")?;
+    ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // load the indexed-array length before deciding whether pop is empty
+    ctx.emitter.instruction("test r10, r10");                                   // check whether the indexed array has any live elements
+    ctx.emitter.instruction(&format!("jz {}", empty_label));                    // return boxed null when array_pop() runs on an empty array
+    ctx.emitter.instruction("sub r10, 1");                                      // convert the old length into the removed last-element index
+    ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // persist the shortened indexed-array length in the header
+    emit_array_pop_value_x86_64(ctx, elem_ty)?;
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, elem_ty);
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the empty-array boxed-null path after loading the removed value
+    ctx.emitter.label(&empty_label);
+    emit_array_pop_null(ctx);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Loads the removed AArch64 indexed-array payload into the canonical result registers.
+fn emit_array_pop_value_aarch64(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Result<()> {
+    match elem_ty {
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
+            ctx.emitter.instruction("add x10, x0, #24");                        // compute the first pointer-sized payload slot in the indexed array
+            ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");               // load the removed pointer-sized payload into the result register
+        }
+        PhpType::Float => {
+            ctx.emitter.instruction("add x10, x0, #24");                        // compute the first float payload slot in the indexed array
+            ctx.emitter.instruction("ldr d0, [x10, x9, lsl #3]");               // load the removed float payload into the result register
+        }
+        PhpType::Str => {
+            ctx.emitter.instruction("lsl x10, x9, #4");                         // scale the removed index by the 16-byte string slot size
+            ctx.emitter.instruction("add x10, x0, x10");                        // advance from the array base to the removed string slot
+            ctx.emitter.instruction("add x10, x10, #24");                       // skip the indexed-array header before loading string payloads
+            ctx.emitter.instruction("ldr x1, [x10]");                           // load the removed string pointer into the mixed payload register
+            ctx.emitter.instruction("ldr x2, [x10, #8]");                       // load the removed string length into the mixed payload high word
+        }
+        PhpType::Void | PhpType::Never => {
+            ctx.emitter.instruction("mov x0, #0");                              // materialize a null payload for impossible void-array live elements
+        }
+        other if other.is_refcounted() => {
+            ctx.emitter.instruction("add x10, x0, #24");                        // compute the first refcounted payload slot in the indexed array
+            ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");               // load the removed heap pointer into the result register
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "array_pop element PHP type {:?}",
+                other
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Loads the removed x86_64 indexed-array payload into the canonical result registers.
+fn emit_array_pop_value_x86_64(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Result<()> {
+    match elem_ty {
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
+            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first pointer-sized payload slot in the indexed array
+            ctx.emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8]");      // load the removed pointer-sized payload into the result register
+        }
+        PhpType::Float => {
+            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first float payload slot in the indexed array
+            ctx.emitter.instruction("movsd xmm0, QWORD PTR [r11 + r10 * 8]");   // load the removed float payload into the result register
+        }
+        PhpType::Str => {
+            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first string payload slot in the indexed array
+            ctx.emitter.instruction("shl r10, 4");                              // scale the removed index by the 16-byte string slot size
+            ctx.emitter.instruction("add r11, r10");                            // advance to the removed string slot payload
+            ctx.emitter.instruction("mov rax, QWORD PTR [r11]");                // load the removed string pointer into the string result register
+            ctx.emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");            // load the removed string length into the string result register
+        }
+        PhpType::Void | PhpType::Never => {
+            ctx.emitter.instruction("xor eax, eax");                            // materialize a null payload for impossible void-array live elements
+        }
+        other if other.is_refcounted() => {
+            ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first refcounted payload slot in the indexed array
+            ctx.emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8]");      // load the removed heap pointer into the result register
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "array_pop element PHP type {:?}",
+                other
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Boxes PHP null for an empty `array_pop()` result.
+fn emit_array_pop_null(ctx: &mut FunctionContext<'_>) {
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
+}
+
+/// Returns the local slot loaded by an `array_pop()` argument when it came from `load_local`.
+fn source_load_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<LocalSlotId>> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+    };
+    if inst_ref.op == Op::LoadLocal {
+        if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
+            return Ok(Some(slot));
+        }
+    }
+    Ok(None)
 }
 
 /// Describes which indexed-array `array_search()` lowering path applies.

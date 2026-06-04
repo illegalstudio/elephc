@@ -575,6 +575,30 @@ fn ir_backend_handles_basic_indexed_arrays() {
     );
 }
 
+/// Verifies `array_pop()` mutates indexed arrays and returns PHP `mixed` values.
+#[test]
+fn ir_backend_handles_indexed_array_pop() {
+    for (name, source, expected) in [
+        (
+            "array_pop_int_mutates_count",
+            "<?php $a = [1, 2, 3]; $v = array_pop($a); echo $v; echo ' '; echo count($a);",
+            "3 2",
+        ),
+        (
+            "array_pop_string_value",
+            "<?php $a = ['a', 'b']; $v = array_pop($a); echo $v; echo ':'; echo count($a);",
+            "b:1",
+        ),
+        (
+            "array_pop_empty_null",
+            "<?php $a = [1]; array_pop($a); $v = array_pop($a); echo is_null($v) ? 'null' : 'value';",
+            "null",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies indexed arrays can read pointer-sized nested array elements.
 #[test]
 fn ir_backend_handles_nested_indexed_array_reads() {
