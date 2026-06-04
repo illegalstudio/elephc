@@ -230,3 +230,14 @@ fn test_abs_mixed_array_element_preserves_int_and_float() {
     );
     assert_eq!(out, "5,2.5,7,3.25,");
 }
+
+/// Verifies `pow()` coerces boxed Mixed operands (heterogeneous-array elements) to their
+/// numeric value before exponentiating, instead of converting the boxed-cell pointer.
+/// Covers a Mixed base, a Mixed exponent, and both operands Mixed.
+#[test]
+fn test_pow_mixed_base_and_exponent() {
+    let out = compile_and_run(
+        r#"<?php $a = [-5, -2.5, 4, 3]; echo pow($a[0], 2), "|", pow(2, $a[1]), "|", pow($a[2], $a[3]);"#,
+    );
+    assert_eq!(out, "25|0.17677669529664|64");
+}
