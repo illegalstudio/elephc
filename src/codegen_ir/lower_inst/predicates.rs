@@ -1,11 +1,12 @@
 //! Purpose:
-//! Lowers scalar predicate EIR opcodes such as null checks and PHP truthiness.
+//! Lowers predicate EIR opcodes such as null checks, PHP truthiness, and Mixed tag tests.
 //!
 //! Called from:
 //! - `crate::codegen_ir::lower_inst::lower_instruction()`.
 //!
 //! Key details:
 //! - PHP string truthiness is special: only `""` and `"0"` are false.
+//! - Mixed predicates unbox the runtime cell before comparing the concrete tag.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -55,12 +56,54 @@ pub(super) fn emit_array_truthiness(ctx: &mut FunctionContext<'_>, value: ValueI
     Ok(())
 }
 
-/// Lowers scalar null checks into a concrete boolean integer result.
+/// Lowers static and boxed Mixed null checks into a concrete boolean integer result.
 pub(super) fn lower_is_null(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    let is_null = matches!(ctx.value_php_type(value)?, PhpType::Void | PhpType::Never);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), i64::from(is_null));
+    emit_is_null_result(ctx, value)?;
     store_if_result(ctx, inst)
+}
+
+/// Emits an `is_null` boolean result for static nulls and boxed Mixed payloads.
+pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    match ctx.value_php_type(value)? {
+        PhpType::Mixed | PhpType::Union(_) => emit_mixed_tag_eq(ctx, value, 8),
+        PhpType::Void | PhpType::Never => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+            Ok(())
+        }
+        _ => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            Ok(())
+        }
+    }
+}
+
+/// Emits a boolean result for whether a boxed Mixed value has the given runtime tag.
+pub(super) fn emit_mixed_tag_eq(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    tag: u8,
+) -> Result<()> {
+    let ty = ctx.load_value_to_result(value)?;
+    if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "mixed tag predicate for PHP type {:?}",
+            ty
+        )));
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp x0, #{}", tag));              // compare the unboxed Mixed runtime tag against the expected tag
+            ctx.emitter.instruction("cset x0, eq");                             // materialize the Mixed tag predicate as boolean 1 on match
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp rax, {}", tag));              // compare the unboxed Mixed runtime tag against the expected tag
+            ctx.emitter.instruction("sete al");                                 // materialize the Mixed tag predicate in the low byte
+            ctx.emitter.instruction("movzx rax, al");                           // widen the Mixed tag predicate byte into the integer result register
+        }
+    }
+    Ok(())
 }
 
 /// Emits an integer nonzero check into the canonical integer result register.

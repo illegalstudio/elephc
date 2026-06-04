@@ -407,6 +407,30 @@ line2:The quick |brown fox:4142:AB"#,
     }
 }
 
+/// Verifies selected type predicates inspect boxed Mixed payloads in the EIR backend.
+#[test]
+fn ir_backend_handles_mixed_type_predicates() {
+    for (name, source, expected) in [
+        (
+            "is_null_mixed_array_fill",
+            "<?php $a = array_fill(0, 1, null); echo is_null($a[0]) ? 'null' : 'value';",
+            "null",
+        ),
+        (
+            "null_coalesce_reads_mixed_null",
+            "<?php $a = array_fill(0, 1, null); echo $a[0] ?? 5;",
+            "5",
+        ),
+        (
+            "is_int_bool_string_mixed_array_fill",
+            "<?php $ints = array_fill(0, 1, 7); $bools = array_fill(0, 1, true); echo is_int($ints[0]) ? 'i' : '_'; echo is_bool($bools[0]) ? 'b' : '_'; echo is_string($ints[0]) ? 'bad' : 'ok';",
+            "ibok",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies `empty()` lowering for scalar, array, hash, and iterable operands.
 #[test]
 fn ir_backend_handles_empty_builtin() {

@@ -1,13 +1,13 @@
 //! Purpose:
 //! Lowers the first scalar PHP builtin calls emitted as EIR `BuiltinCall` instructions.
-//! Covers concrete scalar casts, type predicates, and string length without Mixed dispatch.
+//! Covers concrete scalar casts, type predicates, selected Mixed tag predicates, and string length.
 //!
 //! Called from:
 //! - `crate::codegen_ir::lower_inst::lower_instruction()`.
 //!
 //! Key details:
-//! - Only statically concrete scalar representations are handled here; Mixed/Union paths stay unsupported.
 //! - Runtime conversions reuse existing target-aware helpers instead of duplicating parsing logic.
+//! - Selected Mixed predicates inspect the boxed runtime tag through shared predicate lowering.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -665,8 +665,13 @@ fn lower_static_type_predicate(
     ensure_arg_count(inst, name, 1)?;
     let value = expect_operand(inst, 0)?;
     let ty = ctx.value_php_type(value)?;
-    if ty == PhpType::Mixed {
-        return Err(CodegenIrError::unsupported(format!("{} for PHP type Mixed", name)));
+    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        if let Some(tag) = mixed_type_predicate_tag(&expected) {
+            predicates::emit_mixed_tag_eq(ctx, value, tag)?;
+        } else {
+            emit_static_bool(ctx, false);
+        }
+        return store_if_result(ctx, inst);
     }
     emit_static_bool(ctx, ty == expected);
     store_if_result(ctx, inst)
@@ -701,16 +706,22 @@ fn lower_is_iterable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     store_if_result(ctx, inst)
 }
 
-/// Lowers `is_null()` for concrete scalar values.
+/// Lowers `is_null()` for concrete scalar values and boxed Mixed payloads.
 fn lower_is_null_builtin(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_null", 1)?;
     let value = expect_operand(inst, 0)?;
-    let ty = ctx.value_php_type(value)?;
-    if ty == PhpType::Mixed {
-        return Err(CodegenIrError::unsupported("is_null for PHP type Mixed"));
-    }
-    emit_static_bool(ctx, matches!(ty, PhpType::Void | PhpType::Never));
+    predicates::emit_is_null_result(ctx, value)?;
     store_if_result(ctx, inst)
+}
+
+/// Returns the runtime Mixed tag used by a supported type predicate.
+fn mixed_type_predicate_tag(expected: &PhpType) -> Option<u8> {
+    match expected {
+        PhpType::Int => Some(0),
+        PhpType::Str => Some(1),
+        PhpType::Bool => Some(3),
+        _ => None,
+    }
 }
 
 /// Emits a boolean immediate into the integer result register.
