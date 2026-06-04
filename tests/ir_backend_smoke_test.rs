@@ -1030,6 +1030,34 @@ echo MathBox::add(2, 3);
     );
 }
 
+/// Verifies lexical `self::` and `parent::` static-method receivers lower in class methods.
+#[test]
+fn ir_backend_calls_lexical_static_method_receivers() {
+    let source = r#"<?php
+class BaseMath {
+    public static function add(int $a, int $b): int {
+        return $a + $b;
+    }
+}
+class MathBox extends BaseMath {
+    public static function selfAdd(): int {
+        return self::add(2, 3);
+    }
+
+    public static function parentAdd(): int {
+        return parent::add(4, 5);
+    }
+}
+echo MathBox::selfAdd();
+echo ":";
+echo MathBox::parentAdd();
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("lexical_static_method_receivers", source),
+        "5:9"
+    );
+}
+
 /// Verifies fixed-class object construction calls `__construct` through the EIR method ABI.
 #[test]
 fn ir_backend_calls_simple_constructor() {
