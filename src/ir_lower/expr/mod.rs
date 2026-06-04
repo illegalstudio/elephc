@@ -792,6 +792,7 @@ fn array_builtin_return_type(
         "array_flip" => array_flip_builtin_return_type(ctx, operands),
         "array_fill_keys" => array_fill_keys_builtin_return_type(ctx, operands),
         "array_merge" => array_merge_builtin_return_type(ctx, operands),
+        "array_diff" | "array_intersect" => array_preserve_first_builtin_return_type(ctx, operands),
         "range" => Some(PhpType::Array(Box::new(PhpType::Int))),
         "array_values" => {
             let array = operands.first()?;
@@ -817,6 +818,15 @@ fn array_builtin_return_type(
         }
         _ => None,
     }
+}
+
+/// Returns precise return metadata for array builtins that preserve the first operand type.
+fn array_preserve_first_builtin_return_type(
+    ctx: &LoweringContext<'_, '_>,
+    operands: &[crate::ir::ValueId],
+) -> Option<PhpType> {
+    let first = operands.first()?;
+    Some(ctx.builder.value_php_type(*first).codegen_repr())
 }
 
 /// Returns precise return metadata for `array_fill_keys(keys, value)`.

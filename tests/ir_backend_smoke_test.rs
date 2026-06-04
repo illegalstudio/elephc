@@ -962,6 +962,25 @@ fn ir_backend_handles_indexed_array_merge_empty_left() {
     );
 }
 
+/// Verifies indexed-array value set operations return the expected subset counts and values.
+#[test]
+fn ir_backend_handles_indexed_array_set_operations() {
+    for (name, source, expected) in [
+        (
+            "array_diff_indexed_ints",
+            "<?php $a = [1, 2, 3, 4]; $b = [2, 4]; $c = array_diff($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[1];",
+            "2:1:3",
+        ),
+        (
+            "array_intersect_indexed_ints",
+            "<?php $a = [1, 2, 3, 4]; $b = [2, 4, 6]; $c = array_intersect($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[1];",
+            "2:2:4",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies indexed-array `array_values()` returns an alias that still observes COW on writes.
 #[test]
 fn ir_backend_handles_indexed_array_values() {

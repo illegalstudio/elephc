@@ -188,6 +188,28 @@ pub(super) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_if_result(ctx, inst)
 }
 
+/// Lowers `array_diff()` for two compatible indexed arrays with pointer-sized payload slots.
+pub(super) fn lower_array_diff(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_indexed_array_set_op(
+        ctx,
+        inst,
+        "array_diff",
+        "__rt_array_diff",
+        "__rt_array_diff_refcounted",
+    )
+}
+
+/// Lowers `array_intersect()` for two compatible indexed arrays with pointer-sized payload slots.
+pub(super) fn lower_array_intersect(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_indexed_array_set_op(
+        ctx,
+        inst,
+        "array_intersect",
+        "__rt_array_intersect",
+        "__rt_array_intersect_refcounted",
+    )
+}
+
 /// Lowers `array_slice()` for indexed arrays with pointer-sized payload slots.
 pub(super) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_slice", 2, 3)?;
@@ -329,6 +351,45 @@ fn lower_indexed_array_aggregate(
     store_if_result(ctx, inst)
 }
 
+/// Calls a value set-operation helper after validating compatible indexed-array layouts.
+fn lower_indexed_array_set_op(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    scalar_helper: &str,
+    refcounted_helper: &str,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 2)?;
+    let first = expect_operand(inst, 0)?;
+    let second = expect_operand(inst, 1)?;
+    let first_elem_ty = set_op_indexed_array_element_type(ctx.value_php_type(first)?, name)?;
+    let second_elem_ty = set_op_indexed_array_element_type(ctx.value_php_type(second)?, name)?;
+    require_set_op_compatible_element_types(name, &first_elem_ty, &second_elem_ty)?;
+    require_set_op_result_type(name, &first_elem_ty, &inst.result_php_type.codegen_repr())?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(first, "x0")?;
+            ctx.load_value_to_reg(second, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(first, "rdi")?;
+            ctx.load_value_to_reg(second, "rsi")?;
+        }
+    }
+    let helper = if first_elem_ty.is_refcounted() {
+        refcounted_helper
+    } else {
+        scalar_helper
+    };
+    abi::emit_call_label(ctx.emitter, helper);
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &first_elem_ty,
+    );
+    store_if_result(ctx, inst)
+}
+
 /// Verifies the aggregate can use the current raw integer-slot runtime helper.
 fn require_supported_indexed_array(ty: PhpType, name: &str) -> Result<()> {
     match ty.codegen_repr() {
@@ -337,6 +398,66 @@ fn require_supported_indexed_array(ty: PhpType, name: &str) -> Result<()> {
             "{} for PHP type {:?}",
             name,
             other
+        ))),
+    }
+}
+
+/// Returns the element type accepted by indexed-array value set-operation helpers.
+fn set_op_indexed_array_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
+    match ty.codegen_repr() {
+        PhpType::Array(elem) => {
+            let elem = elem.codegen_repr();
+            if matches!(
+                elem,
+                PhpType::Int
+                    | PhpType::Bool
+                    | PhpType::Float
+                    | PhpType::Callable
+                    | PhpType::Void
+                    | PhpType::Never
+            ) || elem.is_refcounted()
+            {
+                return Ok(elem);
+            }
+            Err(CodegenIrError::unsupported(format!(
+                "{} indexed-array element PHP type {:?}",
+                name,
+                elem
+            )))
+        }
+        other => Err(CodegenIrError::unsupported(format!("{} for PHP type {:?}", name, other))),
+    }
+}
+
+/// Verifies two set-operation operands can share one raw slot comparison helper.
+fn require_set_op_compatible_element_types(
+    name: &str,
+    first: &PhpType,
+    second: &PhpType,
+) -> Result<()> {
+    if first == second
+        || matches!(first, PhpType::Never | PhpType::Void)
+        || matches!(second, PhpType::Never | PhpType::Void)
+    {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "{} for incompatible indexed-array element PHP types {:?} and {:?}",
+        name,
+        first,
+        second
+    )))
+}
+
+/// Verifies the EIR result preserves the first operand element metadata.
+fn require_set_op_result_type(name: &str, first_elem_ty: &PhpType, result_ty: &PhpType) -> Result<()> {
+    match result_ty {
+        PhpType::Array(elem) if elem.codegen_repr() == first_elem_ty.codegen_repr() => Ok(()),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} result PHP type {:?} for first element PHP type {:?}",
+            name,
+            other,
+            first_elem_ty
         ))),
     }
 }
