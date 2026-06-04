@@ -730,6 +730,31 @@ echo C::class;
     assert_eq!(compile_and_run_ir_backend("named_class_constant", source), "C");
 }
 
+/// Verifies scoped class and interface constants inline their checked values.
+#[test]
+fn ir_backend_handles_scoped_class_constants() {
+    let source = r#"<?php
+class Direct { const I = 42; const S = "ok"; }
+class Base { const TOKEN = "base"; }
+class Child extends Base {}
+interface Limits { const MAX = 9; }
+class Impl implements Limits {}
+echo Direct::I;
+echo ":";
+echo Direct::S;
+echo ":";
+echo Child::TOKEN;
+echo ":";
+echo Limits::MAX;
+echo ":";
+echo Impl::MAX;
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("scoped_class_constants", source),
+        "42:ok:base:9:9"
+    );
+}
+
 /// Verifies selected type predicates inspect boxed Mixed payloads in the EIR backend.
 #[test]
 fn ir_backend_handles_mixed_type_predicates() {

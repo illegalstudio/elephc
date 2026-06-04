@@ -1509,6 +1509,10 @@ fn lower_class_constant(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticRece
 
 /// Lowers a scoped constant read.
 fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, name: &str, expr: &Expr) -> LoweredValue {
+    let class_name = receiver_name(receiver);
+    if let Some(value) = ctx.scoped_constant_value(&class_name, name) {
+        return lower_expr(ctx, &value);
+    }
     let key = format!("{}::{}", receiver_name(receiver), name);
     let data = ctx.intern_string(&key);
     ctx.emit_value(

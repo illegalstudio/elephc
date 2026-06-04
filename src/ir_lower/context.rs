@@ -19,7 +19,7 @@ use crate::ir::{
 };
 use crate::parser::ast::{ExprKind, TypeExpr};
 use crate::span::Span;
-use crate::types::{ExternFunctionSig, FunctionSig, PhpType, TypeEnv};
+use crate::types::{ClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PhpType, TypeEnv};
 
 /// Value returned by expression lowering with its PHP metadata.
 #[derive(Debug, Clone, Copy)]
@@ -45,6 +45,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     initialized_slots: HashSet<LocalSlotId>,
     pub functions: &'m HashMap<String, FunctionSig>,
     pub extern_functions: &'m HashMap<String, ExternFunctionSig>,
+    pub classes: &'m HashMap<String, ClassInfo>,
+    pub interfaces: &'m HashMap<String, InterfaceInfo>,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
     pub loop_stack: Vec<LoopFrame>,
     pub return_type: IrType,
@@ -60,6 +62,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         env: TypeEnv,
         functions: &'m HashMap<String, FunctionSig>,
         extern_functions: &'m HashMap<String, ExternFunctionSig>,
+        classes: &'m HashMap<String, ClassInfo>,
+        interfaces: &'m HashMap<String, InterfaceInfo>,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
         return_php_type: PhpType,
     ) -> Self {
@@ -73,6 +77,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             initialized_slots: HashSet::new(),
             functions,
             extern_functions,
+            classes,
+            interfaces,
             constants: constants.clone(),
             loop_stack: Vec::new(),
             return_type,
@@ -112,6 +118,55 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .get(name)
             .or_else(|| self.constants.get(name.trim_start_matches('\\')))
             .cloned()
+    }
+
+    /// Returns a class or interface constant expression resolved with PHP lookup order.
+    pub(crate) fn scoped_constant_value(
+        &self,
+        class_name: &str,
+        const_name: &str,
+    ) -> Option<crate::parser::ast::Expr> {
+        let mut current = Some(class_name);
+        while let Some(name) = current {
+            if let Some(info) = self.classes.get(name) {
+                if let Some(value) = info.constants.get(const_name) {
+                    return Some(value.clone());
+                }
+                current = info.parent.as_deref();
+            } else {
+                current = None;
+            }
+        }
+        if let Some(info) = self.classes.get(class_name) {
+            for interface_name in &info.interfaces {
+                if let Some(value) = self.interface_constant_value(interface_name, const_name) {
+                    return Some(value);
+                }
+            }
+        }
+        self.interface_constant_value(class_name, const_name)
+    }
+
+    /// Returns an interface constant expression, including inherited parent interfaces.
+    fn interface_constant_value(
+        &self,
+        interface_name: &str,
+        const_name: &str,
+    ) -> Option<crate::parser::ast::Expr> {
+        let mut visited = HashSet::new();
+        let mut queue = vec![interface_name.to_string()];
+        while let Some(name) = queue.pop() {
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            if let Some(info) = self.interfaces.get(&name) {
+                if let Some(value) = info.constants.get(const_name) {
+                    return Some(value.clone());
+                }
+                queue.extend(info.parents.iter().cloned());
+            }
+        }
+        None
     }
 
     /// Records a constant discovered while lowering source-order `define()` calls.
