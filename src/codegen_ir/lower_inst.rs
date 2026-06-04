@@ -24,6 +24,7 @@ mod arrays;
 mod builtins;
 mod comparisons;
 mod conversions;
+mod externs;
 mod floats;
 mod hashes;
 mod iterators;
@@ -102,6 +103,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::IterCurrentValue => iterators::lower_iter_current_value(ctx, &inst),
         Op::IterEnd => iterators::lower_iter_end(ctx, &inst),
         Op::Call => lower_direct_call(ctx, &inst),
+        Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),
         Op::Acquire => ownership::lower_acquire(ctx, &inst),
         Op::Release => ownership::lower_release(ctx, &inst),

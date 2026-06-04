@@ -532,6 +532,22 @@ echo $map["f"] * 2;
     );
 }
 
+/// Verifies scalar extern calls are materialized through the target C ABI.
+#[test]
+fn ir_backend_handles_scalar_extern_calls() {
+    let source = r#"<?php
+extern function abs(int $n): int;
+extern function getpid(): int;
+echo abs(-42);
+echo ":";
+echo getpid() > 0 ? "pid" : "bad";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("scalar_extern_calls", source),
+        "42:pid"
+    );
+}
+
 /// Verifies selected type predicates inspect boxed Mixed payloads in the EIR backend.
 #[test]
 fn ir_backend_handles_mixed_type_predicates() {
