@@ -29,6 +29,7 @@ mod externs;
 mod floats;
 mod hashes;
 mod iterators;
+mod objects;
 mod ownership;
 mod pointers;
 mod predicates;
@@ -109,6 +110,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::BufferNew => buffers::lower_buffer_new(ctx, &inst),
         Op::BufferGet => buffers::lower_buffer_get(ctx, &inst),
         Op::BufferSet => buffers::lower_buffer_set(ctx, &inst),
+        Op::ObjectNew => objects::lower_object_new(ctx, &inst),
+        Op::InstanceOf => objects::lower_instanceof(ctx, &inst),
         Op::Call => lower_direct_call(ctx, &inst),
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),

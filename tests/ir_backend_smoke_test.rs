@@ -755,6 +755,30 @@ echo Impl::MAX;
     );
 }
 
+/// Verifies simple object allocation and named `instanceof` metadata checks.
+#[test]
+fn ir_backend_handles_simple_object_instanceof() {
+    let source = r#"<?php
+interface Marker {}
+class Base {}
+class Child extends Base implements Marker {}
+class Other {}
+$child = new Child();
+$base = new Base();
+echo ($child instanceof Child) ? "T" : "F";
+echo ($child instanceof Base) ? "T" : "F";
+echo ($child instanceof Marker) ? "T" : "F";
+echo ($child instanceof Other) ? "T" : "F";
+echo ($base instanceof Child) ? "T" : "F";
+echo (42 instanceof Base) ? "T" : "F";
+echo ($child instanceof Missing) ? "T" : "F";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("simple_object_instanceof", source),
+        "TTTFFFF"
+    );
+}
+
 /// Verifies selected type predicates inspect boxed Mixed payloads in the EIR backend.
 #[test]
 fn ir_backend_handles_mixed_type_predicates() {
