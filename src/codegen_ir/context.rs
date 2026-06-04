@@ -269,6 +269,11 @@ impl<'a> FunctionContext<'a> {
             .ok_or_else(|| CodegenIrError::missing_entry("value slot", value.as_raw()))
     }
 
+    /// Returns the frame offset assigned to a value for custom multi-word lowerings.
+    pub(super) fn value_frame_offset(&self, value: ValueId) -> Result<usize> {
+        self.value_offset(value)
+    }
+
     /// Returns the frame offset assigned to an addressable EIR local.
     pub(super) fn local_offset(&self, slot: LocalSlotId) -> Result<usize> {
         self.local_offsets

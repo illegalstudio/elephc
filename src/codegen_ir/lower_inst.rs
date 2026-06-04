@@ -26,6 +26,7 @@ mod comparisons;
 mod conversions;
 mod floats;
 mod hashes;
+mod iterators;
 mod ownership;
 mod predicates;
 mod strings;
@@ -94,6 +95,11 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashLen => hashes::lower_hash_len(ctx, &inst),
         Op::HashGet => hashes::lower_hash_get(ctx, &inst),
         Op::HashSet => hashes::lower_hash_set(ctx, &inst),
+        Op::IterStart => iterators::lower_iter_start(ctx, &inst),
+        Op::IterNext => iterators::lower_iter_next(ctx, &inst),
+        Op::IterCurrentKey => iterators::lower_iter_current_key(ctx, &inst),
+        Op::IterCurrentValue => iterators::lower_iter_current_value(ctx, &inst),
+        Op::IterEnd => iterators::lower_iter_end(ctx, &inst),
         Op::Call => lower_direct_call(ctx, &inst),
         Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),
         Op::Acquire => ownership::lower_acquire(ctx, &inst),

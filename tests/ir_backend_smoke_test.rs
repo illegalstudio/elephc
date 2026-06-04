@@ -1203,6 +1203,30 @@ fn ir_backend_handles_range_builtin() {
     }
 }
 
+/// Verifies indexed-array foreach lowering over a `range()` result.
+#[test]
+fn ir_backend_handles_indexed_range_foreach() {
+    for (name, source, expected) in [
+        (
+            "range_foreach_values",
+            "<?php foreach (range(1, 3) as $value) { echo $value; }",
+            "123",
+        ),
+        (
+            "range_foreach_keys",
+            "<?php foreach (range(2, 4) as $key => $value) { echo $key; echo ':'; echo $value; echo ';'; }",
+            "0:2;1:3;2:4;",
+        ),
+        (
+            "empty_foreach",
+            "<?php foreach ([] as $value) { echo $value; } echo 'done';",
+            "done",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies array truthiness follows PHP length rules for empty and non-empty containers.
 #[test]
 fn ir_backend_handles_array_truthiness() {
