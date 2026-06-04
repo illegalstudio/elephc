@@ -657,6 +657,50 @@ fn ir_backend_handles_indexed_array_unshift() {
     }
 }
 
+/// Verifies mutating indexed-array sort builtins call the legacy integer sort helpers.
+#[test]
+fn ir_backend_handles_indexed_array_sorting() {
+    for (name, source, expected) in [
+        (
+            "sort_indexed_ints",
+            "<?php $a = [3, 1, 2]; sort($a); echo $a[0]; echo $a[1]; echo $a[2];",
+            "123",
+        ),
+        (
+            "rsort_indexed_ints",
+            "<?php $a = [1, 3, 2]; rsort($a); echo $a[0]; echo $a[1]; echo $a[2];",
+            "321",
+        ),
+        (
+            "asort_indexed_ints",
+            "<?php $a = [3, 1, 2]; asort($a); echo $a[0]; echo $a[1]; echo $a[2];",
+            "123",
+        ),
+        (
+            "arsort_indexed_ints",
+            "<?php $a = [1, 3, 2]; arsort($a); echo $a[0]; echo $a[1]; echo $a[2];",
+            "321",
+        ),
+        (
+            "natsort_indexed_ints",
+            "<?php $a = [3, 1, 2]; natsort($a); echo $a[0]; echo $a[1]; echo $a[2];",
+            "123",
+        ),
+        (
+            "natcasesort_indexed_ints",
+            "<?php $a = [3, 1, 2]; natcasesort($a); echo $a[0]; echo $a[1]; echo $a[2];",
+            "123",
+        ),
+        (
+            "shuffle_indexed_ints",
+            "<?php $a = [1, 2, 3]; shuffle($a); echo count($a); echo ':'; echo array_sum($a); echo ':'; echo (in_array(1, $a) ? '1' : '0'); echo (in_array(2, $a) ? '2' : '0'); echo (in_array(3, $a) ? '3' : '0');",
+            "3:6:123",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies indexed arrays can read pointer-sized nested array elements.
 #[test]
 fn ir_backend_handles_nested_indexed_array_reads() {

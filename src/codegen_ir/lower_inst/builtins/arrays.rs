@@ -301,6 +301,41 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
     unshift::lower_array_unshift(ctx, inst)
 }
 
+/// Lowers `sort()` for indexed integer arrays by mutating the source array in place.
+pub(super) fn lower_sort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_indexed_array_sort(ctx, inst, "sort", "__rt_sort_int")
+}
+
+/// Lowers `rsort()` for indexed integer arrays by mutating the source array in place.
+pub(super) fn lower_rsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_indexed_array_sort(ctx, inst, "rsort", "__rt_rsort_int")
+}
+
+/// Lowers `asort()` for indexed integer arrays through the value-sort runtime wrapper.
+pub(super) fn lower_asort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_indexed_array_sort(ctx, inst, "asort", "__rt_asort")
+}
+
+/// Lowers `arsort()` for indexed integer arrays through the descending value-sort wrapper.
+pub(super) fn lower_arsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_indexed_array_sort(ctx, inst, "arsort", "__rt_arsort")
+}
+
+/// Lowers `natsort()` for indexed integer arrays through the natural-sort runtime wrapper.
+pub(super) fn lower_natsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_indexed_array_sort(ctx, inst, "natsort", "__rt_natsort")
+}
+
+/// Lowers `natcasesort()` for indexed integer arrays through the case-insensitive wrapper.
+pub(super) fn lower_natcasesort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_indexed_array_sort(ctx, inst, "natcasesort", "__rt_natcasesort")
+}
+
+/// Lowers `shuffle()` for indexed integer arrays by mutating the source array in place.
+pub(super) fn lower_shuffle(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_indexed_array_sort(ctx, inst, "shuffle", "__rt_shuffle")
+}
+
 /// Lowers `array_key_exists()` through the dedicated key-existence builtin emitter.
 pub(super) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     key_exists::lower_array_key_exists(ctx, inst)
@@ -388,6 +423,72 @@ fn lower_indexed_array_set_op(
         &first_elem_ty,
     );
     store_if_result(ctx, inst)
+}
+
+/// Calls a mutating indexed-array sort helper after copy-on-write splitting.
+fn lower_indexed_array_sort(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    helper: &str,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 1)?;
+    let array = expect_operand(inst, 0)?;
+    require_indexed_int_sort_array(ctx.value_php_type(array)?, name)?;
+    let source_local = source_load_local_slot(ctx, array)?;
+    ensure_unique_sort_source(ctx, array)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, array)?;
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, helper);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        0x7fff_ffff_ffff_fffe,
+    );
+    store_if_result(ctx, inst)
+}
+
+/// Verifies the sort runtime helper can compare the indexed-array payload slots safely.
+fn require_indexed_int_sort_array(ty: PhpType, name: &str) -> Result<()> {
+    match ty.codegen_repr() {
+        PhpType::Array(elem)
+            if matches!(
+                elem.codegen_repr(),
+                PhpType::Int | PhpType::Void | PhpType::Never
+            ) =>
+        {
+            Ok(())
+        }
+        PhpType::Array(elem) => Err(CodegenIrError::unsupported(format!(
+            "{} indexed-array element PHP type {:?}",
+            name,
+            elem.codegen_repr()
+        ))),
+        other => Err(CodegenIrError::unsupported(format!("{} for PHP type {:?}", name, other))),
+    }
+}
+
+/// Splits a shared indexed array before a sort helper mutates its slots in place.
+fn ensure_unique_sort_source(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
+    ctx.store_result_value(array)
 }
 
 /// Verifies the aggregate can use the current raw integer-slot runtime helper.
