@@ -14,12 +14,14 @@ use crate::ir::{
     BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, MixedNumericOp, Op,
     Ownership, Terminator,
 };
-use crate::ir_lower::context::{value_ir_type, LoweredValue, LoweringContext};
+use crate::ir_lower::context::{
+    type_expr_to_php_type, value_ir_type, LoweredValue, LoweringContext,
+};
 use crate::ir_lower::effects_lookup;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
     BinOp, CallableTarget, CastType, Expr, ExprKind, InstanceOfTarget, MagicConstant,
-    StaticReceiver,
+    StaticReceiver, TypeExpr,
 };
 use crate::types::{
     array_key_type_from_value_type, checker::infer_expr_type_syntactic,
@@ -103,7 +105,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::FirstClassCallable(target) => lower_first_class_callable(ctx, target, expr),
         ExprKind::This => ctx.load_local("this", Some(expr.span)),
         ExprKind::PtrCast { target_type, expr: inner } => lower_ptr_cast(ctx, target_type, inner, expr),
-        ExprKind::BufferNew { element_type: _, len } => lower_buffer_new(ctx, len, expr),
+        ExprKind::BufferNew { element_type, len } => lower_buffer_new(ctx, element_type, len, expr),
         ExprKind::ClassConstant { receiver } => lower_class_constant(ctx, receiver, expr),
         ExprKind::ScopedConstantAccess { receiver, name } => {
             lower_scoped_constant(ctx, receiver, name, expr)
@@ -1468,13 +1470,19 @@ fn lower_ptr_cast(ctx: &mut LoweringContext<'_, '_>, target_type: &str, inner: &
 }
 
 /// Lowers buffer allocation.
-fn lower_buffer_new(ctx: &mut LoweringContext<'_, '_>, len: &Expr, expr: &Expr) -> LoweredValue {
-    lower_expr(ctx, len);
+fn lower_buffer_new(
+    ctx: &mut LoweringContext<'_, '_>,
+    element_type: &TypeExpr,
+    len: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let len_value = lower_expr(ctx, len);
+    let php_type = PhpType::Buffer(Box::new(type_expr_to_php_type(element_type)));
     ctx.emit_value(
         Op::BufferNew,
-        Vec::new(),
+        vec![len_value.value],
         None,
-        fallback_expr_type(expr),
+        php_type,
         Op::BufferNew.default_effects(),
         Some(expr.span),
     )

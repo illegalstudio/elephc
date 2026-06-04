@@ -29,6 +29,7 @@ pub(super) fn lower_acquire(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         PhpType::Callable => {
             abi::emit_incref_if_refcounted(ctx.emitter, &ty);
         }
+        PhpType::Buffer(_) => {}
         other if other.is_refcounted() => {
             abi::emit_incref_if_refcounted(ctx.emitter, &other);
         }
@@ -64,6 +65,7 @@ pub(super) fn lower_release(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         PhpType::Callable => {
             abi::emit_decref_if_refcounted(ctx.emitter, &ty);
         }
+        PhpType::Buffer(_) => {}
         other if other.is_refcounted() => {
             abi::emit_decref_if_refcounted(ctx.emitter, &other);
         }

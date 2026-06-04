@@ -338,7 +338,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
     match inst.op {
         ConstI64 | ConstBool | ConstNull => check_count(inst_id, inst, 0, "0"),
         ConstF64 | ConstStr | ConstClassName | ConstEnumCase | DataAddr | ArrayNew | HashNew
-        | ObjectNew | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew
+        | ObjectNew | ClosureNew | FirstClassCallableNew | CallableArrayNew
         | GeneratorNew | ErrorSuppressBegin | ErrorSuppressEnd | IncludeOnceMark
         | IncludeOnceGuard | FunctionVariantMark | FunctionVariantDispatch | Nop => {
             check_count(inst_id, inst, 0, "0")
@@ -363,6 +363,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
             check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")?;
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
         }
+        BufferNew => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         LoadLocal | LoadRefCell | LoadGlobal | LoadStaticLocal | LoadStaticProperty | ExternGlobalLoad => {
             check_count(inst_id, inst, 0, "0")
         }

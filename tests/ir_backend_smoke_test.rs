@@ -659,6 +659,16 @@ free($buf);
     assert_eq!(compile_and_run_ir_backend("pointer_casts", source), "77");
 }
 
+/// Verifies scalar buffer allocation preserves the declared logical length.
+#[test]
+fn ir_backend_handles_buffer_new_and_len() {
+    let source = r#"<?php
+buffer<int> $values = buffer_new<int>(7);
+echo buffer_len($values);
+"#;
+    assert_eq!(compile_and_run_ir_backend("buffer_new_len", source), "7");
+}
+
 /// Verifies selected type predicates inspect boxed Mixed payloads in the EIR backend.
 #[test]
 fn ir_backend_handles_mixed_type_predicates() {
