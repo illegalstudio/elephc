@@ -785,6 +785,35 @@ fn ir_backend_handles_indexed_array_fill() {
     }
 }
 
+/// Verifies `array_chunk()` returns nested indexed arrays with the expected chunk boundaries.
+#[test]
+fn ir_backend_handles_indexed_array_chunk() {
+    for (name, source, expected) in [
+        (
+            "array_chunk_count",
+            "<?php $a = [1, 2, 3, 4, 5]; $c = array_chunk($a, 2); echo count($c);",
+            "3",
+        ),
+        (
+            "array_chunk_inner_values",
+            "<?php $a = [1, 2, 3, 4, 5]; $c = array_chunk($a, 2); echo $c[0][1]; echo ':'; echo $c[2][0];",
+            "2:5",
+        ),
+        (
+            "array_chunk_preserves_source",
+            "<?php $a = [1, 2, 3]; $c = array_chunk($a, 2); echo count($a); echo ':'; echo $a[0] . $a[1] . $a[2];",
+            "3:123",
+        ),
+        (
+            "array_chunk_nested_array_counts",
+            "<?php $inner = [5]; $rows = [$inner, [9]]; $chunks = array_chunk($rows, 1); echo count($chunks); echo ':'; echo count($chunks[0]); echo ':'; echo count($chunks[1]);",
+            "2:1:1",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies indexed-array reversal returns a reversed copy without mutating the source.
 #[test]
 fn ir_backend_handles_indexed_array_reverse() {

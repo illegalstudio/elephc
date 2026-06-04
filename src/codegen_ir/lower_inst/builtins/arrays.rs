@@ -47,6 +47,24 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_if_result(ctx, inst)
 }
 
+/// Lowers `array_chunk()` by splitting an indexed array into nested indexed arrays.
+pub(super) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "array_chunk", 2)?;
+    let array = expect_operand(inst, 0)?;
+    let length = expect_operand(inst, 1)?;
+    let source_elem_ty = array_chunk_source_element_type(ctx.value_php_type(array)?)?;
+    let result_elem_ty = result_array_element_type("array_chunk", &inst.result_php_type.codegen_repr())?;
+    let result_inner_elem_ty = array_chunk_result_inner_element_type(&result_elem_ty)?;
+    require_array_chunk_result_type(&source_elem_ty, &result_inner_elem_ty)?;
+    lower_array_chunk_call(ctx, array, length, &source_elem_ty)?;
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &result_elem_ty,
+    );
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `array_fill()` for pointer-sized scalar and refcounted payloads.
 pub(super) fn lower_array_fill(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_fill", 3)?;
@@ -390,6 +408,21 @@ fn array_slice_source_element_type(ty: PhpType) -> Result<PhpType> {
     }
 }
 
+/// Returns the copied element type when `array_chunk()` can use legacy pointer-sized helpers.
+fn array_chunk_source_element_type(ty: PhpType) -> Result<PhpType> {
+    match ty.codegen_repr() {
+        PhpType::Array(elem) => {
+            let elem = elem.codegen_repr();
+            require_array_chunk_element_layout(&elem)?;
+            Ok(elem)
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_chunk for PHP type {:?}",
+            other
+        ))),
+    }
+}
+
 /// Returns the result element type declared by the lowered builtin instruction.
 fn result_array_element_type(name: &str, ty: &PhpType) -> Result<PhpType> {
     match ty {
@@ -397,6 +430,17 @@ fn result_array_element_type(name: &str, ty: &PhpType) -> Result<PhpType> {
         other => Err(CodegenIrError::unsupported(format!(
             "{} result PHP type {:?}",
             name, other
+        ))),
+    }
+}
+
+/// Returns the inner chunk element type from an `array<array<T>>` result.
+fn array_chunk_result_inner_element_type(result_elem_ty: &PhpType) -> Result<PhpType> {
+    match result_elem_ty {
+        PhpType::Array(inner) => Ok(inner.codegen_repr()),
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_chunk result element PHP type {:?}",
+            other
         ))),
     }
 }
@@ -422,6 +466,25 @@ fn require_array_slice_element_layout(elem: &PhpType) -> Result<()> {
     )))
 }
 
+/// Verifies that the runtime chunk helper can copy this element representation.
+fn require_array_chunk_element_layout(elem: &PhpType) -> Result<()> {
+    if matches!(
+        elem,
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Callable
+            | PhpType::Void
+    ) || elem.is_refcounted()
+    {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "array_chunk indexed-array element PHP type {:?}",
+        elem
+    )))
+}
+
 /// Verifies the destination element type matches the copied layout or is a Mixed widening.
 fn require_array_slice_result_type(source_elem_ty: &PhpType, result_elem_ty: &PhpType) -> Result<()> {
     if source_elem_ty == result_elem_ty || result_elem_ty == &PhpType::Mixed {
@@ -430,6 +493,18 @@ fn require_array_slice_result_type(source_elem_ty: &PhpType, result_elem_ty: &Ph
     Err(CodegenIrError::unsupported(format!(
         "array_slice result element PHP type {:?} for source element PHP type {:?}",
         result_elem_ty,
+        source_elem_ty
+    )))
+}
+
+/// Verifies the produced chunk inner arrays retain the source element type.
+fn require_array_chunk_result_type(source_elem_ty: &PhpType, result_inner_elem_ty: &PhpType) -> Result<()> {
+    if source_elem_ty == result_inner_elem_ty {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "array_chunk result inner element PHP type {:?} for source element PHP type {:?}",
+        result_inner_elem_ty,
         source_elem_ty
     )))
 }
@@ -455,6 +530,27 @@ fn lower_array_slice_call(
         }
     }
     abi::emit_call_label(ctx.emitter, array_slice_runtime_helper(source_elem_ty));
+    Ok(())
+}
+
+/// Calls the appropriate legacy runtime helper after materializing chunk arguments.
+fn lower_array_chunk_call(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    length: ValueId,
+    source_elem_ty: &PhpType,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(length, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(length, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, array_chunk_runtime_helper(source_elem_ty));
     Ok(())
 }
 
@@ -492,6 +588,15 @@ fn emit_array_slice_until_end_sentinel(ctx: &mut FunctionContext<'_>, reg: &str)
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("mov {}, -1", reg));               // use -1 as the x86_64 array_slice() runtime sentinel for length until the end
         }
+    }
+}
+
+/// Returns the helper that matches the chunk source element ownership representation.
+fn array_chunk_runtime_helper(source_elem_ty: &PhpType) -> &'static str {
+    if source_elem_ty.is_refcounted() {
+        "__rt_array_chunk_refcounted"
+    } else {
+        "__rt_array_chunk"
     }
 }
 
