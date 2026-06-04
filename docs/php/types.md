@@ -174,6 +174,8 @@ function describe($x): string {        // $x may be int or a Point across call s
 
 Narrowing is not tracked across a reassignment of the variable inside the branch.
 
+Narrowing applies to function and method parameters. A parameter whose call sites pass incompatible types (e.g. `int` at one site and a class instance at another) is inferred as a union, and the guard narrows it inside each branch. This is **not** yet supported for closure parameters: a closure invoked with incompatible argument types is rejected at compile time rather than inferred as a union.
+
 
 ### Known incompatibilities with PHP
 
