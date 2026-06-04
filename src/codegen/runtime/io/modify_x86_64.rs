@@ -152,8 +152,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_ftruncate");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish frame
-    emitter.instruction("mov rdi, rax");                                        // fd
-    emitter.instruction("mov rsi, rdx");                                        // size (came via rdx as the secondary scalar)
+    emitter.instruction("mov rdi, rax");                                        // fd → SysV first arg (size already in rsi from the caller)
     emitter.instruction("call ftruncate");                                      // libc ftruncate(fd, size)
     emitter.instruction("cmp rax, 0");                                          // success?
     emitter.instruction("sete al");                                             // boolean byte
