@@ -199,7 +199,7 @@ fn dynamic_instanceof_class_names(module: &Module) -> HashSet<String> {
     module
         .class_infos
         .keys()
-        .filter(|name| class_metadata_supported_for_dynamic_instanceof(name, &module.class_infos))
+        .filter(|name| class_metadata_supported_for_dynamic_instanceof(name, module))
         .cloned()
         .collect()
 }
@@ -214,26 +214,89 @@ fn dynamic_instanceof_interface_names(module: &Module) -> HashSet<String> {
         .collect()
 }
 
-/// Returns true when class metadata does not require method symbols missing from EIR output.
+/// Returns true when class metadata can be emitted for dynamic `instanceof` lookup.
 fn class_metadata_supported_for_dynamic_instanceof(
     class_name: &str,
-    classes: &HashMap<String, ClassInfo>,
+    module: &Module,
 ) -> bool {
+    let emitted_methods = emitted_class_method_keys(module);
     let mut seen = HashSet::new();
     let mut current = Some(class_name);
     while let Some(name) = current {
         if !seen.insert(name.to_string()) {
             return false;
         }
-        let Some(class_info) = classes.get(name) else {
+        let Some(class_info) = module.class_infos.get(name) else {
             return false;
         };
-        if !class_info.vtable_methods.is_empty() || !class_info.static_vtable_methods.is_empty() {
+        if !class_interfaces_supported_for_dynamic_instanceof(class_info, &module.interface_infos) {
+            return false;
+        }
+        if !class_method_symbols_supported(class_info, name, false, &class_info.vtable_methods, &class_info.method_impl_classes, &emitted_methods) {
+            return false;
+        }
+        if !class_method_symbols_supported(
+            class_info,
+            name,
+            true,
+            &class_info.static_vtable_methods,
+            &class_info.static_method_impl_classes,
+            &emitted_methods,
+        ) {
             return false;
         }
         current = class_info.parent.as_deref();
     }
     true
+}
+
+/// Returns class-method symbols emitted by the EIR backend.
+fn emitted_class_method_keys(module: &Module) -> HashSet<(String, String, bool)> {
+    module
+        .class_methods
+        .iter()
+        .filter_map(|function| {
+            let (class_name, method_name) = function.name.rsplit_once("::")?;
+            Some((
+                class_name.to_string(),
+                crate::names::php_symbol_key(method_name),
+                function.flags.is_static,
+            ))
+        })
+        .collect()
+}
+
+/// Returns true when all vtable methods resolve to emitted EIR method symbols.
+fn class_method_symbols_supported(
+    class_info: &ClassInfo,
+    fallback_class: &str,
+    is_static: bool,
+    methods: &[String],
+    impl_classes: &HashMap<String, String>,
+    emitted_methods: &HashSet<(String, String, bool)>,
+) -> bool {
+    methods.iter().all(|method_name| {
+        let impl_class = impl_classes
+            .get(method_name)
+            .map(String::as_str)
+            .unwrap_or(fallback_class);
+        let key = (impl_class.to_string(), method_name.clone(), is_static);
+        emitted_methods.contains(&key)
+            || (!is_static
+                && class_info.methods.contains_key(method_name)
+                && emitted_methods.contains(&(impl_class.to_string(), method_name.clone(), false)))
+    })
+}
+
+/// Returns true when implemented interfaces do not require missing method wrappers.
+fn class_interfaces_supported_for_dynamic_instanceof(
+    class_info: &ClassInfo,
+    interfaces: &HashMap<String, InterfaceInfo>,
+) -> bool {
+    class_info
+        .interfaces
+        .iter()
+        .all(|name| interface_metadata_supported_for_dynamic_instanceof(name, interfaces))
 }
 
 /// Returns true when interface metadata does not require wrapper symbols missing from EIR output.

@@ -832,6 +832,32 @@ echo ($child instanceof $targetOther) ? "T" : "F";
     );
 }
 
+/// Verifies dynamic `instanceof` metadata includes classes whose method symbols are emitted by EIR.
+#[test]
+fn ir_backend_handles_dynamic_instanceof_on_classes_with_methods() {
+    let source = r#"<?php
+class MethodBase {
+    public function baseValue(): int {
+        return 1;
+    }
+}
+class MethodChild extends MethodBase {
+    public function childValue(): int {
+        return 2;
+    }
+}
+$child = new MethodChild();
+$baseName = "MethodBase";
+$childName = "MethodChild";
+echo ($child instanceof $baseName) ? "T" : "F";
+echo ($child instanceof $childName) ? "T" : "F";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("dynamic_instanceof_classes_with_methods", source),
+        "TT"
+    );
+}
+
 /// Verifies invalid dynamic `instanceof` targets use the runtime fatal path.
 #[test]
 fn ir_backend_fatals_on_invalid_dynamic_instanceof_target() {
