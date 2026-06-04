@@ -20,7 +20,10 @@ use crate::parser::ast::{
     BinOp, CallableTarget, CastType, Expr, ExprKind, InstanceOfTarget, MagicConstant,
     StaticReceiver,
 };
-use crate::types::{array_key_type_from_value_type, checker::infer_expr_type_syntactic, PhpType};
+use crate::types::{
+    array_key_type_from_value_type, checker::infer_expr_type_syntactic,
+    merge_array_key_types, normalized_array_key_type, PhpType,
+};
 
 mod constants;
 
@@ -1002,7 +1005,7 @@ fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, 
         Op::HashNew,
         Vec::new(),
         Some(Immediate::Capacity(pairs.len() as u32)),
-        fallback_expr_type(expr),
+        assoc_array_literal_type_for_ir(pairs, expr),
         Op::HashNew.default_effects(),
         Some(expr.span),
     );
@@ -1012,6 +1015,46 @@ fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, 
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
     }
     hash
+}
+
+/// Returns the associative-array type that the EIR backend can faithfully materialize.
+fn assoc_array_literal_type_for_ir(pairs: &[(Expr, Expr)], expr: &Expr) -> PhpType {
+    if pairs.is_empty() {
+        return fallback_expr_type(expr);
+    }
+    let mut key_ty = normalized_array_key_type(
+        &pairs[0].0,
+        infer_expr_type_syntactic(&pairs[0].0),
+    );
+    let mut value_ty = infer_expr_type_syntactic(&pairs[0].1).codegen_repr();
+    for (key, value) in pairs.iter().skip(1) {
+        key_ty = merge_array_key_types(
+            key_ty,
+            normalized_array_key_type(key, infer_expr_type_syntactic(key)),
+        );
+        value_ty = merge_ir_assoc_value_type(
+            value_ty,
+            infer_expr_type_syntactic(value).codegen_repr(),
+        );
+    }
+    PhpType::AssocArray {
+        key: Box::new(key_ty),
+        value: Box::new(value_ty),
+    }
+}
+
+/// Merges associative-array value types for EIR storage metadata.
+fn merge_ir_assoc_value_type(left: PhpType, right: PhpType) -> PhpType {
+    if left == right {
+        return left;
+    }
+    if matches!(left, PhpType::Never) {
+        return right;
+    }
+    if matches!(right, PhpType::Never) {
+        return left;
+    }
+    PhpType::Mixed
 }
 
 /// Lowers a match expression with lazy arm-result evaluation.

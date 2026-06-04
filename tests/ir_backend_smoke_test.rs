@@ -480,6 +480,34 @@ echo "]";
     );
 }
 
+/// Verifies heterogeneous associative arrays store and read boxed Mixed payloads.
+#[test]
+fn ir_backend_handles_mixed_associative_array_slots() {
+    let source = r#"<?php
+$map = [
+    "i" => 42,
+    "s" => "hello",
+    "b" => true,
+    "n" => null,
+    "a" => [1, 2],
+];
+var_dump($map["i"]);
+var_dump($map["s"]);
+var_dump($map["b"]);
+var_dump($map["n"]);
+var_dump($map["a"]);
+echo "[";
+print_r($map["s"]);
+echo "|";
+print_r($map["n"]);
+echo "]";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("mixed_assoc_array_slots", source),
+        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\narray(2) {\n}\n[hello|]"
+    );
+}
+
 /// Verifies selected type predicates inspect boxed Mixed payloads in the EIR backend.
 #[test]
 fn ir_backend_handles_mixed_type_predicates() {

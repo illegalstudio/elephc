@@ -62,12 +62,14 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     let hash = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
     let value = expect_operand(inst, 2)?;
-    require_hash(ctx.value_php_type(hash)?, inst)?;
-    let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, inst)?;
+    let hash_ty = ctx.value_php_type(hash)?;
+    require_hash(hash_ty.clone(), inst)?;
+    let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
+    let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
     let source_local = source_load_local_slot(ctx, hash)?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_hash_set_aarch64(ctx, hash, key, value, &value_ty)?,
-        Arch::X86_64 => lower_hash_set_x86_64(ctx, hash, key, value, &value_ty)?,
+        Arch::AArch64 => lower_hash_set_aarch64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
+        Arch::X86_64 => lower_hash_set_x86_64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
     }
     ctx.store_result_value(hash)?;
     if let Some(slot) = source_local {
@@ -128,13 +130,14 @@ fn lower_hash_set_aarch64(
     key: ValueId,
     value: ValueId,
     value_ty: &PhpType,
+    storage_value_ty: &PhpType,
 ) -> Result<()> {
     materialize_hash_key_aarch64(ctx, key)?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
-    materialize_hash_value_aarch64(ctx, value, value_ty)?;
+    materialize_hash_value_aarch64(ctx, value, value_ty, storage_value_ty)?;
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
     ctx.load_value_to_reg(hash, "x0")?;
-    abi::emit_load_int_immediate(ctx.emitter, "x5", crate::codegen::runtime_value_tag(value_ty) as i64);
+    abi::emit_load_int_immediate(ctx.emitter, "x5", crate::codegen::runtime_value_tag(storage_value_ty) as i64);
     abi::emit_call_label(ctx.emitter, "__rt_hash_set");
     Ok(())
 }
@@ -146,13 +149,14 @@ fn lower_hash_set_x86_64(
     key: ValueId,
     value: ValueId,
     value_ty: &PhpType,
+    storage_value_ty: &PhpType,
 ) -> Result<()> {
     materialize_hash_key_x86_64(ctx, key)?;
     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
-    materialize_hash_value_x86_64(ctx, value, value_ty)?;
+    materialize_hash_value_x86_64(ctx, value, value_ty, storage_value_ty)?;
     abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
     ctx.load_value_to_reg(hash, "rdi")?;
-    abi::emit_load_int_immediate(ctx.emitter, "r9", crate::codegen::runtime_value_tag(value_ty) as i64);
+    abi::emit_load_int_immediate(ctx.emitter, "r9", crate::codegen::runtime_value_tag(storage_value_ty) as i64);
     abi::emit_call_label(ctx.emitter, "__rt_hash_set");
     Ok(())
 }
@@ -203,7 +207,11 @@ fn materialize_hash_value_aarch64(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     value_ty: &PhpType,
+    storage_value_ty: &PhpType,
 ) -> Result<()> {
+    if storage_value_ty == &PhpType::Mixed {
+        return materialize_hash_mixed_value_aarch64(ctx, value, value_ty);
+    }
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
             ctx.load_value_to_reg(value, "x3")?;
@@ -230,7 +238,11 @@ fn materialize_hash_value_x86_64(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     value_ty: &PhpType,
+    storage_value_ty: &PhpType,
 ) -> Result<()> {
+    if storage_value_ty == &PhpType::Mixed {
+        return materialize_hash_mixed_value_x86_64(ctx, value, value_ty);
+    }
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
             ctx.load_value_to_reg(value, "rcx")?;
@@ -252,6 +264,42 @@ fn materialize_hash_value_x86_64(
     Ok(())
 }
 
+/// Materializes a hash payload as an owned boxed Mixed value for AArch64 hash storage.
+fn materialize_hash_mixed_value_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    if value_ty == &PhpType::Mixed {
+        ctx.load_value_to_reg(value, "x3")?;
+        ctx.emitter.instruction("mov x4, xzr");                                 // boxed Mixed hash values do not use the high payload word
+        return Ok(());
+    }
+    ctx.load_value_to_result(value)?;
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, value_ty);
+    ctx.emitter.instruction("mov x3, x0");                                      // pass the boxed Mixed pointer as the hash value low word
+    ctx.emitter.instruction("mov x4, xzr");                                     // boxed Mixed hash values do not use the high payload word
+    Ok(())
+}
+
+/// Materializes a hash payload as an owned boxed Mixed value for x86_64 hash storage.
+fn materialize_hash_mixed_value_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    if value_ty == &PhpType::Mixed {
+        ctx.load_value_to_reg(value, "rcx")?;
+        ctx.emitter.instruction("xor r8, r8");                                  // boxed Mixed hash values do not use the high payload word
+        return Ok(());
+    }
+    ctx.load_value_to_result(value)?;
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, value_ty);
+    ctx.emitter.instruction("mov rcx, rax");                                    // pass the boxed Mixed pointer as the hash value low word
+    ctx.emitter.instruction("xor r8, r8");                                      // boxed Mixed hash values do not use the high payload word
+    Ok(())
+}
+
 /// Moves a successful AArch64 hash lookup payload into the canonical result registers.
 fn emit_hash_get_success_aarch64(ctx: &mut FunctionContext<'_>, value_ty: &PhpType) -> Result<()> {
     match value_ty {
@@ -262,6 +310,9 @@ fn emit_hash_get_success_aarch64(ctx: &mut FunctionContext<'_>, value_ty: &PhpTy
             ctx.emitter.instruction("fmov d0, x1");                             // move the borrowed hash float bits into the standard float result
         }
         PhpType::Str => {}
+        PhpType::Mixed => {
+            ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed pointer stored in the hash entry
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "hash_get value PHP type {:?}",
@@ -284,6 +335,9 @@ fn emit_hash_get_success_x86_64(ctx: &mut FunctionContext<'_>, value_ty: &PhpTyp
         PhpType::Str => {
             ctx.emitter.instruction("mov rax, rdi");                            // move the borrowed hash string pointer into the standard string result
             ctx.emitter.instruction("mov rdx, rsi");                            // move the borrowed hash string length into the paired string result
+        }
+        PhpType::Mixed => {
+            ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed pointer stored in the hash entry
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -311,6 +365,20 @@ fn emit_hash_get_miss(ctx: &mut FunctionContext<'_>, value_ty: &PhpType) {
             abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
             abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
         }
+        PhpType::Mixed => match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_load_int_immediate(ctx.emitter, "x0", 8);
+                abi::emit_load_int_immediate(ctx.emitter, "x1", 0);
+                abi::emit_load_int_immediate(ctx.emitter, "x2", 0);
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            }
+            Arch::X86_64 => {
+                abi::emit_load_int_immediate(ctx.emitter, "rax", 8);
+                abi::emit_load_int_immediate(ctx.emitter, "rdi", 0);
+                abi::emit_load_int_immediate(ctx.emitter, "rsi", 0);
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            }
+        },
         _ => {
             abi::emit_load_int_immediate(
                 ctx.emitter,
@@ -363,7 +431,7 @@ fn require_hash_get_result(value_ty: &PhpType, inst: &Instruction) -> Result<()>
     let result_ty = inst.result_php_type.codegen_repr();
     if matches!(
         value_ty,
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float | PhpType::Str
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float | PhpType::Str | PhpType::Mixed
     ) && result_ty == *value_ty
     {
         return Ok(());
@@ -375,8 +443,29 @@ fn require_hash_get_result(value_ty: &PhpType, inst: &Instruction) -> Result<()>
 }
 
 /// Rejects hash write payload types that do not have Phase 04 storage lowering yet.
-fn require_supported_hash_value(value_ty: PhpType, inst: &Instruction) -> Result<PhpType> {
+fn require_supported_hash_value(
+    value_ty: PhpType,
+    storage_value_ty: &PhpType,
+    inst: &Instruction,
+) -> Result<PhpType> {
     let value_ty = value_ty.codegen_repr();
+    if storage_value_ty == &PhpType::Mixed
+        && (matches!(
+            value_ty,
+            PhpType::Int
+                | PhpType::Bool
+                | PhpType::Callable
+                | PhpType::Float
+                | PhpType::Str
+                | PhpType::Void
+                | PhpType::Mixed
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_)
+        ))
+    {
+        return Ok(value_ty);
+    }
     if matches!(
         value_ty,
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float | PhpType::Str
