@@ -3634,6 +3634,46 @@ echo $row[0] . ":" . $row[1] . ":" . gettype($row);
     );
 }
 
+/// Verifies `flock()` acquires and releases an advisory lock.
+#[test]
+fn ir_backend_handles_flock_lock_and_unlock() {
+    let source = r#"<?php
+file_put_contents("lock.txt", "x");
+$h = fopen("lock.txt", "r+");
+$got = flock($h, LOCK_EX);
+$released = flock($h, LOCK_UN);
+fclose($h);
+echo ($got ? "locked" : "!") . ":" . ($released ? "released" : "!");
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("flock_lock_and_unlock", source),
+        "locked:released"
+    );
+}
+
+/// Verifies `flock()` stores would-block state into a local output variable.
+#[test]
+fn ir_backend_handles_flock_would_block_local() {
+    let source = r#"<?php
+file_put_contents("block.txt", "x");
+$first = fopen("block.txt", "r+");
+$second = fopen("block.txt", "r+");
+flock($first, LOCK_EX);
+$would = 0;
+$ok = flock($second, LOCK_EX | LOCK_NB, $would);
+echo ($ok ? "locked" : "blocked") . ":" . gettype($would) . ":" . $would;
+$namedWould = 99;
+flock(stream: $first, operation: LOCK_UN, would_block: $namedWould);
+echo ":" . $namedWould;
+fclose($second);
+fclose($first);
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("flock_would_block_local", source),
+        "blocked:integer:1:0"
+    );
+}
+
 /// Verifies successful seeks clear EOF state tracked for stream descriptors.
 #[test]
 fn ir_backend_clears_stream_eof_after_seek() {

@@ -12,7 +12,7 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
-use crate::ir::{Instruction, ValueId};
+use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
@@ -356,6 +356,37 @@ pub(super) fn lower_fflush(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 /// Lowers `fdatasync(stream)` through the shared fd data-sync runtime helper.
 pub(super) fn lower_fdatasync(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_unary_stream_bool_runtime(ctx, inst, "fdatasync", "__rt_fdatasync")
+}
+
+/// Lowers `flock(stream, operation, would_block?)` through the libc flock wrapper.
+pub(super) fn lower_flock(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "flock", 2, 3)?;
+    let stream = expect_operand(inst, 0)?;
+    let operation = expect_operand(inst, 1)?;
+    load_stream_fd_to_result(ctx, stream, "flock")?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    require_int(ctx.load_value_to_result(operation)?.codegen_repr(), "flock operation")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // pass the lock operation to the flock runtime helper
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdx, rax");                            // pass the lock operation to the flock runtime helper
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_flock");
+    if inst.operands.len() == 3 {
+        let would_block = expect_operand(inst, 2)?;
+        let Some(slot) = source_load_local_slot(ctx, would_block)? else {
+            return Err(CodegenIrError::unsupported(
+                "flock would_block output for non-local arguments",
+            ));
+        };
+        store_flock_would_block(ctx, slot)?;
+    }
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `file(path)` through the target-aware runtime line-array helper.
@@ -1222,6 +1253,48 @@ fn lower_unary_stream_bool_runtime(
     load_stream_fd_to_result(ctx, stream, name)?;
     abi::emit_call_label(ctx.emitter, runtime_label);
     store_if_result(ctx, inst)
+}
+
+/// Stores `__rt_flock`'s would-block output into a local slot while preserving the return value.
+fn store_flock_would_block(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
+    let offset = ctx.local_offset(slot)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("mov x0, x1");                              // move would_block into the canonical integer register for local storage
+            abi::store_at_offset(ctx.emitter, "x0", offset);
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rax, rdx");                            // move would_block into the canonical integer register for local storage
+            abi::store_at_offset(ctx.emitter, "rax", offset);
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    Ok(())
+}
+
+/// Returns the local slot loaded by a stream builtin operand when it came from `load_local`.
+fn source_load_local_slot(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<LocalSlotId>> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+    };
+    if inst_ref.op == Op::LoadLocal {
+        if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
+            return Ok(Some(slot));
+        }
+    }
+    Ok(None)
 }
 
 /// Loads two path strings into the runtime ABI, calls a helper, and stores its result.

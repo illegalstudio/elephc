@@ -144,6 +144,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "fsync" => io::lower_fsync(ctx, inst),
         "fflush" => io::lower_fflush(ctx, inst),
         "fdatasync" => io::lower_fdatasync(ctx, inst),
+        "flock" => io::lower_flock(ctx, inst),
         "file" => io::lower_file(ctx, inst),
         "realpath" => io::lower_realpath(ctx, inst),
         "file_put_contents" => io::lower_file_put_contents(ctx, inst),
