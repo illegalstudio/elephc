@@ -760,6 +760,24 @@ echo strlen($sys) > 0 ? "S" : "!";
     );
 }
 
+/// Verifies process-control shell builtins lower through the EIR backend.
+#[test]
+fn ir_backend_handles_shell_process_builtins() {
+    let source = r#"<?php
+echo shell_exec("printf shell");
+echo "|";
+echo exec("printf exec");
+echo "|";
+system("printf system");
+echo "|";
+passthru("printf pass");
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("shell_process_builtins", source),
+        "shell|exec|system|pass"
+    );
+}
+
 /// Verifies JSON validation builtins update and expose runtime JSON error state.
 #[test]
 fn ir_backend_handles_json_validation_builtins() {

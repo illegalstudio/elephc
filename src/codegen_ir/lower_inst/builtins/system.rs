@@ -151,6 +151,79 @@ pub(super) fn lower_php_uname(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `exec(command)` by capturing shell stdout through the shared runtime helper.
+pub(super) fn lower_exec(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_shell_exec_like(ctx, inst, "exec")
+}
+
+/// Lowers `shell_exec(command)` by capturing shell stdout through the shared runtime helper.
+pub(super) fn lower_shell_exec(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_shell_exec_like(ctx, inst, "shell_exec")
+}
+
+/// Lowers `system(command)` through libc `system()` and returns the legacy empty string result.
+pub(super) fn lower_system(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_direct_system_call(ctx, inst, "system", true)
+}
+
+/// Lowers `passthru(command)` through libc `system()` for direct stdout passthrough.
+pub(super) fn lower_passthru(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_direct_system_call(ctx, inst, "passthru", false)
+}
+
+/// Lowers shell-capturing process builtins that return a PHP string.
+fn lower_shell_exec_like(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 1)?;
+    let command = expect_operand(inst, 0)?;
+    require_string(ctx.load_value_to_result(command)?.codegen_repr(), "shell command")?;
+    abi::emit_call_label(ctx.emitter, "__rt_shell_exec");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers stdout-passthrough process builtins that execute a command via libc `system()`.
+fn lower_direct_system_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    returns_empty_string: bool,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 1)?;
+    let command = expect_operand(inst, 0)?;
+    require_string(ctx.load_value_to_result(command)?.codegen_repr(), "system command")?;
+    abi::emit_call_label(ctx.emitter, "__rt_cstr");
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the null-terminated shell command to libc system()
+    }
+    ctx.emitter.bl_c("system");
+    if returns_empty_string {
+        emit_empty_string_result(ctx);
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Materializes the legacy empty-string return value used after `system()`.
+fn emit_empty_string_result(ctx: &mut FunctionContext<'_>) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+}
+
 /// Lowers a one-argument blocking libc call that receives an integer duration.
 fn lower_unary_blocking_c_call(
     ctx: &mut FunctionContext<'_>,
