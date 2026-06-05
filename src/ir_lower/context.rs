@@ -232,6 +232,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Updates the current known PHP type for a local.
     pub(crate) fn set_local_type(&mut self, name: &str, ty: PhpType) {
+        if let Some(slot) = self.local_slots.get(name).copied() {
+            self.builder.widen_local_storage_type(slot, ty.clone());
+        }
         self.local_types.insert(name.to_string(), ty);
     }
 

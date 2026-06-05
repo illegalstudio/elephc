@@ -93,6 +93,14 @@ impl<'f> Builder<'f> {
         self.func.add_local(name, ir_type, php_type, kind)
     }
 
+    /// Widens an existing local slot so its frame storage can hold the incoming PHP type.
+    pub fn widen_local_storage_type(&mut self, slot: LocalSlotId, php_type: PhpType) {
+        let local = &mut self.func.locals[slot.as_raw() as usize];
+        let storage_type = widened_local_storage_type(&local.php_type, &php_type);
+        local.ir_type = local_storage_ir_type(&storage_type);
+        local.php_type = storage_type;
+    }
+
     /// Returns the storage type for a value already emitted in this function.
     pub fn value_type(&self, value: ValueId) -> IrType {
         self.func.values[value.as_raw() as usize].ir_type
@@ -341,5 +349,31 @@ impl<'f> Builder<'f> {
             block.terminator.is_none(),
             "attempted to emit an EIR instruction after a terminator"
         );
+    }
+}
+
+/// Returns the local frame PHP representation that can store both observed types.
+fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType {
+    let current = current.codegen_repr();
+    let incoming = incoming.codegen_repr();
+    if current == incoming {
+        return current;
+    }
+    match (&current, &incoming) {
+        (PhpType::Array(_), PhpType::Array(_)) => incoming,
+        (PhpType::AssocArray { .. }, PhpType::AssocArray { .. }) => incoming,
+        (
+            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
+            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
+        ) => incoming,
+        _ => PhpType::Mixed,
+    }
+}
+
+/// Returns the IR storage class used for a local slot's PHP representation.
+fn local_storage_ir_type(php_type: &PhpType) -> IrType {
+    match php_type {
+        PhpType::Void | PhpType::Never => IrType::I64,
+        other => IrType::from_php(other),
     }
 }

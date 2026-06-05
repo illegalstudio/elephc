@@ -584,6 +584,33 @@ fn move_reg_to_int_result(ctx: &mut FunctionContext<'_>, source_reg: &str) {
     }
 }
 
+/// Loads an SSA value and moves it into the first integer/pointer argument register.
+pub(super) fn load_value_to_first_int_arg(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<PhpType> {
+    let ty = ctx.load_value_to_result(value)?;
+    move_int_result_to_first_arg(ctx);
+    Ok(ty)
+}
+
+/// Moves the canonical integer result register into the target's first argument register.
+fn move_int_result_to_first_arg(ctx: &mut FunctionContext<'_>) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    if result_reg == arg_reg {
+        return;
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg)); // move the loaded value into the runtime helper argument register
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg)); // move the loaded value into the runtime helper argument register
+        }
+    }
+}
+
 /// Returns the temporary caller-stack pad needed to match incoming stack-arg offsets.
 fn direct_call_stack_pad_bytes(ctx: &FunctionContext<'_>, overflow_bytes: usize) -> usize {
     match ctx.emitter.target.arch {
@@ -618,8 +645,72 @@ fn lower_int_compare(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
 /// Lowers an addressable local load into the result register and SSA destination slot.
 fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
-    ctx.load_local_to_result(slot)?;
-    store_if_result(ctx, inst)
+    let result = inst.result.ok_or_else(|| {
+        CodegenIrError::invalid_module("load_local missing result value")
+    })?;
+    let source_ty = ctx.load_local_to_result(slot)?;
+    let result_ty = ctx.value_php_type(result)?;
+    coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+    ctx.store_result_value(result)
+}
+
+/// Converts a loaded local slot value to the SSA result representation requested by EIR.
+fn coerce_loaded_local_to_result_type(
+    ctx: &mut FunctionContext<'_>,
+    source_ty: &PhpType,
+    result_ty: &PhpType,
+) -> Result<()> {
+    let source_ty = source_ty.codegen_repr();
+    let result_ty = result_ty.codegen_repr();
+    if local_load_types_share_storage(&source_ty, &result_ty) {
+        return Ok(());
+    }
+    match (&source_ty, &result_ty) {
+        (PhpType::Mixed, PhpType::Int) => {
+            move_int_result_to_first_arg(ctx);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            Ok(())
+        }
+        (PhpType::Mixed, PhpType::Bool) => {
+            move_int_result_to_first_arg(ctx);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+            Ok(())
+        }
+        (PhpType::Mixed, PhpType::Float) => {
+            move_int_result_to_first_arg(ctx);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+            Ok(())
+        }
+        (PhpType::Mixed, PhpType::Str) => {
+            move_int_result_to_first_arg(ctx);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            Ok(())
+        }
+        (_, PhpType::Mixed) => {
+            emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+            Ok(())
+        }
+        _ => Err(CodegenIrError::unsupported(format!(
+            "local load from PHP type {:?} as {:?}",
+            source_ty,
+            result_ty
+        ))),
+    }
+}
+
+/// Returns true when two PHP types use the same local-frame representation.
+fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &PhpType) -> bool {
+    if source_ty == result_ty {
+        return true;
+    }
+    matches!(
+        (source_ty, result_ty),
+        (
+            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
+            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never
+        ) | (PhpType::Array(_), PhpType::Array(_))
+            | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+    )
 }
 
 /// Lowers an addressable local store from one SSA operand.

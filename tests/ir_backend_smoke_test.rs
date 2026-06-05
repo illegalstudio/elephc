@@ -237,6 +237,13 @@ function head_count($head, ...$rest) {
     echo ":";
     echo count($rest);
 }
+function sum_values(...$nums) {
+    $total = 0;
+    foreach ($nums as $n) {
+        $total += $n;
+    }
+    return $total;
+}
 class Counter {
     public function inst($head, ...$rest) {
         echo $head;
@@ -261,10 +268,14 @@ $counter = new Counter();
 $counter->inst(7, 8, 9);
 echo "|";
 Counter::stat(4, 5, 6, 7);
+echo "|";
+echo sum_values(1, 2, 3);
+echo "|";
+echo sum_values();
 "#;
     assert_eq!(
         compile_and_run_ir_backend("positional_variadic_parameters", source),
-        "4|0|7:2|7:0|7:2|4:3"
+        "4|0|7:2|7:0|7:2|4:3|6|0"
     );
 }
 
@@ -376,6 +387,11 @@ fn ir_backend_handles_scalar_builtins() {
         ),
         ("intval_float", "<?php echo intval(3.9);", "3"),
         ("intval_str", "<?php echo intval(\"42xyz\");", "42"),
+        (
+            "intval_mixed_param",
+            "<?php function cast_it(mixed $value) { echo intval($value); } cast_it(\"42xyz\"); echo ':'; cast_it(3.9);",
+            "42:3",
+        ),
         ("floatval_int", "<?php echo floatval(2) + 0.5;", "2.5"),
         ("floatval_str", "<?php echo floatval(\"2.5x\");", "2.5"),
         ("boolval_false", "<?php echo boolval(\"0\");", ""),
@@ -2663,6 +2679,11 @@ fn ir_backend_handles_indexed_range_foreach() {
             "empty_foreach",
             "<?php foreach ([] as $value) { echo $value; } echo 'done';",
             "done",
+        ),
+        (
+            "foreach_sum_mixed_values",
+            "<?php function sum_arr($nums) { $total = 0; foreach ($nums as $n) { $total += $n; } return $total; } echo sum_arr([1, 2, 3]);",
+            "6",
         ),
     ] {
         assert_eq!(compile_and_run_ir_backend(name, source), expected);

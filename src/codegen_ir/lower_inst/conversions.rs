@@ -14,7 +14,7 @@ use crate::ir::{Immediate, Instruction, IrType};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
-use super::{expect_operand, predicates, store_if_result, strings};
+use super::{expect_operand, load_value_to_first_int_arg, predicates, store_if_result, strings};
 use crate::codegen_ir::{CodegenIrError, Result};
 
 /// Lowers a string-to-integer conversion through PHP string cast rules.
@@ -78,6 +78,10 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         PhpType::Str => {
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             predicates::emit_array_truthiness(ctx, value)?;

@@ -835,12 +835,8 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
             return value;
         }
     }
-    let call_args = if let Some(sig) = ctx.functions.get(canonical) {
-        positional_args_with_defaults(sig, args)
-    } else {
-        args.to_vec()
-    };
-    let operands = lower_args(ctx, &call_args);
+    let sig = ctx.functions.get(canonical).cloned();
+    let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
     let php_type = call_return_type(ctx, canonical, &operands);
     if ctx.extern_functions.contains_key(canonical) {
         let data = ctx.intern_function_name(canonical);
@@ -898,10 +894,17 @@ fn lower_args(ctx: &mut LoweringContext<'_, '_>, args: &[Expr]) -> Vec<crate::ir
     args.iter().map(|arg| lower_expr(ctx, arg).value).collect()
 }
 
-/// Returns positional call arguments with omitted optional defaults and variadic tail materialized.
-fn positional_args_with_defaults(sig: &FunctionSig, args: &[Expr]) -> Vec<Expr> {
+/// Lowers positional call arguments with omitted optional defaults and variadic tail packing.
+fn lower_args_with_signature(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let Some(sig) = sig else {
+        return lower_args(ctx, args);
+    };
     if args.iter().any(is_named_or_spread_arg) {
-        return args.to_vec();
+        return lower_args(ctx, args);
     }
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
     let fixed_arg_count = if sig.variadic.is_some() {
@@ -910,28 +913,101 @@ fn positional_args_with_defaults(sig: &FunctionSig, args: &[Expr]) -> Vec<Expr> 
         args.len()
     };
     if sig.variadic.is_none() && fixed_arg_count >= regular_param_count {
-        return args.to_vec();
+        return lower_args(ctx, args);
     }
-    let mut normalized = args[..fixed_arg_count].to_vec();
+    let mut operands: Vec<crate::ir::ValueId> = args[..fixed_arg_count]
+        .iter()
+        .map(|arg| lower_expr(ctx, arg).value)
+        .collect();
     for idx in fixed_arg_count..regular_param_count {
         let Some(Some(default)) = sig.defaults.get(idx) else {
             break;
         };
-        normalized.push(default.clone());
+        operands.push(lower_expr(ctx, default).value);
     }
     if sig.variadic.is_some() {
         let tail = if args.len() > regular_param_count {
-            args[regular_param_count..].to_vec()
+            &args[regular_param_count..]
         } else {
-            Vec::new()
+            &[]
         };
-        let span = tail
-            .first()
-            .map(|arg| arg.span)
-            .unwrap_or_else(crate::span::Span::dummy);
-        normalized.push(Expr::new(ExprKind::ArrayLiteral(tail), span));
+        operands.push(lower_variadic_tail_array(ctx, sig, tail).value);
     }
-    normalized
+    operands
+}
+
+/// Lowers the synthetic variadic tail array using the variadic parameter's storage type.
+fn lower_variadic_tail_array(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    tail: &[Expr],
+) -> LoweredValue {
+    let span = tail
+        .first()
+        .map(|arg| arg.span)
+        .unwrap_or_else(crate::span::Span::dummy);
+    let array_ty = variadic_array_type(sig);
+    let array = ctx.emit_value(
+        Op::ArrayNew,
+        Vec::new(),
+        Some(Immediate::Capacity(tail.len() as u32)),
+        array_ty.clone(),
+        Op::ArrayNew.default_effects(),
+        Some(span),
+    );
+    for item in tail {
+        let value = lower_expr(ctx, item);
+        let value = coerce_variadic_tail_value(ctx, value, &array_ty, item.span);
+        ctx.emit_void(
+            Op::ArrayPush,
+            vec![array.value, value.value],
+            None,
+            Op::ArrayPush.default_effects(),
+            Some(item.span),
+        );
+    }
+    array
+}
+
+/// Returns the runtime array type used for a variadic parameter slot.
+fn variadic_array_type(sig: &FunctionSig) -> PhpType {
+    let Some(variadic_name) = sig.variadic.as_ref() else {
+        return PhpType::Array(Box::new(PhpType::Mixed));
+    };
+    sig.params
+        .iter()
+        .find(|(name, _)| name == variadic_name)
+        .map(|(_, ty)| match ty.codegen_repr() {
+            PhpType::Array(elem_ty) => PhpType::Array(elem_ty),
+            other => PhpType::Array(Box::new(other)),
+        })
+        .unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Mixed)))
+}
+
+/// Boxes variadic tail values when the callee expects an `array<mixed>` slot.
+fn coerce_variadic_tail_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    array_ty: &PhpType,
+    span: crate::span::Span,
+) -> LoweredValue {
+    let PhpType::Array(elem_ty) = array_ty.codegen_repr() else {
+        return value;
+    };
+    if elem_ty.codegen_repr() != PhpType::Mixed {
+        return value;
+    }
+    if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Mixed {
+        return value;
+    }
+    ctx.emit_value(
+        Op::MixedBox,
+        vec![value.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(span),
+    )
 }
 
 /// Returns true when a call argument needs full named/spread planning.
@@ -1486,8 +1562,8 @@ fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, args: &[Exp
 
 /// Lowers fixed-class object construction.
 fn lower_new_object(ctx: &mut LoweringContext<'_, '_>, class_name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
-    let call_args = constructor_call_args(ctx, class_name, args);
-    let operands = lower_args(ctx, &call_args);
+    let sig = constructor_signature(ctx, class_name).cloned();
+    let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
     let php_type = PhpType::Object(class_name.as_str().to_string());
     let data = ctx.intern_class_name(class_name.as_str());
     ctx.emit_value(
@@ -1523,18 +1599,15 @@ fn lower_new_dynamic_object(
     )
 }
 
-/// Returns constructor call arguments with positional defaults when metadata is available.
-fn constructor_call_args(
-    ctx: &LoweringContext<'_, '_>,
+/// Returns constructor signature metadata when available for a fixed class.
+fn constructor_signature<'a>(
+    ctx: &'a LoweringContext<'_, '_>,
     class_name: &Name,
-    args: &[Expr],
-) -> Vec<Expr> {
+) -> Option<&'a FunctionSig> {
     let key = php_symbol_key("__construct");
     ctx.classes
         .get(class_name.as_str().trim_start_matches('\\'))
         .and_then(|class_info| class_info.methods.get(&key))
-        .map(|sig| positional_args_with_defaults(sig, args))
-        .unwrap_or_else(|| args.to_vec())
 }
 
 /// Lowers an object property read.
@@ -1674,8 +1747,8 @@ fn lower_method_call(
     let object = lower_expr(ctx, object);
     let result_type = method_call_result_type(ctx, object.value, method, op, expr);
     let mut operands = vec![object.value];
-    let call_args = method_call_args(ctx, object.value, method, args);
-    operands.extend(lower_args(ctx, &call_args));
+    let sig = method_signature(ctx, object.value, method).cloned();
+    operands.extend(lower_args_with_signature(ctx, sig.as_ref(), args));
     let data = ctx.intern_string(method);
     ctx.emit_value(
         op,
@@ -1778,8 +1851,8 @@ fn lower_method_call_with_receiver(
 ) -> LoweredValue {
     let result_type = method_call_result_type(ctx, object.value, method, op, expr);
     let mut operands = vec![object.value];
-    let call_args = method_call_args(ctx, object.value, method, args);
-    operands.extend(lower_args(ctx, &call_args));
+    let sig = method_signature(ctx, object.value, method).cloned();
+    operands.extend(lower_args_with_signature(ctx, sig.as_ref(), args));
     let data = ctx.intern_string(method);
     ctx.emit_value(
         op,
@@ -1789,18 +1862,6 @@ fn lower_method_call_with_receiver(
         op.default_effects(),
         Some(expr.span),
     )
-}
-
-/// Returns instance-method call arguments with positional defaults when metadata is available.
-fn method_call_args(
-    ctx: &LoweringContext<'_, '_>,
-    object: crate::ir::ValueId,
-    method: &str,
-    args: &[Expr],
-) -> Vec<Expr> {
-    method_signature(ctx, object, method)
-        .map(|sig| positional_args_with_defaults(sig, args))
-        .unwrap_or_else(|| args.to_vec())
 }
 
 /// Returns the checked signature for an instance method call when metadata is available.
@@ -1855,8 +1916,8 @@ fn lower_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let call_args = static_method_call_args(ctx, receiver, method, args);
-    let operands = lower_args(ctx, &call_args);
+    let sig = static_method_signature(ctx, receiver, method).cloned();
+    let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
     let name = format!("{}::{}", receiver_name(receiver), method);
     let data = ctx.intern_string(&name);
     let result_type = static_method_call_result_type(ctx, receiver, method, expr);
@@ -1868,19 +1929,6 @@ fn lower_static_method_call(
         Op::StaticMethodCall.default_effects(),
         Some(expr.span),
     )
-}
-
-/// Returns static-method call arguments with positional defaults when metadata is available.
-fn static_method_call_args(
-    ctx: &LoweringContext<'_, '_>,
-    receiver: &StaticReceiver,
-    method: &str,
-    args: &[Expr],
-) -> Vec<Expr> {
-    let Some(sig) = static_method_signature(ctx, receiver, method) else {
-        return args.to_vec();
-    };
-    positional_args_with_defaults(sig, args)
 }
 
 /// Returns the checked signature for a static method call when metadata is available.
