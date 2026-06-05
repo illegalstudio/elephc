@@ -718,6 +718,52 @@ rmdir("docs");
     );
 }
 
+/// Verifies extended `SplFileInfo` stat/access/link helper methods match the legacy backend.
+#[test]
+fn parity_spl_file_info_extended_stat_helpers() {
+    assert_backend_parity(
+        "spl_file_info_extended_stat_helpers",
+        r##"<?php
+mkdir("docs");
+file_put_contents("docs/a.txt", "one\n");
+file_put_contents("docs/run.sh", "#!/bin/sh\n");
+chmod("docs/run.sh", 0755);
+symlink("a.txt", "docs/link.txt");
+
+$file = new SplFileInfo("docs/a.txt");
+$dir = new SplFileInfo("docs");
+$exec = new SplFileInfo("docs/run.sh");
+$link = new SplFileInfo("docs/link.txt");
+
+echo ($file->getPerms() !== false) ? "P" : "x";
+echo ($file->getInode() !== false) ? "I" : "x";
+echo ($file->getOwner() !== false) ? "O" : "x";
+echo ($file->getGroup() !== false) ? "G" : "x";
+echo ($file->getATime() !== false) ? "A" : "x";
+echo ($file->getMTime() > 0) ? "M" : "x";
+echo ($file->getCTime() !== false) ? "C" : "x";
+echo $file->getType();
+echo ":";
+echo $file->isWritable() ? "W" : "x";
+echo $file->isWriteable() ? "w" : "x";
+echo $file->isReadable() ? "R" : "x";
+echo $exec->isExecutable() ? "X" : "x";
+echo $dir->isDir() ? "D" : "x";
+echo $link->isLink() ? "L" : "x";
+echo ":";
+echo $link->getLinkTarget();
+echo ":";
+echo ($file->getRealPath() === false) ? "x" : "P";
+
+unlink("docs/link.txt");
+unlink("docs/run.sh");
+unlink("docs/a.txt");
+rmdir("docs");
+"##,
+        &[],
+    );
+}
+
 /// Verifies dynamic `SplFileInfo` factories match the legacy backend.
 #[test]
 fn parity_spl_file_info_dynamic_factories() {

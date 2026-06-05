@@ -2336,6 +2336,52 @@ rmdir("docs");
     );
 }
 
+/// Verifies `SplFileInfo` stat/access/link helpers lower through their builtin method bodies.
+#[test]
+fn ir_backend_handles_spl_file_info_extended_stat_helpers() {
+    let source = r##"<?php
+mkdir("docs");
+file_put_contents("docs/a.txt", "one\n");
+file_put_contents("docs/run.sh", "#!/bin/sh\n");
+chmod("docs/run.sh", 0755);
+symlink("a.txt", "docs/link.txt");
+
+$file = new SplFileInfo("docs/a.txt");
+$dir = new SplFileInfo("docs");
+$exec = new SplFileInfo("docs/run.sh");
+$link = new SplFileInfo("docs/link.txt");
+
+echo ($file->getPerms() !== false) ? "P" : "x";
+echo ($file->getInode() !== false) ? "I" : "x";
+echo ($file->getOwner() !== false) ? "O" : "x";
+echo ($file->getGroup() !== false) ? "G" : "x";
+echo ($file->getATime() !== false) ? "A" : "x";
+echo ($file->getMTime() > 0) ? "M" : "x";
+echo ($file->getCTime() !== false) ? "C" : "x";
+echo $file->getType();
+echo ":";
+echo $file->isWritable() ? "W" : "x";
+echo $file->isWriteable() ? "w" : "x";
+echo $file->isReadable() ? "R" : "x";
+echo $exec->isExecutable() ? "X" : "x";
+echo $dir->isDir() ? "D" : "x";
+echo $link->isLink() ? "L" : "x";
+echo ":";
+echo $link->getLinkTarget();
+echo ":";
+echo ($file->getRealPath() === false) ? "x" : "P";
+
+unlink("docs/link.txt");
+unlink("docs/run.sh");
+unlink("docs/a.txt");
+rmdir("docs");
+"##;
+    assert_eq!(
+        compile_and_run_ir_backend("spl_file_info_extended_stat_helpers", source),
+        "PIOGAMCfile:WwRXDL:a.txt:P"
+    );
+}
+
 /// Verifies dynamic `SplFileInfo` factories lower class-string construction through EIR.
 #[test]
 fn ir_backend_handles_spl_file_info_dynamic_factories() {
