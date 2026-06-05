@@ -839,6 +839,9 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
             return value;
         }
     }
+    if let Some(value) = lower_static_is_callable(ctx, canonical, args, expr) {
+        return value;
+    }
     let sig = call_signature(ctx, canonical, args);
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical);
@@ -879,6 +882,27 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         effects_lookup::builtin_effects(canonical),
         Some(expr.span),
     )
+}
+
+/// Lowers direct function first-class callable probes for `is_callable()`.
+fn lower_static_is_callable(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\')) != "is_callable" || args.len() != 1 {
+        return None;
+    }
+    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+        return None;
+    }
+    match &args[0].kind {
+        ExprKind::FirstClassCallable(CallableTarget::Function(_)) => {
+            Some(emit_bool_literal(ctx, true, Some(expr.span)))
+        }
+        _ => None,
+    }
 }
 
 /// Resolved compile-time string callback target for `call_user_func*`.

@@ -4735,6 +4735,21 @@ fn ir_backend_handles_static_is_callable_checks() {
     );
 }
 
+/// Verifies direct function first-class callable probes lower without descriptor materialization.
+#[test]
+fn ir_backend_handles_direct_function_fcc_is_callable_checks() {
+    let source = r#"<?php
+function eir_callable_probe(): int { return 1; }
+echo is_callable(strlen(...)) ? "yes" : "no";
+echo ":";
+echo is_callable(eir_callable_probe(...)) ? "yes" : "no";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("is_callable_direct_function_fcc", source),
+        "yes:yes"
+    );
+}
+
 /// Verifies is_callable() resolves static `Class::method` strings without runtime dispatch.
 #[test]
 fn ir_backend_handles_static_method_string_is_callable_checks() {
