@@ -276,6 +276,29 @@ pub(super) fn lower_nullsafe_prop_get(
     store_if_result(ctx, inst)
 }
 
+/// Lowers a dynamic property read when the property expression is a literal string.
+pub(super) fn lower_dynamic_prop_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let property_value = expect_operand(inst, 1)?;
+    let property = const_string_operand(ctx, property_value)?.to_string();
+    let slot = resolve_property_slot(ctx, object, &property, inst)?;
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, base_reg)?;
+    if slot.is_declared {
+        emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
+    }
+    emit_property_load(ctx, &slot, base_reg)?;
+    if inst.result_php_type.codegen_repr() == PhpType::Mixed
+        && slot.php_type.codegen_repr() != PhpType::Mixed
+    {
+        emit_box_current_value_as_mixed(ctx.emitter, &slot.php_type.codegen_repr());
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a declared object property write for statically known object receivers.
 pub(super) fn lower_prop_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
@@ -502,6 +525,36 @@ pub(super) fn raw_value_php_type(ctx: &FunctionContext<'_>, value: ValueId) -> R
         .value(value)
         .map(|metadata| metadata.php_type.clone())
         .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
+}
+
+/// Returns the literal string payload for a value produced by `ConstStr`.
+fn const_string_operand<'a>(ctx: &FunctionContext<'a>, value: ValueId) -> Result<&'a str> {
+    let metadata = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = metadata.def else {
+        return Err(CodegenIrError::unsupported("dynamic property name from non-instruction value"));
+    };
+    let instruction = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if instruction.op != Op::ConstStr {
+        return Err(CodegenIrError::unsupported(format!(
+            "dynamic property name from opcode {}",
+            instruction.op.name()
+        )));
+    }
+    let Some(Immediate::Data(data)) = instruction.immediate else {
+        return Err(CodegenIrError::invalid_module("const_str missing data immediate"));
+    };
+    ctx.module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .map(String::as_str)
+        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
 }
 
 /// Resolves an object or object|null source type for a nullsafe receiver.

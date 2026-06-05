@@ -1165,6 +1165,22 @@ if ($box->b) { echo "T"; } else { echo "F"; }
     );
 }
 
+/// Verifies dynamic property reads with literal names use declared object slots.
+#[test]
+fn ir_backend_handles_literal_dynamic_object_property_reads() {
+    let source = r#"<?php
+class Box {
+    public int $i = 7;
+}
+$box = new Box();
+echo $box->{"i"};
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("literal_dynamic_object_property_read", source),
+        "7"
+    );
+}
+
 /// Verifies nullsafe property reads short-circuit null receivers and box non-null values.
 #[test]
 fn ir_backend_handles_nullsafe_object_properties() {
