@@ -24,7 +24,9 @@ use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
 use super::{direct_call_stack_pad_bytes, expect_data, expect_operand, materialize_direct_call_args, store_if_result};
-use crate::codegen_ir::literal_defaults::{literal_default_value, LiteralDefaultValue};
+use crate::codegen_ir::literal_defaults::{
+    emit_array_literal_default_to_result, literal_default_value, LiteralDefaultValue,
+};
 use crate::codegen_ir::{CodegenIrError, Result};
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
@@ -216,6 +218,17 @@ fn emit_property_default(
             abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
             abi::emit_store_to_address(ctx.emitter, ptr_reg, object_reg, default.offset);
             abi::emit_store_to_address(ctx.emitter, len_reg, object_reg, default.offset + 8);
+        }
+        LiteralDefaultValue::Array {
+            elem_type,
+            elements,
+        } => {
+            abi::emit_push_reg(ctx.emitter, object_reg);
+            emit_array_literal_default_to_result(ctx, elem_type, elements)?;
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            let int_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_store_to_address(ctx.emitter, int_reg, object_reg, default.offset);
+            abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset + 8);
         }
     }
     Ok(())

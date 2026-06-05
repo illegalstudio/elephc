@@ -27,7 +27,9 @@ use crate::types::{EnumCaseInfo, EnumCaseValue, PhpType};
 use super::context::FunctionContext;
 use super::frame;
 use super::function_variants;
-use super::literal_defaults::{literal_default_value, LiteralDefaultValue};
+use super::literal_defaults::{
+    emit_array_literal_default_to_result, literal_default_value, LiteralDefaultValue,
+};
 use super::lower_inst;
 use super::lower_term;
 use super::{CodegenIrError, Result};
@@ -317,7 +319,7 @@ fn emit_static_property_default(
         "initialize static property {}::${}",
         class_name, property
     ));
-    emit_static_property_default_value(ctx, class_name, property, php_type, &value);
+    emit_static_property_default_value(ctx, class_name, property, php_type, &value)?;
     Ok(())
 }
 
@@ -328,7 +330,7 @@ fn ensure_static_property_default_type_supported(
     php_type: &PhpType,
 ) -> Result<()> {
     match php_type {
-        PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str => Ok(()),
+        PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Array(_) => Ok(()),
         _ => Err(CodegenIrError::unsupported(format!(
             "static property initializer for {}::${} with PHP type {:?}",
             class_name, property, php_type
@@ -343,7 +345,7 @@ fn emit_static_property_default_value(
     property: &str,
     php_type: &PhpType,
     value: &LiteralDefaultValue,
-) {
+) -> Result<()> {
     match value {
         LiteralDefaultValue::Int(value) => {
             let int_reg = abi::int_result_reg(ctx.emitter);
@@ -364,12 +366,19 @@ fn emit_static_property_default_value(
             abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
             abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
         }
+        LiteralDefaultValue::Array {
+            elem_type,
+            elements,
+        } => {
+            emit_array_literal_default_to_result(ctx, elem_type, elements)?;
+        }
     }
     let symbol = static_property_symbol(class_name, property);
     abi::emit_store_result_to_symbol(ctx.emitter, &symbol, php_type, false);
     if !matches!(php_type.codegen_repr(), PhpType::Str) {
         abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 8);
     }
+    Ok(())
 }
 
 /// Emits every block in table order.

@@ -6,9 +6,9 @@
 //! - `crate::codegen_ir::lower_inst::lower_instruction()`.
 //!
 //! Key details:
-//! - This slice supports public scalar/string static properties with named,
+//! - This slice supports public scalar/string/array static properties with named,
 //!   lexical `self`, and lexical `parent` receivers, but not late static binding,
-//!   references, or array mutation.
+//!   references, or non-indexed array mutation.
 //! - Typed static properties use the same high-word uninitialized sentinel as
 //!   the legacy backend before reads.
 
@@ -178,7 +178,7 @@ fn reject_non_public_static_property(
 /// Verifies that this slice knows how to represent the static property type.
 fn ensure_static_property_type_supported(php_type: &PhpType, inst: &Instruction) -> Result<()> {
     match php_type {
-        PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str => Ok(()),
+        PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Array(_) => Ok(()),
         _ => Err(CodegenIrError::unsupported(format!(
             "{} for static property PHP type {:?}",
             inst.op.name(),
