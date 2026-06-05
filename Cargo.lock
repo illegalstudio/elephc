@@ -488,6 +488,7 @@ name = "elephc"
 version = "0.23.5"
 dependencies = [
  "bzip2-rs",
+ "elephc-pdo",
  "elephc-tls",
  "flate2",
  "rustls",

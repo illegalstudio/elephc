@@ -32,12 +32,16 @@ flate2 = "1"
 # the compiler to decompress bzip2 phar:// entries at compile time. Decompress-only.
 bzip2-rs = "0.1"
 
-# elephc-tls is a runtime staticlib, not used by the Rust compiler itself —
-# but the codegen test runner needs libelephc_tls.a to link the https://
-# wrapper into test binaries, so it ships as a dev-dependency to make
-# `cargo test` build it automatically.
+# elephc-tls / elephc-pdo are runtime staticlibs, not used by the Rust compiler
+# itself — but the codegen test runner links libelephc_tls.a (https:// wrapper)
+# and libelephc_pdo.a (PDO) into test binaries, so they ship as dev-dependencies
+# to make `cargo test` / `cargo nextest run` build them automatically. (Without
+# this the staticlibs are only built by `cargo build` of the default-members,
+# which a sharded nextest run does not perform — `ld: library 'elephc_pdo' not
+# found`.)
 [dev-dependencies]
 elephc-tls = { path = "crates/elephc-tls" }
+elephc-pdo = { path = "crates/elephc-pdo" }
 # flate2 lets the phar:// codegen tests build gzip (raw-DEFLATE) fixture entries
 # with the same encoder the compiler decodes, guaranteeing a version-stable
 # round-trip without shelling out to php.
