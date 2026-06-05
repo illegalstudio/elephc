@@ -28,6 +28,7 @@ pub(crate) fn lower(
     populate_metadata(&mut module, program, check_result);
     lower_function_declarations(program, &mut module, check_result, &constants);
     lower_class_like_methods(program, &mut module, check_result, &constants);
+    lower_builtin_reflection_attribute_methods(&mut module, check_result, &constants);
     function::lower_main(program, &mut module, check_result, &constants);
     validate_module(&module)?;
     Ok(module)
@@ -283,4 +284,22 @@ fn lower_methods_for_class_like(
             constants,
         );
     }
+}
+
+/// Lowers the synthetic `ReflectionAttribute` methods injected by the checker.
+fn lower_builtin_reflection_attribute_methods(
+    module: &mut Module,
+    check_result: &CheckResult,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+) {
+    let Some(class_info) = check_result.classes.get("ReflectionAttribute") else {
+        return;
+    };
+    lower_methods_for_class_like(
+        "ReflectionAttribute",
+        &class_info.method_decls,
+        module,
+        check_result,
+        constants,
+    );
 }

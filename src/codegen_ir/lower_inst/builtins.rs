@@ -237,6 +237,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         }
         "class_attribute_names" => attributes::lower_class_attribute_names(ctx, inst),
         "class_attribute_args" => attributes::lower_class_attribute_args(ctx, inst),
+        "class_get_attributes" => attributes::lower_class_get_attributes(ctx, inst),
         "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
             types::lower_get_declared_names(ctx, inst, key.as_str())
         }

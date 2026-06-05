@@ -1746,6 +1746,9 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
             Some(PhpType::Array(Box::new(PhpType::Str)))
         }
         "class_attribute_args" => Some(PhpType::Array(Box::new(PhpType::Mixed))),
+        "class_get_attributes" => Some(PhpType::Array(Box::new(PhpType::Object(
+            "ReflectionAttribute".to_string(),
+        )))),
         _ => None,
     }
 }

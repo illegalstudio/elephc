@@ -18,6 +18,20 @@ use crate::types::{AttrArgValue, ClassInfo, PhpType};
 
 use super::super::super::context::FunctionContext;
 
+const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
+
+/// Fixed object slot layout for the synthetic `ReflectionAttribute` class.
+struct ReflectionAttributeLayout {
+    class_id: u64,
+    property_count: usize,
+    name_lo: usize,
+    name_hi: usize,
+    args_lo: usize,
+    args_hi: usize,
+    factory_lo: usize,
+    factory_hi: usize,
+}
+
 /// Lowers `class_attribute_names(class)` into an indexed string array.
 pub(super) fn lower_class_attribute_names(
     ctx: &mut FunctionContext<'_>,
@@ -47,6 +61,22 @@ pub(super) fn lower_class_attribute_args(
     let attr_args = attribute_args(ctx, &class_name, &attr_name);
 
     emit_mixed_array(ctx, &attr_args)?;
+    super::store_if_result(ctx, inst)
+}
+
+/// Lowers `class_get_attributes(class)` into an array of `ReflectionAttribute` objects.
+pub(super) fn lower_class_get_attributes(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "class_get_attributes", 1)?;
+    let class = super::expect_operand(inst, 0)?;
+    let class_name = const_string_operand(ctx, class, "class_get_attributes")?;
+    let (attr_names, attr_args) = class_info(ctx, &class_name)
+        .map(|info| (info.attribute_names.clone(), info.attribute_args.clone()))
+        .unwrap_or_else(|| (Vec::new(), Vec::new()));
+
+    emit_reflection_attribute_array(ctx, &attr_names, &attr_args)?;
     super::store_if_result(ctx, inst)
 }
 
@@ -80,6 +110,186 @@ fn class_info<'a>(ctx: &'a FunctionContext<'_>, class_name: &str) -> Option<&'a 
         .iter()
         .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
         .map(|(_, info)| info)
+}
+
+/// Allocates and fills an indexed array of populated `ReflectionAttribute` objects.
+fn emit_reflection_attribute_array(
+    ctx: &mut FunctionContext<'_>,
+    attr_names: &[String],
+    attr_args: &[Option<Vec<AttrArgValue>>],
+) -> Result<()> {
+    let layout = reflection_attribute_layout(ctx)?;
+    allocate_indexed_array(ctx, attr_names.len().max(1), 8);
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &PhpType::Object("ReflectionAttribute".to_string()),
+    );
+
+    for (idx, attr_name) in attr_names.iter().enumerate() {
+        let attr_arg_list = attr_args
+            .get(idx)
+            .and_then(|args| args.as_deref())
+            .unwrap_or(&[]);
+        let factory_id = crate::codegen::reflection::attribute_factory_id(
+            &ctx.module.class_infos,
+            attr_name,
+            attr_arg_list,
+        );
+
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_reflection_attribute_object(ctx, &layout);
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_set_name_property(ctx, attr_name, &layout);
+        emit_set_args_property(ctx, attr_arg_list, &layout)?;
+        emit_set_factory_property(ctx, factory_id, &layout);
+        emit_append_reflection_attribute_object(ctx);
+    }
+
+    Ok(())
+}
+
+/// Returns the synthetic `ReflectionAttribute` class layout from EIR metadata.
+fn reflection_attribute_layout(ctx: &FunctionContext<'_>) -> Result<ReflectionAttributeLayout> {
+    let info = ctx
+        .module
+        .class_infos
+        .get("ReflectionAttribute")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let name_lo = reflection_property_offset(info, "__name")?;
+    let args_lo = reflection_property_offset(info, "__args")?;
+    let factory_lo = reflection_property_offset(info, "__factory")?;
+    Ok(ReflectionAttributeLayout {
+        class_id: info.class_id,
+        property_count: info.properties.len(),
+        name_lo,
+        name_hi: name_lo + 8,
+        args_lo,
+        args_hi: args_lo + 8,
+        factory_lo,
+        factory_hi: factory_lo + 8,
+    })
+}
+
+/// Returns one declared property offset from the synthetic reflection class layout.
+fn reflection_property_offset(info: &ClassInfo, property: &str) -> Result<usize> {
+    info.property_offsets.get(property).copied().ok_or_else(|| {
+        CodegenIrError::invalid_module(format!(
+            "ReflectionAttribute missing property offset for ${}",
+            property
+        ))
+    })
+}
+
+/// Allocates a zero-initialized `ReflectionAttribute` object payload.
+fn emit_reflection_attribute_object(
+    ctx: &mut FunctionContext<'_>,
+    layout: &ReflectionAttributeLayout,
+) {
+    let payload_size = 8 + layout.property_count * 16;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov x0, #{}", payload_size));     // request ReflectionAttribute object payload storage
+            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks ReflectionAttribute as an object
+            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the object heap header before the payload
+            ctx.emitter.instruction(&format!("mov x10, #{}", layout.class_id)); // materialize the ReflectionAttribute class id
+            ctx.emitter.instruction("str x10, [x0]");                           // store the class id at object payload offset zero
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov rax, {}", payload_size));     // request ReflectionAttribute object payload storage
+            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize the x86_64 object heap kind word
+            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the object heap header before the payload
+            ctx.emitter.instruction(&format!("mov r10, {}", layout.class_id));  // materialize the ReflectionAttribute class id
+            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object payload offset zero
+        }
+    }
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    for index in 0..layout.property_count {
+        let offset = 8 + index * 16;
+        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset);
+        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset + 8);
+    }
+}
+
+/// Stores the reflected attribute name into the object currently parked on the stack.
+fn emit_set_name_property(
+    ctx: &mut FunctionContext<'_>,
+    attr_name: &str,
+    layout: &ReflectionAttributeLayout,
+) {
+    let (label, len) = ctx.data.add_string(attr_name.as_bytes());
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+            abi::emit_store_to_address(ctx.emitter, "x1", object_reg, layout.name_lo);
+            abi::emit_store_to_address(ctx.emitter, "x2", object_reg, layout.name_hi);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rax", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+            abi::emit_store_to_address(ctx.emitter, "rax", object_reg, layout.name_lo);
+            abi::emit_store_to_address(ctx.emitter, "rdx", object_reg, layout.name_hi);
+        }
+    }
+}
+
+/// Stores a freshly materialized mixed argument array on the stacked object.
+fn emit_set_args_property(
+    ctx: &mut FunctionContext<'_>,
+    attr_args: &[AttrArgValue],
+    layout: &ReflectionAttributeLayout,
+) -> Result<()> {
+    emit_mixed_array(ctx, attr_args)?;
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let tag_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        object_reg,
+        layout.args_lo,
+    );
+    abi::emit_load_int_immediate(ctx.emitter, tag_reg, 4);
+    abi::emit_store_to_address(ctx.emitter, tag_reg, object_reg, layout.args_hi);
+    Ok(())
+}
+
+/// Stores the `newInstance()` factory id on the stacked reflection object.
+fn emit_set_factory_property(
+    ctx: &mut FunctionContext<'_>,
+    factory_id: i64,
+    layout: &ReflectionAttributeLayout,
+) {
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let factory_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_int_immediate(ctx.emitter, factory_reg, factory_id);
+    abi::emit_store_to_address(ctx.emitter, factory_reg, object_reg, layout.factory_lo);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, layout.factory_hi);
+}
+
+/// Appends the stacked object to the stacked result array and leaves the array in result.
+fn emit_append_reflection_attribute_object(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x1");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+        }
+    }
 }
 
 /// Allocates and fills an indexed array of attribute-name strings.
@@ -196,7 +406,7 @@ fn emit_box_arg_aarch64(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue) {
         }
         AttrArgValue::Int(value) => {
             ctx.emitter.instruction("mov x0, #0");                              // runtime tag 0 = integer payload
-            ctx.emitter.instruction(&format!("mov x1, #{}", value));            // pass the captured integer as the mixed low word
+            abi::emit_load_int_immediate(ctx.emitter, "x1", *value);
             ctx.emitter.instruction("mov x2, xzr");                             // integer mixed payloads do not use the high word
         }
         AttrArgValue::Bool(value) => {

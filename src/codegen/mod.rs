@@ -31,7 +31,7 @@ mod main_emission;
 pub mod platform;
 mod prescan;
 mod program_usage;
-mod reflection;
+pub(crate) mod reflection;
 pub(crate) mod runtime;
 mod runtime_features;
 mod stmt;

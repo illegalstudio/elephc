@@ -3639,6 +3639,40 @@ echo "[" . $args[3] . "]";
     );
 }
 
+/// Verifies `class_get_attributes()` materializes `ReflectionAttribute` objects through EIR.
+#[test]
+fn ir_backend_handles_class_get_attributes_objects() {
+    let source = r#"<?php
+#[EirRoute("/api", 7, true, null), EirGuard("admin")]
+class EirAttributedController {}
+$attrs = class_get_attributes("EirAttributedController");
+$route = $attrs[0];
+$guard = $attrs[1];
+$routeArgs = $route->getArguments();
+$guardArgs = $guard->getArguments();
+echo count($attrs);
+echo ":";
+echo $route->getName();
+echo ":";
+echo count($routeArgs);
+echo ":";
+echo "[" . $routeArgs[0] . "]";
+echo "[" . $routeArgs[1] . "]";
+echo "[" . $routeArgs[2] . "]";
+echo "[" . $routeArgs[3] . "]";
+echo ":";
+echo $guard->getName();
+echo ":";
+echo count($guardArgs);
+echo ":";
+echo "[" . $guardArgs[0] . "]";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("class_get_attributes_objects", source),
+        "2:EirRoute:4:[/api][7][1][]:EirGuard:1:[admin]"
+    );
+}
+
 /// Verifies declared class/interface introspection arrays lower through the EIR backend.
 #[test]
 fn ir_backend_handles_declared_name_builtins() {
