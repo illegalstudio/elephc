@@ -81,6 +81,11 @@ pub(super) fn lower_rmdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     lower_unary_path_predicate(ctx, inst, "rmdir", "__rt_rmdir")
 }
 
+/// Lowers `chdir(path)` through the target-aware runtime helper.
+pub(super) fn lower_chdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_unary_path_predicate(ctx, inst, "chdir", "__rt_chdir")
+}
+
 /// Lowers `copy(source, dest)` through the target-aware runtime helper.
 pub(super) fn lower_copy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_binary_path_predicate(ctx, inst, "copy", "__rt_copy")
@@ -89,6 +94,26 @@ pub(super) fn lower_copy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 /// Lowers `rename(from, to)` through the target-aware runtime helper.
 pub(super) fn lower_rename(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_binary_path_predicate(ctx, inst, "rename", "__rt_rename")
+}
+
+/// Lowers `getcwd()` through the target-aware runtime helper.
+pub(super) fn lower_getcwd(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "getcwd", 0)?;
+    abi::emit_call_label(ctx.emitter, "__rt_getcwd");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `sys_get_temp_dir()` as the project's hardcoded `/tmp` string.
+pub(super) fn lower_sys_get_temp_dir(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "sys_get_temp_dir", 0)?;
+    let (label, len) = ctx.data.add_string(b"/tmp");
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `filesize(path)` through the target-aware runtime stat helper.

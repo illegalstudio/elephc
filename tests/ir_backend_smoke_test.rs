@@ -3646,6 +3646,25 @@ echo unlink("new.txt") ? "X" : "!";
     );
 }
 
+/// Verifies current-working-directory and temp-directory builtins.
+#[test]
+fn ir_backend_handles_working_directory_builtins() {
+    let source = r#"<?php
+$before = getcwd();
+echo strlen($before) > 0 ? "C" : "!";
+echo mkdir("sub") ? "M" : "!";
+echo chdir("sub") ? "D" : "!";
+$after = getcwd();
+echo strlen($after) > strlen($before) ? "W" : "!";
+echo ":";
+echo sys_get_temp_dir();
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("working_directory", source),
+        "CMDW:/tmp"
+    );
+}
+
 /// Verifies global constant declarations, references, and `defined()` lowering.
 #[test]
 fn ir_backend_handles_global_constants_and_defined() {
