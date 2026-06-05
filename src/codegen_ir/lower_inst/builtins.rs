@@ -363,6 +363,10 @@ fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()
     ensure_arg_count(inst, "gettype", 1)?;
     let value = expect_operand(inst, 0)?;
     let ty = ctx.value_php_type(value)?;
+    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        emit_mixed_gettype(ctx, value)?;
+        return store_if_result(ctx, inst);
+    }
     let Some(type_name) = static_gettype_name(&ty) else {
         return Err(CodegenIrError::unsupported(format!(
             "gettype for PHP type {:?}",
@@ -371,6 +375,62 @@ fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()
     };
     emit_type_name_result(ctx, type_name);
     store_if_result(ctx, inst)
+}
+
+/// Emits `gettype()` for a boxed Mixed or Union payload by dispatching on runtime tags.
+fn emit_mixed_gettype(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let integer_case = ctx.next_label("gettype_mixed_integer");
+    let double_case = ctx.next_label("gettype_mixed_double");
+    let string_case = ctx.next_label("gettype_mixed_string");
+    let boolean_case = ctx.next_label("gettype_mixed_boolean");
+    let null_case = ctx.next_label("gettype_mixed_null");
+    let array_case = ctx.next_label("gettype_mixed_array");
+    let object_case = ctx.next_label("gettype_mixed_object");
+    let resource_case = ctx.next_label("gettype_mixed_resource");
+    let done = ctx.next_label("gettype_mixed_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_on_gettype_mixed_tag(ctx, 0, &integer_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 1, &string_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 2, &double_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 3, &boolean_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 4, &array_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 5, &array_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 6, &object_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 9, &resource_case);
+    abi::emit_jump(ctx.emitter, &null_case);
+
+    emit_mixed_gettype_case(ctx, &integer_case, b"integer", &done);
+    emit_mixed_gettype_case(ctx, &double_case, b"double", &done);
+    emit_mixed_gettype_case(ctx, &string_case, b"string", &done);
+    emit_mixed_gettype_case(ctx, &boolean_case, b"boolean", &done);
+    emit_mixed_gettype_case(ctx, &null_case, b"NULL", &done);
+    emit_mixed_gettype_case(ctx, &array_case, b"array", &done);
+    emit_mixed_gettype_case(ctx, &object_case, b"object", &done);
+    emit_mixed_gettype_case(ctx, &resource_case, b"resource", &done);
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Branches to a `gettype()` case when the unboxed Mixed runtime tag matches.
+fn emit_branch_on_gettype_mixed_tag(ctx: &mut FunctionContext<'_>, tag: u8, label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp x0, #{}", tag));              // compare the unboxed Mixed tag against this gettype() case
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // branch to the matching gettype() type-name case
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp rax, {}", tag));              // compare the unboxed Mixed tag against this gettype() case
+            ctx.emitter.instruction(&format!("je {}", label));                  // branch to the matching gettype() type-name case
+        }
+    }
+}
+
+/// Selects one static PHP type-name string and rejoins the `gettype()` dispatch.
+fn emit_mixed_gettype_case(ctx: &mut FunctionContext<'_>, label: &str, type_name: &[u8], done: &str) {
+    ctx.emitter.label(label);
+    emit_type_name_result(ctx, type_name);
+    abi::emit_jump(ctx.emitter, done);
 }
 
 /// Returns PHP's `gettype()` spelling for concrete statically known types.

@@ -229,7 +229,10 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         )));
     };
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
-    let overflow_bytes = materialize_direct_call_args(ctx, &inst.operands)?;
+    let mut param_types = Vec::with_capacity(target.params.len() + 1);
+    param_types.push(PhpType::Object(class_name));
+    param_types.extend(target.params.iter().map(|param| param.codegen_repr()));
+    let overflow_bytes = materialize_direct_call_args(ctx, &inst.operands, &param_types)?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &target.method_key));
@@ -258,8 +261,16 @@ fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, object_reg)?;
     let receiver_ty = PhpType::Object(class_name);
-    let overflow_bytes =
-        materialize_method_call_args_with_receiver_reg(ctx, object_reg, &receiver_ty, &inst.operands)?;
+    let mut param_types = Vec::with_capacity(target.params.len() + 1);
+    param_types.push(receiver_ty.clone());
+    param_types.extend(target.params.iter().map(|param| param.codegen_repr()));
+    let overflow_bytes = materialize_method_call_args_with_receiver_reg(
+        ctx,
+        object_reg,
+        &receiver_ty,
+        &inst.operands,
+        &param_types,
+    )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &target.method_key));
@@ -281,6 +292,7 @@ fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 struct MethodCallTarget {
     impl_class: String,
     method_key: String,
+    params: Vec<PhpType>,
     return_ty: PhpType,
 }
 
@@ -320,6 +332,11 @@ fn resolve_method_call_target(
     Ok(MethodCallTarget {
         impl_class,
         method_key,
+        params: callee_sig
+            .params
+            .iter()
+            .map(|(_, ty)| ty.codegen_repr())
+            .collect(),
         return_ty: callee_sig.return_type.clone(),
     })
 }
@@ -382,7 +399,12 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         .get(&method_key)
         .map(String::as_str)
         .unwrap_or(receiver.as_str());
-    let overflow_bytes = materialize_direct_call_args(ctx, &inst.operands)?;
+    let param_types = callee_sig
+        .params
+        .iter()
+        .map(|(_, ty)| ty.codegen_repr())
+        .collect::<Vec<_>>();
+    let overflow_bytes = materialize_direct_call_args(ctx, &inst.operands, &param_types)?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, &method_key));
@@ -457,7 +479,12 @@ fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             callee.params.len()
         )));
     }
-    let overflow_bytes = materialize_direct_call_args(ctx, &inst.operands)?;
+    let param_types = callee
+        .params
+        .iter()
+        .map(|param| param.php_type.codegen_repr())
+        .collect::<Vec<_>>();
+    let overflow_bytes = materialize_direct_call_args(ctx, &inst.operands, &param_types)?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_call_label(ctx.emitter, &function_symbol(&function_name));
@@ -477,18 +504,41 @@ fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
 }
 
 /// Loads SSA operands into ABI argument registers and caller-stack slots for a direct call.
-fn materialize_direct_call_args(ctx: &mut FunctionContext<'_>, args: &[ValueId]) -> Result<usize> {
-    let arg_types = args
-        .iter()
-        .map(|value| ctx.value_php_type(*value))
-        .collect::<Result<Vec<_>>>()?;
+pub(super) fn materialize_direct_call_args(
+    ctx: &mut FunctionContext<'_>,
+    args: &[ValueId],
+    param_types: &[PhpType],
+) -> Result<usize> {
+    if args.len() != param_types.len() {
+        return Err(CodegenIrError::invalid_module(format!(
+            "direct call materialization received {} args for {} params",
+            args.len(),
+            param_types.len()
+        )));
+    }
     let assignments =
-        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &arg_types, 0);
-    for (value, ty) in args.iter().zip(arg_types.iter()) {
-        ctx.load_value_to_result(*value)?;
-        abi::emit_push_result_value(ctx.emitter, ty);
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, param_types, 0);
+    for (value, param_ty) in args.iter().zip(param_types.iter()) {
+        let source_ty = ctx.load_value_to_result(*value)?;
+        let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+        abi::emit_push_result_value(ctx.emitter, &push_ty);
     }
     Ok(abi::materialize_outgoing_args(ctx.emitter, &assignments))
+}
+
+/// Converts the loaded call operand to the ABI shape required by the callee parameter.
+fn materialize_direct_call_arg_for_param(
+    ctx: &mut FunctionContext<'_>,
+    source_ty: &PhpType,
+    param_ty: &PhpType,
+) -> Result<PhpType> {
+    match param_ty.codegen_repr() {
+        PhpType::Mixed if source_ty.codegen_repr() != PhpType::Mixed => {
+            emit_box_current_value_as_mixed(ctx.emitter, &source_ty.codegen_repr());
+            Ok(PhpType::Mixed)
+        }
+        target_ty => Ok(target_ty),
+    }
 }
 
 /// Loads call arguments with an already-unboxed receiver as the first ABI argument.
@@ -497,23 +547,23 @@ fn materialize_method_call_args_with_receiver_reg(
     receiver_reg: &str,
     receiver_ty: &PhpType,
     operands: &[ValueId],
+    param_types: &[PhpType],
 ) -> Result<usize> {
-    let mut arg_types = Vec::with_capacity(operands.len());
-    arg_types.push(receiver_ty.clone());
-    arg_types.extend(
-        operands
-            .iter()
-            .skip(1)
-            .map(|value| ctx.value_php_type(*value))
-            .collect::<Result<Vec<_>>>()?,
-    );
+    if operands.len() != param_types.len() {
+        return Err(CodegenIrError::invalid_module(format!(
+            "method call materialization received {} operands for {} params",
+            operands.len(),
+            param_types.len()
+        )));
+    }
     let assignments =
-        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &arg_types, 0);
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, param_types, 0);
     move_reg_to_int_result(ctx, receiver_reg);
     abi::emit_push_result_value(ctx.emitter, receiver_ty);
-    for (value, ty) in operands.iter().skip(1).zip(arg_types.iter().skip(1)) {
-        ctx.load_value_to_result(*value)?;
-        abi::emit_push_result_value(ctx.emitter, ty);
+    for (value, param_ty) in operands.iter().skip(1).zip(param_types.iter().skip(1)) {
+        let source_ty = ctx.load_value_to_result(*value)?;
+        let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+        abi::emit_push_result_value(ctx.emitter, &push_ty);
     }
     Ok(abi::materialize_outgoing_args(ctx.emitter, &assignments))
 }

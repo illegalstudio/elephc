@@ -490,6 +490,49 @@ line2:The quick |brown fox:4142:AB"#,
     }
 }
 
+/// Verifies direct-call materialization boxes concrete values passed to `mixed` parameters.
+#[test]
+fn ir_backend_handles_gettype_for_mixed_parameters() {
+    let source = r#"<?php
+class A {}
+class Box {
+    public function show(mixed $x): string { return gettype($x); }
+    public static function stat(mixed $x): string { return gettype($x); }
+}
+class Constructed {
+    public function __construct(mixed $x) { echo gettype($x); }
+}
+function describe(mixed $x): string {
+    return gettype($x);
+}
+echo describe(42);
+echo "|";
+echo describe("s");
+echo "|";
+echo describe(null);
+echo "|";
+echo describe(true);
+echo "|";
+echo describe(1.5);
+echo "|";
+echo describe([1]);
+echo "|";
+$a = new A();
+echo describe($a);
+echo "|";
+$b = new Box();
+echo $b->show([1]);
+echo "|";
+echo Box::stat($b);
+echo "|";
+$c = new Constructed([1]);
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("gettype_mixed_parameters", source),
+        "integer|string|NULL|boolean|double|array|object|array|object|array"
+    );
+}
+
 /// Verifies `unset($local)` writes PHP null into local slots on the EIR backend.
 #[test]
 fn ir_backend_handles_unset_locals() {

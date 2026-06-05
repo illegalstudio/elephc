@@ -84,7 +84,12 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
                 .get(&constructor_key)
                 .cloned()
                 .unwrap_or_else(|| class_name.clone());
-            Some(impl_class)
+            let param_types = constructor
+                .params
+                .iter()
+                .map(|(_, ty)| ty.codegen_repr())
+                .collect::<Vec<_>>();
+            Some((impl_class, param_types))
         } else if !inst.operands.is_empty() {
             return Err(CodegenIrError::unsupported(format!(
                 "constructor arguments for class {} without __construct",
@@ -113,8 +118,16 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
         .ok_or_else(|| CodegenIrError::invalid_module("object_new missing result value"))?;
     ctx.store_result_value(result)?;
     emit_property_defaults(ctx, result, &property_defaults)?;
-    if let Some(impl_class) = constructor_impl {
-        emit_constructor_call(ctx, result, &inst.operands, &impl_class, &constructor_key)?;
+    if let Some((impl_class, param_types)) = constructor_impl {
+        emit_constructor_call(
+            ctx,
+            result,
+            &inst.operands,
+            &class_name,
+            &impl_class,
+            &constructor_key,
+            &param_types,
+        )?;
     }
     Ok(())
 }
@@ -213,13 +226,18 @@ fn emit_constructor_call(
     ctx: &mut FunctionContext<'_>,
     object: crate::ir::ValueId,
     constructor_args: &[crate::ir::ValueId],
+    class_name: &str,
     impl_class: &str,
     constructor_key: &str,
+    constructor_param_types: &[PhpType],
 ) -> Result<()> {
     let mut args = Vec::with_capacity(constructor_args.len() + 1);
     args.push(object);
     args.extend(constructor_args.iter().copied());
-    let overflow_bytes = materialize_direct_call_args(ctx, &args)?;
+    let mut param_types = Vec::with_capacity(constructor_param_types.len() + 1);
+    param_types.push(PhpType::Object(class_name.to_string()));
+    param_types.extend_from_slice(constructor_param_types);
+    let overflow_bytes = materialize_direct_call_args(ctx, &args, &param_types)?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_call_label(ctx.emitter, &method_symbol(impl_class, constructor_key));
