@@ -3587,6 +3587,33 @@ echo class_implements("MissingEirRelation") === false ? "false" : "bad";
     );
 }
 
+/// Verifies class attribute helper builtins materialize metadata arrays through EIR.
+#[test]
+fn ir_backend_handles_class_attribute_helper_builtins() {
+    let source = r#"<?php
+#[EirRoute("/api", 7, true, null), EirGuard("admin")]
+class EirAttributedController {}
+$names = class_attribute_names("EirAttributedController");
+echo count($names);
+echo ":";
+echo $names[0];
+echo ",";
+echo $names[1];
+echo ":";
+$args = class_attribute_args("EirAttributedController", "eirroute");
+echo count($args);
+echo ":";
+echo "[" . $args[0] . "]";
+echo "[" . $args[1] . "]";
+echo "[" . $args[2] . "]";
+echo "[" . $args[3] . "]";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("class_attribute_helper_builtins", source),
+        "2:EirRoute,EirGuard:4:[/api][7][1][]"
+    );
+}
+
 /// Verifies declared class/interface introspection arrays lower through the EIR backend.
 #[test]
 fn ir_backend_handles_declared_name_builtins() {

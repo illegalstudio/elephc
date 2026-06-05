@@ -20,13 +20,14 @@ use super::super::context::FunctionContext;
 use super::{expect_data, expect_operand, load_value_to_first_int_arg, predicates, store_if_result};
 use crate::codegen_ir::{CodegenIrError, Result};
 
-mod is_numeric;
+mod attributes;
 mod arrays;
 mod buffers;
 mod class_relations;
 mod ctype;
 mod debug;
 mod io;
+mod is_numeric;
 mod json;
 mod math;
 mod pointers;
@@ -229,6 +230,8 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "class_implements" | "class_parents" | "class_uses" => {
             class_relations::lower_class_relation(ctx, inst, key.as_str())
         }
+        "class_attribute_names" => attributes::lower_class_attribute_names(ctx, inst),
+        "class_attribute_args" => attributes::lower_class_attribute_args(ctx, inst),
         "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
             types::lower_get_declared_names(ctx, inst, key.as_str())
         }
