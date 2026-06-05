@@ -3423,6 +3423,38 @@ echo file_exists("empty.txt") ? "Y" : "N";
     );
 }
 
+/// Verifies `file_get_contents()` returns string contents and boxes failures as false.
+#[test]
+fn ir_backend_handles_file_get_contents() {
+    let source = r#"<?php
+file_put_contents("read.txt", "hello");
+echo file_get_contents("read.txt");
+echo ":";
+echo @file_get_contents("missing.txt");
+echo "after";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("file_get_contents", source),
+        "hello:after"
+    );
+
+    let missing = compile_ir_backend_and_run(
+        "file_get_contents_warning",
+        "<?php echo file_get_contents(\"missing.txt\"); echo \"after\";",
+        &[],
+    );
+    assert!(missing.status.success(), "IR backend missing-file fixture failed");
+    assert_eq!(
+        String::from_utf8(missing.stdout).expect("stdout should be utf8"),
+        "after"
+    );
+    let stderr = String::from_utf8(missing.stderr).expect("stderr should be utf8");
+    assert!(
+        stderr.contains("Warning: file_get_contents()"),
+        "expected file_get_contents warning, got stderr={stderr}"
+    );
+}
+
 /// Verifies global constant declarations, references, and `defined()` lowering.
 #[test]
 fn ir_backend_handles_global_constants_and_defined() {

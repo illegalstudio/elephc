@@ -124,6 +124,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "gettype" => lower_gettype(ctx, inst),
         "define" => lower_define(ctx, inst),
         "defined" => lower_defined(ctx, inst),
+        "file_get_contents" => io::lower_file_get_contents(ctx, inst),
         "file_put_contents" => io::lower_file_put_contents(ctx, inst),
         "file_exists" => io::lower_file_exists(ctx, inst),
         "is_file" => io::lower_is_file(ctx, inst),
