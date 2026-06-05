@@ -2170,6 +2170,13 @@ fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, args: &[Expr
 
 /// Lowers an expression call.
 fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, args: &[Expr], expr: &Expr) -> LoweredValue {
+    if let ExprKind::ArrayLiteral(items) = &callee.kind {
+        if let Some(StaticCallableTarget::StaticMethod { receiver, method }) =
+            static_array_callable_target(ctx, items)
+        {
+            return lower_static_method_call(ctx, &receiver, &method, args, expr);
+        }
+    }
     let mut operands = vec![lower_expr(ctx, callee).value];
     operands.extend(lower_args(ctx, args));
     ctx.emit_value(Op::ExprCall, operands, None, fallback_expr_type(expr), Op::ExprCall.default_effects(), Some(expr.span))

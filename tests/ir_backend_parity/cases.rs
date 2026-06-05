@@ -166,6 +166,23 @@ echo call_user_func_array(["eirstaticcallback", "JOIN"], ["right" => "R", "left"
 "#,
         &[],
     );
+    assert_backend_parity(
+        "static_method_array_expr_call",
+        r#"<?php
+class EirArrayExprCallback {
+    public static function hit(int $value): int {
+        return $value + 1;
+    }
+    public static function join(string $left, string $right): string {
+        return $left . ":" . $right;
+    }
+}
+echo (["EirArrayExprCallback", "hit"])(4);
+echo "|";
+echo ([EirArrayExprCallback::class, "join"])(left: "L", right: "R");
+"#,
+        &[],
+    );
 }
 
 /// Verifies reflection attribute owner metadata matches the legacy backend.
