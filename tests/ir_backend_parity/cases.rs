@@ -201,6 +201,18 @@ echo ("eir_direct_string_add")(4);
         &[],
     );
     assert_backend_parity(
+        "assignment_expression_callable_call",
+        r#"<?php
+function eir_assign_call_add(int $value): int {
+    return $value + 1;
+}
+echo ($fn = eir_assign_call_add(...))(4);
+echo "|";
+echo ($name = "eir_assign_call_add")(5);
+"#,
+        &[],
+    );
+    assert_backend_parity(
         "stored_first_class_callable_variable_call",
         r#"<?php
 function eir_stored_fcc_add(int $value): int {

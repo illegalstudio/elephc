@@ -2421,6 +2421,12 @@ fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, args: &[Exp
             return value;
         }
     }
+    if let Some(callback) = static_assignment_callable_target(ctx, callee) {
+        lower_expr(ctx, callee);
+        if let Some(value) = lower_static_callable_call(ctx, callback, args, expr) {
+            return value;
+        }
+    }
     if let ExprKind::ArrayLiteral(items) = &callee.kind {
         if let Some(StaticCallableBinding::StaticMethod { receiver, method }) =
             static_array_callable_target(ctx, items)
@@ -2431,6 +2437,20 @@ fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, args: &[Exp
     let mut operands = vec![lower_expr(ctx, callee).value];
     operands.extend(lower_args(ctx, args));
     ctx.emit_value(Op::ExprCall, operands, None, fallback_expr_type(expr), Op::ExprCall.default_effects(), Some(expr.span))
+}
+
+/// Resolves an assignment-expression callee whose assigned value is a static callable.
+fn static_assignment_callable_target(
+    ctx: &LoweringContext<'_, '_>,
+    callee: &Expr,
+) -> Option<StaticCallableBinding> {
+    let ExprKind::Assignment { target, value, .. } = &callee.kind else {
+        return None;
+    };
+    if !matches!(target.kind, ExprKind::Variable(_)) {
+        return None;
+    }
+    static_callable_binding_for_expr(ctx, value)
 }
 
 /// Lowers direct invocation of a literal first-class callable target.
