@@ -1679,6 +1679,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "is_readable" | "is_writeable" | "is_writable" => Some(PhpType::Bool),
         "date" => Some(PhpType::Str),
         "microtime" => Some(PhpType::Float),
+        "clearstatcache" => Some(PhpType::Void),
         "printf" | "array_rand" | "array_unshift" | "file_put_contents" | "filemtime"
         | "filesize" | "mktime" | "sleep" | "strtotime" | "time" => Some(PhpType::Int),
         "usleep" => Some(PhpType::Void),

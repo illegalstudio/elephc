@@ -133,6 +133,20 @@ pub(super) fn lower_filetype(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `clearstatcache(...)` as an ordered no-op after EIR operand evaluation.
+pub(super) fn lower_clearstatcache(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() > 2 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "clearstatcache expected at most 2 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `is_file(path)` through the target-aware runtime stat helper.
 pub(super) fn lower_is_file(
     ctx: &mut FunctionContext<'_>,

@@ -3544,6 +3544,25 @@ echo filetype("missing.txt") === false ? "false" : "string";
     assert_eq!(out, "file:dir:false");
 }
 
+/// Verifies `clearstatcache()` is a no-op that still evaluates supplied arguments.
+#[test]
+fn ir_backend_handles_clearstatcache() {
+    let source = r#"<?php
+function marker(): bool {
+    echo "arg|";
+    return true;
+}
+clearstatcache();
+echo "noop|";
+clearstatcache(marker(), "foo.txt");
+echo "ok";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("clearstatcache", source),
+        "noop|arg|ok"
+    );
+}
+
 /// Verifies global constant declarations, references, and `defined()` lowering.
 #[test]
 fn ir_backend_handles_global_constants_and_defined() {
