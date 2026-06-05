@@ -183,6 +183,36 @@ echo $stat(5);
 "#,
         &[],
     );
+    assert_backend_parity(
+        "stored_first_class_callable_call_user_func",
+        r#"<?php
+function eir_stored_cuf_add(int $value): int {
+    return $value + 1;
+}
+function eir_stored_cuf_join(string $left, string $right): string {
+    return $left . ":" . $right;
+}
+class EirStoredCuf {
+    public static function hit(int $value): int {
+        return $value + 2;
+    }
+}
+$fn = eir_stored_cuf_add(...);
+echo call_user_func($fn, 4);
+echo "|";
+echo call_user_func_array($fn, [6]);
+echo "|";
+$join = eir_stored_cuf_join(...);
+echo call_user_func_array($join, ["right" => "R", "left" => "L"]);
+echo "|";
+$len = strlen(...);
+echo call_user_func($len, "abcd");
+echo "|";
+$stat = EirStoredCuf::hit(...);
+echo call_user_func($stat, 5);
+"#,
+        &[],
+    );
 }
 
 /// Verifies static method callback forms lower to the same direct calls as legacy codegen.

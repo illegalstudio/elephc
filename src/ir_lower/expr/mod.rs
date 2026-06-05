@@ -952,6 +952,7 @@ fn static_call_user_func_callback(
         ExprKind::FirstClassCallable(CallableTarget::StaticMethod { receiver, method }) => {
             resolve_static_method_callable(ctx, receiver.clone(), method.clone())
         }
+        ExprKind::Variable(name) => ctx.static_callable_local(name),
         ExprKind::ArrayLiteral(items) => static_array_callable_target(ctx, items),
         _ => None,
     }
