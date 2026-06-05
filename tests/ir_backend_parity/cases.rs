@@ -364,6 +364,34 @@ echo $stat[0]; echo ":"; echo $stat[1];
     );
 }
 
+/// Verifies static `array_filter()` string callbacks use the runtime helper like legacy codegen.
+#[test]
+fn parity_static_array_filter_callbacks() {
+    assert_backend_parity(
+        "static_array_filter_callbacks",
+        r#"<?php
+function eir_filter_odd(int $value): bool {
+    return ($value % 2) === 1;
+}
+function eir_filter_key(int $key): bool {
+    return $key === 1;
+}
+function eir_filter_both(int $value, int $key): bool {
+    return $value > 2 && $key < 3;
+}
+$odd = array_filter([1, 2, 3, 4], "eir_filter_odd");
+echo count($odd); echo ":"; echo $odd[0]; echo ":"; echo $odd[1];
+echo "|";
+$keyed = array_filter([7, 8, 9], "eir_filter_key", ARRAY_FILTER_USE_KEY);
+echo count($keyed); echo ":"; echo $keyed[0];
+echo "|";
+$both = array_filter([1, 3, 4, 2], "eir_filter_both", ARRAY_FILTER_USE_BOTH);
+echo count($both); echo ":"; echo $both[0]; echo ":"; echo $both[1];
+"#,
+        &[],
+    );
+}
+
 /// Verifies static `array_reduce()` callback forms over immediate indexed literals match legacy output.
 #[test]
 fn parity_static_array_reduce_callbacks() {

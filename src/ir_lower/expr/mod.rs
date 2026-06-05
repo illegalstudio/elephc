@@ -1970,9 +1970,8 @@ fn array_builtin_return_type(
         "array_flip" => array_flip_builtin_return_type(ctx, operands),
         "array_fill_keys" => array_fill_keys_builtin_return_type(ctx, operands),
         "array_merge" => array_merge_builtin_return_type(ctx, operands),
-        "array_diff" | "array_intersect" | "array_diff_key" | "array_intersect_key" => {
-            array_preserve_first_builtin_return_type(ctx, operands)
-        }
+        "array_filter" | "array_diff" | "array_intersect" | "array_diff_key"
+        | "array_intersect_key" => array_preserve_first_builtin_return_type(ctx, operands),
         "range" => Some(PhpType::Array(Box::new(PhpType::Int))),
         "array_values" => {
             let array = operands.first()?;

@@ -14,6 +14,7 @@ use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
+use crate::names::function_symbol;
 use crate::types::{array_key_type_from_value_type, PhpType};
 
 use super::super::super::context::FunctionContext;
@@ -161,6 +162,49 @@ pub(super) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instructi
         ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the dedup helper argument
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_unique");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `array_filter()` for static string callbacks by reusing the legacy runtime helper.
+pub(super) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "array_filter", 2, 3)?;
+    let array = expect_operand(inst, 0)?;
+    let callback = expect_operand(inst, 1)?;
+    let mode = if inst.operands.len() == 3 {
+        const_i64_operand(ctx, expect_operand(inst, 2)?, "array_filter mode")?
+    } else {
+        0
+    };
+    let elem_ty = array_filter_source_element_type(ctx.value_php_type(array)?)?;
+    require_array_filter_result_type(&elem_ty, &inst.result_php_type.codegen_repr())?;
+    let callback_name = const_string_operand(ctx, callback, "array_filter callback")?;
+    let callee = ctx.callable_function_by_name(&callback_name).ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
+            "array_filter callback '{}' is not a user function",
+            callback_name
+        ))
+    })?;
+    let callback_label = function_symbol(&callee.name);
+    let runtime_label = if array_filter_uses_refcounted_runtime(&elem_ty) {
+        "__rt_array_filter_refcounted"
+    } else {
+        "__rt_array_filter"
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x0", &callback_label);
+            ctx.load_value_to_reg(array, "x1")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x2", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "x3", mode);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &callback_label);
+            ctx.load_value_to_reg(array, "rsi")?;
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", mode);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, runtime_label);
     store_if_result(ctx, inst)
 }
 
@@ -583,6 +627,118 @@ fn require_supported_indexed_array(ty: PhpType, name: &str) -> Result<()> {
             other
         ))),
     }
+}
+
+/// Returns the indexed-array element type supported by the current filter runtime helpers.
+fn array_filter_source_element_type(ty: PhpType) -> Result<PhpType> {
+    match ty.codegen_repr() {
+        PhpType::Array(elem) => {
+            let elem = elem.codegen_repr();
+            if matches!(
+                elem,
+                PhpType::Int | PhpType::Bool | PhpType::Str | PhpType::Void | PhpType::Never
+            ) {
+                return Ok(elem);
+            }
+            Err(CodegenIrError::unsupported(format!(
+                "array_filter indexed-array element PHP type {:?}",
+                elem
+            )))
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_filter for PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Verifies the filtered result preserves the source element type metadata.
+fn require_array_filter_result_type(source_elem_ty: &PhpType, result_ty: &PhpType) -> Result<()> {
+    match result_ty {
+        PhpType::Array(elem)
+            if elem.codegen_repr() == source_elem_ty.codegen_repr()
+                || matches!(source_elem_ty, PhpType::Never | PhpType::Void) =>
+        {
+            Ok(())
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_filter result PHP type {:?} for source element PHP type {:?}",
+            other,
+            source_elem_ty
+        ))),
+    }
+}
+
+/// Returns true when filtering should preserve/copy refcounted payload slots.
+fn array_filter_uses_refcounted_runtime(elem_ty: &PhpType) -> bool {
+    elem_ty.is_refcounted() || matches!(elem_ty.codegen_repr(), PhpType::Str)
+}
+
+/// Returns a string literal operand attached to a `ConstStr` instruction.
+fn const_string_operand(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    owner: &str,
+) -> Result<String> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} with non-literal string operand",
+            owner
+        )));
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+    };
+    if inst_ref.op != Op::ConstStr {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} with non-literal string operand",
+            owner
+        )));
+    }
+    let Some(Immediate::Data(data)) = inst_ref.immediate.as_ref() else {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} string literal has no data id",
+            owner
+        )));
+    };
+    ctx.module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .cloned()
+        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
+}
+
+/// Returns an integer literal operand attached to a `ConstI64` instruction.
+fn const_i64_operand(ctx: &FunctionContext<'_>, value: ValueId, owner: &str) -> Result<i64> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} with non-literal integer operand",
+            owner
+        )));
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+    };
+    if inst_ref.op != Op::ConstI64 {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} with non-literal integer operand",
+            owner
+        )));
+    }
+    let Some(Immediate::I64(value)) = inst_ref.immediate.as_ref() else {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} integer literal has no immediate value",
+            owner
+        )));
+    };
+    Ok(*value)
 }
 
 /// Returns the element type accepted by indexed-array value set-operation helpers.
