@@ -2906,6 +2906,25 @@ fn ir_backend_handles_indexed_array_set_operations() {
     }
 }
 
+/// Verifies associative-array key set operations return the expected filtered hash entries.
+#[test]
+fn ir_backend_handles_assoc_array_key_set_operations() {
+    for (name, source, expected) in [
+        (
+            "array_diff_key_assoc_strings",
+            "<?php $a = ['a' => '1', 'b' => '2']; $b = ['a' => '9']; $c = array_diff_key($a, $b); echo count($c); echo ':'; echo $c['b']; echo ':'; echo array_key_exists('a', $c) ? 'bad' : 'ok';",
+            "1:2:ok",
+        ),
+        (
+            "array_intersect_key_assoc_strings",
+            "<?php $a = ['a' => '1', 'b' => '2']; $b = ['a' => '9']; $c = array_intersect_key($a, $b); echo count($c); echo ':'; echo $c['a']; echo ':'; echo array_key_exists('b', $c) ? 'bad' : 'ok';",
+            "1:1:ok",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies indexed-array `array_values()` returns an alias that still observes COW on writes.
 #[test]
 fn ir_backend_handles_indexed_array_values() {

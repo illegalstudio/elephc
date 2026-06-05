@@ -1,6 +1,6 @@
 //! Purpose:
-//! Lowers small indexed-array builtins for the EIR backend.
-//! Delegates aggregate iteration and key-existence checks to existing runtime helpers.
+//! Lowers small indexed-array and associative-array builtins for the EIR backend.
+//! Delegates aggregate iteration, set operations, and key checks to existing runtime helpers.
 //!
 //! Called from:
 //! - `crate::codegen_ir::lower_inst::builtins::lower_builtin_call()`.
@@ -8,7 +8,7 @@
 //! Key details:
 //! - Aggregate helpers only accept indexed arrays with non-float scalar slots
 //!   because they read 8-byte integer payloads directly.
-//! - Indexed key existence reads only the array header, so element payload type is irrelevant.
+//! - Associative key filters require hash operands because their runtime helpers copy hash entries.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -208,6 +208,16 @@ pub(super) fn lower_array_intersect(ctx: &mut FunctionContext<'_>, inst: &Instru
         "__rt_array_intersect",
         "__rt_array_intersect_refcounted",
     )
+}
+
+/// Lowers `array_diff_key()` for two associative arrays by filtering first-operand keys.
+pub(super) fn lower_array_diff_key(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_assoc_array_key_set_op(ctx, inst, "array_diff_key", "__rt_array_diff_key")
+}
+
+/// Lowers `array_intersect_key()` for two associative arrays by keeping shared first-operand keys.
+pub(super) fn lower_array_intersect_key(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_assoc_array_key_set_op(ctx, inst, "array_intersect_key", "__rt_array_intersect_key")
 }
 
 /// Lowers `array_slice()` for indexed arrays with pointer-sized payload slots.
@@ -435,6 +445,33 @@ fn lower_indexed_array_set_op(
     store_if_result(ctx, inst)
 }
 
+/// Calls a key set-operation helper after validating associative-array hash operands.
+fn lower_assoc_array_key_set_op(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    helper: &str,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 2)?;
+    let first = expect_operand(inst, 0)?;
+    let second = expect_operand(inst, 1)?;
+    let first_ty = assoc_array_key_set_operand_type(ctx.value_php_type(first)?, name, "first")?;
+    let _second_ty = assoc_array_key_set_operand_type(ctx.value_php_type(second)?, name, "second")?;
+    require_assoc_array_key_set_result_type(name, &first_ty, &inst.result_php_type.codegen_repr())?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(first, "x0")?;
+            ctx.load_value_to_reg(second, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(first, "rdi")?;
+            ctx.load_value_to_reg(second, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, helper);
+    store_if_result(ctx, inst)
+}
+
 /// Calls a mutating indexed-array sort helper after copy-on-write splitting.
 fn lower_indexed_array_sort(
     ctx: &mut FunctionContext<'_>,
@@ -606,6 +643,32 @@ fn require_set_op_result_type(name: &str, first_elem_ty: &PhpType, result_ty: &P
             first_elem_ty
         ))),
     }
+}
+
+/// Returns the hash operand type accepted by key set-operation helpers.
+fn assoc_array_key_set_operand_type(ty: PhpType, name: &str, position: &str) -> Result<PhpType> {
+    match ty.codegen_repr() {
+        PhpType::AssocArray { key, value } => Ok(PhpType::AssocArray { key, value }),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} {} argument PHP type {:?}",
+            name, position, other
+        ))),
+    }
+}
+
+/// Verifies a key set-operation result preserves the first operand's hash metadata.
+fn require_assoc_array_key_set_result_type(
+    name: &str,
+    first_ty: &PhpType,
+    result_ty: &PhpType,
+) -> Result<()> {
+    if result_ty == first_ty {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "{} result PHP type {:?} for first argument PHP type {:?}",
+        name, result_ty, first_ty
+    )))
 }
 
 /// Verifies a builtin can use scalar indexed-array helpers with 8-byte slots.
