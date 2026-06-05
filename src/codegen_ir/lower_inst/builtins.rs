@@ -13,6 +13,7 @@ use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::codegen::platform::Arch;
 use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::names::{define_seen_symbol, ir_global_symbol, php_symbol_key};
+use crate::parser::ast::Visibility;
 use crate::types::checker::builtins::canonical_builtin_function_name;
 use crate::types::PhpType;
 
@@ -660,12 +661,11 @@ fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         PhpType::Callable => emit_static_bool(ctx, true),
         PhpType::Str => {
             let function_name = const_string_operand(ctx, value)?;
-            if function_name.contains("::") {
-                return Err(CodegenIrError::unsupported(
-                    "is_callable static-method string lookup",
-                ));
+            if let Some((class_name, method_name)) = function_name.rsplit_once("::") {
+                emit_static_bool(ctx, static_method_string_is_callable(ctx, class_name, method_name));
+            } else {
+                emit_static_bool(ctx, callable_name_exists(ctx, &function_name));
             }
-            emit_static_bool(ctx, callable_name_exists(ctx, &function_name));
         }
         PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Void | PhpType::Never => {
             emit_static_bool(ctx, false);
@@ -678,6 +678,28 @@ fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Returns true when a static `Class::method` string names a public static method.
+fn static_method_string_is_callable(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    method_name: &str,
+) -> bool {
+    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+    let Some((_, class_info)) = ctx.module.class_infos.iter().find(|(candidate, _)| {
+        php_symbol_key(candidate.trim_start_matches('\\')) == class_key
+    }) else {
+        return false;
+    };
+    let method_key = php_symbol_key(method_name);
+    if !class_info.static_methods.contains_key(&method_key) {
+        return false;
+    }
+    matches!(
+        class_info.static_method_visibilities.get(&method_key),
+        Some(Visibility::Public) | None
+    )
 }
 
 /// Emits a runtime check for whether an include-loaded function variant is active.

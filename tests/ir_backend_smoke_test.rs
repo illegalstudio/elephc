@@ -4735,6 +4735,30 @@ fn ir_backend_handles_static_is_callable_checks() {
     );
 }
 
+/// Verifies is_callable() resolves static `Class::method` strings without runtime dispatch.
+#[test]
+fn ir_backend_handles_static_method_string_is_callable_checks() {
+    let source = r#"<?php
+class EirCallableBox {
+    public static function hit(): int { return 1; }
+    private static function hidden(): int { return 2; }
+}
+echo is_callable("EirCallableBox::hit") ? "yes" : "no";
+echo ":";
+echo is_callable("eircallablebox::HIT") ? "yes" : "no";
+echo ":";
+echo is_callable("EirCallableBox::missing") ? "yes" : "no";
+echo ":";
+echo is_callable("MissingCallableBox::hit") ? "yes" : "no";
+echo ":";
+echo is_callable("EirCallableBox::hidden") ? "yes" : "no";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("is_callable_static_method_string", source),
+        "yes:yes:no:no:no"
+    );
+}
+
 /// Verifies static-string callback dispatch lowers to direct EIR calls.
 #[test]
 fn ir_backend_handles_static_string_call_user_func() {
