@@ -60,6 +60,13 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("mov x10, #1");                                         // ordinary deep-free walks suppress nested collector runs
     emitter.instruction("str x10, [x9]");                                       // store release-suppressed = 1 for child cleanup
 
+    // -- run the class's PHP __destruct (if any) before releasing properties --
+    // The receiver is still fully constructed here; the helper resolves the
+    // destructor from the object's class_id and runs it with $this borrowed.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer for the destructor call
+    emitter.instruction("bl __rt_call_object_destructor");                      // run the class's __destruct hook if one is declared
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer after the destructor returns
+
     // -- Fiber special case: release the per-fiber stack before the standard struct free path --
     // The Fiber object has zero declared PHP properties. Its payload past the class_id is made
     // of runtime-managed fields, not Mixed/array/string slots, so walking those bytes through
@@ -287,6 +294,13 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the object pointer across nested helper calls while releasing properties
     crate::codegen::abi::emit_symbol_address(emitter, "r10", "_gc_release_suppressed");
     emitter.instruction("mov QWORD PTR [r10], 1");                              // suppress nested collector runs while this object deep-free walk releases property payloads
+
+    // -- run the class's PHP __destruct (if any) before releasing properties --
+    // The receiver is still fully constructed here; the helper resolves the
+    // destructor from the object's class_id and runs it with $this borrowed.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // load the object pointer as $this for the destructor call
+    emitter.instruction("call __rt_call_object_destructor");                    // run the class's __destruct hook if one is declared
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer after the destructor returns
 
     // -- Fiber special case: release the per-fiber stack before the standard struct free path --
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // r10 = receiver class_id

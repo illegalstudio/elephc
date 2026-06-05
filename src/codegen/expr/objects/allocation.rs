@@ -193,14 +193,32 @@ pub(super) fn emit_new_object_core(
         if let Some(default_expr) = &class_info.defaults[i] {
             let default_expr = default_expr.clone();
             let offset = 8 + i * 16;
-            let actual_ty = emit_expr(&default_expr, emitter, ctx, data);
             let prop_name = &class_info.properties[i].0;
             let expected_ty = class_info.properties[i].1.clone();
-            let prop_ty = if class_info.declared_properties.contains(prop_name) {
-                coerce_result_to_type(emitter, ctx, data, &actual_ty, &expected_ty);
-                expected_ty
+            // An array-literal default whose refined property type is associative
+            // must be stored as hash storage (tag 5). `emit_expr` lowers `[]` (and
+            // positional literals) to an indexed-list array; later string-keyed
+            // writes then desync from that storage, so reads after the array is
+            // copied out or returned from a method miss the keys (they decode to the
+            // null sentinel). This mirrors the property-assignment path, where the
+            // same rewrite already runs.
+            let prop_ty = if let Some(assoc_ty) =
+                crate::codegen::expr::arrays::emit_array_literal_as_assoc_target(
+                    &default_expr,
+                    &expected_ty,
+                    emitter,
+                    ctx,
+                    data,
+                ) {
+                assoc_ty
             } else {
-                actual_ty
+                let actual_ty = emit_expr(&default_expr, emitter, ctx, data);
+                if class_info.declared_properties.contains(prop_name) {
+                    coerce_result_to_type(emitter, ctx, data, &actual_ty, &expected_ty);
+                    expected_ty
+                } else {
+                    actual_ty
+                }
             };
             let object_reg = abi::symbol_scratch_reg(emitter);
             match emitter.target.arch {

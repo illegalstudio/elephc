@@ -100,8 +100,10 @@ pub(crate) fn emit_property_assign_stmt(
     }
 
     let mut val_ty = if let Some(target_ty) = declared_target_ty.as_ref() {
-        emit_indexed_literal_as_assoc_property_target(value, target_ty, emitter, ctx, data)
-            .unwrap_or_else(|| emit_expr(value, emitter, ctx, data))
+        crate::codegen::expr::arrays::emit_array_literal_as_assoc_target(
+            value, target_ty, emitter, ctx, data,
+        )
+        .unwrap_or_else(|| emit_expr(value, emitter, ctx, data))
     } else {
         emit_expr(value, emitter, ctx, data)
     };
@@ -192,52 +194,6 @@ pub(crate) fn emit_property_assign_stmt(
     }
 
     storage::store_property_value(emitter, object_reg, &val_ty, target.offset);
-}
-
-/// Rewrites a bare array literal as an `AssocArray` literal when assigning to
-/// a `T[string]:mixed` typed property. Converts positional integer keys `0..N`
-/// to explicit `0 => elem, 1 => elem, ...` pairs so the associative emitter
-/// can normalize string keys. Returns `None` if the value is not an array literal
-/// or the target type is not an associative array; in that case the caller falls
-/// back to ordinary expression emission.
-fn emit_indexed_literal_as_assoc_property_target(
-    value: &Expr,
-    target_ty: &PhpType,
-    emitter: &mut Emitter,
-    ctx: &mut Context,
-    data: &mut DataSection,
-) -> Option<PhpType> {
-    let ExprKind::ArrayLiteral(elems) = &value.kind else {
-        return None;
-    };
-    let PhpType::AssocArray {
-        key: target_key_ty,
-        value: target_value_ty,
-    } = target_ty
-    else {
-        return None;
-    };
-    if elems.is_empty() {
-        return Some(crate::codegen::expr::arrays::emit_empty_assoc_array_literal(
-            *target_key_ty.clone(),
-            *target_value_ty.clone(),
-            emitter,
-        ));
-    }
-
-    let pairs: Vec<(Expr, Expr)> = elems
-        .iter()
-        .enumerate()
-        .map(|(idx, elem)| {
-            (
-                Expr::new(ExprKind::IntLiteral(idx as i64), elem.span),
-                elem.clone(),
-            )
-        })
-        .collect();
-    Some(crate::codegen::expr::arrays::emit_assoc_array_literal(
-        &pairs, emitter, ctx, data,
-    ))
 }
 
 /// Returns `true` when the receiver expression's inferred type is `stdClass`.

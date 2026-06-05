@@ -168,6 +168,26 @@ fn test_error_magic_set_must_be_public() {
     );
 }
 
+/// Verifies that a `static` `__destruct` reports
+/// "Magic method must be non-static: Conn::__destruct".
+#[test]
+fn test_error_magic_destruct_must_be_non_static() {
+    expect_error(
+        "<?php class Conn { public static function __destruct() { } }",
+        "Magic method must be non-static: Conn::__destruct",
+    );
+}
+
+/// Verifies that `__destruct` declared with a parameter reports
+/// "Magic method must take 0 arguments: Conn::__destruct".
+#[test]
+fn test_error_magic_destruct_must_take_zero_arguments() {
+    expect_error(
+        "<?php class Conn { public function __destruct($x) { } }",
+        "Magic method must take 0 arguments: Conn::__destruct",
+    );
+}
+
 /// Verifies that `__set` with only one parameter reports
 /// "Magic method must take 2 arguments: Bag::__set".
 #[test]

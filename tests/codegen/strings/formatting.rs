@@ -207,3 +207,18 @@ fclose($f);
     );
     assert_eq!(out, "age is 42 (3.5)|1-2-3|a/b|[x=7]|n=6|f=9:z|m=3");
 }
+
+/// `printf()` returns the number of bytes written, matching PHP. Regression for
+/// an x86_64-specific bug where the byte count was parked in `rcx` across the
+/// `write` syscall — which the `syscall` instruction clobbers — so the return
+/// value was garbage on x86_64 while correct on ARM64.
+#[test]
+fn test_printf_returns_byte_count() {
+    let out = compile_and_run(
+        r#"<?php
+$n = printf("[%s=%d]", "x", 42);
+echo "|n=" . $n;
+"#,
+    );
+    assert_eq!(out, "[x=42]|n=6");
+}

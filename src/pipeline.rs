@@ -17,7 +17,7 @@ use crate::cli::CliConfig;
 use crate::timings::CompileTimings;
 use crate::{
     autoload, codegen, conditional, errors, lexer, linker, magic_constants, name_resolver,
-    optimize, parser, resolver, runtime_cache, source_map, types,
+    optimize, parser, pdo_prelude, resolver, runtime_cache, source_map, types,
 };
 
 /// Holds the paths for all compilation output files (assembly, object, binary, source map).
@@ -107,6 +107,14 @@ pub(crate) fn compile(config: CliConfig) {
     };
     let ast = autoload::collect_aliases(ast);
     timings.record_since("resolve", phase_started);
+
+    // Inject the PDO standard-library prelude (extern bridge + PDO classes,
+    // written in elephc-PHP) only when the program references PDO, so non-PDO
+    // binaries never declare the elephc_pdo externs or link the bridge.
+    // Runs after include resolution so PDO usage inside includes is detected.
+    let phase_started = Instant::now();
+    let ast = pdo_prelude::inject_if_used(ast);
+    timings.record_since("pdo-prelude", phase_started);
 
     let phase_started = Instant::now();
     let ast = match name_resolver::resolve(ast) {

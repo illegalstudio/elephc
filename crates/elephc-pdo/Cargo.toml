@@ -1,0 +1,43 @@
+[package]
+name = "elephc-pdo"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Multi-driver database bridge staticlib (SQLite + PostgreSQL) for the elephc PHP-to-native compiler's PDO support"
+
+# Built as both a C-callable staticlib (linked into compiled PHP programs that
+# use PDO) and an rlib (so the bridge can be unit-tested from Rust via
+# `cargo test -p elephc-pdo`). Mirrors crates/elephc-tls.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# `bundled` compiles the SQLite amalgamation into the staticlib, so compiled
+# PHP binaries stay standalone (no system -lsqlite3 runtime dependency). Cost:
+# a C compile of sqlite at crate build time (cc is already required to build
+# elephc's runtime objects).
+libsqlite3-sys = { version = "0.30", features = ["bundled"] }
+# The synchronous, pure-Rust PostgreSQL client (no system libpq), so compiled
+# PHP binaries stay standalone. Connects to a running PostgreSQL server over
+# TCP/Unix sockets when a `pgsql:` DSN is opened. The `with-*` features add the
+# FromSql decoders for date/time, json, and uuid columns so the driver can read
+# those types back as their PHP-string representation.
+postgres = { version = "0.19", features = [
+    "with-chrono-0_4",
+    "with-serde_json-1",
+    "with-uuid-1",
+] }
+# Type crates named directly in the column decoder (the postgres features above
+# only wire up the FromSql impls). rust_decimal's `db-postgres` feature adds the
+# numeric/decimal FromSql impl (postgres has no built-in one).
+chrono = "0.4"
+serde_json = "1"
+uuid = "1"
+rust_decimal = { version = "1", features = ["db-postgres"] }
+# The synchronous, pure-Rust MySQL/MariaDB client. `default-features = false` with
+# `minimal-rust` drops the optional TLS backends and selects flate2's pure-Rust
+# (miniz_oxide) deflate backend instead of the C `zlib` one, so the staticlib has
+# no `libz` dependency and compiled PHP binaries stay fully standalone (no system
+# DB client, no `-lz`) while keeping the binary wire protocol and prepared
+# statements this driver needs.
+mysql = { version = "25", default-features = false, features = ["minimal-rust"] }

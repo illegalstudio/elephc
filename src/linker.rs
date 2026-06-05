@@ -48,6 +48,15 @@ pub(crate) fn link(
 ) {
     let needs_elephc_tls = extra_link_libs.iter().any(|l| l == "elephc_tls");
     let elephc_tls_dir = needs_elephc_tls.then(elephc_tls_lib_dir).flatten();
+    // The PDO bridge staticlib (SQLite + PostgreSQL) is not a system library:
+    // locate libelephc_pdo.a so its directory can be added to the linker search
+    // path and, on Linux, link -ldl for the Rust staticlib's runtime symbols.
+    let needs_elephc_pdo = extra_link_libs.iter().any(|l| l == "elephc_pdo");
+    let elephc_pdo_dir = if needs_elephc_pdo {
+        find_staticlib_dir("ELEPHC_PDO_LIB_DIR", "libelephc_pdo.a")
+    } else {
+        None
+    };
 
     let mut ld_cmd = match target.platform {
         Platform::MacOS => {
@@ -73,13 +82,16 @@ pub(crate) fn link(
                 cmd.arg("-Wl,--no-as-needed");
             }
             cmd.args(["-lm", "-lpthread"]);
-            if needs_elephc_tls {
+            if needs_elephc_tls || needs_elephc_pdo {
                 cmd.arg("-ldl");
             }
             cmd
         }
     };
     if let Some(dir) = elephc_tls_dir.as_deref() {
+        ld_cmd.arg(format!("-L{}", dir));
+    }
+    if let Some(dir) = elephc_pdo_dir.as_deref() {
         ld_cmd.arg(format!("-L{}", dir));
     }
     if target.platform == Platform::MacOS && !extra_link_libs.is_empty() {
@@ -117,6 +129,13 @@ pub(crate) fn link(
     if target.platform == Platform::MacOS {
         for fw in extra_frameworks {
             ld_cmd.args(["-framework", fw]);
+        }
+        // The PostgreSQL driver in the PDO bridge pulls in `whoami` (to default
+        // the connection user), which references CoreFoundation /
+        // SystemConfiguration on macOS. Link them whenever the bridge is used.
+        if needs_elephc_pdo {
+            ld_cmd.args(["-framework", "CoreFoundation"]);
+            ld_cmd.args(["-framework", "SystemConfiguration"]);
         }
     }
     run_tool("Linker", &mut ld_cmd);
@@ -207,6 +226,36 @@ fn build_elephc_tls_staticlib(workspace: &Path) {
         cmd.arg("--release");
     }
     let _ = cmd.current_dir(workspace).status();
+}
+
+/// Locates the directory holding a non-system bridge staticlib (e.g.
+/// `libelephc_pdo.a`) for programs that use it. Honours the given env var
+/// first (e.g. `ELEPHC_PDO_LIB_DIR`), then the directory of the running
+/// `elephc` binary and its parent (so `target/<profile>/deps/` test binaries
+/// resolve to `target/<profile>/`), then a cwd-relative `target/debug` and
+/// `target/release` fallback for `cargo test` / `cargo run`.
+fn find_staticlib_dir(env_var: &str, lib_filename: &str) -> Option<String> {
+    if let Ok(env_dir) = std::env::var(env_var) {
+        if !env_dir.is_empty() {
+            return Some(env_dir);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        for cand_dir in [exe.parent(), exe.parent().and_then(|p| p.parent())]
+            .into_iter()
+            .flatten()
+        {
+            if cand_dir.join(lib_filename).exists() {
+                return Some(cand_dir.display().to_string());
+            }
+        }
+    }
+    for rel in ["target/debug", "target/release"] {
+        if Path::new(rel).join(lib_filename).exists() {
+            return Some(rel.to_string());
+        }
+    }
+    None
 }
 
 /// Returns the macOS SDK path by running `xcrun --show-sdk-path`.

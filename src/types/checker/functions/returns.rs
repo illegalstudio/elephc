@@ -432,4 +432,25 @@ impl Checker {
             _ => PhpType::Mixed,
         }
     }
+
+    /// Unions two inferred parameter types for call-site specialization: identical
+    /// types stay, `Void`/`Never` are absorbed by the other type, and any genuine
+    /// disagreement widens to `Mixed`. Unlike `wider_type` (which lets `Str`/`Float`
+    /// absorb other scalars for coercion), this preserves the distinction between
+    /// scalar tags, so a parameter called with both an int and a string is `Mixed`
+    /// (boxed) rather than collapsed to one type and mis-tagged at runtime.
+    pub(crate) fn union_param_type(a: &PhpType, b: &PhpType) -> PhpType {
+        match (a, b) {
+            _ if a == b => a.clone(),
+            (PhpType::Void | PhpType::Never, other) | (other, PhpType::Void | PhpType::Never) => {
+                other.clone()
+            }
+            // An object parameter called with various concrete subtypes keeps its
+            // object type (e.g. a `Throwable` param invoked with a concrete
+            // exception) instead of widening to `Mixed`, which would break
+            // object-typed dispatch (`Fiber::throw` / `Generator::throw`).
+            (PhpType::Object(_), PhpType::Object(_)) => a.clone(),
+            _ => PhpType::Mixed,
+        }
+    }
 }

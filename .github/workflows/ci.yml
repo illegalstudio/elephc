@@ -28,12 +28,13 @@ jobs:
       - name: Check (no warnings)
         run: cargo build 2>&1 | grep -v "^$" | grep -i warning && exit 1 || true
 
-      - name: Build TLS staticlib
-        # The codegen test runner links compiled https:// / TLS programs against
-        # libelephc_tls.a, which `cargo test` does not produce on its own (the
-        # crate is pulled in as an rlib dev-dependency, not the staticlib the
-        # external linker needs). Build it explicitly first.
-        run: cargo build -p elephc-tls
+      - name: Build bridge staticlibs
+        # The codegen test runner links compiled programs against libelephc_tls.a
+        # (https:// / TLS) and libelephc_pdo.a (PDO), which `cargo test` / nextest
+        # do not produce on their own (the crates are pulled in as rlib
+        # dev-dependencies, not the staticlibs the external linker needs). Build
+        # them explicitly first.
+        run: cargo build -p elephc-tls -p elephc-pdo
 
       - name: Run non-codegen tests
         run: cargo nextest run --workspace -E 'not binary(codegen_tests)' --no-fail-fast -j 8
@@ -63,12 +64,13 @@ jobs:
       - name: Install native test dependencies
         run: brew install pcre2
 
-      - name: Build TLS staticlib
-        # The codegen test runner links compiled https:// / TLS programs against
-        # libelephc_tls.a, which `cargo test` does not produce on its own (the
-        # crate is pulled in as an rlib dev-dependency, not the staticlib the
-        # external linker needs). Build it explicitly first.
-        run: cargo build -p elephc-tls
+      - name: Build bridge staticlibs
+        # The codegen test runner links compiled programs against libelephc_tls.a
+        # (https:// / TLS) and libelephc_pdo.a (PDO), which `cargo test` / nextest
+        # do not produce on their own (the crates are pulled in as rlib
+        # dev-dependencies, not the staticlibs the external linker needs). Build
+        # them explicitly first.
+        run: cargo build -p elephc-tls -p elephc-pdo
 
       - name: Run codegen test shard
         run: cargo nextest run --test codegen_tests --partition hash:${{ matrix.shard }}/16 --no-fail-fast -j 8

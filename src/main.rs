@@ -21,6 +21,7 @@ mod name_resolver;
 mod names;
 mod optimize;
 mod parser;
+mod pdo_prelude;
 mod pipeline;
 mod resolver;
 mod runtime_cache;

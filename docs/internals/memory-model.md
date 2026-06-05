@@ -233,6 +233,7 @@ When one of these checks trips, the program exits with a fatal heap-debug error 
 - **`unset()`**: releases the current heap-backed value before nulling the slot
 - **Targeted cycle collection**: when decref reaches a container/object graph that may only be keeping itself alive, `__rt_gc_collect_cycles` counts heap-only incoming edges, marks externally reachable blocks, and deep-frees the remaining unreachable array/hash/object island
 - **Generator frame release**: Generator frames are object-kind heap blocks, but their custom Mixed slots and active `yield from` delegate are released by a Generator-specific branch in object deep-free
+- **Object destructors (`__destruct`)**: at the top of `__rt_object_free_deep`, before any property payloads are released, `__rt_call_object_destructor` looks up the object's class in the class_id-indexed `_class_destruct_ptrs` table and, if the class (or an ancestor) declares `__destruct`, calls it with `$this` borrowed. A bit set in the refcount word marks destruction in progress so a balanced `$tmp = $this;` inside the body cannot re-enter the free path; object resurrection is intentionally not supported (the block is still freed). Classes without a destructor have a `0` table entry and pay only one load and branch
 - **Process exit**: all memory is reclaimed by the OS
 
 ### Configurable heap size

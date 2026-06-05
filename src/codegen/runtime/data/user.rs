@@ -253,6 +253,30 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Per-class destructor symbol table — consulted by __rt_call_object_destructor
+    // (invoked at the top of __rt_object_free_deep) to run a class's PHP
+    // __destruct before its storage is freed. Each entry resolves through the
+    // implementing class so an inherited destructor dispatches to the ancestor's
+    // emitted method symbol; `0` means the class and its ancestors declare no
+    // __destruct, so no destructor call is made.
+    out.push_str(".globl _class_destruct_count\n_class_destruct_count:\n");
+    out.push_str(&format!(
+        "    .quad {}\n",
+        max_class_id.map_or(0, |class_id| class_id + 1)
+    ));
+    out.push_str(".globl _class_destruct_ptrs\n_class_destruct_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        let destruct_key = php_symbol_key("__destruct");
+        for class_id in 0..=max_class_id {
+            let entry = class_info_by_id
+                .get(&class_id)
+                .and_then(|class_info| class_info.method_impl_classes.get(&destruct_key))
+                .map(|impl_class| method_symbol(impl_class, &destruct_key))
+                .unwrap_or_else(|| "0".to_string());
+            out.push_str(&format!("    .quad {}\n", entry));
+        }
+    }
+
     // _class_propinit_ptrs: dense class_id-indexed table of property-default
     // init thunks. Entry = _class_propinit_<id> when the class has any property
     // default, else 0 (null = nothing to init). __rt_new_by_name indexes this

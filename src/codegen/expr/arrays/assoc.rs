@@ -41,6 +41,51 @@ pub(crate) fn emit_empty_assoc_array_literal(
     }
 }
 
+/// Rewrites a bare array literal as an `AssocArray` value when the target type is
+/// associative (`T[string]:V`). An empty `[]` becomes an empty hash; a positional
+/// literal `[a, b, ...]` becomes explicit `0 => a, 1 => b, ...` pairs so the
+/// associative emitter normalizes the keys into hash storage. Returns `None` when
+/// `value` is not an array literal or `target_ty` is not associative, so the caller
+/// falls back to ordinary expression emission. Shared by property assignment and
+/// object-allocation default initialization so an `[]` default whose refined type is
+/// associative is stored as hash storage rather than an indexed-list array.
+pub(crate) fn emit_array_literal_as_assoc_target(
+    value: &Expr,
+    target_ty: &PhpType,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    let ExprKind::ArrayLiteral(elems) = &value.kind else {
+        return None;
+    };
+    let PhpType::AssocArray {
+        key: target_key_ty,
+        value: target_value_ty,
+    } = target_ty
+    else {
+        return None;
+    };
+    if elems.is_empty() {
+        return Some(emit_empty_assoc_array_literal(
+            *target_key_ty.clone(),
+            *target_value_ty.clone(),
+            emitter,
+        ));
+    }
+    let pairs: Vec<(Expr, Expr)> = elems
+        .iter()
+        .enumerate()
+        .map(|(idx, elem)| {
+            (
+                Expr::new(ExprKind::IntLiteral(idx as i64), elem.span),
+                elem.clone(),
+            )
+        })
+        .collect();
+    Some(emit_assoc_array_literal(&pairs, emitter, ctx, data))
+}
+
 /// Emits a non-empty associative array literal with key/value expression pairs.
 ///
 /// Allocates a hash table via `__rt_hash_new`, then inserts each key/value pair
