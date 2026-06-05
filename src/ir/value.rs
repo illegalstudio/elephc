@@ -63,6 +63,9 @@ pub enum Ownership {
 impl Ownership {
     /// Returns the default ownership state for a value produced from a PHP type.
     pub fn for_php_type(ty: &PhpType) -> Self {
+        if matches!(ty, PhpType::Packed(_)) {
+            return Ownership::Borrowed;
+        }
         if Self::php_type_needs_lifetime_tracking(ty) {
             Ownership::MaybeOwned
         } else {

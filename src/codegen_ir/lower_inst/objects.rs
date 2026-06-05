@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
-use crate::ir::Instruction;
+use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::names::{method_symbol, php_symbol_key};
 use crate::types::PhpType;
 
@@ -248,7 +248,7 @@ pub(super) fn lower_prop_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     let property = property_name_immediate(ctx, inst)?.to_string();
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
     let value_ty = ctx.value_php_type(value)?;
-    ensure_property_value_supported(&slot, &value_ty, inst)?;
+    ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
     emit_property_store(ctx, value, &slot, base_reg)
@@ -400,6 +400,9 @@ fn resolve_property_slot(
 ) -> Result<PropertySlot> {
     let object_ty = ctx.value_php_type(object)?;
     let PhpType::Object(class_name) = object_ty else {
+        if let PhpType::Packed(class_name) = object_ty {
+            return resolve_packed_field_slot(ctx, &class_name, property, inst);
+        }
         return Err(CodegenIrError::unsupported(format!(
             "{} for receiver PHP type {:?}",
             inst.op.name(),
@@ -448,10 +451,42 @@ fn resolve_property_slot(
     })
 }
 
+/// Resolves a field slot on an embedded packed-class receiver.
+fn resolve_packed_field_slot(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+    inst: &Instruction,
+) -> Result<PropertySlot> {
+    let normalized = class_name.trim_start_matches('\\');
+    let class_info = ctx
+        .module
+        .packed_class_infos
+        .get(normalized)
+        .ok_or_else(|| CodegenIrError::unsupported(format!("unknown packed class {}", normalized)))?;
+    let Some(field) = class_info.fields.iter().find(|field| field.name == property) else {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} for missing packed field {}::${}",
+            inst.op.name(),
+            normalized,
+            property
+        )));
+    };
+    ensure_property_type_supported(&field.php_type, inst)?;
+    Ok(PropertySlot {
+        class_name: normalized.to_string(),
+        property: property.to_string(),
+        php_type: field.php_type.clone(),
+        offset: field.offset,
+        is_declared: false,
+    })
+}
+
 /// Verifies that this slice knows how to represent the property type in an object slot.
 fn ensure_property_type_supported(php_type: &PhpType, inst: &Instruction) -> Result<()> {
     match php_type {
         PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str => Ok(()),
+        ty if is_pointer_sized_property_type(ty) => Ok(()),
         _ => Err(CodegenIrError::unsupported(format!(
             "{} for property PHP type {:?}",
             inst.op.name(),
@@ -462,11 +497,18 @@ fn ensure_property_type_supported(php_type: &PhpType, inst: &Instruction) -> Res
 
 /// Verifies the assigned value already has the property storage representation.
 fn ensure_property_value_supported(
+    ctx: &FunctionContext<'_>,
     slot: &PropertySlot,
+    value: ValueId,
     value_ty: &PhpType,
     inst: &Instruction,
 ) -> Result<()> {
     if value_ty == &slot.php_type {
+        return Ok(());
+    }
+    if is_pointer_sized_property_type(&slot.php_type)
+        && is_pointer_slot_null_sentinel(ctx, value, value_ty)?
+    {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(
@@ -477,6 +519,32 @@ fn ensure_property_value_supported(
         slot.property,
         slot.php_type
     )))
+}
+
+/// Returns true when a value can initialize a pointer-sized slot as null.
+fn is_pointer_slot_null_sentinel(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    value_ty: &PhpType,
+) -> Result<bool> {
+    if matches!(value_ty, PhpType::Void) {
+        return Ok(true);
+    }
+    if !matches!(value_ty, PhpType::Int) {
+        return Ok(false);
+    }
+    let metadata = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = metadata.def else {
+        return Ok(false);
+    };
+    let instruction = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    Ok(instruction.op == Op::ConstI64 && instruction.immediate == Some(Immediate::I64(0)))
 }
 
 /// Emits the declared-property load into the canonical result register(s).
@@ -496,6 +564,10 @@ fn emit_property_load(
             abi::emit_load_from_address(ctx.emitter, float_reg, base_reg, slot.offset);
         }
         PhpType::Bool | PhpType::Int => {
+            let int_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset);
+        }
+        ty if is_pointer_sized_property_type(ty) => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset);
         }
@@ -533,12 +605,35 @@ fn emit_property_store(
             abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
             abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
         }
+        ty if is_pointer_sized_property_type(ty) => {
+            let int_reg = abi::int_result_reg(ctx.emitter);
+            ctx.load_value_to_reg(value, int_reg)?;
+            abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
+            abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
+        }
         _ => return Err(CodegenIrError::unsupported(format!(
             "property store for PHP type {:?}",
             slot.php_type
         ))),
     }
     Ok(())
+}
+
+/// Returns true for property values represented as a single pointer-sized word.
+fn is_pointer_sized_property_type(php_type: &PhpType) -> bool {
+    matches!(
+        php_type.codegen_repr(),
+        PhpType::Iterable
+            | PhpType::Mixed
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Buffer(_)
+            | PhpType::Callable
+            | PhpType::Object(_)
+            | PhpType::Packed(_)
+            | PhpType::Pointer(_)
+            | PhpType::Resource(_)
+    )
 }
 
 /// Emits a fatal guard for reads from uninitialized typed properties.

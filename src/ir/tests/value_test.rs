@@ -44,6 +44,15 @@ fn ownership_for_php_type_string_starts_maybe_owned() {
     );
 }
 
+/// Packed values are borrowed pointers into buffer-owned storage.
+#[test]
+fn ownership_for_php_type_packed_is_borrowed() {
+    assert_eq!(
+        Ownership::for_php_type(&PhpType::Packed("Point".to_string())),
+        Ownership::Borrowed
+    );
+}
+
 /// Value IDs are zero-based function-local table indexes.
 #[test]
 fn value_id_is_zero_indexed() {

@@ -10,9 +10,7 @@
 //!   uses high-level opcodes with conservative effects.
 
 use crate::ir::{BlockId, Immediate, IrType, LocalKind, Op, Ownership, SwitchCase, Terminator};
-use crate::ir_lower::context::{
-    type_expr_to_php_type, LoopFrame, LoweredValue, LoweringContext,
-};
+use crate::ir_lower::context::{LoopFrame, LoweredValue, LoweringContext};
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::lower_expr;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
@@ -441,7 +439,7 @@ fn lower_typed_assign(
     value: &Expr,
     span: Span,
 ) {
-    let php_type = type_expr_to_php_type(type_expr);
+    let php_type = ctx.type_expr_to_php_type_for_value(type_expr);
     let lowered = lower_expr(ctx, value);
     ctx.declare_local(name, php_type.clone());
     ctx.store_local(name, lowered, php_type, Some(span));

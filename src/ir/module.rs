@@ -15,7 +15,7 @@ use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
 use crate::ir::function::{Function, FunctionId};
 use crate::ir::types::IrType;
-use crate::types::{ClassInfo, EnumInfo, InterfaceInfo, PhpType};
+use crate::types::{ClassInfo, EnumInfo, InterfaceInfo, PackedClassInfo, PhpType};
 
 /// Data-pool identifier shared by string, float, and name tables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -52,6 +52,7 @@ pub struct Module {
     pub class_infos: HashMap<String, ClassInfo>,
     pub interface_infos: HashMap<String, InterfaceInfo>,
     pub enum_infos: HashMap<String, EnumInfo>,
+    pub packed_class_infos: HashMap<String, PackedClassInfo>,
     pub packed_layouts: PackedLayoutTable,
     pub required_runtime_features: RuntimeFeatures,
 }
@@ -76,6 +77,7 @@ impl Module {
             class_infos: HashMap::new(),
             interface_infos: HashMap::new(),
             enum_infos: HashMap::new(),
+            packed_class_infos: HashMap::new(),
             packed_layouts: PackedLayoutTable::default(),
             required_runtime_features: RuntimeFeatures::none(),
         }

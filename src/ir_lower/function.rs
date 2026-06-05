@@ -18,7 +18,7 @@ use crate::ir_lower::context::{
 };
 use crate::ir_lower::effects_lookup;
 use crate::parser::ast::{ExprKind, Program, Stmt, TypeExpr};
-use crate::types::{CheckResult, FunctionSig, PhpType, TypeEnv};
+use crate::types::{CheckResult, FunctionSig, PackedClassInfo, PhpType, TypeEnv};
 
 /// AST parameter tuple shape used by function, method, and closure declarations.
 type AstParams = [(String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool)];
@@ -42,6 +42,7 @@ pub(crate) fn lower_main(
         &check_result.classes,
         &check_result.enums,
         &check_result.interfaces,
+        &check_result.packed_classes,
         constants,
         PhpType::Void,
         &[],
@@ -78,6 +79,7 @@ pub(crate) fn lower_user_function(
         &check_result.classes,
         &check_result.enums,
         &check_result.interfaces,
+        &check_result.packed_classes,
         constants,
         signature.return_type.clone(),
         &signature.params,
@@ -140,6 +142,7 @@ pub(crate) fn lower_class_method(
         &check_result.classes,
         &check_result.enums,
         &check_result.interfaces,
+        &check_result.packed_classes,
         constants,
         signature.return_type.clone(),
         &body_params,
@@ -158,6 +161,7 @@ fn lower_body_into_function(
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
     enums: &std::collections::HashMap<String, crate::types::EnumInfo>,
     interfaces: &std::collections::HashMap<String, crate::types::InterfaceInfo>,
+    packed_classes: &std::collections::HashMap<String, PackedClassInfo>,
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     return_php_type: PhpType,
     params: &[(String, PhpType)],
@@ -175,6 +179,7 @@ fn lower_body_into_function(
         classes,
         enums,
         interfaces,
+        packed_classes,
         constants,
         return_php_type,
     );

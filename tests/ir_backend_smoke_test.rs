@@ -727,6 +727,55 @@ echo (int) ($values[0] + $values[1]);
     assert_eq!(compile_and_run_ir_backend("buffer_float_get_set", float_source), "4");
 }
 
+/// Verifies packed buffer values survive cross-class property type refinement.
+#[test]
+fn ir_backend_handles_cross_class_packed_buffer_property_reads() {
+    let source = r#"<?php
+packed class Point {
+    public int $x;
+}
+
+class Box {
+    public $items;
+
+    public function __construct() {
+        $this->items = 0;
+    }
+}
+
+class Loader {
+    public function load(): Box {
+        $box = new Box();
+        buffer<Point> $items = buffer_new<Point>(1);
+        $items[0]->x = 7;
+        $box->items = $items;
+        return $box;
+    }
+}
+
+class Game {
+    public $box;
+
+    public function __construct() {
+        $this->box = 0;
+    }
+
+    public function run(): int {
+        $loader = new Loader();
+        $this->box = $loader->load();
+        return $this->box->items[0]->x;
+    }
+}
+
+$game = new Game();
+echo $game->run();
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("cross_class_packed_buffer_property_reads", source),
+        "7"
+    );
+}
+
 /// Verifies `buffer_free()` releases the buffer and nulls the source local.
 #[test]
 fn ir_backend_handles_buffer_free() {

@@ -24,7 +24,7 @@ pub(super) fn lower_buffer_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
     ensure_arg_count(inst, "buffer_new", 1)?;
     let len = expect_operand(inst, 0)?;
     let result_ty = result_buffer_type(inst)?;
-    let stride = buffer_stride(&result_ty)?;
+    let stride = buffer_stride(ctx, &result_ty)?;
     require_int(ctx.load_value_to_result(len)?, "buffer_new length")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -109,8 +109,8 @@ fn result_buffer_type(inst: &Instruction) -> Result<PhpType> {
     }
 }
 
-/// Returns the fixed runtime stride for supported scalar buffer element types.
-fn buffer_stride(buffer_ty: &PhpType) -> Result<usize> {
+/// Returns the fixed runtime stride for supported buffer element types.
+fn buffer_stride(ctx: &FunctionContext<'_>, buffer_ty: &PhpType) -> Result<usize> {
     match buffer_ty.codegen_repr() {
         PhpType::Buffer(elem) => match elem.codegen_repr() {
             PhpType::Int
@@ -118,6 +118,15 @@ fn buffer_stride(buffer_ty: &PhpType) -> Result<usize> {
             | PhpType::Bool
             | PhpType::Pointer(_)
             | PhpType::Resource(_) => Ok(8),
+            PhpType::Packed(name) => ctx
+                .module
+                .packed_class_infos
+                .get(&name)
+                .map(|info| info.total_size)
+                .ok_or_else(|| CodegenIrError::unsupported(format!(
+                    "unknown packed buffer element type {}",
+                    name
+                ))),
             other => Err(CodegenIrError::unsupported(format!(
                 "buffer_new element PHP type {:?}",
                 other
@@ -254,6 +263,20 @@ fn load_element_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType, address_
         }
         PhpType::Int | PhpType::Bool | PhpType::Pointer(_) | PhpType::Resource(_) => {
             abi::emit_load_from_address(ctx.emitter, abi::int_result_reg(ctx.emitter), address_reg, 0);
+            Ok(())
+        }
+        PhpType::Packed(_) => {
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            if result_reg != address_reg {
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, address_reg)); // return the checked packed-element address as the packed receiver pointer
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, address_reg)); // return the checked packed-element address as the packed receiver pointer
+                    }
+                }
+            }
             Ok(())
         }
         other => Err(CodegenIrError::unsupported(format!(

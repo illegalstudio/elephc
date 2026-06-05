@@ -19,7 +19,10 @@ use crate::ir::{
 };
 use crate::parser::ast::{ExprKind, TypeExpr};
 use crate::span::Span;
-use crate::types::{ClassInfo, EnumInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PhpType, TypeEnv};
+use crate::types::{
+    ClassInfo, EnumInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
+    TypeEnv,
+};
 
 /// Value returned by expression lowering with its PHP metadata.
 #[derive(Debug, Clone, Copy)]
@@ -48,6 +51,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub classes: &'m HashMap<String, ClassInfo>,
     pub enums: &'m HashMap<String, EnumInfo>,
     pub interfaces: &'m HashMap<String, InterfaceInfo>,
+    pub packed_classes: &'m HashMap<String, PackedClassInfo>,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
     pub loop_stack: Vec<LoopFrame>,
     pub return_type: IrType,
@@ -66,6 +70,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         classes: &'m HashMap<String, ClassInfo>,
         enums: &'m HashMap<String, EnumInfo>,
         interfaces: &'m HashMap<String, InterfaceInfo>,
+        packed_classes: &'m HashMap<String, PackedClassInfo>,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
         return_php_type: PhpType,
     ) -> Self {
@@ -82,6 +87,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             classes,
             enums,
             interfaces,
+            packed_classes,
             constants: constants.clone(),
             loop_stack: Vec::new(),
             return_type,
@@ -93,6 +99,33 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Interns a string literal or metadata name in the module data pool.
     pub(crate) fn intern_string(&mut self, value: &str) -> DataId {
         self.data.intern_string(value)
+    }
+
+    /// Converts parsed type syntax into PHP metadata using known packed classes.
+    pub(crate) fn type_expr_to_php_type_for_value(&self, type_expr: &TypeExpr) -> PhpType {
+        match type_expr {
+            TypeExpr::Named(name) => {
+                let name = name.as_str().trim_start_matches('\\');
+                if self.packed_classes.contains_key(name) {
+                    PhpType::Packed(name.to_string())
+                } else {
+                    PhpType::Object(name.to_string())
+                }
+            }
+            TypeExpr::Buffer(inner) => {
+                PhpType::Buffer(Box::new(self.type_expr_to_php_type_for_value(inner)))
+            }
+            TypeExpr::Nullable(inner) => {
+                PhpType::Union(vec![PhpType::Void, self.type_expr_to_php_type_for_value(inner)])
+            }
+            TypeExpr::Union(members) => PhpType::Union(
+                members
+                    .iter()
+                    .map(|member| self.type_expr_to_php_type_for_value(member))
+                    .collect(),
+            ),
+            other => type_expr_to_php_type(other),
+        }
     }
 
     /// Interns a global-name metadata string in the module data pool.

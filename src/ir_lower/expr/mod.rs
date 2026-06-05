@@ -14,9 +14,7 @@ use crate::ir::{
     BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, MixedNumericOp, Op,
     Ownership, Terminator, ValueId,
 };
-use crate::ir_lower::context::{
-    type_expr_to_php_type, value_ir_type, LoweredValue, LoweringContext,
-};
+use crate::ir_lower::context::{value_ir_type, LoweredValue, LoweringContext};
 use crate::ir_lower::effects_lookup;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
@@ -1557,17 +1555,48 @@ fn lower_method_call(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
-    let mut operands = vec![lower_expr(ctx, object).value];
+    let object = lower_expr(ctx, object);
+    let result_type = method_call_result_type(ctx, object.value, method, op, expr);
+    let mut operands = vec![object.value];
     operands.extend(lower_args(ctx, args));
     let data = ctx.intern_string(method);
     ctx.emit_value(
         op,
         operands,
         Some(Immediate::Data(data)),
-        fallback_expr_type(expr),
+        result_type,
         op.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Returns the checked return type for an instance method call when metadata is available.
+fn method_call_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+    op: Op,
+    expr: &Expr,
+) -> PhpType {
+    let object_ty = ctx.builder.value_php_type(object).codegen_repr();
+    let Some((class_name, nullable)) = singular_object_class(&object_ty) else {
+        return fallback_expr_type(expr);
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    let key = php_symbol_key(method);
+    let Some(return_ty) = ctx
+        .classes
+        .get(normalized)
+        .and_then(|class_info| class_info.methods.get(&key))
+        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+    else {
+        return fallback_expr_type(expr);
+    };
+    if op == Op::NullsafeMethodCall && nullable {
+        PhpType::Union(vec![return_ty, PhpType::Void]).codegen_repr()
+    } else {
+        return_ty
+    }
 }
 
 /// Lowers a static method call.
@@ -1629,7 +1658,7 @@ fn lower_buffer_new(
     expr: &Expr,
 ) -> LoweredValue {
     let len_value = lower_expr(ctx, len);
-    let php_type = PhpType::Buffer(Box::new(type_expr_to_php_type(element_type)));
+    let php_type = PhpType::Buffer(Box::new(ctx.type_expr_to_php_type_for_value(element_type)));
     ctx.emit_value(
         Op::BufferNew,
         vec![len_value.value],

@@ -41,6 +41,7 @@ fn populate_metadata(module: &mut Module, program: &Program, check_result: &Chec
     module.class_infos = check_result.classes.clone();
     module.interface_infos = check_result.interfaces.clone();
     module.enum_infos = check_result.enums.clone();
+    module.packed_class_infos = check_result.packed_classes.clone();
     module.packed_layouts.names = sorted_keys(&check_result.packed_classes);
     module.extern_decls = check_result
         .extern_functions
