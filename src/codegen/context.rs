@@ -492,6 +492,22 @@ impl Context {
         }
     }
 
+    /// Returns true if overwriting or unsetting `$name` must release the heap value
+    /// currently in its slot.
+    ///
+    /// Returns false for borrowed aliases — by-value `foreach` value vars and `$argv`,
+    /// which are marked `HeapOwnership::Borrowed` because the array/runtime owns the
+    /// storage — and for by-ref params, which alias the caller's storage. Freeing
+    /// either would double-free or corrupt memory owned elsewhere. `Owned`/`MaybeOwned`
+    /// slots (including globals and statics, which must be freed on overwrite) return true.
+    pub(crate) fn var_owns_heap_slot(&self, name: &str) -> bool {
+        let not_borrowed = self
+            .variables
+            .get(name)
+            .map_or(false, |var| var.ownership != HeapOwnership::Borrowed);
+        not_borrowed && !self.ref_params.contains(name)
+    }
+
     /// Marks a variable as not safe for epilogue cleanup.
     pub fn disable_epilogue_cleanup(&mut self, name: &str) {
         if let Some(var) = self.variables.get_mut(name) {

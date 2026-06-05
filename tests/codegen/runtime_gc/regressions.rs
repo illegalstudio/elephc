@@ -851,3 +851,74 @@ run();
         out.stderr
     );
 }
+
+/// Regression (audit T1/C2): `unset($v)` on a by-value `foreach` value var must not free
+/// the borrowed array element. The value var is a `HeapOwnership::Borrowed` alias into the
+/// array's storage, so the old type-driven free in `emit_unset_arg` double-freed it —
+/// corrupting the heap free-list (a hang on a normal build, a "double free" abort under heap
+/// debug). The two array slots alias one heap string to force a refcounted element.
+#[test]
+fn test_regression_unset_foreach_value_var_does_not_double_free() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$big = str_repeat("z", 200);
+$items = [$big, $big];
+foreach ($items as $v) {
+    unset($v);
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression (audit T1/C3): reassigning a by-value `foreach` value var inside the loop body
+/// must not release the borrowed array element. `release_owned_slot` ran unconditionally on the
+/// Borrowed alias, freeing the element's heap string; persisting the replacement then reused that
+/// just-freed buffer, corrupting every outer alias of the element. Here `$s` and `$arr[0]` share
+/// one heap string: before the fix both read "repla" (the reused buffer), after the fix both stay
+/// "zzzzz". Deterministic (no reliance on heap-debug abort).
+#[test]
+fn test_regression_reassign_foreach_value_var_does_not_free_borrowed_element() {
+    let out = compile_and_run(
+        r#"<?php
+$s = str_repeat("z", 5);
+$arr = [$s];
+foreach ($arr as $v) {
+    $v = "replaced";
+}
+echo $s, "|", $arr[0];
+"#,
+    );
+    assert_eq!(out, "zzzzz|zzzzz");
+}
+
+/// Regression (audit T1/H13): `unset()` of a `mixed` local must decref the boxed Mixed cell.
+/// `emit_unset_arg` had no `Mixed`/`Union` arm, so the cell (and its persisted string) leaked.
+/// The fix routes refcounted old types through `emit_decref_if_refcounted`, which handles Mixed.
+#[test]
+fn test_regression_unset_mixed_local_releases_boxed_cell() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function box(): mixed {
+    return str_repeat("z", 200);
+}
+$m = box();
+unset($m);
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
