@@ -497,6 +497,9 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     if is_fiber_start_call(&class_name, &method_name) {
         return lower_fiber_start(ctx, inst, object);
     }
+    if is_fiber_resume_call(&class_name, &method_name) {
+        return lower_fiber_resume(ctx, inst, object);
+    }
     if is_fiber_get_return_call(&class_name, &method_name) {
         return lower_fiber_noarg_runtime_method(ctx, inst, object, "__rt_fiber_get_return");
     }
@@ -539,6 +542,26 @@ fn lower_fiber_start(
     emit_store_fiber_start_args(ctx, &assignments, args.len())?;
     abi::emit_call_label(ctx.emitter, "__rt_fiber_start");
     abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `Fiber::resume($value = null)` through the shared runtime helper.
+fn lower_fiber_resume(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+) -> Result<()> {
+    let value = fiber_single_optional_arg(
+        ctx,
+        inst.operands.get(1..).unwrap_or(&[]),
+        "Fiber::resume",
+    )?;
+    emit_optional_mixed_arg(ctx, value)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));          // preserve the boxed resume value while loading the receiver
+    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(object, receiver_arg)?;
+    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1)); // pass the boxed resume value as runtime helper argument 2
+    abi::emit_call_label(ctx.emitter, "__rt_fiber_resume");
     store_if_result(ctx, inst)
 }
 
@@ -638,21 +661,59 @@ fn fiber_start_visible_args(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<Vec<ValueId>> {
+    fiber_visible_args(ctx, inst.operands.get(1..).unwrap_or(&[]), "Fiber::start")
+}
+
+/// Returns at most one visible Fiber runtime argument after default padding.
+fn fiber_single_optional_arg(
+    ctx: &FunctionContext<'_>,
+    operands: &[ValueId],
+    context: &str,
+) -> Result<Option<ValueId>> {
+    let args = fiber_visible_args(ctx, operands, context)?;
+    if args.len() > 1 {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} with more than one EIR argument",
+            context
+        )));
+    }
+    Ok(args.first().copied())
+}
+
+/// Returns visible Fiber operands before synthetic default padding.
+fn fiber_visible_args(
+    ctx: &FunctionContext<'_>,
+    operands: &[ValueId],
+    context: &str,
+) -> Result<Vec<ValueId>> {
     let mut args = Vec::new();
     let mut saw_default_padding = false;
-    for operand in inst.operands.iter().skip(1) {
+    for operand in operands {
         if is_synthetic_null_value(ctx, *operand)? {
             saw_default_padding = true;
             continue;
         }
         if saw_default_padding {
-            return Err(CodegenIrError::unsupported(
-                "Fiber::start with non-trailing EIR default arguments",
-            ));
+            return Err(CodegenIrError::unsupported(format!(
+                "{} with non-trailing EIR default arguments",
+                context
+            )));
         }
         args.push(*operand);
     }
     Ok(args)
+}
+
+/// Leaves a boxed Mixed value in the integer result register, using null when omitted.
+fn emit_optional_mixed_arg(ctx: &mut FunctionContext<'_>, value: Option<ValueId>) -> Result<()> {
+    if let Some(value) = value {
+        let source_ty = ctx.load_value_to_result(value)?;
+        materialize_direct_call_arg_for_param(ctx, &source_ty, &PhpType::Mixed)?;
+        return Ok(());
+    }
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
+    Ok(())
 }
 
 /// Returns true when a value is an omitted optional-argument placeholder.
@@ -725,6 +786,12 @@ impl FiberStatePredicate {
 fn is_fiber_start_call(class_name: &str, method_name: &str) -> bool {
     php_symbol_key(class_name.trim_start_matches('\\')) == "fiber"
         && php_symbol_key(method_name) == "start"
+}
+
+/// Returns true when a direct method call targets PHP's built-in `Fiber::resume`.
+fn is_fiber_resume_call(class_name: &str, method_name: &str) -> bool {
+    php_symbol_key(class_name.trim_start_matches('\\')) == "fiber"
+        && php_symbol_key(method_name) == "resume"
 }
 
 /// Returns true when a direct method call targets PHP's built-in `Fiber::getReturn`.
@@ -919,6 +986,9 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     if is_static_fiber_get_current_call(&receiver, method_name) {
         return lower_static_fiber_get_current(ctx, inst);
     }
+    if is_static_fiber_suspend_call(&receiver, method_name) {
+        return lower_static_fiber_suspend(ctx, inst);
+    }
     let called_class_id = resolve_static_called_class_arg(ctx, receiver_label, &receiver)?;
     let receiver_info = ctx
         .module
@@ -973,6 +1043,19 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     Ok(())
 }
 
+/// Lowers static `Fiber::suspend($value = null)` through the shared runtime helper.
+fn lower_static_fiber_suspend(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = fiber_single_optional_arg(ctx, &inst.operands, "Fiber::suspend")?;
+    emit_optional_mixed_arg(ctx, value)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));          // preserve the boxed suspend value for target-specific argument loading
+    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0)); // pass the boxed suspend value as runtime helper argument 1
+    abi::emit_call_label(ctx.emitter, "__rt_fiber_suspend");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers static `Fiber::getCurrent()` through the shared runtime helper.
 fn lower_static_fiber_get_current(
     ctx: &mut FunctionContext<'_>,
@@ -991,6 +1074,12 @@ fn lower_static_fiber_get_current(
 fn is_static_fiber_get_current_call(receiver: &str, method_name: &str) -> bool {
     php_symbol_key(receiver.trim_start_matches('\\')) == "fiber"
         && php_symbol_key(method_name) == "getcurrent"
+}
+
+/// Returns true when a static method call targets PHP's built-in `Fiber::suspend`.
+fn is_static_fiber_suspend_call(receiver: &str, method_name: &str) -> bool {
+    php_symbol_key(receiver.trim_start_matches('\\')) == "fiber"
+        && php_symbol_key(method_name) == "suspend"
 }
 
 /// Resolves the hidden called-class id argument for a static method call.

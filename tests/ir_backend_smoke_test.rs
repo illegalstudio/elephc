@@ -500,6 +500,31 @@ $strings->start("A", "B", "C", "D", "E");
     );
 }
 
+/// Verifies Fiber suspend and resume transfer boxed Mixed values across the boundary.
+#[test]
+fn ir_backend_suspends_and_resumes_fibers() {
+    let source = r#"<?php
+$f = new Fiber(function(): void {
+    $value = Fiber::suspend(42);
+    echo "resume=" . $value;
+});
+$yielded = $f->start();
+echo "yield=" . $yielded . "|";
+$resumed = $f->resume(99);
+echo "|done=" . (is_null($resumed) ? "null" : "value");
+echo "|";
+
+$null = new Fiber(function(): void {
+    Fiber::suspend();
+});
+echo is_null($null->start()) ? "null" : "not-null";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("fiber_suspend_resume", source),
+        "yield=42|resume=99|done=null|null"
+    );
+}
+
 /// Verifies Fiber state predicates observe the transition after a no-arg start.
 #[test]
 fn ir_backend_reports_started_terminated_fiber_state() {
