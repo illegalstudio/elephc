@@ -441,6 +441,25 @@ line2:The quick |brown fox:4142:AB"#,
     }
 }
 
+/// Verifies `unset($local)` writes PHP null into local slots on the EIR backend.
+#[test]
+fn ir_backend_handles_unset_locals() {
+    for (name, source, expected) in [
+        (
+            "unset_int_local",
+            "<?php $x = 42; unset($x); echo is_null($x) ? 'null' : 'value';",
+            "null",
+        ),
+        (
+            "unset_multiple_locals",
+            "<?php $a = 1; $b = 'owned' . $argc; unset($a, $b); echo is_null($a) ? 'A' : 'a'; echo is_null($b) ? 'B' : 'b';",
+            "AB",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies diagnostic output builtins lowered by the EIR backend for concrete values.
 #[test]
 fn ir_backend_handles_debug_output_builtins() {

@@ -775,8 +775,13 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     if let Some(value) = constants::lower_static_defined_call(ctx, name, args, expr) {
         return value;
     }
-    let operands = lower_args(ctx, args);
     let canonical = name.as_str();
+    if php_symbol_key(canonical.trim_start_matches('\\')) == "unset" {
+        if let Some(value) = lower_unset_locals(ctx, args, expr) {
+            return value;
+        }
+    }
+    let operands = lower_args(ctx, args);
     let php_type = call_return_type(ctx, canonical, &operands);
     if ctx.extern_functions.contains_key(canonical) {
         let data = ctx.intern_function_name(canonical);
@@ -809,6 +814,24 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         effects_lookup::builtin_effects(canonical),
         Some(expr.span),
     )
+}
+
+/// Lowers `unset($local, ...)` by storing PHP null into each local slot.
+fn lower_unset_locals(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if !args.iter().all(|arg| matches!(arg.kind, ExprKind::Variable(_))) {
+        return None;
+    }
+    let null = lower_null(ctx, expr);
+    for arg in args {
+        if let ExprKind::Variable(name) = &arg.kind {
+            ctx.store_local(name, null, PhpType::Void, Some(arg.span));
+        }
+    }
+    Some(null)
 }
 
 /// Lowers positional/named/spread call arguments in source order.
