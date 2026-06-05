@@ -202,6 +202,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "time" => system::lower_time(ctx, inst),
         "usleep" => system::lower_usleep(ctx, inst),
         "getenv" => system::lower_getenv(ctx, inst),
+        "putenv" => system::lower_putenv(ctx, inst),
         "php_uname" => system::lower_php_uname(ctx, inst),
         "exec" => system::lower_exec(ctx, inst),
         "shell_exec" => system::lower_shell_exec(ctx, inst),

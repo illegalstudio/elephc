@@ -1694,7 +1694,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "empty" | "file_exists" | "fnmatch" | "function_exists" | "is_callable"
         | "fdatasync" | "fflush" | "flock" | "fsync" | "ftruncate" | "is_dir"
         | "is_executable" | "is_file" | "is_link" | "is_numeric" | "link" | "mkdir" | "rename"
-        | "rmdir" | "is_readable" | "is_writeable" | "is_writable" | "symlink"
+        | "putenv" | "rmdir" | "is_readable" | "is_writeable" | "is_writable" | "symlink"
         | "touch" | "unlink" => Some(PhpType::Bool),
         "basename" | "date" | "dirname" | "exec" | "fgets" | "getcwd" | "getenv"
         | "php_uname" | "readline" | "shell_exec" | "sys_get_temp_dir" | "fread"

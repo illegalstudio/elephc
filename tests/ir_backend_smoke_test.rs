@@ -760,6 +760,19 @@ echo strlen($sys) > 0 ? "S" : "!";
     );
 }
 
+/// Verifies `putenv()` persists environment assignments visible to later `getenv()` calls.
+#[test]
+fn ir_backend_handles_putenv_round_trip() {
+    let source = r#"<?php
+echo putenv("ELEPHC_EIR_PUTENV=round") ? "P:" : "!:";
+echo getenv("ELEPHC_EIR_PUTENV");
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("putenv_round_trip", source),
+        "P:round"
+    );
+}
+
 /// Verifies process-control shell builtins lower through the EIR backend.
 #[test]
 fn ir_backend_handles_shell_process_builtins() {

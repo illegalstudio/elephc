@@ -133,6 +133,21 @@ pub(super) fn lower_getenv(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `putenv(assignment)` by copying the environment string into persistent heap storage.
+pub(super) fn lower_putenv(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "putenv", 1)?;
+    let assignment = expect_operand(inst, 0)?;
+    require_string(ctx.load_value_to_result(assignment)?.codegen_repr(), "putenv assignment")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_putenv_aarch64(ctx),
+        Arch::X86_64 => lower_putenv_x86_64(ctx),
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `php_uname(mode?)` through the target-aware uname runtime helper.
 pub(super) fn lower_php_uname(
     ctx: &mut FunctionContext<'_>,
@@ -222,6 +237,62 @@ fn emit_empty_string_result(ctx: &mut FunctionContext<'_>) {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+}
+
+/// Emits the AArch64 persistent-copy path for `putenv()`.
+fn lower_putenv_aarch64(ctx: &mut FunctionContext<'_>) {
+    let copy_loop = ctx.next_label("putenv_copy");
+    let copy_done = ctx.next_label("putenv_copy_done");
+    ctx.emitter.instruction("add x0, x2, #1");                                  // allocate space for the environment string plus trailing null
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the source string pointer and length across heap allocation
+    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the source string pointer and length after heap allocation
+    ctx.emitter.instruction("mov x3, x0");                                      // keep the persistent destination buffer for copying and putenv()
+    ctx.emitter.instruction("mov x4, #0");                                      // start copying at byte offset zero
+    ctx.emitter.label(&copy_loop);
+    ctx.emitter.instruction("cmp x4, x2");                                      // compare the copied byte count with the source length
+    ctx.emitter.instruction(&format!("b.ge {}", copy_done));                    // finish once every source byte has been persisted
+    ctx.emitter.instruction("ldrb w5, [x1, x4]");                               // load one byte from the source environment assignment
+    ctx.emitter.instruction("strb w5, [x3, x4]");                               // copy the byte into the persistent putenv buffer
+    ctx.emitter.instruction("add x4, x4, #1");                                  // advance to the next source byte
+    ctx.emitter.instruction(&format!("b {}", copy_loop));                       // continue copying the environment assignment
+    ctx.emitter.label(&copy_done);
+    ctx.emitter.instruction("strb wzr, [x3, x4]");                              // append the C null terminator required by putenv()
+    ctx.emitter.instruction("mov x0, x3");                                      // pass the persistent environment buffer to putenv()
+    ctx.emitter.bl_c("putenv");
+    ctx.emitter.instruction("cmp x0, #0");                                      // compare libc putenv() status against success
+    ctx.emitter.instruction("cset x0, eq");                                     // return true when putenv() accepted the assignment
+}
+
+/// Emits the x86_64 persistent-copy path for `putenv()`.
+fn lower_putenv_x86_64(ctx: &mut FunctionContext<'_>) {
+    let copy_loop = ctx.next_label("putenv_copy");
+    let copy_done = ctx.next_label("putenv_copy_done");
+    ctx.emitter.instruction("sub rsp, 16");                                     // reserve aligned spill space for the source string across heap allocation
+    ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the source environment string pointer
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                    // save the source environment string length
+    ctx.emitter.instruction("mov rax, rdx");                                    // seed the heap allocation size from the source length
+    ctx.emitter.instruction("add rax, 1");                                      // allocate space for the environment string plus trailing null
+    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    ctx.emitter.instruction("mov rcx, QWORD PTR [rsp]");                        // restore the source environment string pointer
+    ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 8]");                     // restore the source environment string length
+    ctx.emitter.instruction("add rsp, 16");                                     // release the temporary source string spill space
+    ctx.emitter.instruction("mov r9, rax");                                     // keep the persistent destination buffer for copying and putenv()
+    ctx.emitter.instruction("mov r10, 0");                                      // start copying at byte offset zero
+    ctx.emitter.label(&copy_loop);
+    ctx.emitter.instruction("cmp r10, r8");                                     // compare the copied byte count with the source length
+    ctx.emitter.instruction(&format!("jae {}", copy_done));                     // finish once every source byte has been persisted
+    ctx.emitter.instruction("mov r11b, BYTE PTR [rcx + r10]");                  // load one byte from the source environment assignment
+    ctx.emitter.instruction("mov BYTE PTR [r9 + r10], r11b");                   // copy the byte into the persistent putenv buffer
+    ctx.emitter.instruction("add r10, 1");                                      // advance to the next source byte
+    ctx.emitter.instruction(&format!("jmp {}", copy_loop));                     // continue copying the environment assignment
+    ctx.emitter.label(&copy_done);
+    ctx.emitter.instruction("mov BYTE PTR [r9 + r10], 0");                      // append the C null terminator required by putenv()
+    ctx.emitter.instruction("mov rdi, r9");                                     // pass the persistent environment buffer to putenv()
+    ctx.emitter.bl_c("putenv");
+    ctx.emitter.instruction("cmp rax, 0");                                      // compare libc putenv() status against success
+    ctx.emitter.instruction("sete al");                                         // return true when putenv() accepted the assignment
+    ctx.emitter.instruction("movzx rax, al");                                   // widen the boolean byte into the integer result register
 }
 
 /// Lowers a one-argument blocking libc call that receives an integer duration.
