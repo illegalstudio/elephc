@@ -4740,13 +4740,18 @@ fn ir_backend_handles_static_is_callable_checks() {
 fn ir_backend_handles_direct_function_fcc_is_callable_checks() {
     let source = r#"<?php
 function eir_callable_probe(): int { return 1; }
+class EirCallableProbe {
+    public static function hit(): int { return 1; }
+}
 echo is_callable(strlen(...)) ? "yes" : "no";
 echo ":";
 echo is_callable(eir_callable_probe(...)) ? "yes" : "no";
+echo ":";
+echo is_callable(EirCallableProbe::hit(...)) ? "yes" : "no";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("is_callable_direct_function_fcc", source),
-        "yes:yes"
+        "yes:yes:yes"
     );
 }
 

@@ -884,7 +884,7 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     )
 }
 
-/// Lowers direct function first-class callable probes for `is_callable()`.
+/// Lowers direct function/static-method first-class callable probes for `is_callable()`.
 fn lower_static_is_callable(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -898,9 +898,9 @@ fn lower_static_is_callable(
         return None;
     }
     match &args[0].kind {
-        ExprKind::FirstClassCallable(CallableTarget::Function(_)) => {
-            Some(emit_bool_literal(ctx, true, Some(expr.span)))
-        }
+        ExprKind::FirstClassCallable(
+            CallableTarget::Function(_) | CallableTarget::StaticMethod { .. },
+        ) => Some(emit_bool_literal(ctx, true, Some(expr.span))),
         _ => None,
     }
 }
