@@ -1696,9 +1696,9 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "is_executable" | "is_file" | "is_link" | "is_numeric" | "link" | "mkdir" | "rename"
         | "enum_exists" | "putenv" | "rmdir" | "is_readable" | "is_writeable" | "is_writable" | "symlink"
         | "touch" | "unlink" => Some(PhpType::Bool),
-        "basename" | "date" | "dirname" | "exec" | "fgets" | "getcwd" | "getenv"
-        | "php_uname" | "readline" | "shell_exec" | "sys_get_temp_dir" | "fread"
-        | "system" | "tempnam" => Some(PhpType::Str),
+        "basename" | "date" | "dirname" | "exec" | "fgets" | "get_class" | "get_parent_class"
+        | "getcwd" | "getenv" | "php_uname" | "readline" | "shell_exec" | "sys_get_temp_dir"
+        | "fread" | "system" | "tempnam" => Some(PhpType::Str),
         "microtime" => Some(PhpType::Float),
         "clearstatcache" | "passthru" => Some(PhpType::Void),
         "fclose" | "feof" | "rewind" => Some(PhpType::Bool),

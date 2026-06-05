@@ -142,6 +142,11 @@ fn runtime_referenced_class_names(module: &Module) -> HashSet<String> {
             names.insert(class_name);
         }
     }
+    for class_name in referenced_class_name_lookup_builtin_names(module) {
+        if module.class_infos.contains_key(&class_name) {
+            names.insert(class_name);
+        }
+    }
     for class_name in referenced_scoped_constant_class_names(module) {
         if module.class_infos.contains_key(&class_name) {
             names.insert(class_name);
@@ -466,6 +471,56 @@ fn referenced_class_data_names(module: &Module) -> HashSet<String> {
         }
     }
     names
+}
+
+/// Returns static class names that can feed `get_class()`/`get_parent_class()` lookups.
+fn referenced_class_name_lookup_builtin_names(module: &Module) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        for inst in &function.instructions {
+            if !matches!(inst.op, Op::BuiltinCall) || !is_class_name_lookup_builtin(module, inst) {
+                continue;
+            }
+            if inst.operands.is_empty() {
+                if let Some(class_name) = current_function_class(function) {
+                    names.insert(class_name.to_string());
+                }
+                continue;
+            }
+            for value in &inst.operands {
+                let Some(metadata) = function.value(*value) else {
+                    continue;
+                };
+                if let PhpType::Object(class_name) = metadata.php_type.codegen_repr() {
+                    names.insert(class_name.trim_start_matches('\\').to_string());
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Returns whether an instruction is a class-name lookup builtin call.
+fn is_class_name_lookup_builtin(module: &Module, inst: &crate::ir::Instruction) -> bool {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return false;
+    };
+    let Some(name) = module.data.function_names.get(data.as_raw() as usize) else {
+        return false;
+    };
+    matches!(
+        crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str(),
+        "get_class" | "get_parent_class"
+    )
 }
 
 /// Returns class-like receiver names encoded in scoped constant immediates.

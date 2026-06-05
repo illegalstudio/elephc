@@ -3452,6 +3452,25 @@ echo class_exists("MissingEirLookup") ? "!" : "m";
     );
 }
 
+/// Verifies get_class() and get_parent_class() lower through EIR runtime class-id metadata.
+#[test]
+fn ir_backend_handles_class_name_lookup_builtins() {
+    let source = r#"<?php
+class EirAnimal {}
+class EirDog extends EirAnimal {}
+$dog = new EirDog();
+echo get_class($dog);
+echo ":";
+echo get_parent_class($dog);
+echo ":";
+echo get_parent_class("EirDog");
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("class_name_lookup_builtins", source),
+        "EirDog:EirAnimal:EirAnimal"
+    );
+}
+
 /// Verifies filesystem stat predicates lower through the EIR backend runtime helpers.
 #[test]
 fn ir_backend_handles_filesystem_stat_predicates() {
