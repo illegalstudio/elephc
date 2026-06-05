@@ -920,6 +920,9 @@ fn lower_static_is_callable(
             let is_callable = static_array_callable_is_callable(ctx, items)?;
             Some(emit_bool_literal(ctx, is_callable, Some(expr.span)))
         }
+        ExprKind::Variable(name) if ctx.static_callable_local(name).is_some() => {
+            Some(emit_bool_literal(ctx, true, Some(expr.span)))
+        }
         _ => None,
     }
 }

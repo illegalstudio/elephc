@@ -112,6 +112,24 @@ echo is_callable(["EirCallableArrayBox", "instance"]) ? "yes" : "no";
 "#,
         &[],
     );
+    assert_backend_parity(
+        "static_callable_local_is_callable",
+        r#"<?php
+function eir_local_callable_probe(): int { return 1; }
+class EirLocalCallableProbe {
+    public static function hit(): int { return 1; }
+}
+$fn = eir_local_callable_probe(...);
+echo is_callable($fn) ? "yes" : "no";
+echo ":";
+$name = "eir_local_callable_probe";
+echo is_callable($name) ? "yes" : "no";
+echo ":";
+$stat = EirLocalCallableProbe::hit(...);
+echo is_callable($stat) ? "yes" : "no";
+"#,
+        &[],
+    );
 }
 
 /// Verifies recent callable dispatch fixes preserve legacy backend behavior.
