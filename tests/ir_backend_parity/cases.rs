@@ -953,6 +953,37 @@ unlink("stream.txt");
     );
 }
 
+/// Verifies `SplFileObject` lightweight state helpers match the legacy backend.
+#[test]
+fn parity_spl_file_object_state_helpers() {
+    assert_backend_parity(
+        "spl_file_object_state_helpers",
+        r#"<?php
+file_put_contents("meta.txt", "aa\nbb\n");
+
+$file = new SplFileObject("meta.txt");
+echo $file->getCurrentLine();
+echo "|";
+echo $file->fgetc();
+echo $file->fgetc();
+echo "|";
+$file->fseek(0, 2);
+echo ($file->fgetc() === false) ? "F" : "x";
+echo $file->eof() ? "E" : "N";
+echo "|";
+$file->setFlags(SplFileObject::READ_CSV);
+echo $file->getFlags();
+echo "|";
+$file->setMaxLineLen(7);
+echo $file->getMaxLineLen();
+echo "|";
+
+unlink("meta.txt");
+"#,
+        &[],
+    );
+}
+
 /// Compiles and runs a PHP snippet through both backends and compares stdout.
 fn assert_backend_parity(name: &str, source: &str, args: &[&str]) {
     let legacy = compile_and_run_backend(name, source, args, Backend::Legacy);

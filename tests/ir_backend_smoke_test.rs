@@ -2571,6 +2571,37 @@ unlink("stream.txt");
     );
 }
 
+/// Verifies `SplFileObject` lightweight state getters and byte reads lower to EIR.
+#[test]
+fn ir_backend_handles_spl_file_object_state_helpers() {
+    let source = r#"<?php
+file_put_contents("meta.txt", "aa\nbb\n");
+
+$file = new SplFileObject("meta.txt");
+echo $file->getCurrentLine();
+echo "|";
+echo $file->fgetc();
+echo $file->fgetc();
+echo "|";
+$file->fseek(0, 2);
+echo ($file->fgetc() === false) ? "F" : "x";
+echo $file->eof() ? "E" : "N";
+echo "|";
+$file->setFlags(SplFileObject::READ_CSV);
+echo $file->getFlags();
+echo "|";
+$file->setMaxLineLen(7);
+echo $file->getMaxLineLen();
+echo "|";
+
+unlink("meta.txt");
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("spl_file_object_state_helpers", source),
+        "aa\n|aa|FE|8|7|"
+    );
+}
+
 /// Verifies typed declared properties still fatal when read before initialization.
 #[test]
 fn ir_backend_fatals_on_uninitialized_typed_object_property() {
