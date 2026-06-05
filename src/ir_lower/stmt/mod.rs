@@ -841,6 +841,22 @@ fn lower_static_property_array_push(
     value: &Expr,
     span: Span,
 ) {
+    if let Some(property_ty) =
+        static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
+    {
+        let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::ArrayPush,
+            vec![property_value.value, value.value],
+            None,
+            Op::ArrayPush.default_effects(),
+            Some(span),
+        );
+        store_static_property(ctx, receiver, property, property_value.value, span);
+        return;
+    }
+
     let property_value = load_static_property(ctx, receiver, property, span);
     let value = lower_expr(ctx, value);
     ctx.emit_void(
@@ -882,6 +898,36 @@ fn lower_property_array_push(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    if let Some(property_ty) =
+        object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
+    {
+        let data = ctx.intern_string(property);
+        let property_value = ctx.emit_value(
+            Op::PropGet,
+            vec![object.value],
+            Some(Immediate::Data(data)),
+            property_ty,
+            Op::PropGet.default_effects(),
+            Some(span),
+        );
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::ArrayPush,
+            vec![property_value.value, value.value],
+            None,
+            Op::ArrayPush.default_effects(),
+            Some(span),
+        );
+        ctx.emit_void(
+            Op::PropSet,
+            vec![object.value, property_value.value],
+            Some(Immediate::Data(data)),
+            Op::PropSet.default_effects(),
+            Some(span),
+        );
+        return;
+    }
+
     let value = lower_expr(ctx, value);
     let data = ctx.intern_string(property);
     ctx.emit_void(
@@ -1178,13 +1224,24 @@ fn load_static_property(
     property: &str,
     span: Span,
 ) -> LoweredValue {
+    load_static_property_as(ctx, receiver, property, PhpType::Mixed, span)
+}
+
+/// Loads a static property value using known PHP metadata.
+fn load_static_property_as(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    php_type: PhpType,
+    span: Span,
+) -> LoweredValue {
     let name = format!("{}::{}", receiver_name(receiver), property);
     let data = ctx.intern_string(&name);
     ctx.emit_value(
         Op::LoadStaticProperty,
         Vec::new(),
         Some(Immediate::Data(data)),
-        PhpType::Mixed,
+        php_type,
         Op::LoadStaticProperty.default_effects(),
         Some(span),
     )
@@ -1216,5 +1273,68 @@ fn receiver_name(receiver: &StaticReceiver) -> String {
         StaticReceiver::Self_ => "self".to_string(),
         StaticReceiver::Static => "static".to_string(),
         StaticReceiver::Parent => "parent".to_string(),
+    }
+}
+
+/// Resolves the declared PHP type of a static property for statement lowering.
+fn static_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+) -> Option<PhpType> {
+    let class_name = static_receiver_class_name(ctx, receiver)?;
+    ctx.classes
+        .get(class_name.as_str())?
+        .static_properties
+        .iter()
+        .find(|(name, _)| name == property)
+        .map(|(_, property_ty)| normalize_value_php_type(property_ty.codegen_repr()))
+}
+
+/// Resolves a static receiver to a concrete class name when lexical metadata is available.
+fn static_receiver_class_name(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+) -> Option<String> {
+    match receiver {
+        StaticReceiver::Named(name) => Some(name.as_str().trim_start_matches('\\').to_string()),
+        StaticReceiver::Self_ => ctx.current_class.clone(),
+        StaticReceiver::Parent => {
+            let current = ctx.current_class.as_deref()?;
+            ctx.classes.get(current).and_then(|class_info| class_info.parent.clone())
+        }
+        StaticReceiver::Static => None,
+    }
+}
+
+/// Resolves the declared PHP type of an object property for statement lowering.
+fn object_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> Option<PhpType> {
+    let object_ty = ctx.builder.value_php_type(object);
+    let PhpType::Object(class_name) = object_ty else {
+        return None;
+    };
+    ctx.classes
+        .get(class_name.trim_start_matches('\\'))?
+        .properties
+        .iter()
+        .find(|(name, _)| name == property)
+        .map(|(_, property_ty)| normalize_value_php_type(property_ty.codegen_repr()))
+}
+
+/// Returns true when a property type uses concrete indexed-array storage.
+fn is_indexed_array_type(php_type: &PhpType) -> bool {
+    matches!(php_type.codegen_repr(), PhpType::Array(_))
+}
+
+/// Normalizes non-materializable statement metadata to the EIR null sentinel type.
+fn normalize_value_php_type(php_type: PhpType) -> PhpType {
+    if matches!(php_type, PhpType::Never) {
+        PhpType::Void
+    } else {
+        php_type
     }
 }

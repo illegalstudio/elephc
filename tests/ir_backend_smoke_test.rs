@@ -1601,10 +1601,13 @@ echo ":";
 echo is_null($box->a[1]) ? "N" : "bad";
 echo ":";
 echo $box->a[2];
+$box->a[] = 2;
+echo ":";
+echo $box->a[3];
 "#;
     assert_eq!(
         compile_and_run_ir_backend("array_object_property_defaults", object_source),
-        "3:1:N:ok"
+        "3:1:N:ok:2"
     );
 
     let static_source = r#"<?php
@@ -1618,10 +1621,13 @@ echo ":";
 echo is_null(Box::$a[1]) ? "N" : "bad";
 echo ":";
 echo Box::$a[2];
+Box::$a[] = 2;
+echo ":";
+echo Box::$a[3];
 "#;
     assert_eq!(
         compile_and_run_ir_backend("array_static_property_defaults", static_source),
-        "3:1:N:ok"
+        "3:1:N:ok:2"
     );
 }
 

@@ -15,7 +15,7 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
-use crate::ir::Instruction;
+use crate::ir::{Instruction, ValueDef, ValueId};
 use crate::names::static_property_symbol;
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
@@ -52,11 +52,33 @@ pub(super) fn lower_store_static_property(ctx: &mut FunctionContext<'_>, inst: &
     let value_ty = ctx.value_php_type(value)?;
     ensure_static_property_value_supported(&slot, &value_ty, inst)?;
     ctx.load_value_to_result(value)?;
-    abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &slot.php_type, true);
+    let release_previous = !value_is_same_static_property_load(ctx, value, &slot)?;
+    abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &slot.php_type, release_previous);
     if !matches!(slot.php_type.codegen_repr(), PhpType::Str) {
         abi::emit_store_zero_to_symbol(ctx.emitter, &slot.symbol, 8);
     }
     Ok(())
+}
+
+/// Returns true when a store writes back the same static slot it just loaded.
+fn value_is_same_static_property_load(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    slot: &StaticPropertySlot,
+) -> Result<bool> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(false);
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+    };
+    if inst_ref.op != crate::ir::Op::LoadStaticProperty {
+        return Ok(false);
+    }
+    Ok(resolve_static_property_slot(ctx, inst_ref)?.symbol == slot.symbol)
 }
 
 /// Resolves a static property immediate into declaring-class symbol metadata.
