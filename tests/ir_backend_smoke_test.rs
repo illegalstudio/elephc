@@ -2540,6 +2540,37 @@ unlink("a.txt");
     );
 }
 
+/// Verifies `SplFileObject` stream-position methods operate on the backing stream.
+#[test]
+fn ir_backend_handles_spl_file_object_stream_position_methods() {
+    let source = r#"<?php
+file_put_contents("stream.txt", "abcdef\nsecond\n");
+
+$file = new SplFileObject("stream.txt", "r+");
+echo $file->fread(3);
+echo "|";
+echo $file->ftell();
+$file->fseek(4);
+echo "|";
+echo $file->fread(2);
+$file->fseek(0);
+$file->fwrite("XY");
+$file->fseek(0);
+echo "|";
+echo $file->fread(6);
+$file->ftruncate(4);
+$file->fseek(0);
+echo "|";
+echo $file->fread(10);
+
+unlink("stream.txt");
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("spl_file_object_stream_position_methods", source),
+        "abc|3|ef|XYcdef|XYcd"
+    );
+}
+
 /// Verifies typed declared properties still fatal when read before initialization.
 #[test]
 fn ir_backend_fatals_on_uninitialized_typed_object_property() {
