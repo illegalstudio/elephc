@@ -3473,6 +3473,31 @@ echo "after";
     );
 }
 
+/// Verifies `readfile()` streams contents and boxes int or false return values.
+#[test]
+fn ir_backend_handles_readfile() {
+    let source = r#"<?php
+file_put_contents("rf.txt", "hello world");
+$bytes = readfile("rf.txt");
+echo "|" . $bytes;
+echo ":";
+file_put_contents("empty.txt", "");
+$empty = readfile("empty.txt");
+echo "|" . $empty;
+echo ":";
+mkdir("as-dir");
+$dir_bytes = readfile("as-dir");
+echo $dir_bytes;
+echo ":";
+$missing = @readfile("/nonexistent/path/eir-readfile.txt");
+echo $missing === false ? "F" : "!";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("readfile", source),
+        "hello world|11:|0:-1:F"
+    );
+}
+
 /// Verifies `filesize()` returns the current byte length for a written file.
 #[test]
 fn ir_backend_handles_filesize() {

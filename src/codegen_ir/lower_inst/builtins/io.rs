@@ -36,6 +36,16 @@ pub(super) fn lower_file_get_contents(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `readfile(path)` and boxes the runtime byte-count-or-false result.
+pub(super) fn lower_readfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "readfile", 1)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, "readfile")?;
+    abi::emit_call_label(ctx.emitter, "__rt_readfile");
+    box_readfile_result(ctx);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `file(path)` through the target-aware runtime line-array helper.
 pub(super) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_unary_path_array(ctx, inst, "file", "__rt_file")
@@ -894,6 +904,45 @@ fn box_owned_string_or_false_result(ctx: &mut FunctionContext<'_>, label_prefix:
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the string Mixed result
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("xor edi, edi");                            // use zero as the false payload for the Mixed bool box
+            ctx.emitter.instruction("xor esi, esi");                            // clear the unused high payload word for bool Mixed boxes
+            ctx.emitter.instruction("mov eax, 3");                              // select runtime tag 3 for a boolean false Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+    }
+}
+
+/// Boxes a raw `readfile()` byte count into PHP `int|false` Mixed form.
+fn box_readfile_result(ctx: &mut FunctionContext<'_>) {
+    let false_label = ctx.next_label("readfile_false");
+    let done_label = ctx.next_label("readfile_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x9, #-2");                             // runtime sentinel -2 means the file could not be opened
+            ctx.emitter.instruction("cmp x0, x9");                              // test whether readfile failed before streaming began
+            ctx.emitter.instruction(&format!("b.eq {}", false_label));          // box PHP false for open failure
+            ctx.emitter.instruction("mov x1, x0");                              // pass the streamed byte count as the Mixed integer payload
+            ctx.emitter.instruction("mov x2, #0");                              // integer Mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #0");                              // select runtime tag 0 for an integer Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after building the integer result
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov x1, #0");                              // use zero as the false payload for readfile failure
+            ctx.emitter.instruction("mov x2, #0");                              // clear the unused high payload word for bool Mixed boxes
+            ctx.emitter.instruction("mov x0, #3");                              // select runtime tag 3 for a boolean false Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, -2");                             // runtime sentinel -2 means the file could not be opened
+            ctx.emitter.instruction(&format!("je {}", false_label));            // box PHP false for open failure
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the streamed byte count as the Mixed integer payload
+            ctx.emitter.instruction("xor esi, esi");                            // integer Mixed payloads do not use a high word
+            ctx.emitter.instruction("xor eax, eax");                            // select runtime tag 0 for an integer Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the integer result
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("xor edi, edi");                            // use zero as the false payload for readfile failure
             ctx.emitter.instruction("xor esi, esi");                            // clear the unused high payload word for bool Mixed boxes
             ctx.emitter.instruction("mov eax, 3");                              // select runtime tag 3 for a boolean false Mixed value
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
