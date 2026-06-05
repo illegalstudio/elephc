@@ -142,6 +142,25 @@ echo preg_replace_callback("/[A-Z]/", eir_regex_replace_fcc(...), "AB");
 "#,
         &[],
     );
+    assert_backend_parity(
+        "direct_first_class_callable_expr_call",
+        r#"<?php
+function eir_direct_fcc_add(int $left, int $right): int {
+    return $left + $right;
+}
+class EirDirectFcc {
+    public static function hit(int $value): int {
+        return $value + 2;
+    }
+}
+echo (eir_direct_fcc_add(...))(2, 5);
+echo "|";
+echo (strlen(...))("abcd");
+echo "|";
+echo (EirDirectFcc::hit(...))(3);
+"#,
+        &[],
+    );
 }
 
 /// Verifies static method callback forms lower to the same direct calls as legacy codegen.

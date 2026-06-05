@@ -2170,6 +2170,9 @@ fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, args: &[Expr
 
 /// Lowers an expression call.
 fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, args: &[Expr], expr: &Expr) -> LoweredValue {
+    if let Some(value) = lower_first_class_callable_expr_call(ctx, callee, args, expr) {
+        return value;
+    }
     if let ExprKind::ArrayLiteral(items) = &callee.kind {
         if let Some(StaticCallableTarget::StaticMethod { receiver, method }) =
             static_array_callable_target(ctx, items)
@@ -2180,6 +2183,27 @@ fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, args: &[Exp
     let mut operands = vec![lower_expr(ctx, callee).value];
     operands.extend(lower_args(ctx, args));
     ctx.emit_value(Op::ExprCall, operands, None, fallback_expr_type(expr), Op::ExprCall.default_effects(), Some(expr.span))
+}
+
+/// Lowers direct invocation of a literal first-class callable target.
+fn lower_first_class_callable_expr_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    callee: &Expr,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    match &callee.kind {
+        ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+            Some(lower_function_call(ctx, name, args, expr))
+        }
+        ExprKind::FirstClassCallable(CallableTarget::StaticMethod { receiver, method }) => {
+            Some(lower_static_method_call(ctx, receiver, method, args, expr))
+        }
+        ExprKind::FirstClassCallable(CallableTarget::Method { object, method }) => {
+            Some(lower_method_call(ctx, object, method, args, Op::MethodCall, expr))
+        }
+        _ => None,
+    }
 }
 
 /// Lowers fixed-class object construction.
