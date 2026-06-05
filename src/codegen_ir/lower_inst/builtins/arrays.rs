@@ -400,6 +400,21 @@ pub(super) fn lower_shuffle(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     lower_indexed_array_sort(ctx, inst, "shuffle", "__rt_shuffle")
 }
 
+/// Lowers `usort()` for indexed integer arrays with a static user comparator.
+pub(super) fn lower_usort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_user_sort_static_callback(ctx, inst, "usort")
+}
+
+/// Lowers `uksort()` through the legacy user-sort helper for static comparators.
+pub(super) fn lower_uksort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_user_sort_static_callback(ctx, inst, "uksort")
+}
+
+/// Lowers `uasort()` through the legacy user-sort helper for static comparators.
+pub(super) fn lower_uasort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_user_sort_static_callback(ctx, inst, "uasort")
+}
+
 /// Lowers `array_key_exists()` through the dedicated key-existence builtin emitter.
 pub(super) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     key_exists::lower_array_key_exists(ctx, inst)
@@ -540,6 +555,45 @@ fn lower_indexed_array_sort(
         }
     }
     abi::emit_call_label(ctx.emitter, helper);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        0x7fff_ffff_ffff_fffe,
+    );
+    store_if_result(ctx, inst)
+}
+
+/// Calls the legacy user-sort helper with a static string comparator and a null environment.
+fn lower_user_sort_static_callback(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 2)?;
+    let array = expect_operand(inst, 0)?;
+    let callback = expect_operand(inst, 1)?;
+    require_indexed_int_sort_array(ctx.value_php_type(array)?, name)?;
+    let callback_name = const_string_operand(ctx, callback, "user-sort callback")?;
+    let callee = ctx.callable_function_by_name(&callback_name).ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
+            "{} callback '{}' is not a user function",
+            name,
+            callback_name
+        ))
+    })?;
+    let callback_label = function_symbol(&callee.name);
+    let source_local = source_load_local_slot(ctx, array)?;
+    ensure_unique_sort_source(ctx, array)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, array)?;
+    }
+    let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_label);
+    ctx.load_value_to_reg(array, array_arg_reg)?;
+    abi::emit_load_int_immediate(ctx.emitter, env_arg_reg, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_usort");
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),

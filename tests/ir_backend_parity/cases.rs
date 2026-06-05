@@ -444,6 +444,47 @@ array_walk([5, 6], $stat);
     );
 }
 
+/// Verifies static user-sort callback forms route through the same runtime helper as legacy.
+#[test]
+fn parity_static_user_sort_callbacks() {
+    assert_backend_parity(
+        "static_usort_callback",
+        r#"<?php
+function eir_sort_asc(int $left, int $right): int {
+    return $left - $right;
+}
+$usorted = [5, 3, 1, 4, 2];
+usort($usorted, "eir_sort_asc");
+foreach ($usorted as $value) { echo $value; }
+"#,
+        &[],
+    );
+    assert_backend_parity(
+        "static_uksort_callback",
+        r#"<?php
+function eir_sort_desc(int $left, int $right): int {
+    return $right - $left;
+}
+$uksorted = [1, 3, 2];
+uksort($uksorted, "eir_sort_desc");
+foreach ($uksorted as $value) { echo $value; }
+"#,
+        &[],
+    );
+    assert_backend_parity(
+        "static_uasort_callback",
+        r#"<?php
+function eir_sort_asc(int $left, int $right): int {
+    return $left - $right;
+}
+$uasorted = [30, 10, 20];
+uasort($uasorted, "eir_sort_asc");
+foreach ($uasorted as $value) { echo $value . ":"; }
+"#,
+        &[],
+    );
+}
+
 /// Verifies reflection attribute owner metadata matches the legacy backend.
 #[test]
 fn parity_reflection_owner_attributes() {
