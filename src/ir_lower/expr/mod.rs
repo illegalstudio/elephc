@@ -1691,10 +1691,10 @@ fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
 fn builtin_return_type_override(name: &str) -> Option<PhpType> {
     match php_symbol_key(name.trim_start_matches('\\')).as_str() {
         "chdir" | "chgrp" | "chmod" | "chown" | "class_exists" | "copy" | "define" | "defined"
-        | "empty" | "file_exists" | "fnmatch" | "function_exists" | "is_callable"
+        | "empty" | "file_exists" | "fnmatch" | "function_exists" | "is_a" | "is_callable"
         | "fdatasync" | "fflush" | "flock" | "fsync" | "ftruncate" | "interface_exists" | "is_dir"
         | "is_executable" | "is_file" | "is_link" | "is_numeric" | "link" | "mkdir" | "rename"
-        | "enum_exists" | "putenv" | "rmdir" | "is_readable" | "is_writeable" | "is_writable" | "symlink"
+        | "enum_exists" | "putenv" | "rmdir" | "is_readable" | "is_subclass_of" | "is_writeable" | "is_writable" | "symlink"
         | "touch" | "unlink" => Some(PhpType::Bool),
         "basename" | "date" | "dirname" | "exec" | "fgets" | "get_class" | "get_parent_class"
         | "getcwd" | "getenv" | "php_uname" | "readline" | "shell_exec" | "sys_get_temp_dir"

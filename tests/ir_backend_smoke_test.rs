@@ -3471,6 +3471,26 @@ echo get_parent_class("EirDog");
     );
 }
 
+/// Verifies is_a() and is_subclass_of() fold object relations in the EIR backend.
+#[test]
+fn ir_backend_handles_is_a_relation_builtins() {
+    let source = r#"<?php
+interface EirPettable {}
+class EirAnimal {}
+class EirDog extends EirAnimal implements EirPettable {}
+$dog = new EirDog();
+echo is_a($dog, "EirDog") ? "d" : "n";
+echo is_a($dog, "eiranimal") ? "a" : "n";
+echo is_a($dog, "EirPettable") ? "p" : "n";
+echo is_subclass_of($dog, "EirDog") ? "s" : "n";
+echo is_subclass_of($dog, "EirAnimal") ? "S" : "n";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("is_a_relation_builtins", source),
+        "dapnS"
+    );
+}
+
 /// Verifies filesystem stat predicates lower through the EIR backend runtime helpers.
 #[test]
 fn ir_backend_handles_filesystem_stat_predicates() {

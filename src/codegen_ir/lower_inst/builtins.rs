@@ -219,6 +219,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
             lower_class_like_exists(ctx, inst, key.as_str())
         }
         "get_class" | "get_parent_class" => types::lower_class_name_lookup(ctx, inst, key.as_str()),
+        "is_a" | "is_subclass_of" => types::lower_is_a_relation(ctx, inst, key.as_str()),
         "is_callable" => lower_is_callable(ctx, inst),
         "print_r" => debug::lower_print_r(ctx, inst),
         "var_dump" => debug::lower_var_dump(ctx, inst),

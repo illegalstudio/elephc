@@ -13,7 +13,8 @@ use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
-use crate::types::PhpType;
+use crate::names::php_symbol_key;
+use crate::types::{ClassInfo, PhpType};
 
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
@@ -53,6 +54,25 @@ pub(super) fn lower_class_name_lookup(
             emit_string_result(ctx, b"");
         }
     }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `is_a()` and `is_subclass_of()` for object operands and literal targets.
+pub(super) fn lower_is_a_relation(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, name, 2, 3)?;
+    for value in &inst.operands {
+        ctx.load_value_to_result(*value)?;
+    }
+
+    let object = expect_operand(inst, 0)?;
+    let target = expect_operand(inst, 1)?;
+    let exclude_self = name == "is_subclass_of";
+    let result = static_relation_holds(ctx, object, target, exclude_self)?;
+    emit_bool_result(ctx, result);
     store_if_result(ctx, inst)
 }
 
@@ -157,6 +177,87 @@ fn emit_string_result(ctx: &mut FunctionContext<'_>, bytes: &[u8]) {
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
 }
 
+/// Emits `value` as the current boolean result.
+fn emit_bool_result(ctx: &mut FunctionContext<'_>, value: bool) {
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        i64::from(value),
+    );
+}
+
+/// Statically evaluates an object/class relation against a literal target class name.
+fn static_relation_holds(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    target: ValueId,
+    exclude_self: bool,
+) -> Result<bool> {
+    let PhpType::Object(object_class) = ctx.value_php_type(object)? else {
+        return Ok(false);
+    };
+    let Some(target_class) = optional_const_string_operand(ctx, target)? else {
+        return Ok(false);
+    };
+    let object_class = object_class.trim_start_matches('\\');
+    let target_class = target_class.trim_start_matches('\\');
+    let target_key = php_symbol_key(target_class);
+    if !exclude_self && php_symbol_key(object_class) == target_key {
+        return Ok(true);
+    }
+    if parent_chain_contains(ctx, object_class, &target_key) {
+        return Ok(true);
+    }
+    Ok(class_interfaces_contain(ctx, object_class, &target_key))
+}
+
+/// Returns true when an object's parent chain contains the target PHP symbol key.
+fn parent_chain_contains(
+    ctx: &FunctionContext<'_>,
+    object_class: &str,
+    target_key: &str,
+) -> bool {
+    let mut current = object_class.to_string();
+    while let Some(info) = lookup_class(ctx, &current) {
+        let Some(parent) = &info.parent else {
+            return false;
+        };
+        let parent = parent.trim_start_matches('\\');
+        if php_symbol_key(parent) == target_key {
+            return true;
+        }
+        current = parent.to_string();
+    }
+    false
+}
+
+/// Returns true when an object's implemented interface set contains the target PHP symbol key.
+fn class_interfaces_contain(
+    ctx: &FunctionContext<'_>,
+    object_class: &str,
+    target_key: &str,
+) -> bool {
+    lookup_class(ctx, object_class).is_some_and(|info| {
+        info.interfaces
+            .iter()
+            .any(|name| php_symbol_key(name.trim_start_matches('\\')) == target_key)
+    })
+}
+
+/// Looks up a class by PHP-style case-insensitive name.
+fn lookup_class<'a>(ctx: &'a FunctionContext<'_>, name: &str) -> Option<&'a ClassInfo> {
+    let clean = name.trim_start_matches('\\');
+    if let Some(info) = ctx.module.class_infos.get(clean) {
+        return Some(info);
+    }
+    let key = php_symbol_key(clean);
+    ctx.module
+        .class_infos
+        .iter()
+        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        .map(|(_, info)| info)
+}
+
 /// Returns the lexical class name encoded in an EIR method function name.
 fn current_method_class<'a>(ctx: &'a FunctionContext<'_>) -> Option<&'a str> {
     ctx.function
@@ -179,33 +280,40 @@ fn parent_of(ctx: &FunctionContext<'_>, class_name: &str) -> String {
 
 /// Returns a string literal value defined by a `ConstStr` operand.
 fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<String> {
+    optional_const_string_operand(ctx, value)?.ok_or_else(|| {
+        CodegenIrError::unsupported("get_parent_class with non-literal class name")
+    })
+}
+
+/// Returns a `ConstStr` operand value, or `None` when the operand is not a literal string.
+fn optional_const_string_operand(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<String>> {
     let value_ref = ctx
         .function
         .value(value)
         .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
     let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Err(CodegenIrError::unsupported(
-            "get_parent_class with non-literal class name",
-        ));
+        return Ok(None);
     };
     let inst_ref = ctx
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
     if inst_ref.op != Op::ConstStr {
-        return Err(CodegenIrError::unsupported(
-            "get_parent_class with non-literal class name",
-        ));
+        return Ok(None);
     }
     let Some(Immediate::Data(data)) = inst_ref.immediate else {
         return Err(CodegenIrError::invalid_module(
-            "get_parent_class string literal has no data id",
+            "string literal operand has no data id",
         ));
     };
-    ctx.module
+    Ok(Some(ctx
+        .module
         .data
         .strings
         .get(data.as_raw() as usize)
         .cloned()
-        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
+        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?))
 }
