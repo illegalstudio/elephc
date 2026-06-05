@@ -120,6 +120,19 @@ pub(super) fn lower_fileinode(
     lower_unary_path_stat_int_or_false(ctx, inst, "fileinode", "__rt_fileinode")
 }
 
+/// Lowers `filetype(path)` and boxes the runtime string-or-false result.
+pub(super) fn lower_filetype(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "filetype", 1)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, "filetype")?;
+    abi::emit_call_label(ctx.emitter, "__rt_filetype");
+    box_stat_string_or_false_result(ctx);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `is_file(path)` through the target-aware runtime stat helper.
 pub(super) fn lower_is_file(
     ctx: &mut FunctionContext<'_>,
@@ -326,6 +339,41 @@ fn box_stat_int_or_false_result(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("xor eax, eax");                            // select runtime tag 0 for an integer Mixed value
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the integer Mixed result
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("xor edi, edi");                            // use zero as the false payload for the Mixed bool box
+            ctx.emitter.instruction("xor esi, esi");                            // clear the unused high payload word for bool Mixed boxes
+            ctx.emitter.instruction("mov eax, 3");                              // select runtime tag 3 for a boolean false Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+    }
+}
+
+/// Boxes the raw stat string slice into PHP `string|false` Mixed form.
+fn box_stat_string_or_false_result(ctx: &mut FunctionContext<'_>) {
+    let false_label = ctx.next_label("stat_string_false");
+    let done_label = ctx.next_label("stat_string_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {}", false_label));       // box PHP false when the runtime returned a null string pointer
+            ctx.emitter.instruction("mov x0, #1");                              // select runtime tag 1 for a string Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after building the string Mixed result
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov x1, #0");                              // use zero as the false payload for the Mixed bool box
+            ctx.emitter.instruction("mov x2, #0");                              // clear the unused high payload word for bool Mixed boxes
+            ctx.emitter.instruction("mov x0, #3");                              // select runtime tag 3 for a boolean false Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // test whether the runtime returned a null string pointer
+            ctx.emitter.instruction(&format!("jz {}", false_label));            // box PHP false when filetype failed
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the filetype string pointer as the Mixed low payload word
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the filetype string length as the Mixed high payload word
+            ctx.emitter.instruction("mov eax, 1");                              // select runtime tag 1 for a string Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the string Mixed result
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("xor edi, edi");                            // use zero as the false payload for the Mixed bool box
             ctx.emitter.instruction("xor esi, esi");                            // clear the unused high payload word for bool Mixed boxes

@@ -1683,7 +1683,9 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "filesize" | "mktime" | "sleep" | "strtotime" | "time" => Some(PhpType::Int),
         "usleep" => Some(PhpType::Void),
         "file_get_contents" | "fileatime" | "filectime" | "filegroup" | "fileinode"
-        | "fileowner" | "fileperms" | "strpos" | "strrpos" => Some(PhpType::Mixed),
+        | "fileowner" | "fileperms" | "filetype" | "strpos" | "strrpos" => {
+            Some(PhpType::Mixed)
+        }
         "explode" | "str_split" | "sscanf" => Some(PhpType::Array(Box::new(PhpType::Str))),
         _ => None,
     }

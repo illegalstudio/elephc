@@ -3519,6 +3519,31 @@ echo fileinode("missing.txt") === false ? "I" : "!";
     );
 }
 
+/// Verifies `filetype()` boxes type-name strings and strict false failures.
+#[test]
+fn ir_backend_handles_filetype() {
+    let out = compile_and_run_ir_backend_files(
+        "filetype",
+        &[
+            (
+                "main.php",
+                r#"<?php
+echo filetype("ft.txt");
+echo ":";
+echo filetype("mydir");
+echo ":";
+echo filetype("missing.txt") === false ? "false" : "string";
+"#,
+            ),
+            ("ft.txt", ""),
+            ("mydir/item.txt", "x"),
+        ],
+        "main.php",
+        &[],
+    );
+    assert_eq!(out, "file:dir:false");
+}
+
 /// Verifies global constant declarations, references, and `defined()` lowering.
 #[test]
 fn ir_backend_handles_global_constants_and_defined() {
