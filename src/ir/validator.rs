@@ -376,6 +376,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         }
         MixedTagOf | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat
         | MixedCastString => check_heap_unary(function, inst_id, inst, IrHeapKind::Mixed, "Heap(Mixed)"),
+        ArrayUnion => check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Array), "Heap(Array)"),
         ArrayLen | ArrayGet | ArraySet | ArrayPush | ArrayEnsureUnique | ArrayCloneShallow
         | ArrayToHash => check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)"),
         HashLen | HashGet | HashSet | HashAppend | HashEnsureUnique | HashCloneShallow => {

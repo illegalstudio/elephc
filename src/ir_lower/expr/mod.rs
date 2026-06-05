@@ -12,7 +12,7 @@
 
 use crate::ir::{
     BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, MixedNumericOp, Op,
-    Ownership, Terminator,
+    Ownership, Terminator, ValueId,
 };
 use crate::ir_lower::context::{
     type_expr_to_php_type, value_ir_type, LoweredValue, LoweringContext,
@@ -242,6 +242,18 @@ fn lower_numeric_binary(
 ) -> LoweredValue {
     let lhs = lower_expr(ctx, left);
     let rhs = lower_expr(ctx, right);
+    if matches!(op, BinOp::Add) {
+        if let Some(result_ty) = indexed_array_union_result_type(ctx, lhs.value, rhs.value) {
+            return ctx.emit_value(
+                Op::ArrayUnion,
+                vec![lhs.value, rhs.value],
+                None,
+                result_ty,
+                Op::ArrayUnion.default_effects(),
+                Some(expr.span),
+            );
+        }
+    }
     if matches!(op, BinOp::Pow) {
         let lhs = coerce_to_float(ctx, lhs, expr);
         let rhs = coerce_to_float(ctx, rhs, expr);
@@ -306,6 +318,42 @@ fn lower_numeric_binary(
         effects_lookup::runtime_effects(),
         Some(expr.span),
     )
+}
+
+/// Returns the indexed-array result type for PHP array union operands.
+fn indexed_array_union_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> Option<PhpType> {
+    let lhs_ty = ctx.builder.value_php_type(lhs).codegen_repr();
+    let rhs_ty = ctx.builder.value_php_type(rhs).codegen_repr();
+    match (&lhs_ty, &rhs_ty) {
+        (PhpType::Array(left_elem), PhpType::Array(right_elem)) => {
+            indexed_array_union_element_type(left_elem, right_elem)
+                .map(|elem_ty| PhpType::Array(Box::new(elem_ty)))
+        }
+        _ => None,
+    }
+}
+
+/// Merges indexed-array element types supported by the current EIR storage model.
+fn indexed_array_union_element_type(left: &PhpType, right: &PhpType) -> Option<PhpType> {
+    if left == right {
+        return Some(left.clone());
+    }
+    if matches!(left, PhpType::Never) {
+        return Some(right.codegen_repr());
+    }
+    if matches!(right, PhpType::Never) {
+        return Some(left.codegen_repr());
+    }
+    let left = left.codegen_repr();
+    let right = right.codegen_repr();
+    if left == right {
+        return Some(left);
+    }
+    None
 }
 
 /// Returns true when runtime mixed numeric dispatch is needed before float coercion.

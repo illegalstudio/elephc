@@ -102,6 +102,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArrayGet => arrays::lower_array_get(ctx, &inst),
         Op::ArraySet => arrays::lower_array_set(ctx, &inst),
         Op::ArrayPush => arrays::lower_array_push(ctx, &inst),
+        Op::ArrayUnion => arrays::lower_array_union(ctx, &inst),
         Op::HashNew => hashes::lower_hash_new(ctx, &inst),
         Op::HashLen => hashes::lower_hash_len(ctx, &inst),
         Op::HashGet => hashes::lower_hash_get(ctx, &inst),

@@ -94,6 +94,27 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
     Ok(())
 }
 
+/// Lowers PHP indexed-array union through the shared runtime helper.
+pub(super) fn lower_array_union(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let left = expect_operand(inst, 0)?;
+    let right = expect_operand(inst, 1)?;
+    require_indexed_array(ctx.value_php_type(left)?, inst)?;
+    require_indexed_array(ctx.value_php_type(right)?, inst)?;
+    require_indexed_array(inst.result_php_type.codegen_repr(), inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(left, "x0")?;
+            ctx.load_value_to_reg(right, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(left, "rdi")?;
+            ctx.load_value_to_reg(right, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_union");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers an indexed-array element read for AArch64 targets.
 fn lower_array_get_aarch64(
     ctx: &mut FunctionContext<'_>,

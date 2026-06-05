@@ -1438,6 +1438,30 @@ fn ir_backend_handles_basic_indexed_arrays() {
     );
 }
 
+/// Verifies PHP indexed-array `+` preserves left keys and appends missing right suffixes.
+#[test]
+fn ir_backend_handles_indexed_array_union() {
+    for (name, source, expected) in [
+        (
+            "array_union_keeps_left_numeric_keys",
+            "<?php $left = [10, 20]; $right = [99, 88, 77]; $result = $left + $right; echo count($result); echo ':'; echo $result[0]; echo ','; echo $result[1]; echo ','; echo $result[2];",
+            "3:10,20,77",
+        ),
+        (
+            "array_union_string_suffix",
+            "<?php $left = ['left']; $right = ['ignored', 'added']; $result = $left + $right; echo count($result); echo ':'; echo $result[0]; echo ','; echo $result[1];",
+            "2:left,added",
+        ),
+        (
+            "array_union_empty_left",
+            "<?php $result = [] + ['first', 'second']; echo count($result); echo ':'; echo $result[0]; echo ','; echo $result[1];",
+            "2:first,second",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies `array_pop()` mutates indexed arrays and returns PHP `mixed` values.
 #[test]
 fn ir_backend_handles_indexed_array_pop() {
