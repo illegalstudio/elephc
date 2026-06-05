@@ -900,6 +900,28 @@ unlink("a.txt");
     );
 }
 
+/// Verifies simple `SplFileObject` CSV current-row behavior matches the legacy backend.
+#[test]
+fn parity_spl_file_object_csv_current() {
+    assert_backend_parity(
+        "spl_file_object_csv_current",
+        r#"<?php
+file_put_contents("a.txt", "one\ntwo\n");
+
+$csv = new SplFileObject("a.txt");
+$csv->setFlags(SplFileObject::READ_CSV);
+$csv->setCsvControl("n");
+$row = $csv->current();
+echo $row[0];
+echo ":";
+echo $row[1];
+
+unlink("a.txt");
+"#,
+        &[],
+    );
+}
+
 /// Compiles and runs a PHP snippet through both backends and compares stdout.
 fn assert_backend_parity(name: &str, source: &str, args: &[&str]) {
     let legacy = compile_and_run_backend(name, source, args, Backend::Legacy);

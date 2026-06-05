@@ -2518,6 +2518,28 @@ unlink("a.txt");
     );
 }
 
+/// Verifies `SplFileObject` can expose simple CSV rows through `current()`.
+#[test]
+fn ir_backend_handles_spl_file_object_csv_current() {
+    let source = r#"<?php
+file_put_contents("a.txt", "one\ntwo\n");
+
+$csv = new SplFileObject("a.txt");
+$csv->setFlags(SplFileObject::READ_CSV);
+$csv->setCsvControl("n");
+$row = $csv->current();
+echo $row[0];
+echo ":";
+echo $row[1];
+
+unlink("a.txt");
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("spl_file_object_csv_current", source),
+        "o:e\n"
+    );
+}
+
 /// Verifies typed declared properties still fatal when read before initialization.
 #[test]
 fn ir_backend_fatals_on_uninitialized_typed_object_property() {
