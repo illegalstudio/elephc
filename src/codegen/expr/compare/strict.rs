@@ -256,7 +256,9 @@ pub(in crate::codegen::expr) fn emit_strict_compare(
                     crate::codegen::platform::Arch::X86_64 => {
                         abi::emit_pop_float_reg(emitter, "xmm1");               // pop the saved left float operand from the temporary comparison stack
                         emitter.instruction("ucomisd xmm1, xmm0");              // compare the two doubles in the native x86_64 floating-point registers
-                        emitter.instruction(&format!("set{} al", if is_eq { "e" } else { "ne" })); // materialize the floating-point strict-comparison result in the low result byte on x86_64
+                        emitter.instruction(&format!("set{} al", if is_eq { "e" } else { "ne" })); // strict float compare result
+                        emitter.instruction(&format!("set{} cl", if is_eq { "np" } else { "p" })); // capture the ordered/unordered (NaN) flag
+                        emitter.instruction(&format!("{} al, cl", if is_eq { "and" } else { "or" })); // NAN===NAN is false, NAN!==NAN is true
                         emitter.instruction("movzx rax, al");                   // widen the x86_64 comparison byte back into the full integer result register
                     }
                 }
