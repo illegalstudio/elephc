@@ -406,6 +406,10 @@ echo count($keyed); echo ":"; echo $keyed[0];
 echo "|";
 $both = array_filter([1, 3, 4, 2], "eir_filter_both", ARRAY_FILTER_USE_BOTH);
 echo count($both); echo ":"; echo $both[0]; echo ":"; echo $both[1];
+echo "|";
+$mode = ARRAY_FILTER_USE_KEY;
+$dynamic = array_filter([10, 20, 30], "eir_filter_key", $mode);
+echo count($dynamic); echo ":"; echo $dynamic[0];
 "#,
         &[],
     );
