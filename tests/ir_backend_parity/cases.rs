@@ -53,6 +53,25 @@ fn parity_scalar_control_and_builtin_baseline() {
     );
 }
 
+/// Verifies later indexed-array foreach states do not clobber source pointers at large frame offsets.
+#[test]
+fn parity_repeated_indexed_foreach() {
+    assert_backend_parity(
+        "repeated_indexed_foreach",
+        r#"<?php
+$a = [1, 2];
+foreach ($a as $value) { echo $value; }
+echo "|";
+$b = [3, 4];
+foreach ($b as $value) { echo $value; }
+echo "|";
+$c = [5, 6];
+foreach ($c as $value) { echo $value; }
+"#,
+        &[],
+    );
+}
+
 /// Verifies recent static callable fixes match the legacy backend behavior.
 #[test]
 fn parity_static_callable_checks() {

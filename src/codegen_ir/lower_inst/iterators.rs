@@ -124,13 +124,13 @@ pub(super) fn lower_iter_end(_ctx: &mut FunctionContext<'_>, inst: &Instruction)
 
 /// Emits AArch64 cursor advancement for a stack-resident indexed-array iterator.
 fn lower_indexed_iter_next_aarch64(ctx: &mut FunctionContext<'_>, offset: usize) {
-    let array_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let array_reg = "x12";
     let index_reg = abi::secondary_scratch_reg(ctx.emitter);
     let len_reg = abi::tertiary_scratch_reg(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
     let done_label = ctx.next_label("iter_next_done");
 
-    abi::load_at_offset(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    abi::load_at_offset_scratch(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA, "x9");
     abi::load_at_offset(ctx.emitter, index_reg, offset - ITER_CURSOR_OFFSET_DELTA);
     ctx.emitter.instruction(&format!("add {}, {}, #1", index_reg, index_reg));  // advance to the candidate indexed-array offset
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
@@ -251,10 +251,10 @@ fn load_current_array_value_aarch64(
     offset: usize,
     elem_ty: &PhpType,
 ) -> Result<()> {
-    let array_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let array_reg = "x12";
     let index_reg = abi::secondary_scratch_reg(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::load_at_offset(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    abi::load_at_offset_scratch(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA, "x9");
     abi::load_at_offset(ctx.emitter, index_reg, offset - ITER_CURSOR_OFFSET_DELTA);
     match elem_ty {
         PhpType::Void | PhpType::Never => {
