@@ -86,6 +86,75 @@ fn test_printf() {
     assert_eq!(out, "Hello World");
 }
 
+/// Verifies an integer argument under a `%s` specifier is coerced to its string form,
+/// matching PHP's `sprintf("%s", 42)` → "42" rather than producing an empty string.
+#[test]
+fn test_sprintf_int_under_string_specifier() {
+    let out = compile_and_run(r#"<?php echo sprintf("%s", 42);"#);
+    assert_eq!(out, "42");
+}
+
+/// Verifies a string argument under a `%d` specifier is parsed as a leading-numeric int,
+/// matching PHP's `sprintf("%d", "42abc")` → "42" rather than printing a pointer value.
+#[test]
+fn test_sprintf_string_under_int_specifier() {
+    let out = compile_and_run(r#"<?php echo sprintf("%d", "42abc");"#);
+    assert_eq!(out, "42");
+}
+
+/// Verifies an integer argument under a float specifier is widened to a double,
+/// matching PHP's `sprintf("%.1f", 3)` → "3.0".
+#[test]
+fn test_sprintf_int_under_float_specifier() {
+    let out = compile_and_run(r#"<?php echo sprintf("%.1f", 3);"#);
+    assert_eq!(out, "3.0");
+}
+
+/// Verifies a float argument under a `%d` specifier is truncated toward zero,
+/// matching PHP's `sprintf("%d", 3.9)` → "3".
+#[test]
+fn test_sprintf_float_under_int_specifier() {
+    let out = compile_and_run(r#"<?php echo sprintf("%d", 3.9);"#);
+    assert_eq!(out, "3");
+}
+
+/// Verifies `Mixed` arguments (heterogeneous associative-array values) are coerced to the
+/// type each specifier consumes: an int-bearing value under `%d` and a string-bearing value
+/// under `%s` both format correctly instead of pushing a zero/garbage payload.
+#[test]
+fn test_sprintf_mixed_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["n" => 42, "s" => "hi"];
+echo sprintf("%d", $a["n"]);
+echo ",";
+echo sprintf("%s", $a["s"]);
+"#,
+    );
+    assert_eq!(out, "42,hi");
+}
+
+/// Verifies cross-type `Mixed` formatting matches PHP: a numeric `Mixed` under `%s` stringifies
+/// and a non-numeric `Mixed` string under `%d` casts to 0, like `sprintf("%s|%d", 42, "hi")`.
+#[test]
+fn test_sprintf_mixed_cross_type() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["n" => 42, "s" => "hi"];
+echo sprintf("%s|%d", $a["n"], $a["s"]);
+"#,
+    );
+    assert_eq!(out, "42|0");
+}
+
+/// Verifies printf applies the same specifier-driven coercion as sprintf for cross-type
+/// arguments (int under `%05d`, plain string), writing the formatted bytes to stdout.
+#[test]
+fn test_printf_cross_type_arguments() {
+    let out = compile_and_run(r#"<?php printf("[%05d] %s", "7abc", 99);"#);
+    assert_eq!(out, "[00007] 99");
+}
+
 // --- String interpolation ---
 
 /// Tests sscanf with %d parsing an integer from a formatted string.

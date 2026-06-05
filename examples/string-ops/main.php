@@ -41,6 +41,11 @@ echo "strrev: " . strrev("desserts") . "\n";
 echo "grapheme_strrev: " . grapheme_strrev("A\u{0065}\u{0301}\u{1F469}\u{1F3FD}\u{200D}\u{1F4BB}") . "\n";
 echo "str_replace: " . str_replace("World", "PHP", $str) . "\n";
 
+// Wrapping (word-aware; cut_long_words breaks over-long words)
+echo "\n--- Wrap ---\n";
+echo "wordwrap(15):\n" . wordwrap("The quick brown fox jumped", 15) . "\n";
+echo "wordwrap(8, cut):\n" . wordwrap("A verylongword", 8, "\n", true) . "\n";
+
 // Split and join
 echo "\n--- Split/Join ---\n";
 $csv = "one,two,three";

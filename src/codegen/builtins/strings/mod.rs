@@ -27,6 +27,7 @@ mod ctype_alpha;
 mod ctype_digit;
 mod ctype_space;
 mod explode;
+mod format_args;
 mod grapheme_strrev;
 mod hash;
 mod hex2bin;

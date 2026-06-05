@@ -1,23 +1,27 @@
 //! Purpose:
-//! Emits the `__rt_wordwrap`, `__rt_wordwrap_loop` runtime helper assembly for wordwrap.
+//! Emits the `__rt_wordwrap` runtime helper assembly implementing PHP's word-aware wordwrap.
 //! Keeps PHP byte-string pointer/length behavior and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
 //! - `crate::codegen::runtime::emitters::emit_runtime()` via `crate::codegen::runtime::strings`.
 //!
 //! Key details:
-//! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
+//! - Implements PHP's algorithm: lines break at the last space at/after the wrap width; an
+//!   over-long word is left intact unless `cut_long_words` is set, in which case it is broken at
+//!   the width. Existing `\n` bytes reset the current line length. Output is appended to the
+//!   `_concat_buf` / `_concat_off` globals as a heap-backed, refcount-compatible PHP string.
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
 /// Emits the `__rt_wordwrap` runtime helper entry point, dispatching to the
 /// target-specific implementation. On x86_64, delegates to `emit_wordwrap_linux_x86_64`;
-/// on ARM64 (the default fallback), emits the full wordwrap loop using the concat buffer.
+/// on ARM64 (the default fallback), emits the full word-aware wordwrap loop.
 ///
-/// Input registers (ARM64): x1=source ptr, x2=source len, x3=width, x4=break str ptr, x5=break str len
-/// Output registers (ARM64): x1=result ptr, x2=result len
-/// Output registers (x86_64): rax=result ptr, rdx=result len
+/// Input registers (ARM64): x1=source ptr, x2=source len, x3=width, x4=break ptr, x5=break len,
+/// x6=cut_long_words flag (0/1).
+/// Output registers (ARM64): x1=result ptr, x2=result len.
+/// Output registers (x86_64): rax=result ptr, rdx=result len.
 ///
 /// Uses globals `_concat_buf` / `_concat_off` for output; the result is a heap-backed
 /// refcount-compatible PHP string written into the concat buffer.
@@ -28,146 +32,311 @@ pub fn emit_wordwrap(emitter: &mut Emitter) {
     }
 
     emitter.blank();
-    emitter.comment("--- runtime: wordwrap ---");
+    emitter.comment("--- runtime: wordwrap (word-aware) ---");
     emitter.label_global("__rt_wordwrap");
-    emitter.instruction("sub sp, sp, #48");                                     // allocate stack frame
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #32");                                    // set frame pointer
-    emitter.instruction("stp x4, x5, [sp]");                                    // save break string ptr/len
-    emitter.instruction("str x3, [sp, #16]");                                   // save width
 
-    // -- set up concat_buf --
-    crate::codegen::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    crate::codegen::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x9, x7, x8");                                      // destination pointer
-    emitter.instruction("str x9, [sp, #24]");                                   // save result start
-    emitter.instruction("mov x10, #0");                                         // current line length
+    // -- set up stack frame and preserve callee-saved registers --
+    // Frame (112 bytes): [sp+0]=result start ptr; [sp+16..95]=saved x19-x28; [sp+96]=x29/x30.
+    emitter.instruction("sub sp, sp, #112");                                    // allocate the wordwrap stack frame
+    emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #96");                                    // set the frame pointer
+    emitter.instruction("stp x19, x20, [sp, #16]");                             // save callee-saved x19, x20
+    emitter.instruction("stp x21, x22, [sp, #32]");                             // save callee-saved x21, x22
+    emitter.instruction("stp x23, x24, [sp, #48]");                             // save callee-saved x23, x24
+    emitter.instruction("stp x25, x26, [sp, #64]");                             // save callee-saved x25, x26
+    emitter.instruction("stp x27, x28, [sp, #80]");                             // save callee-saved x27, x28
 
+    // -- load inputs into callee-saved registers --
+    emitter.instruction("mov x19, x1");                                         // x19 = source base pointer
+    emitter.instruction("mov x20, x2");                                         // x20 = source length (textlen)
+    emitter.instruction("mov x21, x3");                                         // x21 = wrap width
+    emitter.instruction("mov x22, x4");                                         // x22 = break-string pointer
+    emitter.instruction("mov x23, x5");                                         // x23 = break-string length
+    emitter.instruction("mov x24, x6");                                         // x24 = cut_long_words flag (0/1)
+    emitter.instruction("mov x25, #0");                                         // x25 = laststart (start index of current line)
+    emitter.instruction("mov x26, #-1");                                        // x26 = lastspace index (-1 = no space on line yet)
+    emitter.instruction("mov x27, #0");                                         // x27 = current scan index
+
+    // -- compute output destination in the concat buffer --
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer write offset
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    emitter.instruction("add x28, x11, x10");                                   // x28 = output write pointer = buf + offset
+    emitter.instruction("str x28, [sp, #0]");                                   // save the result start pointer for the final length
+
+    // -- main scan loop --
     emitter.label("__rt_wordwrap_loop");
-    emitter.instruction("cbz x2, __rt_wordwrap_done");                          // no input left → done
-    emitter.instruction("ldrb w12, [x1], #1");                                  // load byte, advance source
-    emitter.instruction("sub x2, x2, #1");                                      // decrement remaining
+    emitter.instruction("cmp x27, x20");                                        // have all source bytes been scanned?
+    emitter.instruction("b.ge __rt_wordwrap_tail");                             // yes → copy the trailing line and finish
+    emitter.instruction("ldrb w9, [x19, x27]");                                 // load the current source byte
 
-    // -- check for existing newlines (reset counter) --
-    emitter.instruction("cmp w12, #10");                                        // is it '\n'?
-    emitter.instruction("b.ne __rt_wordwrap_check");                            // no → check width
-    emitter.instruction("strb w12, [x9], #1");                                  // store newline
-    emitter.instruction("mov x10, #0");                                         // reset line length
-    emitter.instruction("b __rt_wordwrap_loop");                                // next byte
+    // -- existing newline resets the current line --
+    emitter.instruction("cmp w9, #10");                                         // is the current byte a '\n'?
+    emitter.instruction("b.ne __rt_wordwrap_not_nl");                           // no → check for a space
+    emitter.instruction("add x10, x27, #1");                                    // include the newline in the flushed range
+    emitter.instruction("sub x10, x10, x25");                                   // count = (current + 1) - laststart
+    emitter.instruction("add x9, x19, x25");                                    // source = base + laststart
+    emitter.instruction("bl __rt_wordwrap_cpy");                                // copy the line including its newline to output
+    emitter.instruction("add x25, x27, #1");                                    // laststart = current + 1
+    emitter.instruction("mov x26, #-1");                                        // reset lastspace (no space on the new line)
+    emitter.instruction("b __rt_wordwrap_next");                                // advance to the next byte
 
-    emitter.label("__rt_wordwrap_check");
-    emitter.instruction("ldr x3, [sp, #16]");                                   // reload width
-    emitter.instruction("cmp x10, x3");                                         // line length >= width?
-    emitter.instruction("b.lt __rt_wordwrap_store");                            // no → just store char
+    emitter.label("__rt_wordwrap_not_nl");
+    emitter.instruction("cmp w9, #32");                                         // is the current byte a space?
+    emitter.instruction("b.ne __rt_wordwrap_other");                            // no → handle a regular character
 
-    // -- insert break string at width boundary --
-    emitter.instruction("ldp x4, x5, [sp]");                                    // reload break string
-    emitter.instruction("mov x14, #0");                                         // break copy index
-    emitter.label("__rt_wordwrap_brk");
-    emitter.instruction("cmp x14, x5");                                         // all break chars written?
-    emitter.instruction("b.ge __rt_wordwrap_brk_done");                         // yes → continue with char
-    emitter.instruction("ldrb w13, [x4, x14]");                                 // load break char
-    emitter.instruction("strb w13, [x9], #1");                                  // write to output
-    emitter.instruction("add x14, x14, #1");                                    // next break char
-    emitter.instruction("b __rt_wordwrap_brk");                                 // continue
-    emitter.label("__rt_wordwrap_brk_done");
-    emitter.instruction("mov x10, #0");                                         // reset line length
+    // -- space: break here if the line already reached the width --
+    emitter.instruction("sub x10, x27, x25");                                   // line length so far = current - laststart
+    emitter.instruction("cmp x10, x21");                                        // has the line reached the wrap width?
+    emitter.instruction("b.lt __rt_wordwrap_mark_space");                       // no → just remember this space
+    emitter.instruction("sub x10, x27, x25");                                   // count = current - laststart (exclude the space)
+    emitter.instruction("add x9, x19, x25");                                    // source = base + laststart
+    emitter.instruction("bl __rt_wordwrap_cpy");                                // copy the completed line (without the space)
+    emitter.instruction("mov x10, x23");                                        // count = break-string length
+    emitter.instruction("mov x9, x22");                                         // source = break-string pointer
+    emitter.instruction("bl __rt_wordwrap_cpy");                                // copy the break string in place of the space
+    emitter.instruction("add x25, x27, #1");                                    // laststart = current + 1 (skip the space)
+    emitter.instruction("mov x26, #-1");                                        // reset lastspace
+    emitter.instruction("b __rt_wordwrap_next");                                // advance to the next byte
 
-    emitter.label("__rt_wordwrap_store");
-    emitter.instruction("strb w12, [x9], #1");                                  // store current byte
-    emitter.instruction("add x10, x10, #1");                                    // increment line length
-    emitter.instruction("b __rt_wordwrap_loop");                                // next byte
+    emitter.label("__rt_wordwrap_mark_space");
+    emitter.instruction("mov x26, x27");                                        // lastspace = current
+    emitter.instruction("b __rt_wordwrap_next");                                // advance to the next byte
 
-    emitter.label("__rt_wordwrap_done");
-    emitter.instruction("ldr x1, [sp, #24]");                                   // result pointer
-    emitter.instruction("sub x2, x9, x1");                                      // result length
-    crate::codegen::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    emitter.instruction("add x8, x8, x2");                                      // advance
-    emitter.instruction("str x8, [x6]");                                        // store
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame
-    emitter.instruction("add sp, sp, #48");                                     // deallocate
-    emitter.instruction("ret");                                                 // return
+    // -- regular character: break only when the line exceeds the width --
+    emitter.label("__rt_wordwrap_other");
+    emitter.instruction("sub x10, x27, x25");                                   // line length so far = current - laststart
+    emitter.instruction("cmp x10, x21");                                        // is the line still under the wrap width?
+    emitter.instruction("b.lt __rt_wordwrap_next");                             // yes → keep accumulating the word
+    emitter.instruction("cmn x26, #1");                                         // is lastspace == -1 (no space on this line)?
+    emitter.instruction("b.eq __rt_wordwrap_no_space");                         // yes → only a long word can be cut here
+
+    // -- break at the last space seen on this line --
+    emitter.instruction("sub x10, x26, x25");                                   // count = lastspace - laststart
+    emitter.instruction("add x9, x19, x25");                                    // source = base + laststart
+    emitter.instruction("bl __rt_wordwrap_cpy");                                // copy the line up to (not including) the space
+    emitter.instruction("mov x10, x23");                                        // count = break-string length
+    emitter.instruction("mov x9, x22");                                         // source = break-string pointer
+    emitter.instruction("bl __rt_wordwrap_cpy");                                // copy the break string in place of the space
+    emitter.instruction("add x25, x26, #1");                                    // laststart = lastspace + 1
+    emitter.instruction("mov x26, #-1");                                        // reset lastspace
+    emitter.instruction("b __rt_wordwrap_next");                                // advance to the next byte
+
+    // -- long word with no space: break mid-word only when cut is requested --
+    emitter.label("__rt_wordwrap_no_space");
+    emitter.instruction("cbz x24, __rt_wordwrap_next");                         // cut disabled → leave the long word intact
+    emitter.instruction("sub x10, x27, x25");                                   // count = current - laststart (a full width run)
+    emitter.instruction("add x9, x19, x25");                                    // source = base + laststart
+    emitter.instruction("bl __rt_wordwrap_cpy");                                // copy the width-long run of the word
+    emitter.instruction("mov x10, x23");                                        // count = break-string length
+    emitter.instruction("mov x9, x22");                                         // source = break-string pointer
+    emitter.instruction("bl __rt_wordwrap_cpy");                                // copy the break string mid-word
+    emitter.instruction("mov x25, x27");                                        // laststart = current (the remaining word continues)
+    emitter.instruction("mov x26, #-1");                                        // reset lastspace
+
+    emitter.label("__rt_wordwrap_next");
+    emitter.instruction("add x27, x27, #1");                                    // current += 1
+    emitter.instruction("b __rt_wordwrap_loop");                                // continue scanning
+
+    // -- copy the final line (laststart .. textlen) --
+    emitter.label("__rt_wordwrap_tail");
+    emitter.instruction("sub x10, x20, x25");                                   // count = textlen - laststart
+    emitter.instruction("add x9, x19, x25");                                    // source = base + laststart
+    emitter.instruction("bl __rt_wordwrap_cpy");                                // copy the trailing line to output
+
+    // -- finalize result pointer/length and publish the new concat offset --
+    emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = result start pointer
+    emitter.instruction("sub x2, x28, x1");                                     // x2 = result length = end - start
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // load the current concat offset
+    emitter.instruction("add x10, x10, x2");                                    // advance it by the wrapped length
+    emitter.instruction("str x10, [x9]");                                       // publish the updated concat offset
+
+    // -- restore callee-saved registers and return --
+    emitter.instruction("ldp x19, x20, [sp, #16]");                             // restore x19, x20
+    emitter.instruction("ldp x21, x22, [sp, #32]");                             // restore x21, x22
+    emitter.instruction("ldp x23, x24, [sp, #48]");                             // restore x23, x24
+    emitter.instruction("ldp x25, x26, [sp, #64]");                             // restore x25, x26
+    emitter.instruction("ldp x27, x28, [sp, #80]");                             // restore x27, x28
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #112");                                    // deallocate the stack frame
+    emitter.instruction("ret");                                                 // return the wrapped string in x1/x2
+
+    // -- internal copy helper: copy x10 bytes from x9 to the output pointer x28 --
+    // Clobbers x9, x10, x11 and advances x28. Uses x30 (caller saved it on the stack).
+    emitter.label("__rt_wordwrap_cpy");
+    emitter.instruction("cbz x10, __rt_wordwrap_cpy_ret");                      // nothing to copy
+    emitter.label("__rt_wordwrap_cpy_loop");
+    emitter.instruction("ldrb w11, [x9], #1");                                  // load a source byte and advance
+    emitter.instruction("strb w11, [x28], #1");                                 // store it to output and advance
+    emitter.instruction("subs x10, x10, #1");                                   // decrement the remaining byte count
+    emitter.instruction("b.ne __rt_wordwrap_cpy_loop");                         // continue until all bytes are copied
+    emitter.label("__rt_wordwrap_cpy_ret");
+    emitter.instruction("ret");                                                 // return to the wrapping loop
 }
 
-/// Emits the x86_64 Linux implementation of the `__rt_wordwrap` runtime helper.
+/// Emits the x86_64 Linux implementation of the word-aware `__rt_wordwrap` runtime helper.
 ///
-/// Input registers: rdi=source ptr, rdx=source len, rcx=width, r8=break str ptr, [rbp-16]=break str len
-/// Output registers: rax=result ptr, rdx=result len
+/// Input registers: rax=source ptr, rdx=source len, rdi=width, rcx=break str ptr, r8=break str len,
+/// r9=cut_long_words flag (0/1).
+/// Output registers: rax=result ptr, rdx=result len.
 ///
-/// Uses stack slots at `[rbp-8..48]` for spill: break string ptr/len, width, result start pointer,
-/// concat-offset symbol address, and current line-length counter. Writes wrapped output to the
-/// concat buffer globals `_concat_buf` / `_concat_off` and advances `_concat_off` on completion.
+/// Hot state lives in callee-saved registers (rbx=source base, r12=current, r13=laststart,
+/// r14=lastspace, r15=output pointer); width, textlen, break ptr/len, cut, and the result start are
+/// spilled to `[rbp-8..56]`. Writes wrapped output to `_concat_buf` / `_concat_off` and advances
+/// `_concat_off` on completion.
 fn emit_wordwrap_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
-    emitter.comment("--- runtime: wordwrap ---");
+    emitter.comment("--- runtime: wordwrap (word-aware) ---");
     emitter.label_global("__rt_wordwrap");
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving wordwrap() spill slots
-    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved break string, width, and concat-buffer bookkeeping
-    emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for the break string, width, result start, and current line length
-    emitter.instruction("mov QWORD PTR [rbp - 8], rcx");                        // preserve the break-string pointer across the wrapping loop
-    emitter.instruction("mov QWORD PTR [rbp - 16], r8");                        // preserve the break-string length across the wrapping loop
-    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // preserve the requested wrap width across the wrapping loop
-    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_concat_off");
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current concat-buffer write offset before emitting wrapped output
+
+    // -- set up the frame and preserve callee-saved registers --
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for spills
+    emitter.instruction("push rbx");                                            // preserve callee-saved rbx (source base)
+    emitter.instruction("push r12");                                            // preserve callee-saved r12 (current index)
+    emitter.instruction("push r13");                                            // preserve callee-saved r13 (laststart)
+    emitter.instruction("push r14");                                            // preserve callee-saved r14 (lastspace)
+    emitter.instruction("push r15");                                            // preserve callee-saved r15 (output pointer)
+    emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for the cold inputs
+
+    // -- spill the cold inputs and initialize hot state --
+    emitter.instruction("mov QWORD PTR [rbp - 72], rdi");                       // spill the wrap width
+    emitter.instruction("mov QWORD PTR [rbp - 80], rcx");                       // spill the break-string pointer
+    emitter.instruction("mov QWORD PTR [rbp - 88], r8");                        // spill the break-string length
+    emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // spill the cut_long_words flag
+    emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // spill the source length (textlen)
+    emitter.instruction("mov rbx, rax");                                        // rbx = source base pointer
+    emitter.instruction("xor r12, r12");                                        // r12 = current scan index = 0
+    emitter.instruction("xor r13, r13");                                        // r13 = laststart = 0
+    emitter.instruction("mov r14, -1");                                         // r14 = lastspace = -1 (no space on line yet)
+
+    // -- compute the output destination in the concat buffer --
+    crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_concat_off");
+    emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the current concat-buffer write offset
     crate::codegen::abi::emit_symbol_address(emitter, "r11", "_concat_buf");
-    emitter.instruction("lea r11, [r11 + r10]");                                // compute the concat-buffer destination pointer where the wrapped string begins
-    emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // preserve the wrapped-string start pointer for the final string return pair
-    emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // preserve the concat-offset symbol address so the helper can publish the new write position
-    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // start the current line-length counter at zero before processing the source bytes
+    emitter.instruction("lea r15, [r11 + r10]");                                // r15 = output write pointer = buf + offset
+    emitter.instruction("mov QWORD PTR [rbp - 64], r15");                       // save the result start pointer for the final length
 
-    emitter.label("__rt_wordwrap_loop_linux_x86_64");
-    emitter.instruction("test rdx, rdx");                                       // have all input bytes been consumed by the wrapping loop?
-    emitter.instruction("jz __rt_wordwrap_done_linux_x86_64");                  // finalize the wrapped string once there are no source bytes left
-    emitter.instruction("mov al, BYTE PTR [rax]");                              // load the next source byte before applying newline and width-boundary rules
-    emitter.instruction("add rax, 1");                                          // advance the source-string cursor after consuming one byte
-    emitter.instruction("sub rdx, 1");                                          // decrement the remaining source-byte count after consuming one byte
-    emitter.instruction("cmp al, 10");                                          // is the current source byte already a newline that resets the current line-length counter?
-    emitter.instruction("jne __rt_wordwrap_check_linux_x86_64");                // only run the width-boundary logic when the consumed byte is not an existing newline
-    emitter.instruction("mov BYTE PTR [r11], al");                              // copy the existing newline into the wrapped output unchanged
-    emitter.instruction("add r11, 1");                                          // advance the wrapped-output destination after copying the existing newline
-    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // reset the current line-length counter after an existing newline in the input
-    emitter.instruction("jmp __rt_wordwrap_loop_linux_x86_64");                 // continue processing the remaining source bytes after handling the existing newline
+    // -- main scan loop --
+    emitter.label("__rt_wordwrap_loop_x86_64");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload textlen
+    emitter.instruction("cmp r12, rax");                                        // have all source bytes been scanned?
+    emitter.instruction("jge __rt_wordwrap_tail_x86_64");                       // yes → copy the trailing line and finish
+    emitter.instruction("movzx eax, BYTE PTR [rbx + r12]");                     // load the current source byte
 
-    emitter.label("__rt_wordwrap_check_linux_x86_64");
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the current line-length counter before testing the configured wrap width
-    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the configured wrap width before testing whether a line break should be inserted
-    emitter.instruction("cmp rcx, r9");                                         // has the current line already reached or exceeded the configured wrap width?
-    emitter.instruction("jl __rt_wordwrap_store_linux_x86_64");                 // skip inserting the break string when the current line is still below the configured width
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the break-string length before copying the wrap break into the output
-    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the break-string pointer before copying the wrap break into the output
-    emitter.instruction("xor r9d, r9d");                                        // start copying the break string from byte index zero
+    // -- existing newline resets the current line --
+    emitter.instruction("cmp al, 10");                                          // is the current byte a '\n'?
+    emitter.instruction("jne __rt_wordwrap_not_nl_x86_64");                     // no → check for a space
+    emitter.instruction("lea r10, [r12 + 1]");                                  // include the newline in the flushed range
+    emitter.instruction("sub r10, r13");                                        // count = (current + 1) - laststart
+    emitter.instruction("lea rsi, [rbx + r13]");                                // source = base + laststart
+    emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the line including its newline to output
+    emitter.instruction("lea r13, [r12 + 1]");                                  // laststart = current + 1
+    emitter.instruction("mov r14, -1");                                         // reset lastspace
+    emitter.instruction("jmp __rt_wordwrap_next_x86_64");                       // advance to the next byte
 
-    emitter.label("__rt_wordwrap_break_linux_x86_64");
-    emitter.instruction("cmp r9, rcx");                                         // have all break-string bytes been emitted at the wrap boundary?
-    emitter.instruction("jge __rt_wordwrap_break_done_linux_x86_64");           // resume emitting the current source byte once the full break string has been copied
-    emitter.instruction("mov bl, BYTE PTR [r8 + r9]");                          // load the next break-string byte that should be emitted at the wrap boundary
-    emitter.instruction("mov BYTE PTR [r11], bl");                              // store the next break-string byte into the wrapped output
-    emitter.instruction("add r11, 1");                                          // advance the wrapped-output destination after storing one break-string byte
-    emitter.instruction("add r9, 1");                                           // advance to the next break-string byte after a successful copy
-    emitter.instruction("jmp __rt_wordwrap_break_linux_x86_64");                // continue copying the break string until the full wrap separator is emitted
+    emitter.label("__rt_wordwrap_not_nl_x86_64");
+    emitter.instruction("cmp al, 32");                                          // is the current byte a space?
+    emitter.instruction("jne __rt_wordwrap_other_x86_64");                      // no → handle a regular character
 
-    emitter.label("__rt_wordwrap_break_done_linux_x86_64");
-    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // reset the current line-length counter after inserting the configured wrap separator
+    // -- space: break here if the line already reached the width --
+    emitter.instruction("mov r10, r12");                                        // line length so far = current ...
+    emitter.instruction("sub r10, r13");                                        // ... - laststart
+    emitter.instruction("cmp r10, QWORD PTR [rbp - 72]");                       // has the line reached the wrap width?
+    emitter.instruction("jl __rt_wordwrap_mark_space_x86_64");                  // no → just remember this space
+    emitter.instruction("mov r10, r12");                                        // count = current ...
+    emitter.instruction("sub r10, r13");                                        // ... - laststart (exclude the space)
+    emitter.instruction("lea rsi, [rbx + r13]");                                // source = base + laststart
+    emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the completed line (without the space)
+    emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // count = break-string length
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // source = break-string pointer
+    emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the break string in place of the space
+    emitter.instruction("lea r13, [r12 + 1]");                                  // laststart = current + 1 (skip the space)
+    emitter.instruction("mov r14, -1");                                         // reset lastspace
+    emitter.instruction("jmp __rt_wordwrap_next_x86_64");                       // advance to the next byte
 
-    emitter.label("__rt_wordwrap_store_linux_x86_64");
-    emitter.instruction("mov BYTE PTR [r11], al");                              // store the current source byte into the wrapped output after any required break insertion
-    emitter.instruction("add r11, 1");                                          // advance the wrapped-output destination after storing one source byte
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the current line-length counter before incrementing it for the stored source byte
-    emitter.instruction("add rcx, 1");                                          // increment the current line-length counter after storing one non-newline source byte
-    emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // preserve the updated line-length counter for the next wrapping-loop iteration
-    emitter.instruction("jmp __rt_wordwrap_loop_linux_x86_64");                 // continue processing the remaining source bytes until wrapping is complete
+    emitter.label("__rt_wordwrap_mark_space_x86_64");
+    emitter.instruction("mov r14, r12");                                        // lastspace = current
+    emitter.instruction("jmp __rt_wordwrap_next_x86_64");                       // advance to the next byte
 
-    emitter.label("__rt_wordwrap_done_linux_x86_64");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // return the wrapped-string start pointer in the primary x86_64 string result register
-    emitter.instruction("mov rdx, r11");                                        // copy the wrapped-output end pointer so the final wrapped-string length can be derived
-    emitter.instruction("sub rdx, rax");                                        // derive the wrapped-string length from the concat-buffer start/end pointers
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the concat-offset symbol address before publishing the new write position
-    emitter.instruction("mov r8, QWORD PTR [rcx]");                             // reload the old concat-buffer write offset before advancing it by the wrapped-string length
-    emitter.instruction("add r8, rdx");                                         // advance the concat-buffer write offset by the emitted wrapped-string length
-    emitter.instruction("mov QWORD PTR [rcx], r8");                             // publish the updated concat-buffer write offset after emitting the wrapped string
-    emitter.instruction("add rsp, 64");                                         // release the wordwrap() spill slots before returning the wrapped string
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the caller
-    emitter.instruction("ret");                                                 // return the wrapped string in the standard x86_64 string result registers
+    // -- regular character: break only when the line exceeds the width --
+    emitter.label("__rt_wordwrap_other_x86_64");
+    emitter.instruction("mov r10, r12");                                        // line length so far = current ...
+    emitter.instruction("sub r10, r13");                                        // ... - laststart
+    emitter.instruction("cmp r10, QWORD PTR [rbp - 72]");                       // is the line still under the wrap width?
+    emitter.instruction("jl __rt_wordwrap_next_x86_64");                        // yes → keep accumulating the word
+    emitter.instruction("cmp r14, -1");                                         // is lastspace == -1 (no space on this line)?
+    emitter.instruction("je __rt_wordwrap_no_space_x86_64");                    // yes → only a long word can be cut here
+
+    // -- break at the last space seen on this line --
+    emitter.instruction("mov r10, r14");                                        // count = lastspace ...
+    emitter.instruction("sub r10, r13");                                        // ... - laststart
+    emitter.instruction("lea rsi, [rbx + r13]");                                // source = base + laststart
+    emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the line up to (not including) the space
+    emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // count = break-string length
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // source = break-string pointer
+    emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the break string in place of the space
+    emitter.instruction("lea r13, [r14 + 1]");                                  // laststart = lastspace + 1
+    emitter.instruction("mov r14, -1");                                         // reset lastspace
+    emitter.instruction("jmp __rt_wordwrap_next_x86_64");                       // advance to the next byte
+
+    // -- long word with no space: break mid-word only when cut is requested --
+    emitter.label("__rt_wordwrap_no_space_x86_64");
+    emitter.instruction("cmp QWORD PTR [rbp - 48], 0");                         // is cut_long_words disabled?
+    emitter.instruction("je __rt_wordwrap_next_x86_64");                        // yes → leave the long word intact
+    emitter.instruction("mov r10, r12");                                        // count = current ...
+    emitter.instruction("sub r10, r13");                                        // ... - laststart (a full width run)
+    emitter.instruction("lea rsi, [rbx + r13]");                                // source = base + laststart
+    emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the width-long run of the word
+    emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // count = break-string length
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // source = break-string pointer
+    emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the break string mid-word
+    emitter.instruction("mov r13, r12");                                        // laststart = current (the remaining word continues)
+    emitter.instruction("mov r14, -1");                                         // reset lastspace
+
+    emitter.label("__rt_wordwrap_next_x86_64");
+    emitter.instruction("add r12, 1");                                          // current += 1
+    emitter.instruction("jmp __rt_wordwrap_loop_x86_64");                       // continue scanning
+
+    // -- copy the final line (laststart .. textlen) --
+    emitter.label("__rt_wordwrap_tail_x86_64");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // count = textlen ...
+    emitter.instruction("sub r10, r13");                                        // ... - laststart
+    emitter.instruction("lea rsi, [rbx + r13]");                                // source = base + laststart
+    emitter.instruction("call __rt_wordwrap_cpy_x86_64");                       // copy the trailing line to output
+
+    // -- finalize result pointer/length and publish the new concat offset --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // rax = result start pointer
+    emitter.instruction("mov rdx, r15");                                        // rdx = output end pointer
+    emitter.instruction("sub rdx, rax");                                        // rdx = result length = end - start
+    crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_concat_off");
+    emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the current concat offset
+    emitter.instruction("add r10, rdx");                                        // advance it by the wrapped length
+    emitter.instruction("mov QWORD PTR [rsi], r10");                            // publish the updated concat offset
+
+    // -- restore callee-saved registers and return --
+    emitter.instruction("add rsp, 64");                                         // release the spill slots
+    emitter.instruction("pop r15");                                             // restore r15
+    emitter.instruction("pop r14");                                             // restore r14
+    emitter.instruction("pop r13");                                             // restore r13
+    emitter.instruction("pop r12");                                             // restore r12
+    emitter.instruction("pop rbx");                                             // restore rbx
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the wrapped string in rax/rdx
+
+    // -- internal copy helper: copy r10 bytes from rsi to the output pointer r15 --
+    // Clobbers rsi, r10, al and advances r15.
+    emitter.label("__rt_wordwrap_cpy_x86_64");
+    emitter.instruction("test r10, r10");                                       // nothing to copy?
+    emitter.instruction("jz __rt_wordwrap_cpy_ret_x86_64");                     // yes → return immediately
+    emitter.label("__rt_wordwrap_cpy_loop_x86_64");
+    emitter.instruction("mov al, BYTE PTR [rsi]");                              // load a source byte
+    emitter.instruction("mov BYTE PTR [r15], al");                              // store it to output
+    emitter.instruction("add rsi, 1");                                          // advance the source cursor
+    emitter.instruction("add r15, 1");                                          // advance the output cursor
+    emitter.instruction("sub r10, 1");                                          // decrement the remaining byte count
+    emitter.instruction("jnz __rt_wordwrap_cpy_loop_x86_64");                   // continue until all bytes are copied
+    emitter.label("__rt_wordwrap_cpy_ret_x86_64");
+    emitter.instruction("ret");                                                 // return to the wrapping loop
 }
