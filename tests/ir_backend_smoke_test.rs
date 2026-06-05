@@ -810,6 +810,31 @@ passthru("printf pass");
     );
 }
 
+/// Verifies simple regex builtins delegate to the shared runtime helpers.
+#[test]
+fn ir_backend_handles_simple_regex_builtins() {
+    let source = r#"<?php
+echo preg_match("/[0-9]+/", "abc123");
+echo ":";
+echo preg_match("/xyz/", "abc123");
+echo ":";
+echo preg_match_all("/[0-9]+/", "a1b22c333");
+echo ":";
+echo preg_replace("/[0-9]+/", "N", "a1b22");
+echo ":";
+$parts = preg_split("/,/", "a,b,c");
+echo count($parts);
+echo ":";
+echo $parts[0];
+echo "-";
+echo $parts[2];
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("simple_regex_builtins", source),
+        "1:0:3:aNbN:3:a-c"
+    );
+}
+
 /// Verifies JSON validation builtins update and expose runtime JSON error state.
 #[test]
 fn ir_backend_handles_json_validation_builtins() {

@@ -31,6 +31,7 @@ mod is_numeric;
 mod json;
 mod math;
 mod pointers;
+mod regex;
 mod spl;
 mod system;
 mod strings;
@@ -216,6 +217,10 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "shell_exec" => system::lower_shell_exec(ctx, inst),
         "system" => system::lower_system(ctx, inst),
         "passthru" => system::lower_passthru(ctx, inst),
+        "preg_match" => regex::lower_preg_match(ctx, inst),
+        "preg_match_all" => regex::lower_preg_match_all(ctx, inst),
+        "preg_replace" => regex::lower_preg_replace(ctx, inst),
+        "preg_split" => regex::lower_preg_split(ctx, inst),
         "json_decode" => json::lower_json_decode(ctx, inst),
         "json_encode" => json::lower_json_encode(ctx, inst),
         "json_last_error" => json::lower_json_last_error(ctx, inst),

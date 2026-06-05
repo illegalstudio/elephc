@@ -1079,6 +1079,12 @@ fn lower_builtin_call_args(
     match php_symbol_key(name.trim_start_matches('\\')).as_str() {
         "date" => lower_date_args(ctx, sig, args),
         "json_decode" => lower_json_decode_args(ctx, sig, args),
+        "preg_match" | "preg_split"
+            if !crate::types::call_args::has_named_args(args)
+                && !args.iter().any(is_spread_arg) =>
+        {
+            lower_args(ctx, args)
+        }
         _ => lower_args_with_signature(ctx, sig, args),
     }
 }
@@ -1413,6 +1419,8 @@ fn call_return_type(
         php_type
     } else if let Some(php_type) = pathinfo_builtin_return_type(name, operands) {
         php_type
+    } else if let Some(php_type) = regex_builtin_return_type(name) {
+        php_type
     } else if let Some(php_type) = array_builtin_return_type(ctx, name, operands) {
         php_type
     } else if let Some(sig) = ctx.functions.get(name) {
@@ -1542,6 +1550,16 @@ fn pathinfo_builtin_return_type(name: &str, operands: &[crate::ir::ValueId]) -> 
         });
     }
     Some(PhpType::Mixed)
+}
+
+/// Returns precise EIR result metadata for regex builtins lowered by `codegen_ir`.
+fn regex_builtin_return_type(name: &str) -> Option<PhpType> {
+    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        "preg_match" | "preg_match_all" => Some(PhpType::Int),
+        "preg_replace" => Some(PhpType::Str),
+        "preg_split" => Some(PhpType::Array(Box::new(PhpType::Mixed))),
+        _ => None,
+    }
 }
 
 /// Returns precise return metadata for array builtins that preserve operand element type.
