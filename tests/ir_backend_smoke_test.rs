@@ -503,6 +503,18 @@ echo is_null($f->getReturn()) ? "null" : "not-null";
     );
 }
 
+/// Verifies static Fiber getCurrent returns null outside a running fiber.
+#[test]
+fn ir_backend_gets_current_fiber_outside_fiber() {
+    let source = r#"<?php
+echo is_null(Fiber::getCurrent()) ? "null" : "not-null";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("fiber_get_current_outside", source),
+        "null"
+    );
+}
+
 /// Verifies pipe calls through runtime-selected first-class function descriptors.
 #[test]
 fn ir_backend_handles_runtime_function_pipe_calls() {

@@ -823,6 +823,9 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let target = method_name_data(ctx, inst)?.to_string();
     let (receiver_label, method_name) = parse_static_method_target(&target)?;
     let receiver = resolve_static_method_receiver(ctx, receiver_label)?;
+    if is_static_fiber_get_current_call(&receiver, method_name) {
+        return lower_static_fiber_get_current(ctx, inst);
+    }
     let called_class_id = resolve_static_called_class_arg(ctx, receiver_label, &receiver)?;
     let receiver_info = ctx
         .module
@@ -875,6 +878,26 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         ctx.store_result_value(result)?;
     }
     Ok(())
+}
+
+/// Lowers static `Fiber::getCurrent()` through the shared runtime helper.
+fn lower_static_fiber_get_current(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if !inst.operands.is_empty() {
+        return Err(CodegenIrError::unsupported(
+            "Fiber::getCurrent with EIR arguments",
+        ));
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_fiber_get_current");
+    store_if_result(ctx, inst)
+}
+
+/// Returns true when a static method call targets PHP's built-in `Fiber::getCurrent`.
+fn is_static_fiber_get_current_call(receiver: &str, method_name: &str) -> bool {
+    php_symbol_key(receiver.trim_start_matches('\\')) == "fiber"
+        && php_symbol_key(method_name) == "getcurrent"
 }
 
 /// Resolves the hidden called-class id argument for a static method call.
