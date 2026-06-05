@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ir::{
     BlockId, Builder, DataId, DataPool, Effects, Immediate, IrType, LocalKind, LocalSlotId, Op,
-    Ownership, ValueId,
+    Ownership, ValueId, Function,
 };
 use crate::parser::ast::{ExprKind, StaticReceiver, TypeExpr};
 use crate::span::Span;
@@ -44,6 +44,10 @@ pub(crate) enum StaticCallableBinding {
     UserFunction(String),
     ExternFunction(String),
     Builtin(String),
+    Closure {
+        name: String,
+        signature: FunctionSig,
+    },
     StaticMethod {
         receiver: StaticReceiver,
         method: String,
@@ -73,6 +77,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub return_php_type: PhpType,
     pub in_main: bool,
     pub all_global_var_names: HashSet<String>,
+    owner_name: String,
+    closures: Vec<Function>,
+    pending_static_callable_result: Option<StaticCallableBinding>,
+    closure_counter: usize,
     hidden_temp_counter: usize,
 }
 
@@ -91,6 +99,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
         top_level_env: TypeEnv,
         current_class: Option<String>,
+        owner_name: String,
         return_php_type: PhpType,
         in_main: bool,
         all_global_var_names: HashSet<String>,
@@ -118,6 +127,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return_php_type,
             in_main,
             all_global_var_names,
+            owner_name,
+            closures: Vec::new(),
+            pending_static_callable_result: None,
+            closure_counter: 0,
             hidden_temp_counter: 0,
         }
     }
@@ -296,6 +309,42 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.hidden_temp_counter += 1;
         self.declare_local_with_kind(&name, php_type, LocalKind::HiddenTemp);
         name
+    }
+
+    /// Returns a deterministic EIR function name for the next closure literal in this body.
+    pub(crate) fn next_closure_name(&mut self) -> String {
+        let name = format!(
+            "__eir_closure_{}_{}",
+            closure_name_fragment(&self.owner_name),
+            self.closure_counter
+        );
+        self.closure_counter += 1;
+        name
+    }
+
+    /// Appends closure functions discovered while lowering expressions in this body.
+    pub(crate) fn extend_closures(&mut self, closures: impl IntoIterator<Item = Function>) {
+        self.closures.extend(closures);
+    }
+
+    /// Returns closure functions accumulated in this body once lowering has finished.
+    pub(crate) fn into_closures(self) -> Vec<Function> {
+        self.closures
+    }
+
+    /// Records that the expression just lowered produced a statically known callable.
+    pub(crate) fn set_pending_static_callable_result(&mut self, target: StaticCallableBinding) {
+        self.pending_static_callable_result = Some(target);
+    }
+
+    /// Takes any statically known callable result recorded by the last direct expression.
+    pub(crate) fn take_pending_static_callable_result(&mut self) -> Option<StaticCallableBinding> {
+        self.pending_static_callable_result.take()
+    }
+
+    /// Clears stale callable-result metadata before lowering a new independent expression.
+    pub(crate) fn clear_pending_static_callable_result(&mut self) {
+        self.pending_static_callable_result = None;
     }
 
     /// Emits a load from a PHP local slot.
@@ -501,6 +550,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         )
     }
+}
+
+/// Converts an owner function name into a valid fragment for synthetic closure names.
+fn closure_name_fragment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect()
 }
 
 /// Returns the EIR return storage type for a function signature.

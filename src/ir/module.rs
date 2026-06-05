@@ -96,6 +96,14 @@ impl Module {
         self.functions.push(function);
         id
     }
+
+    /// Adds a closure function and returns its closure-table identifier.
+    pub fn add_closure(&mut self, mut function: Function) -> FunctionId {
+        let id = FunctionId::from_raw(self.closures.len() as u32);
+        function.set_id(id);
+        self.closures.push(function);
+        id
+    }
 }
 
 /// Deterministic literal/name pool used by IR immediates and printer output.

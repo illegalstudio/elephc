@@ -49,6 +49,9 @@ pub(super) fn emit_module(
     for method in &module.class_methods {
         emit_class_method(module, method, emitter, data)?;
     }
+    for closure in &module.closures {
+        emit_user_function(module, closure, emitter, data)?;
+    }
     let main = module
         .functions
         .iter()

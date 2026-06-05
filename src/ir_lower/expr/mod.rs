@@ -18,6 +18,7 @@ use crate::ir_lower::context::{
     value_ir_type, LoweredValue, LoweringContext, StaticCallableBinding,
 };
 use crate::ir_lower::effects_lookup;
+use crate::ir_lower::function;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
     BinOp, CallableTarget, CastType, Expr, ExprKind, InstanceOfTarget, MagicConstant,
@@ -75,7 +76,24 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
             lower_short_ternary(ctx, value, default, expr)
         }
         ExprKind::Cast { target, expr: inner } => lower_cast(ctx, target, inner, expr),
-        ExprKind::Closure { captures, .. } => lower_closure(ctx, captures, expr),
+        ExprKind::Closure {
+            params,
+            variadic,
+            return_type,
+            body,
+            captures,
+            capture_refs,
+            ..
+        } => lower_closure(
+            ctx,
+            params,
+            variadic.as_deref(),
+            return_type.as_ref(),
+            body,
+            captures,
+            capture_refs,
+            expr,
+        ),
         ExprKind::NamedArg { value, .. } => lower_expr(ctx, value),
         ExprKind::Spread(inner) => lower_expr(ctx, inner),
         ExprKind::ClosureCall { var, args } => lower_closure_call(ctx, var, args, expr),
@@ -1129,6 +1147,9 @@ fn static_callable_return_type(
         StaticCallableBinding::UserFunction(name)
         | StaticCallableBinding::ExternFunction(name)
         | StaticCallableBinding::Builtin(name) => call_return_type(ctx, name, &[]),
+        StaticCallableBinding::Closure { signature, .. } => {
+            normalize_value_php_type(signature.return_type.codegen_repr())
+        }
         StaticCallableBinding::StaticMethod { receiver, method } => {
             static_method_implementation_signature(ctx, receiver, method)
                 .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
@@ -1178,6 +1199,18 @@ fn lower_static_callable_value_call(
                 Some(Immediate::Data(data)),
                 php_type,
                 effects_lookup::builtin_effects(&function_name),
+                Some(expr.span),
+            ))
+        }
+        StaticCallableBinding::Closure { name, signature } => {
+            let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
+            let data = ctx.intern_function_name(&name);
+            Some(ctx.emit_value(
+                Op::Call,
+                operands,
+                Some(Immediate::Data(data)),
+                php_type,
+                effects_lookup::user_call_effects(&name),
                 Some(expr.span),
             ))
         }
@@ -1381,6 +1414,19 @@ fn lower_static_callable_call(
                 Some(Immediate::Data(data)),
                 php_type,
                 effects_lookup::builtin_effects(&function_name),
+                Some(expr.span),
+            ))
+        }
+        StaticCallableBinding::Closure { name, signature } => {
+            let operands = lower_args_with_signature(ctx, Some(&signature), callback_args);
+            let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
+            let data = ctx.intern_function_name(&name);
+            Some(ctx.emit_value(
+                Op::Call,
+                operands,
+                Some(Immediate::Data(data)),
+                php_type,
+                effects_lookup::user_call_effects(&name),
                 Some(expr.span),
             ))
         }
@@ -2442,13 +2488,37 @@ fn cast_php_type(target: &CastType) -> PhpType {
     }
 }
 
-/// Lowers a closure expression.
-fn lower_closure(ctx: &mut LoweringContext<'_, '_>, captures: &[String], expr: &Expr) -> LoweredValue {
+/// Lowers a closure expression into a callable descriptor backed by an EIR closure function.
+fn lower_closure(
+    ctx: &mut LoweringContext<'_, '_>,
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    variadic: Option<&str>,
+    return_type: Option<&TypeExpr>,
+    body: &[crate::parser::ast::Stmt],
+    captures: &[String],
+    _capture_refs: &[String],
+    expr: &Expr,
+) -> LoweredValue {
     for capture in captures {
         let captured = ctx.load_local(capture, Some(expr.span));
         ctx.emit_void(Op::ClosureCapture, vec![captured.value], None, Op::ClosureCapture.default_effects(), Some(expr.span));
     }
-    ctx.emit_value(Op::ClosureNew, Vec::new(), None, PhpType::Callable, Op::ClosureNew.default_effects(), Some(expr.span))
+    let name = ctx.next_closure_name();
+    let signature =
+        function::lower_closure_function(ctx, &name, params, variadic, return_type, body);
+    let data = ctx.intern_string(&name);
+    ctx.set_pending_static_callable_result(StaticCallableBinding::Closure {
+        name,
+        signature,
+    });
+    ctx.emit_value(
+        Op::ClosureNew,
+        Vec::new(),
+        Some(Immediate::Data(data)),
+        PhpType::Callable,
+        Op::ClosureNew.default_effects(),
+        Some(expr.span),
+    )
 }
 
 /// Lowers a closure variable call.

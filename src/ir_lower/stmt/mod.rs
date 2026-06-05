@@ -172,11 +172,19 @@ fn lower_echo(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span) {
 
 /// Lowers a plain PHP local assignment.
 fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, span: Span) {
+    let direct_closure = matches!(value.kind, ExprKind::Closure { .. });
+    ctx.clear_pending_static_callable_result();
     let static_callable = static_callable_binding_for_expr(ctx, value);
     let lowered = lower_expr(ctx, value);
     let php_type = ctx.builder.value_php_type(lowered.value);
     ctx.store_local(name, lowered, php_type, Some(span));
-    if let Some(target) = static_callable {
+    let callable_result = if direct_closure {
+        ctx.take_pending_static_callable_result()
+    } else {
+        ctx.clear_pending_static_callable_result();
+        None
+    };
+    if let Some(target) = static_callable.or(callable_result) {
         ctx.bind_static_callable_local(name, target);
     }
 }
@@ -452,12 +460,20 @@ fn lower_typed_assign(
     value: &Expr,
     span: Span,
 ) {
+    let direct_closure = matches!(value.kind, ExprKind::Closure { .. });
+    ctx.clear_pending_static_callable_result();
     let php_type = ctx.type_expr_to_php_type_for_value(type_expr);
     let static_callable = static_callable_binding_for_expr(ctx, value);
     let lowered = lower_expr(ctx, value);
     ctx.declare_local(name, php_type.clone());
     ctx.store_local(name, lowered, php_type, Some(span));
-    if let Some(target) = static_callable {
+    let callable_result = if direct_closure {
+        ctx.take_pending_static_callable_result()
+    } else {
+        ctx.clear_pending_static_callable_result();
+        None
+    };
+    if let Some(target) = static_callable.or(callable_result) {
         ctx.bind_static_callable_local(name, target);
     }
 }

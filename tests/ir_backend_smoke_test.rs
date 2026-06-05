@@ -415,6 +415,26 @@ fn ir_backend_handles_static_pipe_calls() {
     }
 }
 
+/// Verifies closure literals materialize callable descriptors through the EIR backend.
+#[test]
+fn ir_backend_materializes_closure_descriptors() {
+    let source = "<?php $f = function(): void {}; echo is_callable($f) ? \"Y\" : \"N\";";
+    assert_eq!(
+        compile_and_run_ir_backend("closure_descriptor_is_callable", source),
+        "Y"
+    );
+}
+
+/// Verifies closures assigned to locals can be called through a static EIR binding.
+#[test]
+fn ir_backend_calls_assigned_closure_literals() {
+    let source = "<?php $f = function(): void { echo \"inside\"; }; $f(); echo \"|done\";";
+    assert_eq!(
+        compile_and_run_ir_backend("assigned_closure_literal_call", source),
+        "inside|done"
+    );
+}
+
 /// Verifies pipe calls through runtime-selected first-class function descriptors.
 #[test]
 fn ir_backend_handles_runtime_function_pipe_calls() {

@@ -35,7 +35,7 @@ pub(crate) fn lower_main(
     let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
     function.flags.is_main = true;
     let all_global_var_names = collect_global_var_names(program);
-    lower_body_into_function(
+    let closures = lower_body_into_function(
         &mut function,
         &mut module.data,
         program,
@@ -54,6 +54,7 @@ pub(crate) fn lower_main(
         true,
         all_global_var_names,
     );
+    add_closures(module, closures);
     module.add_function(function);
 }
 
@@ -173,7 +174,7 @@ pub(crate) fn lower_user_function(
     );
     function.params = function_params(signature);
     function.source_signature = Some(source_signature(name, signature));
-    lower_body_into_function(
+    let closures = lower_body_into_function(
         &mut function,
         &mut module.data,
         body,
@@ -192,6 +193,7 @@ pub(crate) fn lower_user_function(
         false,
         std::collections::HashSet::new(),
     );
+    add_closures(module, closures);
     module.add_function(function);
 }
 
@@ -251,7 +253,7 @@ pub(crate) fn lower_class_method(
         body_params.insert(0, ("this".to_string(), this_type));
     }
     function.params.extend(function_params(signature));
-    lower_body_into_function(
+    let closures = lower_body_into_function(
         &mut function,
         &mut module.data,
         body,
@@ -270,7 +272,52 @@ pub(crate) fn lower_class_method(
         false,
         std::collections::HashSet::new(),
     );
+    add_closures(module, closures);
     module.class_methods.push(function);
+}
+
+/// Lowers one closure literal into an EIR function plus any nested closure functions.
+pub(crate) fn lower_closure_function(
+    parent: &mut LoweringContext<'_, '_>,
+    name: &str,
+    params: &AstParams,
+    variadic: Option<&str>,
+    return_type: Option<&TypeExpr>,
+    body: &[Stmt],
+) -> FunctionSig {
+    let signature = signature_from_ast_with_variadic(params, return_type, variadic);
+    let mut function = Function::new(
+        name.to_string(),
+        return_ir_type(&signature.return_type),
+        signature.return_type.clone(),
+    );
+    function.flags = FunctionFlags {
+        is_closure: true,
+        ..FunctionFlags::default()
+    };
+    function.params = function_params(&signature);
+    function.source_signature = Some(source_signature(name, &signature));
+    let closures = lower_body_into_function(
+        &mut function,
+        parent.data,
+        body,
+        env_from_signature(&signature),
+        parent.top_level_env.clone(),
+        parent.functions,
+        parent.extern_functions,
+        parent.classes,
+        parent.enums,
+        parent.interfaces,
+        parent.packed_classes,
+        &parent.constants,
+        parent.current_class.clone(),
+        signature.return_type.clone(),
+        &signature.params,
+        false,
+        collect_global_var_names(body),
+    );
+    parent.extend_closures(std::iter::once(function).chain(closures));
+    signature
 }
 
 /// Lowers the supplied statements into `function` and appends a default terminator if needed.
@@ -292,7 +339,8 @@ fn lower_body_into_function(
     params: &[(String, PhpType)],
     in_main: bool,
     all_global_var_names: std::collections::HashSet<String>,
-) {
+) -> Vec<Function> {
+    let owner_name = function.name.clone();
     let mut builder = Builder::new(function);
     let entry = builder.create_named_block("entry", Vec::new());
     builder.set_entry(entry);
@@ -310,6 +358,7 @@ fn lower_body_into_function(
         constants,
         top_level_env,
         current_class,
+        owner_name,
         return_php_type,
         in_main,
         all_global_var_names,
@@ -322,6 +371,14 @@ fn lower_body_into_function(
         crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
     }
     terminate_open_block(&mut ctx);
+    ctx.into_closures()
+}
+
+/// Appends lowered closure functions to the module with stable closure-table ids.
+fn add_closures(module: &mut Module, closures: Vec<Function>) {
+    for closure in closures {
+        module.add_closure(closure);
+    }
 }
 
 /// Adds a default function terminator when the current block can still fall through.
@@ -429,6 +486,15 @@ fn env_from_signature(signature: &FunctionSig) -> TypeEnv {
 
 /// Builds a fallback function signature from AST syntax when checker metadata is unavailable.
 fn signature_from_ast(params: &AstParams, return_type: Option<&TypeExpr>) -> FunctionSig {
+    signature_from_ast_with_variadic(params, return_type, None)
+}
+
+/// Builds a fallback function signature from AST syntax and optional variadic metadata.
+fn signature_from_ast_with_variadic(
+    params: &AstParams,
+    return_type: Option<&TypeExpr>,
+    variadic: Option<&str>,
+) -> FunctionSig {
     FunctionSig {
         params: params
             .iter()
@@ -446,7 +512,7 @@ fn signature_from_ast(params: &AstParams, return_type: Option<&TypeExpr>) -> Fun
         declared_return: return_type.is_some(),
         ref_params: params.iter().map(|(_, _, _, by_ref)| *by_ref).collect(),
         declared_params: params.iter().map(|(_, ty, _, _)| ty.is_some()).collect(),
-        variadic: None,
+        variadic: variadic.map(str::to_string),
         deprecation: None,
     }
 }

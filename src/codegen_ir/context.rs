@@ -92,9 +92,13 @@ impl<'a> FunctionContext<'a> {
     /// Returns a module function by PHP name using PHP's case-insensitive lookup.
     pub(super) fn function_by_name(&self, name: &str) -> Option<&'a Function> {
         let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
-        self.module.functions.iter().find(|function| {
-            crate::names::php_symbol_key(function.name.trim_start_matches('\\')) == key
-        })
+        self.module
+            .functions
+            .iter()
+            .chain(self.module.closures.iter())
+            .find(|function| {
+                crate::names::php_symbol_key(function.name.trim_start_matches('\\')) == key
+            })
     }
 
     /// Returns true when an extern declaration exists for a PHP function name.

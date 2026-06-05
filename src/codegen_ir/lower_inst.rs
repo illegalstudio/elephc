@@ -15,7 +15,7 @@ use crate::ir::{CmpPredicate, Immediate, InstId, Instruction, LocalSlotId, Op, V
 use crate::names::{
     function_symbol, ir_global_symbol, method_symbol, php_symbol_key, static_method_symbol,
 };
-use crate::types::PhpType;
+use crate::types::{FunctionSig, PhpType};
 
 use super::context::FunctionContext;
 use super::function_variants;
@@ -144,6 +144,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StaticMethodCall => lower_static_method_call(ctx, &inst),
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),
+        Op::ClosureNew => lower_closure_new(ctx, &inst),
         Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, &inst),
         Op::Acquire => ownership::lower_acquire(ctx, &inst),
         Op::Release => ownership::lower_release(ctx, &inst),
@@ -160,6 +161,59 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::RuntimeCall => lower_runtime_call(ctx, &inst),
         Op::Nop => Ok(()),
         _ => Err(CodegenIrError::unsupported(format!("opcode {}", inst.op.name()))),
+    }
+}
+
+/// Materializes an EIR closure literal as a static callable descriptor pointer.
+fn lower_closure_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let closure_name = callable_target_data(ctx, inst)?.to_string();
+    let closure = ctx
+        .module
+        .closures
+        .iter()
+        .find(|function| function.name == closure_name)
+        .ok_or_else(|| CodegenIrError::missing_entry("closure", 0))?;
+    let signature = function_signature_from_eir(closure);
+    callable_descriptor::emit_load_descriptor_address_with_meta(
+        ctx.emitter,
+        ctx.data,
+        abi::int_result_reg(ctx.emitter),
+        &function_symbol(&closure.name),
+        Some(&closure.name),
+        callable_descriptor::CALLABLE_DESC_KIND_CLOSURE,
+        Some(&signature),
+        &[],
+        &[],
+        callable_descriptor::CallableDescriptorInvocation::new(
+            callable_descriptor::CallableDescriptorShape::Closure,
+        ),
+    );
+    store_if_result(ctx, inst)
+}
+
+/// Reconstructs callable signature metadata from an emitted EIR function.
+fn function_signature_from_eir(function: &crate::ir::Function) -> FunctionSig {
+    FunctionSig {
+        params: function
+            .params
+            .iter()
+            .map(|param| (param.name.clone(), param.php_type.clone()))
+            .collect(),
+        defaults: function.params.iter().map(|_| None).collect(),
+        return_type: function.return_php_type.clone(),
+        declared_return: !matches!(function.return_php_type, PhpType::Mixed),
+        ref_params: function.params.iter().map(|param| param.by_ref).collect(),
+        declared_params: function
+            .params
+            .iter()
+            .map(|param| !matches!(param.php_type, PhpType::Mixed))
+            .collect(),
+        variadic: function
+            .params
+            .iter()
+            .find(|param| param.variadic)
+            .map(|param| param.name.clone()),
+        deprecation: None,
     }
 }
 
