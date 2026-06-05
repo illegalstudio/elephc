@@ -1301,7 +1301,7 @@ fn lower_builtin_call_args(
     }
 }
 
-/// Lowers static function first-class callbacks for `preg_replace_callback()`.
+/// Lowers static function callbacks for `preg_replace_callback()`.
 fn lower_preg_replace_callback_args(
     ctx: &mut LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
@@ -1310,13 +1310,30 @@ fn lower_preg_replace_callback_args(
     if args.len() != 3 {
         return lower_args_with_signature(ctx, sig, args);
     }
-    let ExprKind::FirstClassCallable(CallableTarget::Function(callback)) = &args[1].kind else {
+    let Some(callback) = preg_replace_static_callback(ctx, &args[1]) else {
         return lower_args_with_signature(ctx, sig, args);
     };
     let pattern = lower_expr(ctx, &args[0]);
-    let callback = lower_string_literal(ctx, callback.as_str(), &args[1]);
+    let callback = lower_string_literal(ctx, &callback, &args[1]);
     let subject = lower_expr(ctx, &args[2]);
     vec![pattern.value, callback.value, subject.value]
+}
+
+/// Returns the userland callback name accepted by the current regex runtime helper.
+fn preg_replace_static_callback(
+    ctx: &LoweringContext<'_, '_>,
+    callback: &Expr,
+) -> Option<String> {
+    match &callback.kind {
+        ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+            Some(name.as_str().to_string())
+        }
+        ExprKind::Variable(name) => match ctx.static_callable_local(name)? {
+            StaticCallableBinding::UserFunction(function_name) => Some(function_name),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Lowers simple positional `date` operands while stabilizing the format string before timestamp evaluation.

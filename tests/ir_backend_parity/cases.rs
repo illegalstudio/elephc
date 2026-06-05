@@ -143,6 +143,17 @@ echo preg_replace_callback("/[A-Z]/", eir_regex_replace_fcc(...), "AB");
         &[],
     );
     assert_backend_parity(
+        "preg_replace_callback_stored_function_fcc",
+        r#"<?php
+function eir_regex_replace_stored_fcc(array $matches): string {
+    return "S" . count($matches);
+}
+$cb = eir_regex_replace_stored_fcc(...);
+echo preg_replace_callback("/[A-Z]/", $cb, "AB");
+"#,
+        &[],
+    );
+    assert_backend_parity(
         "direct_first_class_callable_expr_call",
         r#"<?php
 function eir_direct_fcc_add(int $left, int $right): int {
