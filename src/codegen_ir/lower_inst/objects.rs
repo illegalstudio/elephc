@@ -65,6 +65,9 @@ struct DynamicNewCandidate {
 /// Lowers fixed-class object allocation and optional constructor invocation.
 pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let class_name = class_name_immediate(ctx, inst)?.to_string();
+    if is_fiber_class(&class_name) {
+        return lower_fiber_new(ctx, inst);
+    }
     if reflection::is_reflection_owner_class(&class_name) {
         return reflection::lower_reflection_owner_new(ctx, inst, &class_name);
     }
@@ -160,6 +163,34 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
         )?;
     }
     Ok(())
+}
+
+/// Lowers `new Fiber($callable)` through the runtime-managed Fiber constructor.
+fn lower_fiber_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let class_id = ctx
+        .module
+        .class_infos
+        .get("Fiber")
+        .map(|class| class.class_id)
+        .unwrap_or(0);
+    let callable_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    if let Some(callable) = inst.operands.first().copied() {
+        ctx.load_value_to_reg(callable, callable_arg)?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, callable_arg, 0);
+    }
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        class_id as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        0,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_fiber_construct");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers constrained runtime class-string object construction.
@@ -1852,4 +1883,9 @@ fn class_name_immediate<'a>(
         .get(data.as_raw() as usize)
         .map(String::as_str)
         .ok_or_else(|| CodegenIrError::missing_entry("class data", data.as_raw()))
+}
+
+/// Returns true when a class name refers to PHP's built-in `Fiber` type.
+fn is_fiber_class(class_name: &str) -> bool {
+    php_symbol_key(class_name.trim_start_matches('\\')) == "fiber"
 }

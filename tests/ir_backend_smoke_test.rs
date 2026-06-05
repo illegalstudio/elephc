@@ -435,6 +435,29 @@ fn ir_backend_calls_assigned_closure_literals() {
     );
 }
 
+/// Verifies Fiber construction routes through the runtime-managed EIR object path.
+#[test]
+fn ir_backend_constructs_fibers() {
+    let source = "<?php $f = new Fiber(function(): void {}); echo \"ok\";";
+    assert_eq!(compile_and_run_ir_backend("fiber_construct", source), "ok");
+}
+
+/// Verifies newly constructed Fibers report their initial state predicates.
+#[test]
+fn ir_backend_handles_initial_fiber_state_predicates() {
+    let source = r#"<?php
+$f = new Fiber(function(): void {});
+if ($f->isStarted()) { echo "S"; } else { echo "s"; }
+if ($f->isRunning()) { echo "R"; } else { echo "r"; }
+if ($f->isSuspended()) { echo "P"; } else { echo "p"; }
+if ($f->isTerminated()) { echo "T"; } else { echo "t"; }
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("fiber_initial_state_predicates", source),
+        "srpt"
+    );
+}
+
 /// Verifies pipe calls through runtime-selected first-class function descriptors.
 #[test]
 fn ir_backend_handles_runtime_function_pipe_calls() {

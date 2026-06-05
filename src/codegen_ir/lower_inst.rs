@@ -491,6 +491,9 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             object_ty
         )));
     };
+    if let Some(state) = fiber_state_predicate(&class_name, &method_name) {
+        return lower_fiber_state_predicate(ctx, inst, object, state);
+    }
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
     param_types.push(PhpType::Object(class_name));
@@ -502,6 +505,71 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
     store_call_result(ctx, inst, &target.return_ty)
+}
+
+/// Lowers Fiber state predicates directly to the shared runtime helper.
+fn lower_fiber_state_predicate(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    state: FiberStatePredicate,
+) -> Result<()> {
+    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(object, receiver_arg)?;
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        state.expected_state() as i64,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_fiber_state_eq");
+    if matches!(state, FiberStatePredicate::Started) {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("eor x0, x0, #1");                      // invert not-started into PHP's isStarted predicate
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("xor rax, 1");                          // invert not-started into PHP's isStarted predicate
+            }
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Fiber state-query method selected by a direct method call.
+enum FiberStatePredicate {
+    Started,
+    Running,
+    Suspended,
+    Terminated,
+}
+
+impl FiberStatePredicate {
+    /// Returns the runtime state value compared by `__rt_fiber_state_eq`.
+    fn expected_state(&self) -> i32 {
+        match self {
+            Self::Started => crate::codegen::runtime::FIBER_STATE_NOT_STARTED,
+            Self::Running => crate::codegen::runtime::FIBER_STATE_RUNNING,
+            Self::Suspended => crate::codegen::runtime::FIBER_STATE_SUSPENDED,
+            Self::Terminated => crate::codegen::runtime::FIBER_STATE_TERMINATED,
+        }
+    }
+}
+
+/// Resolves a Fiber state predicate method name, if the receiver is `Fiber`.
+fn fiber_state_predicate(
+    class_name: &str,
+    method_name: &str,
+) -> Option<FiberStatePredicate> {
+    if php_symbol_key(class_name.trim_start_matches('\\')) != "fiber" {
+        return None;
+    }
+    match php_symbol_key(method_name).as_str() {
+        "isstarted" => Some(FiberStatePredicate::Started),
+        "isrunning" => Some(FiberStatePredicate::Running),
+        "issuspended" => Some(FiberStatePredicate::Suspended),
+        "isterminated" => Some(FiberStatePredicate::Terminated),
+        _ => None,
+    }
 }
 
 /// Lowers a nullsafe method call by short-circuiting boxed-null receivers.
