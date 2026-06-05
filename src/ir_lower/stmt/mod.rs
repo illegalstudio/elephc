@@ -780,7 +780,8 @@ fn normalize_materialized_element_type(item_type: PhpType) -> PhpType {
 /// Declares global aliases in the local slot table.
 fn lower_global(ctx: &mut LoweringContext<'_, '_>, vars: &[String]) {
     for var in vars {
-        ctx.declare_local_with_kind(var, PhpType::Mixed, LocalKind::GlobalAlias);
+        let php_type = ctx.global_alias_type(var);
+        ctx.declare_local_with_kind(var, php_type, LocalKind::GlobalAlias);
     }
 }
 

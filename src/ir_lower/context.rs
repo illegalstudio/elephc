@@ -53,10 +53,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub interfaces: &'m HashMap<String, InterfaceInfo>,
     pub packed_classes: &'m HashMap<String, PackedClassInfo>,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
+    pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
     pub return_type: IrType,
     pub return_php_type: PhpType,
+    pub in_main: bool,
+    pub all_global_var_names: HashSet<String>,
     hidden_temp_counter: usize,
 }
 
@@ -73,8 +76,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         interfaces: &'m HashMap<String, InterfaceInfo>,
         packed_classes: &'m HashMap<String, PackedClassInfo>,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
+        top_level_env: TypeEnv,
         current_class: Option<String>,
         return_php_type: PhpType,
+        in_main: bool,
+        all_global_var_names: HashSet<String>,
     ) -> Self {
         let return_type = return_ir_type(&return_php_type);
         Self {
@@ -91,10 +97,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             interfaces,
             packed_classes,
             constants: constants.clone(),
+            top_level_env,
             current_class,
             loop_stack: Vec::new(),
             return_type,
             return_php_type,
+            in_main,
+            all_global_var_names,
             hidden_temp_counter: 0,
         }
     }
@@ -149,6 +158,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Returns the current known PHP type for a local or `Mixed` when unknown.
     pub(crate) fn local_type(&self, name: &str) -> PhpType {
         self.local_types.get(name).cloned().unwrap_or(PhpType::Mixed)
+    }
+
+    /// Returns the checker-known top-level type for a `global` alias name.
+    pub(crate) fn global_alias_type(&self, name: &str) -> PhpType {
+        self.top_level_env
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| self.local_type(name))
     }
 
     /// Returns the prescanned value and PHP type for a global constant name.
@@ -268,16 +285,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let ir_type = value_ir_type(&php_type);
         let ownership = Ownership::for_php_type(&php_type);
         let kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
-        let op = match kind {
-            LocalKind::StaticLocal => Op::LoadStaticLocal,
+        let uses_global = self.uses_global_storage(name, kind);
+        let op = match (uses_global, kind) {
+            (true, _) => Op::LoadGlobal,
+            (false, LocalKind::StaticLocal) => Op::LoadStaticLocal,
             _ => Op::LoadLocal,
+        };
+        let immediate = if uses_global {
+            Some(Immediate::GlobalName(self.intern_global_name(name)))
+        } else {
+            Some(Immediate::LocalSlot(slot))
         };
         let value = self
             .builder
             .emit_with_effects(
                 op,
                 Vec::new(),
-                Some(Immediate::LocalSlot(slot)),
+                immediate,
                 ir_type,
                 php_type,
                 ownership,
@@ -293,25 +317,60 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let previous_slot = self.local_slots.get(name).copied();
         let previous_type = self.local_type(name);
         let previous_kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
+        let uses_global = self.uses_global_storage(name, previous_kind);
         let slot = self.declare_local(name, php_type.clone());
-        if previous_kind == LocalKind::PhpLocal
+        if !uses_global
+            && previous_kind == LocalKind::PhpLocal
             && previous_slot.is_some_and(|slot| self.initialized_slots.contains(&slot))
             && Ownership::php_type_needs_lifetime_tracking(&previous_type)
         {
             let previous = self.load_local(name, span);
             crate::ir_lower::ownership::release_if_owned(self, previous, span);
         }
-        let value = if previous_kind == LocalKind::PhpLocal {
+        let value = if uses_global || previous_kind == LocalKind::PhpLocal {
             crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
         } else {
             value
         };
+        if uses_global {
+            self.store_global_name(name, slot, value, span);
+            self.set_local_type(name, php_type);
+            return;
+        }
         let op = match previous_kind {
             LocalKind::StaticLocal => Op::StoreStaticLocal,
             _ => Op::StoreLocal,
         };
         self.store_slot_with_op(slot, value, op, span);
         self.set_local_type(name, php_type);
+    }
+
+    /// Returns whether the named PHP variable should use program-global storage.
+    fn uses_global_storage(&self, name: &str, kind: LocalKind) -> bool {
+        kind == LocalKind::GlobalAlias
+            || (self.in_main && self.all_global_var_names.contains(name))
+    }
+
+    /// Emits a store to the program-global symbol for a global alias variable.
+    fn store_global_name(
+        &mut self,
+        name: &str,
+        slot: LocalSlotId,
+        value: LoweredValue,
+        span: Option<Span>,
+    ) {
+        let data = self.intern_global_name(name);
+        self.builder.emit_with_effects(
+            Op::StoreGlobal,
+            vec![value.value],
+            Some(Immediate::GlobalName(data)),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::StoreGlobal.default_effects(),
+            span,
+        );
+        self.initialized_slots.insert(slot);
     }
 
     /// Emits a store opcode to an already declared local or static-local slot.

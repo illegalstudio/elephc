@@ -207,6 +207,30 @@ fn ir_backend_handles_static_pipe_calls() {
     }
 }
 
+/// Verifies `global` aliases share storage with top-level variables in the EIR backend.
+#[test]
+fn ir_backend_handles_global_aliases() {
+    for (name, source, expected) in [
+        (
+            "global_read",
+            "<?php $x = 5; function show() { global $x; echo $x; } show();",
+            "5",
+        ),
+        (
+            "global_write",
+            "<?php $x = 1; function f() { global $x; $x = $x + 2; } f(); echo $x;",
+            "3",
+        ),
+        (
+            "global_multiple",
+            "<?php $a = 1; $b = 2; function bump() { global $a, $b; $a = $a + 10; $b = $b + 20; } bump(); echo $a; echo \":\"; echo $b;",
+            "11:22",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies function static locals initialize once and persist across direct calls.
 #[test]
 fn ir_backend_handles_function_static_locals() {
