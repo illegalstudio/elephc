@@ -101,6 +101,114 @@ pub(super) fn lower_tempnam(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     lower_binary_path_call(ctx, inst, "tempnam", "__rt_tempnam")
 }
 
+/// Lowers `basename(path, suffix?)` through the target-aware runtime helper.
+pub(super) fn lower_basename(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "basename", 1, 2)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, "basename path")?;
+    if inst.operands.len() == 2 {
+        let suffix = expect_operand(inst, 1)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+                load_string_to_result(ctx, suffix, "basename suffix")?;
+                ctx.emitter.instruction("mov x3, x1");                          // pass the suffix pointer in the runtime helper's secondary string slot
+                ctx.emitter.instruction("mov x4, x2");                          // pass the suffix length in the runtime helper's secondary string slot
+                abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            }
+            Arch::X86_64 => {
+                abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+                load_string_to_result(ctx, suffix, "basename suffix")?;
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the suffix pointer while the path remains on the stack
+                ctx.emitter.instruction("mov rsi, rdx");                        // pass the suffix length while the path remains on the stack
+                abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            }
+        }
+    } else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x3, #0");                          // signal that no suffix pointer was supplied
+                ctx.emitter.instruction("mov x4, #0");                          // signal that no suffix length was supplied
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("xor edi, edi");                        // signal that no suffix pointer was supplied
+                ctx.emitter.instruction("xor esi, esi");                        // signal that no suffix length was supplied
+            }
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_basename");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `dirname(path, levels?)` through the target-aware runtime helper.
+pub(super) fn lower_dirname(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "dirname", 1, 2)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, "dirname path")?;
+    if inst.operands.len() == 1 {
+        abi::emit_call_label(ctx.emitter, "__rt_dirname");
+        return store_if_result(ctx, inst);
+    }
+    let levels = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            require_int(ctx.load_value_to_result(levels)?.codegen_repr(), "dirname levels")?;
+            ctx.emitter.instruction("mov x3, x0");                              // pass the requested parent depth to the levels-aware runtime helper
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            require_int(ctx.load_value_to_result(levels)?.codegen_repr(), "dirname levels")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the requested parent depth to the levels-aware runtime helper
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_dirname_levels");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `fnmatch(pattern, filename, flags?)` through the target-aware runtime helper.
+pub(super) fn lower_fnmatch(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "fnmatch", 2, 3)?;
+    let pattern = expect_operand(inst, 0)?;
+    let filename = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_to_result(ctx, pattern, "fnmatch pattern")?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            load_string_to_result(ctx, filename, "fnmatch filename")?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            if inst.operands.len() == 3 {
+                let flags = expect_operand(inst, 2)?;
+                require_int(ctx.load_value_to_result(flags)?.codegen_repr(), "fnmatch flags")?;
+                ctx.emitter.instruction("mov x5, x0");                          // pass the caller-supplied fnmatch flags to the runtime helper
+            } else {
+                ctx.emitter.instruction("mov x5, #0");                          // use the PHP default flags value
+            }
+            abi::emit_pop_reg_pair(ctx.emitter, "x3", "x4");
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        }
+        Arch::X86_64 => {
+            load_string_to_result(ctx, pattern, "fnmatch pattern")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_string_to_result(ctx, filename, "fnmatch filename")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            if inst.operands.len() == 3 {
+                let flags = expect_operand(inst, 2)?;
+                require_int(ctx.load_value_to_result(flags)?.codegen_repr(), "fnmatch flags")?;
+                ctx.emitter.instruction("mov rcx, rax");                        // pass the caller-supplied fnmatch flags to the runtime helper
+            } else {
+                ctx.emitter.instruction("xor ecx, ecx");                        // use the PHP default flags value
+            }
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_fnmatch");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `getcwd()` through the target-aware runtime helper.
 pub(super) fn lower_getcwd(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "getcwd", 0)?;
@@ -356,6 +464,18 @@ fn lower_binary_path_call(
     store_if_result(ctx, inst)
 }
 
+/// Verifies that a builtin call has a lowered operand count within an inclusive range.
+fn ensure_arg_count_between(inst: &Instruction, name: &str, min: usize, max: usize) -> Result<()> {
+    let actual = inst.operands.len();
+    if (min..=max).contains(&actual) {
+        return Ok(());
+    }
+    Err(CodegenIrError::invalid_module(format!(
+        "{} expected {}..={} args, got {}",
+        name, min, max, actual
+    )))
+}
+
 /// Loads a path string, calls a stat helper, boxes int success or PHP false, and stores it.
 fn lower_unary_path_stat_int_or_false(
     ctx: &mut FunctionContext<'_>,
@@ -535,6 +655,18 @@ fn load_string_to_result(
 /// Verifies that a filesystem path argument has the supported string representation.
 fn require_string(ty: PhpType, name: &str) -> Result<()> {
     if ty == PhpType::Str {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "{} for PHP type {:?}",
+        name,
+        ty
+    )))
+}
+
+/// Verifies that a path builtin scalar argument has the supported integer representation.
+fn require_int(ty: PhpType, name: &str) -> Result<()> {
+    if ty == PhpType::Int {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(

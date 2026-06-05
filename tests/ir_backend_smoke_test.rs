@@ -3679,6 +3679,28 @@ echo unlink($tmp) ? "U" : "!";
     assert_eq!(compile_and_run_ir_backend("tempnam", source), "S:E:U");
 }
 
+/// Verifies path component builtins lower optional arguments and boolean results.
+#[test]
+fn ir_backend_handles_path_component_builtins() {
+    let source = r#"<?php
+echo basename("/var/log/app.txt");
+echo ":";
+echo basename("/var/log/app.txt", ".txt");
+echo ":";
+echo dirname("/var/log/app.txt");
+echo ":";
+echo dirname("/var/log/app.txt", 2);
+echo ":";
+echo fnmatch("*.txt", "app.txt", 0) ? "Y" : "N";
+echo ":";
+echo fnmatch("*.txt", "app.log") ? "Y" : "N";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("path_component_builtins", source),
+        "app.txt:app:/var/log:/var:Y:N"
+    );
+}
+
 /// Verifies global constant declarations, references, and `defined()` lowering.
 #[test]
 fn ir_backend_handles_global_constants_and_defined() {
