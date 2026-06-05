@@ -3569,6 +3569,30 @@ echo filetype("missing.txt") === false ? "false" : "string";
     assert_eq!(out, "file:dir:false");
 }
 
+/// Verifies `stat()` and `lstat()` box PHP stat arrays and strict false failures.
+#[test]
+fn ir_backend_handles_stat_arrays() {
+    let source = r#"<?php
+file_put_contents("metadata.txt", "hello");
+$st = stat("metadata.txt");
+$lst = lstat("metadata.txt");
+echo $st["size"];
+echo ":";
+echo gettype($st["mode"]);
+echo ":";
+echo $st[7] === $st["size"] ? "match" : "differ";
+echo ":";
+echo $lst["size"] === $st["size"] ? "lstat" : "!";
+echo ":";
+echo stat("missing.txt") === false ? "S" : "!";
+echo lstat("missing.txt") === false ? "L" : "!";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("stat_arrays", source),
+        "5:integer:match:lstat:SL"
+    );
+}
+
 /// Verifies `clearstatcache()` is a no-op that still evaluates supplied arguments.
 #[test]
 fn ir_backend_handles_clearstatcache() {

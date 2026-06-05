@@ -758,6 +758,16 @@ pub(super) fn lower_filetype(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `stat(path)` and boxes the runtime stat array or PHP false result.
+pub(super) fn lower_stat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_unary_path_stat_array_or_false(ctx, inst, "stat", "__rt_stat_array")
+}
+
+/// Lowers `lstat(path)` and boxes the runtime lstat array or PHP false result.
+pub(super) fn lower_lstat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_unary_path_stat_array_or_false(ctx, inst, "lstat", "__rt_lstat_array")
+}
+
 /// Lowers `clearstatcache(...)` as an ordered no-op after EIR operand evaluation.
 pub(super) fn lower_clearstatcache(
     ctx: &mut FunctionContext<'_>,
@@ -926,6 +936,21 @@ fn lower_unary_path_stat_int_or_false(
     load_string_to_result(ctx, path, name)?;
     abi::emit_call_label(ctx.emitter, runtime_label);
     box_stat_int_or_false_result(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Loads a path, calls a stat-array helper, boxes array success or PHP false, and stores it.
+fn lower_unary_path_stat_array_or_false(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 1)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, name)?;
+    abi::emit_call_label(ctx.emitter, runtime_label);
+    box_stat_array_or_false_result(ctx);
     store_if_result(ctx, inst)
 }
 
@@ -1104,6 +1129,54 @@ fn box_stat_int_or_false_result(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("xor eax, eax");                            // select runtime tag 0 for an integer Mixed value
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the integer Mixed result
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("xor edi, edi");                            // use zero as the false payload for the Mixed bool box
+            ctx.emitter.instruction("xor esi, esi");                            // clear the unused high payload word for bool Mixed boxes
+            ctx.emitter.instruction("mov eax, 3");                              // select runtime tag 3 for a boolean false Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+    }
+}
+
+/// Boxes the raw stat hash payload into PHP `array|false` Mixed form.
+fn box_stat_array_or_false_result(ctx: &mut FunctionContext<'_>) {
+    let false_label = ctx.next_label("stat_array_false");
+    let done_label = ctx.next_label("stat_array_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", false_label));       // branch when the stat runtime returned a null hash pointer
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("mov x0, #24");                             // request a mixed cell payload with tag and two value words
+            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            ctx.emitter.instruction("mov x9, #5");                              // select heap kind 5 for a boxed Mixed cell
+            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation header as a Mixed cell
+            ctx.emitter.instruction("mov x9, #5");                              // select runtime tag 5 for an associative-array Mixed payload
+            ctx.emitter.instruction("str x9, [x0]");                            // store the associative-array tag in the Mixed cell
+            abi::emit_pop_reg(ctx.emitter, "x10");
+            ctx.emitter.instruction("str x10, [x0, #8]");                       // store the owned stat hash pointer in the Mixed cell
+            ctx.emitter.instruction("str xzr, [x0, #16]");                      // associative-array Mixed payloads do not use a high word
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after building the array Mixed result
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov x1, #0");                              // use zero as the false payload for the Mixed bool box
+            ctx.emitter.instruction("mov x2, #0");                              // clear the unused high payload word for bool Mixed boxes
+            ctx.emitter.instruction("mov x0, #3");                              // select runtime tag 3 for a boolean false Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // test whether the stat runtime returned a null hash pointer
+            ctx.emitter.instruction(&format!("jz {}", false_label));            // box false when the runtime stat-array helper failed
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rax, 24");                             // request a mixed cell payload with tag and two value words
+            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the x86_64 Mixed heap kind word
+            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a Mixed cell
+            ctx.emitter.instruction("mov QWORD PTR [rax], 5");                  // select runtime tag 5 for an associative-array Mixed payload
+            abi::emit_pop_reg(ctx.emitter, "r10");
+            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the owned stat hash pointer in the Mixed cell
+            ctx.emitter.instruction("mov QWORD PTR [rax + 16], 0");             // associative-array Mixed payloads do not use a high word
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the array Mixed result
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("xor edi, edi");                            // use zero as the false payload for the Mixed bool box
             ctx.emitter.instruction("xor esi, esi");                            // clear the unused high payload word for bool Mixed boxes

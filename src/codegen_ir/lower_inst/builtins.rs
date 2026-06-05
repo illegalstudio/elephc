@@ -163,6 +163,8 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "filegroup" => io::lower_filegroup(ctx, inst),
         "fileinode" => io::lower_fileinode(ctx, inst),
         "filetype" => io::lower_filetype(ctx, inst),
+        "stat" => io::lower_stat(ctx, inst),
+        "lstat" => io::lower_lstat(ctx, inst),
         "clearstatcache" => io::lower_clearstatcache(ctx, inst),
         "is_file" => io::lower_is_file(ctx, inst),
         "is_dir" => io::lower_is_dir(ctx, inst),
