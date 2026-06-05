@@ -206,4 +206,13 @@ echo (BOOLEAN)0 ? "true" : "false";
     assert_eq!(out, "3:2.5:42:false");
 }
 
+/// Regression (audit T4/M2): a cast binds tighter than `*`/`/`/`%` but looser than `**`,
+/// matching PHP. With the old binding power (27) `(int)1.9 * 2` parsed as `(int)(1.9 * 2)` = 3;
+/// at bp 35 (the unary level) it is `((int)1.9) * 2` = 2, while `**` still binds inside the cast.
+#[test]
+fn test_cast_binds_tighter_than_multiplicative() {
+    let out = compile_and_run(r#"<?php echo (int)1.9 * 2, "|", (int)2 ** 3, "|", (int)7.9 - 1;"#);
+    assert_eq!(out, "2|8|6");
+}
+
 // --- gettype ---

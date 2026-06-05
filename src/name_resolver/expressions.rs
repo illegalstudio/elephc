@@ -322,6 +322,58 @@ pub(super) fn resolve_expr(
             element_type: resolve_type_expr(element_type, current_namespace, imports, symbols),
             len: Box::new(resolve_expr(len, current_namespace, imports, symbols)),
         },
+        ExprKind::Assignment {
+            target,
+            value,
+            result_target,
+            prelude,
+            conditional_value_temp,
+        } => ExprKind::Assignment {
+            target: Box::new(resolve_expr(target, current_namespace, imports, symbols)),
+            value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
+            result_target: result_target
+                .as_ref()
+                .map(|t| Box::new(resolve_expr(t, current_namespace, imports, symbols))),
+            // `prelude` is empty at name-resolution time (assignment preludes are
+            // synthesized later during codegen), so there is nothing to resolve here.
+            prelude: prelude.clone(),
+            conditional_value_temp: conditional_value_temp.clone(),
+        },
+        ExprKind::Yield { key, value } => ExprKind::Yield {
+            key: key
+                .as_ref()
+                .map(|k| Box::new(resolve_expr(k, current_namespace, imports, symbols))),
+            value: value
+                .as_ref()
+                .map(|v| Box::new(resolve_expr(v, current_namespace, imports, symbols))),
+        },
+        ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(resolve_expr(
+            inner,
+            current_namespace,
+            imports,
+            symbols,
+        ))),
+        ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
+            name_expr: Box::new(resolve_expr(name_expr, current_namespace, imports, symbols)),
+            args: args
+                .iter()
+                .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
+                .collect(),
+        },
+        ExprKind::NewDynamicObject {
+            class_name,
+            fallback_class,
+            required_parent,
+            args,
+        } => ExprKind::NewDynamicObject {
+            class_name: Box::new(resolve_expr(class_name, current_namespace, imports, symbols)),
+            fallback_class: fallback_class.clone(),
+            required_parent: required_parent.clone(),
+            args: args
+                .iter()
+                .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
+                .collect(),
+        },
         _ => expr.kind.clone(),
     };
     Expr::new(kind, expr.span)
