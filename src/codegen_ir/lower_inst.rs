@@ -494,6 +494,9 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     if let Some(state) = fiber_state_predicate(&class_name, &method_name) {
         return lower_fiber_state_predicate(ctx, inst, object, state);
     }
+    if is_fiber_start_call(&class_name, &method_name) {
+        return lower_fiber_start(ctx, inst, object);
+    }
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
     param_types.push(PhpType::Object(class_name));
@@ -505,6 +508,54 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
     store_call_result(ctx, inst, &target.return_ty)
+}
+
+/// Lowers no-argument `Fiber::start()` through the shared runtime helper.
+fn lower_fiber_start(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+) -> Result<()> {
+    if !fiber_start_has_only_default_args(ctx, inst)? {
+        return Err(CodegenIrError::unsupported(
+            "Fiber::start with EIR start arguments",
+        ));
+    }
+    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(object, receiver_arg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_fiber_start");
+    store_if_result(ctx, inst)
+}
+
+/// Returns true when `Fiber::start()` has no visible arguments after default padding.
+fn fiber_start_has_only_default_args(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<bool> {
+    for operand in inst.operands.iter().skip(1) {
+        if !is_synthetic_null_value(ctx, *operand)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Returns true when a value is an omitted optional-argument placeholder.
+fn is_synthetic_null_value(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    if ctx.value_php_type(value)? != PhpType::Void {
+        return Ok(false);
+    }
+    let Some(value) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let crate::ir::ValueDef::Instruction { inst, .. } = value.def else {
+        return Ok(false);
+    };
+    let Some(inst) = ctx.function.instruction(inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+    };
+    Ok(matches!(inst.op, Op::ConstNull)
+        && inst.span.is_some_and(|span| span.line == 0 && span.col == 0))
 }
 
 /// Lowers Fiber state predicates directly to the shared runtime helper.
@@ -553,6 +604,12 @@ impl FiberStatePredicate {
             Self::Terminated => crate::codegen::runtime::FIBER_STATE_TERMINATED,
         }
     }
+}
+
+/// Returns true when a direct method call targets PHP's built-in `Fiber::start`.
+fn is_fiber_start_call(class_name: &str, method_name: &str) -> bool {
+    php_symbol_key(class_name.trim_start_matches('\\')) == "fiber"
+        && php_symbol_key(method_name) == "start"
 }
 
 /// Resolves a Fiber state predicate method name, if the receiver is `Fiber`.

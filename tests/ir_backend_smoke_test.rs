@@ -458,6 +458,37 @@ if ($f->isTerminated()) { echo "T"; } else { echo "t"; }
     );
 }
 
+/// Verifies no-argument Fiber start executes an EIR closure body and returns to main.
+#[test]
+fn ir_backend_starts_noarg_void_fibers() {
+    let source = r#"<?php
+$f = new Fiber(function(): void { echo "inside"; });
+$f->start();
+echo "|after";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("fiber_start_noarg_void", source),
+        "inside|after"
+    );
+}
+
+/// Verifies Fiber state predicates observe the transition after a no-arg start.
+#[test]
+fn ir_backend_reports_started_terminated_fiber_state() {
+    let source = r#"<?php
+$f = new Fiber(function(): void {});
+$f->start();
+echo $f->isStarted() ? "S" : "s";
+echo $f->isRunning() ? "R" : "r";
+echo $f->isSuspended() ? "P" : "p";
+echo $f->isTerminated() ? "T" : "t";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("fiber_started_terminated_state", source),
+        "SrpT"
+    );
+}
+
 /// Verifies pipe calls through runtime-selected first-class function descriptors.
 #[test]
 fn ir_backend_handles_runtime_function_pipe_calls() {

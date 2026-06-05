@@ -30,6 +30,8 @@ use crate::codegen::runtime;
 use crate::ir::{Function, Immediate, Module, Op};
 use crate::types::{ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 
+pub(crate) const FIBER_NOARG_VOID_WRAPPER_LABEL: &str = "_eir_fiber_noarg_void_wrapper";
+
 /// Error returned by the Phase 04 IR backend while a required lowering path is missing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodegenIrError {

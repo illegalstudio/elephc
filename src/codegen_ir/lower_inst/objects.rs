@@ -184,13 +184,55 @@ fn lower_fiber_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
         abi::int_arg_reg_name(ctx.emitter.target, 1),
         class_id as i64,
     );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        0,
-    );
+    let wrapper_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    if fiber_callable_uses_noarg_void_wrapper(ctx, inst) {
+        abi::emit_symbol_address(
+            ctx.emitter,
+            wrapper_arg,
+            crate::codegen_ir::FIBER_NOARG_VOID_WRAPPER_LABEL,
+        );
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, wrapper_arg, 0);
+    }
     abi::emit_call_label(ctx.emitter, "__rt_fiber_construct");
     store_if_result(ctx, inst)
+}
+
+/// Returns true when `new Fiber($callable)` can use the current EIR no-arg wrapper.
+fn fiber_callable_uses_noarg_void_wrapper(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> bool {
+    let Some(callable) = inst.operands.first().copied() else {
+        return false;
+    };
+    let Some(value) = ctx.function.value(callable) else {
+        return false;
+    };
+    let ValueDef::Instruction {
+        inst: callable_inst,
+        ..
+    } = value.def
+    else {
+        return false;
+    };
+    let Some(callable_inst) = ctx.function.instruction(callable_inst) else {
+        return false;
+    };
+    if !matches!(callable_inst.op, Op::ClosureNew) {
+        return false;
+    }
+    let Some(Immediate::Data(data)) = callable_inst.immediate else {
+        return false;
+    };
+    let Some(closure_name) = ctx.module.data.strings.get(data.as_raw() as usize) else {
+        return false;
+    };
+    ctx.module.closures.iter().any(|closure| {
+        closure.name == *closure_name
+            && closure.params.is_empty()
+            && closure.return_php_type.codegen_repr() == PhpType::Void
+    })
 }
 
 /// Lowers constrained runtime class-string object construction.
