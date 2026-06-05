@@ -3434,6 +3434,24 @@ fn ir_backend_handles_static_function_exists_checks() {
     );
 }
 
+/// Verifies static class/interface/enum existence checks lower through EIR metadata tables.
+#[test]
+fn ir_backend_handles_static_class_like_exists_checks() {
+    let source = r#"<?php
+class EirLookupClass {}
+interface EirLookupInterface {}
+enum EirLookupEnum { case CaseA; }
+echo class_exists("EirLookupClass") ? "C" : "c";
+echo interface_exists("EirLookupInterface") ? "I" : "i";
+echo enum_exists("EirLookupEnum") ? "E" : "e";
+echo class_exists("MissingEirLookup") ? "!" : "m";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("class_like_exists", source),
+        "CIEm"
+    );
+}
+
 /// Verifies filesystem stat predicates lower through the EIR backend runtime helpers.
 #[test]
 fn ir_backend_handles_filesystem_stat_predicates() {

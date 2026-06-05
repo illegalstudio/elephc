@@ -214,6 +214,9 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "json_last_error_msg" => json::lower_json_last_error_msg(ctx, inst),
         "json_validate" => json::lower_json_validate(ctx, inst),
         "function_exists" => lower_function_exists(ctx, inst),
+        "class_exists" | "interface_exists" | "enum_exists" => {
+            lower_class_like_exists(ctx, inst, key.as_str())
+        }
         "is_callable" => lower_is_callable(ctx, inst),
         "print_r" => debug::lower_print_r(ctx, inst),
         "var_dump" => debug::lower_var_dump(ctx, inst),
@@ -589,6 +592,31 @@ fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     store_if_result(ctx, inst)
 }
 
+/// Lowers AOT class/interface/enum existence checks for literal names.
+fn lower_class_like_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<()> {
+    ensure_arg_count_between(inst, name, 1, 2)?;
+    let value = expect_operand(inst, 0)?;
+    let symbol_name = const_string_operand(ctx, value)?;
+    let exists = match name {
+        "class_exists" => contains_folded(
+            ctx.module
+                .class_infos
+                .keys()
+                .filter(|class_name| !is_internal_synthetic_class_name(class_name)),
+            &symbol_name,
+        ),
+        "interface_exists" => contains_folded(ctx.module.interface_infos.keys(), &symbol_name),
+        "enum_exists" => contains_folded(ctx.module.enum_infos.keys(), &symbol_name),
+        _ => false,
+    };
+    emit_static_bool(ctx, exists);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `is_callable(value)` for static strings and concrete scalar types.
 fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_callable", 1)?;
@@ -960,6 +988,20 @@ fn callable_name_exists(ctx: &FunctionContext<'_>, name: &str) -> bool {
         || canonical_builtin_function_name(name.trim_start_matches('\\')).is_some()
 }
 
+/// Checks whether a PHP symbol is present in an iterator of known names.
+fn contains_folded<'a>(
+    mut names: impl Iterator<Item = &'a String>,
+    needle: &str,
+) -> bool {
+    let needle_key = php_symbol_key(needle.trim_start_matches('\\'));
+    names.any(|name| php_symbol_key(name.trim_start_matches('\\')) == needle_key)
+}
+
+/// Returns true for internal helper classes that should not be visible to PHP class_exists().
+fn is_internal_synthetic_class_name(name: &str) -> bool {
+    php_symbol_key(name).starts_with("__elephc")
+}
+
 /// Returns a string literal value defined by a `ConstStr` instruction.
 fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<String> {
     let value_ref = ctx
@@ -1015,6 +1057,25 @@ fn ensure_min_arg_count(inst: &Instruction, name: &str, expected: usize) -> Resu
         "{} expected at least {} args, got {}",
         name,
         expected,
+        inst.operands.len()
+    )))
+}
+
+/// Verifies that the builtin call has between the expected lowered operand counts.
+fn ensure_arg_count_between(
+    inst: &Instruction,
+    name: &str,
+    min: usize,
+    max: usize,
+) -> Result<()> {
+    if (min..=max).contains(&inst.operands.len()) {
+        return Ok(());
+    }
+    Err(CodegenIrError::invalid_module(format!(
+        "{} expected {} to {} args, got {}",
+        name,
+        min,
+        max,
         inst.operands.len()
     )))
 }
