@@ -2471,6 +2471,31 @@ unlink("a.txt");
     );
 }
 
+/// Verifies direct `SplFileObject` construction emits inherited runtime metadata.
+#[test]
+fn ir_backend_handles_direct_spl_file_object_methods() {
+    let source = r#"<?php
+file_put_contents("a.txt", "one\ntwo\n");
+
+$file = new SplFileObject("a.txt");
+echo ($file instanceof SplFileObject) ? "F" : "x";
+echo ":";
+$file->seek(1);
+echo $file->current();
+echo ":";
+$file->rewind();
+echo $file->fgets();
+echo ":";
+echo $file->key();
+
+unlink("a.txt");
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("direct_spl_file_object_methods", source),
+        "F:two\n:one\n:1"
+    );
+}
+
 /// Verifies typed declared properties still fatal when read before initialization.
 #[test]
 fn ir_backend_fatals_on_uninitialized_typed_object_property() {

@@ -853,6 +853,31 @@ unlink("a.txt");
     );
 }
 
+/// Verifies direct `SplFileObject` construction and method calls match the legacy backend.
+#[test]
+fn parity_direct_spl_file_object_methods() {
+    assert_backend_parity(
+        "direct_spl_file_object_methods",
+        r#"<?php
+file_put_contents("a.txt", "one\ntwo\n");
+
+$file = new SplFileObject("a.txt");
+echo ($file instanceof SplFileObject) ? "F" : "x";
+echo ":";
+$file->seek(1);
+echo $file->current();
+echo ":";
+$file->rewind();
+echo $file->fgets();
+echo ":";
+echo $file->key();
+
+unlink("a.txt");
+"#,
+        &[],
+    );
+}
+
 /// Compiles and runs a PHP snippet through both backends and compares stdout.
 fn assert_backend_parity(name: &str, source: &str, args: &[&str]) {
     let legacy = compile_and_run_backend(name, source, args, Backend::Legacy);

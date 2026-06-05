@@ -389,7 +389,7 @@ fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, String)> {
                         if is_supported_builtin_spl_method(class_name, &construct_key) {
                             methods.push((class_name.to_string(), construct_key));
                         }
-                        push_builtin_spl_metadata_methods(&mut methods, class_name);
+                        push_builtin_spl_metadata_methods(&mut methods, module, class_name);
                     }
                 }
                 Op::DynamicObjectNew => {
@@ -403,8 +403,8 @@ fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, String)> {
                         if is_supported_builtin_spl_method(required_parent, &construct_key) {
                             methods.push((required_parent.to_string(), construct_key));
                         }
-                        push_builtin_spl_metadata_methods(&mut methods, fallback_class);
-                        push_builtin_spl_metadata_methods(&mut methods, required_parent);
+                        push_builtin_spl_metadata_methods(&mut methods, module, fallback_class);
+                        push_builtin_spl_metadata_methods(&mut methods, module, required_parent);
                     }
                 }
                 Op::MethodCall | Op::NullsafeMethodCall => {
@@ -474,12 +474,23 @@ fn php_method_key(method_name: &str) -> String {
 }
 
 /// Adds builtin SPL methods required by runtime class/interface metadata.
-fn push_builtin_spl_metadata_methods(methods: &mut Vec<(String, String)>, class_name: &str) {
-    for method_name in required_builtin_spl_metadata_methods(class_name) {
-        let method_key = php_method_key(method_name);
-        if is_supported_builtin_spl_method(class_name, &method_key) {
-            methods.push((class_name.to_string(), method_key));
+fn push_builtin_spl_metadata_methods(
+    methods: &mut Vec<(String, String)>,
+    module: &Module,
+    class_name: &str,
+) {
+    let mut current = Some(class_name);
+    while let Some(name) = current {
+        for method_name in required_builtin_spl_metadata_methods(name) {
+            let method_key = php_method_key(method_name);
+            if is_supported_builtin_spl_method(name, &method_key) {
+                methods.push((name.to_string(), method_key));
+            }
         }
+        current = module
+            .class_infos
+            .get(name)
+            .and_then(|class_info| class_info.parent.as_deref());
     }
 }
 
