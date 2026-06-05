@@ -29,6 +29,7 @@ mod io;
 mod json;
 mod math;
 mod pointers;
+mod spl;
 mod system;
 mod strings;
 mod types;
@@ -369,6 +370,8 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "ctype_digit" => ctype::lower_ctype_digit(ctx, inst),
         "ctype_alnum" => ctype::lower_ctype_alnum(ctx, inst),
         "ctype_space" => ctype::lower_ctype_space(ctx, inst),
+        "spl_object_id" => spl::lower_spl_object_id(ctx, inst),
+        "spl_object_hash" => spl::lower_spl_object_hash(ctx, inst),
         _ => Err(CodegenIrError::unsupported(format!("builtin call {}", name))),
     }
 }

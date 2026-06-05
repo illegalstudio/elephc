@@ -3491,6 +3491,27 @@ echo is_subclass_of($dog, "EirAnimal") ? "S" : "n";
     );
 }
 
+/// Verifies SPL object identity helpers lower through the EIR backend.
+#[test]
+fn ir_backend_handles_spl_object_identity_builtins() {
+    let source = r#"<?php
+class EirBox {}
+$a = new EirBox();
+$b = new EirBox();
+echo (spl_object_id($a) === spl_object_id($a)) ? "stable" : "drift";
+echo ":";
+echo (spl_object_id($a) !== spl_object_id($b)) ? "unique" : "same";
+echo ":";
+echo (spl_object_hash($a) === spl_object_hash($a)) ? "stable" : "drift";
+echo ":";
+echo (spl_object_hash($a) !== spl_object_hash($b)) ? "unique" : "same";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("spl_object_identity_builtins", source),
+        "stable:unique:stable:unique"
+    );
+}
+
 /// Verifies filesystem stat predicates lower through the EIR backend runtime helpers.
 #[test]
 fn ir_backend_handles_filesystem_stat_predicates() {

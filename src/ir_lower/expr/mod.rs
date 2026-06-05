@@ -1704,9 +1704,10 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         "fclose" | "feof" | "rewind" => Some(PhpType::Bool),
         "printf" | "array_rand" | "array_unshift" | "file_put_contents" | "filemtime"
         | "filesize" | "fpassthru" | "fputcsv" | "fseek" | "ftell" | "fwrite"
-        | "linkinfo" | "mktime" | "sleep" | "strtotime" | "time" | "umask" => {
+        | "linkinfo" | "mktime" | "sleep" | "spl_object_id" | "strtotime" | "time" | "umask" => {
             Some(PhpType::Int)
         }
+        "spl_object_hash" => Some(PhpType::Str),
         "usleep" => Some(PhpType::Void),
         "file_get_contents" | "fileatime" | "filectime" | "filegroup" | "fileinode"
         | "fileowner" | "fileperms" | "filetype" | "readfile" | "readlink" | "realpath"
