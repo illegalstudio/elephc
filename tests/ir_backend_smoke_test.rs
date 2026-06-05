@@ -3701,6 +3701,40 @@ echo fnmatch("*.txt", "app.log") ? "Y" : "N";
     );
 }
 
+/// Verifies file modification builtins lower scalar arguments and optional timestamps.
+#[test]
+fn ir_backend_handles_file_modify_builtins() {
+    let source = r#"<?php
+file_put_contents("perm.txt", "");
+echo chmod("perm.txt", 0o644) ? "C" : "!";
+echo ":";
+echo chown("/nonexistent/eir-owner", 1000) ? "!" : "O";
+echo chgrp("/nonexistent/eir-group", 1000) ? "!" : "G";
+echo ":";
+echo chown("perm.txt", "elephc_user_that_should_not_exist") ? "!" : "u";
+echo chgrp("perm.txt", "elephc_group_that_should_not_exist") ? "!" : "g";
+echo ":";
+$old = umask(0);
+$previous = umask($old);
+echo $previous === 0 ? "U" : "!";
+echo ":";
+echo touch("touched.txt") ? "T" : "!";
+echo file_exists("touched.txt") ? "E" : "!";
+echo touch("nulltime.txt", null) ? "N" : "!";
+file_put_contents("mtime.txt", "");
+touch("mtime.txt", 1000000000);
+echo ":";
+echo filemtime("mtime.txt");
+echo ":";
+file_put_contents("both.txt", "");
+echo touch("both.txt", 1000000000, 900000000) ? "B" : "!";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("file_modify_builtins", source),
+        "C:OG:ug:U:TEN:1000000000:B"
+    );
+}
+
 /// Verifies global constant declarations, references, and `defined()` lowering.
 #[test]
 fn ir_backend_handles_global_constants_and_defined() {

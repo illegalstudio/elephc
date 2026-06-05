@@ -19,6 +19,9 @@ use super::super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
+const TOUCH_ATIME_NOW: u8 = 1;
+const TOUCH_MTIME_NOW: u8 = 2;
+const TOUCH_BOTH_NOW: u8 = TOUCH_ATIME_NOW | TOUCH_MTIME_NOW;
 
 /// Lowers `file_get_contents(path)` and boxes the runtime string-or-false result.
 pub(super) fn lower_file_get_contents(
@@ -99,6 +102,84 @@ pub(super) fn lower_rename(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 /// Lowers `tempnam(directory, prefix)` through the target-aware runtime helper.
 pub(super) fn lower_tempnam(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_binary_path_call(ctx, inst, "tempnam", "__rt_tempnam")
+}
+
+/// Lowers `chmod(path, mode)` through the target-aware runtime helper.
+pub(super) fn lower_chmod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "chmod", 2)?;
+    let path = expect_operand(inst, 0)?;
+    let mode = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_to_result(ctx, path, "chmod path")?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            require_int(ctx.load_value_to_result(mode)?.codegen_repr(), "chmod mode")?;
+            ctx.emitter.instruction("mov x3, x0");                              // pass the requested mode to the chmod runtime helper
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        }
+        Arch::X86_64 => {
+            load_string_to_result(ctx, path, "chmod path")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            require_int(ctx.load_value_to_result(mode)?.codegen_repr(), "chmod mode")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the requested mode to the chmod runtime helper
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_chmod");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `chown(path, owner)` for integer UIDs and string user names.
+pub(super) fn lower_chown(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_chown_or_chgrp(ctx, inst, "chown", PrincipalKind::Owner)
+}
+
+/// Lowers `chgrp(path, group)` for integer GIDs and string group names.
+pub(super) fn lower_chgrp(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_chown_or_chgrp(ctx, inst, "chgrp", PrincipalKind::Group)
+}
+
+/// Lowers `umask(mask?)` through the target-aware runtime helper.
+pub(super) fn lower_umask(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "umask", 0, 1)?;
+    if inst.operands.is_empty() {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, #0");                          // probe the current umask with a temporary zero mask
+                abi::emit_call_label(ctx.emitter, "__rt_umask");
+                ctx.emitter.instruction("stp x0, xzr, [sp, #-16]!");            // save the probed previous mask while restoring it
+                ctx.emitter.instruction("ldr x0, [sp]");                        // pass the previous mask back to restore process state
+                abi::emit_call_label(ctx.emitter, "__rt_umask");
+                ctx.emitter.instruction("ldp x0, xzr, [sp], #16");              // return the originally probed mask to PHP
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("xor eax, eax");                        // probe the current umask with a temporary zero mask
+                abi::emit_call_label(ctx.emitter, "__rt_umask");
+                ctx.emitter.instruction("push rax");                            // save the probed previous mask while restoring it
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");            // pass the previous mask back to restore process state
+                abi::emit_call_label(ctx.emitter, "__rt_umask");
+                ctx.emitter.instruction("pop rax");                             // return the originally probed mask to PHP
+            }
+        }
+        return store_if_result(ctx, inst);
+    }
+    let mask = expect_operand(inst, 0)?;
+    require_int(ctx.load_value_to_result(mask)?.codegen_repr(), "umask mask")?;
+    abi::emit_call_label(ctx.emitter, "__rt_umask");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `touch(path, mtime?, atime?)` through the target-aware runtime helper.
+pub(super) fn lower_touch(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "touch", 1, 3)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, "touch path")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_touch_args_aarch64(ctx, inst)?,
+        Arch::X86_64 => lower_touch_args_x86_64(ctx, inst)?,
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_touch");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `basename(path, suffix?)` through the target-aware runtime helper.
@@ -207,6 +288,227 @@ pub(super) fn lower_fnmatch(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     }
     abi::emit_call_label(ctx.emitter, "__rt_fnmatch");
     store_if_result(ctx, inst)
+}
+
+/// Selects which ownership field a filesystem principal builtin changes.
+#[derive(Clone, Copy)]
+enum PrincipalKind {
+    Owner,
+    Group,
+}
+
+/// Selects how `touch()` should materialize optional timestamp operands.
+enum TouchTimeShape {
+    BothNow,
+    MtimeAlsoAtime,
+    ExplicitBoth,
+}
+
+/// Lowers the shared path/principal calling convention for `chown()` and `chgrp()`.
+fn lower_chown_or_chgrp(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    kind: PrincipalKind,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 2)?;
+    let path = expect_operand(inst, 0)?;
+    let principal = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_chown_or_chgrp_aarch64(ctx, path, principal, name, kind)?,
+        Arch::X86_64 => lower_chown_or_chgrp_x86_64(ctx, path, principal, name, kind)?,
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Materializes `chown()`/`chgrp()` operands for the ARM64 runtime ABI.
+fn lower_chown_or_chgrp_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    path: ValueId,
+    principal: ValueId,
+    name: &str,
+    kind: PrincipalKind,
+) -> Result<()> {
+    load_string_to_result(ctx, path, name)?;
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+    match ctx.load_value_to_result(principal)?.codegen_repr() {
+        PhpType::Str => {
+            ctx.emitter.instruction("mov x3, x1");                              // pass the principal-name pointer to the resolver helper
+            ctx.emitter.instruction("mov x4, x2");                              // pass the principal-name length to the resolver helper
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_call_label(ctx.emitter, principal_string_runtime(kind));
+        }
+        PhpType::Int => {
+            match kind {
+                PrincipalKind::Owner => {
+                    ctx.emitter.instruction("mov x3, x0");                      // pass the target uid to chown(path, uid, -1)
+                    ctx.emitter.instruction("mov x4, #-1");                     // keep the file group unchanged
+                }
+                PrincipalKind::Group => {
+                    ctx.emitter.instruction("mov x4, x0");                      // pass the target gid to chown(path, -1, gid)
+                    ctx.emitter.instruction("mov x3, #-1");                     // keep the file owner unchanged
+                }
+            }
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_call_label(ctx.emitter, "__rt_chown");
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} principal PHP type {:?}",
+                name, other
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Materializes `chown()`/`chgrp()` operands for the Linux x86_64 runtime ABI.
+fn lower_chown_or_chgrp_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    path: ValueId,
+    principal: ValueId,
+    name: &str,
+    kind: PrincipalKind,
+) -> Result<()> {
+    load_string_to_result(ctx, path, name)?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    match ctx.load_value_to_result(principal)?.codegen_repr() {
+        PhpType::Str => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the principal-name pointer to the resolver helper
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the principal-name length to the resolver helper
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            abi::emit_call_label(ctx.emitter, principal_string_runtime(kind));
+        }
+        PhpType::Int => {
+            match kind {
+                PrincipalKind::Owner => {
+                    ctx.emitter.instruction("mov rdi, rax");                    // pass the target uid to chown(path, uid, -1)
+                    ctx.emitter.instruction("mov rsi, -1");                     // keep the file group unchanged
+                }
+                PrincipalKind::Group => {
+                    ctx.emitter.instruction("mov rsi, rax");                    // pass the target gid to chown(path, -1, gid)
+                    ctx.emitter.instruction("mov rdi, -1");                     // keep the file owner unchanged
+                }
+            }
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_chown");
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} principal PHP type {:?}",
+                name, other
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Returns the string-principal runtime helper for the ownership field.
+fn principal_string_runtime(kind: PrincipalKind) -> &'static str {
+    match kind {
+        PrincipalKind::Owner => "__rt_chown_user",
+        PrincipalKind::Group => "__rt_chgrp_group",
+    }
+}
+
+/// Materializes timestamp arguments for the `touch()` call on ARM64.
+fn lower_touch_args_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    match touch_time_shape(ctx, inst)? {
+        TouchTimeShape::BothNow => {
+            ctx.emitter.instruction("mov x3, #0");                              // ignored mtime seconds when runtime uses current time
+            ctx.emitter.instruction("mov x4, #0");                              // ignored atime seconds when runtime uses current time
+            ctx.emitter.instruction(&format!("mov x5, #{}", TOUCH_BOTH_NOW));   // mark mtime and atime as current-time fields
+        }
+        TouchTimeShape::MtimeAlsoAtime => {
+            let mtime = expect_operand(inst, 1)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            require_int(ctx.load_value_to_result(mtime)?.codegen_repr(), "touch mtime")?;
+            ctx.emitter.instruction("mov x3, x0");                              // pass explicit mtime seconds
+            ctx.emitter.instruction("mov x4, x0");                              // default atime to the explicit mtime seconds
+            ctx.emitter.instruction("mov x5, #0");                              // mark both timestamp fields as explicit
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        }
+        TouchTimeShape::ExplicitBoth => {
+            let mtime = expect_operand(inst, 1)?;
+            let atime = expect_operand(inst, 2)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            require_int(ctx.load_value_to_result(mtime)?.codegen_repr(), "touch mtime")?;
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // save explicit mtime while atime is evaluated
+            require_int(ctx.load_value_to_result(atime)?.codegen_repr(), "touch atime")?;
+            ctx.emitter.instruction("mov x4, x0");                              // pass explicit atime seconds
+            ctx.emitter.instruction("ldr x3, [sp], #16");                       // restore explicit mtime seconds
+            ctx.emitter.instruction("mov x5, #0");                              // mark both timestamp fields as explicit
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        }
+    }
+    Ok(())
+}
+
+/// Materializes timestamp arguments for the `touch()` call on x86_64.
+fn lower_touch_args_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    match touch_time_shape(ctx, inst)? {
+        TouchTimeShape::BothNow => {
+            ctx.emitter.instruction("mov rdi, 0");                              // ignored mtime seconds when runtime uses current time
+            ctx.emitter.instruction("mov rsi, 0");                              // ignored atime seconds when runtime uses current time
+            ctx.emitter.instruction(&format!("mov rcx, {}", TOUCH_BOTH_NOW));   // mark mtime and atime as current-time fields
+        }
+        TouchTimeShape::MtimeAlsoAtime => {
+            let mtime = expect_operand(inst, 1)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            require_int(ctx.load_value_to_result(mtime)?.codegen_repr(), "touch mtime")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // pass explicit mtime seconds
+            ctx.emitter.instruction("mov rsi, rax");                            // default atime to the explicit mtime seconds
+            ctx.emitter.instruction("mov rcx, 0");                              // mark both timestamp fields as explicit
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+        }
+        TouchTimeShape::ExplicitBoth => {
+            let mtime = expect_operand(inst, 1)?;
+            let atime = expect_operand(inst, 2)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            require_int(ctx.load_value_to_result(mtime)?.codegen_repr(), "touch mtime")?;
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve aligned temporary storage for mtime
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save explicit mtime while atime is evaluated
+            require_int(ctx.load_value_to_result(atime)?.codegen_repr(), "touch atime")?;
+            ctx.emitter.instruction("mov rsi, rax");                            // pass explicit atime seconds
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // restore explicit mtime seconds
+            ctx.emitter.instruction("add rsp, 16");                             // release the aligned mtime temporary
+            ctx.emitter.instruction("mov rcx, 0");                              // mark both timestamp fields as explicit
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+        }
+    }
+    Ok(())
+}
+
+/// Classifies optional `touch()` timestamp operands after EIR type checking.
+fn touch_time_shape(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<TouchTimeShape> {
+    match inst.operands.len() {
+        1 => Ok(TouchTimeShape::BothNow),
+        2 if is_nullish_value(ctx, expect_operand(inst, 1)?)? => Ok(TouchTimeShape::BothNow),
+        2 => Ok(TouchTimeShape::MtimeAlsoAtime),
+        _ if is_nullish_value(ctx, expect_operand(inst, 1)?)?
+            && is_nullish_value(ctx, expect_operand(inst, 2)?)? =>
+        {
+            Ok(TouchTimeShape::BothNow)
+        }
+        _ if is_nullish_value(ctx, expect_operand(inst, 2)?)? => {
+            Ok(TouchTimeShape::MtimeAlsoAtime)
+        }
+        _ => Ok(TouchTimeShape::ExplicitBoth),
+    }
+}
+
+/// Returns true when an EIR value represents PHP `null`.
+fn is_nullish_value(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    Ok(matches!(
+        ctx.value_php_type(value)?.codegen_repr(),
+        PhpType::Void
+    ))
 }
 
 /// Lowers `getcwd()` through the target-aware runtime helper.
