@@ -1077,9 +1077,27 @@ fn lower_builtin_call_args(
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
     match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        "date" => lower_date_args(ctx, sig, args),
         "json_decode" => lower_json_decode_args(ctx, sig, args),
         _ => lower_args_with_signature(ctx, sig, args),
     }
+}
+
+/// Lowers simple positional `date` operands while stabilizing the format string before timestamp evaluation.
+fn lower_date_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    if args.len() != 2
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+    {
+        return lower_args_with_signature(ctx, sig, args);
+    }
+    let format = lower_expr(ctx, &args[0]);
+    let format = persist_call_arg_if_string(ctx, format, args[0].span);
+    vec![format.value, lower_expr(ctx, &args[1]).value]
 }
 
 /// Lowers simple positional `json_decode` operands while stabilizing string sources early.
@@ -1095,7 +1113,7 @@ fn lower_json_decode_args(
         return lower_args_with_signature(ctx, sig, args);
     }
     let source = lower_expr(ctx, &args[0]);
-    let source = persist_json_decode_source_if_string(ctx, source, args[0].span);
+    let source = persist_call_arg_if_string(ctx, source, args[0].span);
     let mut operands = Vec::with_capacity(args.len());
     operands.push(source.value);
     for arg in &args[1..] {
@@ -1104,8 +1122,8 @@ fn lower_json_decode_args(
     operands
 }
 
-/// Emits `StrPersist` for already-string JSON sources before later arguments can reuse string scratch storage.
-fn persist_json_decode_source_if_string(
+/// Emits `StrPersist` for already-string call operands before later arguments can reuse string scratch storage.
+fn persist_call_arg_if_string(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
     span: crate::span::Span,
@@ -1659,7 +1677,11 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         "define" | "defined" | "empty" | "function_exists" | "is_callable" | "is_numeric" => {
             Some(PhpType::Bool)
         }
-        "printf" | "array_rand" | "array_unshift" => Some(PhpType::Int),
+        "date" => Some(PhpType::Str),
+        "microtime" => Some(PhpType::Float),
+        "printf" | "array_rand" | "array_unshift" | "mktime" | "strtotime" | "time" => {
+            Some(PhpType::Int)
+        }
         "strpos" | "strrpos" => Some(PhpType::Mixed),
         "explode" | "str_split" | "sscanf" => Some(PhpType::Array(Box::new(PhpType::Str))),
         _ => None,

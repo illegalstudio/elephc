@@ -702,6 +702,29 @@ line2:The quick |brown fox:4142:AB"#,
     }
 }
 
+/// Verifies date/time builtins dispatch through the shared runtime helpers.
+#[test]
+fn ir_backend_handles_date_time_builtins() {
+    let source = r#"<?php
+echo date("Y-m-d", 1700000000);
+echo "|";
+echo date("Y-m-d", mktime(0, 0, 0, 1, 1, 2000));
+echo "|";
+$ts = strtotime("2024-06-15 12:30:45");
+echo date("Y-m-d H:i:s", $ts);
+echo "|";
+echo strtotime("garbage");
+echo "|";
+echo time() > 0 ? "T" : "F";
+echo "|";
+echo microtime() > 0.0 ? "M" : "N";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("date_time_builtins", source),
+        "2023-11-14|2000-01-01|2024-06-15 12:30:45|-1|T|M"
+    );
+}
+
 /// Verifies JSON validation builtins update and expose runtime JSON error state.
 #[test]
 fn ir_backend_handles_json_validation_builtins() {

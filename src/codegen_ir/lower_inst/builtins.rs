@@ -28,6 +28,7 @@ mod debug;
 mod json;
 mod math;
 mod pointers;
+mod system;
 mod strings;
 
 const DEFINE_ALREADY_DEFINED_WARNING: &str =
@@ -122,6 +123,11 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "gettype" => lower_gettype(ctx, inst),
         "define" => lower_define(ctx, inst),
         "defined" => lower_defined(ctx, inst),
+        "date" => system::lower_date(ctx, inst),
+        "microtime" => system::lower_microtime(ctx, inst),
+        "mktime" => system::lower_mktime(ctx, inst),
+        "strtotime" => system::lower_strtotime(ctx, inst),
+        "time" => system::lower_time(ctx, inst),
         "json_decode" => json::lower_json_decode(ctx, inst),
         "json_encode" => json::lower_json_encode(ctx, inst),
         "json_last_error" => json::lower_json_last_error(ctx, inst),
