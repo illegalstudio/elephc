@@ -1000,6 +1000,16 @@ pub(super) fn lower_lstat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     lower_unary_path_stat_array_or_false(ctx, inst, "lstat", "__rt_lstat_array")
 }
 
+/// Lowers `fstat(stream)` and boxes the runtime stat array or PHP false result.
+pub(super) fn lower_fstat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "fstat", 1)?;
+    let stream = expect_operand(inst, 0)?;
+    load_stream_fd_to_result(ctx, stream, "fstat")?;
+    abi::emit_call_label(ctx.emitter, "__rt_fstat_array");
+    box_stat_array_or_false_result(ctx);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `clearstatcache(...)` as an ordered no-op after EIR operand evaluation.
 pub(super) fn lower_clearstatcache(
     ctx: &mut FunctionContext<'_>,

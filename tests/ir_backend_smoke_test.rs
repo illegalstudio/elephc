@@ -3713,6 +3713,46 @@ echo lstat("missing.txt") === false ? "L" : "!";
     );
 }
 
+/// Verifies `fstat()` boxes PHP stat arrays for stream resources.
+#[test]
+fn ir_backend_handles_fstat_arrays() {
+    let source = r#"<?php
+file_put_contents("fd.txt", "abcdefghij");
+$h = fopen("fd.txt", "r");
+$info = fstat($h);
+fclose($h);
+echo $info["size"];
+echo ":";
+echo gettype($info["mode"]);
+echo ":";
+echo $info[7] === $info["size"] ? "match" : "differ";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("fstat_arrays", source),
+        "10:integer:match"
+    );
+}
+
+/// Verifies `fstat()` rejects boxed false handles before calling the runtime helper.
+#[test]
+fn ir_backend_rejects_false_fstat_handles() {
+    let run = compile_ir_backend_and_run(
+        "false_fstat_handle",
+        r#"<?php
+$h = @fopen("missing.txt", "r");
+fstat($h);
+echo "unreachable";
+"#,
+        &[],
+    );
+    assert!(!run.status.success(), "false fstat handle unexpectedly succeeded");
+    let stderr = String::from_utf8(run.stderr).expect("fstat TypeError should be utf8");
+    assert!(
+        stderr.contains("TypeError: fstat()") && stderr.contains("resource"),
+        "expected fstat TypeError, got stderr={stderr}"
+    );
+}
+
 /// Verifies `clearstatcache()` is a no-op that still evaluates supplied arguments.
 #[test]
 fn ir_backend_handles_clearstatcache() {
