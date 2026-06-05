@@ -1686,7 +1686,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         }
         "usleep" => Some(PhpType::Void),
         "file_get_contents" | "fileatime" | "filectime" | "filegroup" | "fileinode"
-        | "fileowner" | "fileperms" | "filetype" | "strpos" | "strrpos" => {
+        | "fileowner" | "fileperms" | "filetype" | "realpath" | "strpos" | "strrpos" => {
             Some(PhpType::Mixed)
         }
         "explode" | "str_split" | "sscanf" => Some(PhpType::Array(Box::new(PhpType::Str))),

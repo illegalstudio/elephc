@@ -29,7 +29,17 @@ pub(super) fn lower_file_get_contents(
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, "file_get_contents filename")?;
     abi::emit_call_label(ctx.emitter, "__rt_file_get_contents");
-    box_file_get_contents_result(ctx);
+    box_owned_string_or_false_result(ctx, "fgc");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `realpath(path)` and boxes the owned runtime string-or-false result.
+pub(super) fn lower_realpath(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "realpath", 1)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, "realpath")?;
+    abi::emit_call_label(ctx.emitter, "__rt_realpath");
+    box_owned_string_or_false_result(ctx, "realpath");
     store_if_result(ctx, inst)
 }
 
@@ -286,10 +296,10 @@ fn lower_file_put_contents_x86_64(
     Ok(())
 }
 
-/// Boxes the raw `file_get_contents` string result into PHP `string|false` Mixed form.
-fn box_file_get_contents_result(ctx: &mut FunctionContext<'_>) {
-    let false_label = ctx.next_label("fgc_false");
-    let done_label = ctx.next_label("fgc_done");
+/// Boxes an owned runtime string result into PHP `string|false` Mixed form.
+fn box_owned_string_or_false_result(ctx: &mut FunctionContext<'_>, label_prefix: &str) {
+    let false_label = ctx.next_label(&format!("{}_false", label_prefix));
+    let done_label = ctx.next_label(&format!("{}_done", label_prefix));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cbz x1, {}", false_label));       // branch when the runtime returned a null string pointer for failure
@@ -301,7 +311,7 @@ fn box_file_get_contents_result(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov x9, #1");                              // select runtime tag 1 for a string Mixed payload
             ctx.emitter.instruction("str x9, [x0]");                            // store the string tag in the Mixed cell
             abi::emit_pop_reg_pair(ctx.emitter, "x10", "x11");
-            ctx.emitter.instruction("stp x10, x11, [x0, #8]");                  // store the owned file string pointer and length in the Mixed cell
+            ctx.emitter.instruction("stp x10, x11, [x0, #8]");                  // store the owned string pointer and length in the Mixed cell
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after building the string Mixed result
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("mov x1, #0");                              // use zero as the false payload for the Mixed bool box
@@ -312,7 +322,7 @@ fn box_file_get_contents_result(ctx: &mut FunctionContext<'_>) {
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("test rax, rax");                           // test whether the runtime returned a null string pointer for failure
-            ctx.emitter.instruction(&format!("jz {}", false_label));            // box false when file_get_contents failed
+            ctx.emitter.instruction(&format!("jz {}", false_label));            // box false when the runtime string helper failed
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
             ctx.emitter.instruction("mov rax, 24");                             // request a mixed cell payload with tag and two value words
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
@@ -321,8 +331,8 @@ fn box_file_get_contents_result(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov r10, 1");                              // select runtime tag 1 for a string Mixed payload
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the string tag in the Mixed cell
             abi::emit_pop_reg_pair(ctx.emitter, "r10", "r11");
-            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the owned file string pointer in the Mixed cell
-            ctx.emitter.instruction("mov QWORD PTR [rax + 16], r11");           // store the owned file string length in the Mixed cell
+            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the owned string pointer in the Mixed cell
+            ctx.emitter.instruction("mov QWORD PTR [rax + 16], r11");           // store the owned string length in the Mixed cell
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the string Mixed result
             ctx.emitter.label(&false_label);
             ctx.emitter.instruction("xor edi, edi");                            // use zero as the false payload for the Mixed bool box

@@ -3578,6 +3578,22 @@ echo linkinfo("missing.txt") === -1 ? "missing" : "bad";
     );
 }
 
+/// Verifies `realpath()` boxes owned path strings and strict false failures.
+#[test]
+fn ir_backend_handles_realpath() {
+    let source = r#"<?php
+file_put_contents("anchor.txt", "x");
+$resolved = realpath("anchor.txt");
+echo gettype($resolved);
+echo ":";
+echo realpath("/definitely/does/not/exist/eir-realpath") === false ? "false" : "bad";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("realpath", source),
+        "string:false"
+    );
+}
+
 /// Verifies global constant declarations, references, and `defined()` lowering.
 #[test]
 fn ir_backend_handles_global_constants_and_defined() {
