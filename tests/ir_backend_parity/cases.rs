@@ -402,6 +402,12 @@ class EirFilterStatic {
     public static function odd(int $value): bool {
         return ($value % 2) === 1;
     }
+    public static function key_one(int $key): bool {
+        return $key === 1;
+    }
+    public static function both(int $value, int $key): bool {
+        return $value >= 4 && $key < 2;
+    }
 }
 $odd = array_filter([1, 2, 3, 4], "eir_filter_odd");
 echo count($odd); echo ":"; echo $odd[0]; echo ":"; echo $odd[1];
@@ -421,6 +427,12 @@ echo count($fcc); echo ":"; echo $fcc[0]; echo ":"; echo $fcc[1];
 echo "|";
 $static = array_filter([5, 6, 7], EirFilterStatic::odd(...));
 echo count($static); echo ":"; echo $static[0]; echo ":"; echo $static[1];
+echo "|";
+$staticKey = array_filter([7, 8, 9], EirFilterStatic::key_one(...), ARRAY_FILTER_USE_KEY);
+echo count($staticKey); echo ":"; echo $staticKey[0];
+echo "|";
+$staticBoth = array_filter([1, 4, 5], EirFilterStatic::both(...), ARRAY_FILTER_USE_BOTH);
+echo count($staticBoth); echo ":"; echo $staticBoth[0];
 "#,
         &[],
     );
