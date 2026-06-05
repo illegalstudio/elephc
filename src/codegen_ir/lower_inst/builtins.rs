@@ -220,12 +220,12 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "json_last_error_msg" => json::lower_json_last_error_msg(ctx, inst),
         "json_validate" => json::lower_json_validate(ctx, inst),
         "function_exists" => lower_function_exists(ctx, inst),
-        "class_exists" | "interface_exists" | "enum_exists" => {
+        "class_exists" | "interface_exists" | "trait_exists" | "enum_exists" => {
             lower_class_like_exists(ctx, inst, key.as_str())
         }
         "get_class" | "get_parent_class" => types::lower_class_name_lookup(ctx, inst, key.as_str()),
         "is_a" | "is_subclass_of" => types::lower_is_a_relation(ctx, inst, key.as_str()),
-        "get_declared_classes" | "get_declared_interfaces" => {
+        "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
             types::lower_get_declared_names(ctx, inst, key.as_str())
         }
         "is_callable" => lower_is_callable(ctx, inst),
@@ -630,6 +630,7 @@ fn lower_class_like_exists(
             &symbol_name,
         ),
         "interface_exists" => contains_folded(ctx.module.interface_infos.keys(), &symbol_name),
+        "trait_exists" => contains_folded(ctx.module.trait_table.names.iter(), &symbol_name),
         "enum_exists" => contains_folded(ctx.module.enum_infos.keys(), &symbol_name),
         _ => false,
     };

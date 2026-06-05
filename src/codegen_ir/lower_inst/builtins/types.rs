@@ -280,7 +280,7 @@ fn declared_names(ctx: &FunctionContext<'_>, name: &str) -> Result<Vec<String>> 
                 .cloned()
                 .collect(),
             "get_declared_interfaces" => ctx.module.interface_table.names.clone(),
-            "get_declared_traits" => Vec::new(),
+            "get_declared_traits" => ctx.module.trait_table.names.clone(),
             _ => unreachable!(),
         };
     }

@@ -38,6 +38,7 @@ fn populate_metadata(module: &mut Module, program: &Program, check_result: &Chec
     module.class_table.names = sorted_keys(&check_result.classes);
     module.enum_table.names = sorted_keys(&check_result.enums);
     module.interface_table.names = sorted_keys(&check_result.interfaces);
+    module.trait_table.names = collect_declared_trait_names(program);
     module.class_infos = check_result.classes.clone();
     module.interface_infos = check_result.interfaces.clone();
     module.enum_infos = check_result.enums.clone();
@@ -72,6 +73,21 @@ fn sorted_keys<T>(map: &std::collections::HashMap<String, T>) -> Vec<String> {
     let mut keys = map.keys().cloned().collect::<Vec<_>>();
     keys.sort();
     keys
+}
+
+/// Collects user-declared trait names in source order, including namespace blocks.
+fn collect_declared_trait_names(program: &Program) -> Vec<String> {
+    let mut names = Vec::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::TraitDecl { name, .. } => names.push(name.clone()),
+            StmtKind::NamespaceBlock { body, .. } => {
+                names.extend(collect_declared_trait_names(body));
+            }
+            _ => {}
+        }
+    }
+    names
 }
 
 /// Converts a PHP type to EIR storage while preserving true void returns.

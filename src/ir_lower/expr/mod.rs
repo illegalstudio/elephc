@@ -1698,8 +1698,11 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "empty" | "file_exists" | "fnmatch" | "function_exists" | "is_a" | "is_callable"
         | "fdatasync" | "fflush" | "flock" | "fsync" | "ftruncate" | "interface_exists" | "is_dir"
         | "is_executable" | "is_file" | "is_link" | "is_numeric" | "link" | "mkdir" | "rename"
-        | "enum_exists" | "putenv" | "rmdir" | "is_readable" | "is_subclass_of" | "is_writeable" | "is_writable" | "spl_autoload_register"
-        | "spl_autoload_unregister" | "symlink" | "touch" | "unlink" => Some(PhpType::Bool),
+        | "enum_exists" | "trait_exists" | "putenv" | "rmdir" | "is_readable"
+        | "is_subclass_of" | "is_writeable" | "is_writable" | "spl_autoload_register"
+        | "spl_autoload_unregister" | "symlink" | "touch" | "unlink" => {
+            Some(PhpType::Bool)
+        }
         "basename" | "date" | "dirname" | "exec" | "fgets" | "get_class" | "get_parent_class"
         | "getcwd" | "getenv" | "php_uname" | "readline" | "shell_exec" | "sys_get_temp_dir"
         | "fread" | "system" | "spl_autoload_extensions" | "tempnam" => Some(PhpType::Str),
@@ -1720,7 +1723,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         }
         "spl_autoload_functions" => Some(PhpType::Array(Box::new(PhpType::Int))),
         "explode" | "fgetcsv" | "file" | "get_declared_classes" | "get_declared_interfaces"
-        | "glob" | "scandir" | "spl_classes" | "str_split" | "sscanf" => {
+        | "get_declared_traits" | "glob" | "scandir" | "spl_classes" | "str_split" | "sscanf" => {
             Some(PhpType::Array(Box::new(PhpType::Str)))
         }
         _ => None,

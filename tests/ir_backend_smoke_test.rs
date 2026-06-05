@@ -3497,21 +3497,23 @@ fn ir_backend_handles_static_function_exists_checks() {
     );
 }
 
-/// Verifies static class/interface/enum existence checks lower through EIR metadata tables.
+/// Verifies static class/interface/trait/enum existence checks lower through EIR metadata tables.
 #[test]
 fn ir_backend_handles_static_class_like_exists_checks() {
     let source = r#"<?php
 class EirLookupClass {}
 interface EirLookupInterface {}
+trait EirLookupTrait {}
 enum EirLookupEnum { case CaseA; }
 echo class_exists("EirLookupClass") ? "C" : "c";
 echo interface_exists("EirLookupInterface") ? "I" : "i";
 echo enum_exists("EirLookupEnum") ? "E" : "e";
+echo trait_exists("EirLookupTrait") ? "T" : "t";
 echo class_exists("MissingEirLookup") ? "!" : "m";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("class_like_exists", source),
-        "CIEm"
+        "CIETm"
     );
 }
 
@@ -3593,6 +3595,27 @@ echo ($zebra_interface >= 0 && $alpha_interface >= 0 && $zebra_interface < $alph
     assert_eq!(
         compile_and_run_ir_backend("declared_interface_names", interface_source),
         "interfaces"
+    );
+
+    let trait_source = r#"<?php
+trait EirDeclaredZebraTrait {}
+trait EirDeclaredAlphaTrait {}
+$traits = get_declared_traits();
+$zebra_trait = -1;
+$alpha_trait = -1;
+$trait_idx = 0;
+foreach ($traits as $trait_name) {
+    if ($trait_name === "EirDeclaredZebraTrait") $zebra_trait = $trait_idx;
+    if ($trait_name === "EirDeclaredAlphaTrait") $alpha_trait = $trait_idx;
+    $trait_idx = $trait_idx + 1;
+}
+echo ($zebra_trait >= 0 && $alpha_trait >= 0 && $zebra_trait < $alpha_trait)
+    ? "traits"
+    : "bad";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("declared_trait_names", trait_source),
+        "traits"
     );
 }
 

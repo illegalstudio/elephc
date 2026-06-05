@@ -51,6 +51,7 @@ pub struct Module {
     pub class_table: ClassTable,
     pub enum_table: EnumTable,
     pub interface_table: InterfaceTable,
+    pub trait_table: TraitTable,
     pub class_infos: HashMap<String, ClassInfo>,
     pub interface_infos: HashMap<String, InterfaceInfo>,
     pub enum_infos: HashMap<String, EnumInfo>,
@@ -77,6 +78,7 @@ impl Module {
             class_table: ClassTable::default(),
             enum_table: EnumTable::default(),
             interface_table: InterfaceTable::default(),
+            trait_table: TraitTable::default(),
             class_infos: HashMap::new(),
             interface_infos: HashMap::new(),
             enum_infos: HashMap::new(),
@@ -187,6 +189,12 @@ pub struct EnumTable {
 /// Minimal interface metadata table placeholder for Phase 02.
 #[derive(Debug, Clone, Default)]
 pub struct InterfaceTable {
+    pub names: Vec<String>,
+}
+
+/// Minimal trait metadata table placeholder for Phase 04 introspection.
+#[derive(Debug, Clone, Default)]
+pub struct TraitTable {
     pub names: Vec<String>,
 }
 
