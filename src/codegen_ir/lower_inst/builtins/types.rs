@@ -344,9 +344,6 @@ fn emit_string_array_fill_x86_64(ctx: &mut FunctionContext<'_>, names: &[String]
 /// Looks up a class by PHP-style case-insensitive name.
 fn lookup_class<'a>(ctx: &'a FunctionContext<'_>, name: &str) -> Option<&'a ClassInfo> {
     let clean = name.trim_start_matches('\\');
-    if let Some(info) = ctx.module.class_infos.get(clean) {
-        return Some(info);
-    }
     let key = php_symbol_key(clean);
     ctx.module
         .class_infos

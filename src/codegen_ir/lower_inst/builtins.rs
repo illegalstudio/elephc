@@ -23,6 +23,7 @@ use crate::codegen_ir::{CodegenIrError, Result};
 mod is_numeric;
 mod arrays;
 mod buffers;
+mod class_relations;
 mod ctype;
 mod debug;
 mod io;
@@ -225,6 +226,9 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         }
         "get_class" | "get_parent_class" => types::lower_class_name_lookup(ctx, inst, key.as_str()),
         "is_a" | "is_subclass_of" => types::lower_is_a_relation(ctx, inst, key.as_str()),
+        "class_implements" | "class_parents" | "class_uses" => {
+            class_relations::lower_class_relation(ctx, inst, key.as_str())
+        }
         "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
             types::lower_get_declared_names(ctx, inst, key.as_str())
         }

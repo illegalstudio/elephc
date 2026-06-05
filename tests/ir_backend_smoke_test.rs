@@ -3556,6 +3556,37 @@ echo is_subclass_of($dog, "EirAnimal") ? "S" : "n";
     );
 }
 
+/// Verifies class relation builtins lower metadata arrays or boxed false values.
+#[test]
+fn ir_backend_handles_class_relation_builtins() {
+    let source = r#"<?php
+interface EirBaseMarker {}
+interface EirChildMarker extends EirBaseMarker {}
+trait EirSharedTrait {}
+trait EirLocalTrait {
+    use EirSharedTrait;
+}
+class EirRoot {}
+class EirMiddle extends EirRoot {}
+class EirRelationChild extends EirMiddle implements EirChildMarker {
+    use EirLocalTrait;
+}
+echo gettype(class_implements("EirRelationChild"));
+echo ":";
+echo gettype(class_parents("EirRelationChild"));
+echo ":";
+echo gettype(class_uses("EirRelationChild"));
+echo ":";
+echo gettype(class_uses("EirLocalTrait"));
+echo ":";
+echo class_implements("MissingEirRelation") === false ? "false" : "bad";
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("class_relation_builtins", source),
+        "array:array:array:array:false"
+    );
+}
+
 /// Verifies declared class/interface introspection arrays lower through the EIR backend.
 #[test]
 fn ir_backend_handles_declared_name_builtins() {
