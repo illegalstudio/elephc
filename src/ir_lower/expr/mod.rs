@@ -715,6 +715,62 @@ fn lower_short_ternary(
 
 /// Lowers a pipe operation.
 fn lower_pipe(ctx: &mut LoweringContext<'_, '_>, value: &Expr, callable: &Expr, expr: &Expr) -> LoweredValue {
+    match &callable.kind {
+        ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+            let arg = lower_pipe_value_temp(ctx, value, expr);
+            let synthetic = Expr::new(
+                ExprKind::FunctionCall {
+                    name: name.clone(),
+                    args: vec![arg],
+                },
+                expr.span,
+            );
+            lower_expr(ctx, &synthetic)
+        }
+        ExprKind::FirstClassCallable(CallableTarget::StaticMethod { receiver, method }) => {
+            let arg = lower_pipe_value_temp(ctx, value, expr);
+            let synthetic = Expr::new(
+                ExprKind::StaticMethodCall {
+                    receiver: receiver.clone(),
+                    method: method.clone(),
+                    args: vec![arg],
+                },
+                expr.span,
+            );
+            lower_expr(ctx, &synthetic)
+        }
+        ExprKind::FirstClassCallable(CallableTarget::Method { object, method }) => {
+            let arg = lower_pipe_value_temp(ctx, value, expr);
+            let synthetic = Expr::new(
+                ExprKind::MethodCall {
+                    object: object.clone(),
+                    method: method.clone(),
+                    args: vec![arg],
+                },
+                expr.span,
+            );
+            lower_expr(ctx, &synthetic)
+        }
+        _ => lower_pipe_runtime_call(ctx, value, callable, expr),
+    }
+}
+
+/// Lowers the pipe input once, stores it in a hidden local, and returns a temp argument expression.
+fn lower_pipe_value_temp(ctx: &mut LoweringContext<'_, '_>, value: &Expr, expr: &Expr) -> Expr {
+    let value = lower_expr(ctx, value);
+    let temp_type = ctx.builder.value_php_type(value.value);
+    let temp_name = ctx.declare_hidden_temp(temp_type.clone());
+    store_value_into_temp(ctx, &temp_name, temp_type, value, expr.span);
+    Expr::new(ExprKind::Variable(temp_name), expr.span)
+}
+
+/// Lowers pipe shapes that still need a dynamic callable invocation backend path.
+fn lower_pipe_runtime_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: &Expr,
+    callable: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
     let value = lower_expr(ctx, value);
     let callable = lower_expr(ctx, callable);
     ctx.emit_value(

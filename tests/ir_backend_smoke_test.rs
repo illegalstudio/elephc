@@ -182,6 +182,31 @@ fn ir_backend_calls_user_functions() {
     }
 }
 
+/// Verifies pipe calls with static first-class callable targets lower to direct EIR calls.
+#[test]
+fn ir_backend_handles_static_pipe_calls() {
+    for (name, source, expected) in [
+        (
+            "pipe_user_function",
+            "<?php function double($x) { return $x * 2; } echo 3 |> double(...);",
+            "6",
+        ),
+        ("pipe_builtin", "<?php echo \"abc\" |> strlen(...);", "3"),
+        (
+            "pipe_static_method",
+            "<?php class MathBox { public static function inc($x) { return $x + 1; } } echo 3 |> MathBox::inc(...);",
+            "4",
+        ),
+        (
+            "pipe_instance_method",
+            "<?php class Box { public function add($x) { return $x + 4; } } $b = new Box(); echo 3 |> $b->add(...);",
+            "7",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies function static locals initialize once and persist across direct calls.
 #[test]
 fn ir_backend_handles_function_static_locals() {
