@@ -100,6 +100,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StrConcat => strings::lower_str_concat(ctx, &inst),
         Op::StrLen => strings::lower_str_len(ctx, &inst),
         Op::StrCharAt => strings::lower_str_char_at(ctx, &inst),
+        Op::StrPersist => strings::lower_str_persist(ctx, &inst),
         Op::ArrayNew => arrays::lower_array_new(ctx, &inst),
         Op::ArrayLen => arrays::lower_array_len(ctx, &inst),
         Op::ArrayGet => arrays::lower_array_get(ctx, &inst),
@@ -216,6 +217,9 @@ fn lower_runtime_void_call(ctx: &mut FunctionContext<'_>, label: &str) -> Result
 
 /// Lowers high-level runtime fallback casts that Phase 04 can identify by type.
 fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() == 2 {
+        return lower_binary_runtime_call(ctx, inst);
+    }
     if inst.operands.len() != 1 {
         return Err(CodegenIrError::unsupported(format!(
             "runtime_call with {} operands returning PHP type {:?}",
@@ -248,6 +252,66 @@ fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
         source_ty,
         inst.result_php_type
     )))
+}
+
+/// Lowers binary runtime fallbacks that Phase 04 can identify by operand type.
+fn lower_binary_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let receiver = expect_operand(inst, 0)?;
+    match ctx.value_php_type(receiver)?.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => lower_mixed_array_runtime_get(ctx, inst),
+        other => Err(CodegenIrError::unsupported(format!(
+            "runtime_call with receiver PHP type {:?} returning PHP type {:?}",
+            other,
+            inst.result_php_type
+        ))),
+    }
+}
+
+/// Lowers `$mixed[$key]` through the shared boxed Mixed array/hash/stdClass reader.
+fn lower_mixed_array_runtime_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let receiver = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            hashes::materialize_hash_key_aarch64(ctx, key)?;
+            ctx.load_value_to_reg(receiver, "x0")?;
+        }
+        Arch::X86_64 => {
+            hashes::materialize_hash_key_x86_64(ctx, key)?;
+            ctx.load_value_to_reg(receiver, "rdi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_get");
+    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+    store_if_result(ctx, inst)
+}
+
+/// Casts the boxed Mixed pointer currently returned by a runtime helper when needed.
+fn cast_loaded_mixed_pointer_to_result(
+    ctx: &mut FunctionContext<'_>,
+    target_ty: &PhpType,
+) -> Result<()> {
+    let label = match target_ty {
+        PhpType::Mixed | PhpType::Union(_) => return Ok(()),
+        PhpType::Str => "__rt_mixed_cast_string",
+        PhpType::Int => "__rt_mixed_cast_int",
+        PhpType::Float => "__rt_mixed_cast_float",
+        PhpType::Bool => "__rt_mixed_cast_bool",
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "runtime mixed result cast to PHP type {:?}",
+                other
+            )))
+        }
+    };
+    if matches!(ctx.emitter.target.arch, Arch::X86_64) {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the returned boxed Mixed pointer as the SysV first argument
+    }
+    abi::emit_call_label(ctx.emitter, label);
+    Ok(())
 }
 
 /// Lowers expression-form `throw` through the same runtime path as throw terminators.

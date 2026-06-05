@@ -1,5 +1,5 @@
 //! Purpose:
-//! Lowers JSON state and validation builtins for the EIR backend.
+//! Lowers JSON state, encode, decode, and validation builtins for the EIR backend.
 //! Bridges already-evaluated EIR operands to the shared JSON runtime helpers.
 //!
 //! Called from:
@@ -16,8 +16,37 @@ use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
-use super::super::load_value_to_first_int_arg;
+use super::super::{load_value_to_first_int_arg, predicates};
 use super::{expect_operand, store_if_result};
+
+/// Tracks how `json_decode()` should derive decoded object shape.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AssocArg {
+    Explicit,
+    FromFlags,
+}
+
+/// Lowers `json_decode(json, associative?, depth?, flags?)` through the shared JSON decoder runtime.
+pub(super) fn lower_json_decode(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "json_decode", 1, 4)?;
+    let json = expect_operand(inst, 0)?;
+    let assoc_arg = json_decode_assoc_arg(ctx, inst)?;
+
+    reset_json_decode_state(ctx);
+    lower_json_decode_flags(ctx, inst, assoc_arg)?;
+    lower_json_decode_depth(ctx, inst)?;
+    if matches!(assoc_arg, AssocArg::Explicit) {
+        lower_json_decode_assoc(ctx, inst)?;
+    }
+    load_json_source_string(ctx, json, "json_decode source")?;
+    store_json_error_source_ptr(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_json_decode_mixed");
+    box_null_on_json_decode_failure(ctx);
+    store_if_result(ctx, inst)
+}
 
 /// Lowers `json_encode(value, flags?, depth?)` through the shared JSON encoder runtime.
 pub(super) fn lower_json_encode(
@@ -73,9 +102,17 @@ pub(super) fn lower_json_validate(
     reset_json_validation_state(ctx);
     lower_json_validate_flags(ctx, inst)?;
     lower_json_validate_depth(ctx, inst)?;
-    load_json_source_for_validate(ctx, json)?;
+    load_json_source_string(ctx, json, "json_validate source")?;
     abi::emit_call_label(ctx.emitter, "__rt_json_validate");
     store_if_result(ctx, inst)
+}
+
+/// Clears JSON decoder state after all EIR operands have already evaluated.
+fn reset_json_decode_state(ctx: &mut FunctionContext<'_>) {
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_last_error", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_active_depth", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_location_active", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_source_ptr", 0);
 }
 
 /// Clears observable JSON error and parser state after all EIR operands have evaluated.
@@ -93,6 +130,121 @@ fn reset_json_encode_state(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_indent_depth", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_location_active", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_source_ptr", 0);
+}
+
+/// Classifies the optional `json_decode()` associative argument.
+fn json_decode_assoc_arg(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<AssocArg> {
+    if inst.operands.len() < 2 {
+        return Ok(AssocArg::FromFlags);
+    }
+    let assoc = expect_operand(inst, 1)?;
+    match ctx.value_php_type(assoc)? {
+        PhpType::Void | PhpType::Never => Ok(AssocArg::FromFlags),
+        _ => Ok(AssocArg::Explicit),
+    }
+}
+
+/// Stores `json_decode()` flags and derives assoc mode from flags when required.
+fn lower_json_decode_flags(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    assoc_arg: AssocArg,
+) -> Result<()> {
+    if inst.operands.len() >= 4 {
+        let flags = expect_operand(inst, 3)?;
+        require_integer_like(ctx.load_value_to_result(flags)?, "json_decode flags")?;
+        let reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_store_reg_to_symbol(ctx.emitter, reg, "_json_active_flags", 0);
+        if matches!(assoc_arg, AssocArg::FromFlags) {
+            write_json_decode_assoc_from_flags(ctx);
+        }
+    } else {
+        abi::emit_store_zero_to_symbol(ctx.emitter, "_json_active_flags", 0);
+        if matches!(assoc_arg, AssocArg::FromFlags) {
+            abi::emit_store_zero_to_symbol(ctx.emitter, "_json_decode_assoc", 0);
+        }
+    }
+    Ok(())
+}
+
+/// Stores the strict-depth limit used by `json_decode()`.
+fn lower_json_decode_depth(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() >= 3 {
+        let depth = expect_operand(inst, 2)?;
+        require_integer_like(ctx.load_value_to_result(depth)?, "json_decode depth")?;
+        subtract_one_from_int_result(ctx);
+        abi::emit_store_reg_to_symbol(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            "_json_depth_limit",
+            0,
+        );
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 511);
+        abi::emit_store_reg_to_symbol(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            "_json_depth_limit",
+            0,
+        );
+    }
+    Ok(())
+}
+
+/// Stores an explicit `json_decode()` associative argument after PHP truthiness coercion.
+fn lower_json_decode_assoc(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let assoc = expect_operand(inst, 1)?;
+    emit_json_decode_assoc_truthiness(ctx, assoc)?;
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        "_json_decode_assoc",
+        0,
+    );
+    Ok(())
+}
+
+/// Emits PHP truthiness for the explicit `json_decode()` associative operand.
+fn emit_json_decode_assoc_truthiness(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    match ctx.value_php_type(value)? {
+        PhpType::Bool | PhpType::Int => {
+            ctx.load_value_to_result(value)?;
+            predicates::emit_int_result_nonzero_bool(ctx);
+        }
+        PhpType::Float => {
+            ctx.load_value_to_result(value)?;
+            predicates::emit_float_result_nonzero_bool(ctx);
+        }
+        PhpType::Str => {
+            predicates::emit_string_truthiness(ctx, value)?;
+        }
+        PhpType::Void | PhpType::Never => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "json_decode associative for PHP type {:?}",
+                other
+            )))
+        }
+    }
+    Ok(())
 }
 
 /// Stores the active `json_encode()` depth limit.
@@ -355,10 +507,11 @@ fn lower_json_validate_depth(
     Ok(())
 }
 
-/// Loads the JSON source string into the runtime helper's expected result registers.
-fn load_json_source_for_validate(
+/// Loads a JSON source string into the runtime helper's expected result registers.
+fn load_json_source_string(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
+    context: &str,
 ) -> Result<()> {
     match ctx.value_php_type(value)? {
         PhpType::Str => {
@@ -386,7 +539,8 @@ fn load_json_source_for_validate(
             Ok(())
         }
         other => Err(CodegenIrError::unsupported(format!(
-            "json_validate source for PHP type {:?}",
+            "{} for PHP type {:?}",
+            context,
             other
         ))),
     }
@@ -394,8 +548,8 @@ fn load_json_source_for_validate(
 
 /// Coerces a dynamic boolean JSON source to PHP's string form.
 fn lower_bool_json_source(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
-    let true_label = ctx.next_label("json_validate_bool_true");
-    let done_label = ctx.next_label("json_validate_bool_done");
+    let true_label = ctx.next_label("json_source_bool_true");
+    let done_label = ctx.next_label("json_source_bool_done");
     ctx.load_value_to_result(value)?;
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &true_label);
     emit_static_string_result(ctx, b"");
@@ -412,6 +566,50 @@ fn emit_static_string_result(ctx: &mut FunctionContext<'_>, bytes: &[u8]) {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+}
+
+/// Stores the current string pointer for location-aware `json_decode()` errors.
+fn store_json_error_source_ptr(ctx: &mut FunctionContext<'_>) {
+    let ptr_reg = abi::string_result_regs(ctx.emitter).0;
+    abi::emit_store_reg_to_symbol(ctx.emitter, ptr_reg, "_json_error_source_ptr", 0);
+}
+
+/// Extracts `JSON_OBJECT_AS_ARRAY` from the loaded flags and stores decode assoc mode.
+fn write_json_decode_assoc_from_flags(ctx: &mut FunctionContext<'_>) {
+    let reg = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("and {reg}, {reg}, #1"));          // keep JSON_OBJECT_AS_ARRAY when associative is null or missing
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("and {reg}, 1"));                  // keep JSON_OBJECT_AS_ARRAY when associative is null or missing
+        }
+    }
+    abi::emit_store_reg_to_symbol(ctx.emitter, reg, "_json_decode_assoc", 0);
+}
+
+/// Boxes `Mixed(null)` when `__rt_json_decode_mixed` reports a decode failure.
+fn box_null_on_json_decode_failure(ctx: &mut FunctionContext<'_>) {
+    let done_label = ctx.next_label("json_decode_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x0, {}", done_label));       // valid JSON already returned a boxed Mixed value
+            ctx.emitter.instruction("mov x0, #8");                              // tag = Mixed null
+            ctx.emitter.instruction("mov x1, #0");                              // value_lo = 0 for null
+            ctx.emitter.instruction("mov x2, #0");                              // value_hi = 0 for null
+            ctx.emitter.instruction("bl __rt_mixed_from_value");                // box Mixed(null) for decode failures
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // valid JSON returns a non-null Mixed pointer
+            ctx.emitter.instruction(&format!("jne {}", done_label));            // skip null boxing when decode succeeded
+            ctx.emitter.instruction("mov rax, 8");                              // tag = Mixed null
+            ctx.emitter.instruction("mov rdi, 0");                              // value_lo = 0 for null
+            ctx.emitter.instruction("mov rsi, 0");                              // value_hi = 0 for null
+            ctx.emitter.instruction("call __rt_mixed_from_value");              // box Mixed(null) for decode failures
+            ctx.emitter.label(&done_label);
+        }
+    }
 }
 
 /// Masks unsupported validate flags, preserving only `JSON_INVALID_UTF8_IGNORE`.
@@ -433,10 +631,10 @@ fn subtract_one_from_int_result(ctx: &mut FunctionContext<'_>) {
     let reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("sub {reg}, {reg}, #1"));          // convert PHP json_validate depth to the runtime strict-depth limit
+            ctx.emitter.instruction(&format!("sub {reg}, {reg}, #1"));          // convert PHP JSON depth to the runtime strict-depth limit
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("sub {reg}, 1"));                  // convert PHP json_validate depth to the runtime strict-depth limit
+            ctx.emitter.instruction(&format!("sub {reg}, 1"));                  // convert PHP JSON depth to the runtime strict-depth limit
         }
     }
 }

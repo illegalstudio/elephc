@@ -130,6 +130,14 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_if_result(ctx, inst)
 }
 
+/// Lowers string persistence by copying the string into runtime-owned storage.
+pub(super) fn lower_str_persist(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    require_string(ctx.load_value_to_result(value)?, inst)?;
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a float-to-string conversion through the existing runtime formatter.
 pub(super) fn lower_float_to_string(
     ctx: &mut FunctionContext<'_>,

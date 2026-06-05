@@ -162,7 +162,7 @@ fn lower_hash_set_x86_64(
 }
 
 /// Materializes an EIR value as a normalized hash key for AArch64.
-fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
+pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
     match ctx.value_php_type(key)? {
         PhpType::Str => {
             ctx.load_string_value_to_regs(key, "x1", "x2")?;
@@ -182,7 +182,7 @@ fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: ValueId) -> 
 }
 
 /// Materializes an EIR value as a normalized hash key for x86_64.
-fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
+pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: ValueId) -> Result<()> {
     match ctx.value_php_type(key)? {
         PhpType::Str => {
             ctx.load_string_value_to_regs(key, "rax", "rdx")?;

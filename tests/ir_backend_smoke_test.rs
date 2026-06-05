@@ -733,6 +733,43 @@ echo json_validate(123) ? "I" : "B";
     );
 }
 
+/// Verifies JSON decoding builtins configure runtime state and return boxed Mixed results.
+#[test]
+fn ir_backend_handles_json_decode_builtins() {
+    let source = r#"<?php
+function json_arg() { echo "J"; return '{"a":1}'; }
+function assoc_arg() { echo "A"; return true; }
+function depth_arg() { echo "D"; return 512; }
+function flags_arg() { echo "F"; return 0; }
+echo gettype(json_decode(json_arg(), assoc_arg(), depth_arg(), flags_arg()));
+echo "|";
+$decoded = json_decode('{"name":"Ada","n":2}', true);
+echo gettype($decoded);
+echo ":";
+echo $decoded["name"];
+echo ":";
+echo $decoded["n"];
+echo "|";
+$object = json_decode('{"name":"Ada"}');
+echo gettype($object);
+echo ":";
+echo $object->name;
+echo "|";
+echo json_decode("42");
+echo "|";
+json_decode("not json");
+echo json_last_error();
+echo ":";
+echo json_last_error_msg();
+echo "|";
+echo gettype(json_decode("{}", null, 512, JSON_OBJECT_AS_ARRAY));
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("json_decode_builtins", source),
+        "JADFarray|array:Ada:2|object:Ada|42|4:Syntax error near location 1:9|array"
+    );
+}
+
 /// Verifies JSON encoding builtins dispatch through the shared runtime helpers.
 #[test]
 fn ir_backend_handles_json_encode_builtins() {

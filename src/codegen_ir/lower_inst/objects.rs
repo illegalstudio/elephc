@@ -23,7 +23,10 @@ use crate::names::{method_symbol, php_symbol_key};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
-use super::{direct_call_stack_pad_bytes, expect_data, expect_operand, materialize_direct_call_args, store_if_result};
+use super::{
+    cast_loaded_mixed_pointer_to_result, direct_call_stack_pad_bytes, expect_data, expect_operand,
+    materialize_direct_call_args, store_if_result,
+};
 use crate::codegen_ir::literal_defaults::{
     emit_array_literal_default_to_result, literal_default_value, LiteralDefaultValue,
 };
@@ -263,6 +266,9 @@ fn emit_constructor_call(
 pub(super) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let property = property_name_immediate(ctx, inst)?.to_string();
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return lower_mixed_prop_get(ctx, inst, object, &property);
+    }
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
@@ -270,6 +276,31 @@ pub(super) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
     }
     emit_property_load(ctx, &slot, base_reg)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `$mixed->property` through the shared stdClass-aware runtime helper.
+fn lower_mixed_prop_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+) -> Result<()> {
+    let (label, len) = ctx.data.add_string(property.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(object, "x0")?;
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(object, "rdi")?;
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_property_get");
+    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
 }
 

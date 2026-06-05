@@ -840,9 +840,15 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         }
     }
     let sig = call_signature(ctx, canonical, args);
-    let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let is_extern = ctx.extern_functions.contains_key(canonical);
+    let is_user_function = ctx.functions.contains_key(canonical);
+    let operands = if is_extern || is_user_function {
+        lower_args_with_signature(ctx, sig.as_ref(), args)
+    } else {
+        lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
+    };
     let php_type = call_return_type(ctx, canonical, &operands);
-    if ctx.extern_functions.contains_key(canonical) {
+    if is_extern {
         let data = ctx.intern_function_name(canonical);
         return ctx.emit_value(
             Op::ExternCall,
@@ -853,7 +859,7 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
             Some(expr.span),
         );
     }
-    if ctx.functions.contains_key(canonical) {
+    if is_user_function {
         let data = ctx.intern_function_name(canonical);
         return ctx.emit_value(
             Op::Call,
@@ -978,7 +984,7 @@ fn lower_static_string_callable_call(
         }
         StaticStringCallableTarget::Builtin(function_name) => {
             let sig = call_signature(ctx, &function_name, callback_args);
-            let operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
+            let operands = lower_builtin_call_args(ctx, &function_name, sig.as_ref(), callback_args);
             let php_type = call_return_type(ctx, &function_name, &operands);
             let data = ctx.intern_function_name(&function_name);
             Some(ctx.emit_value(
@@ -1061,6 +1067,60 @@ fn lower_unset_locals(
         }
     }
     Some(null)
+}
+
+/// Lowers builtin call operands, applying builtin-specific preservation where source order matters.
+fn lower_builtin_call_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        "json_decode" => lower_json_decode_args(ctx, sig, args),
+        _ => lower_args_with_signature(ctx, sig, args),
+    }
+}
+
+/// Lowers simple positional `json_decode` operands while stabilizing string sources early.
+fn lower_json_decode_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    if args.is_empty()
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+    {
+        return lower_args_with_signature(ctx, sig, args);
+    }
+    let source = lower_expr(ctx, &args[0]);
+    let source = persist_json_decode_source_if_string(ctx, source, args[0].span);
+    let mut operands = Vec::with_capacity(args.len());
+    operands.push(source.value);
+    for arg in &args[1..] {
+        operands.push(lower_expr(ctx, arg).value);
+    }
+    operands
+}
+
+/// Emits `StrPersist` for already-string JSON sources before later arguments can reuse string scratch storage.
+fn persist_json_decode_source_if_string(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: crate::span::Span,
+) -> LoweredValue {
+    if source.ir_type != IrType::Str {
+        return source;
+    }
+    ctx.emit_value(
+        Op::StrPersist,
+        vec![source.value],
+        None,
+        PhpType::Str,
+        Op::StrPersist.default_effects(),
+        Some(span),
+    )
 }
 
 /// Lowers positional/named/spread call arguments in source order.
@@ -1779,7 +1839,10 @@ fn array_access_result_type(
             PhpType::Buffer(elem_ty) => normalize_value_php_type(*elem_ty),
             _ => fallback_expr_type(expr),
         },
-        _ => fallback_expr_type(expr),
+        _ => match ctx.builder.value_php_type(array).codegen_repr() {
+            PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
+            _ => fallback_expr_type(expr),
+        },
     }
 }
 
@@ -1946,6 +2009,9 @@ fn property_get_result_type(
     expr: &Expr,
 ) -> PhpType {
     let object_ty = ctx.builder.value_php_type(object);
+    if matches!(object_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return PhpType::Mixed;
+    }
     let Some((class_name, nullable)) = singular_object_class(&object_ty) else {
         return fallback_expr_type(expr);
     };
