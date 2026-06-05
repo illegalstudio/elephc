@@ -301,6 +301,35 @@ echo str_repeat(...["string" => "ha", "times" => 3]);
     }
 }
 
+/// Verifies static indexed spread calls are flattened before EIR call argument lowering.
+#[test]
+fn ir_backend_handles_static_indexed_spread_arguments() {
+    for (name, source, expected) in [
+        (
+            "static_indexed_spread_user_defaults",
+            r#"<?php
+function show($a, $b = 99) {
+    echo $a . ":" . $b;
+}
+show(...[10]);
+"#,
+            "10:99",
+        ),
+        (
+            "static_indexed_spread_empty_prefix",
+            r#"<?php
+function show($a, $b = 99) {
+    echo $a . ":" . $b;
+}
+show(10, ...[]);
+"#,
+            "10:99",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies positional variadic calls collect tail arguments into the variadic array parameter.
 #[test]
 fn ir_backend_handles_positional_variadic_parameters() {

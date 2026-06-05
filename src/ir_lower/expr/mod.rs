@@ -931,6 +931,12 @@ fn lower_args_with_signature(
     if crate::types::call_args::has_named_args(args) {
         return lower_named_args_with_signature(ctx, sig, args);
     }
+    let static_spread_args = if has_static_indexed_spread_args(args) {
+        Some(expand_static_indexed_spread_args(args))
+    } else {
+        None
+    };
+    let args = static_spread_args.as_deref().unwrap_or(args);
     if args.iter().any(is_spread_arg) {
         return lower_args(ctx, args);
     }
@@ -1136,6 +1142,34 @@ fn coerce_variadic_tail_value(
 /// Returns true when a call argument uses unpacking syntax.
 fn is_spread_arg(arg: &Expr) -> bool {
     matches!(arg.kind, ExprKind::Spread(_))
+}
+
+/// Returns true when a call contains an indexed-array spread that EIR can flatten statically.
+fn has_static_indexed_spread_args(args: &[Expr]) -> bool {
+    args.iter().any(|arg| match &arg.kind {
+        ExprKind::Spread(inner) => matches!(inner.kind, ExprKind::ArrayLiteral(_)),
+        _ => false,
+    })
+}
+
+/// Flattens static indexed array spreads into positional call arguments.
+fn expand_static_indexed_spread_args(args: &[Expr]) -> Vec<Expr> {
+    let mut expanded = Vec::new();
+    for arg in args {
+        match &arg.kind {
+            ExprKind::Spread(inner) => {
+                if let ExprKind::ArrayLiteral(items) = &inner.kind {
+                    expanded.extend(items.iter().map(|value| {
+                        Expr::new(value.kind.clone(), arg.span)
+                    }));
+                } else {
+                    expanded.push(arg.clone());
+                }
+            }
+            _ => expanded.push(arg.clone()),
+        }
+    }
+    expanded
 }
 
 /// Returns the best available return type for a function-like call.
