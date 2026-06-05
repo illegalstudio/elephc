@@ -9,7 +9,7 @@
 //! - JSON error state is runtime-global and must be reset after PHP arguments
 //!   have already been evaluated by preceding EIR instructions.
 
-use crate::codegen::abi;
+use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::codegen::platform::Arch;
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Instruction, ValueId};
@@ -18,6 +18,24 @@ use crate::types::PhpType;
 use super::super::super::context::FunctionContext;
 use super::super::load_value_to_first_int_arg;
 use super::{expect_operand, store_if_result};
+
+/// Lowers `json_encode(value, flags?, depth?)` through the shared JSON encoder runtime.
+pub(super) fn lower_json_encode(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "json_encode", 1, 3)?;
+    let value = expect_operand(inst, 0)?;
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+
+    reset_json_encode_state(ctx);
+    lower_json_encode_depth(ctx, inst)?;
+    lower_json_encode_flags(ctx, inst)?;
+    load_json_encode_value(ctx, value, &value_ty)?;
+    emit_json_encode_loaded_value(ctx, &value_ty);
+    box_json_encode_result(ctx);
+    store_if_result(ctx, inst)
+}
 
 /// Lowers `json_last_error()` by reading the shared runtime error-code symbol.
 pub(super) fn lower_json_last_error(
@@ -66,6 +84,227 @@ fn reset_json_validation_state(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_active_depth", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_location_active", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_source_ptr", 0);
+}
+
+/// Clears JSON encoder state after all EIR operands have already evaluated.
+fn reset_json_encode_state(ctx: &mut FunctionContext<'_>) {
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_last_error", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_active_depth", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_indent_depth", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_location_active", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_source_ptr", 0);
+}
+
+/// Stores the active `json_encode()` depth limit.
+fn lower_json_encode_depth(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() >= 3 {
+        let depth = expect_operand(inst, 2)?;
+        require_integer_like(ctx.load_value_to_result(depth)?, "json_encode depth")?;
+        abi::emit_store_reg_to_symbol(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            "_json_depth_limit",
+            0,
+        );
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 512);
+        abi::emit_store_reg_to_symbol(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            "_json_depth_limit",
+            0,
+        );
+    }
+    Ok(())
+}
+
+/// Stores the active `json_encode()` flag bitmask.
+fn lower_json_encode_flags(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() >= 2 {
+        let flags = expect_operand(inst, 1)?;
+        require_integer_like(ctx.load_value_to_result(flags)?, "json_encode flags")?;
+        abi::emit_store_reg_to_symbol(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            "_json_active_flags",
+            0,
+        );
+    } else {
+        abi::emit_store_zero_to_symbol(ctx.emitter, "_json_active_flags", 0);
+    }
+    Ok(())
+}
+
+/// Loads the value being JSON-encoded into the canonical ABI result registers.
+fn load_json_encode_value(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    if matches!(value_ty, PhpType::Void | PhpType::Never) {
+        return Ok(());
+    }
+    ctx.load_value_to_result(value)?;
+    Ok(())
+}
+
+/// Dispatches a loaded PHP value to the appropriate JSON runtime encoder.
+fn emit_json_encode_loaded_value(ctx: &mut FunctionContext<'_>, value_ty: &PhpType) {
+    match value_ty {
+        PhpType::Int => {
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+        }
+        PhpType::Float => {
+            abi::emit_call_label(ctx.emitter, "__rt_json_encode_float");
+        }
+        PhpType::Bool => {
+            abi::emit_call_label(ctx.emitter, "__rt_json_encode_bool");
+        }
+        PhpType::Str => {
+            abi::emit_call_label(ctx.emitter, "__rt_json_encode_str");
+        }
+        PhpType::Void | PhpType::Never => {
+            abi::emit_call_label(ctx.emitter, "__rt_json_encode_null");
+        }
+        PhpType::Array(elem_ty) => match elem_ty.as_ref().codegen_repr() {
+            PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_json_encode_array_int"),
+            PhpType::Str => abi::emit_call_label(ctx.emitter, "__rt_json_encode_array_str"),
+            _ => abi::emit_call_label(ctx.emitter, "__rt_json_encode_array_dynamic"),
+        },
+        PhpType::AssocArray { .. } => {
+            abi::emit_call_label(ctx.emitter, "__rt_json_encode_assoc");
+        }
+        PhpType::Iterable => {
+            emit_json_encode_iterable(ctx);
+        }
+        PhpType::Object(class_name) => {
+            emit_json_encode_object(ctx, class_name);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_json_encode_mixed");
+        }
+        _ => {
+            abi::emit_call_label(ctx.emitter, "__rt_json_encode_null");
+        }
+    }
+}
+
+/// Emits heap-kind dispatch for iterable JSON values.
+fn emit_json_encode_iterable(ctx: &mut FunctionContext<'_>) {
+    let indexed_case = ctx.next_label("json_encode_iter_indexed");
+    let assoc_case = ctx.next_label("json_encode_iter_assoc");
+    let object_case = ctx.next_label("json_encode_iter_object");
+    let null_case = ctx.next_label("json_encode_iter_null");
+    let done = ctx.next_label("json_encode_iter_done");
+
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #2");                              // check whether the iterable is backed by an indexed array
+            ctx.emitter.instruction(&format!("b.eq {}", indexed_case));         // encode indexed-array iterables with the array encoder
+            ctx.emitter.instruction("cmp x0, #3");                              // check whether the iterable is backed by a hash table
+            ctx.emitter.instruction(&format!("b.eq {}", assoc_case));           // encode hash-backed iterables with the associative encoder
+            ctx.emitter.instruction("cmp x0, #4");                              // check whether the iterable is backed by an object
+            ctx.emitter.instruction(&format!("b.eq {}", object_case));          // encode object-backed iterables with the object encoder
+            ctx.emitter.instruction(&format!("b {}", null_case));               // unknown iterable heap kinds encode as JSON null
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 2");                              // check whether the iterable is backed by an indexed array
+            ctx.emitter.instruction(&format!("je {}", indexed_case));           // encode indexed-array iterables with the array encoder
+            ctx.emitter.instruction("cmp rax, 3");                              // check whether the iterable is backed by a hash table
+            ctx.emitter.instruction(&format!("je {}", assoc_case));             // encode hash-backed iterables with the associative encoder
+            ctx.emitter.instruction("cmp rax, 4");                              // check whether the iterable is backed by an object
+            ctx.emitter.instruction(&format!("je {}", object_case));            // encode object-backed iterables with the object encoder
+            ctx.emitter.instruction(&format!("jmp {}", null_case));             // unknown iterable heap kinds encode as JSON null
+        }
+    }
+
+    ctx.emitter.label(&indexed_case);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_json_encode_array_dynamic");
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&assoc_case);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_json_encode_assoc");
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&object_case);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_json_encode_object");
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&null_case);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_json_encode_null");
+
+    ctx.emitter.label(&done);
+}
+
+/// Emits object JSON encoding, including stdClass dynamic-property hashes.
+fn emit_json_encode_object(ctx: &mut FunctionContext<'_>, class_name: &str) {
+    if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("ldr x0, [x0, #8]");                    // load the stdClass dynamic-property hash pointer
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");        // load the stdClass dynamic-property hash pointer
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_json_encode_stdclass");
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_json_encode_object");
+    }
+}
+
+/// Boxes the JSON encoder string-or-false result into the Mixed-compatible result slot.
+fn box_json_encode_result(ctx: &mut FunctionContext<'_>) {
+    let string_label = ctx.next_label("json_encode_string_result");
+    let done_label = ctx.next_label("json_encode_boxed_result");
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_json_last_error", 0);
+            ctx.emitter.instruction(&format!("cbz x9, {}", string_label));      // no JSON error means the string result is valid
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_json_active_flags", 0);
+            ctx.emitter.instruction("tst x9, #512");                            // JSON_PARTIAL_OUTPUT_ON_ERROR keeps the partial string result
+            ctx.emitter.instruction(&format!("b.ne {}", string_label));         // partial-output flag means return the encoded string
+            abi::emit_pop_reg_pair(ctx.emitter, "x10", "x11");
+            ctx.emitter.instruction("mov x0, #0");                              // false payload for json_encode failure
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the string boxing path after returning false
+            ctx.emitter.label(&string_label);
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            ctx.emitter.instruction("mov r10, QWORD PTR [rip + _json_last_error]"); // load the current JSON error code
+            ctx.emitter.instruction("test r10, r10");                           // check whether the encoder reported an error
+            ctx.emitter.instruction(&format!("jz {}", string_label));           // no JSON error means the string result is valid
+            ctx.emitter.instruction("mov r10, QWORD PTR [rip + _json_active_flags]"); // load the active JSON flag bitmask
+            ctx.emitter.instruction("test r10, 512");                           // JSON_PARTIAL_OUTPUT_ON_ERROR keeps the partial string result
+            ctx.emitter.instruction(&format!("jnz {}", string_label));          // partial-output flag means return the encoded string
+            abi::emit_pop_reg_pair(ctx.emitter, "r10", "r11");
+            ctx.emitter.instruction("xor eax, eax");                            // false payload for json_encode failure
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the string boxing path after returning false
+            ctx.emitter.label(&string_label);
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            ctx.emitter.label(&done_label);
+        }
+    }
 }
 
 /// Stores the active `json_validate()` flags, keeping only PHP's accepted bit.

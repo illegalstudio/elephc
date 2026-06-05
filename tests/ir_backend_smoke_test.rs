@@ -733,6 +733,35 @@ echo json_validate(123) ? "I" : "B";
     );
 }
 
+/// Verifies JSON encoding builtins dispatch through the shared runtime helpers.
+#[test]
+fn ir_backend_handles_json_encode_builtins() {
+    let source = r#"<?php
+function value_arg() { echo "V"; return "x"; }
+function flags_arg() { echo "F"; return 0; }
+function depth_arg() { echo "D"; return 512; }
+echo json_encode(value_arg(), flags_arg(), depth_arg());
+echo "|";
+echo Json_Encode([1, 2]);
+echo "|";
+echo JSON_ENCODE("hi");
+echo "|";
+echo \json_encode(true);
+echo "|";
+echo json_encode(["a/b", "c/d"], JSON_UNESCAPED_SLASHES);
+echo "|";
+echo json_encode(["name" => "Ada", "ok" => true]);
+echo "|";
+echo json_encode([1, 2], JSON_PRETTY_PRINT);
+echo "|";
+echo json_last_error();
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("json_encode_builtins", source),
+        "VFD\"x\"|[1,2]|\"hi\"|true|[\"a/b\",\"c/d\"]|{\"name\":\"Ada\",\"ok\":true}|[\n    1,\n    2\n]|0"
+    );
+}
+
 /// Verifies direct-call materialization boxes concrete values passed to `mixed` parameters.
 #[test]
 fn ir_backend_handles_gettype_for_mixed_parameters() {

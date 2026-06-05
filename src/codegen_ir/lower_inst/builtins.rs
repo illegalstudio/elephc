@@ -122,6 +122,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "gettype" => lower_gettype(ctx, inst),
         "define" => lower_define(ctx, inst),
         "defined" => lower_defined(ctx, inst),
+        "json_encode" => json::lower_json_encode(ctx, inst),
         "json_last_error" => json::lower_json_last_error(ctx, inst),
         "json_last_error_msg" => json::lower_json_last_error_msg(ctx, inst),
         "json_validate" => json::lower_json_validate(ctx, inst),
