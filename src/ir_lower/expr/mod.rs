@@ -1678,8 +1678,8 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "is_dir" | "is_file" | "is_numeric" => Some(PhpType::Bool),
         "date" => Some(PhpType::Str),
         "microtime" => Some(PhpType::Float),
-        "printf" | "array_rand" | "array_unshift" | "file_put_contents" | "mktime" | "sleep"
-        | "strtotime" | "time" => Some(PhpType::Int),
+        "printf" | "array_rand" | "array_unshift" | "file_put_contents" | "filesize"
+        | "mktime" | "sleep" | "strtotime" | "time" => Some(PhpType::Int),
         "usleep" => Some(PhpType::Void),
         "file_get_contents" | "strpos" | "strrpos" => Some(PhpType::Mixed),
         "explode" | "str_split" | "sscanf" => Some(PhpType::Array(Box::new(PhpType::Str))),

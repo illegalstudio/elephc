@@ -56,6 +56,14 @@ pub(super) fn lower_file_exists(
     lower_unary_path_predicate(ctx, inst, "file_exists", "__rt_file_exists")
 }
 
+/// Lowers `filesize(path)` through the target-aware runtime stat helper.
+pub(super) fn lower_filesize(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_unary_path_int(ctx, inst, "filesize", "__rt_filesize")
+}
+
 /// Lowers `is_file(path)` through the target-aware runtime stat helper.
 pub(super) fn lower_is_file(
     ctx: &mut FunctionContext<'_>,
@@ -82,6 +90,20 @@ fn lower_unary_path_predicate(
     super::ensure_arg_count(inst, name, 1)?;
     let path = expect_operand(inst, 0)?;
     require_string(ctx.load_value_to_result(path)?.codegen_repr(), name)?;
+    abi::emit_call_label(ctx.emitter, runtime_label);
+    store_if_result(ctx, inst)
+}
+
+/// Loads a path string into runtime argument/result registers and stores the integer result.
+fn lower_unary_path_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+) -> Result<()> {
+    super::ensure_arg_count(inst, name, 1)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, name)?;
     abi::emit_call_label(ctx.emitter, runtime_label);
     store_if_result(ctx, inst)
 }

@@ -3455,6 +3455,16 @@ echo "after";
     );
 }
 
+/// Verifies `filesize()` returns the current byte length for a written file.
+#[test]
+fn ir_backend_handles_filesize() {
+    let source = r#"<?php
+file_put_contents("size.txt", "12345");
+echo filesize("size.txt");
+"#;
+    assert_eq!(compile_and_run_ir_backend("filesize", source), "5");
+}
+
 /// Verifies global constant declarations, references, and `defined()` lowering.
 #[test]
 fn ir_backend_handles_global_constants_and_defined() {
