@@ -186,6 +186,7 @@ Narrowing applies to function and method parameters. A parameter whose call site
 - `??=` is checked against typed assignment storage for variables, object properties, static properties, and non-append array elements. For concrete local variable types, the fallback must keep the same type or be a literal `null`.
 - Plain array numeric casts (`(int)$array`, `(float)$array`) follow elephc's existing array cast semantics (return the element count rather than PHP's `0`/`1`). Direct `iterable` numeric casts use PHP's empty/non-empty `0`/`1` semantics.
 - `__destruct` runs when an object's refcount reaches zero (scope exit, reassignment, `unset`, program end), matching PHP's timing, but **object resurrection is not supported**: re-storing `$this` so the object would outlive the destructor does not keep it alive — the object is still freed once `__destruct` returns.
+- Division or modulo by zero (`$a / 0`, `$a % 0`, `intdiv($a, 0)`) raises a fatal error and terminates the process. PHP throws a catchable `DivisionByZeroError`; elephc does not yet support catching runtime errors with `try`/`catch`, so the program exits instead of unwinding to a handler.
 ### Filesystem functions not implemented
 
 These standard PHP filesystem functions are intentionally absent from elephc because they have no meaningful semantics in a compiled native binary:

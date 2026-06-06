@@ -77,30 +77,9 @@ pub fn emit(
         }
     }
 
-    // -- fatal error: division by zero --
+    // -- fatal error: division by zero (uncatchable, terminates the process) --
     emitter.label(&zero_label);
-    let (err_label, err_len) = data.add_string(b"Fatal error: division by zero\n");
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction("mov x0, #2");                                  // fd = stderr
-            emitter.adrp("x1", &err_label);                                     // load the page that contains the fatal error string
-            emitter.add_lo12("x1", "x1", &err_label);                           // resolve the fatal error string address within that page
-            emitter.instruction(&format!("mov x2, #{}", err_len));              // pass the fatal error string length to write()
-            emitter.syscall(4);
-            emitter.instruction("mov x0, #1");                                  // exit code 1
-            emitter.syscall(1);
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("lea rsi, [rip + {}]", err_label));    // point the Linux write() buffer register at the fatal error string
-            emitter.instruction(&format!("mov edx, {}", err_len));              // pass the fatal error string length to write()
-            emitter.instruction("mov edi, 2");                                  // fd = stderr
-            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
-            emitter.instruction("syscall");                                     // emit the fatal division-by-zero message before terminating
-            emitter.instruction("mov edi, 1");                                  // exit code 1
-            emitter.instruction("mov eax, 60");                                 // Linux x86_64 syscall 60 = exit
-            emitter.instruction("syscall");                                     // terminate the process after reporting division by zero
-        }
-    }
+    abi::emit_fatal_to_stderr(emitter, data, b"Fatal error: division by zero\n");
 
     emitter.label(&done_label);
     Some(PhpType::Int)

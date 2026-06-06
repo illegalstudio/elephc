@@ -58,9 +58,23 @@ fn test_intdiv_negative() {
     assert_eq!(out, "-3");
 }
 
-/// Verifies float division by zero produces `INF`.
+/// Verifies float division by zero raises an (uncatchable) fatal instead of producing INF,
+/// matching PHP's DivisionByZeroError as closely as elephc can (M7 audit finding).
 #[test]
-fn test_division_by_zero_inf() {
-    let out = compile_and_run("<?php echo 1.0 / 0.0;");
-    assert_eq!(out, "INF");
+fn test_float_division_by_zero_fatals() {
+    let err = compile_and_run_expect_failure("<?php echo 1.0 / 0.0;");
+    assert!(
+        err.contains("division by zero"),
+        "float division by zero should fatal, got: {err}"
+    );
+}
+
+/// Verifies intdiv() by zero raises an (uncatchable) fatal (the shared fatal helper path).
+#[test]
+fn test_intdiv_by_zero() {
+    let err = compile_and_run_expect_failure("<?php echo intdiv(5, 0);");
+    assert!(
+        err.contains("division by zero"),
+        "intdiv by zero should fatal, got: {err}"
+    );
 }
