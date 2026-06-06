@@ -2759,6 +2759,47 @@ echo MathBox::parentAdd();
     );
 }
 
+/// Verifies late-bound `static::` static method calls dispatch through the static vtable.
+#[test]
+fn ir_backend_calls_late_bound_static_method_receivers() {
+    let source = r#"<?php
+class BaseLate {
+    public static function who(): int {
+        return 1;
+    }
+
+    public static function viaStatic(): int {
+        return static::who();
+    }
+
+    public function instanceViaStatic(): int {
+        return static::who();
+    }
+
+    public function instanceViaSelfForward(): int {
+        return self::viaStatic();
+    }
+}
+
+class ChildLate extends BaseLate {
+    public static function who(): int {
+        return 2;
+    }
+}
+
+$child = new ChildLate();
+echo ChildLate::viaStatic();
+echo ":";
+echo $child->instanceViaStatic();
+echo ":";
+echo $child->instanceViaSelfForward();
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("late_bound_static_method_receivers", source),
+        "2:2:2"
+    );
+}
+
 /// Verifies fixed-class object construction calls `__construct` through the EIR method ABI.
 #[test]
 fn ir_backend_calls_simple_constructor() {

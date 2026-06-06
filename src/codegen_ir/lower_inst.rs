@@ -1071,6 +1071,7 @@ struct MethodCallTarget {
 enum CalledClassIdArg {
     Immediate(u64),
     Local(LocalSlotId),
+    ThisObject(LocalSlotId),
 }
 
 /// Resolves method implementation class, canonical key, return type, and ABI arity.
@@ -1188,6 +1189,7 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         return Ok(());
     }
     let called_class_id = resolve_static_called_class_arg(ctx, receiver_label, &receiver)?;
+    let late_bound_static = is_late_bound_static_receiver(receiver_label);
     let receiver_info = ctx
         .module
         .class_infos
@@ -1221,11 +1223,20 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         .iter()
         .map(|(_, ty)| ty.codegen_repr())
         .collect::<Vec<_>>();
+    let dynamic_static_slot = if late_bound_static {
+        receiver_info.static_vtable_slots.get(&method_key).copied()
+    } else {
+        None
+    };
     let overflow_bytes =
         materialize_static_method_call_args(ctx, &called_class_id, &inst.operands, &param_types)?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, &method_key));
+    if let Some(slot) = dynamic_static_slot {
+        emit_dynamic_static_method_call(ctx, slot);
+    } else {
+        abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, &method_key));
+    }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
     if let Some(result) = inst.result {
@@ -1239,6 +1250,32 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         ctx.store_result_value(result)?;
     }
     Ok(())
+}
+
+/// Emits an indirect static-vtable call for a late-bound `static::method()` receiver.
+fn emit_dynamic_static_method_call(ctx: &mut FunctionContext<'_>, slot: usize) {
+    let hidden_called_class_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let class_id_scratch = abi::temp_int_reg(ctx.emitter.target);
+    let dispatch_scratch = abi::symbol_scratch_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov {}, {}", class_id_scratch, hidden_called_class_reg)); // preserve the forwarded called-class id across static-vtable address materialization
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {}, {}", class_id_scratch, hidden_called_class_reg)); // preserve the forwarded called-class id across static-vtable address materialization
+        }
+    }
+    abi::emit_symbol_address(ctx.emitter, dispatch_scratch, "_class_static_vtable_ptrs");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_scratch, dispatch_scratch, class_id_scratch)); // load the class-specific static-vtable pointer from the global table
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", dispatch_scratch, dispatch_scratch, class_id_scratch)); // load the class-specific static-vtable pointer from the global table
+        }
+    }
+    abi::emit_load_from_address(ctx.emitter, dispatch_scratch, dispatch_scratch, slot * 8);
+    abi::emit_call_reg(ctx.emitter, dispatch_scratch);
 }
 
 /// Lowers static `Fiber::suspend($value = null)` through the shared runtime helper.
@@ -1291,6 +1328,9 @@ fn resolve_static_called_class_arg(
         if let Some(slot) = ctx.local_slot_by_name(CALLED_CLASS_ID_PARAM) {
             return Ok(CalledClassIdArg::Local(slot));
         }
+        if let Some(slot) = ctx.local_slot_by_name("this") {
+            return Ok(CalledClassIdArg::ThisObject(slot));
+        }
     }
     let class_info = ctx
         .module
@@ -1316,11 +1356,14 @@ fn resolve_static_method_receiver(ctx: &FunctionContext<'_>, receiver: &str) -> 
                     ctx.function.name
                 )))
         }
-        "static" => Err(CodegenIrError::unsupported(
-            "static method call with late-bound receiver static",
-        )),
+        "static" => current_method_class(ctx).map(str::to_string),
         _ => Ok(receiver.to_string()),
     }
+}
+
+/// Returns true for the late-bound static receiver spelling.
+fn is_late_bound_static_receiver(receiver: &str) -> bool {
+    receiver.trim_start_matches('\\') == "static"
 }
 
 /// Returns the class name encoded in the current EIR class-method function name.
@@ -1455,6 +1498,21 @@ fn materialize_called_class_id(
                     source_ty
                 )));
             }
+        }
+        CalledClassIdArg::ThisObject(slot) => {
+            let source_ty = ctx.load_local_to_result(*slot)?;
+            if !matches!(source_ty.codegen_repr(), PhpType::Object(_)) {
+                return Err(CodegenIrError::invalid_module(format!(
+                    "this local has PHP type {:?} for forwarded called-class id",
+                    source_ty
+                )));
+            }
+            abi::emit_load_from_address(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                abi::int_result_reg(ctx.emitter),
+                0,
+            );
         }
     }
     Ok(())
