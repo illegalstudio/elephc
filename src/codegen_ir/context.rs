@@ -418,7 +418,8 @@ impl<'a> FunctionContext<'a> {
             .strings
             .get(data_id.as_raw() as usize)
             .ok_or_else(|| CodegenIrError::missing_entry("data string", data_id.as_raw()))?;
-        Ok(self.data.add_string(value.as_bytes()))
+        let bytes = crate::string_bytes::literal_bytes(value);
+        Ok(self.data.add_string(&bytes))
     }
 
     /// Interns a module class-name data-pool entry into the assembly data section.
