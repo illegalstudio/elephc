@@ -74,6 +74,9 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
     if reflection::is_reflection_owner_class(&class_name) {
         return reflection::lower_reflection_owner_new(ctx, inst, &class_name);
     }
+    if class_name == "IteratorIterator" {
+        return lower_iterator_iterator_new(ctx, inst);
+    }
     if let Some(class_id) = throwable_payload_class_id(ctx, &class_name) {
         return lower_builtin_throwable_new(ctx, inst, &class_name, class_id);
     }
@@ -169,6 +172,74 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
         )?;
     }
     Ok(())
+}
+
+/// Lowers `new IteratorIterator($iterator)` for sources already implementing `Iterator`.
+fn lower_iterator_iterator_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let source = expect_operand(inst, 0)?;
+    let source_ty = ctx.value_php_type(source)?.codegen_repr();
+    let PhpType::Object(source_name) = &source_ty else {
+        return Err(CodegenIrError::unsupported(format!(
+            "IteratorIterator source PHP type {:?}",
+            source_ty
+        )));
+    };
+    if !object_type_is_a(ctx, source_name, "Iterator") {
+        return Err(CodegenIrError::unsupported(format!(
+            "IteratorIterator Traversable normalization for PHP type {:?}",
+            source_ty
+        )));
+    }
+    let class_info = ctx
+        .module
+        .class_infos
+        .get("IteratorIterator")
+        .ok_or_else(|| CodegenIrError::unsupported("unknown class IteratorIterator"))?;
+    if class_info.allow_dynamic_properties {
+        return Err(CodegenIrError::unsupported(
+            "object allocation requiring dynamic properties for IteratorIterator",
+        ));
+    }
+    if class_interfaces_require_missing_method_symbols(ctx, "IteratorIterator", class_info) {
+        return Err(CodegenIrError::unsupported(
+            "object allocation requiring interface method symbols not emitted by EIR for IteratorIterator",
+        ));
+    }
+    let inner_offset = class_info
+        .property_offsets
+        .get("inner")
+        .copied()
+        .ok_or_else(|| CodegenIrError::missing_entry("property offset", 0))?;
+    let inner_ty = class_info
+        .properties
+        .iter()
+        .find(|(name, _)| name == "inner")
+        .map(|(_, ty)| ty.clone())
+        .ok_or_else(|| CodegenIrError::missing_entry("property inner", 0))?;
+    let class_id = class_info.class_id;
+    let property_count = class_info.properties.len();
+    let uninitialized_marker_offsets = uninitialized_property_marker_offsets(class_info);
+    let slot = PropertySlot {
+        class_name: "IteratorIterator".to_string(),
+        property: "inner".to_string(),
+        php_type: inner_ty,
+        offset: inner_offset,
+        is_declared: true,
+        is_packed: false,
+    };
+    emit_object_allocation(
+        ctx,
+        class_id,
+        property_count,
+        &uninitialized_marker_offsets,
+    )?;
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("object_new missing result value"))?;
+    ctx.store_result_value(result)?;
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(result, base_reg)?;
+    emit_property_store(ctx, source, &slot, base_reg)
 }
 
 /// Lowers builtin Throwable allocation using the compact runtime payload layout.

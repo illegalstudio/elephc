@@ -543,6 +543,14 @@ fn required_builtin_spl_metadata_methods(class_name: &str) -> &'static [&'static
             "offsetSet",
             "offsetUnset",
         ],
+        "IteratorIterator" => &[
+            "current",
+            "key",
+            "next",
+            "rewind",
+            "valid",
+            "getInnerIterator",
+        ],
         "AppendIterator" => &[
             "current",
             "key",
@@ -691,6 +699,15 @@ fn is_supported_builtin_spl_method(class_name: &str, method_key: &str) -> bool {
                 | "offsetunset"
                 | "append"
                 | "getarraycopy"
+        ),
+        "IteratorIterator" => matches!(
+            method_key,
+            "current"
+                | "key"
+                | "next"
+                | "rewind"
+                | "valid"
+                | "getinneriterator"
         ),
         "AppendIterator" => matches!(
             method_key,

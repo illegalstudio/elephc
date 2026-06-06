@@ -1980,6 +1980,19 @@ fn lower_nullable_receiver_method_call(
     class_name: &str,
     method_name: &str,
 ) -> Result<()> {
+    if ctx
+        .module
+        .interface_infos
+        .contains_key(class_name.trim_start_matches('\\'))
+    {
+        return lower_nullable_receiver_interface_method_call(
+            ctx,
+            inst,
+            object,
+            class_name,
+            method_name,
+        );
+    }
     let target = resolve_method_call_target(ctx, class_name, method_name, inst.operands.len())?;
     let receiver_ty = PhpType::Object(class_name.to_string());
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
@@ -2006,6 +2019,73 @@ fn lower_nullable_receiver_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &target.return_ty)?;
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&null_label);
+    emit_method_call_on_null_fatal(ctx, method_name);
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Lowers a nullable receiver call whose non-null payload is known only by interface type.
+fn lower_nullable_receiver_interface_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    interface_name: &str,
+    method_name: &str,
+) -> Result<()> {
+    let normalized = interface_name.trim_start_matches('\\');
+    let method_key = php_symbol_key(method_name);
+    let callee_sig = ctx
+        .module
+        .interface_infos
+        .get(normalized)
+        .and_then(|interface_info| interface_info.methods.get(&method_key))
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "interface method call to unknown method {}::{}",
+                normalized, method_name
+            ))
+        })?
+        .clone();
+    let expected_args = callee_sig.params.len() + 1;
+    if inst.operands.len() != expected_args {
+        return Err(CodegenIrError::unsupported(format!(
+            "interface method call to {}::{} with {} operands for {} ABI params",
+            normalized,
+            method_name,
+            inst.operands.len(),
+            expected_args
+        )));
+    }
+    let receiver_ty = PhpType::Object(normalized.to_string());
+    let mut param_types = Vec::with_capacity(callee_sig.params.len() + 1);
+    param_types.push(receiver_ty.clone());
+    param_types.extend(callee_sig.params.iter().map(|(_, ty)| ty.codegen_repr()));
+    let mut ref_params = Vec::with_capacity(callee_sig.ref_params.len() + 1);
+    ref_params.push(false);
+    ref_params.extend(callee_sig.ref_params.iter().copied());
+    let null_label = ctx.next_label("method_receiver_null");
+    let done_label = ctx.next_label("method_receiver_done");
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, receiver_reg)?;
+    let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
+        ctx,
+        receiver_reg,
+        &receiver_ty,
+        &inst.operands,
+        &param_types,
+        &ref_params,
+    )?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    let return_ty = iterators::emit_interface_dispatch_call(ctx, normalized, &method_key, None)?;
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    store_call_result(ctx, inst, &return_ty)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
