@@ -319,6 +319,7 @@ pub enum Op {
     ThrowException,
     TryPushHandler,
     TryPopHandler,
+    CatchCurrent,
     CatchBind,
     FinallyEnter,
     FinallyExit,
@@ -354,12 +355,12 @@ impl Op {
             IDiv | ISDiv | ISMod | PtrCheckNonnull => E::MAY_FATAL,
             ConstEnumCase => E::ALLOC_HEAP,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
-            StoreLocal | StoreRefCell | ListUnpack | TryPushHandler | TryPopHandler
-            | CatchBind | FinallyEnter | FinallyExit => E::WRITES_LOCAL,
+            StoreLocal | StoreRefCell | ListUnpack | CatchBind | FinallyEnter
+            | FinallyExit => E::WRITES_LOCAL,
             LoadGlobal | LoadStaticProperty | ScopedConstantGet | ClassAttrNames
-            | ClassAttrArgs | ClassGetAttributes => E::READS_GLOBAL,
+            | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
             StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal | IncludeOnceMark
-            | FunctionVariantMark => E::WRITES_GLOBAL,
+            | FunctionVariantMark | TryPushHandler | TryPopHandler => E::WRITES_GLOBAL,
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
             IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
@@ -598,6 +599,7 @@ impl Op {
             ThrowException => "throw_exception",
             TryPushHandler => "try_push_handler",
             TryPopHandler => "try_pop_handler",
+            CatchCurrent => "catch_current",
             CatchBind => "catch_bind",
             FinallyEnter => "finally_enter",
             FinallyExit => "finally_exit",

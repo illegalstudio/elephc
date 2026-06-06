@@ -525,6 +525,69 @@ echo is_null($null->start()) ? "null" : "not-null";
     );
 }
 
+/// Verifies EIR try/catch dispatch catches matching exceptions and skips catch bodies on normal flow.
+#[test]
+fn ir_backend_catches_exceptions() {
+    let source = r#"<?php
+try {
+    clamp(5, 10, 0);
+    echo "bad";
+} catch (ValueError $e) {
+    echo "caught";
+}
+echo "|";
+try {
+    echo "normal";
+} catch (ValueError $e) {
+    echo "bad";
+}
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("try_catch_exception", source),
+        "caught|normal"
+    );
+}
+
+/// Verifies Fiber::throw delivers exceptions into suspended EIR fibers.
+#[test]
+fn ir_backend_throws_into_suspended_fibers() {
+    let source = r#"<?php
+$caught = new Fiber(function(): void {
+    try {
+        Fiber::suspend("ready");
+    } catch (ValueError $e) {
+        echo "fiber";
+    }
+});
+echo $caught->start();
+echo "|";
+try {
+    clamp(5, 10, 0);
+} catch (ValueError $e) {
+    $caught->throw($e);
+}
+echo "|";
+
+$escaped = new Fiber(function(): void {
+    Fiber::suspend("go");
+});
+$escaped->start();
+try {
+    try {
+        clamp(5, 10, 0);
+    } catch (ValueError $e) {
+        $escaped->throw($e);
+    }
+} catch (ValueError $e) {
+    echo "caller";
+}
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("fiber_throw", source),
+        "ready|fiber|caller"
+    );
+}
+
 /// Verifies Fiber state predicates observe the transition after a no-arg start.
 #[test]
 fn ir_backend_reports_started_terminated_fiber_state() {

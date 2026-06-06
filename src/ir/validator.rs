@@ -338,8 +338,9 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
     match inst.op {
         ConstI64 | ConstBool | ConstNull => check_count(inst_id, inst, 0, "0"),
         ConstF64 | ConstStr | ConstClassName | ConstEnumCase | DataAddr | ArrayNew | HashNew
-        | ClosureNew | FirstClassCallableNew | CallableArrayNew
-        | GeneratorNew | ErrorSuppressBegin | ErrorSuppressEnd | IncludeOnceMark
+        | ClosureNew | FirstClassCallableNew | CallableArrayNew | GeneratorNew
+        | ErrorSuppressBegin | ErrorSuppressEnd | TryPushHandler | TryPopHandler
+        | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark
         | IncludeOnceGuard | FunctionVariantMark | FunctionVariantDispatch | Nop => {
             check_count(inst_id, inst, 0, "0")
         }
@@ -371,7 +372,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal | StoreStaticProperty | ExternGlobalStore
         | StoreRefCell | Acquire | Release | Move | Borrow | EnsureOwned
         | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR
-        | ThrowException | CatchBind | GeneratorReturn | PtrCheckNonnull => {
+        | ThrowException | GeneratorReturn | PtrCheckNonnull => {
             check_count(inst_id, inst, 1, "1")
         }
         MixedTagOf | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat

@@ -12,8 +12,9 @@
 use std::collections::HashMap;
 
 use crate::codegen::abi;
+use crate::codegen::context::TRY_HANDLER_SLOT_SIZE;
 use crate::codegen::platform::Arch;
-use crate::ir::{Function, LocalSlotId};
+use crate::ir::{Function, Immediate, LocalSlotId, Op};
 use crate::names::function_symbol;
 
 use super::context::FunctionContext;
@@ -25,6 +26,7 @@ const FRAME_FOOTER_BYTES: usize = 16;
 pub(super) struct FrameLayout {
     pub(super) value_placement: ValuePlacement,
     pub(super) local_offsets: HashMap<LocalSlotId, usize>,
+    pub(super) try_handler_offsets: HashMap<i64, usize>,
     pub(super) frame_size: usize,
 }
 
@@ -42,12 +44,35 @@ pub(super) fn layout_for_function(function: &Function) -> FrameLayout {
         offset += bytes;
         local_offsets.insert(local.id, offset);
     }
+    let mut try_handler_offsets = HashMap::new();
+    for token in try_handler_tokens(function) {
+        offset += TRY_HANDLER_SLOT_SIZE;
+        try_handler_offsets.insert(token, offset);
+    }
     let frame_size = align_to_16(offset + FRAME_FOOTER_BYTES);
     FrameLayout {
         value_placement,
         local_offsets,
+        try_handler_offsets,
         frame_size,
     }
+}
+
+/// Returns the unique try-handler tokens used by EIR `try_push_handler` opcodes.
+fn try_handler_tokens(function: &Function) -> Vec<i64> {
+    let mut tokens = Vec::new();
+    for inst in &function.instructions {
+        if inst.op != Op::TryPushHandler {
+            continue;
+        }
+        let Some(Immediate::I64(token)) = inst.immediate else {
+            continue;
+        };
+        if !tokens.contains(&token) {
+            tokens.push(token);
+        }
+    }
+    tokens
 }
 
 /// Emits the process-entry prologue for the EIR main function.

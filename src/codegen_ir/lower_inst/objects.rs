@@ -989,7 +989,6 @@ pub(super) fn lower_instanceof(ctx: &mut FunctionContext<'_>, inst: &Instruction
         emit_false(ctx);
         return store_if_result(ctx, inst);
     };
-    reject_interface_method_metadata_target(ctx, class_name)?;
     match value_ty {
         PhpType::Object(_) => {
             ctx.load_value_to_reg(value, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
@@ -1838,20 +1837,6 @@ fn classify_named_target(
         .interface_infos
         .get(normalized)
         .map(|interface_info| (interface_info.interface_id, 1))
-}
-
-/// Rejects targets whose runtime metadata would reference interface wrappers not emitted yet.
-fn reject_interface_method_metadata_target(ctx: &FunctionContext<'_>, class_name: &str) -> Result<()> {
-    let normalized = class_name.trim_start_matches('\\');
-    if let Some(class_info) = ctx.module.class_infos.get(normalized) {
-        if class_interfaces_require_missing_method_symbols(ctx, normalized, class_info) {
-            return Err(CodegenIrError::unsupported(format!(
-                "instanceof target with interface method symbols not emitted by EIR {}",
-                normalized
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// Emits a boolean false result for non-object values or unresolved targets.

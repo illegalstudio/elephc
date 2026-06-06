@@ -30,6 +30,7 @@ pub(super) struct FunctionContext<'a> {
     pub(super) data: &'a mut DataSection,
     pub(super) placement: ValuePlacement,
     local_offsets: HashMap<LocalSlotId, usize>,
+    try_handler_offsets: HashMap<i64, usize>,
     pub(super) frame_size: usize,
     pub(super) epilogue_emitted: bool,
     pub(super) is_main: bool,
@@ -55,6 +56,7 @@ impl<'a> FunctionContext<'a> {
             data,
             placement: layout.value_placement,
             local_offsets: layout.local_offsets,
+            try_handler_offsets: layout.try_handler_offsets,
             frame_size: layout.frame_size,
             epilogue_emitted: false,
             is_main,
@@ -321,6 +323,14 @@ impl<'a> FunctionContext<'a> {
             .get(&slot)
             .copied()
             .ok_or_else(|| CodegenIrError::missing_entry("local slot offset", slot.as_raw()))
+    }
+
+    /// Returns the frame offset assigned to a high-level try-handler token.
+    pub(super) fn try_handler_offset(&self, token: i64) -> Result<usize> {
+        self.try_handler_offsets
+            .get(&token)
+            .copied()
+            .ok_or_else(|| CodegenIrError::invalid_module(format!("missing try handler token {}", token)))
     }
 }
 

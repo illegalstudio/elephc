@@ -13,7 +13,7 @@ use crate::ir::{BlockId, Immediate, IrType, LocalKind, Op, Ownership, SwitchCase
 use crate::ir_lower::context::{LoopFrame, LoweredValue, LoweringContext};
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{lower_expr, static_callable_binding_for_expr};
-use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
+use crate::parser::ast::{CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::span::Span;
 use crate::types::PhpType;
 
@@ -671,45 +671,164 @@ fn lower_throw(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) {
     ctx.builder.terminate(Terminator::Throw { value: value.value });
 }
 
-/// Lowers a `try` statement with conservative high-level handler opcodes.
+/// Lowers a `try`/`catch` statement into a runtime handler and explicit catch-dispatch blocks.
 fn lower_try(
     ctx: &mut LoweringContext<'_, '_>,
     try_body: &[Stmt],
-    catches: &[crate::parser::ast::CatchClause],
+    catches: &[CatchClause],
     finally_body: Option<&[Stmt]>,
     span: Span,
 ) {
-    ctx.clear_static_callable_locals();
-    ctx.emit_void(Op::TryPushHandler, Vec::new(), None, Op::TryPushHandler.default_effects(), Some(span));
-    lower_block(ctx, try_body);
-    if ctx.builder.insertion_block_is_terminated() {
+    if finally_body.is_some() {
+        ctx.emit_void(
+            Op::FinallyEnter,
+            Vec::new(),
+            None,
+            Op::FinallyEnter.default_effects(),
+            Some(span),
+        );
         return;
     }
-    ctx.emit_void(Op::TryPopHandler, Vec::new(), None, Op::TryPopHandler.default_effects(), Some(span));
+
+    let handler_block = ctx.builder.create_named_block("try.catch_dispatch", Vec::new());
+    let after_block = ctx.builder.create_named_block("try.after", Vec::new());
+    let handler_token = handler_block.as_raw() as i64;
+
+    ctx.clear_static_callable_locals();
+    ctx.emit_void(
+        Op::TryPushHandler,
+        Vec::new(),
+        Some(Immediate::I64(handler_token)),
+        Op::TryPushHandler.default_effects(),
+        Some(span),
+    );
+    lower_block(ctx, try_body);
+    if !ctx.builder.insertion_block_is_terminated() {
+        ctx.emit_void(
+            Op::TryPopHandler,
+            Vec::new(),
+            Some(Immediate::I64(handler_token)),
+            Op::TryPopHandler.default_effects(),
+            Some(span),
+        );
+        branch_to(ctx, after_block);
+    }
+
+    ctx.builder.position_at_end(handler_block);
+    ctx.emit_void(
+        Op::TryPopHandler,
+        Vec::new(),
+        Some(Immediate::I64(handler_token)),
+        Op::TryPopHandler.default_effects(),
+        Some(span),
+    );
+    lower_catch_dispatch(ctx, catches, after_block, span);
+    ctx.builder.position_at_end(after_block);
+    ctx.clear_static_callable_locals();
+}
+
+/// Lowers ordered catch matching from the current exception handler block.
+fn lower_catch_dispatch(
+    ctx: &mut LoweringContext<'_, '_>,
+    catches: &[CatchClause],
+    after_block: BlockId,
+    span: Span,
+) {
     for catch in catches {
-        if let Some(variable) = &catch.variable {
-            let caught = ctx.emit_value(
-                Op::RuntimeCall,
-                Vec::new(),
-                None,
-                PhpType::Mixed,
-                effects_lookup::runtime_effects(),
-                Some(span),
-            );
-            ctx.store_local(variable, caught, PhpType::Mixed, Some(span));
-        }
+        let catch_body = ctx.builder.create_named_block("try.catch_body", Vec::new());
+        let next_catch = ctx.builder.create_named_block("try.catch_next", Vec::new());
+        lower_catch_match(ctx, catch, catch_body, next_catch, span);
+        ctx.builder.position_at_end(catch_body);
+        lower_catch_bind(ctx, catch, span);
         lower_block(ctx, &catch.body);
-        if ctx.builder.insertion_block_is_terminated() {
-            return;
-        }
-    }
-    if let Some(finally_body) = finally_body {
-        ctx.emit_void(Op::FinallyEnter, Vec::new(), None, Op::FinallyEnter.default_effects(), Some(span));
-        lower_block(ctx, finally_body);
         if !ctx.builder.insertion_block_is_terminated() {
-            ctx.emit_void(Op::FinallyExit, Vec::new(), None, Op::FinallyExit.default_effects(), Some(span));
+            branch_to(ctx, after_block);
+        }
+        ctx.clear_static_callable_locals();
+        ctx.builder.position_at_end(next_catch);
+    }
+
+    let current = lower_current_exception(ctx, span);
+    ctx.builder.terminate(Terminator::Throw { value: current.value });
+}
+
+/// Emits the match tests for one catch clause and branches to body or next clause.
+fn lower_catch_match(
+    ctx: &mut LoweringContext<'_, '_>,
+    catch: &CatchClause,
+    catch_body: BlockId,
+    next_catch: BlockId,
+    span: Span,
+) {
+    if catch.exception_types.is_empty() {
+        branch_to(ctx, next_catch);
+        return;
+    }
+
+    for (idx, catch_type) in catch.exception_types.iter().enumerate() {
+        let mismatch = if idx + 1 == catch.exception_types.len() {
+            next_catch
+        } else {
+            ctx.builder.create_named_block("try.catch_type_next", Vec::new())
+        };
+        let current = lower_current_exception(ctx, span);
+        let data = ctx.intern_class_name(catch_type.as_str());
+        let matched = ctx.emit_value(
+            Op::InstanceOf,
+            vec![current.value],
+            Some(Immediate::Data(data)),
+            PhpType::Bool,
+            Op::InstanceOf.default_effects(),
+            Some(span),
+        );
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: matched.value,
+            then_target: catch_body,
+            then_args: Vec::new(),
+            else_target: mismatch,
+            else_args: Vec::new(),
+        });
+        if idx + 1 != catch.exception_types.len() {
+            ctx.builder.position_at_end(mismatch);
         }
     }
+}
+
+/// Emits the current exception value as an object-typed SSA value.
+fn lower_current_exception(ctx: &mut LoweringContext<'_, '_>, span: Span) -> LoweredValue {
+    ctx.emit_value(
+        Op::CatchCurrent,
+        Vec::new(),
+        None,
+        PhpType::Object("Throwable".to_string()),
+        Op::CatchCurrent.default_effects(),
+        Some(span),
+    )
+}
+
+/// Binds and clears the active exception for a matched catch clause.
+fn lower_catch_bind(ctx: &mut LoweringContext<'_, '_>, catch: &CatchClause, span: Span) {
+    let immediate = catch.variable.as_ref().map(|variable| {
+        let php_type = catch_variable_type(catch);
+        let slot = ctx.declare_local(variable, php_type.clone());
+        ctx.set_local_type(variable, php_type);
+        Immediate::LocalSlot(slot)
+    });
+    ctx.emit_void(
+        Op::CatchBind,
+        Vec::new(),
+        immediate,
+        Op::CatchBind.default_effects(),
+        Some(span),
+    );
+}
+
+/// Returns the local type to use for a catch variable.
+fn catch_variable_type(catch: &CatchClause) -> PhpType {
+    if catch.exception_types.len() == 1 {
+        return PhpType::Object(catch.exception_types[0].trim_start_matches('\\').to_string());
+    }
+    PhpType::Object("Throwable".to_string())
 }
 
 /// Lowers a `break` terminator.

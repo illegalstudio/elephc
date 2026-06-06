@@ -10,8 +10,9 @@
 //! - Unsupported opcodes fail explicitly instead of falling back to legacy AST codegen.
 
 use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed, runtime};
+use crate::codegen::context::{TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET};
 use crate::codegen::platform::Arch;
-use crate::ir::{CmpPredicate, Immediate, InstId, Instruction, LocalSlotId, Op, ValueId};
+use crate::ir::{BlockId, CmpPredicate, Immediate, InstId, Instruction, LocalSlotId, Op, ValueId};
 use crate::names::{
     function_symbol, ir_global_symbol, method_symbol, php_symbol_key, static_method_symbol,
 };
@@ -152,6 +153,10 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),
         Op::ThrowException => lower_throw_exception(ctx, &inst),
+        Op::TryPushHandler => lower_try_push_handler(ctx, &inst),
+        Op::TryPopHandler => lower_try_pop_handler(ctx, &inst),
+        Op::CatchCurrent => lower_catch_current(ctx, &inst),
+        Op::CatchBind => lower_catch_bind(ctx, &inst),
         Op::ErrorSuppressBegin => lower_runtime_void_call(ctx, "__rt_diag_push_suppression"),
         Op::ErrorSuppressEnd => lower_runtime_void_call(ctx, "__rt_diag_pop_suppression"),
         Op::IncludeOnceMark => lower_include_once_mark(ctx, &inst),
@@ -480,6 +485,66 @@ fn lower_throw_exception(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     super::lower_term::lower_throw_value(ctx, value)
 }
 
+/// Pushes an EIR exception handler and branches to the handler block after `longjmp`.
+fn lower_try_push_handler(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let token = expect_i64(inst)?;
+    let handler_offset = ctx.try_handler_offset(token)?;
+    let handler_block = BlockId::from_raw(token as u32);
+    let handler_label = ctx.block_label_for_id(handler_block)?;
+    let scratch = abi::temp_int_reg(ctx.emitter.target);
+
+    ctx.emitter.comment("push EIR exception handler");
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_handler_top", 0);
+    abi::store_at_offset(ctx.emitter, scratch, handler_offset);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    abi::store_at_offset(ctx.emitter, scratch, handler_offset - 8);
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_rt_diag_suppression", 0);
+    abi::store_at_offset(
+        ctx.emitter,
+        scratch,
+        handler_offset - TRY_HANDLER_DIAG_DEPTH_OFFSET,
+    );
+    abi::emit_frame_slot_address(ctx.emitter, scratch, handler_offset);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
+    abi::emit_frame_slot_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        handler_offset - TRY_HANDLER_JMP_BUF_OFFSET,
+    );
+    ctx.emitter.bl_c("setjmp");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &handler_label);
+    Ok(())
+}
+
+/// Pops an EIR exception handler by restoring its saved previous handler pointer.
+fn lower_try_pop_handler(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let token = expect_i64(inst)?;
+    let handler_offset = ctx.try_handler_offset(token)?;
+    let scratch = abi::temp_int_reg(ctx.emitter.target);
+    ctx.emitter.comment("pop EIR exception handler");
+    abi::load_at_offset(ctx.emitter, scratch, handler_offset);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
+    Ok(())
+}
+
+/// Loads the currently active exception object from the runtime exception slot.
+fn lower_catch_current(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
+    store_if_result(ctx, inst)
+}
+
+/// Binds the active exception to an optional catch variable and clears the runtime slot.
+fn lower_catch_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
+        let target_ty = ctx.local_php_type(slot)?;
+        let offset = ctx.local_offset(slot)?;
+        abi::emit_load_symbol_to_result(ctx.emitter, "_exc_value", &target_ty);
+        abi::emit_store(ctx.emitter, &target_ty, offset);
+    }
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_exc_value", 0);
+    Ok(())
+}
+
 /// Lowers a direct instance-method call on a statically known object receiver.
 fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
@@ -499,6 +564,9 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     }
     if is_fiber_resume_call(&class_name, &method_name) {
         return lower_fiber_resume(ctx, inst, object);
+    }
+    if is_fiber_throw_call(&class_name, &method_name) {
+        return lower_fiber_throw(ctx, inst, object);
     }
     if is_fiber_get_return_call(&class_name, &method_name) {
         return lower_fiber_noarg_runtime_method(ctx, inst, object, "__rt_fiber_get_return");
@@ -562,6 +630,33 @@ fn lower_fiber_resume(
     ctx.load_value_to_reg(object, receiver_arg)?;
     abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1)); // pass the boxed resume value as runtime helper argument 2
     abi::emit_call_label(ctx.emitter, "__rt_fiber_resume");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `Fiber::throw(Throwable $exception)` through the shared runtime helper.
+fn lower_fiber_throw(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+) -> Result<()> {
+    let args = fiber_visible_args(ctx, inst.operands.get(1..).unwrap_or(&[]), "Fiber::throw")?;
+    if args.len() != 1 {
+        return Err(CodegenIrError::unsupported(
+            "Fiber::throw without exactly one EIR argument",
+        ));
+    }
+    let thrown = args[0];
+    let thrown_ty = ctx.load_value_to_result(thrown)?;
+    if !matches!(thrown_ty.codegen_repr(), PhpType::Object(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "Fiber::throw argument PHP type {:?}",
+            thrown_ty
+        )));
+    }
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));          // preserve the Throwable while loading the Fiber receiver
+    ctx.load_value_to_reg(object, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1)); // pass the Throwable object as runtime helper argument 2
+    abi::emit_call_label(ctx.emitter, "__rt_fiber_throw");
     store_if_result(ctx, inst)
 }
 
@@ -792,6 +887,12 @@ fn is_fiber_start_call(class_name: &str, method_name: &str) -> bool {
 fn is_fiber_resume_call(class_name: &str, method_name: &str) -> bool {
     php_symbol_key(class_name.trim_start_matches('\\')) == "fiber"
         && php_symbol_key(method_name) == "resume"
+}
+
+/// Returns true when a direct method call targets PHP's built-in `Fiber::throw`.
+fn is_fiber_throw_call(class_name: &str, method_name: &str) -> bool {
+    php_symbol_key(class_name.trim_start_matches('\\')) == "fiber"
+        && php_symbol_key(method_name) == "throw"
 }
 
 /// Returns true when a direct method call targets PHP's built-in `Fiber::getReturn`.
