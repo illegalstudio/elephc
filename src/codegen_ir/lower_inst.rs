@@ -2975,11 +2975,49 @@ fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &PhpType) -> b
 fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
+    let reset_concat_after_store = inst.span.is_some_and(|span| span.line > 0)
+        && value_is_acquire_of_str_concat(ctx, value)?;
     if local_slot_stores_ref_cell_pointer(ctx, slot) {
-        store_value_to_ref_param_local(ctx, slot, value)
+        store_value_to_ref_param_local(ctx, slot, value)?;
     } else {
-        ctx.store_value_to_local(slot, value)
+        ctx.store_value_to_local(slot, value)?;
     }
+    if reset_concat_after_store {
+        abi::emit_store_zero_to_symbol(ctx.emitter, "_concat_off", 0);
+    }
+    Ok(())
+}
+
+/// Returns true when a value is `Acquire(StrConcat(...))`, which means storage now owns a heap copy.
+fn value_is_acquire_of_str_concat(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    let Some(acquire_inst) = instruction_for_value(ctx, value)? else {
+        return Ok(false);
+    };
+    if acquire_inst.op != Op::Acquire {
+        return Ok(false);
+    }
+    let Some(source) = acquire_inst.operands.first().copied() else {
+        return Ok(false);
+    };
+    Ok(instruction_for_value(ctx, source)?.is_some_and(|source_inst| source_inst.op == Op::StrConcat))
+}
+
+/// Returns the instruction that produced an SSA value, or `None` for block parameters.
+fn instruction_for_value<'a>(
+    ctx: &'a FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<&'a Instruction>> {
+    let metadata = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = metadata.def else {
+        return Ok(None);
+    };
+    ctx.function
+        .instruction(inst)
+        .map(Some)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))
 }
 
 /// Lowers an explicit local ref-cell store through the pointer held in the slot.
