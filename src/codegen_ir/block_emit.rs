@@ -74,7 +74,7 @@ fn emit_eir_fiber_wrappers(module: &Module, emitter: &mut Emitter) {
             sig: wrapper.sig,
             visible_param_count: wrapper.visible_param_count,
             hidden_arg_types: wrapper.hidden_arg_types,
-            use_descriptor_invoker: false,
+            use_descriptor_invoker: wrapper.use_descriptor_invoker,
         };
         emit_fiber_wrapper(emitter, &wrapper);
     }

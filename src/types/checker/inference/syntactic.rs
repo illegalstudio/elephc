@@ -357,6 +357,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         ExprKind::NewScopedObject { .. } => PhpType::Object(String::new()),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => PhpType::Str,
         ExprKind::This => PhpType::Object(String::new()),
+        ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => PhpType::Callable,
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),
         ExprKind::BinaryOp { left, op, right } => match op {
             BinOp::Add => {
