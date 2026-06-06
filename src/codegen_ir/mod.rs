@@ -149,6 +149,11 @@ fn runtime_referenced_class_names(module: &Module) -> HashSet<String> {
             names.insert(class_name);
         }
     }
+    for class_name in referenced_static_method_class_names(module) {
+        if module.class_infos.contains_key(&class_name) {
+            names.insert(class_name);
+        }
+    }
     for class_name in referenced_class_data_names(module) {
         if module.class_infos.contains_key(&class_name) {
             names.insert(class_name);
@@ -437,6 +442,57 @@ fn redeclared_late_static_property_classes(
         }
     }
     names
+}
+
+/// Returns class names encoded in static-method call immediates.
+fn referenced_static_method_class_names(module: &Module) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        for inst in &function.instructions {
+            if !matches!(inst.op, Op::StaticMethodCall) {
+                continue;
+            }
+            let Some(Immediate::Data(data)) = inst.immediate else {
+                continue;
+            };
+            let Some(label) = module.data.strings.get(data.as_raw() as usize) else {
+                continue;
+            };
+            let Some((class_name, _)) = label.rsplit_once("::") else {
+                continue;
+            };
+            if let Some(class_name) = resolve_static_method_metadata_class(module, function, class_name) {
+                names.insert(class_name);
+            }
+        }
+    }
+    names
+}
+
+/// Resolves lexical static-method receivers for runtime metadata collection.
+fn resolve_static_method_metadata_class(
+    module: &Module,
+    function: &Function,
+    class_name: &str,
+) -> Option<String> {
+    let class_name = class_name.trim_start_matches('\\');
+    match class_name {
+        "self" | "static" => current_function_class(function).map(str::to_string),
+        "parent" => {
+            let current = current_function_class(function)?;
+            module.class_infos.get(current)?.parent.clone()
+        }
+        _ => Some(class_name.to_string()),
+    }
 }
 
 /// Returns true when `class_name` is `ancestor` or one of its descendants.

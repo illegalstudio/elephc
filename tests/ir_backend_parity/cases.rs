@@ -634,6 +634,49 @@ foreach ($static as $value) { echo $value; }
     );
 }
 
+/// Verifies pure static late-bound first-class callbacks keep vtable metadata like legacy codegen.
+#[test]
+fn parity_late_bound_static_first_class_callbacks_without_object_metadata() {
+    assert_backend_parity(
+        "late_bound_static_fcc_without_object_metadata",
+        r#"<?php
+class BaseLateMap {
+    public static function offset(int $value): int {
+        return $value + 10;
+    }
+
+    public static function add(int $carry, int $value): int {
+        return $carry + $value + 10;
+    }
+
+    public static function map(): string {
+        $values = array_map(static::offset(...), [1, 2]);
+        return $values[0] . ":" . $values[1];
+    }
+
+    public static function reduce(): int {
+        return array_reduce([1, 2], static::add(...), 0);
+    }
+}
+
+class ChildLateMap extends BaseLateMap {
+    public static function offset(int $value): int {
+        return $value + 20;
+    }
+
+    public static function add(int $carry, int $value): int {
+        return $carry + $value + 20;
+    }
+}
+
+echo ChildLateMap::map();
+echo "|";
+echo ChildLateMap::reduce();
+"#,
+        &[],
+    );
+}
+
 /// Verifies reflection attribute owner metadata matches the legacy backend.
 #[test]
 fn parity_reflection_owner_attributes() {

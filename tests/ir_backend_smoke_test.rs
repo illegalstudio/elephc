@@ -2800,6 +2800,49 @@ echo $child->instanceViaSelfForward();
     );
 }
 
+/// Verifies pure static calls keep runtime metadata needed by late-bound static vtables.
+#[test]
+fn ir_backend_calls_late_bound_static_method_without_object_metadata() {
+    let source = r#"<?php
+class BaseLateMap {
+    public static function offset(int $value): int {
+        return $value + 10;
+    }
+
+    public static function add(int $carry, int $value): int {
+        return $carry + $value + 10;
+    }
+
+    public static function map(): string {
+        $values = array_map(static::offset(...), [1, 2]);
+        return $values[0] . ":" . $values[1];
+    }
+
+    public static function reduce(): int {
+        return array_reduce([1, 2], static::add(...), 0);
+    }
+}
+
+class ChildLateMap extends BaseLateMap {
+    public static function offset(int $value): int {
+        return $value + 20;
+    }
+
+    public static function add(int $carry, int $value): int {
+        return $carry + $value + 20;
+    }
+}
+
+echo ChildLateMap::map();
+echo "|";
+echo ChildLateMap::reduce();
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("late_bound_static_method_without_object_metadata", source),
+        "21:22|43"
+    );
+}
+
 /// Verifies fixed-class object construction calls `__construct` through the EIR method ABI.
 #[test]
 fn ir_backend_calls_simple_constructor() {
