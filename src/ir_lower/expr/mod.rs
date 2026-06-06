@@ -975,6 +975,9 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         return value;
     }
     let canonical = name.as_str();
+    if let Some(value) = lower_lazy_isset(ctx, canonical, args, expr) {
+        return value;
+    }
     if let Some(value) = lower_static_call_user_func(ctx, canonical, args, expr) {
         return value;
     }
@@ -1042,6 +1045,66 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         effects_lookup::builtin_effects(canonical),
         Some(expr.span),
     )
+}
+
+/// Lowers `isset()` as a lazy language construct instead of an eager builtin call.
+fn lower_lazy_isset(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\')) != "isset" {
+        return None;
+    }
+    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+        return None;
+    }
+    if args.is_empty() {
+        return Some(lower_int_literal(ctx, 0, expr));
+    }
+
+    let temp_name = ctx.declare_hidden_temp(PhpType::Int);
+    let false_block = ctx.builder.create_named_block("isset.lazy_false", Vec::new());
+    let merge = ctx.builder.create_named_block("isset.lazy_merge", Vec::new());
+    let data = ctx.intern_function_name(name);
+
+    for (idx, arg) in args.iter().enumerate() {
+        let value = lower_expr(ctx, arg);
+        let checked = ctx.emit_value(
+            Op::BuiltinCall,
+            vec![value.value],
+            Some(Immediate::Data(data)),
+            PhpType::Int,
+            effects_lookup::builtin_effects(name),
+            Some(arg.span),
+        );
+        let then_target = if idx + 1 == args.len() {
+            ctx.builder.create_named_block("isset.lazy_true", Vec::new())
+        } else {
+            ctx.builder.create_named_block("isset.lazy_next", Vec::new())
+        };
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: checked.value,
+            then_target,
+            then_args: Vec::new(),
+            else_target: false_block,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(then_target);
+    }
+
+    let true_value = lower_int_literal(ctx, 1, expr);
+    store_value_into_temp(ctx, &temp_name, PhpType::Int, true_value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(false_block);
+    let false_value = lower_int_literal(ctx, 0, expr);
+    store_value_into_temp(ctx, &temp_name, PhpType::Int, false_value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    Some(ctx.load_local(&temp_name, Some(expr.span)))
 }
 
 /// Lowers direct function/static-method first-class callable probes for `is_callable()`.
@@ -2739,7 +2802,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         "fclose" | "feof" | "rewind" => Some(PhpType::Bool),
         "printf" | "array_rand" | "array_unshift" | "file_put_contents" | "filemtime"
         | "filesize" | "fpassthru" | "fputcsv" | "fseek" | "ftell" | "fwrite"
-        | "linkinfo" | "mktime" | "sleep" | "spl_object_id" | "strtotime" | "time" | "umask" => {
+        | "in_array" | "isset" | "linkinfo" | "mktime" | "sleep" | "spl_object_id" | "strtotime" | "time" | "umask" => {
             Some(PhpType::Int)
         }
         "spl_object_hash" => Some(PhpType::Str),
@@ -2835,6 +2898,7 @@ fn array_literal_element_type_for_ir(
     item: &Expr,
 ) -> PhpType {
     match &item.kind {
+        ExprKind::Null => PhpType::Mixed,
         ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
             PhpType::Array(elem) => elem.codegen_repr(),
             _ => PhpType::Mixed,
@@ -2929,6 +2993,7 @@ fn assoc_array_literal_value_type_for_ir(
     value: &Expr,
 ) -> PhpType {
     match &value.kind {
+        ExprKind::Null => PhpType::Mixed,
         ExprKind::Variable(name) => ctx
             .local_types
             .get(name)
@@ -3021,12 +3086,15 @@ fn lower_match(
 /// Lowers array, hash, string, or ArrayAccess indexing.
 fn lower_array_access(ctx: &mut LoweringContext<'_, '_>, array: &Expr, index: &Expr, expr: &Expr) -> LoweredValue {
     let array_value = lower_expr(ctx, array);
-    let index_value = lower_expr(ctx, index);
+    let mut index_value = lower_expr(ctx, index);
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => Op::ArrayGet,
         IrType::Heap(IrHeapKind::Hash) => Op::HashGet,
         IrType::Heap(IrHeapKind::Buffer) => Op::BufferGet,
-        IrType::Str if index_value.ir_type == IrType::I64 => Op::StrCharAt,
+        IrType::Str => {
+            index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+            Op::StrCharAt
+        }
         _ => Op::RuntimeCall,
     };
     let result_type = array_access_result_type(ctx, array_value.value, op, expr);
