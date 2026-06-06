@@ -1308,6 +1308,9 @@ fn callable_target_data<'a>(
 
 /// Lowers high-level runtime fallback casts that Phase 04 can identify by type.
 fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let Some(()) = try_lower_array_access_runtime_call(ctx, inst)? {
+        return Ok(());
+    }
     if inst.operands.len() == 3 {
         return lower_mixed_array_runtime_set(ctx, inst);
     }
@@ -1359,6 +1362,101 @@ fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
         source_ty,
         inst.result_php_type
     )))
+}
+
+/// Lowers generic EIR runtime calls that represent PHP `ArrayAccess` object indexing.
+fn try_lower_array_access_runtime_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<Option<()>> {
+    let Some(receiver) = inst.operands.first().copied() else {
+        return Ok(None);
+    };
+    let receiver_ty = ctx.value_php_type(receiver)?.codegen_repr();
+    let PhpType::Object(class_name) = receiver_ty else {
+        return Ok(None);
+    };
+    if !class_implements_interface(ctx, &class_name, "ArrayAccess") {
+        return Ok(None);
+    }
+    let method_name = match inst.operands.len() {
+        2 if inst.result_php_type.codegen_repr() == PhpType::Void => "append",
+        2 => "offsetGet",
+        3 => "offsetSet",
+        _ => return Ok(None),
+    };
+    lower_runtime_object_method_call(ctx, inst, &class_name, method_name)?;
+    Ok(Some(()))
+}
+
+/// Emits the concrete method body backing a PHP object runtime fallback.
+pub(super) fn lower_runtime_object_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+    method_name: &str,
+) -> Result<()> {
+    let target = resolve_method_call_target(ctx, class_name, method_name, inst.operands.len())?;
+    let mut param_types = Vec::with_capacity(target.params.len() + 1);
+    param_types.push(PhpType::Object(class_name.to_string()));
+    param_types.extend(target.params.iter().map(|param| param.codegen_repr()));
+    let mut ref_params = Vec::with_capacity(target.ref_params.len() + 1);
+    ref_params.push(false);
+    ref_params.extend(target.ref_params.iter().copied());
+    let call_args =
+        materialize_direct_call_args_with_refs(ctx, &inst.operands, &param_types, &ref_params)?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &target.method_key));
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    store_runtime_object_call_result(ctx, inst, &target.return_ty)?;
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+}
+
+/// Stores an object fallback call result, casting boxed Mixed values when the access type is known.
+fn store_runtime_object_call_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    return_ty: &PhpType,
+) -> Result<()> {
+    if return_ty.codegen_repr() != PhpType::Mixed {
+        return store_call_result(ctx, inst, return_ty);
+    }
+    let Some(result) = inst.result else {
+        return Ok(());
+    };
+    let result_ty = ctx.value_php_type(result)?.codegen_repr();
+    if matches!(result_ty, PhpType::Mixed | PhpType::Union(_)) {
+        ctx.store_result_value(result)?;
+        return Ok(());
+    }
+    cast_loaded_mixed_pointer_to_result(ctx, &result_ty)?;
+    ctx.store_result_value(result)
+}
+
+/// Returns true when a class implements an interface, following parent classes if needed.
+fn class_implements_interface(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    interface_name: &str,
+) -> bool {
+    let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    while let Some(candidate) = current {
+        let Some(info) = ctx.module.class_infos.get(candidate) else {
+            return false;
+        };
+        if info
+            .interfaces
+            .iter()
+            .any(|interface| php_symbol_key(interface.trim_start_matches('\\')) == interface_key)
+        {
+            return true;
+        }
+        current = info.parent.as_deref();
+    }
+    false
 }
 
 /// Converts an untyped boxed Mixed payload into indexed-array storage with Mixed slots.

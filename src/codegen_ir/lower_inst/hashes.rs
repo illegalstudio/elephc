@@ -382,6 +382,9 @@ pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: V
             abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
             Ok(())
         }
+        PhpType::Mixed | PhpType::Union(_) => {
+            materialize_mixed_hash_key_aarch64(ctx, key)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "hash key PHP type {:?}",
             other
@@ -403,11 +406,71 @@ pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: Va
             abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
             Ok(())
         }
+        PhpType::Mixed | PhpType::Union(_) => {
+            materialize_mixed_hash_key_x86_64(ctx, key)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "hash key PHP type {:?}",
             other
         ))),
     }
+}
+
+/// Materializes a boxed Mixed key as the AArch64 hash key pair `x1`/`x2`.
+fn materialize_mixed_hash_key_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    key: ValueId,
+) -> Result<()> {
+    let string_key = ctx.next_label("mixed_hash_key_string");
+    let scalar_key = ctx.next_label("mixed_hash_key_scalar");
+    let done = ctx.next_label("mixed_hash_key_done");
+    ctx.load_value_to_reg(key, "x0")?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("cmp x0, #1");                                      // string mixed keys need PHP numeric-string normalization
+    ctx.emitter.instruction(&format!("b.eq {}", string_key));                   // route string keys through the normal hash-key helper
+    ctx.emitter.instruction("cmp x0, #0");                                      // integer mixed keys are already scalar hash keys
+    ctx.emitter.instruction(&format!("b.eq {}", scalar_key));                   // keep integer keys as integer hash keys
+    ctx.emitter.instruction("cmp x0, #3");                                      // boolean mixed keys normalize like integer keys
+    ctx.emitter.instruction(&format!("b.eq {}", scalar_key));                   // keep boolean keys as integer hash keys
+    ctx.emitter.instruction("mov x1, #0");                                      // unsupported mixed key tags fall back to integer key zero
+    ctx.emitter.label(&scalar_key);
+    ctx.emitter.instruction("mov x2, #-1");                                     // key_hi sentinel marks scalar mixed keys as integers
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip string-key normalization after scalar selection
+    ctx.emitter.label(&string_key);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Materializes a boxed Mixed key as the x86_64 hash key pair `rsi`/`rdx`.
+fn materialize_mixed_hash_key_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    key: ValueId,
+) -> Result<()> {
+    let string_key = ctx.next_label("mixed_hash_key_string");
+    let scalar_key = ctx.next_label("mixed_hash_key_scalar");
+    let done = ctx.next_label("mixed_hash_key_done");
+    ctx.load_value_to_reg(key, "rax")?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("cmp rax, 1");                                      // string mixed keys need PHP numeric-string normalization
+    ctx.emitter.instruction(&format!("je {}", string_key));                     // route string keys through the normal hash-key helper
+    ctx.emitter.instruction("cmp rax, 0");                                      // integer mixed keys are already scalar hash keys
+    ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep integer keys as integer hash keys
+    ctx.emitter.instruction("cmp rax, 3");                                      // boolean mixed keys normalize like integer keys
+    ctx.emitter.instruction(&format!("je {}", scalar_key));                     // keep boolean keys as integer hash keys
+    ctx.emitter.instruction("xor esi, esi");                                    // unsupported mixed key tags fall back to integer key zero
+    ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks fallback mixed keys as integers
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after fallback selection
+    ctx.emitter.label(&scalar_key);
+    ctx.emitter.instruction("mov rsi, rdi");                                    // publish the unboxed scalar payload as key_lo
+    ctx.emitter.instruction("mov rdx, -1");                                     // key_hi sentinel marks scalar mixed keys as integers
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip string-key normalization after scalar selection
+    ctx.emitter.label(&string_key);
+    ctx.emitter.instruction("mov rax, rdi");                                    // move the unboxed string pointer into the hash normalizer input
+    abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+    ctx.emitter.instruction("mov rsi, rax");                                    // move normalized key_lo into the hash-set ABI register
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Materializes an EIR value as the hash-set value payload for AArch64.

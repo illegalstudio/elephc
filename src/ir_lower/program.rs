@@ -535,6 +535,14 @@ fn required_builtin_spl_metadata_methods(class_name: &str) -> &'static [&'static
             "offsetUnset",
             "count",
         ],
+        "ArrayObject" => &[
+            "getIterator",
+            "count",
+            "offsetExists",
+            "offsetGet",
+            "offsetSet",
+            "offsetUnset",
+        ],
         "AppendIterator" => &[
             "current",
             "key",
@@ -664,6 +672,18 @@ fn is_supported_builtin_spl_method(class_name: &str, method_key: &str) -> bool {
                 | "rewind"
                 | "valid"
                 | "seek"
+                | "count"
+                | "offsetexists"
+                | "offsetget"
+                | "offsetset"
+                | "offsetunset"
+                | "append"
+                | "getarraycopy"
+        ),
+        "ArrayObject" => matches!(
+            method_key,
+            "__construct"
+                | "getiterator"
                 | "count"
                 | "offsetexists"
                 | "offsetget"

@@ -716,16 +716,23 @@ fn emit_variant_function_exists(ctx: &mut FunctionContext<'_>, function_name: &s
 fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "count", 1)?;
     let value = expect_operand(inst, 0)?;
-    let ty = ctx.load_value_to_result(value)?;
+    let ty = ctx.value_php_type(value)?.codegen_repr();
     match ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            ctx.load_value_to_result(value)?;
             let result_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
             store_if_result(ctx, inst)
         }
         PhpType::Mixed | PhpType::Union(_) => {
+            ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
             store_if_result(ctx, inst)
+        }
+        PhpType::Object(class_name)
+            if super::class_implements_interface(ctx, &class_name, "Countable") =>
+        {
+            super::lower_runtime_object_method_call(ctx, inst, &class_name, "count")
         }
         other => Err(CodegenIrError::unsupported(format!(
             "count for PHP type {:?}",
