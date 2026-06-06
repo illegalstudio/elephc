@@ -135,7 +135,7 @@ fn resolve_static_property_slot(
         .class_infos
         .get(declaring_class)
         .ok_or_else(|| CodegenIrError::unsupported(format!("unknown static property declaring class {}", declaring_class)))?;
-    reject_non_public_static_property(declaring_class, property, declaring_info, inst)?;
+    ensure_static_property_visibility(ctx, declaring_class, property, declaring_info, inst)?;
     let (raw_receiver, _) = parse_static_property_label(label)?;
     let late_bound = raw_receiver.trim_start_matches('\\') == "static";
     let branches = dynamic_static_property_branches(ctx, late_bound, property, declaring_class);
@@ -441,25 +441,44 @@ fn parse_static_property_label(label: &str) -> Result<(&str, &str)> {
     })
 }
 
-/// Rejects non-public static properties until the EIR backend has class-context visibility checks.
-fn reject_non_public_static_property(
+/// Verifies that the current class context may access a static property.
+fn ensure_static_property_visibility(
+    ctx: &FunctionContext<'_>,
     declaring_class: &str,
     property: &str,
     declaring_info: &ClassInfo,
     inst: &Instruction,
 ) -> Result<()> {
-    if matches!(
-        declaring_info.static_property_visibilities.get(property),
-        None | Some(Visibility::Public)
-    ) {
-        return Ok(());
+    let visibility = declaring_info
+        .static_property_visibilities
+        .get(property)
+        .unwrap_or(&Visibility::Public);
+    if static_property_is_visible(ctx, declaring_class, visibility) {
+        Ok(())
+    } else {
+        Err(CodegenIrError::unsupported(format!(
+            "{} for non-public static property {}::${}",
+            inst.op.name(),
+            declaring_class,
+            property
+        )))
     }
-    Err(CodegenIrError::unsupported(format!(
-        "{} for non-public static property {}::${}",
-        inst.op.name(),
-        declaring_class,
-        property
-    )))
+}
+
+/// Returns true when the current EIR function has access to the member visibility.
+fn static_property_is_visible(
+    ctx: &FunctionContext<'_>,
+    declaring_class: &str,
+    visibility: &Visibility,
+) -> bool {
+    match visibility {
+        Visibility::Public => true,
+        Visibility::Private => super::current_method_class(ctx)
+            .is_ok_and(|current| current == declaring_class),
+        Visibility::Protected => super::current_method_class(ctx).is_ok_and(|current| {
+            current == declaring_class || is_same_or_descendant(ctx, current, declaring_class)
+        }),
+    }
 }
 
 /// Verifies that this slice knows how to represent the static property type.
