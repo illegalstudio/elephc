@@ -629,3 +629,27 @@ echo 3;
     );
     assert_eq!(out, "3");
 }
+
+/// Verifies PHP 8.3+ array auto-increment after a negative explicit key (L4): the first explicit
+/// integer key seeds the cursor even when negative, so the next implicit element continues from
+/// `key + 1` instead of resetting to 0. Covers the lone negative key, a later smaller key not
+/// lowering the cursor, a positive key still winning the max, and a string key not seeding.
+#[test]
+fn test_array_literal_negative_key_auto_increment_php83() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [-5 => "a", "b"];
+$b = [-5 => "x", -10 => "y", "z"];
+$c = [3 => "p", -5 => "q", "r"];
+$d = ["k" => 1, "v"];
+echo $a[-5] . $a[-4];
+echo "|";
+echo $b[-4];
+echo "|";
+echo $c[4];
+echo "|";
+echo $d[0];
+"#,
+    );
+    assert_eq!(out, "ab|z|r|v");
+}
