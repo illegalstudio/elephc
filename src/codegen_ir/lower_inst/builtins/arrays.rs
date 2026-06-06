@@ -23,6 +23,7 @@ use super::super::{expect_operand, store_if_result};
 
 mod key_exists;
 mod keys;
+mod search;
 mod shift;
 mod unshift;
 mod values;
@@ -631,7 +632,13 @@ pub(super) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instructi
     super::ensure_arg_count(inst, "array_search", 2)?;
     let needle = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
-    match supported_array_search_case(ctx.value_php_type(needle)?, ctx.value_php_type(array)?)? {
+    let needle_ty = ctx.value_php_type(needle)?;
+    let array_ty = ctx.value_php_type(array)?;
+    if search::try_lower_assoc_array_search(ctx, needle, array, needle_ty.clone(), array_ty.clone())? {
+        store_if_result(ctx, inst)?;
+        return Ok(());
+    }
+    match supported_array_search_case(needle_ty, array_ty)? {
         ArraySearchCase::Empty => box_array_search_miss(ctx),
         ArraySearchCase::Scalar => lower_array_search_scalar(ctx, needle, array)?,
     }
@@ -643,7 +650,13 @@ pub(super) fn lower_in_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     super::ensure_arg_count(inst, "in_array", 2)?;
     let needle = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
-    match supported_in_array_case(ctx.value_php_type(needle)?, ctx.value_php_type(array)?)? {
+    let needle_ty = ctx.value_php_type(needle)?;
+    let array_ty = ctx.value_php_type(array)?;
+    if search::try_lower_assoc_in_array(ctx, needle, array, needle_ty.clone(), array_ty.clone())? {
+        store_if_result(ctx, inst)?;
+        return Ok(());
+    }
+    match supported_in_array_case(needle_ty, array_ty)? {
         InArrayCase::Empty => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         }
