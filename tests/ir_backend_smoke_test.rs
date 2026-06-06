@@ -3143,6 +3143,45 @@ echo $value;
     );
 }
 
+/// Verifies first-class function callable aliases preserve by-reference params.
+#[test]
+fn ir_backend_handles_first_class_callable_alias_by_ref_params() {
+    let source = r#"<?php
+function bump(&$value): void {
+    $value = $value + 1;
+}
+
+$fn = bump(...);
+$alias = $fn;
+$value = 7;
+$alias($value);
+echo $value;
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("first_class_callable_alias_by_ref_params", source),
+        "8"
+    );
+}
+
+/// Verifies closure callable aliases write scalar locals back through Mixed by-reference params.
+#[test]
+fn ir_backend_handles_closure_alias_by_ref_mixed_params() {
+    let source = r#"<?php
+$fn = function (&$value): void {
+    $value = $value + 1;
+};
+
+$alias = $fn;
+$value = 7;
+$alias($value);
+echo $value;
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("closure_alias_by_ref_mixed_params", source),
+        "8"
+    );
+}
+
 /// Verifies instance-method first-class callables work with `call_user_func*`.
 #[test]
 fn ir_backend_handles_instance_method_call_user_func_callbacks() {

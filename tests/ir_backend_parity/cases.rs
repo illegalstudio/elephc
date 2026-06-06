@@ -972,6 +972,45 @@ echo $value;
     );
 }
 
+/// Verifies first-class function callable by-reference aliases match legacy output.
+#[test]
+fn parity_first_class_callable_alias_by_ref_params() {
+    assert_backend_parity(
+        "first_class_callable_alias_by_ref_params",
+        r#"<?php
+function bump(&$value): void {
+    $value = $value + 1;
+}
+
+$fn = bump(...);
+$alias = $fn;
+$value = 7;
+$alias($value);
+echo $value;
+"#,
+        &[],
+    );
+}
+
+/// Verifies closure by-reference aliases with Mixed params match legacy output.
+#[test]
+fn parity_closure_alias_by_ref_mixed_params() {
+    assert_backend_parity(
+        "closure_alias_by_ref_mixed_params",
+        r#"<?php
+$fn = function (&$value): void {
+    $value = $value + 1;
+};
+
+$alias = $fn;
+$value = 7;
+$alias($value);
+echo $value;
+"#,
+        &[],
+    );
+}
+
 /// Verifies instance-method first-class callable `call_user_func*` output matches legacy.
 #[test]
 fn parity_instance_method_call_user_func_callbacks() {

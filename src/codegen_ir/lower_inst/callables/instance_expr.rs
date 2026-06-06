@@ -17,7 +17,7 @@ use crate::types::{FunctionSig, PhpType};
 
 use super::super::super::context::FunctionContext;
 use super::super::{
-    class_method_already_emitted, direct_call_stack_pad_bytes,
+    class_method_already_emitted, direct_call_stack_pad_bytes, emit_ref_arg_writebacks,
     materialize_method_call_args_with_receiver_reg_and_refs, store_call_result,
 };
 use crate::codegen_ir::{CodegenIrError, Result};
@@ -74,7 +74,7 @@ fn lower_instance_method_callable_call(
 
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
     ctx.load_value_to_reg(target.receiver, receiver_reg)?;
-    let overflow_bytes = materialize_method_call_args_with_receiver_reg_and_refs(
+    let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
         ctx,
         receiver_reg,
         &target.receiver_ty,
@@ -82,12 +82,13 @@ fn lower_instance_method_callable_call(
         &target.param_types,
         &target.ref_params,
     )?;
-    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_call_label(ctx.emitter, &target.entry_label);
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
-    store_call_result(ctx, inst, &target.return_ty)
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    store_call_result(ctx, inst, &target.return_ty)?;
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
 /// Resolves a callable operand back to the receiver-bound method descriptor that produced it.

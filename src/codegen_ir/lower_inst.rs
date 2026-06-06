@@ -719,13 +719,18 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
     param_types.push(PhpType::Object(class_name));
     param_types.extend(target.params.iter().map(|param| param.codegen_repr()));
-    let overflow_bytes = materialize_direct_call_args(ctx, &inst.operands, &param_types)?;
-    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
+    let mut ref_params = Vec::with_capacity(target.ref_params.len() + 1);
+    ref_params.push(false);
+    ref_params.extend(target.ref_params.iter().copied());
+    let call_args =
+        materialize_direct_call_args_with_refs(ctx, &inst.operands, &param_types, &ref_params)?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &target.method_key));
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
-    store_call_result(ctx, inst, &target.return_ty)
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    store_call_result(ctx, inst, &target.return_ty)?;
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
 /// Returns true when a direct method call can read PHP's compact Throwable payload.
@@ -1164,18 +1169,22 @@ fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
     param_types.push(receiver_ty.clone());
     param_types.extend(target.params.iter().map(|param| param.codegen_repr()));
-    let overflow_bytes = materialize_method_call_args_with_receiver_reg(
+    let mut ref_params = Vec::with_capacity(target.ref_params.len() + 1);
+    ref_params.push(false);
+    ref_params.extend(target.ref_params.iter().copied());
+    let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
         ctx,
         object_reg,
         &receiver_ty,
         &inst.operands,
         &param_types,
+        &ref_params,
     )?;
-    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &target.method_key));
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     if inst.result_php_type.codegen_repr() == PhpType::Mixed
         && target.return_ty.codegen_repr() != PhpType::Mixed
     {
@@ -1185,7 +1194,8 @@ fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     ctx.emitter.label(&null_label);
     objects::emit_boxed_null(ctx);
     ctx.emitter.label(&done_label);
-    store_if_result(ctx, inst)
+    store_if_result(ctx, inst)?;
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
 /// Resolved method metadata needed to issue a direct method call.
@@ -1193,7 +1203,23 @@ struct MethodCallTarget {
     impl_class: String,
     method_key: String,
     params: Vec<PhpType>,
+    ref_params: Vec<bool>,
     return_ty: PhpType,
+}
+
+/// Outgoing call argument state that must be cleaned up after the call returns.
+struct CallArgMaterialization {
+    overflow_bytes: usize,
+    ref_writebacks: Vec<RefArgWriteback>,
+}
+
+/// A caller-side scalar local boxed into a temporary Mixed by-reference cell.
+struct RefArgWriteback {
+    param_index: usize,
+    source_value: ValueId,
+    source_slot: LocalSlotId,
+    source_ty: PhpType,
+    cell_offset: usize,
 }
 
 /// Source for the hidden called-class id passed to static method bodies.
@@ -1250,6 +1276,7 @@ fn resolve_method_call_target(
             .iter()
             .map(|(_, ty)| ty.codegen_repr())
             .collect(),
+        ref_params: callee_sig.ref_params.clone(),
         return_ty: callee_sig.return_type.clone(),
     })
 }
@@ -1367,9 +1394,14 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     } else {
         None
     };
-    let overflow_bytes =
-        materialize_static_method_call_args(ctx, &called_class_id, &inst.operands, &param_types)?;
-    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
+    let call_args = materialize_static_method_call_args_with_refs(
+        ctx,
+        &called_class_id,
+        &inst.operands,
+        &param_types,
+        &callee_sig.ref_params,
+    )?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     if let Some(slot) = dynamic_static_slot {
         emit_dynamic_static_method_call(ctx, slot);
@@ -1377,7 +1409,7 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, &method_key));
     }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     if let Some(result) = inst.result {
         if ctx.value_php_type(result)? == PhpType::Void {
             abi::emit_load_int_immediate(
@@ -1388,7 +1420,7 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         }
         ctx.store_result_value(result)?;
     }
-    Ok(())
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
 /// Emits an indirect static-vtable call for a late-bound `static::method()` receiver.
@@ -1543,12 +1575,14 @@ fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         .iter()
         .map(|param| param.php_type.codegen_repr())
         .collect::<Vec<_>>();
-    let overflow_bytes = materialize_direct_call_args(ctx, &inst.operands, &param_types)?;
-    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
+    let ref_params = callee.params.iter().map(|param| param.by_ref).collect::<Vec<_>>();
+    let call_args =
+        materialize_direct_call_args_with_refs(ctx, &inst.operands, &param_types, &ref_params)?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_call_label(ctx.emitter, &function_symbol(&function_name));
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     if let Some(result) = inst.result {
         if ctx.value_php_type(result)? == PhpType::Void {
             abi::emit_load_int_immediate(
@@ -1559,7 +1593,7 @@ fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         }
         ctx.store_result_value(result)?;
     }
-    Ok(())
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
 /// Loads SSA operands into ABI argument registers and caller-stack slots for a direct call.
@@ -1568,6 +1602,18 @@ pub(super) fn materialize_direct_call_args(
     args: &[ValueId],
     param_types: &[PhpType],
 ) -> Result<usize> {
+    let ref_params = vec![false; param_types.len()];
+    let materialized = materialize_direct_call_args_with_refs(ctx, args, param_types, &ref_params)?;
+    Ok(materialized.overflow_bytes)
+}
+
+/// Loads SSA operands into ABI argument slots, preserving by-reference locals.
+fn materialize_direct_call_args_with_refs(
+    ctx: &mut FunctionContext<'_>,
+    args: &[ValueId],
+    param_types: &[PhpType],
+    ref_params: &[bool],
+) -> Result<CallArgMaterialization> {
     if args.len() != param_types.len() {
         return Err(CodegenIrError::invalid_module(format!(
             "direct call materialization received {} args for {} params",
@@ -1575,24 +1621,45 @@ pub(super) fn materialize_direct_call_args(
             param_types.len()
         )));
     }
-    let assignments =
-        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, param_types, 0);
-    for (value, param_ty) in args.iter().zip(param_types.iter()) {
-        ctx.load_value_to_result(*value)?;
-        let source_ty = ctx.raw_value_php_type(*value)?;
-        let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
-        abi::emit_push_result_value(ctx.emitter, &push_ty);
+    if ref_params.len() != param_types.len() {
+        return Err(CodegenIrError::invalid_module(format!(
+            "direct call materialization received {} ref flags for {} params",
+            ref_params.len(),
+            param_types.len()
+        )));
     }
-    Ok(abi::materialize_outgoing_args(ctx.emitter, &assignments))
+    let mut ref_writebacks = plan_ref_arg_writebacks(ctx, args, param_types, ref_params)?;
+    emit_ref_arg_temp_cells(ctx, &mut ref_writebacks)?;
+    let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
+    let assignments =
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
+    let mut arg_temp_bytes = 0usize;
+    for (index, (value, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
+        if ref_params[index] {
+            materialize_ref_arg_address(ctx, *value, index, arg_temp_bytes, &ref_writebacks)?;
+            abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
+        } else {
+            ctx.load_value_to_result(*value)?;
+            let source_ty = ctx.raw_value_php_type(*value)?;
+            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+            abi::emit_push_result_value(ctx.emitter, &push_ty);
+        }
+        arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[index]);
+    }
+    Ok(CallArgMaterialization {
+        overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
+        ref_writebacks,
+    })
 }
 
-/// Loads the hidden called-class id plus visible operands for an EIR static method call.
-fn materialize_static_method_call_args(
+/// Loads hidden and visible static-method arguments, preserving by-reference locals.
+fn materialize_static_method_call_args_with_refs(
     ctx: &mut FunctionContext<'_>,
     called_class_id: &CalledClassIdArg,
     args: &[ValueId],
     param_types: &[PhpType],
-) -> Result<usize> {
+    ref_params: &[bool],
+) -> Result<CallArgMaterialization> {
     if args.len() != param_types.len() {
         return Err(CodegenIrError::invalid_module(format!(
             "static method call materialization received {} args for {} visible params",
@@ -1600,20 +1667,40 @@ fn materialize_static_method_call_args(
             param_types.len()
         )));
     }
-    let mut abi_param_types = Vec::with_capacity(param_types.len() + 1);
+    if ref_params.len() != param_types.len() {
+        return Err(CodegenIrError::invalid_module(format!(
+            "static method call materialization received {} ref flags for {} visible params",
+            ref_params.len(),
+            param_types.len()
+        )));
+    }
+    let mut ref_writebacks = plan_ref_arg_writebacks(ctx, args, param_types, ref_params)?;
+    emit_ref_arg_temp_cells(ctx, &mut ref_writebacks)?;
+    let visible_abi_param_types = abi_param_types_for_refs(param_types, ref_params);
+    let mut abi_param_types = Vec::with_capacity(visible_abi_param_types.len() + 1);
     abi_param_types.push(PhpType::Int);
-    abi_param_types.extend_from_slice(param_types);
+    abi_param_types.extend_from_slice(&visible_abi_param_types);
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
     materialize_called_class_id(ctx, called_class_id)?;
     abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
-    for (value, param_ty) in args.iter().zip(param_types.iter()) {
-        ctx.load_value_to_result(*value)?;
-        let source_ty = ctx.raw_value_php_type(*value)?;
-        let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
-        abi::emit_push_result_value(ctx.emitter, &push_ty);
+    let mut arg_temp_bytes = call_arg_temp_slot_size(&PhpType::Int);
+    for (index, (value, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
+        if ref_params[index] {
+            materialize_ref_arg_address(ctx, *value, index, arg_temp_bytes, &ref_writebacks)?;
+            abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
+        } else {
+            ctx.load_value_to_result(*value)?;
+            let source_ty = ctx.raw_value_php_type(*value)?;
+            let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+            abi::emit_push_result_value(ctx.emitter, &push_ty);
+        }
+        arg_temp_bytes += call_arg_temp_slot_size(&visible_abi_param_types[index]);
     }
-    Ok(abi::materialize_outgoing_args(ctx.emitter, &assignments))
+    Ok(CallArgMaterialization {
+        overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
+        ref_writebacks,
+    })
 }
 
 /// Materializes the hidden called-class id into the integer result register.
@@ -1672,25 +1759,6 @@ fn materialize_direct_call_arg_for_param(
     }
 }
 
-/// Loads call arguments with an already-unboxed receiver as the first ABI argument.
-fn materialize_method_call_args_with_receiver_reg(
-    ctx: &mut FunctionContext<'_>,
-    receiver_reg: &str,
-    receiver_ty: &PhpType,
-    operands: &[ValueId],
-    param_types: &[PhpType],
-) -> Result<usize> {
-    let ref_params = vec![false; param_types.len()];
-    materialize_method_call_args_with_receiver_reg_and_refs(
-        ctx,
-        receiver_reg,
-        receiver_ty,
-        operands,
-        param_types,
-        &ref_params,
-    )
-}
-
 /// Loads method call arguments with by-reference parameter support for local operands.
 fn materialize_method_call_args_with_receiver_reg_and_refs(
     ctx: &mut FunctionContext<'_>,
@@ -1699,7 +1767,7 @@ fn materialize_method_call_args_with_receiver_reg_and_refs(
     operands: &[ValueId],
     param_types: &[PhpType],
     ref_params: &[bool],
-) -> Result<usize> {
+) -> Result<CallArgMaterialization> {
     if operands.len() != param_types.len() {
         return Err(CodegenIrError::invalid_module(format!(
             "method call materialization received {} operands for {} params",
@@ -1714,10 +1782,18 @@ fn materialize_method_call_args_with_receiver_reg_and_refs(
             param_types.len()
         )));
     }
+    let ref_writebacks = plan_ref_arg_writebacks(ctx, operands, param_types, ref_params)?;
+    if !ref_writebacks.is_empty() {
+        return Err(CodegenIrError::unsupported(
+            "receiver-register method call with scalar-to-mixed by-reference writebacks",
+        ));
+    }
+    let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let assignments =
-        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, param_types, 0);
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
     move_reg_to_int_result(ctx, receiver_reg);
     abi::emit_push_result_value(ctx.emitter, receiver_ty);
+    let mut arg_temp_bytes = call_arg_temp_slot_size(&abi_param_types[0]);
     for (index, (value, param_ty)) in operands
         .iter()
         .skip(1)
@@ -1726,7 +1802,7 @@ fn materialize_method_call_args_with_receiver_reg_and_refs(
     {
         let param_index = index + 1;
         if ref_params[param_index] {
-            materialize_local_ref_arg_address(ctx, *value)?;
+            materialize_ref_arg_address(ctx, *value, param_index, arg_temp_bytes, &ref_writebacks)?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
         } else {
             ctx.load_value_to_result(*value)?;
@@ -1734,8 +1810,154 @@ fn materialize_method_call_args_with_receiver_reg_and_refs(
             let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
+        arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
     }
-    Ok(abi::materialize_outgoing_args(ctx.emitter, &assignments))
+    Ok(CallArgMaterialization {
+        overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
+        ref_writebacks,
+    })
+}
+
+/// Converts declared parameter types to the ABI-visible shape for by-reference args.
+fn abi_param_types_for_refs(param_types: &[PhpType], ref_params: &[bool]) -> Vec<PhpType> {
+    param_types
+        .iter()
+        .zip(ref_params.iter())
+        .map(|(ty, is_ref)| if *is_ref { PhpType::Int } else { ty.codegen_repr() })
+        .collect()
+}
+
+/// Returns the temporary stack slot size used by outgoing-argument staging.
+fn call_arg_temp_slot_size(ty: &PhpType) -> usize {
+    if matches!(ty.codegen_repr(), PhpType::Void | PhpType::Never) {
+        0
+    } else {
+        16
+    }
+}
+
+/// Plans caller-side Mixed cells needed for scalar locals passed to by-reference Mixed params.
+fn plan_ref_arg_writebacks(
+    ctx: &FunctionContext<'_>,
+    args: &[ValueId],
+    param_types: &[PhpType],
+    ref_params: &[bool],
+) -> Result<Vec<RefArgWriteback>> {
+    let mut writebacks = Vec::new();
+    for (param_index, value) in args.iter().enumerate() {
+        if !ref_params[param_index] || param_types[param_index].codegen_repr() != PhpType::Mixed {
+            continue;
+        }
+        let source_ty = ctx.raw_value_php_type(*value)?.codegen_repr();
+        if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+            continue;
+        }
+        reject_unsupported_mixed_ref_writeback_source(&source_ty)?;
+        writebacks.push(RefArgWriteback {
+            param_index,
+            source_value: *value,
+            source_slot: local_slot_for_loaded_value(ctx, *value)?,
+            source_ty,
+            cell_offset: 0,
+        });
+    }
+    Ok(writebacks)
+}
+
+/// Rejects scalar-to-Mixed temporary ref cells whose writeback shape is not supported yet.
+fn reject_unsupported_mixed_ref_writeback_source(source_ty: &PhpType) -> Result<()> {
+    if matches!(source_ty.codegen_repr(), PhpType::Int | PhpType::Bool) {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "by-reference Mixed parameter writeback to PHP type {:?}",
+        source_ty
+    )))
+}
+
+/// Emits persistent caller-stack Mixed cells used by scalar-to-Mixed by-reference args.
+fn emit_ref_arg_temp_cells(
+    ctx: &mut FunctionContext<'_>,
+    writebacks: &mut [RefArgWriteback],
+) -> Result<()> {
+    let total = writebacks.len();
+    for (index, writeback) in writebacks.iter_mut().enumerate() {
+        ctx.load_value_to_result(writeback.source_value)?;
+        emit_box_current_value_as_mixed(ctx.emitter, &writeback.source_ty);
+        abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
+        writeback.cell_offset = (total - index - 1) * 16;
+    }
+    Ok(())
+}
+
+/// Loads the address that should be passed for a by-reference argument.
+fn materialize_ref_arg_address(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    param_index: usize,
+    arg_temp_bytes: usize,
+    writebacks: &[RefArgWriteback],
+) -> Result<()> {
+    if let Some(writeback) = writebacks
+        .iter()
+        .find(|writeback| writeback.param_index == param_index)
+    {
+        let cell_offset = arg_temp_bytes + writeback.cell_offset;
+        abi::emit_temporary_stack_address(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            cell_offset,
+        );
+        return Ok(());
+    }
+    materialize_local_ref_arg_address(ctx, value)
+}
+
+/// Writes temporary Mixed by-reference cells back into the original caller locals.
+fn emit_ref_arg_writebacks(
+    ctx: &mut FunctionContext<'_>,
+    writebacks: &[RefArgWriteback],
+) -> Result<()> {
+    for writeback in writebacks {
+        abi::emit_load_temporary_stack_slot(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            writeback.cell_offset,
+        );
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
+        store_current_scalar_result_to_ref_source(ctx, writeback)?;
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, writebacks.len() * 16);
+    Ok(())
+}
+
+/// Returns the low payload register produced by `__rt_mixed_unbox` on the active target.
+fn mixed_unbox_low_payload_reg(ctx: &FunctionContext<'_>) -> &'static str {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdi",
+    }
+}
+
+/// Stores an unboxed scalar Mixed payload back through the original by-reference source.
+fn store_current_scalar_result_to_ref_source(
+    ctx: &mut FunctionContext<'_>,
+    writeback: &RefArgWriteback,
+) -> Result<()> {
+    if local_slot_is_by_ref_param(ctx, writeback.source_slot) {
+        let offset = ctx.local_offset(writeback.source_slot)?;
+        let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, pointer_reg, offset);
+        abi::emit_store_to_address(ctx.emitter, abi::int_result_reg(ctx.emitter), pointer_reg, 0);
+        return Ok(());
+    }
+    let offset = ctx.local_offset(writeback.source_slot)?;
+    abi::emit_store(ctx.emitter, &writeback.source_ty, offset);
+    Ok(())
 }
 
 /// Loads a local variable's address for a by-reference method-call argument.

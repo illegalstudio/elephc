@@ -1349,6 +1349,7 @@ pub(crate) fn static_callable_binding_for_expr(
         ExprKind::FirstClassCallable(CallableTarget::Method { object, method }) => {
             resolve_instance_method_callable(ctx, object, method.clone())
         }
+        ExprKind::Variable(name) => ctx.static_callable_local(name),
         _ => None,
     }
 }
