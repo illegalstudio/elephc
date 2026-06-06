@@ -94,6 +94,27 @@ echo $bucket->first();
     assert_eq!(out, "9");
 }
 
+/// Verifies assigning an untyped function parameter into a typed object property.
+#[test]
+fn test_typed_int_property_accepts_untyped_function_param_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public int $n = 0;
+}
+
+function set_n(Box $box, $value): void {
+    $box->n = $value;
+}
+
+$box = new Box();
+set_n($box, 7);
+echo $box->n;
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
 /// Verifies that a typed `public array $headers` property (initialized to `[]`)
 /// accepts a string-keyed assignment (`$this->headers["Host"] = ...`) and the
 /// value is retrievable via the same key.

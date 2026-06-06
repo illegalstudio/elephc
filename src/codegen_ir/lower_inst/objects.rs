@@ -25,7 +25,7 @@ use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 use super::super::context::FunctionContext;
 use super::{
     cast_loaded_mixed_pointer_to_result, direct_call_stack_pad_bytes, expect_data, expect_operand,
-    materialize_direct_call_args, store_if_result,
+    load_value_to_first_int_arg, materialize_direct_call_args, store_if_result,
 };
 use crate::codegen_ir::fibers;
 use crate::codegen_ir::literal_defaults::{
@@ -1590,6 +1590,9 @@ fn ensure_property_value_supported(
     if is_empty_array_for_array_property(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if can_coerce_mixed_to_scalar_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     Err(CodegenIrError::unsupported(format!(
         "{} assigning PHP type {:?} to {}::${} with PHP type {:?}",
         inst.op.name(),
@@ -1598,6 +1601,15 @@ fn ensure_property_value_supported(
         slot.property,
         slot.php_type
     )))
+}
+
+/// Returns true when a boxed Mixed value can be coerced before a scalar typed-property store.
+fn can_coerce_mixed_to_scalar_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && matches!(
+            slot_ty.codegen_repr(),
+            PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
+        )
 }
 
 /// Returns true when an empty array literal initializes a typed array property.
@@ -1722,7 +1734,7 @@ fn emit_property_store(
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
+            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             abi::emit_store_to_address(ctx.emitter, ptr_reg, base_reg, slot.offset);
             abi::emit_store_to_address(ctx.emitter, len_reg, base_reg, slot.offset + 8);
@@ -1730,7 +1742,7 @@ fn emit_property_store(
         PhpType::Float => {
             let float_reg = abi::float_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            ctx.load_value_to_reg(value, float_reg)?;
+            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             abi::emit_store_to_address(ctx.emitter, float_reg, base_reg, slot.offset);
             abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
@@ -1738,7 +1750,7 @@ fn emit_property_store(
         PhpType::Bool | PhpType::Int => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
-            ctx.load_value_to_reg(value, int_reg)?;
+            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
             abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
             abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
@@ -1756,6 +1768,28 @@ fn emit_property_store(
             slot.php_type
         ))),
     }
+    Ok(())
+}
+
+/// Loads an SSA value in the shape required by a typed object property store.
+fn load_property_store_value_to_result(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    slot_ty: &PhpType,
+) -> Result<()> {
+    let value_ty = ctx.value_php_type(value)?;
+    if matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        load_value_to_first_int_arg(ctx, value)?;
+        match slot_ty.codegen_repr() {
+            PhpType::Str => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string"),
+            PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
+            PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
+            PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
+            _ => {}
+        }
+        return Ok(());
+    }
+    ctx.load_value_to_result(value)?;
     Ok(())
 }
 
