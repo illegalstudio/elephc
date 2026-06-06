@@ -2308,58 +2308,71 @@ fn lower_named_args_with_spread_plan(
     if sig.variadic.is_some() {
         return None;
     }
+    let call_span = plan
+        .source_args
+        .first()
+        .map(|arg| arg.span)
+        .unwrap_or_else(crate::span::Span::dummy);
+    let first_named_pos = plan.first_named_pos?;
+    let prefix_expr = plan.positional_prefix_expr(call_span)?;
+    let prefix = lower_expr(ctx, &prefix_expr);
+    let prefix_type = ctx.builder.value_php_type(prefix.value);
+    let prefix_temp_name = ctx.declare_hidden_temp(prefix_type.clone());
+    store_value_into_temp(ctx, &prefix_temp_name, prefix_type, prefix, prefix_expr.span);
+    let prefix_temp = Expr::new(ExprKind::Variable(prefix_temp_name), prefix_expr.span);
+
     let mut source_values = vec![None; plan.source_args.len()];
-    let mut spread_temps = Vec::new();
-    for (source_index, source_arg) in plan.source_args.iter().enumerate() {
-        match &source_arg.kind {
-            ExprKind::Spread(inner) => {
-                let spread = lower_expr(ctx, inner);
-                let spread_type = ctx.builder.value_php_type(spread.value);
-                let temp_name = ctx.declare_hidden_temp(spread_type.clone());
-                store_value_into_temp(ctx, &temp_name, spread_type, spread, source_arg.span);
-                spread_temps.push((
-                    source_arg.span,
-                    Expr::new(ExprKind::Variable(temp_name), inner.span),
-                ));
-            }
-            _ => {
-                source_values[source_index] = Some(lower_call_source_arg(ctx, source_arg));
-            }
+    for (source_index, source_arg) in plan.source_args.iter().enumerate().skip(first_named_pos) {
+        if matches!(source_arg.kind, ExprKind::Spread(_)) {
+            return None;
         }
+        source_values[source_index] = Some(lower_call_source_arg(ctx, source_arg));
     }
 
     let mut operands = Vec::with_capacity(plan.regular_args.len());
-    for arg in &plan.regular_args {
+    for (param_idx, arg) in plan.regular_args.iter().enumerate() {
         match arg {
             crate::types::call_args::PlannedRegularArg::Source { source_index, .. } => {
-                operands.push(source_values.get(*source_index).copied().flatten()?);
+                if *source_index < first_named_pos {
+                    let expr = spread_element_expr_for_ir(
+                        &prefix_temp,
+                        param_idx,
+                        None,
+                        false,
+                        plan.source_args.get(*source_index).map(|arg| arg.span).unwrap_or(call_span),
+                    );
+                    operands.push(lower_expr(ctx, &expr).value);
+                } else {
+                    operands.push(source_values.get(*source_index).copied().flatten()?);
+                }
             }
             crate::types::call_args::PlannedRegularArg::Default(default) => {
                 operands.push(lower_expr(ctx, default).value);
             }
             crate::types::call_args::PlannedRegularArg::SpreadElement {
-                spread_span,
-                element_idx,
+                element_idx: _,
+                prefix_element_idx,
                 param_name,
                 prefer_named_key,
                 default,
                 guaranteed_present,
+                spread_span,
                 ..
             } => {
-                let spread = spread_temp_for_span(&spread_temps, *spread_span)?;
+                let element_idx = *prefix_element_idx;
                 let expr = if let Some(default) = default {
                     if *guaranteed_present {
                         spread_element_expr_for_ir(
-                            spread,
-                            *element_idx,
+                            &prefix_temp,
+                            element_idx,
                             param_name.as_deref(),
                             *prefer_named_key,
                             *spread_span,
                         )
                     } else {
                         spread_element_or_default_expr_for_ir(
-                            spread,
-                            *element_idx,
+                            &prefix_temp,
+                            element_idx,
                             param_name.as_deref(),
                             *prefer_named_key,
                             default.clone(),
@@ -2368,8 +2381,8 @@ fn lower_named_args_with_spread_plan(
                     }
                 } else {
                     spread_element_expr_for_ir(
-                        spread,
-                        *element_idx,
+                        &prefix_temp,
+                        element_idx,
                         param_name.as_deref(),
                         *prefer_named_key,
                         *spread_span,
@@ -2380,17 +2393,6 @@ fn lower_named_args_with_spread_plan(
         }
     }
     Some(operands)
-}
-
-/// Finds the hidden temporary that owns a previously evaluated spread expression.
-fn spread_temp_for_span(
-    temps: &[(crate::span::Span, Expr)],
-    span: crate::span::Span,
-) -> Option<&Expr> {
-    temps
-        .iter()
-        .find(|(candidate, _)| candidate.line == span.line && candidate.col == span.col)
-        .map(|(_, expr)| expr)
 }
 
 /// Lowers a single associative spread as named parameter reads by key.
