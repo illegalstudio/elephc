@@ -1159,7 +1159,14 @@ fn lower_user_sort_static_callback(
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
     }
-    match ctx.value_php_type(callback)?.codegen_repr() {
+    let callback_ty = ctx.value_php_type(callback)?.codegen_repr();
+    let callback_owner = format!("{} callback", name);
+    if callback_ty == PhpType::Callable && static_callback_operand_is_recoverable(ctx, callback) {
+        let callback_binding =
+            static_sort_callback_binding(ctx, callback, &callback_owner, Some(&[PhpType::Int, PhpType::Int]))?;
+        return lower_user_sort_with_static_callback_binding(ctx, inst, array, callback_binding);
+    }
+    match callback_ty {
         PhpType::Callable => {
             lower_descriptor_callback_runtime(
                 ctx,
@@ -1215,7 +1222,17 @@ fn lower_user_sort_static_callback(
         _ => {}
     }
     let callback_binding =
-        static_sort_callback_binding(ctx, callback, &format!("{} callback", name), Some(&[PhpType::Int, PhpType::Int]))?;
+        static_sort_callback_binding(ctx, callback, &callback_owner, Some(&[PhpType::Int, PhpType::Int]))?;
+    lower_user_sort_with_static_callback_binding(ctx, inst, array, callback_binding)
+}
+
+/// Calls the user-sort runtime with a statically recovered callback binding.
+fn lower_user_sort_with_static_callback_binding(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    callback_binding: StaticSortCallbackBinding,
+) -> Result<()> {
     let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
@@ -2002,6 +2019,11 @@ fn static_callback_source_instruction<'a>(
         return static_callback_local_source_instruction(ctx, block, index, inst_ref, owner);
     }
     require_static_callback_source(inst_ref, owner)
+}
+
+/// Returns whether a callback operand can use the static callback binding path.
+fn static_callback_operand_is_recoverable(ctx: &FunctionContext<'_>, value: ValueId) -> bool {
+    static_callback_source_instruction(ctx, value, "static callback probe").is_ok()
 }
 
 /// Returns true when a callback operand is a dynamic callable local, such as a parameter.

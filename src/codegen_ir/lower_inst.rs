@@ -23,7 +23,7 @@ use crate::ir::{
 use crate::names::{
     function_symbol, ir_global_symbol, method_symbol, php_symbol_key, static_method_symbol,
 };
-use crate::types::{FunctionSig, PhpType};
+use crate::types::{callable_wrapper_sig, first_class_callable_builtin_sig, FunctionSig, PhpType};
 
 use super::context::FunctionContext;
 use super::function_variants;
@@ -845,6 +845,59 @@ fn emit_runtime_callable_invoker_inline(
     label
 }
 
+/// Emits a legacy builtin wrapper inline so EIR descriptors can point at PHP-ABI code.
+fn emit_runtime_builtin_wrapper_inline(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    sig: &FunctionSig,
+) -> String {
+    let mut legacy_ctx = legacy_context_from_eir_module(ctx.module);
+    let label = crate::codegen::callable_dispatch::ensure_runtime_builtin_wrapper(
+        &mut legacy_ctx,
+        name,
+        sig,
+    );
+    emit_legacy_deferred_callable_support_inline(ctx, &mut legacy_ctx);
+    label
+}
+
+/// Emits a legacy static-method wrapper inline for descriptor-compatible callbacks.
+fn emit_runtime_static_method_wrapper_inline(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    method_name: &str,
+    sig: &FunctionSig,
+) -> String {
+    let mut legacy_ctx = legacy_context_from_eir_module(ctx.module);
+    let label = crate::codegen::callable_dispatch::ensure_runtime_static_method_wrapper(
+        &mut legacy_ctx,
+        class_name,
+        method_name,
+        sig,
+    );
+    emit_legacy_deferred_callable_support_inline(ctx, &mut legacy_ctx);
+    label
+}
+
+/// Emits legacy deferred callable helpers inline and branches around their entry bodies.
+fn emit_legacy_deferred_callable_support_inline(
+    ctx: &mut FunctionContext<'_>,
+    legacy_ctx: &mut LegacyContext,
+) {
+    if legacy_ctx.deferred_closures.is_empty()
+        && legacy_ctx.deferred_fiber_wrappers.is_empty()
+        && legacy_ctx.deferred_callback_wrappers.is_empty()
+        && legacy_ctx.deferred_extern_callback_trampolines.is_empty()
+        && legacy_ctx.deferred_runtime_callable_invokers.is_empty()
+    {
+        return;
+    }
+    let done_label = ctx.next_label("runtime_callable_support_done");
+    abi::emit_jump(ctx.emitter, &done_label);
+    crate::codegen::emit_deferred_closures(ctx.emitter, ctx.data, legacy_ctx);
+    ctx.emitter.label(&done_label);
+}
+
 /// Builds the legacy metadata context needed by reused descriptor-invoker emitters.
 fn legacy_context_from_eir_module(module: &crate::ir::Module) -> LegacyContext {
     let mut ctx = LegacyContext::new();
@@ -927,7 +980,7 @@ struct FirstClassCallableDescriptor {
 
 /// Returns static descriptor metadata for compile-time callable targets supported by EIR.
 fn first_class_callable_descriptor(
-    ctx: &FunctionContext<'_>,
+    ctx: &mut FunctionContext<'_>,
     target: &str,
 ) -> Option<FirstClassCallableDescriptor> {
     if let Some((receiver_label, method_name)) = target.rsplit_once("::") {
@@ -955,12 +1008,35 @@ fn first_class_callable_descriptor(
             ),
         });
     }
+    if let Some(descriptor) = first_class_builtin_descriptor(ctx, target) {
+        return Some(descriptor);
+    }
     None
+}
+
+/// Returns descriptor metadata for builtin first-class callable targets.
+fn first_class_builtin_descriptor(
+    ctx: &mut FunctionContext<'_>,
+    target: &str,
+) -> Option<FirstClassCallableDescriptor> {
+    let name = php_symbol_key(target.trim_start_matches('\\'));
+    let sig = first_class_callable_builtin_sig(&name)?;
+    let wrapper_sig = callable_wrapper_sig(&sig);
+    let entry_label = emit_runtime_builtin_wrapper_inline(ctx, &name, &wrapper_sig);
+    Some(FirstClassCallableDescriptor {
+        entry_label,
+        kind: callable_descriptor::CALLABLE_DESC_KIND_BUILTIN,
+        sig: Some(wrapper_sig),
+        invocation: callable_descriptor::CallableDescriptorInvocation::named(
+            callable_descriptor::CallableDescriptorShape::Builtin,
+            name,
+        ),
+    })
 }
 
 /// Returns descriptor metadata for static methods with compile-time class receivers.
 fn first_class_static_method_descriptor(
-    ctx: &FunctionContext<'_>,
+    ctx: &mut FunctionContext<'_>,
     receiver_label: &str,
     method_name: &str,
 ) -> Option<FirstClassCallableDescriptor> {
@@ -975,15 +1051,23 @@ fn first_class_static_method_descriptor(
         .get(&method_key)
         .map(String::as_str)
         .unwrap_or(receiver.as_str());
-    ctx.module
+    let sig = ctx.module
         .class_infos
         .get(impl_class)?
         .static_methods
-        .get(&method_key)?;
+        .get(&method_key)?
+        .clone();
+    let wrapper_sig = crate::codegen::callable_dispatch::static_method_runtime_wrapper_sig(&sig);
+    let entry_label = emit_runtime_static_method_wrapper_inline(
+        ctx,
+        receiver.as_str(),
+        &method_key,
+        &wrapper_sig,
+    );
     Some(FirstClassCallableDescriptor {
-        entry_label: static_method_symbol(impl_class, &method_key),
+        entry_label,
         kind: callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD,
-        sig: None,
+        sig: Some(wrapper_sig),
         invocation: callable_descriptor::CallableDescriptorInvocation::method(
             callable_descriptor::CallableDescriptorShape::StaticMethod,
             Some(receiver),

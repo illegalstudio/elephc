@@ -544,7 +544,7 @@ fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
 }
 
 /// Ensures runtime builtin wrapper is available before the caller continues.
-fn ensure_runtime_builtin_wrapper(
+pub(crate) fn ensure_runtime_builtin_wrapper(
     ctx: &mut Context,
     name: &str,
     sig: &FunctionSig,
@@ -598,7 +598,7 @@ fn ensure_runtime_extern_wrapper(
 }
 
 /// Ensures runtime static method wrapper is available before the caller continues.
-fn ensure_runtime_static_method_wrapper(
+pub(crate) fn ensure_runtime_static_method_wrapper(
     ctx: &mut Context,
     class_name: &str,
     method_name: &str,
@@ -656,7 +656,7 @@ fn ensure_runtime_instance_method_wrapper(
 }
 
 /// Builds a static-method runtime wrapper signature that can receive keyed variadic tails.
-fn static_method_runtime_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
+pub(crate) fn static_method_runtime_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
     let mut wrapper_sig = callable_wrapper_sig(sig);
     if wrapper_sig.variadic.is_some() {
         if let Some((_, ty)) = wrapper_sig.params.last_mut() {
