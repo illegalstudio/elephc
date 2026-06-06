@@ -435,6 +435,25 @@ fn ir_backend_calls_assigned_closure_literals() {
     );
 }
 
+/// Verifies assigned closure calls receive by-value captures as hidden EIR params.
+#[test]
+fn ir_backend_calls_assigned_closure_literals_with_captures() {
+    for (name, source, expected) in [
+        (
+            "assigned_closure_int_capture",
+            "<?php $x = $argc + 3; $f = function($n) use ($x) { return $x + $n; }; $x = 99; echo $f(1);",
+            "5",
+        ),
+        (
+            "assigned_closure_string_capture",
+            "<?php $prefix = \"pre\"; $f = function($s) use ($prefix) { return $prefix . $s; }; $prefix = \"bad\"; echo $f(\"ok\");",
+            "preok",
+        ),
+    ] {
+        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+    }
+}
+
 /// Verifies Fiber construction routes through the runtime-managed EIR object path.
 #[test]
 fn ir_backend_constructs_fibers() {

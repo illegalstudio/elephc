@@ -47,11 +47,18 @@ pub(crate) enum StaticCallableBinding {
     Closure {
         name: String,
         signature: FunctionSig,
+        captures: Vec<ClosureCapture>,
     },
     StaticMethod {
         receiver: StaticReceiver,
         method: String,
     },
+}
+
+/// Captured closure value recorded at closure creation time for static calls.
+#[derive(Debug, Clone)]
+pub(crate) struct ClosureCapture {
+    pub value: ValueId,
 }
 
 /// Mutable state for one function body while it is lowered.

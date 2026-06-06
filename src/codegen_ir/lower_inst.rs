@@ -145,6 +145,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StaticMethodCall => lower_static_method_call(ctx, &inst),
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),
+        Op::ClosureCapture => lower_closure_capture(ctx, &inst),
         Op::ClosureNew => lower_closure_new(ctx, &inst),
         Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, &inst),
         Op::Acquire => ownership::lower_acquire(ctx, &inst),
@@ -167,6 +168,16 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::Nop => Ok(()),
         _ => Err(CodegenIrError::unsupported(format!("opcode {}", inst.op.name()))),
     }
+}
+
+/// Lowers a by-value closure capture marker.
+fn lower_closure_capture(_ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.immediate.is_some() {
+        return Err(CodegenIrError::unsupported(
+            "by-reference closure captures in the EIR backend",
+        ));
+    }
+    Ok(())
 }
 
 /// Materializes an EIR closure literal as a static callable descriptor pointer.

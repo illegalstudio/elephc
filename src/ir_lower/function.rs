@@ -284,6 +284,7 @@ pub(crate) fn lower_closure_function(
     variadic: Option<&str>,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
+    captures: &[(String, PhpType, bool)],
 ) -> FunctionSig {
     let signature = signature_from_ast_with_variadic(params, return_type, variadic);
     let mut function = Function::new(
@@ -296,12 +297,15 @@ pub(crate) fn lower_closure_function(
         ..FunctionFlags::default()
     };
     function.params = function_params(&signature);
+    function.params.extend(closure_capture_params(captures));
     function.source_signature = Some(source_signature(name, &signature));
+    let env = env_with_closure_captures(&signature, captures);
+    let lowered_params = params_with_closure_captures(&signature, captures);
     let closures = lower_body_into_function(
         &mut function,
         parent.data,
         body,
-        env_from_signature(&signature),
+        env,
         parent.top_level_env.clone(),
         parent.functions,
         parent.extern_functions,
@@ -312,7 +316,7 @@ pub(crate) fn lower_closure_function(
         &parent.constants,
         parent.current_class.clone(),
         signature.return_type.clone(),
-        &signature.params,
+        &lowered_params,
         false,
         collect_global_var_names(body),
     );
@@ -475,6 +479,20 @@ fn function_params(signature: &FunctionSig) -> Vec<FunctionParam> {
         .collect()
 }
 
+/// Converts closure captures into hidden EIR ABI parameters.
+fn closure_capture_params(captures: &[(String, PhpType, bool)]) -> Vec<FunctionParam> {
+    captures
+        .iter()
+        .map(|(name, php_type, by_ref)| FunctionParam {
+            name: name.clone(),
+            ir_type: value_ir_type(php_type),
+            php_type: php_type.clone(),
+            by_ref: *by_ref,
+            variadic: false,
+        })
+        .collect()
+}
+
 /// Creates an initial local type environment from a function signature.
 fn env_from_signature(signature: &FunctionSig) -> TypeEnv {
     signature
@@ -482,6 +500,32 @@ fn env_from_signature(signature: &FunctionSig) -> TypeEnv {
         .iter()
         .map(|(name, php_type)| (name.clone(), php_type.clone()))
         .collect()
+}
+
+/// Creates a closure environment that includes hidden captured locals.
+fn env_with_closure_captures(
+    signature: &FunctionSig,
+    captures: &[(String, PhpType, bool)],
+) -> TypeEnv {
+    let mut env = env_from_signature(signature);
+    for (name, php_type, _) in captures {
+        env.insert(name.clone(), php_type.clone());
+    }
+    env
+}
+
+/// Returns visible params followed by hidden closure capture params for slot setup.
+fn params_with_closure_captures(
+    signature: &FunctionSig,
+    captures: &[(String, PhpType, bool)],
+) -> Vec<(String, PhpType)> {
+    let mut params = signature.params.clone();
+    params.extend(
+        captures
+            .iter()
+            .map(|(name, php_type, _)| (name.clone(), php_type.clone())),
+    );
+    params
 }
 
 /// Builds a fallback function signature from AST syntax when checker metadata is unavailable.

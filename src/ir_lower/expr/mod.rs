@@ -15,7 +15,7 @@ use crate::ir::{
     Ownership, Terminator, ValueId,
 };
 use crate::ir_lower::context::{
-    value_ir_type, LoweredValue, LoweringContext, StaticCallableBinding,
+    value_ir_type, ClosureCapture, LoweredValue, LoweringContext, StaticCallableBinding,
 };
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::function;
@@ -1203,7 +1203,13 @@ fn lower_static_callable_value_call(
                 Some(expr.span),
             ))
         }
-        StaticCallableBinding::Closure { name, signature } => {
+        StaticCallableBinding::Closure {
+            name,
+            signature,
+            captures,
+        } => {
+            let mut operands = operands;
+            append_closure_capture_operands(&mut operands, &captures);
             let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
             let data = ctx.intern_function_name(&name);
             Some(ctx.emit_value(
@@ -1418,8 +1424,13 @@ fn lower_static_callable_call(
                 Some(expr.span),
             ))
         }
-        StaticCallableBinding::Closure { name, signature } => {
-            let operands = lower_args_with_signature(ctx, Some(&signature), callback_args);
+        StaticCallableBinding::Closure {
+            name,
+            signature,
+            captures,
+        } => {
+            let mut operands = lower_args_with_signature(ctx, Some(&signature), callback_args);
+            append_closure_capture_operands(&mut operands, &captures);
             let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
             let data = ctx.intern_function_name(&name);
             Some(ctx.emit_value(
@@ -1458,6 +1469,11 @@ fn resolve_static_string_callable(
         return Some(StaticCallableBinding::UserFunction(function_name));
     }
     canonical_builtin_function_name(callback).map(StaticCallableBinding::Builtin)
+}
+
+/// Appends captured closure values after caller-visible operands for hidden ABI params.
+fn append_closure_capture_operands(operands: &mut Vec<ValueId>, captures: &[ClosureCapture]) {
+    operands.extend(captures.iter().map(|capture| capture.value));
 }
 
 /// Resolves a static method callback when class and method are compile-time known.
@@ -2497,20 +2513,28 @@ fn lower_closure(
     return_type: Option<&TypeExpr>,
     body: &[crate::parser::ast::Stmt],
     captures: &[String],
-    _capture_refs: &[String],
+    capture_refs: &[String],
     expr: &Expr,
 ) -> LoweredValue {
+    let mut captured_values = Vec::with_capacity(captures.len());
+    let mut capture_params = Vec::with_capacity(captures.len());
     for capture in captures {
+        let by_ref = capture_refs.iter().any(|name| name == capture);
         let captured = ctx.load_local(capture, Some(expr.span));
-        ctx.emit_void(Op::ClosureCapture, vec![captured.value], None, Op::ClosureCapture.default_effects(), Some(expr.span));
+        let php_type = ctx.builder.value_php_type(captured.value);
+        let immediate = by_ref.then_some(Immediate::I64(1));
+        ctx.emit_void(Op::ClosureCapture, vec![captured.value], immediate, Op::ClosureCapture.default_effects(), Some(expr.span));
+        captured_values.push(ClosureCapture { value: captured.value });
+        capture_params.push((capture.clone(), php_type, by_ref));
     }
     let name = ctx.next_closure_name();
     let signature =
-        function::lower_closure_function(ctx, &name, params, variadic, return_type, body);
+        function::lower_closure_function(ctx, &name, params, variadic, return_type, body, &capture_params);
     let data = ctx.intern_string(&name);
     ctx.set_pending_static_callable_result(StaticCallableBinding::Closure {
         name,
         signature,
+        captures: captured_values,
     });
     ctx.emit_value(
         Op::ClosureNew,
