@@ -290,6 +290,41 @@ pub(crate) fn lower_closure_function(
     captures: &[(String, PhpType, bool)],
 ) -> FunctionSig {
     let signature = closure_signature_from_ast(params, variadic, return_type, body);
+    lower_closure_function_with_signature(parent, name, signature, body, captures)
+}
+
+/// Lowers one closure literal using contextual types for unannotated parameters.
+pub(crate) fn lower_closure_function_with_context(
+    parent: &mut LoweringContext<'_, '_>,
+    name: &str,
+    params: &AstParams,
+    variadic: Option<&str>,
+    return_type: Option<&TypeExpr>,
+    body: &[Stmt],
+    captures: &[(String, PhpType, bool)],
+    contextual_arg_types: &[PhpType],
+) -> FunctionSig {
+    let mut signature = closure_signature_from_ast(params, variadic, return_type, body);
+    for (idx, (_, type_ann, _, _)) in params.iter().enumerate() {
+        if type_ann.is_none() {
+            if let Some(contextual_ty) = contextual_arg_types.get(idx) {
+                if let Some((_, param_ty)) = signature.params.get_mut(idx) {
+                    *param_ty = contextual_ty.clone();
+                }
+            }
+        }
+    }
+    lower_closure_function_with_signature(parent, name, signature, body, captures)
+}
+
+/// Lowers one closure function from an already-built signature.
+fn lower_closure_function_with_signature(
+    parent: &mut LoweringContext<'_, '_>,
+    name: &str,
+    signature: FunctionSig,
+    body: &[Stmt],
+    captures: &[(String, PhpType, bool)],
+) -> FunctionSig {
     let mut function = Function::new(
         name.to_string(),
         return_ir_type(&signature.return_type),

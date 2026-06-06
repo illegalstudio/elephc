@@ -1714,6 +1714,13 @@ fn lower_preg_replace_callback_args(
     if args.len() != 3 {
         return lower_args_with_signature(ctx, sig, args);
     }
+    if matches!(&args[1].kind, ExprKind::Closure { .. }) {
+        let pattern = lower_expr(ctx, &args[0]);
+        let callback = lower_preg_replace_callback_closure(ctx, &args[1])
+            .expect("preg_replace_callback closure check must match lowering");
+        let subject = lower_expr(ctx, &args[2]);
+        return vec![pattern.value, callback.value, subject.value];
+    }
     let Some(callback) = preg_replace_static_callback(ctx, &args[1]) else {
         return lower_args_with_signature(ctx, sig, args);
     };
@@ -1721,6 +1728,36 @@ fn lower_preg_replace_callback_args(
     let callback = lower_string_literal(ctx, &callback, &args[1]);
     let subject = lower_expr(ctx, &args[2]);
     vec![pattern.value, callback.value, subject.value]
+}
+
+/// Lowers a `preg_replace_callback()` closure with match-array parameter context.
+fn lower_preg_replace_callback_closure(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback: &Expr,
+) -> Option<LoweredValue> {
+    let ExprKind::Closure {
+        params,
+        variadic,
+        return_type,
+        body,
+        captures,
+        capture_refs,
+        ..
+    } = &callback.kind
+    else {
+        return None;
+    };
+    Some(lower_closure_with_context(
+        ctx,
+        params,
+        variadic.as_deref(),
+        return_type.as_ref(),
+        body,
+        captures,
+        capture_refs,
+        callback,
+        &[PhpType::Array(Box::new(PhpType::Str))],
+    ))
 }
 
 /// Returns the userland callback name accepted by the current regex runtime helper.
@@ -2790,6 +2827,21 @@ fn lower_closure(
     capture_refs: &[String],
     expr: &Expr,
 ) -> LoweredValue {
+    lower_closure_with_context(ctx, params, variadic, return_type, body, captures, capture_refs, expr, &[])
+}
+
+/// Lowers a closure expression, applying contextual types to unannotated parameters.
+fn lower_closure_with_context(
+    ctx: &mut LoweringContext<'_, '_>,
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    variadic: Option<&str>,
+    return_type: Option<&TypeExpr>,
+    body: &[crate::parser::ast::Stmt],
+    captures: &[String],
+    capture_refs: &[String],
+    expr: &Expr,
+    contextual_arg_types: &[PhpType],
+) -> LoweredValue {
     let mut captured_values = Vec::with_capacity(captures.len());
     let mut capture_params = Vec::with_capacity(captures.len());
     for capture in captures {
@@ -2802,8 +2854,20 @@ fn lower_closure(
         capture_params.push((capture.clone(), php_type, by_ref));
     }
     let name = ctx.next_closure_name();
-    let signature =
-        function::lower_closure_function(ctx, &name, params, variadic, return_type, body, &capture_params);
+    let signature = if contextual_arg_types.is_empty() {
+        function::lower_closure_function(ctx, &name, params, variadic, return_type, body, &capture_params)
+    } else {
+        function::lower_closure_function_with_context(
+            ctx,
+            &name,
+            params,
+            variadic,
+            return_type,
+            body,
+            &capture_params,
+            contextual_arg_types,
+        )
+    };
     let data = ctx.intern_string(&name);
     ctx.set_pending_static_callable_result(StaticCallableBinding::Closure {
         name,

@@ -7,7 +7,8 @@
 //!
 //! Key details:
 //! - `preg_match()` captures currently support direct local `$matches` variables.
-//! - `preg_replace_callback()` currently supports static string user callbacks.
+//! - `preg_replace_callback()` supports static string callbacks and no-capture
+//!   closure descriptors whose ABI matches the regex callback runtime.
 //! - `preg_split()` forces boxed Mixed element slots so dynamic flags cannot mismatch layout.
 
 use crate::codegen::abi;
@@ -83,7 +84,7 @@ pub(super) fn lower_preg_replace(
     super::store_if_result(ctx, inst)
 }
 
-/// Lowers `preg_replace_callback(pattern, callback, subject)` for static string callbacks.
+/// Lowers `preg_replace_callback(pattern, callback, subject)` through supported direct callbacks.
 pub(super) fn lower_preg_replace_callback(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -92,7 +93,54 @@ pub(super) fn lower_preg_replace_callback(
     let pattern = super::expect_operand(inst, 0)?;
     let callback = super::expect_operand(inst, 1)?;
     let subject = super::expect_operand(inst, 2)?;
-    let callback_name = const_string_operand(ctx, callback, "preg_replace_callback callback")?;
+    let callback_target = preg_replace_callback_target(ctx, callback)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg(ctx, pattern, "x1", "x2", "preg_replace_callback pattern")?;
+            abi::emit_symbol_address(ctx.emitter, "x3", &callback_target.entry_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x4", 0);
+            load_string_arg(ctx, subject, "x5", "x6", "preg_replace_callback subject")?;
+        }
+        Arch::X86_64 => {
+            load_string_arg(ctx, pattern, "rdi", "rsi", "preg_replace_callback pattern")?;
+            abi::emit_symbol_address(ctx.emitter, "rdx", &callback_target.entry_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", 0);
+            load_string_arg(ctx, subject, "r8", "r9", "preg_replace_callback subject")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_preg_replace_callback");
+    super::store_if_result(ctx, inst)
+}
+
+/// Runtime callback target passed to `__rt_preg_replace_callback`.
+struct PregReplaceCallbackTarget {
+    entry_label: String,
+}
+
+/// Resolves a regex replacement callback to a direct entry with no environment.
+fn preg_replace_callback_target(
+    ctx: &FunctionContext<'_>,
+    callback: ValueId,
+) -> Result<PregReplaceCallbackTarget> {
+    if let Some(entry_label) = static_string_callback_entry(ctx, callback)? {
+        return Ok(PregReplaceCallbackTarget { entry_label });
+    }
+    if let Some(entry_label) = closure_callback_entry(ctx, callback)? {
+        return Ok(PregReplaceCallbackTarget { entry_label });
+    }
+    Err(CodegenIrError::unsupported(
+        "preg_replace_callback callback with non-literal string",
+    ))
+}
+
+/// Resolves a literal string callback to a module-local function entry.
+fn static_string_callback_entry(
+    ctx: &FunctionContext<'_>,
+    callback: ValueId,
+) -> Result<Option<String>> {
+    let Some(callback_name) = maybe_const_string_operand(ctx, callback)? else {
+        return Ok(None);
+    };
     let function_name = ctx
         .callable_function_by_name(&callback_name)
         .map(|function| function.name.to_string())
@@ -102,22 +150,44 @@ pub(super) fn lower_preg_replace_callback(
                 callback_name
             ))
         })?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            load_string_arg(ctx, pattern, "x1", "x2", "preg_replace_callback pattern")?;
-            abi::emit_symbol_address(ctx.emitter, "x3", &function_symbol(&function_name));
-            abi::emit_load_int_immediate(ctx.emitter, "x4", 0);
-            load_string_arg(ctx, subject, "x5", "x6", "preg_replace_callback subject")?;
-        }
-        Arch::X86_64 => {
-            load_string_arg(ctx, pattern, "rdi", "rsi", "preg_replace_callback pattern")?;
-            abi::emit_symbol_address(ctx.emitter, "rdx", &function_symbol(&function_name));
-            abi::emit_load_int_immediate(ctx.emitter, "rcx", 0);
-            load_string_arg(ctx, subject, "r8", "r9", "preg_replace_callback subject")?;
-        }
+    Ok(Some(function_symbol(&function_name)))
+}
+
+/// Resolves a no-capture closure descriptor to its direct EIR closure entry.
+fn closure_callback_entry(
+    ctx: &FunctionContext<'_>,
+    callback: ValueId,
+) -> Result<Option<String>> {
+    let Some(inst) = value_source_instruction(ctx, callback)? else {
+        return Ok(None);
+    };
+    if inst.op != Op::ClosureNew {
+        return Ok(None);
     }
-    abi::emit_call_label(ctx.emitter, "__rt_preg_replace_callback");
-    super::store_if_result(ctx, inst)
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return Err(CodegenIrError::invalid_module(
+            "preg_replace_callback closure descriptor has no data id",
+        ));
+    };
+    let closure_name = ctx
+        .module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?;
+    let closure = ctx
+        .module
+        .closures
+        .iter()
+        .find(|function| function.name == *closure_name)
+        .ok_or_else(|| CodegenIrError::missing_entry("closure", data.as_raw()))?;
+    if closure.params.len() != 1 || closure.return_php_type.codegen_repr() != PhpType::Str {
+        return Err(CodegenIrError::unsupported(format!(
+            "preg_replace_callback closure {} with unsupported signature",
+            closure_name
+        )));
+    }
+    Ok(Some(function_symbol(closure_name)))
 }
 
 /// Lowers `preg_split(pattern, subject, limit?, flags?)` through the regex split helper.
@@ -210,44 +280,48 @@ fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Resu
     Ok(())
 }
 
-/// Returns a string literal value defined by a `ConstStr` instruction operand.
-fn const_string_operand(
+/// Returns a string literal value when `value` is defined by a `ConstStr` instruction.
+fn maybe_const_string_operand(
     ctx: &FunctionContext<'_>,
     value: ValueId,
-    context: &str,
-) -> Result<String> {
-    let value_ref = ctx
-        .function
-        .value(value)
-        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Err(CodegenIrError::unsupported(format!(
-            "{} with non-literal string",
-            context
-        )));
+) -> Result<Option<String>> {
+    let Some(inst_ref) = value_source_instruction(ctx, value)? else {
+        return Ok(None);
     };
-    let inst_ref = ctx
-        .function
-        .instruction(inst)
-        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
     if inst_ref.op != Op::ConstStr {
-        return Err(CodegenIrError::unsupported(format!(
-            "{} with non-literal string",
-            context
-        )));
+        return Ok(None);
     }
     let Some(Immediate::Data(data)) = inst_ref.immediate else {
-        return Err(CodegenIrError::invalid_module(format!(
-            "{} string literal has no data id",
-            context
-        )));
+        return Err(CodegenIrError::invalid_module(
+            "preg_replace_callback callback string literal has no data id",
+        ));
     };
     ctx.module
         .data
         .strings
         .get(data.as_raw() as usize)
         .cloned()
+        .map(Some)
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
+}
+
+/// Returns the instruction that defines an SSA value, when it has one.
+fn value_source_instruction<'a>(
+    ctx: &'a FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<&'a Instruction>> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    ctx
+        .function
+        .instruction(inst)
+        .map(Some)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))
 }
 
 /// Loads a string operand into an explicit pointer/length register pair.
